@@ -1,9 +1,6 @@
 #pragma once
 
 #include <exception>
-#include <string>
-
-#include "Common.h"
 
 class Exception : public std::exception
 {

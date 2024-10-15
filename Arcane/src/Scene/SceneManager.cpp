@@ -1,13 +1,14 @@
+#include "arcpch.h"
 #include "SceneManager.h"
 
 #include "Scene.h"
 
-Arcane::SceneManager::SceneManager() :
+ARC::SceneManager::SceneManager() :
    m_initialized(false),
    m_currentScene(nullptr)
 {}
 
-void Arcane::SceneManager::Initialize()
+void ARC::SceneManager::Initialize()
 {
    auto& instance = GetInstance();
    auto newScene = std::make_shared<Scene>();
@@ -15,7 +16,7 @@ void Arcane::SceneManager::Initialize()
    instance.ChangeScene(std::move(newScene));
 }
 
-bool Arcane::SceneManager::ChangeScene(std::shared_ptr<Scene> scene)
+bool ARC::SceneManager::ChangeScene(std::shared_ptr<Scene> scene)
 {
    auto& instance = GetInstance();
 

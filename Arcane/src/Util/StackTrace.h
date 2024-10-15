@@ -1,9 +1,6 @@
 #pragma once
 
-#include <optional>
-#include <string>
-
-namespace Arcane
+namespace ARC
 {
    namespace StackTrace
    {
@@ -18,4 +15,4 @@ namespace Arcane
       [[nodiscard]] std::optional<std::string> Capture(CaptureDef captureDef);
       [[nodiscard]] std::optional<std::string> Capture(int maxFrames = 16, bool resolveSymbols = true, bool includeModuleInfo = true, bool includeLineInfo = true);
    } // namespace StackTrace
-} // namespace Arcane
+} // namespace ARC

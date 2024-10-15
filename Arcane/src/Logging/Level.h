@@ -1,9 +1,6 @@
 #pragma once
 
-#include <string>
-#include <unordered_map>
-
-namespace Arcane
+namespace ARC
 {
    enum class Level
    {
@@ -16,8 +13,8 @@ namespace Arcane
       Off
    };
 
-   inline const std::unordered_map<Level, std::wstring> LevelToStringMap =
-   {
+   constexpr std::array<std::pair<Level, std::wstring_view>, 7> LevelToStringArray =
+   {{
       { Level::Trace, L"TRACE" },
       { Level::Debug, L"DEBUG" },
       { Level::Info,  L"INFO"  },
@@ -25,10 +22,21 @@ namespace Arcane
       { Level::Error, L"ERROR" },
       { Level::Fatal, L"FATAL" },
       { Level::Off,   L"OFF"   }
-   };
+   }};
 
-   inline const std::unordered_map<std::wstring, Level> StringToLevelMap =
+
+   constexpr std::wstring_view LevelToString(Level level)
    {
+      for (const auto& pair : LevelToStringArray)
+      {
+         if (pair.first == level)
+            return pair.second;
+      }
+      return L"UNKNOWN";
+   }
+
+   constexpr std::array<std::pair<std::wstring_view, Level>, 7> StringToLevelArray =
+   {{
       { L"TRACE", Level::Trace },
       { L"DEBUG", Level::Debug },
       { L"INFO",  Level::Info  },
@@ -36,21 +44,15 @@ namespace Arcane
       { L"ERROR", Level::Error },
       { L"FATAL", Level::Fatal },
       { L"OFF",   Level::Off   }
-   };
+   }};
 
-   inline std::wstring LevelToString(Level level)
+   constexpr Level StringToLevel(std::wstring_view levelStr)
    {
-      auto it = LevelToStringMap.find(level);
-      if (it != LevelToStringMap.end())
-         return it->second;
-      return L"UNKNOWN";
-   }
-
-   inline Level StringToLevel(const std::wstring& levelStr)
-   {
-      auto it = StringToLevelMap.find(levelStr);
-      if (it != StringToLevelMap.end())
-         return it->second;
+      for (const auto& pair : StringToLevelArray)
+      {
+         if (pair.first == levelStr)
+            return pair.second;
+      }
       return Level::Off;
    }
 }

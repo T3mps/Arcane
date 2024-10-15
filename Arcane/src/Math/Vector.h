@@ -1,15 +1,12 @@
 #pragma once
 
-#include <functional>
-
-#include "Common.h"
 #include "GLMType.h"
 #include "glm/geometric.hpp"
 #include "glm/vec2.hpp"
 #include "glm/vec3.hpp"
 #include "glm/vec4.hpp"
 
-namespace Arcane
+namespace ARC
 {
    template <typename T>
    class Vector2 : public GLMType<glm::vec<2, T>>
@@ -198,4 +195,4 @@ namespace Arcane
    using Vector4u = Vector4<uint32_t>;
    using Vector4f = Vector4<float32_t>;
    using Vector4d = Vector4<float64_t>;
-} // namespace Arcane
+} // namespace ARC

@@ -1,13 +1,10 @@
+#include "arcpch.h"
 #include "Format.h"
-
-#include <chrono>
-#include <format>
-#include <regex>
 
 #include "Util/Json.h"
 #include "Util/StringUtil.h"
 
-Arcane::Format::Format(const std::wstring& formatString) : m_formatString(formatString)
+ARC::Format::Format(const std::wstring& formatString) : m_formatString(formatString)
 {
    m_tokenMap[Tokens::TIMESTAMP.data()] = std::wstring();
    m_tokenMap[Tokens::LEVEL.data()] = std::wstring();
@@ -20,7 +17,7 @@ Arcane::Format::Format(const std::wstring& formatString) : m_formatString(format
    ExtractOrderedKeys();
 }
 
-std::wstring Arcane::Format::operator()(const std::wstring& level, const std::wstring& name, const std::wstring& message, const std::source_location& location)
+std::wstring ARC::Format::operator()(const std::wstring& level, const std::wstring& name, const std::wstring& message, const std::source_location& location)
 {
    m_tokenMap[Tokens::TIMESTAMP.data()]   =  GetCurrentTimestamp();
    m_tokenMap[Tokens::LEVEL.data()]       =  level;
@@ -43,10 +40,10 @@ std::wstring Arcane::Format::operator()(const std::wstring& level, const std::ws
       }
    }
 
-   return Arcane::JSON::GenerateJsonWString(orderedLogData, true);
+   return ARC::JSON::GenerateJsonWString(orderedLogData, true);
 }
 
-void Arcane::Format::SetFormatString(const std::wstring& formatStr)
+void ARC::Format::SetFormatString(const std::wstring& formatStr)
 {
    if (formatStr.empty())
       return;
@@ -54,13 +51,13 @@ void Arcane::Format::SetFormatString(const std::wstring& formatStr)
    ExtractOrderedKeys();
 }
 
-std::wstring Arcane::Format::GetCurrentTimestamp()
+std::wstring ARC::Format::GetCurrentTimestamp()
 {
    auto now = std::chrono::system_clock::now();
    return std::format(L"{:%F %T}", std::chrono::zoned_time{std::chrono::current_zone(), now});
 }
 
-void Arcane::Format::ExtractOrderedKeys()
+void ARC::Format::ExtractOrderedKeys()
 {
    m_orderedKeys.clear();
    std::wregex placeholderRegex(L"\\{([a-zA-Z]+)\\}");

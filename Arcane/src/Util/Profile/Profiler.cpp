@@ -1,92 +1,91 @@
+#include "arcpch.h"
 #include "Profiler.h"
 
-#include <sstream>
-#include <iomanip>
-#include <thread>
-
 #include "Logging/Logging.h"
+#include "Util/Json.h"
 
-void Arcane::Profiler::BeginSession(const std::string& name, const std::string& filepath)
+ARC::Profiler::Profiler() : m_currentSession(nullptr) {}
+
+ARC::Profiler::~Profiler() { EndSession(); }
+
+void ARC::Profiler::BeginSession(const std::string& name, const std::string& filepath)
 {
 	auto& instance = GetInstance();
+	std::lock_guard lock(instance.m_mutex);
 
-	std::lock_guard lock(instance.m_Mutex);
-	if (instance.m_CurrentSession)
+	if (instance.m_currentSession)
 	{
 		if (LoggingManager::HasCoreLogger()) // Edge case: BeginSession() might be before Log::Init()
 		{
 			//ARC_CORE_ERROR("Profiler::BeginSession('{}') when session '{}' already open.", name, instance.m_CurrentSession->name);
+			ARC_CORE_ERROR("A session is already open. End session before starting a new one.");
 		}
 		instance.InternalEndSession();
 	}
-	instance.m_OutputStream.open(filepath);
 
-	if (instance.m_OutputStream.is_open())
+	instance.m_outputStream.open(filepath);
+	if (instance.m_outputStream.is_open())
 	{
-		instance.m_CurrentSession = new InstrumentationSession({name});
+		instance.m_currentSession = std::make_unique<InstrumentationSession>(name);
 		instance.WriteHeader();
 	}
 	else if (LoggingManager::HasCoreLogger()) // Edge case: BeginSession() might be before Log::Init()
 	{
 		//ARC_CORE_ERROR("Profiler could not open results file '{}'.", filepath);
+		ARC_CORE_ERROR("Profiler could not open results file");
 	}
 }
 
-void Arcane::Profiler::EndSession()
+void ARC::Profiler::EndSession()
 {
 	auto& instance = GetInstance();
 
-	std::lock_guard lock(instance.m_Mutex);
+	std::lock_guard lock(instance.m_mutex);
 	instance.InternalEndSession();
 }
 
-void Arcane::Profiler::WriteProfile(const ProfileResult& result)
+void ARC::Profiler::WriteProfile(const ProfileResult& result)
 {
-	std::stringstream json;
-	json << std::setprecision(3) << std::fixed;
-	json << ",{";
-	json << "\"cat\":\"function\",";
-	json << "\"dur\":"		<< (result.elapsedTime.count()) << ',';
-	json << "\"name\":\""	<< result.name << "\",";
-	json << "\"ph\":\"X\",";
-	json << "\"pid\":0,";
-	json << "\"tid\":"		<< result.threadID << ",";
-	json << "\"ts\":"			<< result.start.count();
-	json << "}";
-
 	auto& instance = GetInstance();
+	if (!instance.m_currentSession)
+		return;
 
-	std::lock_guard lock(instance.m_Mutex);
-	if (instance.m_CurrentSession)
-	{
-		instance.m_OutputStream << json.str();
-		instance.m_OutputStream.flush();
-	}
+	ARC::JSON json;
+	json.Set("cat", "function");
+	json.Set("dur", result.elapsedTime.count());
+	json.Set("name", result.name);
+	json.Set("ph", "X");
+	json.Set("pid", 0);
+	json.Set("tid", result.threadID._Get_underlying_id());
+	json.Set("ts", result.start.count());
+
+	if (!instance.m_firstProfileWritten)
+		instance.m_outputStream << ",";
+	else
+		instance.m_firstProfileWritten = false;
+
+	instance.m_outputStream << json.ToString();
+	instance.m_outputStream.flush();
 }
 
-Arcane::Profiler::Profiler() : m_CurrentSession(nullptr) {}
-
-Arcane::Profiler::~Profiler() { EndSession(); }
-
-void Arcane::Profiler::InternalEndSession()
+void ARC::Profiler::InternalEndSession()
 {
-	if (m_CurrentSession)
+	if (m_currentSession)
 	{
 		WriteFooter();
-		m_OutputStream.close();
-		delete m_CurrentSession;
-		m_CurrentSession = nullptr;
+		m_outputStream.close();
+		m_currentSession.reset();
 	}
 }
 
-void Arcane::Profiler::WriteHeader()
+void ARC::Profiler::WriteHeader()
 {
-	m_OutputStream << "{\"otherData\": {},\"traceEvents\":[{}";
-	m_OutputStream.flush();
+	m_outputStream << R"({"otherData": {},"traceEvents":[)";
+	m_outputStream.flush();
 }
 
-void Arcane::Profiler::WriteFooter()
+void ARC::Profiler::WriteFooter()
 {
-	m_OutputStream << "]}";
-	m_OutputStream.flush();
+	m_outputStream << "]}";
+	m_outputStream.flush();
 }

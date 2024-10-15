@@ -1,17 +1,8 @@
 #pragma once
 
-#include <algorithm>
-#include <cmath>
-#include <initializer_list>
-#include <limits>
-#include <stdexcept>
-#include <tuple>
-#include <type_traits>
-
-#include "Common.h"
 #include "Vector.h"
 
-namespace Arcane
+namespace ARC
 {
    template  <typename T = float64_t>
    class AABB
@@ -257,20 +248,20 @@ namespace Arcane
    using AABBi = AABB<int32_t>;
    using AABBf = AABB<float32_t>;
    using AABBd = AABB<float64_t>;
-} // namespace Arcane
+} // namespace ARC
 
 namespace std
 {
    template  <typename T>
-   struct tuple_size<Arcane::AABB<T>> : integral_constant<size_t, Arcane::AABB<T>::ELEMENT_COUNT> {};
+   struct tuple_size<ARC::AABB<T>> : integral_constant<size_t, ARC::AABB<T>::ELEMENT_COUNT> {};
 
    template  <size_t N, typename T>
-   struct tuple_element<N, Arcane::AABB<T>> { using type = T; };
+   struct tuple_element<N, ARC::AABB<T>> { using type = T; };
 
    template  <size_t N, typename T>
-   constexpr T& get(Arcane::AABB<T>& aabb)
+   constexpr T& get(ARC::AABB<T>& aabb)
    {
-      static_assert(N < Arcane::AABB<T>::ELEMENT_COUNT, "Index out of bounds");
+      static_assert(N < ARC::AABB<T>::ELEMENT_COUNT, "Index out of bounds");
       if constexpr (N == 0)
          return aabb.minX;
       else if constexpr (N == 1)
@@ -281,9 +272,9 @@ namespace std
    }
 
    template  <size_t N, typename T>
-   constexpr const T& get(const Arcane::AABB<T>& aabb)
+   constexpr const T& get(const ARC::AABB<T>& aabb)
    {
-      static_assert(N < Arcane::AABB<T>::ELEMENT_COUNT, "Index out of bounds");
+      static_assert(N < ARC::AABB<T>::ELEMENT_COUNT, "Index out of bounds");
       if constexpr (N == 0)
          return aabb.minX;
       else if constexpr (N == 1)

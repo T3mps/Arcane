@@ -1,15 +1,10 @@
 #pragma once
 
-#include <functional>
-#include <string>
-#include <vector>
-
-#include "Common.h"
 #include "Entity.h"
 #include "Math/Vector.h"
 #include "Util/UUID.h"
 
-namespace Arcane
+namespace ARC
 {
    namespace Components
    {
@@ -59,4 +54,4 @@ namespace Arcane
          bool operator!=(const Transform& other) const { return position != other.position; }
       };
    } // namespace Components
-} // namespace Arcane
+} // namespace ARC

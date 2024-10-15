@@ -1,11 +1,5 @@
+#include "arcpch.h"
 #include "DumpGenerator.h"
-
-#include <chrono>
-#include <filesystem>
-#include <iomanip>
-#include <iostream>
-#include <mutex>
-#include <sstream>
 
 namespace { std::mutex dumpMutex; }
 
@@ -20,7 +14,7 @@ std::string GetDefaultDumpFileName()
    return fileName.str();
 }
 
-bool Arcane::DumpGenerator::MiniDump(EXCEPTION_POINTERS* exceptionInfo, DumpType dumpType, const std::string& customPath)
+bool ARC::DumpGenerator::MiniDump(EXCEPTION_POINTERS* exceptionInfo, DumpType dumpType, const std::string& customPath)
 {
    std::lock_guard<std::mutex> guard(dumpMutex); // Thread-safe access
 
@@ -66,13 +60,13 @@ bool Arcane::DumpGenerator::MiniDump(EXCEPTION_POINTERS* exceptionInfo, DumpType
    }
 }
 
-LONG WINAPI Arcane::UnhandledExceptionHandler(EXCEPTION_POINTERS* exceptionInfo)
+LONG WINAPI ARC::UnhandledExceptionHandler(EXCEPTION_POINTERS* exceptionInfo)
 {
    DumpGenerator::MiniDump(exceptionInfo, DumpGenerator::DumpType::MiniDumpWithFullMemory, "");
    return EXCEPTION_EXECUTE_HANDLER;
 }
 
-void Arcane::RegisterDumpHandler()
+void ARC::RegisterDumpHandler()
 {
    SetUnhandledExceptionFilter(UnhandledExceptionHandler);
 }

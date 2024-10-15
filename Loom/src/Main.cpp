@@ -1,3 +1,4 @@
+#include "arcpch.h"
 #include "Loom.h"
 
 int32_t APIENTRY wWinMain(_In_ HINSTANCE hInstance,

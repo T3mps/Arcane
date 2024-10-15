@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Arcane
+namespace ARC
 {
    template  <typename GLM_t>
    class GLMType
@@ -11,4 +11,4 @@ namespace Arcane
       virtual GLM_t& GetGLMType() = 0;
       virtual const GLM_t& GetGLMType() const = 0;
    };
-} // namespace Arcane
+} // namespace ARC

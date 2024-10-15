@@ -1,16 +1,10 @@
 #pragma once
 
-#include <iostream>
-#include <stdexcept>
-#include <string>
-#include <variant>
-
-#include "Common.h"
 #include "Error.h"
 
-namespace Arcane
+namespace ARC
 {
-   template<typename T>
+   template <typename T>
    class Result
    {
    public:
@@ -37,14 +31,14 @@ namespace Arcane
       {
          if (Success())
             return "No error.";
-         return std::get<Arcane::Error>(m_data).ToString();
+         return std::get<ARC::Error>(m_data).ToString();
       }
 
    private:
-      std::variant<T, Arcane::Error> m_data;
+      std::variant<T, ARC::Error> m_data;
    };
 
-   template<>
+   template <>
    class Result<void>
    {
    public:
@@ -70,6 +64,6 @@ namespace Arcane
       }
 
    private:
-      Arcane::Error m_data;
+      ARC::Error m_data;
    };
-} // namespace Arcane
+} // namespace ARC

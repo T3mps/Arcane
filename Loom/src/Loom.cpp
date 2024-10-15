@@ -1,3 +1,4 @@
+#include "arcpch.h"
 #include "Loom.h"
 
 #include "CommandLineParser.h"
@@ -5,7 +6,6 @@
 #include "DLLInterface.h"
 #include "Exception.h"
 #include "Util/StringUtil.h"
-#include "Version.h"
 
 static constexpr const wchar_t* ENTRY_POINT_FUNCTION_NAME = L"EntryPoint";
 
@@ -24,11 +24,9 @@ std::unique_ptr<Loom> Loom::Create(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 Loom::Loom(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int32_t nCmdShow) : m_hModule(nullptr)
 {
-   Arcane::Console::Initialize();
+   ARC::Console::Initialize();
 
-   Arcane::LoggingManager::GetInstance().SetCoreLogger(new Arcane::Logger(Arcane::LoggingManager::DEFAULT_CORE_LOGGER_NAME));
-
-   ARC_CORE_INFO(L"Loom " + Arcane::StringUtil::ToWString(GetLoomVersionString()));
+   ARC::LoggingManager::GetInstance().SetCoreLogger(new ARC::Logger(ARC::LoggingManager::DEFAULT_CORE_LOGGER_NAME));
 
    std::wstring dllName;
    try
@@ -38,7 +36,7 @@ Loom::Loom(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int32
    } 
    catch (const Exception& e)
    {
-      ARC_CORE_FATAL(Arcane::StringUtil::ToWString(e.what()));
+      ARC_CORE_FATAL(ARC::StringUtil::ToWString(e.what()));
    }
 }
 
@@ -47,7 +45,7 @@ Loom::~Loom()
    ARC_CORE_INFO(L"Cleaning up Loom resources...");
    if (m_hModule)
       UnloadDLL(m_hModule);
-   Arcane::LoggingManager::Shutdown();
+   ARC::LoggingManager::Shutdown();
 }
 
 void Loom::ProcessCommandLineArgs(LPWSTR lpCmdLine, std::wstring& dllName) const

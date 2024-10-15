@@ -1,18 +1,9 @@
 #pragma once
 
-#include <functional>
-#include <iostream>
-#include <optional>
-#include <source_location>
-#include <sstream>
-#include <stdexcept>
-#include <string_view>
-
-#include "Common.h"
-#include "StackTrace.h"
 #include "Util/DumpGenerator.h"
+#include "Util/StackTrace.h"
 
-namespace Arcane
+namespace ARC
 {
    namespace Asserts
    {
@@ -26,14 +17,14 @@ namespace Arcane
 
       inline static void SetAssertHandler(AssertHandler handler)  { s_assertHandler = handler; }
    } // namespace Asserts
-} // namespace Arcane
+} // namespace ARC
 
 #ifdef ARC_ENABLE_ASSERTS
    #define ARC_ASSERT(expr, ...) \
       do { \
          const bool assertCondition = (expr); \
          if (!assertCondition) \
-            ::Arcane::Asserts::OnAssertionFailure(ARC_STRINGIFY_MACRO(expr), __VA_ARGS__, std::source_location::current()); \
+            ::ARC::Asserts::OnAssertionFailure(ARC_STRINGIFY_MACRO(expr), __VA_ARGS__, std::source_location::current()); \
       } while (false)
 #else
    #define ASSERT(expr)

@@ -1,12 +1,6 @@
 #pragma once
 
-#include <functional>
-#include <string>
-#include <unordered_map>
-
-#include "Common.h"
-
-namespace Arcane
+namespace ARC
 {
    class Window
    {

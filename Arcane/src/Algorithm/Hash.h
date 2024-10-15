@@ -1,11 +1,6 @@
 #pragma once
 
-#include <iostream>
-#include <string_view>
-
-#include "Common.h"
-
-namespace Arcane
+namespace ARC
 {
    namespace Hash
    {
@@ -69,4 +64,4 @@ namespace Arcane
          }
       };
    } // namespace Hash
-} // namespace Arcane
+} // namespace ARC

@@ -1,19 +1,19 @@
+#include "arcpch.h"
 #include "Instrumentation.h"
 
-Arcane::InstrumentationTimer::InstrumentationTimer(const char* name) :
+ARC::InstrumentationTimer::InstrumentationTimer(const char* name) :
 	m_name(name),
 	m_startTimepoint(std::chrono::steady_clock::now()),
 	m_stopped(false)
-{
-}
+{}
 
-Arcane::InstrumentationTimer::~InstrumentationTimer()
+ARC::InstrumentationTimer::~InstrumentationTimer()
 {
 	if (!m_stopped)
 		Stop();
 }
 
-void Arcane::InstrumentationTimer::Stop()
+void ARC::InstrumentationTimer::Stop()
 {
 	auto endTimepoint = std::chrono::steady_clock::now();
 	auto highResStart = FloatingPointMicroseconds{ m_startTimepoint.time_since_epoch() };

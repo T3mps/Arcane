@@ -1,11 +1,6 @@
 #pragma once
 
-#include <algorithm>
-#include <cmath>
-
-#include "Common.h"
-
-namespace Arcane
+namespace ARC
 {
    struct Rectangle
    {

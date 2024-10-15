@@ -1,11 +1,10 @@
+#include "arcpch.h"
 #include "Console.h"
 
-#include <iostream>
+std::once_flag ARC::Console::m_initFlag;
+HANDLE ARC::Console::m_hConsole;
 
-std::once_flag Arcane::Console::m_initFlag;
-HANDLE Arcane::Console::m_hConsole;
-
-bool Arcane::Console::Initialize(const std::wstring& title, int width, int height)
+bool ARC::Console::Initialize(const std::wstring& title, int width, int height)
 {
    static bool initialized = false;
    std::call_once(m_initFlag, [&]()
@@ -30,53 +29,108 @@ bool Arcane::Console::Initialize(const std::wstring& title, int width, int heigh
    return initialized;
 }
 
-void Arcane::Console::Output(const std::string& msg)
+void ARC::Console::Output(const std::string& msg)
 {
-   std::cout << msg << std::endl;
+   std::cout << msg << NEW_LINE;
 }
 
-void Arcane::Console::Output(const char* msg)
+void ARC::Console::Output(const std::string_view& msg)
 {
-   std::cout << msg << std::endl;
+   std::cout << msg << NEW_LINE;
 }
 
-void Arcane::Console::OutputW(const std::wstring& msg)
+void ARC::Console::Output(const char* msg)
 {
-   std::wcout << msg << std::endl;
+   std::cout << msg << NEW_LINE;
 }
 
-void Arcane::Console::OutputW(const wchar_t* msg)
+void ARC::Console::OutputW(const std::wstring& msg)
 {
-   std::wcout << msg << std::endl;
+   std::wcout << msg << NEW_LINE;
 }
 
-void Arcane::Console::Error(const std::string& msg)
+void ARC::Console::OutputW(const std::wstring_view& msg)
 {
-   std::cerr << msg << std::endl;
+   std::wcout << msg << NEW_LINE;
 }
 
-void Arcane::Console::Error(const char* msg)
+void ARC::Console::OutputW(const wchar_t* msg)
 {
-   std::cerr << msg << std::endl;
+   std::wcout << msg << NEW_LINE;
 }
 
-void Arcane::Console::ErrorW(const std::wstring& msg)
+void ARC::Console::Error(const std::string& msg)
 {
-   std::wcerr << msg << std::endl;
+   std::cerr << msg << NEW_LINE;
 }
 
-void Arcane::Console::ErrorW(const wchar_t* msg)
+void ARC::Console::Error(const std::string_view& msg)
 {
-   std::wcerr << msg << std::endl;
+   std::cerr << msg << NEW_LINE;
 }
 
-void Arcane::Console::SetTitle(const std::wstring& title)
+void ARC::Console::Error(const char* msg)
+{
+   std::cerr << msg << NEW_LINE;
+}
+
+void ARC::Console::ErrorW(const std::wstring& msg)
+{
+   std::wcerr << msg << NEW_LINE;
+}
+
+void ARC::Console::ErrorW(const std::wstring_view& msg)
+{
+   std::wcerr << msg << NEW_LINE;
+}
+
+void ARC::Console::ErrorW(const wchar_t* msg)
+{
+   std::wcerr << msg << NEW_LINE;
+}
+
+void ARC::Console::Log(const std::string& msg)
+{
+   std::clog << msg << NEW_LINE;
+}
+
+void ARC::Console::Log(const std::string_view& msg)
+{
+   std::clog << msg << NEW_LINE;
+}
+
+void ARC::Console::Log(const char* msg)
+{
+   std::clog << msg << NEW_LINE;
+}
+
+void ARC::Console::LogW(const std::wstring& msg)
+{
+   std::wclog << msg << NEW_LINE;
+}
+
+void ARC::Console::LogW(const std::wstring_view& msg)
+{
+   std::wclog << msg << NEW_LINE;
+}
+
+void ARC::Console::LogW(const wchar_t* msg)
+{
+   std::wclog << msg << NEW_LINE;
+}
+
+void ARC::Console::Flush(std::ostream& stream)
+{
+   std::flush(stream);
+}
+
+void ARC::Console::SetTitle(const std::wstring& title)
 {
    if (m_hConsole)
       SetConsoleTitle(title.c_str());
 }
 
-void Arcane::Console::SetTextColor(WORD color)
+void ARC::Console::SetTextColor(WORD color)
 {
    if (m_hConsole)
       SetConsoleTextAttribute(m_hConsole, color);

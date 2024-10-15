@@ -1,12 +1,6 @@
 #pragma once
 
-#include <format>
-#include <string>
-#include <vector>
-
-#include "Common.h"
-
-namespace Arcane
+namespace ARC
 {
    namespace StringUtil
    {
@@ -38,62 +32,87 @@ namespace Arcane
       std::wstring Replace(const std::wstring& str, const std::wstring& find, const std::wstring& replace);
 
       template <typename T>
-      std::string ToString(T value)
+      std::string ToString(const T& value)
       {
          if constexpr (std::is_same_v<T, std::wstring>)
          {
-            int32_t size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, NULL, 0, NULL, NULL);
-            std::string result(size, 0);
-            WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), size, NULL, NULL);
+            int32_t size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), NULL, 0, NULL, NULL);
+            std::string result;
+            result.resize(size);
+            WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), result.data(), size, NULL, NULL);
+            return result;
+         }
+         else if constexpr (std::is_same_v<T, const wchar_t*> || std::is_same_v<T, wchar_t*>)
+         {
+            int32_t size = WideCharToMultiByte(CP_UTF8, 0, value, static_cast<int32_t>(std::wcslen(value)), NULL, 0, NULL, NULL);
+            std::string result;
+            result.resize(size);
+            WideCharToMultiByte(CP_UTF8, 0, value, static_cast<int32_t>(std::wcslen(value)), result.data(), size, NULL, NULL);
             return result;
          }
          else if constexpr (std::is_floating_point_v<T>)
          {
-            return std::format("{:.{}g}", value, std::numeric_limits<T>::max_digits10);
+            std::ostringstream oss;
+            oss.precision(std::numeric_limits<T>::max_digits10);
+            oss << value;
+            return oss.str();
          }
-         else if constexpr (std::is_same_v<T, const char*>)
+         else if constexpr (std::is_same_v<T, char*> || std::is_same_v<T, const char*>)
          {
             return std::string(value);
          }
-         else if constexpr (std::is_same_v<T, std::string>)
+         else if constexpr (std::is_convertible_v<T, std::string>)
          {
             return value;
          }
          else
          {
-            return std::format("{}", value);
+            std::ostringstream oss;
+            oss << value;
+            return oss.str();
          }
       }
 
       template <typename T>
-      std::wstring ToWString(T value)
+      std::wstring ToWString(const T& value)
       {
          if constexpr (std::is_same_v<T, std::string>)
          {
-            int32_t size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, NULL, 0);
-            std::wstring result(size, 0);
-            MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, result.data(), size);
+            int32_t size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), NULL, 0);
+            std::wstring result;
+            result.resize(size);
+            MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), result.data(), size);
             return result;
+         }
+         else if constexpr (std::is_same_v<T, const wchar_t*> || std::is_same_v<T, wchar_t*>)
+         {
+            return std::wstring(value);
          }
          else if constexpr (std::is_floating_point_v<T>)
          {
-            return std::format(L"{:.{}g}", value, std::numeric_limits<T>::max_digits10);
+            std::wostringstream woss;
+            woss.precision(std::numeric_limits<T>::max_digits10);
+            woss << value;
+            return woss.str();
          }
-         else if constexpr (std::is_same_v<T, const char*>)
+         else if constexpr (std::is_same_v<T, char*> || std::is_same_v<T, const char*>)
          {
-            int32_t size = MultiByteToWideChar(CP_UTF8, 0, value, -1, NULL, 0);
-            std::wstring result(size, 0);
-            MultiByteToWideChar(CP_UTF8, 0, value, -1, result.data(), size);
+            int32_t size = MultiByteToWideChar(CP_UTF8, 0, value, static_cast<int32_t>(std::strlen(value)), NULL, 0);
+            std::wstring result;
+            result.resize(size);
+            MultiByteToWideChar(CP_UTF8, 0, value, static_cast<int32_t>(std::strlen(value)), result.data(), size);
             return result;
          }
-         else if constexpr (std::is_same_v<T, std::wstring>)
+         else if constexpr (std::is_convertible_v<T, std::wstring>)
          {
             return value;
          }
          else
          {
-            return std::format(L"{}", value);
+            std::wostringstream woss;
+            woss << value;
+            return woss.str();
          }
       }
    } // namespace StringUtil
-} // namespace Arcane
+} // namespace ARC

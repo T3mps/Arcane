@@ -1,8 +1,9 @@
+#include "arcpch.h"
 #include "Window.h"
 
 #include "Logging/Logging.h"
 
-Arcane::Window::Window(HINSTANCE hInstance, int32_t nCmdShow, const std::wstring& windowTitle, int32_t width, int32_t height) :
+ARC::Window::Window(HINSTANCE hInstance, int32_t nCmdShow, const std::wstring& windowTitle, int32_t width, int32_t height) :
    m_hInstance(hInstance),
    m_hWnd(nullptr),
    m_windowClassName(L"ArcaneWindow"),
@@ -26,12 +27,12 @@ Arcane::Window::Window(HINSTANCE hInstance, int32_t nCmdShow, const std::wstring
    UpdateWindow(m_hWnd);
 }
 
-Arcane::Window::~Window()
+ARC::Window::~Window()
 {
    Cleanup();
 }
 
-bool Arcane::Window::Initialize()
+bool ARC::Window::Initialize()
 {
    if (!RegisterWindowClass())
       return false;
@@ -43,7 +44,7 @@ bool Arcane::Window::Initialize()
    return true;
 }
 
-void Arcane::Window::ProcessMessages()
+void ARC::Window::ProcessMessages()
 {
    MSG msg = { 0 };
    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
@@ -56,7 +57,7 @@ void Arcane::Window::ProcessMessages()
    }
 }
 
-void Arcane::Window::Cleanup()
+void ARC::Window::Cleanup()
 {
    if (m_hWnd)
    {
@@ -66,7 +67,7 @@ void Arcane::Window::Cleanup()
    UnregisterClass(m_windowClassName.c_str(), m_hInstance);
 }
 
-bool Arcane::Window::RegisterWindowClass()
+bool ARC::Window::RegisterWindowClass()
 {
    WNDCLASSEX wc = { 0 };
    wc.cbSize = sizeof(WNDCLASSEX);
@@ -86,7 +87,7 @@ bool Arcane::Window::RegisterWindowClass()
    return true;
 }
 
-bool Arcane::Window::CreateAppWindow(int32_t nCmdShow)
+bool ARC::Window::CreateAppWindow(int32_t nCmdShow)
 {
    m_hWnd = CreateWindowEx
    (
@@ -112,14 +113,14 @@ bool Arcane::Window::CreateAppWindow(int32_t nCmdShow)
    return true;
 }
 
-void Arcane::Window::SetTitle(const std::wstring& title)
+void ARC::Window::SetTitle(const std::wstring& title)
 {
    m_windowTitle = title;
    if (m_hWnd)
       SetWindowText(m_hWnd, title.c_str());
 }
 
-void Arcane::Window::ToggleFullscreen()
+void ARC::Window::ToggleFullscreen()
 {
    if (m_isFullscreen)
    {
@@ -139,7 +140,7 @@ void Arcane::Window::ToggleFullscreen()
    }
 }
 
-LRESULT CALLBACK Arcane::Window::WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK ARC::Window::WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
    Window* window = reinterpret_cast<Window*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 

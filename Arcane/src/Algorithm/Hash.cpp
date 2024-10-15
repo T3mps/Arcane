@@ -1,10 +1,11 @@
+#include "arcpch.h"
 #include "Hash.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // FNV1a
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-uint64_t Arcane::Hash::FNV1aRuntime(const std::string& string) noexcept
+uint64_t ARC::Hash::FNV1aRuntime(const std::string& string) noexcept
 {
    uint64_t hash = FNV_OFFSET_BASIS;
    for (char c : string)
@@ -19,7 +20,7 @@ uint64_t Arcane::Hash::FNV1aRuntime(const std::string& string) noexcept
 // xxHash64
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr uint64_t Arcane::Hash::xxHash64Round(uint64_t accumulator, uint64_t input)
+constexpr uint64_t ARC::Hash::xxHash64Round(uint64_t accumulator, uint64_t input)
 {
    accumulator += input * XXH_PRIME64_2;
    accumulator = RotateLeft64(accumulator, 31);
@@ -27,7 +28,7 @@ constexpr uint64_t Arcane::Hash::xxHash64Round(uint64_t accumulator, uint64_t in
    return accumulator;
 }
 
-constexpr uint64_t Arcane::Hash::xxHash64Avalanche(uint64_t hash)
+constexpr uint64_t ARC::Hash::xxHash64Avalanche(uint64_t hash)
 {
    hash ^= hash >> 33;
    hash *= XXH_PRIME64_2;
@@ -37,7 +38,7 @@ constexpr uint64_t Arcane::Hash::xxHash64Avalanche(uint64_t hash)
    return hash;
 }
 
-constexpr uint64_t Arcane::Hash::xxHash64Finalize(uint64_t hash, const char* data, size_t length)
+constexpr uint64_t ARC::Hash::xxHash64Finalize(uint64_t hash, const char* data, size_t length)
 {
    while (length >= 8)
    {
@@ -70,7 +71,7 @@ constexpr uint64_t Arcane::Hash::xxHash64Finalize(uint64_t hash, const char* dat
    return xxHash64Avalanche(hash);
 }
 
-constexpr uint64_t Arcane::Hash::xxHash64(const char* data, size_t length, uint64_t seed)
+constexpr uint64_t ARC::Hash::xxHash64(const char* data, size_t length, uint64_t seed)
 {
    uint64_t hash = seed + XXH_PRIME64_5 + length;
 

@@ -1,13 +1,12 @@
-#include "Json.h"
+#include "arcpch.h"
+#include "JSON.h"
 
-#include <sstream>
-
-Arcane::JSON::JSON(const std::string& filePath)
+ARC::JSON::JSON(const std::string& filePath)
 {
    Load(filePath);
 }
 
-bool Arcane::JSON::Save(const std::string& filePath, int tabSize) const
+bool ARC::JSON::Save(const std::string& filePath, int tabSize) const
 {
    std::ofstream file(filePath);
    if (!file.is_open())
@@ -18,7 +17,7 @@ bool Arcane::JSON::Save(const std::string& filePath, int tabSize) const
 
    try
    {
-      file << std::setw(tabSize) << m_jsonData;
+      file << std::setw(tabSize) << m_data;
    }
    catch (const std::exception& e)
    {
@@ -30,7 +29,7 @@ bool Arcane::JSON::Save(const std::string& filePath, int tabSize) const
    return true;
 }
 
-bool Arcane::JSON::Load(const std::string& filePath)
+bool ARC::JSON::Load(const std::string& filePath)
 {
    std::ifstream file(filePath);
    if (!file.is_open())
@@ -41,7 +40,7 @@ bool Arcane::JSON::Load(const std::string& filePath)
 
    try
    {
-      file >> m_jsonData;
+      file >> m_data;
    }
    catch (const std::exception& e)
    {
@@ -53,12 +52,12 @@ bool Arcane::JSON::Load(const std::string& filePath)
    return true;
 }
 
-std::string Arcane::JSON::ToString(int tabSize) const
+std::string ARC::JSON::ToString(int tabSize) const
 {
-   return m_jsonData.dump(tabSize);
+   return m_data.dump(tabSize);
 }
 
-std::string Arcane::JSON::GenerateJsonString(const std::vector<std::pair<std::string, std::string>>& data, bool prettyPrint, int indentLevel)
+std::string ARC::JSON::GenerateJsonString(const std::vector<std::pair<std::string, std::string>>& data, bool prettyPrint, int indentLevel)
 {
    std::ostringstream oss;
    std::string indent(prettyPrint ? indentLevel : 0, ' ');
@@ -87,7 +86,7 @@ std::string Arcane::JSON::GenerateJsonString(const std::vector<std::pair<std::st
    return oss.str();
 }
 
-std::wstring Arcane::JSON::GenerateJsonWString(const std::vector<std::pair<std::wstring, std::wstring>>& data, bool prettyPrint, int indentLevel)
+std::wstring ARC::JSON::GenerateJsonWString(const std::vector<std::pair<std::wstring, std::wstring>>& data, bool prettyPrint, int indentLevel)
 {
    std::wostringstream oss;
    std::wstring indent(prettyPrint ? indentLevel : 0, L' ');
@@ -99,15 +98,12 @@ std::wstring Arcane::JSON::GenerateJsonWString(const std::vector<std::pair<std::
    for (const auto& [key, value] : data)
    {
       if (!first)
-      {
          oss << L"," << newline;
-      }
-      first = false;
+      else
+         first = false;
 
       if (prettyPrint)
-      {
          oss << indent;
-      }
 
       oss << L"\"" << EscapeWString(key) << L"\": \"" << EscapeWString(value) << L"\"";
    }
@@ -116,7 +112,7 @@ std::wstring Arcane::JSON::GenerateJsonWString(const std::vector<std::pair<std::
    return oss.str();
 }
 
-std::string Arcane::JSON::EscapeString(const std::string& input)
+std::string ARC::JSON::EscapeString(const std::string& input)
 {
    std::string output;
    for (char c : input)
@@ -136,7 +132,7 @@ std::string Arcane::JSON::EscapeString(const std::string& input)
    return output;
 }
 
-std::wstring Arcane::JSON::EscapeWString(const std::wstring& input)
+std::wstring ARC::JSON::EscapeWString(const std::wstring& input)
 {
    std::wstring output;
    for (wchar_t c : input)

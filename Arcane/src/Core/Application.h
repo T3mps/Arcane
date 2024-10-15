@@ -1,21 +1,24 @@
 #pragma once
 
-#include <functional>
-#include <memory>
-
 #include "Window.h"
+#include "Util/Delegate.h"
+#include "Version.h"
 
-namespace Arcane
+namespace ARC
 {
+   struct ApplicationInfo
+   {
+      HINSTANCE hInstance;
+      int nCmdShow;
+   };
+
    class Application
    {
    public:
       static constexpr uint32_t TARGET_UPDATES_PER_SECOND = 60U;
       static constexpr uint32_t MAX_ACCUMULATED_UPDATES = 5U;
 
-      static std::unique_ptr<Application> Create(HINSTANCE hInstance, int nCmdShow);
-
-      Application(HINSTANCE hInstance, int nCmdShow);
+      explicit Application(ApplicationInfo info);
       ~Application();
       Application(const Application&) = delete;
       Application& operator=(const Application&) = delete;
@@ -24,9 +27,14 @@ namespace Arcane
 
       void Run();
 
-      void RegisterUpdateCallback(std::function<void(float)> callback)       { m_updateCallback = callback; }
-      void RegisterFixedUpdateCallback(std::function<void(float)> callback)  { m_fixedUpdateCallback = callback; }
-      void RegisterRenderCallback(std::function<void()> callback)            { m_renderCallback = callback; }
+      template<void (*Function)(float)>
+      void RegisterUpdateCallback()       { m_updateCallback.Bind<Function>(); }
+
+      template<void (*Function)(float)>
+      void RegisterFixedUpdateCallback()  { m_fixedUpdateCallback.Bind<Function>(); }
+      
+      template<void (*Function)()>
+      void RegisterRenderCallback()       { m_renderCallback.Bind<Function>(); }
 
    private:
       bool Initialize(HINSTANCE hInstance, int nCmdShow);
@@ -43,9 +51,8 @@ namespace Arcane
       uint32_t m_updatesPerSecond;
       uint32_t m_fixedUpdatesPerSecond;
 
-      std::function<void(float)> m_updateCallback;
-      std::function<void(float)> m_fixedUpdateCallback;
-      std::function<void()> m_renderCallback;
-
+      Delegate<void(float)> m_updateCallback;
+      Delegate<void(float)> m_fixedUpdateCallback;
+      Delegate<void(void)> m_renderCallback;
    };
 }

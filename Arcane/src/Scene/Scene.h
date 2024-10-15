@@ -1,43 +1,11 @@
 #pragma once
 
-#include <algorithm>
-#include <functional>
-#include <map>
-#include <memory>
-#include <vector>
-
-#include "Common.h"
 #include "entt/entt.hpp"
 #include "System.h"
 #include "Util/UUID.h"
 
-namespace Arcane
+namespace ARC
 {
-   template<typename SystemType>
-   class SortedSystemList
-   {
-   public:
-      SortedSystemList(size_t capacity = 32)
-      {
-         m_systems.reserve(capacity);
-      }
-
-      ~SortedSystemList() = default;
-
-      void Insert(const SystemType& system)
-      {
-         auto it = std::lower_bound(m_systems.begin(), m_systems.end(), system,
-            [](const SystemType& a, const SystemType& b) { return a.priority < b.priority; });
-         m_systems.insert(it, system);
-      }
-
-      typename std::vector<SystemType>::const_iterator begin() const { return m_systems.begin(); }
-      typename std::vector<SystemType>::const_iterator end() const { return m_systems.end(); }
-
-   private:
-      std::vector<SystemType> m_systems;
-   };
-
    class Entity;
 
    class Scene : public std::enable_shared_from_this<Scene>
@@ -85,4 +53,4 @@ namespace Arcane
 
       friend class Entity;
    };
-} // namespace Arcane
+} // namespace ARC

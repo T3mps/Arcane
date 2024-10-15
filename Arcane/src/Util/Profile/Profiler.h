@@ -1,13 +1,9 @@
 #pragma once
 
-#include <fstream>
-#include <mutex>
-#include <string>
-
-#include "Instrumentor.h"
 #include "../Singleton.h"
+#include "Instrumentor.h"
 
-namespace Arcane
+namespace ARC
 {
 	class Profiler : public Singleton<Profiler>
 	{
@@ -29,9 +25,10 @@ namespace Arcane
 		void WriteHeader();
 		void WriteFooter();
 
-		std::mutex m_Mutex;
-		InstrumentationSession* m_CurrentSession;
-		std::ofstream m_OutputStream;
+		std::mutex m_mutex;
+		std::unique_ptr<InstrumentationSession> m_currentSession;
+		std::ofstream m_outputStream;
+		bool m_firstProfileWritten = true;
 
 		friend class Singleton<Profiler>;
 	};

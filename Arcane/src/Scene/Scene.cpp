@@ -1,3 +1,4 @@
+#include "arcpch.h"
 #include "Scene.h"
 
 #include "Components.h"
@@ -5,22 +6,22 @@
 #include "Entity.h"
 #include "Math/Geometry.h"
 
-Arcane::Scene::Scene() :
+ARC::Scene::Scene() :
    m_running(false),
    m_paused(false)
 {
 }
 
-Arcane::Scene::~Scene()
+ARC::Scene::~Scene()
 {
 }
 
-Arcane::Entity Arcane::Scene::CreateEntity(const std::string& name /*= std::string()*/)
+ARC::Entity ARC::Scene::CreateEntity(const std::string& name /*= std::string()*/)
 {
    return CreateEntity(UUID(), name);
 }
 
-Arcane::Entity Arcane::Scene::CreateEntity(UUID uuid, const std::string& name /*= std::string()*/)
+ARC::Entity ARC::Scene::CreateEntity(UUID uuid, const std::string& name /*= std::string()*/)
 {
    Entity entity = { m_registry.create(), this };
    
@@ -34,13 +35,13 @@ Arcane::Entity Arcane::Scene::CreateEntity(UUID uuid, const std::string& name /*
    return entity;
 }
 
-void Arcane::Scene::DestroyEntity(Entity entity)
+void ARC::Scene::DestroyEntity(Entity entity)
 {
    m_entityMap.erase(entity.GetComponent<Components::ID>());
    m_registry.destroy(entity);
 }
 
-Arcane::Entity Arcane::Scene::FindEntity(const std::string& name)
+ARC::Entity ARC::Scene::FindEntity(const std::string& name)
 {
    auto view = m_registry.view<Components::Tag>();
    for (auto entity : view)
@@ -53,7 +54,7 @@ Arcane::Entity Arcane::Scene::FindEntity(const std::string& name)
    return Entity{};
 }
 
-Arcane::Entity Arcane::Scene::GetEntity(UUID uuid)
+ARC::Entity ARC::Scene::GetEntity(UUID uuid)
 {
    auto entity = m_entityMap.find(uuid);
    if (entity != m_entityMap.end())
@@ -62,28 +63,32 @@ Arcane::Entity Arcane::Scene::GetEntity(UUID uuid)
    return Entity{};
 }
 
-void Arcane::Scene::OnStart()
+void ARC::Scene::OnStart()
 {
    m_running = true;
 }
 
-void Arcane::Scene::OnStop()
+void ARC::Scene::OnStop()
 {
    m_running = false;
 }
 
-void Arcane::Scene::Update(float32_t deltaTime)
+#include "Util/Profile/Instrumentation.h"
+
+void ARC::Scene::Update(float32_t deltaTime)
 {
+   ARC_PROFILE_FUNCTION();
    if (m_running && !m_paused)
    {
       for (const auto& system : m_updateSystems)
       {
+         ARC_PROFILE_SCOPE("ECS Systems");
          system(shared_from_this(), deltaTime);
       }
    }
 }
 
-void Arcane::Scene::FixedUpdate(float32_t timeStep)
+void ARC::Scene::FixedUpdate(float32_t timeStep)
 {
    if (m_running && !m_paused)
    {
@@ -94,7 +99,7 @@ void Arcane::Scene::FixedUpdate(float32_t timeStep)
    }
 }
 
-void Arcane::Scene::Render()
+void ARC::Scene::Render()
 {
    if (m_running)
    {
@@ -106,22 +111,22 @@ void Arcane::Scene::Render()
 }
 
 template <typename T>
-void Arcane::Scene::OnComponentAdded(Entity entity, T& component)
+void ARC::Scene::OnComponentAdded(Entity entity, T& component)
 {
    static_assert(sizeof(T) == 0);
 }
 
 template <>
-void Arcane::Scene::OnComponentAdded<Arcane::Components::ID>(Entity entity, Components::ID& component)
+void ARC::Scene::OnComponentAdded<ARC::Components::ID>(Entity entity, Components::ID& component)
 {
 }
 
 template <>
-void Arcane::Scene::OnComponentAdded<Arcane::Components::Tag>(Entity entity, Components::Tag& component)
+void ARC::Scene::OnComponentAdded<ARC::Components::Tag>(Entity entity, Components::Tag& component)
 {
 }
 
 template <>
-void Arcane::Scene::OnComponentAdded<Arcane::Components::Transform>(Entity entity, Components::Transform& component)
+void ARC::Scene::OnComponentAdded<ARC::Components::Transform>(Entity entity, Components::Transform& component)
 {
 }

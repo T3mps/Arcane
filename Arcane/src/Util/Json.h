@@ -1,14 +1,8 @@
 #pragma once
 
-#include <fstream>
-#include <iostream>
-#include <string>
-#include <utility>
-#include <vector>
-
 #include "nlohmann/json.hpp"
 
-namespace Arcane
+namespace ARC
 {
    class JSON
    {
@@ -21,30 +15,30 @@ namespace Arcane
       bool Save(const std::string& filePath, int tabSize = 4) const;
       bool Load(const std::string& filePath);
 
-      template<typename T>
-      T Get(const std::string& key, const T& defaultValue) const
+      template <typename T>
+      std::optional<T> Get(const std::string& key) const
       {
-         if (m_jsonData.contains(key))
+         if (m_data.contains(key))
          {
             try
             {
-               return m_jsonData.at(key).get<T>();
+               return m_data.at(key).get<T>();
             }
             catch (const nlohmann::json::exception& e)
             {
-               std::cerr << "JSON error while getting key \"" << key << "\": " << e.what() << std::endl;
+               return std::nullopt;
             }
          }
-         return defaultValue;
+         return std::nullopt;
       }
 
-      template<typename T>
-      void Set(const std::string& key, const T& value) { m_jsonData[key] = value; }
+      template <typename T>
+      void Set(const std::string& key, const T& value) { m_data[key] = value; }
 
-      bool Contains(const std::string& key) const { return m_jsonData.contains(key); }
+      bool Contains(const std::string& key) const { return m_data.contains(key); }
 
-      nlohmann::json& Data() { return m_jsonData; }
-      const nlohmann::json& Data() const { return m_jsonData; }
+      nlohmann::json& Data() { return m_data; }
+      const nlohmann::json& Data() const { return m_data; }
 
       std::string ToString(int tabSize = 4) const;
 
@@ -55,6 +49,6 @@ namespace Arcane
       static std::string EscapeString(const std::string& input);
       static std::wstring EscapeWString(const std::wstring& input);
 
-      nlohmann::json m_jsonData;
+      nlohmann::json m_data;
    };
-} // namespace Arcane
+} // namespace ARC

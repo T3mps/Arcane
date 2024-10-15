@@ -1,3 +1,4 @@
+#include "arcpch.h"
 #include "DLLInterface.h"
 
 #include "Util/StringUtil.h"
@@ -12,15 +13,15 @@ HMODULE LoadDLL(const std::wstring& dllName, const std::wstring& funcName, Entry
    if (!hModule)
    {
       DWORD error = GetLastError();
-      ARC_CORE_ERROR(L"Failed to load " + dllName + L", error code: " + Arcane::StringUtil::ToWString(error) + L" (" + GetErrorMessage(error) + L")");
+      ARC_CORE_ERROR(L"Failed to load " + dllName + L", error code: " + ARC::StringUtil::ToWString(error) + L" (" + GetErrorMessage(error) + L")");
       return nullptr;
    }
 
-   runGameFunc = (EntryPointFunc) GetProcAddress(hModule, Arcane::StringUtil::ToString(funcName).c_str());
+   runGameFunc = (EntryPointFunc) GetProcAddress(hModule, ARC::StringUtil::ToString(funcName).c_str());
    if (!runGameFunc)
    {
       DWORD error = GetLastError();
-      ARC_CORE_ERROR(L"Failed to find " + funcName + L" function in " + dllName + L", error code: " + Arcane::StringUtil::ToWString(error) + L" (" + GetErrorMessage(error) + L")");
+      ARC_CORE_ERROR(L"Failed to find " + funcName + L" function in " + dllName + L", error code: " + ARC::StringUtil::ToWString(error) + L" (" + GetErrorMessage(error) + L")");
       FreeLibrary(hModule);
       return nullptr;
    }
@@ -59,7 +60,7 @@ void RunDLL(EntryPointFunc runGameFunc, HINSTANCE hInstance, int32_t nCmdShow)
          else
          {
             DWORD error = GetLastError();
-            ARC_CORE_ERROR(L"GetMessage failed with error: " + Arcane::StringUtil::ToWString(error) + L" (" + GetErrorMessage(error) + L")");
+            ARC_CORE_ERROR(L"GetMessage failed with error: " + ARC::StringUtil::ToWString(error) + L" (" + GetErrorMessage(error) + L")");
             break;
          }
       }

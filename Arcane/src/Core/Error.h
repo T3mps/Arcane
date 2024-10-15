@@ -1,14 +1,9 @@
 #pragma once
 
-#include <source_location>
-#include <string>
-#include <vector>
-
-#include "Common.h"
-#include "StackTrace.h"
+#include "Util/StackTrace.h"
 #include "Util/UUID.h"
 
-namespace Arcane
+namespace ARC
 {
    enum class ErrorCode : uint64_t
    {
@@ -26,13 +21,13 @@ namespace Arcane
    class Error
    {
    public:
-      static Error Create(ErrorCode code, const std::string& message, const std::source_location location = std::source_location::current())
+      static Error Create(ErrorCode code, const std::string_view message, const std::source_location location = std::source_location::current())
       {
          std::optional<std::string> stackTrace = std::nullopt;
 #ifdef ARC_BUILD_DEBUG
          stackTrace = StackTrace::Capture();
 #endif
-         return Error(code, message, stackTrace, location.file_name(), location.line());
+         return Error(code, message.data(), stackTrace, location.file_name(), location.line());
       }
 
       ErrorCode Code()                                const { return m_code; }
@@ -48,11 +43,11 @@ namespace Arcane
       }
 
    private:
-      Error(ErrorCode code, std::string msg, std::optional<std::string> trace = std::nullopt, std::string file = "", int line = 0) :
+      Error(ErrorCode code, const std::string& msg, std::optional<std::string> trace = std::nullopt, std::string file = "", int line = 0) :
          m_code(code),
-         m_message(std::move(msg)),
-         m_stackTrace(std::move(trace)),
-         m_file(std::move(file)),
+         m_message(msg),
+         m_stackTrace(trace),
+         m_file(file),
          m_line(line),
          m_uuid()
       {}
@@ -64,4 +59,4 @@ namespace Arcane
       int m_line;
       UUID m_uuid;
    };
-} // namespace Arcane
+} // namespace ARC

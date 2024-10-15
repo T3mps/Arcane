@@ -1,12 +1,5 @@
 #pragma once
 
-#include <functional>
-#include <stack>
-#include <string>
-#include <unordered_map>
-
-#include "Common.h"
-
 using OptionHandler        = std::function<void(const std::wstring&)>;
 using OptionHandlers       = std::unordered_map<std::wstring, OptionHandler>;
 using PositionalArguments  = std::stack<std::wstring>;

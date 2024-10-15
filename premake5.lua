@@ -17,16 +17,18 @@ workspace "Arcane"
     }
 
     language "C++"
-    cppdialect "C++20"
+    cppdialect "C++latest"
     staticruntime "on"
 
     filter "system:windows"
         toolset "v143"    
         systemversion "latest"
+        defines { "ARC_PLATFORM_WINDOWS" }
 
     filter "system:linux"
         pic "On"
         systemversion "latest"
+        defines { "ARC_PLATFORM_LINUX" }
 
     filter "configurations:Debug"
         defines { "ARC_BUILD_DEBUG", "ARC_PROFILE" }
@@ -46,9 +48,10 @@ workspace "Arcane"
         objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
 
         files {
+            "%{prj.location}/src/**.c",
             "%{prj.location}/src/**.h",
             "%{prj.location}/src/**.cpp",
-            "%{prj.location}/src/**.hpp"
+            "%{prj.location}/src/**.hpp",
         }
 
         includedirs {
@@ -72,18 +75,22 @@ workspace "Arcane"
         filter "system:windows"
             links { "d3d12" }
 
+        pchheader "arcpch.h"
+        pchsource "Arcane/src/arcpch.cpp"
+
         postbuildcommands { ("{COPY} %{cfg.buildtarget.relpath} ../bin/" .. outputdir .. "/ArcaneTest") }
 
     project "ArcaneTest"
         setupProject("ArcaneTest", "SharedLib")
         links { "Arcane" }
 
+        pchheader "arcpch.h"
+        pchsource "../Arcane/src/arcpch.cpp"
+
         filter "system:windows"
             linkoptions { "/SUBSYSTEM:WINDOWS" }
-            defines { "ARCANE_TEST_EXPORTS" }
 
-        filter "system:linux"
-            defines { "ARCANE_TEST_EXPORTS" }
+        defines { "ARCANE_TEST_EXPORTS" }
 
         postbuildcommands {
             ("{COPY} %{cfg.buildtarget.relpath} ../bin/" .. outputdir .. "/Loom/")
@@ -91,7 +98,10 @@ workspace "Arcane"
 
     project "Loom"
         setupProject("Loom", "ConsoleApp")
-        links { "Arcane", "ArcaneTest" }
+        links { "Arcane" }
+
+        pchheader "arcpch.h"
+        pchsource "../Arcane/src/arcpch.cpp"
 
         filter "system:windows"
             linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:wWinMainCRTStartup" }

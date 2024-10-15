@@ -1,8 +1,6 @@
 #pragma once
 
-#include "Common.h"
-
-namespace Arcane
+namespace ARC
 {
 	class UUID
 	{
@@ -18,7 +16,7 @@ namespace Arcane
 	private:
 		uint64_t m_UUID;
 	};
-} // namespace Arcane
+} // namespace ARC
 
 namespace std
 {
@@ -26,9 +24,9 @@ namespace std
 	struct hash;
 
 	template <>
-	struct hash<Arcane::UUID>
+	struct hash<ARC::UUID>
 	{
-		size_t operator()(const Arcane::UUID& uuid) const
+		size_t operator()(const ARC::UUID& uuid) const
 		{
 			return static_cast<uint64_t>(uuid);
 		}

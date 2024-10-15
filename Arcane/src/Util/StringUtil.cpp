@@ -1,55 +1,49 @@
+#include "arcpch.h"
 #include "StringUtil.h"
 
-#include <algorithm>
 #include <cctype>
 #include <cwctype>
 #include <locale>
-#include <string>
-#include <vector>
-#include <sstream>
-#include <iomanip>
-#include <limits>
-#include "Common.h"
 
-std::string Arcane::StringUtil::ToLower(const std::string& str)
+std::string ARC::StringUtil::ToLower(const std::string& str)
 {
    std::string lowerStr = str;
    std::transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(), ::tolower);
    return lowerStr;
 }
 
-std::wstring Arcane::StringUtil::ToLower(const std::wstring& str)
+std::wstring ARC::StringUtil::ToLower(const std::wstring& str)
 {
    std::wstring lowerStr = str;
    std::transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(), ::towlower);
    return lowerStr;
 }
 
-std::string Arcane::StringUtil::ToUpper(const std::string& str)
+std::string ARC::StringUtil::ToUpper(const std::string& str)
 {
    std::string upperStr = str;
    std::transform(upperStr.begin(), upperStr.end(), upperStr.begin(), ::toupper);
    return upperStr;
 }
 
-std::wstring Arcane::StringUtil::ToUpper(const std::wstring& str)
+std::wstring ARC::StringUtil::ToUpper(const std::wstring& str)
 {
    std::wstring upperStr = str;
    std::transform(upperStr.begin(), upperStr.end(), upperStr.begin(), ::towupper);
    return upperStr;
 }
 
-int32_t Arcane::StringUtil::Compare(const std::string& str1, const std::string& str2)
+int32_t ARC::StringUtil::Compare(const std::string& str1, const std::string& str2)
 {
    return str1.compare(str2);
 }
 
-int32_t Arcane::StringUtil::Compare(const std::wstring& str1, const std::wstring& str2)
+int32_t ARC::StringUtil::Compare(const std::wstring& str1, const std::wstring& str2)
 {
    return str1.compare(str2);
 }
 
-std::string Arcane::StringUtil::Trim(const std::string& str)
+std::string ARC::StringUtil::Trim(const std::string& str)
 {
    size_t first = str.find_first_not_of(' ');
    if (first == std::string::npos)
@@ -58,7 +52,7 @@ std::string Arcane::StringUtil::Trim(const std::string& str)
    return str.substr(first, (last - first + 1));
 }
 
-std::wstring Arcane::StringUtil::Trim(const std::wstring& str)
+std::wstring ARC::StringUtil::Trim(const std::wstring& str)
 {
    size_t first = str.find_first_not_of(L' ');
    if (first == std::wstring::npos)
@@ -67,31 +61,31 @@ std::wstring Arcane::StringUtil::Trim(const std::wstring& str)
    return str.substr(first, (last - first + 1));
 }
 
-char* Arcane::StringUtil::ToChar(const std::string& str)
+char* ARC::StringUtil::ToChar(const std::string& str)
 {
    char* cstr = new char[str.length() + 1];
    std::strcpy(cstr, str.c_str());
    return cstr;
 }
 
-wchar_t* Arcane::StringUtil::ToWChar(const std::wstring& str)
+wchar_t* ARC::StringUtil::ToWChar(const std::wstring& str)
 {
    wchar_t* wcstr = new wchar_t[str.length() + 1];
    std::wcscpy(wcstr, str.c_str());
    return wcstr;
 }
 
-std::string Arcane::StringUtil::FromChar(const char* str)
+std::string ARC::StringUtil::FromChar(const char* str)
 {
    return std::string(str);
 }
 
-std::wstring Arcane::StringUtil::FromWChar(const wchar_t* str)
+std::wstring ARC::StringUtil::FromWChar(const wchar_t* str)
 {
    return std::wstring(str);
 }
 
-std::vector<std::string> Arcane::StringUtil::Split(const std::string& str, const std::string& delimiters)
+std::vector<std::string> ARC::StringUtil::Split(const std::string& str, const std::string& delimiters)
 {
    std::vector<std::string> tokens;
    size_t start = 0, end = 0;
@@ -106,7 +100,7 @@ std::vector<std::string> Arcane::StringUtil::Split(const std::string& str, const
    return tokens;
 }
 
-std::vector<std::wstring> Arcane::StringUtil::Split(const std::wstring& str, const std::wstring& delimiters)
+std::vector<std::wstring> ARC::StringUtil::Split(const std::wstring& str, const std::wstring& delimiters)
 {
    std::vector<std::wstring> tokens;
    size_t start = 0, end = 0;
@@ -121,7 +115,7 @@ std::vector<std::wstring> Arcane::StringUtil::Split(const std::wstring& str, con
    return tokens;
 }
 
-std::string Arcane::StringUtil::Replace(const std::string& str, const std::string& find, const std::string& replace)
+std::string ARC::StringUtil::Replace(const std::string& str, const std::string& find, const std::string& replace)
 {
    std::string result = str;
    size_t pos = 0;
@@ -133,7 +127,7 @@ std::string Arcane::StringUtil::Replace(const std::string& str, const std::strin
    return result;
 }
 
-std::wstring Arcane::StringUtil::Replace(const std::wstring& str, const std::wstring& find, const std::wstring& replace)
+std::wstring ARC::StringUtil::Replace(const std::wstring& str, const std::wstring& find, const std::wstring& replace)
 {
    std::wstring result = str;
    size_t pos = 0;
@@ -145,22 +139,24 @@ std::wstring Arcane::StringUtil::Replace(const std::wstring& str, const std::wst
    return result;
 }
 
-template std::string Arcane::StringUtil::ToString<int>(int value);
-template std::string Arcane::StringUtil::ToString<unsigned int>(unsigned int value);
-template std::string Arcane::StringUtil::ToString<long>(long value);
-template std::string Arcane::StringUtil::ToString<unsigned long>(unsigned long value);
-template std::string Arcane::StringUtil::ToString<long long>(long long value);
-template std::string Arcane::StringUtil::ToString<unsigned long long>(unsigned long long value);
-template std::string Arcane::StringUtil::ToString<float>(float value);
-template std::string Arcane::StringUtil::ToString<double>(double value);
-template std::string Arcane::StringUtil::ToString<long double>(long double value);
+template std::string ARC::StringUtil::ToString<int>(const int& value);
+template std::string ARC::StringUtil::ToString<unsigned int>(const unsigned int& value);
+template std::string ARC::StringUtil::ToString<long>(const long& value);
+template std::string ARC::StringUtil::ToString<unsigned long>(const unsigned long& value);
+template std::string ARC::StringUtil::ToString<long long>(const long long& value);
+template std::string ARC::StringUtil::ToString<unsigned long long>(const unsigned long long& value);
+template std::string ARC::StringUtil::ToString<float>(const float& value);
+template std::string ARC::StringUtil::ToString<double>(const double& value);
+template std::string ARC::StringUtil::ToString<long double>(const long double& value);
+template std::string ARC::StringUtil::ToString<std::wstring>(const std::wstring& value);
 
-template std::wstring Arcane::StringUtil::ToWString<int>(int value);
-template std::wstring Arcane::StringUtil::ToWString<unsigned int>(unsigned int value);
-template std::wstring Arcane::StringUtil::ToWString<long>(long value);
-template std::wstring Arcane::StringUtil::ToWString<unsigned long>(unsigned long value);
-template std::wstring Arcane::StringUtil::ToWString<long long>(long long value);
-template std::wstring Arcane::StringUtil::ToWString<unsigned long long>(unsigned long long value);
-template std::wstring Arcane::StringUtil::ToWString<float>(float value);
-template std::wstring Arcane::StringUtil::ToWString<double>(double value);
-template std::wstring Arcane::StringUtil::ToWString<long double>(long double value);
+template std::wstring ARC::StringUtil::ToWString<int>(const int& value);
+template std::wstring ARC::StringUtil::ToWString<unsigned int>(const unsigned int& value);
+template std::wstring ARC::StringUtil::ToWString<long>(const long& value);
+template std::wstring ARC::StringUtil::ToWString<unsigned long>(const unsigned long& value);
+template std::wstring ARC::StringUtil::ToWString<long long>(const long long& value);
+template std::wstring ARC::StringUtil::ToWString<unsigned long long>(const unsigned long long& value);
+template std::wstring ARC::StringUtil::ToWString<float>(const float& value);
+template std::wstring ARC::StringUtil::ToWString<double>(const double& value);
+template std::wstring ARC::StringUtil::ToWString<long double>(const long double& value);
+template std::wstring ARC::StringUtil::ToWString<std::string>(const std::string& value);

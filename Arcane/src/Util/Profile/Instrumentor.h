@@ -1,11 +1,6 @@
 #pragma once
 
-#include <algorithm>
-#include <chrono>
-
-#include "Common.h"
-
-namespace Arcane
+namespace ARC
 {
 	using FloatingPointMicroseconds = std::chrono::duration<double, std::micro>;
 
@@ -22,4 +17,4 @@ namespace Arcane
 	{
 		std::string name;
 	};
-} // namespace Arcane
+} // namespace ARC

@@ -1,28 +1,34 @@
+#include "arcpch.h"
 #include "Logger.h"
-
-#include <fstream>
 
 #include "Core/Console.h"
 #include "Level.h"
+#include "Util/ANSI.h"
 
-Arcane::Logger::Logger(const std::wstring& name) :
+ARC::Logger::Logger(const std::wstring& name) :
    LoggingService(),
    m_name(name),
-   m_level(Level::Trace),
    m_format(),
+   m_flushInterval(DEFAULT_FLUSH_INTERVAL),
+   m_messageCount(0),
    m_colorizeMessages(true)
 {
+#ifdef ARC_BUILD_DEBUG
+   m_level = Level::Trace;
+#else
+   m_level = Level::Info;
+#endif
 }
 
-void Arcane::Logger::Log(Level level, const std::wstring& message, const std::source_location& location)
+void ARC::Logger::Log(Level level, const std::wstring& message, const std::source_location& location)
 {
    if (level < m_level)
       return;
-
+   
    std::lock_guard<std::mutex> lock(m_mutex);
 
-   std::wstring levelStr = LevelToString(level);
-   std::wstring formattedMessage = m_format(levelStr, m_name, message, location);
+   const std::wstring& levelStr = LevelToString(level).data();
+   std::wstring formattedMessage = std::wstring(m_format(levelStr, m_name, message, location) + L',');
    
    if (m_colorizeMessages)
    {
@@ -50,10 +56,17 @@ void Arcane::Logger::Log(Level level, const std::wstring& message, const std::so
    }
 
    OutputLog(formattedMessage);
+
+   if (++m_messageCount >= m_flushInterval || level > Level::Info)
+   {
+      Console::Flush(std::clog);
+      if (m_messageCount >= m_flushInterval)
+         m_messageCount = 0;
+   }
 }
 
-void Arcane::Logger::OutputLog(const std::wstring& message) const
+void ARC::Logger::OutputLog(const std::wstring& message) const
 {
-   Console::OutputW(message);
+   Console::LogW(message);
 }
 

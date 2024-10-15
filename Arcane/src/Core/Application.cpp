@@ -1,51 +1,39 @@
+#include "arcpch.h"
 #include "Application.h"
 
-#include <chrono>
-#include <thread>
-#include <iostream>
-#include <fstream>
-
-#include "Common.h"
-#include "Logging/Logging.h"
 #include "Scene/SceneManager.h"
 
 #ifdef ARC_BUILD_DEBUG
    #include "Util/DumpGenerator.h"
 #endif
 
-std::unique_ptr<Arcane::Application> Arcane::Application::Create(HINSTANCE hInstance, int nCmdShow)
-{
-   auto app = std::make_unique<Application>(hInstance, nCmdShow);
-   if (!app)
-   {
-#ifdef ARC_BUILD_DEBUG
-      ARC_DEBUGBREAK();
-#endif;
-      exit(EXIT_FAILURE);
-   }
-   return app;
-}
+static std::thread::id s_mainThreadID;
 
-Arcane::Application::Application(HINSTANCE hInstance, int nCmdShow) :
+ARC::Application::Application(ApplicationInfo info) :
    m_updatesPerSecond(0U),
    m_fixedUpdatesPerSecond(0U),
    m_framesPerSecond(0U)
 {
-   if (!Initialize(hInstance, nCmdShow))
+   if (!Initialize(info.hInstance, info.nCmdShow))
    {
       if (&LoggingManager::GetCoreLogger())
          ARC_CORE_ERROR("Application initialization failed");
       MessageBox(NULL, L"Application initialization failed", L"Error", MB_OK);
+
+#ifdef ARC_BUILD_DEBUG
+      ARC_DEBUGBREAK();
+#else
       exit(EXIT_FAILURE);
+#endif;
    }
 }
 
-Arcane::Application::~Application()
+ARC::Application::~Application()
 {
    Cleanup();
 }
 
-Arcane::Application::Application(Application&& other) noexcept :
+ARC::Application::Application(Application&& other) noexcept :
    m_window(std::move(other.m_window)),
    m_framesPerSecond(other.m_framesPerSecond),
    m_updatesPerSecond(other.m_updatesPerSecond),
@@ -59,7 +47,7 @@ Arcane::Application::Application(Application&& other) noexcept :
    other.m_fixedUpdatesPerSecond = 0;
 }
 
-Arcane::Application& Arcane::Application::operator=(Application&& other) noexcept
+ARC::Application& ARC::Application::operator=(Application&& other) noexcept
 {
    if (this != &other)
    {
@@ -80,7 +68,7 @@ Arcane::Application& Arcane::Application::operator=(Application&& other) noexcep
    return *this;
 }
 
-void Arcane::Application::Run()
+void ARC::Application::Run()
 {
    using std::chrono::steady_clock;
    using std::chrono::time_point;
@@ -139,40 +127,58 @@ void Arcane::Application::Run()
          fixedUpdates = 0;
          lastSecond = now;
 
-         ARC_CORE_INFO("FPS: "   + std::to_string(m_framesPerSecond)    +
+         /*ARC_CORE_INFO("FPS: "   + std::to_string(m_framesPerSecond)    +
                      " UPS: "    + std::to_string(m_updatesPerSecond)   +
-                     " FUPS: "   + std::to_string(m_fixedUpdatesPerSecond));
+                     " FUPS: "   + std::to_string(m_fixedUpdatesPerSecond));*/
       }
 
       //std::this_thread::sleep_for(milliseconds(1));
    }
 }
 
-bool Arcane::Application::Initialize(HINSTANCE hInstance, int nCmdShow)
+bool ARC::Application::Initialize(HINSTANCE hInstance, int nCmdShow)
 {
+   static std::once_flag initFlag;
+   bool success = true;
+
+   std::call_once(initFlag, [&]()
+   {
 #ifdef ARC_BUILD_DEBUG
-   RegisterDumpHandler();
+      RegisterDumpHandler();
 #endif
 
-   auto& logging = LoggingManager::GetInstance();
-   logging.SetCoreLogger(new Logger(LoggingManager::DEFAULT_CORE_LOGGER_NAME));
-   if (!&logging.GetCoreLogger())
-      return false;
-   logging.SetApplicationLogger(new Logger(LoggingManager::DEFAULT_APPLICATION_LOGGER_NAME));
-   if (!&logging.GetApplicationLogger())
-      return false;
-   m_window = std::make_unique<Window>(hInstance, nCmdShow);
-   if (!m_window)
-      return false;
-   m_window->SetCloseCallback([]() { return true; /* Allow the window to close */ });
+      //std::filesystem::current_path("/");
 
-   SceneManager::Initialize();
+      auto& logging = LoggingManager::GetInstance();
+      logging.SetCoreLogger(new Logger(LoggingManager::DEFAULT_CORE_LOGGER_NAME));
+      if (!&logging.GetCoreLogger())
+      {
+         success = false;
+         return;
+      }
+      logging.SetApplicationLogger(new Logger(LoggingManager::DEFAULT_APPLICATION_LOGGER_NAME));
+      if (!&logging.GetApplicationLogger())
+      {
+         success = false;
+         return;
+      }
+      m_window = std::make_unique<Window>(hInstance, nCmdShow);
+      if (!m_window)
+      {
+         success = false;
+         return;
+      }
+      m_window->SetCloseCallback([]() { return true; /* Allow the window to close */ });
 
-   ARC_CORE_INFO("Application initialized");
-   return true;
+      SceneManager::Initialize();
+
+      ARC_CORE_INFO("Application initialized");
+   });
+
+   return success;
 }
 
-void Arcane::Application::Update(float deltaTime)
+void ARC::Application::Update(float deltaTime)
 {
    if (auto currentScene = SceneManager::GetCurrentScene())
       currentScene->Update(deltaTime);
@@ -181,7 +187,7 @@ void Arcane::Application::Update(float deltaTime)
       m_updateCallback(deltaTime);
 }
 
-void Arcane::Application::FixedUpdate(float timeStep)
+void ARC::Application::FixedUpdate(float timeStep)
 {
    if (auto currentScene = SceneManager::GetCurrentScene())
       currentScene->FixedUpdate(timeStep);
@@ -190,7 +196,7 @@ void Arcane::Application::FixedUpdate(float timeStep)
       m_fixedUpdateCallback(timeStep);
 }
 
-void Arcane::Application::Render()
+void ARC::Application::Render()
 {
    if (auto currentScene = SceneManager::GetCurrentScene())
       currentScene->Render();
@@ -199,7 +205,7 @@ void Arcane::Application::Render()
       m_renderCallback();
 }
 
-void Arcane::Application::Cleanup()
+void ARC::Application::Cleanup()
 {
    PostQuitMessage(0);
 }

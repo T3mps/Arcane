@@ -1,8 +1,8 @@
 #pragma once
 
-namespace Arcane
+namespace ARC
 {
-   template<typename T>
+   template <typename T>
    class Singleton
    {
    public:

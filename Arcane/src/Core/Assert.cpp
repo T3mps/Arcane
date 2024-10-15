@@ -1,8 +1,10 @@
+#include "arcpch.h"
 #include "Assert.h"
 
 #include "Console.h"
+#include "Util/ANSI.h"
 
-void Arcane::Asserts::DefaultAssertHandler(std::string_view message, std::optional<std::string> stackTrace, std::source_location location)
+void ARC::Asserts::DefaultAssertHandler(std::string_view message, std::optional<std::string> stackTrace, std::source_location location)
 {
    std::ostringstream logMessage;
    logMessage << "Assertion failed: " << message
@@ -19,12 +21,12 @@ void Arcane::Asserts::DefaultAssertHandler(std::string_view message, std::option
    Console::Error(output);
 
    EXCEPTION_POINTERS* exceptionInfo = nullptr;
-   Arcane::DumpGenerator::MiniDump(exceptionInfo, Arcane::DumpGenerator::DumpType::MiniDumpWithFullMemory);
+   ARC::DumpGenerator::MiniDump(exceptionInfo, ARC::DumpGenerator::DumpType::MiniDumpWithFullMemory);
 
    ARC_DEBUGBREAK();
 }
 
-void Arcane::Asserts::OnAssertionFailure(std::string_view message, std::optional<std::string_view> context, std::source_location location)
+void ARC::Asserts::OnAssertionFailure(std::string_view message, std::optional<std::string_view> context, std::source_location location)
 {
 #ifdef ARC_ENABLE_ASSERTS
    std::ostringstream finalMessage;
@@ -32,7 +34,6 @@ void Arcane::Asserts::OnAssertionFailure(std::string_view message, std::optional
       finalMessage << "\"" << *context << "\", ";
 
    finalMessage << "'" << message << "'";
-
 
    std::optional<std::string> stackTrace = StackTrace::Capture();
    s_assertHandler(finalMessage.str(), stackTrace, location);

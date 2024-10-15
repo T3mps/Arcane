@@ -1,13 +1,9 @@
 #pragma once
 
-#include <algorithm>
-#include <chrono>
-
-#include "Common.h"
 #include "Instrumentor.h"
 #include "Profiler.h"
 
-namespace Arcane
+namespace ARC
 {
 	class InstrumentationTimer
 	{
@@ -72,11 +68,11 @@ namespace Arcane
 		#define ARC_FUNC_SIG "ARC_FUNC_SIG unknown!"
 	#endif
 
-	#define ARC_PROFILE_BEGIN_SESSION(name, filepath)	::Arcane::Profiler::BeginSession(name, filepath)
-	#define ARC_PROFILE_END_SESSION()						::Arcane::Profiler::EndSession()
-	#define ARC_PROFILE_SCOPE_LINE2(name, line)			constexpr auto fixedName##line = ::Arcane::Internal::CleanupOutputString(name, "__cdecl "); \
-																			::Arcane::InstrumentationTimer timer##line(fixedName##line.data)
-	#define ARC_PROFILE_SCOPE_LINE(name, line)			ARC_PROFILE_SCOPE_LINE2(name, line)
+	#define ARC_PROFILE_BEGIN_SESSION(name, filepath)	::ARC::Profiler::BeginSession(name, filepath)
+	#define ARC_PROFILE_END_SESSION()						::ARC::Profiler::EndSession()
+
+	#define ARC_PROFILE_SCOPE_LINE(name, line)			constexpr auto fixedName##line = ::ARC::Internal::CleanupOutputString(name, "__cdecl "); \
+																			::ARC::InstrumentationTimer timer##line(fixedName##line.data)
 	#define ARC_PROFILE_SCOPE(name)							ARC_PROFILE_SCOPE_LINE(name, __LINE__)
 	#define ARC_PROFILE_FUNCTION()							ARC_PROFILE_SCOPE(ARC_FUNC_SIG)
 #else

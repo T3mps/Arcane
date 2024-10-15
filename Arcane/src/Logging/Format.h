@@ -1,11 +1,6 @@
 #pragma once
 
-#include <source_location>
-#include <string>
-#include <unordered_map>
-#include <vector>
-
-namespace Arcane
+namespace ARC
 {
    class Format
    {

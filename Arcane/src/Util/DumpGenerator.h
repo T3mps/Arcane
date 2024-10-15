@@ -1,12 +1,10 @@
 #pragma once
 
-#include <windows.h>
 #include <DbgHelp.h>
-#include <string>
 
 #pragma comment(lib, "Dbghelp.lib")
 
-namespace Arcane
+namespace ARC
 {
    namespace DumpGenerator
    {
@@ -26,4 +24,4 @@ namespace Arcane
 
    void RegisterDumpHandler();
 
-} // namespace Arcane
+} // namespace ARC

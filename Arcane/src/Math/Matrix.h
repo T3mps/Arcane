@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Common.h"
 #include "GLMType.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/mat2x2.hpp"
@@ -14,7 +13,7 @@
 #include "glm/mat4x4.hpp"
 #include "glm/matrix.hpp"
 
-namespace Arcane
+namespace ARC
 {
    template <typename T>
    class Matrix2x2 : public GLMType<glm::mat<2, 2, T>>
@@ -373,4 +372,4 @@ namespace Arcane
    using Matrix4x4u = Matrix4x4<uint32_t>;
    using Matrix4x4f = Matrix4x4<float32_t>;
    using Matrix4x4d = Matrix4x4<float64_t>;
-} // namespace Arcane
+} // namespace ARC

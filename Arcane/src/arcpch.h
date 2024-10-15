@@ -1,0 +1,50 @@
+#pragma once
+
+#ifdef ARC_PLATFORM_WINDOWS
+   #include <Windows.h>
+#endif
+
+#include <algorithm>
+#include <any>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <format>
+#include <fstream>
+#include <functional>
+#include <initializer_list>
+#include <iostream>
+#include <iomanip>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <ostream>
+#include <random>
+#include <regex>
+#include <set>
+#include <source_location>
+#include <sstream>
+#include <stack>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+#include <thread>
+
+#include "Common.h"
+#include "Core/Assert.h"
+#include "Logging/Logging.h"
+#include "Core/Version.h"

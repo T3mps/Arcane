@@ -1,3 +1,4 @@
+#include "arcpch.h"
 #include "CommandLineParser.h"
 
 #include "Exception.h"
