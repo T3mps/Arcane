@@ -7,11 +7,11 @@ pipeline {
                 git url: 'https://github.com/T3mps/Arcane.git', branch: 'main'
             }
         }
-
+        
         stage('Build') {
             steps {
                 sh 'premake5 gmake2'
-                sh 'make config=release_x64'
+                sh 'make config=release_x86_64'
             }
         }
 
@@ -23,8 +23,8 @@ pipeline {
     }
 
     post {
-        always {
-            junit 'test-results/**/*.xml'
-        }
+    always {
+        junit 'test-results/**/*.xml'
     }
+}
 }
