@@ -1,6 +1,6 @@
 workspace "Arcane"
-    architectures { "x64" }
-    platforms { "x64" }
+    architecture "x86_64"
+    platforms { "x86_64" }
     startproject "ArcaneTest"
     configurations { "Debug", "Release" }
     flags { "MultiProcessorCompile" }
