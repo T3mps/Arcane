@@ -10,17 +10,21 @@ workspace "Arcane"
         Arcane          = "Arcane/src",
         entt            = "Vendor/entt/include",
         glm             = "Vendor/glm/include",
-        nlogmannjson    = "Vendor/nlogmannjson/include",
-        jemalloc        = "Vendor/jemalloc/include"
+        nlogmannjson    = "Vendor/nlohmannjson/include",
+        jemalloc        = "Vendor/jemalloc/include",
+        tomlplusplus    = "Vendor/tomlplusplus/include"
     }
 
     language "C++"
-    cppdialect "C++latest"
+    cppdialect "C++20"
     staticruntime "on"
 
-    toolset "v143"
-
     filter "system:windows"
+        toolset "v143"    
+        systemversion "latest"
+
+    filter "system:linux"
+        pic "On"
         systemversion "latest"
 
     filter "configurations:Debug"
@@ -51,16 +55,21 @@ workspace "Arcane"
             "%{IncludeDir.entt}",
             "%{IncludeDir.glm}",
             "%{IncludeDir.nlogmannjson}",
-            "%{IncludeDir.jemalloc}"
+            "%{IncludeDir.jemalloc}",
+            "%{IncludeDir.tomlplusplus}"
         }
 
         defines { "_CRT_SECURE_NO_WARNINGS" }
+
+        filter "system:linux"
+            links { "pthread", "dl" }
     end
 
 -- Projects
     project "Arcane"
         setupProject("Arcane", "StaticLib")
-        links { "d3d12" }
+        filter "system:windows"
+            links { "d3d12" }
 
         postbuildcommands { ("{COPY} %{cfg.buildtarget.relpath} ../bin/" .. outputdir .. "/ArcaneTest") }
 
@@ -70,8 +79,10 @@ workspace "Arcane"
 
         filter "system:windows"
             linkoptions { "/SUBSYSTEM:WINDOWS" }
+            defines { "ARCANE_TEST_EXPORTS" }
 
-        defines { "ARCANE_TEST_EXPORTS" }
+        filter "system:linux"
+            defines { "ARCANE_TEST_EXPORTS" }
 
         postbuildcommands {
             ("{COPY} %{cfg.buildtarget.relpath} ../bin/" .. outputdir .. "/Loom/")
@@ -83,3 +94,6 @@ workspace "Arcane"
 
         filter "system:windows"
             linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:wWinMainCRTStartup" }
+
+        filter "system:linux"
+            links { "pthread", "dl" }
