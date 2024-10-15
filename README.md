@@ -1,3 +1,5 @@
+<img src="logo.png" alt="Project Logo" width="128" height="128"/>
+
 # Arcane
 **Arcane** is a modern, high-performance game engine designed for Windows, focusing on ease of use and powerful performance. With a robust API and simple integration of popular libraries, **Arcane** aims to help developers create 2D games with a clean, modern approach.
 
