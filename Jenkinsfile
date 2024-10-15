@@ -4,7 +4,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git url: 'https://your-repo-url.git', branch: 'main'
+                git url: 'https://github.com/T3mps/Arcane', branch: 'main'
             }
         }
 
