@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef ARC_PLATFORM_WINDOWS
-   #ifndef(ARC_PLATFORM_LINUX)
+   #ifndef ARC_PLATFORM_LINUX
       #error Unknown platform.
    #endif
 #endif
