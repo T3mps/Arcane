@@ -19,7 +19,7 @@ public:
    using Exception::Exception;
 };
 
-class DLLLoadException : public Exception
+class ModuleLoadException : public Exception
 {
 public:
    using Exception::Exception;

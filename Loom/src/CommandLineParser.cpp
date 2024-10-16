@@ -2,49 +2,53 @@
 #include "CommandLineParser.h"
 
 #include "Exception.h"
+#include "Util/StringUtil.h"
 
 void AddOption(OptionHandlers& handlers, const std::wstring& option, OptionHandler handler)
 {
    handlers[option] = handler;
 }
 
-void ParseCommandLine(int32_t argc, LPWSTR* argv, const OptionHandlers& handlers, PositionalArguments& positionalArgs, std::wstring& errorMsg)
+void ParseCommandLine(int argc, char* argv[], const OptionHandlers& handlers, PositionalArguments& positionalArgs, std::wstring& errorMsg)
 {
-   for (int32_t i = 0; i < argc; ++i)
+   for (int i = 1; i < argc; ++i) // Start from 1 to skip argv[0] (program name)
    {
-      std::wstring arg = argv[i];
-      if (arg[0] == L'-')
+      std::string arg = argv[i];
+      std::wstring warg = ARC::StringUtil::ToWString(arg);
+
+      if (warg[0] == L'-')
       {
-         auto it = handlers.find(arg);
+         auto it = handlers.find(warg);
          if (it != handlers.end())
          {
             if (i + 1 < argc)
             {
-               it->second(argv[++i]);
+               std::string nextArg = argv[++i];
+               std::wstring wnextArg = ARC::StringUtil::ToWString(nextArg);
+               it->second(wnextArg);
             }
             else
             {
-               errorMsg = L"Option " + arg + L" requires an argument.";
+               errorMsg = L"Option " + warg + L" requires an argument.";
                return;
             }
          }
          else
          {
-            errorMsg = L"Unknown option: " + arg;
+            errorMsg = L"Unknown option: " + warg;
             return;
          }
       }
       else
       {
-         positionalArgs.push(arg);
-         ARC_CORE_INFO(L"Found positional argument '" + arg + L"'");
+         positionalArgs.push(warg);
+         ARC_CORE_INFO(L"Found positional argument '" + warg + L"'");
       }
    }
 
    if (positionalArgs.empty())
    {
       errorMsg = L"No positional arguments provided.";
-      return;
    }
 }
 
@@ -67,17 +71,8 @@ size_t GetPositionalArgumentCount(const PositionalArguments& args)
    return args.size();
 }
 
-bool ProcessCommandLine(LPWSTR lpCmdLine, OptionHandlers& handlers, PositionalArguments& positionalArgs, std::wstring& errorMsg)
+bool ProcessCommandLine(int argc, char* argv[], OptionHandlers& handlers, PositionalArguments& positionalArgs, std::wstring& errorMsg)
 {
-   int32_t argc;
-   LPWSTR* argv = CommandLineToArgvW(lpCmdLine, &argc);
-   if (!argv)
-   {
-      errorMsg = L"Failed to parse command line.";
-      return false;
-   }
-   std::unique_ptr<LPWSTR, decltype(&LocalFree)> argvGuard(argv, LocalFree);
-
    ParseCommandLine(argc, argv, handlers, positionalArgs, errorMsg);
    return errorMsg.empty();
 }
@@ -93,6 +88,6 @@ int32_t TryPopPositionalArgument(PositionalArguments& args, std::wstring& result
       ARC_CORE_ERROR(errorMsg);
       return 1;
    }
-   ARC_CORE_INFO(L"Found client DLL '" + resultVar + L"'");
+   ARC_CORE_INFO(L"Found client module '" + resultVar + L"'");
    return 0;
 }

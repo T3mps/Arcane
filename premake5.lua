@@ -13,7 +13,8 @@ workspace "Arcane"
         glm             = "Vendor/glm/include",
         nlogmannjson    = "Vendor/nlohmannjson/include",
         jemalloc        = "Vendor/jemalloc/include",
-        tomlplusplus    = "Vendor/tomlplusplus/include"
+        tomlplusplus    = "Vendor/tomlplusplus/include",
+        GLFW            = "Vendor/GLFW/include"
     }
 
     language "C++"
@@ -21,7 +22,7 @@ workspace "Arcane"
     staticruntime "on"
 
     filter "system:windows"
-        toolset "v143"    
+        toolset "v143"
         systemversion "latest"
         defines { "ARC_PLATFORM_WINDOWS" }
 
@@ -60,7 +61,8 @@ workspace "Arcane"
             "%{IncludeDir.glm}",
             "%{IncludeDir.nlogmannjson}",
             "%{IncludeDir.jemalloc}",
-            "%{IncludeDir.tomlplusplus}"
+            "%{IncludeDir.tomlplusplus}",
+            "%{IncludeDir.GLFW}"
         }
 
         defines { "_CRT_SECURE_NO_WARNINGS" }
@@ -72,8 +74,12 @@ workspace "Arcane"
 -- Projects
     project "Arcane"
         setupProject("Arcane", "StaticLib")
+
         filter "system:windows"
-            links { "d3d12" }
+            links { "GLFW", "d3d12" }
+
+        filter "system:linux"
+            links { "GLFW" }
 
         pchheader "arcpch.h"
         pchsource "Arcane/src/arcpch.cpp"
@@ -82,15 +88,15 @@ workspace "Arcane"
 
     project "ArcaneTest"
         setupProject("ArcaneTest", "SharedLib")
-        links { "Arcane" }
 
         pchheader "arcpch.h"
         pchsource "../Arcane/src/arcpch.cpp"
 
         filter "system:windows"
-            linkoptions { "/SUBSYSTEM:WINDOWS" }
+            links { "Arcane" }
 
-        defines { "ARCANE_TEST_EXPORTS" }
+        filter "system:linux"
+            links { "Arcane" }
 
         postbuildcommands {
             ("{COPY} %{cfg.buildtarget.relpath} ../bin/" .. outputdir .. "/Loom/")
@@ -98,13 +104,14 @@ workspace "Arcane"
 
     project "Loom"
         setupProject("Loom", "ConsoleApp")
-        links { "Arcane" }
-
+        
         pchheader "arcpch.h"
         pchsource "../Arcane/src/arcpch.cpp"
 
         filter "system:windows"
-            linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:wWinMainCRTStartup" }
+            links { "Arcane" }
 
         filter "system:linux"
-            links { "pthread", "dl" }
+            links { "Arcane", "pthread", "dl" }
+
+    include "Vendor/GLFW"

@@ -1,0 +1,6 @@
+[submodule "Arcane/Vendor/GLFW"]
+	path = Arcane/Vendor/GLFW
+	url = https://github.com/T3mps/glfw
+[submodule "Vendor/GLFW"]
+	path = Vendor/GLFW
+	url = https://github.com/T3mps/glfw

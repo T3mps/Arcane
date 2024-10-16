@@ -12,9 +12,10 @@ static std::thread::id s_mainThreadID;
 ARC::Application::Application(ApplicationInfo info) :
    m_updatesPerSecond(0U),
    m_fixedUpdatesPerSecond(0U),
-   m_framesPerSecond(0U)
+   m_framesPerSecond(0U),
+   m_running(true)
 {
-   if (!Initialize(info.hInstance, info.nCmdShow))
+   if (!Initialize(info))
    {
       if (&LoggingManager::GetCoreLogger())
          ARC_CORE_ERROR("Application initialization failed");
@@ -88,9 +89,9 @@ void ARC::Application::Run()
    uint32_t fixedUpdates = 0;
    duration<float> accumulator = duration<float>::zero();
 
-   while (m_window->IsRunning())
+   while (m_running)
    {
-      m_window->ProcessMessages();
+      m_window->ProcessEvents();
 
       auto now = steady_clock::now();
       auto frameElapsedTime = duration_cast<duration<float>>(now - lastUpdateTime);
@@ -136,7 +137,7 @@ void ARC::Application::Run()
    }
 }
 
-bool ARC::Application::Initialize(HINSTANCE hInstance, int nCmdShow)
+bool ARC::Application::Initialize(ApplicationInfo info)
 {
    static std::once_flag initFlag;
    bool success = true;
@@ -162,13 +163,20 @@ bool ARC::Application::Initialize(HINSTANCE hInstance, int nCmdShow)
          success = false;
          return;
       }
-      m_window = std::make_unique<Window>(hInstance, nCmdShow);
-      if (!m_window)
-      {
-         success = false;
-         return;
-      }
-      m_window->SetCloseCallback([]() { return true; /* Allow the window to close */ });
+      
+      WindowInfo windowInfo;
+      windowInfo.title = info.name;
+      windowInfo.width = info.windowWidth;
+      windowInfo.height = info.windowHeight;
+      windowInfo.decorated = info.decoratedWindow;
+      windowInfo.fullscreen = info.fullscreenWindow;
+
+      m_window = std::make_unique<Window>(windowInfo);
+      ARC_ASSERT((success = m_window != nullptr), "Unable to create window instance.");
+
+      m_window->Initialize();
+      m_window->CenterInScreen();
+      m_window->SetResizable(info.resizableWindow);
 
       SceneManager::Initialize();
 
@@ -207,5 +215,5 @@ void ARC::Application::Render()
 
 void ARC::Application::Cleanup()
 {
-   PostQuitMessage(0);
+   m_running = false;
 }

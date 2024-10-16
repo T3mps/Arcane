@@ -13,7 +13,7 @@ namespace ARC
       Off
    };
 
-   constexpr std::array<std::pair<Level, std::wstring_view>, 7> LevelToStringArray =
+   inline constexpr std::array<std::pair<Level, std::wstring_view>, 7> levelToStringArray =
    {{
       { Level::Trace, L"TRACE" },
       { Level::Debug, L"DEBUG" },
@@ -27,7 +27,7 @@ namespace ARC
 
    constexpr std::wstring_view LevelToString(Level level)
    {
-      for (const auto& pair : LevelToStringArray)
+      for (const auto& pair : levelToStringArray)
       {
          if (pair.first == level)
             return pair.second;
@@ -35,7 +35,7 @@ namespace ARC
       return L"UNKNOWN";
    }
 
-   constexpr std::array<std::pair<std::wstring_view, Level>, 7> StringToLevelArray =
+   inline constexpr std::array<std::pair<std::wstring_view, Level>, 7> stringToLevelArray =
    {{
       { L"TRACE", Level::Trace },
       { L"DEBUG", Level::Debug },
@@ -48,7 +48,7 @@ namespace ARC
 
    constexpr Level StringToLevel(std::wstring_view levelStr)
    {
-      for (const auto& pair : StringToLevelArray)
+      for (const auto& pair : stringToLevelArray)
       {
          if (pair.first == levelStr)
             return pair.second;
