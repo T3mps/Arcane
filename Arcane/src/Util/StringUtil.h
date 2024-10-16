@@ -36,19 +36,29 @@ namespace ARC
       {
          if constexpr (std::is_same_v<T, std::wstring>)
          {
+#ifdef ARC_PLATFORM_WINDOWS
             int32_t size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), NULL, 0, NULL, NULL);
             std::string result;
             result.resize(size);
             WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), result.data(), size, NULL, NULL);
             return result;
+#else
+            std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+            return converter.to_bytes(value);
+#endif
          }
          else if constexpr (std::is_same_v<T, const wchar_t*> || std::is_same_v<T, wchar_t*>)
          {
+#ifdef ARC_PLATFORM_WINDOWS
             int32_t size = WideCharToMultiByte(CP_UTF8, 0, value, static_cast<int32_t>(std::wcslen(value)), NULL, 0, NULL, NULL);
             std::string result;
             result.resize(size);
             WideCharToMultiByte(CP_UTF8, 0, value, static_cast<int32_t>(std::wcslen(value)), result.data(), size, NULL, NULL);
             return result;
+#else
+            std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+            return converter.to_bytes(value);
+#endif
          }
          else if constexpr (std::is_floating_point_v<T>)
          {
@@ -78,11 +88,16 @@ namespace ARC
       {
          if constexpr (std::is_same_v<T, std::string>)
          {
+#ifdef ARC_PLATFORM_WINDOWS
             int32_t size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), NULL, 0);
             std::wstring result;
             result.resize(size);
             MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), result.data(), size);
             return result;
+#else
+            std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+            return converter.from_bytes(value);
+#endif
          }
          else if constexpr (std::is_same_v<T, const wchar_t*> || std::is_same_v<T, wchar_t*>)
          {
@@ -97,11 +112,16 @@ namespace ARC
          }
          else if constexpr (std::is_same_v<T, char*> || std::is_same_v<T, const char*>)
          {
+#ifdef ARC_PLATFORM_WINDOWS
             int32_t size = MultiByteToWideChar(CP_UTF8, 0, value, static_cast<int32_t>(std::strlen(value)), NULL, 0);
             std::wstring result;
             result.resize(size);
             MultiByteToWideChar(CP_UTF8, 0, value, static_cast<int32_t>(std::strlen(value)), result.data(), size);
             return result;
+#else
+            std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+            return converter.from_bytes(value);
+#endif
          }
          else if constexpr (std::is_convertible_v<T, std::wstring>)
          {
