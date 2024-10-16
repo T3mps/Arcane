@@ -84,8 +84,6 @@ workspace "Arcane"
         pchheader "arcpch.h"
         pchsource "Arcane/src/arcpch.cpp"
 
-        postbuildcommands { ("{COPY} %{cfg.buildtarget.relpath} ../bin/" .. outputdir .. "/ArcaneTest") }
-
     project "ArcaneTest"
         setupProject("ArcaneTest", "SharedLib")
 
@@ -95,12 +93,19 @@ workspace "Arcane"
         filter "system:windows"
             links { "Arcane" }
 
+            postbuildcommands {
+                "if not exist \"..\\bin\\" .. outputdir .. "\\Loom\\\" mkdir \"..\\bin\\" .. outputdir .. "\\Loom\\\"",
+                "xcopy /Q /Y \"..\\bin\\" .. outputdir .. "\\ArcaneTest\\*.*\" \"..\\bin\\" .. outputdir .. "\\Loom\\\""
+            }
+
         filter "system:linux"
             links { "Arcane" }
 
-        postbuildcommands {
-            ("{COPY} %{cfg.buildtarget.relpath} ../bin/" .. outputdir .. "/Loom/")
-        }
+            postbuildcommands {
+                "mkdir -p \"../bin/" .. outputdir .. "/Loom/\"",
+                
+                "cp -r \"../bin/" .. outputdir .. "/ArcaneTest/*\" \"../bin/" .. outputdir .. "/Loom/\""
+            }
 
     project "Loom"
         setupProject("Loom", "ConsoleApp")
@@ -115,3 +120,4 @@ workspace "Arcane"
             links { "Arcane", "pthread", "dl" }
 
     include "Vendor/GLFW"
+    

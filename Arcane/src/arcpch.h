@@ -1,5 +1,3 @@
-#pragma once
-
 #ifdef ARC_PLATFORM_WINDOWS
    #include <Windows.h>
 #endif
