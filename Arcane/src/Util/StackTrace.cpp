@@ -5,14 +5,12 @@
    #include "DbgHelp.h"
    #pragma comment(lib, "Dbghelp.lib")
 #else
-   #include <cstring>
-
    #include "cxxabi.h"
    #include "dlfcn.h"
    #include "execinfo.h"
 #endif
 
-#include "Util/Json.h"
+#include "Util/Serialization/JSON.h"
 
 #ifdef ARC_PLATFORM_WINDOWS
    std::optional<std::string> ARC::StackTrace::Capture(CaptureInfo CaptureInfo)
@@ -20,7 +18,7 @@
       return Capture(CaptureInfo.maxFrames, CaptureInfo.resolveSymbols, CaptureInfo.includeModuleInfo, CaptureInfo.includeLineInfo);
    }
 
-   std::optional<std::string> ARC::StackTrace::Capture(int maxFrames, 
+   std::optional<std::string> ARC::StackTrace::Capture(int32_t maxFrames, 
       bool resolveSymbols,
       bool includeModuleInfo,
       bool includeLineInfo)
@@ -34,7 +32,7 @@
       ARC::JSON json;
       json.Set("frame_count", frameCount);
 
-      auto createFrameJson = [&](USHORT index, DWORD64 address, const std::string& functionName = "", const std::string& moduleName = "", const std::string& fileName = "", int lineNumber = -1) -> ARC::JSON
+      auto createFrameJson = [&](USHORT index, DWORD64 address, const std::string& functionName = "", const std::string& moduleName = "", const std::string& fileName = "", int32_t lineNumber = -1) -> ARC::JSON
          {
             ARC::JSON frameJson;
             frameJson.Set("frame_index", index);
@@ -95,10 +93,10 @@
             return "Unknown Module";
          };
 
-      auto resolveLineInfo = [&](DWORD64 address) -> std::pair<std::string, int>
+      auto resolveLineInfo = [&](DWORD64 address) -> std::pair<std::string, int32_t>
          {
             if (SymGetLineFromAddr64(process, address, &displacement, &lineInfo))
-               return {lineInfo.FileName, (int)lineInfo.LineNumber};
+               return {lineInfo.FileName, (int32_t)lineInfo.LineNumber};
             return {"Unknown File", -1};
          };
 
@@ -107,7 +105,7 @@
          DWORD64 address = (DWORD64)(frames[i]);
          std::string functionName = resolveSymbol(address);
          std::string moduleName = includeModuleInfo ? getModuleName(address) : "";
-         std::pair<std::string, int> lineInfo = includeLineInfo ? resolveLineInfo(address) : std::make_pair("", -1);
+         std::pair<std::string, int32_t> lineInfo = includeLineInfo ? resolveLineInfo(address) : std::make_pair("", -1);
 
          json.Data()["frames"].push_back(createFrameJson(i, address, functionName, moduleName, lineInfo.first, lineInfo.second).Data());
       }
@@ -121,13 +119,13 @@
       return Capture(captureDef.maxFrames, captureDef.resolveSymbols, captureDef.includeModuleInfo, captureDef.includeLineInfo);
    }
 
-   std::optional<std::string> ARC::StackTrace::Capture(int maxFrames, 
+   std::optional<std::string> ARC::StackTrace::Capture(int32_t maxFrames, 
       bool resolveSymbols, 
       bool includeModuleInfo, 
       bool includeLineInfo)
    {
       std::vector<void*> frames(maxFrames);
-      int frameCount = backtrace(frames.data(), maxFrames);
+      int32_t frameCount = backtrace(frames.data(), maxFrames);
 
       if (frameCount == 0)
          return std::nullopt;
@@ -139,7 +137,7 @@
       std::ostringstream jsonStream;
       jsonStream << "{ \"frame_count\": " << frameCount << ", \"frames\": [";
 
-      for (int i = 0; i < frameCount; ++i)
+      for (int32_t i = 0; i < frameCount; ++i)
       {
          Dl_info info;
          if (dladdr(frames[i], &info) && resolveSymbols)
@@ -147,7 +145,7 @@
             const char* symbolName = info.dli_sname ? info.dli_sname : "Unknown Function";
             const char* moduleName = includeModuleInfo && info.dli_fname ? info.dli_fname : "Unknown Module";
 
-            int status = 0;
+            int32_t status = 0;
             char* demangledName = abi::__cxa_demangle(symbolName, nullptr, nullptr, &status);
             std::string functionName = (status == 0 && demangledName) ? demangledName : symbolName;
 

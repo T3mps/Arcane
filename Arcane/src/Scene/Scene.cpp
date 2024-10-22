@@ -16,21 +16,22 @@ ARC::Scene::~Scene()
 {
 }
 
-ARC::Entity ARC::Scene::CreateEntity(const std::string& name /*= std::string()*/)
+ARC::Entity ARC::Scene::CreateEntity(const std::string& name)
 {
    return CreateEntity(UUID(), name);
 }
 
-ARC::Entity ARC::Scene::CreateEntity(UUID uuid, const std::string& name /*= std::string()*/)
+ARC::Entity ARC::Scene::CreateEntity(UUID uuid, const std::string& name)
 {
    Entity entity = { m_registry.create(), this };
    
    entity.AddComponent<Components::ID>(uuid);
-   static const std::string defaultName = "Entity";
-   entity.AddComponent<Components::Tag>(name.empty() ? defaultName : name);
+   entity.AddComponent<Components::Tag>(name);
    entity.AddComponent<Components::Transform>();
    
    m_entityMap[uuid] = entity;
+
+   SortEntities();
 
    return entity;
 }
@@ -73,28 +74,13 @@ void ARC::Scene::OnStop()
    m_running = false;
 }
 
-#include "Util/Profile/Instrumentation.h"
-
 void ARC::Scene::Update(float32_t deltaTime)
 {
-   ARC_PROFILE_FUNCTION();
    if (m_running && !m_paused)
    {
       for (const auto& system : m_updateSystems)
       {
-         ARC_PROFILE_SCOPE("ECS Systems");
          system(shared_from_this(), deltaTime);
-      }
-   }
-}
-
-void ARC::Scene::FixedUpdate(float32_t timeStep)
-{
-   if (m_running && !m_paused)
-   {
-      for (auto& system : m_fixedUpdateSystems)
-      {
-         system(shared_from_this(), timeStep);
       }
    }
 }
@@ -108,6 +94,16 @@ void ARC::Scene::Render()
          system(shared_from_this());
       }
    }
+}
+
+void ARC::Scene::SortEntities()
+{
+   m_registry.sort<Components::ID>([&](const auto lhs, const auto rhs)
+   {
+      auto lhsEntity = m_entityMap.find(lhs.value);
+      auto rhsEntity = m_entityMap.find(rhs.value);
+      return static_cast<uint32_t>(lhsEntity->second) < static_cast<uint32_t>(rhsEntity->second);
+   });
 }
 
 template <typename T>

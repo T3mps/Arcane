@@ -8,7 +8,7 @@ namespace ARC
    {
    public:
       virtual ~LoggingService() = default;
-      virtual void Log(Level level, const std::wstring& message, const std::source_location& location = std::source_location::current()) = 0;
+      virtual void Log(Level level, const std::string& message, const std::source_location& location = std::source_location::current()) = 0;
       virtual void SetLevel(Level level) = 0;
    };
 
@@ -16,4 +16,4 @@ namespace ARC
    {
       void operator()(LoggingService* ptr) const { delete ptr; }
    };
-}
+} // namespace ARC

@@ -57,8 +57,8 @@ namespace ARC
 
       T Distance(const Vector2<T>& rhs) const { return glm::distance(this->m_glmVector, rhs.m_glmVector); }
       
-      glm::vec<2, T>& GetGLMType() override { return this->m_glmVector; }
-      const glm::vec<2, T>& GetGLMType() const override { return this->m_glmVector; }
+      glm::vec<2, T>& Data() override { return this->m_glmVector; }
+      const glm::vec<2, T>& Data() const override { return this->m_glmVector; }
 
    private:
       glm::vec<2, T> m_glmVector;
@@ -121,8 +121,8 @@ namespace ARC
 
       T Distance(const Vector3<T>& rhs) const { return glm::distance(this->m_glmVector, rhs.m_glmVector); }
 
-      glm::vec<3, T>& GetGLMType() override { return this->m_glmVector; }
-      const glm::vec<3, T>& GetGLMType() const override { return this->m_glmVector; }
+      glm::vec<3, T>& Data() override { return this->m_glmVector; }
+      const glm::vec<3, T>& Data() const override { return this->m_glmVector; }
 
    private:
       glm::vec<3, T> m_glmVector;
@@ -184,8 +184,8 @@ namespace ARC
 
       T Distance(const Vector4<T>& rhs) const { return glm::distance(this->m_glmVector, rhs.m_glmVector); }
 
-      glm::vec<4, T>& GetGLMType() override { return this->m_glmVector; }
-      const glm::vec<4, T>& GetGLMType() const override { return this->m_glmVector; }
+      glm::vec<4, T>& Data() override { return this->m_glmVector; }
+      const glm::vec<4, T>& Data() const override { return this->m_glmVector; }
 
    private:
       glm::vec<4, T> m_glmVector;

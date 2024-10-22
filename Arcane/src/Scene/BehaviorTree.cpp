@@ -85,7 +85,7 @@ ARC::BehaviorTree::Status ARC::BehaviorTree::RandomSelector::Update(Scene& scene
    }
    else
    {
-      std::uniform_int_distribution<> dis(0, static_cast<int>(m_children.size() - 1));
+      std::uniform_int_distribution<> dis(0, static_cast<int32_t>(m_children.size() - 1));
       index = dis(m_gen);
       blackboard.SetValue<size_t>(key, index);
    }
@@ -154,10 +154,10 @@ ARC::BehaviorTree::Status ARC::BehaviorTree::Repeater::Update(Scene& scene, Enti
 {
    std::string key = "RepeaterCount_" + m_uuid.ToString();
 
-   int currentCount = 0;
+   int32_t currentCount = 0;
    if (blackboard.HasValue(key))
    {
-      currentCount = blackboard.GetValue<int>(key).value();
+      currentCount = blackboard.GetValue<int32_t>(key).value();
    }
 
    if (m_repeatCount == INFINITE_COUNT || currentCount < m_repeatCount)
@@ -169,12 +169,12 @@ ARC::BehaviorTree::Status ARC::BehaviorTree::Repeater::Update(Scene& scene, Enti
          return Status::Running;
       }
 
-      blackboard.SetValue<int>(key, ++currentCount);
+      blackboard.SetValue<int32_t>(key, ++currentCount);
       return Status::Running;
    }
    else
    {
-      blackboard.SetValue<int>(key, 0); // Reset for next time
+      blackboard.SetValue<int32_t>(key, 0); // Reset for next time
       return Status::Success;
    }
 }

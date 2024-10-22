@@ -1,81 +1,108 @@
 #include "arcpch.h"
 #include "Loom.h"
 
-#include "CommandLineParser.h"
 #include "Core/Console.h"
-#include "ModuleInterface.h"
-#include "Exception.h"
-#include "Util/StringUtil.h"
+#include "DynamicLibrary.h"
+#include "ErrorCode.h"
 
-static constexpr const char* ENTRY_POINT_FUNCTION_NAME = "EntryPoint";
-
-Loom::Loom(int argc, char* argv[]) : m_hModule(nullptr)
+Loom::Loom(int32_t argc, char* argv[])
 {
    ARC::Console::Initialize();
+   ARC::LoggingManager::GetInstance().SetCoreLogger(new ARC::Logger(ARC::LoggingManager::DEFAULT_CORE_LOGGER_NAME.data()));
 
-   ARC::LoggingManager::GetInstance().SetCoreLogger(new ARC::Logger(ARC::LoggingManager::DEFAULT_CORE_LOGGER_NAME));
+   auto result = Initialize(argc, argv);
+   if (!result)
+   {
+      if (&ARC::LoggingManager::GetCoreLogger())
+      {
+         ARC::Log::CoreError(result.GetErrorMessage());
+         ARC::Log::CoreError("Loom initialization failed");
+      }
+#ifdef ARC_PLATFORM_WINDOWS
+      MessageBox(NULL, L"Loom initialization failed", L"Error", MB_OK);
+#endif
 
-   std::wstring moduleName;
-   try
-   {
-      ProcessCommandLineArgs(argc, argv, moduleName);
-      ProcessModule(moduleName);
-   } 
-   catch (const Exception& e)
-   {
-      ARC_CORE_FATAL(ARC::StringUtil::ToWString(e.what()));
+      ARC::Error error = result.Error();
+      uint64_t errorCode = error.Code();
+      exit(static_cast<int32_t>(errorCode));
    }
+   ARC::Log::CoreInfo("Loom initialized");
 }
 
 Loom::~Loom()
 {
-   ARC_CORE_INFO(L"Cleaning up Loom resources...");
-   if (m_hModule)
-      Module::Unload(m_hModule);
-   ARC::LoggingManager::Shutdown();
+   Cleanup();
 }
 
-void Loom::ProcessCommandLineArgs(int argc, char* argv[], std::wstring& moduleName) const
+ARC::Result<void> Loom::Initialize(int32_t argc, char* argv[])
 {
-   OptionHandlers handlers;
-   PositionalArguments positionalArgs;
-   std::wstring errorMsg;
+   static std::once_flag initFlag;
 
-   ARC_CORE_INFO(L"Processing command line arguments...");
-   if (!ProcessCommandLine(argc, argv, handlers, positionalArgs, errorMsg))
+   ARC::Result<void> result;
+   
+   std::call_once(initFlag, [&]()
    {
-      ARC_CORE_ERROR(errorMsg);
-      throw CommandLineException(errorMsg);
-   }
+      m_argParser = ArgumentParser();
+      m_argParser.RegisterFlag("help", [this](const std::string&) { ShowHelpMessage(); }, "Displays help");
+      m_argParser.RegisterFlag("h",    [this](const std::string&) { ShowHelpMessage(); }, "Displays help");
+      m_argParser.Parse(argc, argv);
 
-   ARC_CORE_INFO(L"Validating command line arguments...");
-   if (GetPositionalArgumentCount(positionalArgs) < 1)
-   {
-      errorMsg = L"Usage: Loom <ClientModuleName>";
-      ARC_CORE_ERROR(errorMsg);
-      throw CommandLineException(errorMsg);
-   }
+      ARC::Log::CoreInfo("Initializing Loom...");
 
-   ARC_CORE_INFO(L"Acquiring client module...");
-   errorMsg = L"No valid module name provided.";
-   if (TryPopPositionalArgument(positionalArgs, moduleName, errorMsg.c_str()) != 0)
+      const auto& positionalArgs = m_argParser.GetPositionalArgs();
+      if (positionalArgs.empty())
+      {
+         ARC::Log::CoreInfo(LOOM_USEAGE_STRING);
+         result = ARC::Error::Create(LoomError::IncorrectParameterUsage, "No client module specified.");
+         return;
+      }
+
+      std::ostringstream oss;
+      for (int32_t i = 0; i < positionalArgs.size(); ++i)
+      {
+         const std::string& str = positionalArgs[i];
+         oss << str;
+         if (i != positionalArgs.size() - 1)
+            oss << ", ";
+      }
+      ARC::Log::CoreInfo("Identified positional arguments: " + oss.str());
+
+      std::filesystem::path clientModulePath = positionalArgs.front();
+
+      m_clientModule = std::make_unique<Module>(clientModulePath);
+
+      result = m_clientModule->Load();
+      if (!result)
+      {
+         ARC::Log::CoreError("Failed to load client module: " + clientModulePath.string());
+         return;
+      }
+
+      ARC::Log::CoreInfo("Successfully loaded client module: " + m_clientModule->GetName());
+
+      m_clientModule->StartMonitoring();
+   });
+
+   return result;
+}
+
+void Loom::Cleanup()
+{
+   if (m_clientModule)
    {
-      ARC_CORE_ERROR(errorMsg);
-      throw CommandLineException(errorMsg);
+      auto result = m_clientModule->Unload();
+      if (!result)
+      {
+         ARC::Log::CoreError("Error occured while trying to unload module.");
+         ARC::Log::CoreError(result.GetErrorMessage());
+      }
+      m_clientModule.reset();
    }
 }
 
-void Loom::ProcessModule(const std::wstring& moduleName) const
+void Loom::ShowHelpMessage()
 {
-   Module::EntryPointFunc runGameFunc;
-   m_hModule = Module::Load(moduleName, ENTRY_POINT_FUNCTION_NAME, runGameFunc);
-   if (!m_hModule)
-   {
-      const std::wstring errorMsg = L"Error loading " + moduleName;
-      ARC_CORE_ERROR(errorMsg);
-      throw ModuleLoadException(errorMsg);
-   }
-
-   ARC_CORE_INFO(L"Successfully loaded '" + moduleName + L"'.");
-   Module::Run(runGameFunc);
+   std::string message = m_argParser.BuildHelpMessage();
+   ARC::Console::Output(message);
+   exit(0);
 }

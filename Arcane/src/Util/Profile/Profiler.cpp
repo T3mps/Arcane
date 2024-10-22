@@ -2,7 +2,7 @@
 #include "Profiler.h"
 
 #include "Logging/Logging.h"
-#include "Util/Json.h"
+#include "Util/Serialization/JSON.h"
 
 ARC::Profiler::Profiler() : m_currentSession(nullptr) {}
 
@@ -17,8 +17,8 @@ void ARC::Profiler::BeginSession(const std::string& name, const std::string& fil
 	{
 		if (LoggingManager::HasCoreLogger()) // Edge case: BeginSession() might be before Log::Init()
 		{
-			//ARC_CORE_ERROR("Profiler::BeginSession('{}') when session '{}' already open.", name, instance.m_CurrentSession->name);
-			ARC_CORE_ERROR("A session is already open. End session before starting a new one.");
+			//Log::CoreError("Profiler::BeginSession('{}') when session '{}' already open.", name, instance.m_CurrentSession->name);
+			Log::CoreError("A session is already open. End session before starting a new one.");
 		}
 		instance.InternalEndSession();
 	}
@@ -31,8 +31,8 @@ void ARC::Profiler::BeginSession(const std::string& name, const std::string& fil
 	}
 	else if (LoggingManager::HasCoreLogger()) // Edge case: BeginSession() might be before Log::Init()
 	{
-		//ARC_CORE_ERROR("Profiler could not open results file '{}'.", filepath);
-		ARC_CORE_ERROR("Profiler could not open results file");
+		//Log::CoreError("Profiler could not open results file '{}'.", filepath);
+		Log::CoreError("Profiler could not open results file");
 	}
 }
 

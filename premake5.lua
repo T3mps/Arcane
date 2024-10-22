@@ -8,13 +8,14 @@ workspace "Arcane"
     outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 
     IncludeDir = {
-        Arcane          = "Arcane/src",
-        entt            = "Vendor/entt/include",
-        glm             = "Vendor/glm/include",
-        nlogmannjson    = "Vendor/nlohmannjson/include",
-        jemalloc        = "Vendor/jemalloc/include",
-        tomlplusplus    = "Vendor/tomlplusplus/include",
-        GLFW            = "Vendor/GLFW/include"
+        Arcane       = "Arcane/src",
+        entt         = "Vendor/entt/include",
+        glm          = "Vendor/glm/include",
+        jemalloc     = "Vendor/jemalloc/include",
+        GLFW         = "Vendor/GLFW/include",
+        nlogmannjson = "Vendor/nlohmannjson/include",
+        tomlplusplus = "Vendor/tomlplusplus/include",
+        sol2         = "Vendor/sol2/include"
     }
 
     language "C++"
@@ -59,10 +60,11 @@ workspace "Arcane"
             "%{IncludeDir.Arcane}",
             "%{IncludeDir.entt}",
             "%{IncludeDir.glm}",
-            "%{IncludeDir.nlogmannjson}",
             "%{IncludeDir.jemalloc}",
+            "%{IncludeDir.GLFW}",
+            "%{IncludeDir.nlogmannjson}",
             "%{IncludeDir.tomlplusplus}",
-            "%{IncludeDir.GLFW}"
+            "%{IncludeDir.sol2}"
         }
 
         defines { "_CRT_SECURE_NO_WARNINGS" }

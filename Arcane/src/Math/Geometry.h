@@ -52,4 +52,4 @@ namespace ARC
       }
       bool operator!=(const Rectangle& other) const { return !(*this == other); }
    };
-}
+} // namespace ARC

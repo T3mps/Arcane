@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Container/ConcurrentQueue.h"
 #include "Format.h"
 #include "LoggingService.h"
 
@@ -8,23 +9,33 @@ namespace ARC
    class Logger : public LoggingService
    {
    public:
-      static constexpr int DEFAULT_FLUSH_INTERVAL = 16;
+      static constexpr int32_t DEFAULT_FLUSH_INTERVAL = 16;
 
-      Logger(const std::wstring& name);
-      virtual ~Logger() = default;
+      Logger(const std::string& name);
+      virtual ~Logger();
 
-      void Log(Level level, const std::wstring& message, const std::source_location& location = std::source_location::current()) override;
+      void Start();
+      void Stop();
+
+      void Log(Level level, const std::string& message, const std::source_location& location = std::source_location::current()) override;
       void SetLevel(Level level) override { m_level = level; }
 
    private:
-      void OutputLog(const std::wstring& message) const;
+      std::string BuildMessage(Level level, const std::string& message, const std::source_location& location);
+      void ProcessLogs();
+      void OutputLog(const std::string& message) const;
+      void FlushStream() const;
 
-      std::wstring m_name;
+      std::string m_name;
       Level m_level;
       Format m_format;
-      int m_messageCount;
-      const int m_flushInterval;
       bool m_colorizeMessages;
-      mutable std::mutex m_mutex;
+
+      ConcurrentQueue<std::string> m_logQueue;
+      std::atomic<bool> m_running;
+      std::thread m_workerThread;
+      int32_t m_flushInterval;
+      int32_t m_messageCount;
+      std::mutex m_flushMutex;
    };
-}
+} // namespace ARC

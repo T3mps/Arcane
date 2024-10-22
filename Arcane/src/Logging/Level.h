@@ -13,40 +13,40 @@ namespace ARC
       Off
    };
 
-   inline constexpr std::array<std::pair<Level, std::wstring_view>, 7> levelToStringArray =
+   inline constexpr std::array<std::pair<Level, std::string_view>, 7> levelToStringArray =
    {{
-      { Level::Trace, L"TRACE" },
-      { Level::Debug, L"DEBUG" },
-      { Level::Info,  L"INFO"  },
-      { Level::Warn,  L"WARN"  },
-      { Level::Error, L"ERROR" },
-      { Level::Fatal, L"FATAL" },
-      { Level::Off,   L"OFF"   }
+      { Level::Trace, "TRACE" },
+      { Level::Debug, "DEBUG" },
+      { Level::Info,  "INFO"  },
+      { Level::Warn,  "WARN"  },
+      { Level::Error, "ERROR" },
+      { Level::Fatal, "FATAL" },
+      { Level::Off,   "OFF"   }
    }};
 
 
-   constexpr std::wstring_view LevelToString(Level level)
+   constexpr std::string_view LevelToString(Level level)
    {
       for (const auto& pair : levelToStringArray)
       {
          if (pair.first == level)
             return pair.second;
       }
-      return L"UNKNOWN";
+      return "UNKNOWN";
    }
 
-   inline constexpr std::array<std::pair<std::wstring_view, Level>, 7> stringToLevelArray =
+   inline constexpr std::array<std::pair<std::string_view, Level>, 7> stringToLevelArray =
    {{
-      { L"TRACE", Level::Trace },
-      { L"DEBUG", Level::Debug },
-      { L"INFO",  Level::Info  },
-      { L"WARN",  Level::Warn  },
-      { L"ERROR", Level::Error },
-      { L"FATAL", Level::Fatal },
-      { L"OFF",   Level::Off   }
+      { "TRACE", Level::Trace },
+      { "DEBUG", Level::Debug },
+      { "INFO",  Level::Info  },
+      { "WARN",  Level::Warn  },
+      { "ERROR", Level::Error },
+      { "FATAL", Level::Fatal },
+      { "OFF",   Level::Off   }
    }};
 
-   constexpr Level StringToLevel(std::wstring_view levelStr)
+   constexpr Level StringToLevel(std::string_view levelStr)
    {
       for (const auto& pair : stringToLevelArray)
       {
@@ -55,4 +55,4 @@ namespace ARC
       }
       return Level::Off;
    }
-}
+} // namespace ARC

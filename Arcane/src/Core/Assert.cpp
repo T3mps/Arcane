@@ -4,7 +4,7 @@
 #include "Console.h"
 #include "Util/ANSI.h"
 
-void ARC::Asserts::DefaultAssertHandler(std::string_view message, std::optional<std::string> stackTrace, std::source_location location)
+void ARC::Assert::DefaultAssertHandler(std::string_view message, std::optional<std::string> stackTrace, std::source_location location)
 {
    std::ostringstream logMessage;
    logMessage << "Assertion failed: " << message
@@ -26,7 +26,7 @@ void ARC::Asserts::DefaultAssertHandler(std::string_view message, std::optional<
    ARC_DEBUGBREAK();
 }
 
-void ARC::Asserts::OnAssertionFailure(std::string_view message, std::optional<std::string_view> context, std::source_location location)
+void ARC::Assert::OnAssertionFailure(std::string_view message, std::optional<std::string_view> context, std::source_location location)
 {
 #ifdef ARC_ENABLE_ASSERTS
    std::ostringstream finalMessage;

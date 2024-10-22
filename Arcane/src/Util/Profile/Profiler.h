@@ -32,4 +32,4 @@ namespace ARC
 
 		friend class Singleton<Profiler>;
 	};
-}
+} // namespace ARC

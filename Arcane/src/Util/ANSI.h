@@ -1,6 +1,6 @@
 #pragma once
 
-namespace AnsiColor
+namespace ARC::AnsiColor
 {
    template <typename StringType>
    constexpr StringType RESET();
@@ -289,4 +289,4 @@ namespace AnsiColor
 
    template <typename StringType>
    void FormatMessage(StringType& msg, const StringType& fgColor, const StringType& bgColor = BG_BLACK<StringType>()) { msg = fgColor + bgColor + msg + RESET<StringType>(); }
-} // namespace AnsiColor
+} // namespace ARC::AnsiColor

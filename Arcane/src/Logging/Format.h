@@ -8,22 +8,28 @@ namespace ARC
       class Tokens
       {
       public:
-         static constexpr std::wstring_view TIMESTAMP = L"{timestamp}";
-         static constexpr std::wstring_view LEVEL     = L"{level}";
-         static constexpr std::wstring_view NAME      = L"{name}";
-         static constexpr std::wstring_view MESSAGE   = L"{message}";
-         static constexpr std::wstring_view SOURCE    = L"{source}";
-         static constexpr std::wstring_view FUNCTION  = L"{function}";
-         static constexpr std::wstring_view LINE      = L"{line}";
+         static constexpr std::string_view TIMESTAMP  =  "{timestamp}";
+         static constexpr std::string_view LEVEL      =  "{level}";
+         static constexpr std::string_view NAME       =  "{name}";
+         static constexpr std::string_view MESSAGE    =  "{message}";
+         static constexpr std::string_view SOURCE     =  "{source}";
+         static constexpr std::string_view FUNCTION   =  "{function}";
+         static constexpr std::string_view LINE       =  "{line}";
          
       private:
          Tokens() = delete;
          ~Tokens() = delete;
+
+         Tokens(const Tokens& other) = delete;
+         Tokens& operator=(const Tokens& other) = delete;
+
+         Tokens(Tokens&& other) = delete;
+         Tokens& operator=(Tokens&& other) = delete;
       };
 
-      static inline std::wstring DefaultFormatString()
+      static inline std::string DefaultFormatString()
       {
-         std::wstring result;
+         std::string result;
          result.append(Tokens::TIMESTAMP)
                .append(Tokens::LEVEL)
                .append(Tokens::NAME)
@@ -34,9 +40,9 @@ namespace ARC
          return result;
       }
 
-      static inline std::wstring MinimalFormatString()
+      static inline std::string MinimalFormatString()
       {
-         std::wstring result;
+         std::string result;
          result.append(Tokens::TIMESTAMP)
                .append(Tokens::LEVEL)
                .append(Tokens::NAME)
@@ -44,19 +50,19 @@ namespace ARC
          return result;
       }
 
-      explicit Format(const std::wstring& formatStr = DefaultFormatString());
+      explicit Format(const std::string& formatStr = DefaultFormatString());
       ~Format() = default;
 
-      std::wstring operator()(const std::wstring& level, const std::wstring& name, const std::wstring& message, const std::source_location& location);
+      std::string operator()(const std::string& level, const std::string& name, const std::string& message, const std::source_location& location);
 
-      void SetFormatString(const std::wstring& formatStr);
+      void SetFormatString(const std::string& formatStr);
 
    private:
-      std::wstring GetCurrentTimestamp();
+      std::string GetCurrentTimestamp();
       void ExtractOrderedKeys();
 
-      std::wstring m_formatString;
-      std::unordered_map<std::wstring, std::wstring> m_tokenMap;
-      std::vector<std::wstring> m_orderedKeys;
+      std::string m_formatString;
+      std::unordered_map<std::string, std::string> m_tokenMap;
+      std::vector<std::string> m_orderedKeys;
    };
-}
+} // namespace ARC

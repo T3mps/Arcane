@@ -22,4 +22,4 @@ namespace ARC
       Singleton(Singleton&& other) = delete;
       Singleton& operator=(Singleton&& other) = delete;
    };
-}
+} // namespace ARC

@@ -8,7 +8,7 @@ namespace ARC
    public:
       virtual ~GLMType() = default;
 
-      virtual GLM_t& GetGLMType() = 0;
-      virtual const GLM_t& GetGLMType() const = 0;
+      virtual GLM_t& Data() = 0;
+      virtual const GLM_t& Data() const = 0;
    };
 } // namespace ARC

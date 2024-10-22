@@ -1,10 +1,6 @@
 #include "arcpch.h"
 #include "StringUtil.h"
 
-#include <cctype>
-#include <cwctype>
-#include <locale>
-
 std::string ARC::StringUtil::ToLower(const std::string& str)
 {
    std::string lowerStr = str;
@@ -139,8 +135,8 @@ std::wstring ARC::StringUtil::Replace(const std::wstring& str, const std::wstrin
    return result;
 }
 
-template std::string ARC::StringUtil::ToString<int>(const int& value);
-template std::string ARC::StringUtil::ToString<unsigned int>(const unsigned int& value);
+template std::string ARC::StringUtil::ToString<int32_t>(const int32_t& value);
+template std::string ARC::StringUtil::ToString<uint32_t>(const uint32_t& value);
 template std::string ARC::StringUtil::ToString<long>(const long& value);
 template std::string ARC::StringUtil::ToString<unsigned long>(const unsigned long& value);
 template std::string ARC::StringUtil::ToString<long long>(const long long& value);
@@ -150,8 +146,8 @@ template std::string ARC::StringUtil::ToString<double>(const double& value);
 template std::string ARC::StringUtil::ToString<long double>(const long double& value);
 template std::string ARC::StringUtil::ToString<std::wstring>(const std::wstring& value);
 
-template std::wstring ARC::StringUtil::ToWString<int>(const int& value);
-template std::wstring ARC::StringUtil::ToWString<unsigned int>(const unsigned int& value);
+template std::wstring ARC::StringUtil::ToWString<int32_t>(const int32_t& value);
+template std::wstring ARC::StringUtil::ToWString<uint32_t>(const uint32_t& value);
 template std::wstring ARC::StringUtil::ToWString<long>(const long& value);
 template std::wstring ARC::StringUtil::ToWString<unsigned long>(const unsigned long& value);
 template std::wstring ARC::StringUtil::ToWString<long long>(const long long& value);

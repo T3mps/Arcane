@@ -111,4 +111,4 @@ namespace ARC
 	private:
 		InvocationElement m_invocation;
 	};
-}
+} // namespace ARC

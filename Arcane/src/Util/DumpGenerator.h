@@ -31,11 +31,11 @@ namespace ARC
       };
       bool MiniDump(void* exceptionInfo = nullptr, DumpType dumpType = DumpType::MiniDumpWithFullMemory, const std::string& customPath = "");
 #endif
-   }
+   } // namespace DumpGenerator
 
 #ifdef ARC_PLATFORM_WINDOWS
    LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* exceptionInfo);
 #endif
 
    void RegisterDumpHandler();
-} 
+}  // namespace ARC

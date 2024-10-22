@@ -9,7 +9,7 @@ namespace ARC
    public:
       static constexpr char NEW_LINE = '\n';
 
-      static bool Initialize(const std::wstring& title = L"", int width = 96, int height = 64);
+      static bool Initialize(const std::wstring& title = L"", int32_t width = 96, int32_t height = 64);
 
       static void Output(const std::string& msg);
       static void Output(const std::string_view& msg);
@@ -49,4 +49,4 @@ namespace ARC
 
       friend class Singleton<Console>;
    };
-}
+} // namespace ARC

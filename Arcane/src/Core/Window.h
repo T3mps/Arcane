@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Event/Event.h"
 #include "GLFW/glfw3.h"
 #include "Math/Vector.h"
 
@@ -22,11 +23,13 @@ namespace ARC
 
       void Initialize();
 
-      void SwapBuffers();
       void ProcessEvents();
+      void SwapBuffers();
 
       void CenterInScreen();
       void Maximize();
+
+      void SetEventCallback(const Event::Callback& callback) { m_data.eventCallback = callback; }
 
       inline GLFWwindow* GetGLFWPointer() const { return m_windowPointer; }
 
@@ -39,14 +42,16 @@ namespace ARC
       void SetResizable(bool resizable) const;
 
    private:
-      void Cleanup();
+      void Close();
 
       GLFWwindow* m_windowPointer;
       WindowInfo m_properties;
+
       struct WindowData
       {
          std::string title;
          uint32_t width, height;
+         Event::Callback eventCallback;
       } m_data;
    };
-}
+} // namespace ARC

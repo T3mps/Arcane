@@ -18,6 +18,7 @@ namespace ARC
    template <typename T>
    class Matrix2x2 : public GLMType<glm::mat<2, 2, T>>
    {
+   public:
       Matrix2x2<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix2x2<T>(T a, T b, T c, T d) : m_glmMatrix(a, b, c, d) {}
       Matrix2x2<T>(const glm::mat<2, 2, T>& mat) : m_glmMatrix(mat) {}
@@ -45,8 +46,8 @@ namespace ARC
 
       T Determinant() const { return glm::determinant(m_glmMatrix); }
 
-      glm::mat<2, 2, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<2, 2, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<2, 2, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<2, 2, T>& Data() const override { return m_glmMatrix; }
 
    private:
       glm::mat<2, 2, T> m_glmMatrix;
@@ -60,6 +61,7 @@ namespace ARC
    template <typename T>
    class Matrix2x3 : public GLMType<glm::mat<2, 3, T>>
    {
+   public:
       Matrix2x3<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix2x3<T>(T a, T b, T c, T d, T e, T f) : m_glmMatrix(a, b, c, d, e, f) {}
       Matrix2x3<T>(const glm::mat<2, 3, T>& mat) : m_glmMatrix(mat) {}
@@ -87,8 +89,8 @@ namespace ARC
 
       T Determinant() const { return glm::determinant(m_glmMatrix); }
 
-      glm::mat<2, 3, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<2, 3, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<2, 3, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<2, 3, T>& Data() const override { return m_glmMatrix; }
       
    private:
       glm::mat<2, 3, T> m_glmMatrix;
@@ -102,6 +104,7 @@ namespace ARC
    template <typename T>
    class Matrix2x4 : public GLMType<glm::mat<2, 4, T>>
    {
+   public:
       Matrix2x4<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix2x4<T>(T a, T b, T c, T d, T e, T f, T g, T h) : m_glmMatrix(a, b, c, d, e, f, g, h) {}
       Matrix2x4<T>(const glm::mat<2, 4, T>& mat) : m_glmMatrix(mat) {}
@@ -129,8 +132,8 @@ namespace ARC
 
       T Determinant() const { return glm::determinant(m_glmMatrix); }
 
-      glm::mat<2, 4, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<2, 4, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<2, 4, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<2, 4, T>& Data() const override { return m_glmMatrix; }
       
    private:
       glm::mat<2, 4, T> m_glmMatrix;
@@ -144,6 +147,7 @@ namespace ARC
    template <typename T>
    class Matrix3x2 : public GLMType<glm::mat<3, 2, T>>
    {
+   public:
       Matrix3x2<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix3x2<T>(T a, T b, T c, T d, T e, T f) : m_glmMatrix(a, b, c, d, e, f) {}
       Matrix3x2<T>(const glm::mat<3, 2, T>& mat) : m_glmMatrix(mat) {}
@@ -171,8 +175,8 @@ namespace ARC
       
       T Determinant() const { return glm::determinant(m_glmMatrix); }
       
-      glm::mat<3, 2, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<3, 2, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<3, 2, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<3, 2, T>& Data() const override { return m_glmMatrix; }
       
    private:
       glm::mat<3, 2, T> m_glmMatrix;
@@ -186,6 +190,7 @@ namespace ARC
    template <typename T>
    class Matrix3x3 : public GLMType<glm::mat<3, 3, T>>
    {
+   public:
       Matrix3x3<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix3x3<T>(T a, T b, T c, T d, T e, T f, T g, T h, T i) : m_glmMatrix(a, b, c, d, e, f, g, h, i) {}
       Matrix3x3<T>(const glm::mat<3, 3, T>& mat) : m_glmMatrix(mat) {}
@@ -213,8 +218,8 @@ namespace ARC
       
       T Determinant() const { return glm::determinant(m_glmMatrix); }
       
-      glm::mat<3, 3, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<3, 3, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<3, 3, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<3, 3, T>& Data() const override { return m_glmMatrix; }
       
    private:
       glm::mat<3, 3, T> m_glmMatrix;
@@ -228,6 +233,7 @@ namespace ARC
    template <typename T>
    class Matrix3x4 : public GLMType<glm::mat<3, 4, T>>
    {
+   public:
       Matrix3x4<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix3x4<T>(T a, T b, T c, T d, T e, T f, T g, T h, T i, T j, T k, T l) : m_glmMatrix(a, b, c, d, e, f, g, h, i, j, k, l) {}
       Matrix3x4<T>(const glm::mat<3, 4, T>& mat) : m_glmMatrix(mat) {}
@@ -250,8 +256,8 @@ namespace ARC
       bool operator==(const Matrix3x4<T>& rhs) const { return m_glmMatrix == rhs.m_glmMatrix; }
       bool operator!=(const Matrix3x4<T>& rhs) const { return m_glmMatrix != rhs.m_glmMatrix; }
       
-      glm::mat<3, 4, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<3, 4, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<3, 4, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<3, 4, T>& Data() const override { return m_glmMatrix; }
       
    private:
       glm::mat<3, 4, T> m_glmMatrix;
@@ -265,6 +271,7 @@ namespace ARC
    template <typename T>
    class Matrix4x2 : public GLMType<glm::mat<4, 2, T>>
    {
+   public:
       Matrix4x2<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix4x2<T>(T a, T b, T c, T d, T e, T f, T g, T h) : m_glmMatrix(a, b, c, d, e, f, g, h) {}
       Matrix4x2<T>(const glm::mat<4, 2, T>& mat) : m_glmMatrix(mat) {}
@@ -287,8 +294,8 @@ namespace ARC
       bool operator==(const Matrix4x2<T>& rhs) const { return m_glmMatrix == rhs.m_glmMatrix; }
       bool operator!=(const Matrix4x2<T>& rhs) const { return m_glmMatrix != rhs.m_glmMatrix; }
       
-      glm::mat<4, 2, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<4, 2, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<4, 2, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<4, 2, T>& Data() const override { return m_glmMatrix; }
       
    private:
       glm::mat<4, 2, T> m_glmMatrix;
@@ -302,6 +309,7 @@ namespace ARC
    template <typename T>
    class Matrix4x3 : public GLMType<glm::mat<4, 3, T>>
    {
+   public:
       Matrix4x3<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix4x3<T>(T a, T b, T c, T d, T e, T f, T g, T h, T i, T j, T k, T l) : m_glmMatrix(a, b, c, d, e, f, g, h, i, j, k, l) {}
       Matrix4x3<T>(const glm::mat<4, 3, T>& mat) : m_glmMatrix(mat) {}
@@ -324,8 +332,8 @@ namespace ARC
       bool operator==(const Matrix4x3<T>& rhs) const { return m_glmMatrix == rhs.m_glmMatrix; }
       bool operator!=(const Matrix4x3<T>& rhs) const { return m_glmMatrix != rhs.m_glmMatrix; }
       
-      glm::mat<4, 3, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<4, 3, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<4, 3, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<4, 3, T>& Data() const override { return m_glmMatrix; }
       
    private:
       glm::mat<4, 3, T> m_glmMatrix;
@@ -339,6 +347,7 @@ namespace ARC
    template <typename T>
    class Matrix4x4 : public GLMType<glm::mat<4, 4, T>>
    {
+   public:
       Matrix4x4<T>() : m_glmMatrix(static_cast<T>(1)) {}
       Matrix4x4<T>(T a, T b, T c, T d, T e, T f, T g, T h, T i, T j, T k, T l, T m, T n, T o, T p) : m_glmMatrix(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) {}
       Matrix4x4<T>(const glm::mat<4, 4, T>& mat) : m_glmMatrix(mat) {}
@@ -361,8 +370,8 @@ namespace ARC
       bool operator==(const Matrix4x4<T>& rhs) const { return m_glmMatrix == rhs.m_glmMatrix; }
       bool operator!=(const Matrix4x4<T>& rhs) const { return m_glmMatrix != rhs.m_glmMatrix; }
       
-      glm::mat<4, 4, T>& GetGLMType() override { return m_glmMatrix; }
-      const glm::mat<4, 4, T>& GetGLMType() const override { return m_glmMatrix; }
+      glm::mat<4, 4, T>& Data() override { return m_glmMatrix; }
+      const glm::mat<4, 4, T>& Data() const override { return m_glmMatrix; }
       
    private:
       glm::mat<4, 4, T> m_glmMatrix;

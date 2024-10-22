@@ -1,9 +1,6 @@
 #include "arcpch.h"
 #include "DumpGenerator.h"
 
-#include <ctime>
-#include <csignal>
-
 namespace { std::mutex dumpMutex; }
 
 std::string GetDefaultDumpFileName()
@@ -22,7 +19,6 @@ std::string GetDefaultDumpFileName()
 }
 
 #ifdef ARC_PLATFORM_WINDOWS
-
    bool ARC::DumpGenerator::MiniDump(EXCEPTION_POINTERS* exceptionInfo, DumpType dumpType, const std::string& customPath)
    {
       std::lock_guard<std::mutex> guard(dumpMutex); // Thread-safe access
@@ -32,7 +28,7 @@ std::string GetDefaultDumpFileName()
       HANDLE hFile = CreateFileA(dumpFilePath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
       if (hFile == INVALID_HANDLE_VALUE)
       {
-         std::cerr << "Failed to create minidump file at: " << dumpFilePath << std::endl;
+         ARC::Log::CoreError("Failed to create minidump file at: " + dumpFilePath);
          return false;
       }
 
@@ -58,12 +54,12 @@ std::string GetDefaultDumpFileName()
 
       if (success)
       {
-         std::cout << "Minidump created at: " << dumpFilePath << std::endl;
+         ARC::Log::CoreError("Minidump created at: " + dumpFilePath);
          return true;
       }
       else
       {
-         std::cerr << "Failed to write minidump." << std::endl;
+         ARC::Log::CoreError("Failed to write minidump.");
          return false;
       }
    }
@@ -78,25 +74,23 @@ std::string GetDefaultDumpFileName()
    {
       SetUnhandledExceptionFilter(UnhandledExceptionHandler);
    }
-
-#else // Linux implementation
-
-   void SignalHandler(int signum)
+#else
+   void SignalHandler(int32_t signum)
    {
-      std::cerr << "Received signal: " << signum << ", creating core dump..." << std::endl;
+      ARC::Log::CoreError("Received signal: " + signum + ", creating core dump...");
       std::abort();  // Causes core dump to be generated
    }
 
-   bool ARC::DumpGenerator::MiniDump(void* /* exceptionInfo */, DumpType /* dumpType */, const std::string& /* customPath */)
+   bool ARC::DumpGenerator::MiniDump(void* exceptionInfo, DumpType dumpType, const std::string& customPath)
    {
-      std::cerr << "Linux does not support MiniDump. Use core dump or external tools like gdb for debugging." << std::endl;
+      ARC::Log::CoreError("Linux does not support MiniDump. Use core dump or external tools like gdb for debugging.");
       return false;
    }
 
    void ARC::RegisterDumpHandler()
    {
-      std::signal(SIGSEGV, SignalHandler);  // Handle segmentation faults
-      std::signal(SIGABRT, SignalHandler);  // Handle aborts
+      std::signal(SIGSEGV, SignalHandler);  // Segmentation faults
+      std::signal(SIGABRT, SignalHandler);  // Aborts
    }
 
 #endif

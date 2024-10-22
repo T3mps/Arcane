@@ -1,26 +1,31 @@
 #include "arcpch.h"
 #include "Application.h"
 
-#include "Scene/SceneManager.h"
+#include "Event/ApplicationEvent.h"
+#include "Input.h"
 
 #ifdef ARC_BUILD_DEBUG
    #include "Util/DumpGenerator.h"
 #endif
 
+ARC::Application* ARC::Application::s_instance = nullptr;
 static std::thread::id s_mainThreadID;
 
 ARC::Application::Application(ApplicationInfo info) :
    m_updatesPerSecond(0U),
-   m_fixedUpdatesPerSecond(0U),
    m_framesPerSecond(0U),
    m_running(true)
 {
+   s_instance = this;
+   s_mainThreadID = std::this_thread::get_id();
+
    if (!Initialize(info))
    {
       if (&LoggingManager::GetCoreLogger())
-         ARC_CORE_ERROR("Application initialization failed");
+         ARC::Log::CoreError("Application initialization failed");
+#ifdef ARC_PLATFORM_WINDOWS
       MessageBox(NULL, L"Application initialization failed", L"Error", MB_OK);
-
+#endif
 #ifdef ARC_BUILD_DEBUG
       ARC_DEBUGBREAK();
 #else
@@ -31,21 +36,19 @@ ARC::Application::Application(ApplicationInfo info) :
 
 ARC::Application::~Application()
 {
-   Cleanup();
+   Close();
 }
 
 ARC::Application::Application(Application&& other) noexcept :
    m_window(std::move(other.m_window)),
    m_framesPerSecond(other.m_framesPerSecond),
    m_updatesPerSecond(other.m_updatesPerSecond),
-   m_fixedUpdatesPerSecond(other.m_fixedUpdatesPerSecond),
    m_updateCallback(std::move(other.m_updateCallback)),
-   m_fixedUpdateCallback(std::move(other.m_fixedUpdateCallback)),
-   m_renderCallback(std::move(other.m_renderCallback))
+   m_renderCallback(std::move(other.m_renderCallback)),
+   m_running(other.m_running)
 {
    other.m_framesPerSecond = 0;
    other.m_updatesPerSecond = 0;
-   other.m_fixedUpdatesPerSecond = 0;
 }
 
 ARC::Application& ARC::Application::operator=(Application&& other) noexcept
@@ -57,15 +60,13 @@ ARC::Application& ARC::Application::operator=(Application&& other) noexcept
       m_window = std::move(other.m_window);
       m_framesPerSecond = other.m_framesPerSecond;
       m_updatesPerSecond = other.m_updatesPerSecond;
-      m_fixedUpdatesPerSecond = other.m_fixedUpdatesPerSecond;
       m_updateCallback = std::move(other.m_updateCallback);
-      m_fixedUpdateCallback = std::move(other.m_fixedUpdateCallback);
       m_renderCallback = std::move(other.m_renderCallback);
 
       other.m_framesPerSecond = 0;
       other.m_updatesPerSecond = 0;
-      other.m_fixedUpdatesPerSecond = 0;
    }
+
    return *this;
 }
 
@@ -77,21 +78,15 @@ void ARC::Application::Run()
    using std::chrono::milliseconds;
    using std::chrono::duration_cast;
 
-   constexpr duration<float> fixedUpdateRate = milliseconds(1000 / TARGET_UPDATES_PER_SECOND);
-   constexpr float maxAccumulatedTime = fixedUpdateRate.count() * MAX_ACCUMULATED_UPDATES;
-
    time_point<steady_clock> lastUpdateTime = steady_clock::now();
-   time_point<steady_clock> lastFixedUpdateTime = steady_clock::now();
    time_point<steady_clock> lastSecond = steady_clock::now();
 
    uint32_t frames = 0;
    uint32_t updates = 0;
-   uint32_t fixedUpdates = 0;
-   duration<float> accumulator = duration<float>::zero();
 
    while (m_running)
    {
-      m_window->ProcessEvents();
+      ProcessEvents();
 
       auto now = steady_clock::now();
       auto frameElapsedTime = duration_cast<duration<float>>(now - lastUpdateTime);
@@ -100,41 +95,86 @@ void ARC::Application::Run()
       Update(frameElapsedTime.count());
       ++updates;
 
-      auto fixedUpdateElapsedTime = duration_cast<duration<float>>(now - lastFixedUpdateTime);
-      lastFixedUpdateTime = now;
-      accumulator += fixedUpdateElapsedTime;
-
-      if (accumulator.count() > maxAccumulatedTime)
-         accumulator = duration<float>(maxAccumulatedTime);
-
-      while (accumulator >= fixedUpdateRate)
-      {
-         FixedUpdate(fixedUpdateRate.count());
-         accumulator -= fixedUpdateRate;
-         ++fixedUpdates;
-      }
-
       Render();
       ++frames;
+
+      Input::ClearReleasedKeys();
 
       if (duration_cast<duration<float>>(now - lastSecond).count() >= 1.0f)
       {
          m_framesPerSecond = frames;
          m_updatesPerSecond = updates;
-         m_fixedUpdatesPerSecond = fixedUpdates;
 
          frames = 0;
          updates = 0;
-         fixedUpdates = 0;
          lastSecond = now;
 
-         /*ARC_CORE_INFO("FPS: "   + std::to_string(m_framesPerSecond)    +
-                     " UPS: "    + std::to_string(m_updatesPerSecond)   +
-                     " FUPS: "   + std::to_string(m_fixedUpdatesPerSecond));*/
+         Log::CoreDebug("FPS: " + std::to_string(m_framesPerSecond) +
+                        " UPS: "  + std::to_string(m_updatesPerSecond));
       }
-
-      //std::this_thread::sleep_for(milliseconds(1));
    }
+}
+
+void ARC::Application::PushLayer(Layer* layer)
+{
+   m_layerStack.Push(layer);
+   layer->OnAttach();
+}
+
+void ARC::Application::PushOverlay(Layer* layer)
+{
+   m_layerStack.PushFront(layer);
+   layer->OnAttach();
+}
+
+void ARC::Application::PopLayer(Layer* layer)
+{
+   m_layerStack.Pop(layer);
+   layer->OnDetach();
+}
+
+void ARC::Application::PopOverlay(Layer* layer)
+{
+   m_layerStack.PopFront(layer);
+   layer->OnDetach();
+}
+
+void ARC::Application::OnEvent(Event& event)
+{
+   EventDispatcher dispatcher(event);
+   dispatcher.Dispatch<WindowClosedEvent>([this](WindowClosedEvent& e)        { return OnWindowClose(e); });
+
+   for (auto& callback : m_eventCallbacks)
+   {
+      callback(event);
+
+      if (event.handled)
+         break;
+   }
+
+   if (event.handled)
+      return;
+
+   for (auto it = m_layerStack.end(); it != m_layerStack.begin(); )
+   {
+      (*--it)->OnEvent(event);
+      if (event.handled)
+         break;
+   }
+}
+
+void ARC::Application::SyncEvents()
+{
+   std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
+   for (auto& [synced, _] : m_eventQueue)
+   {
+      synced = true;
+   }
+}
+
+std::thread::id ARC::Application::GetMainThreadID()
+{
+   return s_mainThreadID;
 }
 
 bool ARC::Application::Initialize(ApplicationInfo info)
@@ -151,19 +191,19 @@ bool ARC::Application::Initialize(ApplicationInfo info)
       //std::filesystem::current_path("/");
 
       auto& logging = LoggingManager::GetInstance();
-      logging.SetCoreLogger(new Logger(LoggingManager::DEFAULT_CORE_LOGGER_NAME));
+      logging.SetCoreLogger(new Logger(LoggingManager::DEFAULT_CORE_LOGGER_NAME.data()));
       if (!&logging.GetCoreLogger())
       {
          success = false;
          return;
       }
-      logging.SetApplicationLogger(new Logger(LoggingManager::DEFAULT_APPLICATION_LOGGER_NAME));
+      logging.SetApplicationLogger(new Logger(LoggingManager::DEFAULT_APPLICATION_LOGGER_NAME.data()));
       if (!&logging.GetApplicationLogger())
       {
          success = false;
          return;
       }
-      
+
       WindowInfo windowInfo;
       windowInfo.title = info.name;
       windowInfo.width = info.windowWidth;
@@ -175,15 +215,65 @@ bool ARC::Application::Initialize(ApplicationInfo info)
       ARC_ASSERT((success = m_window != nullptr), "Unable to create window instance.");
 
       m_window->Initialize();
+      m_window->SetEventCallback([this](Event& e) { OnEvent(e); });
       m_window->CenterInScreen();
       m_window->SetResizable(info.resizableWindow);
 
       SceneManager::Initialize();
 
-      ARC_CORE_INFO("Application initialized");
+      Log::CoreInfo("Application initialized");
    });
 
    return success;
+}
+
+void ARC::Application::ProcessEvents()
+{
+   Input::TransitionPressedKeys();
+   Input::TransitionPressedButtons();
+
+   m_window->ProcessEvents();
+
+   // We need to ensure thread safety when accessing the event queue, but we
+   // can't hold the lock while calling func() because we have no control over it.
+   // Potential problems with holding the lock during func() include:
+   // 1. func() might be slow, which would hold the lock for an extended period,
+   //    degrading performance and preventing other threads from accessing the queue.
+   // 2. func() might queue additional events, causing a deadlock if the event queue
+   //    is accessed again while the lock is held.
+
+   // To mitigate these risks, we only hold the lock when accessing the queue, 
+   // but we release it before calling func(). This ensures:
+   // - The queue is safely modified within the lock.
+   // - func() is called outside the lock, avoiding deadlocks and performance issues.
+   while (true)
+   {
+      std::function<void()> func;
+      {
+         // Lock the mutex only when accessing the queue to prevent race conditions
+         std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
+
+         if (m_eventQueue.empty())
+            break;
+
+         const auto& [synced, eventFunc] = m_eventQueue.front();
+         if (!synced)
+            break;
+
+         func = eventFunc;
+         // Remove the event from the queue while holding the lock
+         m_eventQueue.pop_front();
+      }
+
+      // Call the function outside the lock
+      func();
+   }
+}
+
+bool ARC::Application::OnWindowClose(WindowClosedEvent& e)
+{
+   Close();
+   return false;
 }
 
 void ARC::Application::Update(float deltaTime)
@@ -191,17 +281,11 @@ void ARC::Application::Update(float deltaTime)
    if (auto currentScene = SceneManager::GetCurrentScene())
       currentScene->Update(deltaTime);
 
+   for (Layer* layer : m_layerStack)
+      layer->OnUpdate(deltaTime);
+
    if (m_updateCallback)
       m_updateCallback(deltaTime);
-}
-
-void ARC::Application::FixedUpdate(float timeStep)
-{
-   if (auto currentScene = SceneManager::GetCurrentScene())
-      currentScene->FixedUpdate(timeStep);
-
-   if (m_fixedUpdateCallback)
-      m_fixedUpdateCallback(timeStep);
 }
 
 void ARC::Application::Render()
@@ -213,7 +297,11 @@ void ARC::Application::Render()
       m_renderCallback();
 }
 
-void ARC::Application::Cleanup()
+void ARC::Application::Close()
 {
+   m_eventCallbacks.clear();
+   m_window->SetEventCallback([](Event& e) {});
+   m_layerStack.Clear();
+
    m_running = false;
 }

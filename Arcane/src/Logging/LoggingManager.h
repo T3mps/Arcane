@@ -9,30 +9,30 @@ namespace ARC
    class LoggingManager : public Singleton<LoggingManager>
    {
    public:
-      static constexpr const wchar_t* DEFAULT_CORE_LOGGER_NAME = L"ARCANE";
-      static constexpr const wchar_t* DEFAULT_APPLICATION_LOGGER_NAME = L"APP";
-
+      static constexpr std::string_view DEFAULT_CORE_LOGGER_NAME = "ARCANE";
+      static constexpr std::string_view DEFAULT_APPLICATION_LOGGER_NAME = "APP";
+      
       using LoggerPtr = std::unique_ptr<LoggingService, std::function<void(LoggingService*)>>;
 
       static LoggingService& GetCoreLogger() { return *(GetInstance().m_coreLogger); }
 
       template <typename Deleter = LoggerDeleter>
-      static void SetCoreLogger(LoggingService* newLogger, Deleter deleter = Deleter())
+      static inline void SetCoreLogger(LoggingService* newLogger, Deleter deleter = Deleter())
       {
          GetInstance().m_coreLogger = LoggerPtr(newLogger, deleter);
       }
 
-      static bool HasCoreLogger() { return GetInstance().m_coreLogger != nullptr; }
+      static inline bool HasCoreLogger() { return GetInstance().m_coreLogger != nullptr; }
 
-      static LoggingService& GetApplicationLogger() { return *(GetInstance().m_applicationLogger); }
+      static inline LoggingService& GetApplicationLogger() { return *(GetInstance().m_applicationLogger); }
 
       template <typename Deleter = LoggerDeleter>
-      static void SetApplicationLogger(LoggingService* newLogger, Deleter deleter = Deleter())
+      static inline void SetApplicationLogger(LoggingService* newLogger, Deleter deleter = Deleter())
       {
          GetInstance().m_applicationLogger = LoggerPtr(newLogger, deleter);
       }
 
-      static bool HasApplicationLogger() { return GetInstance().m_applicationLogger != nullptr; }
+      static inline bool HasApplicationLogger() { return GetInstance().m_applicationLogger != nullptr; }
 
       static void Shutdown();
 
@@ -48,4 +48,4 @@ namespace ARC
 
       friend class Singleton<LoggingManager>;
    };
-}
+} // namespace ARC

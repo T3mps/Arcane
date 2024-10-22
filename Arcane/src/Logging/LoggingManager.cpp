@@ -14,9 +14,7 @@ void ARC::LoggingManager::Shutdown()
    instance.m_coreLogger.reset();
    instance.m_applicationLogger.reset();
 
-   FreeConsole();
-
-   ARC::Console::Flush(std::cout);
-   ARC::Console::Flush(std::cerr);
    ARC::Console::Flush(std::clog);
+
+   FreeConsole();
 }

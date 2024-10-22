@@ -14,8 +14,8 @@ namespace ARC
       Scene();
       ~Scene();
 
-      Entity CreateEntity(const std::string& name = std::string());
-      Entity CreateEntity(UUID uuid, const std::string& name = std::string());
+      Entity CreateEntity(const std::string& name = "Entity");
+      Entity CreateEntity(UUID uuid, const std::string& name = "Entity");
       void DestroyEntity(Entity entity);
 
       Entity FindEntity(const std::string& name);
@@ -28,16 +28,16 @@ namespace ARC
       void OnStop();
 
       void Update(float32_t deltaTime);
-      void FixedUpdate(float32_t timeStep);
       void Render();
 
       void AddUpdateSystem(const UpdateSystem& system) { m_updateSystems.Insert(system); }
-      void AddFixedUpdateSystem(const UpdateSystem& system) { m_fixedUpdateSystems.Insert(system); }
       void AddRenderSystem(const RenderSystem& system) { m_renderSystems.Insert(system); }
 
       bool IsRunning() const { return m_running; }
 
    private:
+      void SortEntities();
+
       template <typename T>
       void OnComponentAdded(Entity entity, T& component);
 
@@ -45,7 +45,6 @@ namespace ARC
       std::unordered_map<UUID, entt::entity> m_entityMap;
 
       SortedSystemList<UpdateSystem> m_updateSystems;
-      SortedSystemList<UpdateSystem> m_fixedUpdateSystems;
       SortedSystemList<RenderSystem> m_renderSystems;
 
       bool m_running;

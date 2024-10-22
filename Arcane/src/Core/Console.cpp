@@ -4,7 +4,7 @@
 std::once_flag ARC::Console::m_initFlag;
 HANDLE ARC::Console::m_hConsole;
 
-bool ARC::Console::Initialize(const std::wstring& title, int width, int height)
+bool ARC::Console::Initialize(const std::wstring& title, int32_t width, int32_t height)
 {
    static bool initialized = false;
    std::call_once(m_initFlag, [&]()
@@ -15,6 +15,9 @@ bool ARC::Console::Initialize(const std::wstring& title, int width, int height)
          freopen_s((FILE**) stderr, "CONOUT$",  "w", stderr);
          freopen_s((FILE**) stdin,  "CONIN$",   "r", stdin);
          m_hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+
+         if (!title.empty())
+            SetConsoleTitle(title.c_str());
 
          CONSOLE_SCREEN_BUFFER_INFO csbi;
          GetConsoleScreenBufferInfo(m_hConsole, &csbi);

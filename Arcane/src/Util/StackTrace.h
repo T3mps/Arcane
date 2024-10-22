@@ -1,18 +1,15 @@
 #pragma once
 
-namespace ARC
+namespace ARC::StackTrace
 {
-   namespace StackTrace
+   struct CaptureInfo
    {
-      struct CaptureInfo
-      {
-         int maxFrames           = 16;
-         bool resolveSymbols     = true;
-         bool includeModuleInfo  = true;
-         bool includeLineInfo    = true;
-      };
+      int32_t maxFrames       = 16;
+      bool resolveSymbols     = true;
+      bool includeModuleInfo  = true;
+      bool includeLineInfo    = true;
+   };
 
-      [[nodiscard]] std::optional<std::string> Capture(CaptureInfo CaptureInfo = {});
-      [[nodiscard]] std::optional<std::string> Capture(int maxFrames, bool resolveSymbols = true, bool includeModuleInfo = true, bool includeLineInfo = true);
-   } // namespace StackTrace
+   [[nodiscard]] std::optional<std::string> Capture(CaptureInfo CaptureInfo = {});
+   [[nodiscard]] std::optional<std::string> Capture(int32_t maxFrames, bool resolveSymbols = true, bool includeModuleInfo = true, bool includeLineInfo = true);
 } // namespace ARC
