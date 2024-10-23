@@ -1,0 +1,18 @@
+[submodule "Vendor/entt"]
+	path = Vendor/entt
+	url = https://github.com/skypjack/entt
+[submodule "Vendor/GLFW"]
+	path = Vendor/GLFW
+	url = https://github.com/T3mps/glfw
+[submodule "Vendor/glm"]
+	path = Vendor/glm
+	url = https://github.com/g-truc/glm
+[submodule "Vendor/nlohmannjson"]
+	path = Vendor/nlohmannjson
+	url = https://github.com/nlohmann/json
+[submodule "Vendor/toml++"]
+	path = Vendor/toml++
+	url = https://github.com/marzer/tomlplusplus
+[submodule "Vendor/sol2"]
+	path = Vendor/sol2
+	url = https://github.com/ThePhD/sol2

@@ -9,12 +9,11 @@ workspace "Arcane"
 
     IncludeDir = {
         Arcane       = "Arcane/src",
-        entt         = "Vendor/entt/include",
-        glm          = "Vendor/glm/include",
-        jemalloc     = "Vendor/jemalloc/include",
-        GLFW         = "Vendor/GLFW/include",
+        entt         = "Vendor/entt/src",
+        glm          = "Vendor/glm/",
+        glfw         = "Vendor/glfw/include",
         nlogmannjson = "Vendor/nlohmannjson/include",
-        tomlplusplus = "Vendor/tomlplusplus/include",
+        tomlplusplus = "Vendor/toml++/include",
         sol2         = "Vendor/sol2/include"
     }
 
@@ -61,7 +60,7 @@ workspace "Arcane"
             "%{IncludeDir.entt}",
             "%{IncludeDir.glm}",
             "%{IncludeDir.jemalloc}",
-            "%{IncludeDir.GLFW}",
+            "%{IncludeDir.glfw}",
             "%{IncludeDir.nlogmannjson}",
             "%{IncludeDir.tomlplusplus}",
             "%{IncludeDir.sol2}"
@@ -78,10 +77,10 @@ workspace "Arcane"
         setupProject("Arcane", "StaticLib")
 
         filter "system:windows"
-            links { "GLFW", "d3d12" }
+            links { "glfw", "d3d12" }
 
         filter "system:linux"
-            links { "GLFW" }
+            links { "glfw" }
 
         pchheader "arcpch.h"
         pchsource "Arcane/src/arcpch.cpp"
@@ -121,5 +120,5 @@ workspace "Arcane"
         filter "system:linux"
             links { "Arcane", "pthread", "dl" }
 
-    include "Vendor/GLFW"
+    include "Vendor/glfw"
     
