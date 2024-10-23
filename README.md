@@ -35,25 +35,20 @@ void Update(float dt)
   // Custom update logic...
 }
 
-void FixedUpdate(float ts)
-{
-  // Custom fixed update logic...
-}
-
 void Render()
 {
   // Custom render logic...
 }
 
-ARC_API void EntryPoint(HINSTANCE hInstance, int nCmdShow)
+ARC_API void EntryPoint()
 {
-   auto app = Arcane::Application::Create(hInstance, nCmdShow);
-
-   app->RegisterUpdateCallback(Update);
-   app->RegisterFixedUpdateCallback(FixedUpdate);
-   app->RegisterRenderCallback(Render);
-
+   auto* app = new ARC::Application();
+   app->RegisterUpdateCallback<Update>();
+   app->RegisterRenderCallback<Render>();
+   
    app->Run();
+   
+   delete app;
 }
 ```
 _This example shows how to set up basic game loops with update and render callbacks using the **Arcane** API._
