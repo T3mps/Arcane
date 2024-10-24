@@ -28,7 +28,7 @@ ARC::Application::Application(ApplicationInfo info) :
       ARC_DEBUGBREAK();
 #else
       exit(EXIT_FAILURE);
-#endif;
+#endif
    }
 }
 
