@@ -3,51 +3,42 @@
 #include "Event.h"
 #include "Scene/Scene.h"
 
-namespace ARC
-{
-	class SceneEvent : public Event
-	{
-	public:
-		const std::shared_ptr<Scene>& GetScene() const { return m_scene; }
-		std::shared_ptr<Scene> GetScene() { return m_scene; }
+namespace ARC {
 
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication | EventCategoryScene)
-	
-	protected:
-		SceneEvent(const std::shared_ptr<Scene>& scene) : m_scene(scene) {}
+   template <EventType Type, EventCategory Category>
+   class SceneEventBase : public EventBase<Type, Category>
+   {
+   public:
+      const std::shared_ptr<Scene>& GetScene() const { return m_scene; }
 
-		std::shared_ptr<Scene> m_scene;
-	};
+   protected:
+      explicit SceneEventBase(const std::shared_ptr<Scene>& scene) : m_scene(scene) {}
 
-	class ScenePreStartEvent : public SceneEvent
-	{
-	public:
-		ScenePreStartEvent(const std::shared_ptr<Scene>& scene) : SceneEvent(scene) {}
+      std::shared_ptr<Scene> m_scene;
+   };
 
-		ARC_EVENT_CLASS_TYPE(ScenePreStart)
-	};
+   class ScenePreStartEvent final : public SceneEventBase<EventType::ScenePreStart, EventCategory::Application | EventCategory::Scene>
+   {
+   public:
+      explicit ScenePreStartEvent(const std::shared_ptr<Scene>& scene) : SceneEventBase(scene) {}
+   };
 
-	class ScenePostStartEvent : public SceneEvent
-	{
-	public:
-		ScenePostStartEvent(const std::shared_ptr<Scene>& scene) : SceneEvent(scene) {}
+   class ScenePostStartEvent final : public SceneEventBase<EventType::ScenePostStart, EventCategory::Application | EventCategory::Scene>
+   {
+   public:
+      explicit ScenePostStartEvent(const std::shared_ptr<Scene>& scene) : SceneEventBase(scene) {}
+   };
 
-		ARC_EVENT_CLASS_TYPE(ScenePostStart)
-	};
+   class ScenePreStopEvent final : public SceneEventBase<EventType::ScenePreStop, EventCategory::Application | EventCategory::Scene>
+   {
+   public:
+      explicit ScenePreStopEvent(const std::shared_ptr<Scene>& scene) : SceneEventBase(scene) {}
+   };
 
-	class ScenePreStopEvent : public SceneEvent
-	{
-	public:
-		ScenePreStopEvent(const std::shared_ptr<Scene>& scene) : SceneEvent(scene) {}
+   class ScenePostStopEvent final : public SceneEventBase<EventType::ScenePostStop, EventCategory::Application | EventCategory::Scene>
+   {
+   public:
+      explicit ScenePostStopEvent(const std::shared_ptr<Scene>& scene) : SceneEventBase(scene) {}
+   };
 
-		ARC_EVENT_CLASS_TYPE(ScenePreStop)
-	};
-
-	class ScenePostStopEvent : public SceneEvent
-	{
-	public:
-		ScenePostStopEvent(const std::shared_ptr<Scene>& scene) : SceneEvent(scene) {}
-
-		ARC_EVENT_CLASS_TYPE(ScenePostStop)
-	};
 } // namespace ARC

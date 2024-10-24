@@ -2,6 +2,7 @@
 
 #include "Event/ApplicationEvent.h"
 #include "Event/Event.h"
+#include "Event/EventBus.h"
 #include "Event/KeyEvent.h"
 #include "Event/MouseEvent.h"
 #include "Event/LayerStack.h"
@@ -34,47 +35,45 @@ namespace ARC
       ~Application();
       Application(const Application&) = delete;
       Application& operator=(const Application&) = delete;
-      Application(Application&&) noexcept;
-      Application& operator=(Application&&) noexcept;
 
       static inline Application& GetInstance() { return *s_instance; }
 
       void Run();
 
-      void PushLayer(Layer* layer);
-      void PushOverlay(Layer* layer);
-      void PopLayer(Layer* layer);
-      void PopOverlay(Layer* layer);
-
-      void OnEvent(Event& event); 
-      inline void AddEventCallback(const Event::Callback& eventCallback) { m_eventCallbacks.push_back(eventCallback); }
+      void PushLayer(std::unique_ptr<Layer> overlay);
+      void PushOverlay(std::unique_ptr<Layer> overlay);
+      std::unique_ptr<Layer> PopLayer(Layer* layer);
+      std::unique_ptr<Layer> PopOverlay(Layer* overlay);
 
       template<typename Func>
       inline void QueueEvent(Func&& func)
       {
          std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
-         m_eventQueue.emplace_back(true, func);
+         m_eventQueue.emplace_back(std::forward<Func>(func));
       }
 
-      template<typename E, bool DispatchImmediately = false, typename... EventArgs>
-      inline void DispatchEvent(EventArgs&&... args)
+      template<typename E, typename... EventArgs>
+      void DispatchEvent(EventArgs&&... args)
       {
-         std::shared_ptr<E> event = std::make_shared<E>(std::forward<EventArgs>(args)...);
-         if constexpr (DispatchImmediately)
+         auto event = std::make_shared<E>(std::forward<EventArgs>(args)...);
+
+         if (std::this_thread::get_id() == GetMainThreadID())
          {
             OnEvent(*event);
          }
          else
          {
-            std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
-            m_eventQueue.emplace_back(false, [event](){ Application::GetInstance().OnEvent(*event); });
+            QueueEvent([event = std::move(event), this]() mutable
+            {
+               OnEvent(*event);
+            });
          }
       }
 
-      void SyncEvents();
-
       template<void (*Callback)(float)>
       inline void RegisterUpdateCallback()       { m_updateCallback.Bind<Callback>(); }
+      template<void (*Callback)(float)>
+      inline void RegisterFixedUpdateCallback()       { m_fixedUpdateCallback.Bind<Callback>(); }
       template<void (*Callback)()>
       inline void RegisterRenderCallback()       { m_renderCallback.Bind<Callback>(); }
 
@@ -85,14 +84,18 @@ namespace ARC
       static std::thread::id GetMainThreadID();
 
    private:
+      Application(Application&&) = delete;
+      Application& operator=(Application&&) = delete;
+
       bool Initialize(ApplicationInfo info);
 
       void ProcessEvents();
-
-      bool OnWindowClose(WindowClosedEvent& e);
+      bool GetNextEvent(std::function<void()>& func);
+      void OnEvent(Event& event);
 
       void Update(float deltaTime);
-      void Render();
+      void FixedUpdate(float timeStep);
+      void Render(float alpha);
 
       void Close();
 
@@ -100,17 +103,18 @@ namespace ARC
       std::unique_ptr<Window> m_window;
       LayerStack m_layerStack;
 
+      std::deque<std::function<void()>> m_eventQueue;
       std::mutex m_eventQueueMutex;
-      std::deque<std::pair<bool, std::function<void()>>> m_eventQueue;
-      std::vector<Event::Callback> m_eventCallbacks;
 
       uint32_t m_framesPerSecond;
+      uint32_t m_fixedUpdatesPerSecond;
       uint32_t m_updatesPerSecond;
       bool m_running;
 
       Delegate<void(float)> m_updateCallback;
+      Delegate<void(float)> m_fixedUpdateCallback;
       Delegate<void(void)> m_renderCallback;
 
-      static Application* s_instance;
+      inline static Application* s_instance;
    };
 } // namespace ARC

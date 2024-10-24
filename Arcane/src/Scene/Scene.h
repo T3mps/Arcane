@@ -28,6 +28,7 @@ namespace ARC
       void OnStop();
 
       void Update(float32_t deltaTime);
+      void FixedUpdate(float32_t timeStep);
       void Render();
 
       void AddUpdateSystem(const UpdateSystem& system) { m_updateSystems.Insert(system); }
@@ -45,6 +46,7 @@ namespace ARC
       std::unordered_map<UUID, entt::entity> m_entityMap;
 
       SortedSystemList<UpdateSystem> m_updateSystems;
+      SortedSystemList<UpdateSystem> m_fixedUpdateSystems;
       SortedSystemList<RenderSystem> m_renderSystems;
 
       bool m_running;

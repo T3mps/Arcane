@@ -24,21 +24,6 @@
    #ifdef max
       #undef max
    #endif
-
-   #ifndef GET_X_LPARAM
-      #define GET_X_LPARAM(lp) (static_cast<int32_t>(static_cast<short>(LOWORD(lp))))
-   #endif
-   #ifndef GET_Y_LPARAM
-      #define GET_Y_LPARAM(lp) (static_cast<int32_t>(static_cast<short>(HIWORD(lp))))
-   #endif
-#endif
-
-#ifndef GET_X_LPARAM
-   #define GET_X_LPARAM(lp) (static_cast<int32_t>(static_cast<short>(LOWORD(lp))))
-#endif
-
-#ifndef GET_Y_LPARAM
-   #define GET_Y_LPARAM(lp) (static_cast<int32_t>(static_cast<short>(HIWORD(lp))))
 #endif
 
 #ifdef ARC_BUILD_DEBUG
@@ -74,6 +59,16 @@
    #define ARC_FORCE_INLINE __attribute__((always_inline))
 #else
    #define ARC_FORCE_INLINE
+#endif
+
+#if __cplusplus >= 201703L
+   #define ARC_FALLTHROUGH [[fallthrough]]
+#elif defined(ARC_COMPILER_GNUC) || defined(ARC_COMPILER_CLANG)
+   #define ARC_FALLTHROUGH __attribute__((fallthrough))
+#elif defined(ARC_COMPILER_MSVC)
+   #define ARC_FALLTHROUGH __fallthrough
+#else
+   #define ARC_FALLTHROUGH // fallthrough
 #endif
 
 using float32_t = float;

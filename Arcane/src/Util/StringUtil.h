@@ -29,141 +29,161 @@ namespace ARC::StringUtil
    std::string Replace(const std::string& str, const std::string& find, const std::string& replace);
    std::wstring Replace(const std::wstring& str, const std::wstring& find, const std::wstring& replace);
 
-   template <typename T>
-   inline std::string ToString(const T& value)
+   inline std::string ToString(const std::wstring& value)
    {
-      if constexpr (std::is_same_v<T, std::wstring>)
-      {
 #ifdef ARC_PLATFORM_WINDOWS
-         int32_t size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), NULL, 0, NULL, NULL);
-         std::string result;
-         result.resize(size);
-         WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), result.data(), size, NULL, NULL);
-         return result;
+      if (value.empty())
+         return std::string();
+
+      int size_needed = WideCharToMultiByte(CP_UTF8, 0, &value[0], static_cast<int>(value.size()), NULL, 0, NULL, NULL);
+      std::string result(size_needed, 0);
+      WideCharToMultiByte(CP_UTF8, 0, &value[0], static_cast<int>(value.size()), &result[0], size_needed, NULL, NULL);
+      return result;
 #else
-         std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-         return converter.to_bytes(value);
+      std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+      return converter.to_bytes(value);
 #endif
-      }
-      else if constexpr (std::is_same_v<T, std::wstring_view>)
+   }
+
+   inline std::string ToString(std::wstring_view value)
+   {
+      return ToString(std::wstring(value));
+   }
+
+   inline std::string ToString(const wchar_t* value)
+   {
+      return value ? ToString(std::wstring(value)) : std::string();
+   }
+
+   template <typename T>
+   inline std::enable_if_t<std::is_integral_v<T>, std::string> ToString(T value)
+   {
+      char buffer[std::numeric_limits<T>::digits10 + 3];
+      auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
+      if (ec == std::errc())
       {
-#ifdef ARC_PLATFORM_WINDOWS
-         int32_t size = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int32_t>(value.size()), NULL, 0, NULL, NULL);
-         std::string result;
-         result.resize(size);
-         WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int32_t>(value.size()), result.data(), size, NULL, NULL);
-         return result;
-#else
-         std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-         return converter.to_bytes(value.data(), value.data() + value.size());
-#endif
-      }
-      else if constexpr (std::is_same_v<T, const wchar_t*> || std::is_same_v<T, wchar_t*>)
-      {
-#ifdef ARC_PLATFORM_WINDOWS
-         int32_t size = WideCharToMultiByte(CP_UTF8, 0, value, static_cast<int32_t>(std::wcslen(value)), NULL, 0, NULL, NULL);
-         std::string result;
-         result.resize(size);
-         WideCharToMultiByte(CP_UTF8, 0, value, static_cast<int32_t>(std::wcslen(value)), result.data(), size, NULL, NULL);
-         return result;
-#else
-         std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-         return converter.to_bytes(value);
-#endif
-      }
-      else if constexpr (std::is_same_v<T, std::string_view>)
-      {
-         return std::string(value);
-      }
-      else if constexpr (std::is_floating_point_v<T>)
-      {
-         std::ostringstream oss;
-         oss.precision(std::numeric_limits<T>::max_digits10);
-         oss << value;
-         return oss.str();
-      }
-      else if constexpr (std::is_same_v<T, char*> || std::is_same_v<T, const char*>)
-      {
-         return std::string(value);
-      }
-      else if constexpr (std::is_convertible_v<T, std::string>)
-      {
-         return value;
+         return std::string(buffer, ptr);
       }
       else
       {
-         std::ostringstream oss;
-         oss << value;
-         return oss.str();
+         return std::string();
       }
    }
 
    template <typename T>
-   inline std::wstring ToWString(const T& value)
+   inline std::enable_if_t<std::is_floating_point_v<T>, std::string> ToString(T value)
    {
-      if constexpr (std::is_same_v<T, std::string>)
+      char buffer[64];
+      auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::general);
+      if (ec == std::errc())
       {
-#ifdef ARC_PLATFORM_WINDOWS
-         int32_t size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), NULL, 0);
-         std::wstring result;
-         result.resize(size);
-         MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int32_t>(value.size()), result.data(), size);
-         return result;
-#else
-         std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-         return converter.from_bytes(value);
-#endif
-      }
-      else if constexpr (std::is_same_v<T, std::string_view>)
-      {
-#ifdef ARC_PLATFORM_WINDOWS
-         int32_t size = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int32_t>(value.size()), NULL, 0);
-         std::wstring result;
-         result.resize(size);
-         MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int32_t>(value.size()), result.data(), size);
-         return result;
-#else
-         std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-         return converter.from_bytes(value.data(), value.data() + value.size());
-#endif
-      }
-      else if constexpr (std::is_same_v<T, std::wstring_view>)
-      {
-         return std::wstring(value.begin(), value.end());
-      }
-      else if constexpr (std::is_same_v<T, const wchar_t*> || std::is_same_v<T, wchar_t*>)
-      {
-         return std::wstring(value);
-      }
-      else if constexpr (std::is_floating_point_v<T>)
-      {
-         std::wostringstream woss;
-         woss.precision(std::numeric_limits<T>::max_digits10);
-         woss << value;
-         return woss.str();
-      }
-      else if constexpr (std::is_same_v<T, char*> || std::is_same_v<T, const char*>)
-      {
-#ifdef ARC_PLATFORM_WINDOWS
-         int32_t size = MultiByteToWideChar(CP_UTF8, 0, value, static_cast<int32_t>(std::strlen(value)), NULL, 0);
-         std::wstring result;
-         result.resize(size);
-         MultiByteToWideChar(CP_UTF8, 0, value, static_cast<int32_t>(std::strlen(value)), result.data(), size);
-         return result;
-#else
-         std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-         return converter.from_bytes(value);
-#endif
-      }
-      else if constexpr (std::is_convertible_v<T, std::wstring>)
-      {
-         return value;
+         return std::string(buffer, ptr);
       }
       else
       {
-         std::wostringstream woss;
-         woss << value;
-         return woss.str();
+         return std::string();
       }
+   }
+
+   inline const std::string& ToString(const std::string& value)
+   {
+      return value;
+   }
+
+   inline std::string ToString(std::string_view value)
+   {
+      return std::string(value);
+   }
+
+   inline std::string ToString(const char* value)
+   {
+      return value ? std::string(value) : std::string();
+   }
+
+   template <typename T>
+   inline std::enable_if_t<!std::is_arithmetic_v<T> && !std::is_convertible_v<T, std::string>, std::string> ToString(const T& value)
+   {
+      std::ostringstream oss;
+      oss << value;
+      return oss.str();
+   }
+
+   inline std::wstring ToWString(const std::string& value)
+   {
+#ifdef ARC_PLATFORM_WINDOWS
+      if (value.empty())
+         return std::wstring();
+
+      int size_needed = MultiByteToWideChar(CP_UTF8, 0, &value[0], static_cast<int>(value.size()), NULL, 0);
+      std::wstring result(size_needed, 0);
+      MultiByteToWideChar(CP_UTF8, 0, &value[0], static_cast<int>(value.size()), &result[0], size_needed);
+      return result;
+#else
+      std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+      return converter.from_bytes(value);
+#endif
+   }
+
+   inline std::wstring ToWString(std::string_view value)
+   {
+      return ToWString(std::string(value));
+   }
+
+   inline std::wstring ToWString(const char* value)
+   {
+      return value ? ToWString(std::string(value)) : std::wstring();
+   }
+
+   template <typename T>
+   inline std::enable_if_t<std::is_integral_v<T>, std::wstring> ToWString(T value)
+   {
+      wchar_t buffer[std::numeric_limits<T>::digits10 + 3];
+      int result = std::swprintf(buffer, sizeof(buffer) / sizeof(wchar_t), L"%lld", static_cast<long long>(value));
+      if (result >= 0)
+      {
+         return std::wstring(buffer);
+      }
+      else
+      {
+         return std::wstring();
+      }
+   }
+
+   template <typename T>
+   inline std::enable_if_t<std::is_floating_point_v<T>, std::wstring> ToWString(T value)
+   {
+      wchar_t buffer[64];
+      int result = std::swprintf(buffer, sizeof(buffer) / sizeof(wchar_t), L"%.*g", std::numeric_limits<T>::max_digits10, value);
+      if (result >= 0)
+      {
+         return std::wstring(buffer);
+      }
+      else
+      {
+         return std::wstring();
+      }
+   }
+
+   inline const std::wstring& ToWString(const std::wstring& value)
+   {
+      return value;
+   }
+
+   inline std::wstring ToWString(std::wstring_view value)
+   {
+      return std::wstring(value);
+   }
+
+   inline std::wstring ToWString(const wchar_t* value)
+   {
+      return value ? std::wstring(value) : std::wstring();
+   }
+
+   template <typename T>
+   inline std::enable_if_t<!std::is_arithmetic_v<T> && !std::is_convertible_v<T, std::wstring>, std::wstring> ToWString(const T& value)
+   {
+      std::wostringstream woss;
+      woss << value;
+      return woss.str();
    }
 } // namespace ARC

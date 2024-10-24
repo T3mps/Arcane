@@ -28,7 +28,7 @@ std::string GetDefaultDumpFileName()
       HANDLE hFile = CreateFileA(dumpFilePath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
       if (hFile == INVALID_HANDLE_VALUE)
       {
-         ARC::Log::CoreError("Failed to create minidump file at: " + dumpFilePath);
+         ARC_CORE_ERROR("Failed to create minidump file at: " + dumpFilePath);
          return false;
       }
 
@@ -54,12 +54,12 @@ std::string GetDefaultDumpFileName()
 
       if (success)
       {
-         ARC::Log::CoreError("Minidump created at: " + dumpFilePath);
+         ARC_CORE_ERROR("Minidump created at: " + dumpFilePath);
          return true;
       }
       else
       {
-         ARC::Log::CoreError("Failed to write minidump.");
+         ARC_CORE_ERROR("Failed to write minidump.");
          return false;
       }
    }
@@ -77,13 +77,13 @@ std::string GetDefaultDumpFileName()
 #else
    void SignalHandler(int32_t signum)
    {
-      ARC::Log::CoreError("Received signal: " + signum + ", creating core dump...");
+      ARC_CORE_ERROR("Received signal: " + signum + ", creating core dump...");
       std::abort();  // Causes core dump to be generated
    }
 
    bool ARC::DumpGenerator::MiniDump(void* exceptionInfo, DumpType dumpType, const std::string& customPath)
    {
-      ARC::Log::CoreError("Linux does not support MiniDump. Use core dump or external tools like gdb for debugging.");
+      ARC_CORE_ERROR("Linux does not support MiniDump. Use core dump or external tools like gdb for debugging.");
       return false;
    }
 

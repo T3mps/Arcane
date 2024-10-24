@@ -13,6 +13,7 @@ namespace ARC
       virtual void OnAttach() {}
       virtual void OnDetach() {}
       virtual void OnUpdate(float deltaTime) {}
+      virtual void OnFixedUpdate(float timeStep) {}
       virtual void OnImGuiRender() {}
       virtual void OnEvent(Event& event) {}
 

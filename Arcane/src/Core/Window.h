@@ -29,8 +29,6 @@ namespace ARC
       void CenterInScreen();
       void Maximize();
 
-      void SetEventCallback(const Event::Callback& callback) { m_data.eventCallback = callback; }
-
       inline GLFWwindow* GetGLFWPointer() const { return m_windowPointer; }
 
       inline uint32_t GetWidth() const { return m_properties.width; }
@@ -51,7 +49,6 @@ namespace ARC
       {
          std::string title;
          uint32_t width, height;
-         Event::Callback eventCallback;
       } m_data;
    };
 } // namespace ARC

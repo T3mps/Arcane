@@ -1,14 +1,12 @@
 #include "arcpch.h"
 #include "Application.h"
 
-#include "Event/ApplicationEvent.h"
-#include "Input.h"
+#include "Input/Input.h"
 
 #ifdef ARC_BUILD_DEBUG
    #include "Util/DumpGenerator.h"
 #endif
 
-ARC::Application* ARC::Application::s_instance = nullptr;
 static std::thread::id s_mainThreadID;
 
 ARC::Application::Application(ApplicationInfo info) :
@@ -22,7 +20,7 @@ ARC::Application::Application(ApplicationInfo info) :
    if (!Initialize(info))
    {
       if (&LoggingManager::GetCoreLogger())
-         ARC::Log::CoreError("Application initialization failed");
+         ARC_CORE_ERROR("Application initialization failed");
 #ifdef ARC_PLATFORM_WINDOWS
       MessageBox(NULL, L"Application initialization failed", L"Error", MB_OK);
 #endif
@@ -36,140 +34,113 @@ ARC::Application::Application(ApplicationInfo info) :
 
 ARC::Application::~Application()
 {
-   Close();
-}
-
-ARC::Application::Application(Application&& other) noexcept :
-   m_window(std::move(other.m_window)),
-   m_framesPerSecond(other.m_framesPerSecond),
-   m_updatesPerSecond(other.m_updatesPerSecond),
-   m_updateCallback(std::move(other.m_updateCallback)),
-   m_renderCallback(std::move(other.m_renderCallback)),
-   m_running(other.m_running)
-{
-   other.m_framesPerSecond = 0;
-   other.m_updatesPerSecond = 0;
-}
-
-ARC::Application& ARC::Application::operator=(Application&& other) noexcept
-{
-   if (this != &other)
-   {
-      m_window.reset();
-
-      m_window = std::move(other.m_window);
-      m_framesPerSecond = other.m_framesPerSecond;
-      m_updatesPerSecond = other.m_updatesPerSecond;
-      m_updateCallback = std::move(other.m_updateCallback);
-      m_renderCallback = std::move(other.m_renderCallback);
-
-      other.m_framesPerSecond = 0;
-      other.m_updatesPerSecond = 0;
-   }
-
-   return *this;
+   if (m_running)
+      Close();
 }
 
 void ARC::Application::Run()
 {
-   using std::chrono::steady_clock;
-   using std::chrono::time_point;
-   using std::chrono::duration;
-   using std::chrono::milliseconds;
-   using std::chrono::duration_cast;
+   using duration = std::chrono::duration<float>;
+   using clock = std::chrono::steady_clock;
+   using time_point = clock::time_point;
 
-   time_point<steady_clock> lastUpdateTime = steady_clock::now();
-   time_point<steady_clock> lastSecond = steady_clock::now();
+   constexpr const duration fixedDeltaTime = duration(1.0f / TARGET_UPDATES_PER_SECOND);
+   duration accumulator = duration::zero();
+
+   time_point lastTime = clock::now();
+   time_point lastSecond = lastTime;
 
    uint32_t frames = 0;
    uint32_t updates = 0;
+   uint32_t fixedUpdates = 0;
 
    while (m_running)
    {
+      time_point currentTime = clock::now();
+      duration frameTime = currentTime - lastTime;
+      lastTime = currentTime;
+
+      constexpr const duration maxFrameTime = duration(0.25f); // 250ms
+      if (frameTime > maxFrameTime)
+      {
+         ARC_CORE_WARN("Large frame time detected: " + StringUtil::ToString(frameTime.count()));
+         frameTime = maxFrameTime;
+      }
+
+      accumulator += frameTime;
+
       ProcessEvents();
 
-      auto now = steady_clock::now();
-      auto frameElapsedTime = duration_cast<duration<float>>(now - lastUpdateTime);
-      lastUpdateTime = now;
-
-      Update(frameElapsedTime.count());
+      Update(frameTime.count());
       ++updates;
 
-      Render();
+      int fixedUpdateCount = 0;
+      const int maxFixedUpdatesPerFrame = 5;
+
+      while (accumulator >= fixedDeltaTime && fixedUpdateCount < maxFixedUpdatesPerFrame)
+      {
+         FixedUpdate(fixedDeltaTime.count());
+         accumulator -= fixedDeltaTime;
+         ++fixedUpdates;
+         ++fixedUpdateCount;
+      }
+
+      if (fixedUpdateCount == maxFixedUpdatesPerFrame)
+      {
+         accumulator -= fixedDeltaTime * fixedUpdateCount;
+         ARC_CORE_WARN("FixedUpdate loop exceeded maximum iterations.");
+      }
+
+      float alpha = accumulator / fixedDeltaTime;
+      Render(alpha);
       ++frames;
 
       Input::ClearReleasedKeys();
 
-      if (duration_cast<duration<float>>(now - lastSecond).count() >= 1.0f)
+      if (currentTime - lastSecond >= duration(1.0))
       {
-         m_framesPerSecond = frames;
          m_updatesPerSecond = updates;
+         m_fixedUpdatesPerSecond = fixedUpdates;
+         m_framesPerSecond = frames;
 
-         frames = 0;
          updates = 0;
-         lastSecond = now;
+         fixedUpdates = 0;
+         frames = 0;
+         lastSecond = currentTime;
 
-         Log::CoreDebug("FPS: " + std::to_string(m_framesPerSecond) +
-                        " UPS: "  + std::to_string(m_updatesPerSecond));
+         /*ARC_CORE_DEBUG("FPS: "   + std::to_string(m_framesPerSecond)   +
+                        " UPS: "  + std::to_string(m_updatesPerSecond)  +
+                        " FUPS: " + std::to_string(m_fixedUpdatesPerSecond));*/
       }
    }
 }
 
-void ARC::Application::PushLayer(Layer* layer)
+void ARC::Application::PushLayer(std::unique_ptr<Layer> layer)
 {
-   m_layerStack.Push(layer);
    layer->OnAttach();
+   m_layerStack.Push(std::move(layer));
 }
 
-void ARC::Application::PushOverlay(Layer* layer)
+void ARC::Application::PushOverlay(std::unique_ptr<Layer> overlay)
 {
-   m_layerStack.PushFront(layer);
-   layer->OnAttach();
+   overlay->OnAttach();
+   m_layerStack.PushFront(std::move(overlay));
 }
 
-void ARC::Application::PopLayer(Layer* layer)
+std::unique_ptr<ARC::Layer> ARC::Application::PopLayer(Layer* layer)
 {
-   m_layerStack.Pop(layer);
-   layer->OnDetach();
+   auto removedLayer = m_layerStack.Pop(layer);
+   if (removedLayer)
+      removedLayer->OnDetach();
+   return removedLayer;
 }
 
-void ARC::Application::PopOverlay(Layer* layer)
+std::unique_ptr<ARC::Layer> ARC::Application::PopOverlay(Layer* overlay)
 {
-   m_layerStack.PopFront(layer);
-   layer->OnDetach();
-}
-
-void ARC::Application::OnEvent(Event& event)
-{
-   EventDispatcher dispatcher(event);
-   dispatcher.Dispatch<WindowClosedEvent>([this](WindowClosedEvent& e)        { return OnWindowClose(e); });
-
-   for (auto& callback : m_eventCallbacks)
-   {
-      callback(event);
-
-      if (event.handled)
-         break;
-   }
-
-   if (event.handled)
-      return;
-
-   for (auto it = m_layerStack.end(); it != m_layerStack.begin(); )
-   {
-      (*--it)->OnEvent(event);
-      if (event.handled)
-         break;
-   }
-}
-
-void ARC::Application::SyncEvents()
-{
-   std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
-   for (auto& [synced, _] : m_eventQueue)
-   {
-      synced = true;
-   }
+   auto removedOverlay = m_layerStack.PopFront(overlay);
+   if (removedOverlay)
+      removedOverlay->OnDetach();
+   return removedOverlay;
 }
 
 std::thread::id ARC::Application::GetMainThreadID()
@@ -212,16 +183,25 @@ bool ARC::Application::Initialize(ApplicationInfo info)
       windowInfo.fullscreen = info.fullscreenWindow;
 
       m_window = std::make_unique<Window>(windowInfo);
-      ARC_ASSERT((success = m_window != nullptr), "Unable to create window instance.");
+      if (!m_window)
+      {
+         ARC_CORE_ERROR("Unable to create window instance.");
+         success = false;
+         return;
+      }
 
       m_window->Initialize();
-      m_window->SetEventCallback([this](Event& e) { OnEvent(e); });
       m_window->CenterInScreen();
       m_window->SetResizable(info.resizableWindow);
 
+      EventBus::GetInstance().Subscribe<WindowClosedEvent>([this](const WindowClosedEvent& event)
+      {
+         Close();
+      });
+
       SceneManager::Initialize();
 
-      Log::CoreInfo("Application initialized");
+      ARC_CORE_INFO("Application initialized");
    });
 
    return success;
@@ -242,38 +222,50 @@ void ARC::Application::ProcessEvents()
    // 2. func() might queue additional events, causing a deadlock if the event queue
    //    is accessed again while the lock is held.
 
-   // To mitigate these risks, we only hold the lock when accessing the queue, 
+   // To mitigate these risks, we only hold the lock when accessing the queue,
    // but we release it before calling func(). This ensures:
    // - The queue is safely modified within the lock.
    // - func() is called outside the lock, avoiding deadlocks and performance issues.
-   while (true)
+
+   std::function<void()> callback;
+   while (GetNextEvent(callback))
    {
-      std::function<void()> func;
-      {
-         // Lock the mutex only when accessing the queue to prevent race conditions
-         std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
-
-         if (m_eventQueue.empty())
-            break;
-
-         const auto& [synced, eventFunc] = m_eventQueue.front();
-         if (!synced)
-            break;
-
-         func = eventFunc;
-         // Remove the event from the queue while holding the lock
-         m_eventQueue.pop_front();
-      }
-
       // Call the function outside the lock
-      func();
+      try
+      {
+         callback();
+      }
+      catch (const std::exception& e)
+      {
+         ARC_CORE_ERROR("Exception caught during event processing: {}", e.what());
+         // TODO: Handle or rethrow as appropriate
+      }
    }
 }
 
-bool ARC::Application::OnWindowClose(WindowClosedEvent& e)
+bool ARC::Application::GetNextEvent(std::function<void()>& func)
 {
-   Close();
-   return false;
+   std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
+
+   if (m_eventQueue.empty())
+      return false;
+
+   func = std::move(m_eventQueue.front());
+   m_eventQueue.pop_front();
+   return true;
+}
+
+void ARC::Application::OnEvent(Event& event)
+{
+   for (auto it = m_layerStack.rbegin(); it != m_layerStack.rend(); ++it)
+   {
+      (*it)->OnEvent(event);
+      if (event.handled)
+         break;
+   }
+
+   if (!event.handled)
+      EventBus::GetInstance().Publish(event);
 }
 
 void ARC::Application::Update(float deltaTime)
@@ -281,14 +273,26 @@ void ARC::Application::Update(float deltaTime)
    if (auto currentScene = SceneManager::GetCurrentScene())
       currentScene->Update(deltaTime);
 
-   for (Layer* layer : m_layerStack)
+   for (const auto& layer : m_layerStack)
       layer->OnUpdate(deltaTime);
 
    if (m_updateCallback)
       m_updateCallback(deltaTime);
 }
 
-void ARC::Application::Render()
+void ARC::Application::FixedUpdate(float timeStep)
+{
+   if (auto currentScene = SceneManager::GetCurrentScene())
+      currentScene->FixedUpdate(timeStep);
+
+   for (const auto& layer : m_layerStack)
+      layer->OnFixedUpdate(timeStep);
+
+   if (m_fixedUpdateCallback)
+      m_fixedUpdateCallback(timeStep);
+}
+
+void ARC::Application::Render(float alpha)
 {
    if (auto currentScene = SceneManager::GetCurrentScene())
       currentScene->Render();
@@ -299,8 +303,6 @@ void ARC::Application::Render()
 
 void ARC::Application::Close()
 {
-   m_eventCallbacks.clear();
-   m_window->SetEventCallback([](Event& e) {});
    m_layerStack.Clear();
 
    m_running = false;

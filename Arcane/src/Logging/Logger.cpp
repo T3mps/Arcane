@@ -5,13 +5,10 @@
 #include "Level.h"
 #include "Util/ANSI.h"
 
-ARC::Logger::Logger(const std::string& name) :
-   LoggingService(),
+ARC::Logger::Logger(const std::string& name) : LoggingService(),
    m_name(name),
    m_format(),
    m_colorizeMessages(true),
-   m_flushInterval(DEFAULT_FLUSH_INTERVAL),
-   m_messageCount(0),
    m_running(false)
 {
 #ifdef ARC_BUILD_DEBUG
@@ -59,8 +56,10 @@ void ARC::Logger::Log(Level level, const std::string& message, const std::source
 
 std::string ARC::Logger::BuildMessage(Level level, const std::string& message, const std::source_location& location)
 {
-   const std::string& levelString = LevelToString(level).data();
-   std::string formattedMessage = m_format(levelString, m_name, message, location);
+   std::string_view levelString = LevelToString(level);
+   std::string formattedMessage;
+   formattedMessage.reserve(256);
+   formattedMessage = m_format(levelString, m_name, message, location);
 
    if (m_colorizeMessages)
    {
@@ -81,42 +80,35 @@ std::string ARC::Logger::BuildMessage(Level level, const std::string& message, c
          case Level::Fatal:
             AnsiColor::FormatMessage(formattedMessage, AnsiColor::FG_WHITE<std::string>(), AnsiColor::BG_RED<std::string>());
             break;
-         case Level::Info: __fallthrough;
+         case Level::Info: ARC_FALLTHROUGH;
          default:
             break;
       }
    }
 
-   std::ostringstream osstream;
-   osstream << formattedMessage << ',';
-   return osstream.str();
+   formattedMessage += ',';
+   return formattedMessage;
 }
 
 void ARC::Logger::ProcessLogs()
 {
-   while (m_running || !m_logQueue.Empty())
+   while (m_running)
    {
-      auto value = m_logQueue.TryPop();
-      if (value)
+      m_logQueue.WaitForData();
+
+      while (auto value = m_logQueue.TryPop())
       {
-         if (!(*value).empty())
-         {
-            OutputLog(*value);
-            std::lock_guard<std::mutex> flushLock(m_flushMutex);
-            if (++m_messageCount >= m_flushInterval)
-            {
-               FlushStream();
-               m_messageCount = 0;
-            }
-         }
-      }
-      else
-      {
-         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+         OutputLog(*value);
+         FlushStream();
       }
    }
-}
 
+   while (auto value = m_logQueue.TryPop())
+   {
+      OutputLog(*value);
+      FlushStream();
+   }
+}
 
 void ARC::Logger::OutputLog(const std::string& message) const
 {

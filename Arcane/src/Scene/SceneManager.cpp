@@ -22,12 +22,12 @@ bool ARC::SceneManager::ChangeScene(std::shared_ptr<Scene> scene)
 
    if (!instance.m_initialized)
    {
-      ARC::Log::CoreError("Initialize Scene Manager before accessing.");
+      ARC_CORE_ERROR("Initialize Scene Manager before accessing.");
       return false;
    }
    if (!scene)
    {
-      ARC::Log::CoreError("New scene is invalid.");
+      ARC_CORE_ERROR("New scene is invalid.");
       return false;
    }
    if (instance.m_currentScene)

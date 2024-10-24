@@ -4,105 +4,92 @@
 
 namespace ARC
 {
-	class WindowClosedEvent : public Event
-	{
-	public:
-		WindowClosedEvent() {}
+   template <EventType Type, EventCategory Category>
+   class ApplicationEventBase : public EventBase<Type, Category>
+   {
+   protected:
+      ApplicationEventBase() {}
+   };
 
-		ARC_EVENT_CLASS_TYPE(WindowClosed)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
-	};
+   template <EventType Type, EventCategory Category>
+   class WindowEventBase : public ApplicationEventBase<Type, Category>
+   {
+   protected:
+      WindowEventBase() {}
+   };
 
-	class WindowMinimizedEvent : public Event
-	{
-	public:
-		WindowMinimizedEvent(bool minimized) : m_minimized(minimized) {}
+   class WindowClosedEvent final : public WindowEventBase<EventType::WindowClosed, EventCategory::Application>
+   {
+   public:
+      WindowClosedEvent() {}
+   };
 
-		bool IsMinimized() const { return m_minimized; }
+   class WindowMinimizedEvent final : public WindowEventBase<EventType::WindowMinimized, EventCategory::Application>
+   {
+   public:
+      explicit WindowMinimizedEvent(bool minimized) : m_minimized(minimized) {}
 
-		ARC_EVENT_CLASS_TYPE(WindowMinimized)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
-	
-	private:
-		bool m_minimized = false;
-	};
+      bool IsMinimized() const { return m_minimized; }
 
-	class WindowResizedEvent : public Event
-	{
-	public:
-		WindowResizedEvent(uint32_t width, uint32_t height) : m_width(width), m_height(height) {}
+   private:
+      bool m_minimized;
+   };
 
-		inline uint32_t GetWidth() const { return m_width; }
-		inline uint32_t GetHeight() const { return m_height; }
+   class WindowResizedEvent final : public WindowEventBase<EventType::WindowResized, EventCategory::Application>
+   {
+   public:
+      WindowResizedEvent(uint32_t width, uint32_t height) : m_width(width), m_height(height) {}
 
-		ARC_EVENT_CLASS_TYPE(WindowResized)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
+      uint32_t GetWidth() const { return m_width; }
+      uint32_t GetHeight() const { return m_height; }
 
-	private:
-		uint32_t m_width;
-		uint32_t m_height;
-	};
+   private:
+      uint32_t m_width;
+      uint32_t m_height;
+   };
 
-	class WindowFocusedEvent : public Event
-	{
-	public:
-		WindowFocusedEvent() {}
+   class WindowFocusedEvent final : public WindowEventBase<EventType::WindowFocused, EventCategory::Application>
+   {
+   public:
+      WindowFocusedEvent() {}
+   };
 
-		ARC_EVENT_CLASS_TYPE(WindowFocused)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
-	};
+   class WindowLostFocusEvent final : public WindowEventBase<EventType::WindowLostFocus, EventCategory::Application>
+   {
+   public:
+      WindowLostFocusEvent() {}
+   };
 
-	class WindowLostFocusEvent : public Event
-	{
-	public:
-		WindowLostFocusEvent() {}
+   class WindowMovedEvent final : public WindowEventBase<EventType::WindowMoved, EventCategory::Application>
+   {
+   public:
+      WindowMovedEvent() {}
+   };
 
-		ARC_EVENT_CLASS_TYPE(WindowLostFocus)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
-	};
+   class WindowTitleBarHitTestEvent final : public WindowEventBase<EventType::WindowTitleBarClicked, EventCategory::Application>
+   {
+   public:
+      WindowTitleBarHitTestEvent(int32_t x, int32_t y, int32_t& hit) : m_x(x), m_y(y), m_hit(hit) {}
 
-	class WindowMovedEvent : public Event
-	{
-	public:
-		WindowMovedEvent() {}
+      int32_t GetX() const { return m_x; }
+      int32_t GetY() const { return m_y; }
+      void SetHit(bool hit) { m_hit = static_cast<int32_t>(hit); }
 
-		ARC_EVENT_CLASS_TYPE(WindowMoved)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
-	};
+   private:
+      int32_t m_x;
+      int32_t m_y;
+      int32_t& m_hit;
+   };
 
-	class WindowTitleBarHitTestEvent : public Event
-	{
-	public:
-		WindowTitleBarHitTestEvent(int32_t x, int32_t y, int32_t& hit) : m_x(x), m_y(y), m_hit(hit) {}
+   class AppUpdatedEvent final : public ApplicationEventBase<EventType::AppUpdated, EventCategory::Application>
+   {
+   public:
+      AppUpdatedEvent() {}
+   };
 
-		inline int32_t GetX() const { return m_x; }
-		inline int32_t GetY() const { return m_y; }
-		inline void SetHit(bool hit) { m_hit = (int32_t)hit; }
-
-		ARC_EVENT_CLASS_TYPE(WindowTitleBarClicked)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
-
-	private:
-		int32_t m_x;
-		int32_t m_y;
-		int32_t& m_hit;
-	};
-
-	class AppUpdatedEvent : public Event
-	{
-	public:
-		AppUpdatedEvent() {}
-
-		ARC_EVENT_CLASS_TYPE(AppUpdated)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
-	};
-
-	class AppRenderedEvent : public Event
-	{
-	public:
-		AppRenderedEvent() {}
-
-		ARC_EVENT_CLASS_TYPE(AppRendered)
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryApplication)
-	};
+   class AppRenderedEvent final : public ApplicationEventBase<EventType::AppRendered, EventCategory::Application>
+   {
+   public:
+      AppRenderedEvent() {}
+   };
 } // namespace ARC

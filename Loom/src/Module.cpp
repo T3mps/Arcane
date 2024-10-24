@@ -42,7 +42,7 @@ ARC::Result<void> Module::Load()
    {
       auto result = m_library->Unload();
       if (!result)
-         ARC::Log::CoreError(result.GetErrorMessage());
+         ARC_CORE_ERROR(result.GetErrorMessage());
       DeleteTemporaryCopy();
       return entryPoint.Error();
    }
@@ -56,7 +56,7 @@ ARC::Result<void> Module::Load()
       }
       catch (const std::exception& e)
       {
-         ARC::Log::CoreError("Exception thrown in module: " + m_originalModulePath.string() + ". " + e.what());
+         ARC_CORE_ERROR("Exception thrown in module: " + m_originalModulePath.string() + ". " + e.what());
       }
       m_running = false;
    });
@@ -103,7 +103,7 @@ void Module::MonitorModule()
       auto currentWriteTime = std::filesystem::last_write_time(m_originalModulePath).time_since_epoch().count();
       if (currentWriteTime != m_lastWriteTime)
       {
-         ARC::Log::CoreInfo("Detected change in client module. Reloading...");
+         ARC_CORE_INFO("Detected change in client module. Reloading...");
 
          try
          {
@@ -128,16 +128,16 @@ void Module::MonitorModule()
                }
                catch (const std::exception& e)
                {
-                  ARC::Log::CoreError(std::string("Exception in client module: ") + e.what());
+                  ARC_CORE_ERROR(std::string("Exception in client module: ") + e.what());
                }
                m_running = false;
             });
 
-            ARC::Log::CoreInfo("Client module reloaded successfully.");
+            ARC_CORE_INFO("Client module reloaded successfully.");
          }
          catch (const std::exception& e)
          {
-            ARC::Log::CoreError(std::string("Error during hot-swapping: ") + e.what());
+            ARC_CORE_ERROR(std::string("Error during hot-swapping: ") + e.what());
          }
 
          m_lastWriteTime = currentWriteTime;
@@ -157,7 +157,7 @@ std::filesystem::path Module::CreateTemporaryCopy() const
    }
    catch (const std::exception& e)
    {
-      ARC::Log::CoreError("Failed to create temporary copy: " + std::string(e.what()));
+      ARC_CORE_ERROR("Failed to create temporary copy: " + std::string(e.what()));
       return m_originalModulePath;
    }
 
@@ -171,11 +171,11 @@ void Module::DeleteTemporaryCopy()
       try
       {
          std::filesystem::remove(m_tempModulePath);
-         ARC::Log::CoreInfo("Temporary module copy deleted: " + m_tempModulePath.string());
+         ARC_CORE_INFO("Temporary module copy deleted: " + m_tempModulePath.string());
       }
       catch (const std::exception& e)
       {
-         ARC::Log::CoreError("Failed to delete temporary copy: " + std::string(e.what()));
+         ARC_CORE_ERROR("Failed to delete temporary copy: " + std::string(e.what()));
       }
       m_tempModulePath.clear();
    }

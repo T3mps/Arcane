@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tomlplusplus/toml.hpp"
+#include "toml++/toml.hpp"
 
 // Used to represent and serialize configuration files
 namespace ARC::TOML

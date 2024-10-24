@@ -15,7 +15,7 @@ void ArgumentParser::Parse(int32_t argc, char* argv[])
          {
             if (arg.size() == 2)
             {
-               ARC::Log::CoreError("Invalid argument: '--'");
+               ARC_CORE_ERROR("Invalid argument: '--'");
                continue;
             }
             std::string option = arg.substr(2);
@@ -72,7 +72,7 @@ void ArgumentParser::UnregisterOptionHandler(const std::string& option)
    if (it != m_optionHandlers.end())
       m_optionHandlers.erase(it);
    else
-      ARC::Log::CoreWarn("Attempted to unregister handler for option '" + option + "', but no handler is registered for this option.");
+      ARC_CORE_WARN("Attempted to unregister handler for option '" + option + "', but no handler is registered for this option.");
 }
 
 void ArgumentParser::UnregisterFlagHandler(const std::string& flag)
@@ -81,7 +81,7 @@ void ArgumentParser::UnregisterFlagHandler(const std::string& flag)
    if (it != m_flagHandlers.end())
       m_flagHandlers.erase(it);
    else
-      ARC::Log::CoreWarn("Attempted to unregister handler for flag '" + flag + "', but no handler is registered for this flag.");
+      ARC_CORE_WARN("Attempted to unregister handler for flag '" + flag + "', but no handler is registered for this flag.");
 }
 
 void ArgumentParser::UnregisterAllOptionHandlers()

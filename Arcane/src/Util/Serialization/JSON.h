@@ -43,55 +43,8 @@ namespace ARC
 
       std::string ToString(int32_t tabSize = 4) const;
 
-      static std::string GenerateJsonString(const std::vector<std::pair<std::string, std::string>>& data, bool prettyPrint = false, int32_t indentLevel = TAB_SIZE);
-      static std::wstring GenerateJsonWString(const std::vector<std::pair<std::wstring, std::wstring>>& data, bool prettyPrint = false, int32_t indentLevel = TAB_SIZE);
-
    private:
-      template <typename StringType>
-      static StringType EscapeString(const StringType& input) { throw std::exception(); }
-
-      template <>
-      static std::string EscapeString(const std::string& input)
-      {
-         std::string output;
-         for (char c : input)
-         {
-            switch (c)
-            {
-               case '\"': output += "\\\"";  break;
-               case '\\': output += "\\\\";  break;
-               case '\b': output += "\\b";   break;
-               case '\f': output += "\\f";   break;
-               case '\n': output += "\\n";   break;
-               case '\r': output += "\\r";   break;
-               case '\t': output += "\\t";   break;
-               default:   output += c;       break;
-            }
-         }
-         return output;
-      }
-
-      template <>
-      static std::wstring EscapeString(const std::wstring& input)
-      {
-         std::wstring output;
-         for (wchar_t c : input)
-         {
-            switch (c)
-            {
-               case L'\"': output += L"\\\"";  break;
-               case L'\\': output += L"\\\\";  break;
-               case L'\b': output += L"\\b";   break;
-               case L'\f': output += L"\\f";   break;
-               case L'\n': output += L"\\n";   break;
-               case L'\r': output += L"\\r";   break;
-               case L'\t': output += L"\\t";   break;
-               default:    output += c;        break;
-            }
-         }
-         return output;
-      }
-
+      
       nlohmann::json m_data;
    };
 } // namespace ARC

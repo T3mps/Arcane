@@ -15,8 +15,8 @@ Loom::Loom(int32_t argc, char* argv[])
    {
       if (&ARC::LoggingManager::GetCoreLogger())
       {
-         ARC::Log::CoreError(result.GetErrorMessage());
-         ARC::Log::CoreError("Loom initialization failed");
+         ARC_CORE_ERROR(result.GetErrorMessage());
+         ARC_CORE_ERROR("Loom initialization failed");
       }
 #ifdef ARC_PLATFORM_WINDOWS
       MessageBox(NULL, L"Loom initialization failed", L"Error", MB_OK);
@@ -26,7 +26,7 @@ Loom::Loom(int32_t argc, char* argv[])
       uint64_t errorCode = error.Code();
       exit(static_cast<int32_t>(errorCode));
    }
-   ARC::Log::CoreInfo("Loom initialized");
+   ARC_CORE_INFO("Loom initialized");
 }
 
 Loom::~Loom()
@@ -47,12 +47,12 @@ ARC::Result<void> Loom::Initialize(int32_t argc, char* argv[])
       m_argParser.RegisterFlag("h",    [this](const std::string&) { ShowHelpMessage(); }, "Displays help");
       m_argParser.Parse(argc, argv);
 
-      ARC::Log::CoreInfo("Initializing Loom...");
+      ARC_CORE_INFO("Initializing Loom...");
 
       const auto& positionalArgs = m_argParser.GetPositionalArgs();
       if (positionalArgs.empty())
       {
-         ARC::Log::CoreInfo(LOOM_USEAGE_STRING);
+         ARC_CORE_INFO(LOOM_USEAGE_STRING);
          result = ARC::Error::Create(LoomError::IncorrectParameterUsage, "No client module specified.");
          return;
       }
@@ -65,7 +65,7 @@ ARC::Result<void> Loom::Initialize(int32_t argc, char* argv[])
          if (i != positionalArgs.size() - 1)
             oss << ", ";
       }
-      ARC::Log::CoreInfo("Identified positional arguments: " + oss.str());
+      ARC_CORE_INFO("Identified positional arguments: " + oss.str());
 
       std::filesystem::path clientModulePath = positionalArgs.front();
 
@@ -74,11 +74,11 @@ ARC::Result<void> Loom::Initialize(int32_t argc, char* argv[])
       result = m_clientModule->Load();
       if (!result)
       {
-         ARC::Log::CoreError("Failed to load client module: " + clientModulePath.string());
+         ARC_CORE_ERROR("Failed to load client module: " + clientModulePath.string());
          return;
       }
 
-      ARC::Log::CoreInfo("Successfully loaded client module: " + m_clientModule->GetName());
+      ARC_CORE_INFO("Successfully loaded client module: " + m_clientModule->GetName());
 
       m_clientModule->StartMonitoring();
    });
@@ -93,8 +93,8 @@ void Loom::Cleanup()
       auto result = m_clientModule->Unload();
       if (!result)
       {
-         ARC::Log::CoreError("Error occured while trying to unload module.");
-         ARC::Log::CoreError(result.GetErrorMessage());
+         ARC_CORE_ERROR("Error occured while trying to unload module.");
+         ARC_CORE_ERROR(result.GetErrorMessage());
       }
       m_clientModule.reset();
    }

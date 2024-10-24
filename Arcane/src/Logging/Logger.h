@@ -9,8 +9,6 @@ namespace ARC
    class Logger : public LoggingService
    {
    public:
-      static constexpr int32_t DEFAULT_FLUSH_INTERVAL = 16;
-
       Logger(const std::string& name);
       virtual ~Logger();
 
@@ -32,10 +30,10 @@ namespace ARC
       bool m_colorizeMessages;
 
       ConcurrentQueue<std::string> m_logQueue;
+      std::condition_variable m_conditionVar;
+      std::mutex m_queueMutex;
       std::atomic<bool> m_running;
       std::thread m_workerThread;
-      int32_t m_flushInterval;
-      int32_t m_messageCount;
       std::mutex m_flushMutex;
    };
 } // namespace ARC

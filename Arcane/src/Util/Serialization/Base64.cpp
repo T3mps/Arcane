@@ -72,7 +72,7 @@ std::string ARC::Base64::Decode(const std::string& encodedString)
 
    if (inputLength % 4 != 0)
    {
-      ARC::Log::CoreError("Input length must be a multiple of 4 for valid Base64 encoding, cannot decode.");
+      ARC_CORE_ERROR("Input length must be a multiple of 4 for valid Base64 encoding, cannot decode.");
       return {};
    }
 
@@ -98,7 +98,7 @@ std::string ARC::Base64::Decode(const std::string& encodedString)
          uint8_t c = static_cast<uint8_t>(encodedString[i + j]);
          if (BASE64_LOOKUP[c] == -1)
          {
-            ARC::Log::CoreError("Invalid character in Base64 string, cannot continue decoding.");
+            ARC_CORE_ERROR("Invalid character in Base64 string, cannot continue decoding.");
             return {};
          }
          charArray4[j] = BASE64_LOOKUP[c];

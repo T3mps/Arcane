@@ -1,49 +1,42 @@
 #pragma once
 
-#include "Core/KeyCode.h"
 #include "Event.h"
+#include "Input/KeyCode.h"
 
 namespace ARC
 {
-	class KeyEvent : public Event
-	{
-	public:
-		inline KeyCode GetKeyCode() const { return m_KeyCode; }
+   template <EventType Type, EventCategory Category>
+   class KeyEventBase : public EventBase<Type, Category>
+   {
+   public:
+      KeyCode GetKeyCode() const { return m_keyCode; }
 
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryKeyboard | EventCategoryInput)
+   protected:
+      explicit KeyEventBase(KeyCode keycode) : m_keyCode(keycode) {}
 
-	protected:
-		KeyEvent(KeyCode keycode) : m_KeyCode(keycode) {}
+      KeyCode m_keyCode;
+   };
 
-		KeyCode m_KeyCode;
-	};
+   class KeyPressedEvent final : public KeyEventBase<EventType::KeyPressed, EventCategory::Keyboard | EventCategory::Input>
+   {
+   public:
+      KeyPressedEvent(KeyCode keycode, int32_t repeatCount) : KeyEventBase(keycode), m_repeatCount(repeatCount) {}
 
-	class KeyPressedEvent : public KeyEvent
-	{
-	public:
-		KeyPressedEvent(KeyCode keycode, int32_t repeatCount) : KeyEvent(keycode), m_RepeatCount(repeatCount) {}
+      int32_t GetRepeatCount() const { return m_repeatCount; }
 
-		inline int32_t GetRepeatCount() const { return m_RepeatCount; }
+   private:
+      int32_t m_repeatCount;
+   };
 
-		ARC_EVENT_CLASS_TYPE(KeyPressed)
+   class KeyReleasedEvent final : public KeyEventBase<EventType::KeyReleased, EventCategory::Keyboard | EventCategory::Input>
+   {
+   public:
+      explicit KeyReleasedEvent(KeyCode keycode) : KeyEventBase(keycode) {}
+   };
 
-	private:
-		int32_t m_RepeatCount;
-	};
-
-	class KeyReleasedEvent : public KeyEvent
-	{
-	public:
-		KeyReleasedEvent(KeyCode keycode) : KeyEvent(keycode) {}
-
-		ARC_EVENT_CLASS_TYPE(KeyReleased)
-	};
-
-	class KeyTypedEvent : public KeyEvent
-	{
-	public:
-		KeyTypedEvent(KeyCode keycode) : KeyEvent(keycode) {}
-
-		ARC_EVENT_CLASS_TYPE(KeyTyped)
-	};
+   class KeyTypedEvent final : public KeyEventBase<EventType::KeyTyped, EventCategory::Keyboard | EventCategory::Input>
+   {
+   public:
+      explicit KeyTypedEvent(KeyCode keycode) : KeyEventBase(keycode) {}
+   };
 } // namespace ARC

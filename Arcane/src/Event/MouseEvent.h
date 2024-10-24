@@ -1,81 +1,64 @@
 #pragma once
 
-#include "Core/KeyCode.h"
 #include "Event.h"
+#include "Input/KeyCode.h"
 
 namespace ARC
 {
-	class MouseEvent : public Event
-	{
-	public:
-		ARC_EVENT_CLASS_CATEGORY(EventCategoryMouse | EventCategoryInput)
-	
-	protected:
-		MouseEvent() {}
-	};
+   template <EventType Type, EventCategory Category>
+   class MouseEventBase : public EventBase<Type, Category>
+   {
+   protected:
+      MouseEventBase() {}
+   };
 
-	class MouseButtonEvent : public MouseEvent
-	{
-	public:
-		inline MouseButton GetMouseButton() const { return m_button; }
+   template <EventType Type, EventCategory Category>
+   class MouseButtonEventBase : public MouseEventBase<Type, Category>
+   {
+   public:
+      MouseButton GetMouseButton() const { return m_button; }
 
-	protected:
-		MouseButtonEvent(MouseButton button) : m_button(button) {}
+   protected:
+      explicit MouseButtonEventBase(MouseButton button) : m_button(button) {}
 
-		MouseButton m_button;
-	};
+      MouseButton m_button;
+   };
 
-	class MouseButtonPressedEvent : public MouseButtonEvent
-	{
-	public:
-		MouseButtonPressedEvent(MouseButton button) : MouseButtonEvent(button) {}
+   class MouseButtonPressedEvent final : public MouseButtonEventBase<EventType::MouseButtonPressed, EventCategory::MouseButton | EventCategory::Mouse | EventCategory::Input>
+   {
+   public:
+      explicit MouseButtonPressedEvent(MouseButton button) : MouseButtonEventBase(button) {}
+   };
 
-		ARC_EVENT_CLASS_TYPE(MouseButtonPressed)
-	};
+   class MouseButtonReleasedEvent final : public MouseButtonEventBase<EventType::MouseButtonReleased, EventCategory::MouseButton | EventCategory::Mouse | EventCategory::Input>
+   {
+   public:
+      explicit MouseButtonReleasedEvent(MouseButton button) : MouseButtonEventBase(button) {}
+   };
 
-	class MouseButtonReleasedEvent : public MouseButtonEvent
-	{
-	public:
-		MouseButtonReleasedEvent(MouseButton button) : MouseButtonEvent(button) {}
+   class MouseMovedEvent final : public MouseEventBase<EventType::MouseMoved, EventCategory::Mouse | EventCategory::Input>
+   {
+   public:
+      MouseMovedEvent(float x, float y) : m_mouseX(x), m_mouseY(y) {}
 
-		ARC_EVENT_CLASS_TYPE(MouseButtonReleased)
-	};
+      float GetX() const { return m_mouseX; }
+      float GetY() const { return m_mouseY; }
 
-	class MouseButtonDownEvent : public MouseButtonEvent
-	{
-	public:
-		MouseButtonDownEvent(MouseButton button) : MouseButtonEvent(button) {}
+   private:
+      float m_mouseX;
+      float m_mouseY;
+   };
 
-		ARC_EVENT_CLASS_TYPE(MouseButtonHeld)
-	};
+   class MouseScrolledEvent final : public MouseEventBase<EventType::MouseScrolled, EventCategory::Mouse | EventCategory::Input>
+   {
+   public:
+      MouseScrolledEvent(float xOffset, float yOffset) : m_xOffset(xOffset), m_yOffset(yOffset) {}
 
-	class MouseMovedEvent : public MouseEvent
-	{
-	public:
-		MouseMovedEvent(float x, float y) : m_mouseX(x), m_mouseY(y) {}
+      float GetXOffset() const { return m_xOffset; }
+      float GetYOffset() const { return m_yOffset; }
 
-		inline float GetX() const { return m_mouseX; }
-		inline float GetY() const { return m_mouseY; }
-
-		ARC_EVENT_CLASS_TYPE(MouseMoved)
-
-	private:
-		float m_mouseX;
-		float m_mouseY;
-	};
-
-	class MouseScrolledEvent : public MouseEvent
-	{
-	public:
-		MouseScrolledEvent(float xOffset, float yOffset) : m_xOffset(xOffset), m_yOffset(yOffset) {}
-
-		inline float GetXOffset() const { return m_xOffset; }
-		inline float GetYOffset() const { return m_yOffset; }
-
-		ARC_EVENT_CLASS_TYPE(MouseScrolled)
-	
-	private:
-		float m_xOffset;
-		float m_yOffset;
-	};
+   private:
+      float m_xOffset;
+      float m_yOffset;
+   };
 } // namespace ARC

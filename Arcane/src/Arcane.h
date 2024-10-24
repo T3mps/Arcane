@@ -17,8 +17,6 @@
 #include "Core/Assert.h"
 #include "Core/Console.h"
 #include "Core/Error.h"
-#include "Core/Input.h"
-#include "Core/KeyCode.h"
 #include "Core/Result.h"
 #include "Core/RuntimeLayer.h"
 #include "Core/Version.h"
@@ -32,6 +30,10 @@
 #include "Event/LayerStack.h"
 #include "Event/MouseEvent.h"
 #include "Event/SceneEvent.h"
+
+// Arcane/Input
+#include "Input/Input.h"
+#include "Input/KeyCode.h"
 
 // Arcane/Logging
 #include "Logging/Format.h"

@@ -2,76 +2,140 @@
 
 namespace ARC
 {
-	enum class EventType
-	{
-		None = 0,
-		WindowClosed, WindowMinimized, WindowResized, WindowFocused, WindowLostFocus, WindowMoved, WindowTitleBarClicked,
-		AppUpdated, AppRendered,
-		KeyPressed, KeyReleased, KeyTyped,
-		MouseButtonPressed, MouseButtonReleased, MouseButtonHeld, MouseMoved, MouseScrolled,
-		ScenePreStart, ScenePostStart, ScenePreStop, ScenePostStop
-	};
+   enum class EventType
+   {
+      None = 0,
 
-	enum EventCategory
-	{
-		None = 0,
-		EventCategoryApplication	= (1U << 0U),
-		EventCategoryInput         = (1U << 1U),
-		EventCategoryKeyboard      = (1U << 2U),
-		EventCategoryMouse         = (1U << 3U),
-		EventCategoryMouseButton   = (1U << 4U),
-		EventCategoryScene			= (1U << 5U)
-	};
+      // Window
+      WindowClosed,
+      WindowMinimized,
+      WindowResized,
+      WindowFocused,
+      WindowLostFocus,
+      WindowMoved,
+      WindowTitleBarClicked,
 
-#define ARC_EVENT_CLASS_TYPE(type) \
-	static EventType GetStaticType() { return EventType::type; } \
-	virtual EventType GetEventType() const override { return GetStaticType(); } \
-	virtual const char* GetName() const override { return #type; }
+      // Application
+      AppUpdated,
+      AppRendered,
 
-#define ARC_EVENT_CLASS_CATEGORY(category) \
-	virtual int32_t GetCategoryFlags() const override { return category; }
+      // Keyboard
+      KeyPressed,
+      KeyReleased,
+      KeyTyped,
 
-	struct Event
-	{
-		using Callback = std::function<void(Event&)>;
+      // Mouse
+      MouseButtonPressed,
+      MouseButtonReleased,
+      MouseButtonHeld,
+      MouseMoved,
+      MouseScrolled,
 
-		bool handled = false;
-		bool synced = false; // Queued events are only processed if this is true.  It is set true when asset thread syncs with main thread.
+      // Scene
+      ScenePreStart,
+      ScenePostStart,
+      ScenePreStop,
+      ScenePostStop
+   };
 
-		virtual ~Event() {}
-		virtual EventType GetEventType() const = 0;
-		virtual const char* GetName() const = 0;
-		virtual int32_t GetCategoryFlags() const = 0;
-		virtual std::string ToString() const { return GetName(); }
+   enum class EventCategory : uint32_t
+   {
+      None         = 0,
+      Application  = (1U << 0U),
+      Input        = (1U << 1U),
+      Keyboard     = (1U << 2U),
+      Mouse        = (1U << 3U),
+      MouseButton  = (1U << 4U),
+      Scene        = (1U << 5U)
+   };
 
-		inline bool IsInCategory(EventCategory category) { return GetCategoryFlags() & category; }
-	};
+   inline constexpr EventCategory operator|(EventCategory lhs, EventCategory rhs)
+   {
+      return static_cast<EventCategory>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
+   }
 
-	class EventDispatcher
-	{
-		template<typename T>
-		using EventFn = std::function<bool(T&)>;
-	public:
-		EventDispatcher(Event& event) : m_event(event) {}
+   inline EventCategory& operator|=(EventCategory& lhs, EventCategory rhs)
+   {
+      lhs = lhs | rhs;
+      return lhs;
+   }
 
-		template<typename T>
-		bool Dispatch(EventFn<T> func)
-		{
-			if (m_event.GetEventType() == T::GetStaticType() && !m_event.handled)
-			{
-				m_event.handled = func(*(T*)&m_event);
-				return true;
-			}
-			return false;
-		}
-	private:
-		Event& m_event;
-	};
+   inline constexpr EventCategory operator&(EventCategory lhs, EventCategory rhs)
+   {
+      return static_cast<EventCategory>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
+   }
 
-	inline std::ostream& operator<<(std::ostream& os, const Event& e)
-	{
-		return os << e.ToString();
-	}
+   inline const char* EventTypeToString(EventType type)
+   {
+      switch (type)
+      {
+         case EventType::None: return "None";
+         case EventType::WindowClosed: return "WindowClosed";
+         case EventType::WindowMinimized: return "WindowMinimized";
+         case EventType::WindowResized: return "WindowResized";
+         case EventType::WindowFocused: return "WindowFocused";
+         case EventType::WindowLostFocus: return "WindowLostFocus";
+         case EventType::WindowMoved: return "WindowMoved";
+         case EventType::WindowTitleBarClicked: return "WindowTitleBarClicked";
+         case EventType::AppUpdated: return "AppUpdated";
+         case EventType::AppRendered: return "AppRendered";
+         case EventType::KeyPressed: return "KeyPressed";
+         case EventType::KeyReleased: return "KeyReleased";
+         case EventType::KeyTyped: return "KeyTyped";
+         case EventType::MouseButtonPressed: return "MouseButtonPressed";
+         case EventType::MouseButtonReleased: return "MouseButtonReleased";
+         case EventType::MouseButtonHeld: return "MouseButtonHeld";
+         case EventType::MouseMoved: return "MouseMoved";
+         case EventType::MouseScrolled: return "MouseScrolled";
+         case EventType::ScenePreStart: return "ScenePreStart";
+         case EventType::ScenePostStart: return "ScenePostStart";
+         case EventType::ScenePreStop: return "ScenePreStop";
+         case EventType::ScenePostStop: return "ScenePostStop";
+         default: return "Unknown";
+      }
+   }
+
+   template<typename T>
+   struct EventTypeID
+   {
+      static const std::size_t value;
+   };
+
+   template<typename T>
+   const std::size_t EventTypeID<T>::value = reinterpret_cast<std::size_t>(&EventTypeID<T>::value);
+
+   class Event
+   {
+   public:
+      using Callback = std::function<void(Event&)>;
+
+      bool handled = false;
+
+      virtual ~Event() {}
+      virtual EventType GetEventType() const = 0;
+      virtual const char* GetName() const = 0;
+      virtual EventCategory GetCategoryFlags() const = 0;
+      virtual std::string ToString() const { return GetName(); }
+
+      inline bool IsInCategory(EventCategory category) const
+      {
+         return static_cast<uint32_t>(GetCategoryFlags()) & static_cast<uint32_t>(category);
+      }
+   };
+
+   // Defined events should inherit from this class
+   template <EventType Type, EventCategory Category>
+   class EventBase : public Event
+   {
+   public:
+      static EventType GetStaticType() { return Type; }
+      virtual EventType GetEventType() const override { return GetStaticType(); }
+      virtual EventCategory GetCategoryFlags() const override { return Category; }
+      virtual const char* GetName() const override { return EventTypeToString(Type); }
+   };
+
+   inline std::ostream& operator<<(std::ostream& os, const Event& e)
+   {
+      return os << e.ToString();
+   }
 }
-
-#define ARC_BIND_EVENT_CALLBACK(fn) std::bind(&Application::##fn, this, std::placeholders::_1)

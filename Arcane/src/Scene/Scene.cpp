@@ -85,6 +85,17 @@ void ARC::Scene::Update(float32_t deltaTime)
    }
 }
 
+void ARC::Scene::FixedUpdate(float32_t timeStep)
+{
+   if (m_running && !m_paused)
+   {
+      for (const auto& system : m_fixedUpdateSystems)
+      {
+         system(shared_from_this(), timeStep);
+      }
+   }
+}
+
 void ARC::Scene::Render()
 {
    if (m_running)
