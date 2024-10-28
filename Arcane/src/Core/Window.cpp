@@ -1,7 +1,7 @@
 #include "arcpch.h"
 #include "Window.h"
 
-#include "Event/ApplicationEvent.h"
+#include "Event/WindowEvent.h"
 #include "Event/EventBus.h"
 #include "Event/KeyEvent.h"
 #include "Event/MouseEvent.h"
@@ -27,15 +27,15 @@ ARC::Window::~Window()
 
 void ARC::Window::Initialize()
 {
-	if (!s_GLFWInitialized)
-	{
-		// TODO: glfwTerminate on system shutdown
-		int32_t success = glfwInit();
-		ARC_ASSERT(success != 0, "Could not intialize GLFW!");
-		glfwSetErrorCallback(GLFWErrorCallback);
-
-		s_GLFWInitialized = true;
-	}
+   std::lock_guard<std::mutex> lock(s_glfwMutex);
+   if (!s_GLFWInitialized)
+   {
+      int32_t success = glfwInit();
+      ARC_ASSERT(success != 0, "Could not intialize GLFW!");
+      glfwSetErrorCallback(GLFWErrorCallback);
+      s_GLFWInitialized = true;
+   }
+   ++s_windowCount;
 
 	if (!m_properties.decorated)
 	{
@@ -74,14 +74,16 @@ void ARC::Window::Initialize()
 
    glfwSetWindowCloseCallback(m_windowPointer, [](GLFWwindow* window)
    {
+      auto& data = *((WindowData*) glfwGetWindowUserPointer(window));
       WindowClosedEvent event;
-      EventBus::GetInstance().Publish(event);
+      data.eventCallback(event);
    });
 
    glfwSetWindowIconifyCallback(m_windowPointer, [](GLFWwindow* window, int32_t iconified)
    {
+      auto& data = *((WindowData*) glfwGetWindowUserPointer(window));
       WindowMinimizedEvent event(static_cast<bool>(iconified));
-      EventBus::GetInstance().Publish(event);
+      data.eventCallback(event);
    });
 
    glfwSetWindowSizeCallback(m_windowPointer, [](GLFWwindow* window, int32_t width, int32_t height)
@@ -91,80 +93,88 @@ void ARC::Window::Initialize()
       data.height = height;
 
       WindowResizedEvent event(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-      EventBus::GetInstance().Publish(event);
+      data.eventCallback(event);
    });
 
    glfwSetKeyCallback(m_windowPointer, [](GLFWwindow* window, int32_t key, int32_t scancode, int32_t action, int32_t mods)
    {
+      auto& data = *((WindowData*) glfwGetWindowUserPointer(window));
+
       switch (action)
       {
-      case GLFW_PRESS:
-      {
-         Input::UpdateKeyState(static_cast<KeyCode>(key), KeyState::Pressed);
-         KeyPressedEvent event(static_cast<KeyCode>(key), 0);
-         EventBus::GetInstance().Publish(event);
-         break;
-      }
-      case GLFW_RELEASE:
-      {
-         Input::UpdateKeyState(static_cast<KeyCode>(key), KeyState::Released);
-         KeyReleasedEvent event(static_cast<KeyCode>(key));
-         EventBus::GetInstance().Publish(event);
-         break;
-      }
-      case GLFW_REPEAT:
-      {
-         Input::UpdateKeyState(static_cast<KeyCode>(key), KeyState::Held);
-         KeyPressedEvent event(static_cast<KeyCode>(key), 1);
-         EventBus::GetInstance().Publish(event);
-         break;
-      }
+         case GLFW_PRESS:
+         {
+            Input::UpdateKeyState(static_cast<KeyCode>(key), KeyState::Pressed);
+            KeyPressedEvent event(static_cast<KeyCode>(key), 0);
+            data.eventCallback(event);
+            break;
+         }
+         case GLFW_RELEASE:
+         {
+            Input::UpdateKeyState(static_cast<KeyCode>(key), KeyState::Released);
+            KeyReleasedEvent event(static_cast<KeyCode>(key));
+            data.eventCallback(event);
+            break;
+         }
+         case GLFW_REPEAT:
+         {
+            Input::UpdateKeyState(static_cast<KeyCode>(key), KeyState::Held);
+            KeyPressedEvent event(static_cast<KeyCode>(key), 1);
+            data.eventCallback(event);
+            break;
+         }
       }
    });
 
    glfwSetCharCallback(m_windowPointer, [](GLFWwindow* window, uint32_t codepoint)
    {
+      auto& data = *((WindowData*) glfwGetWindowUserPointer(window));
       KeyTypedEvent event(static_cast<KeyCode>(codepoint));
-      EventBus::GetInstance().Publish(event);
+      data.eventCallback(event);
    });
 
    glfwSetMouseButtonCallback(m_windowPointer, [](GLFWwindow* window, int32_t button, int32_t action, int32_t mods)
    {
+      auto& data = *((WindowData*) glfwGetWindowUserPointer(window));
+
       switch (action)
       {
-      case GLFW_PRESS:
-      {
-         Input::UpdateMouseState(static_cast<MouseButton>(button), KeyState::Pressed);
-         MouseButtonPressedEvent event(static_cast<MouseButton>(button));
-         EventBus::GetInstance().Publish(event);
-         break;
-      }
-      case GLFW_RELEASE:
-      {
-         Input::UpdateMouseState(static_cast<MouseButton>(button), KeyState::Released);
-         MouseButtonReleasedEvent event(static_cast<MouseButton>(button));
-         EventBus::GetInstance().Publish(event);
-         break;
-      }
+         case GLFW_PRESS:
+         {
+            Input::UpdateMouseState(static_cast<MouseButton>(button), KeyState::Pressed);
+            MouseButtonPressedEvent event(static_cast<MouseButton>(button));
+            data.eventCallback(event);
+            break;
+         }
+         case GLFW_RELEASE:
+         {
+            Input::UpdateMouseState(static_cast<MouseButton>(button), KeyState::Released);
+            MouseButtonReleasedEvent event(static_cast<MouseButton>(button));
+            data.eventCallback(event);
+            break;
+         }
       }
    });
 
    glfwSetScrollCallback(m_windowPointer, [](GLFWwindow* window, double xOffset, double yOffset)
    {
+      auto& data = *((WindowData*) glfwGetWindowUserPointer(window));
       MouseScrolledEvent event(static_cast<float>(xOffset), static_cast<float>(yOffset));
-      EventBus::GetInstance().Publish(event);
+      data.eventCallback(event);
    });
 
    glfwSetCursorPosCallback(m_windowPointer, [](GLFWwindow* window, double x, double y)
    {
+      auto& data = *((WindowData*) glfwGetWindowUserPointer(window));
       MouseMovedEvent event(static_cast<float>(x), static_cast<float>(y));
-      EventBus::GetInstance().Publish(event);
+      data.eventCallback(event);
    });
 
    glfwSetTitlebarHitTestCallback(m_windowPointer, [](GLFWwindow* window, int32_t x, int32_t y, int32_t* hit)
    {
+      auto& data = *((WindowData*) glfwGetWindowUserPointer(window));
       WindowTitleBarHitTestEvent event(x, y, *hit);
-      EventBus::GetInstance().Publish(event);
+      data.eventCallback(event);
    });
 
 	int32_t tWidth, tHeight;
@@ -176,7 +186,6 @@ void ARC::Window::Initialize()
 void ARC::Window::ProcessEvents()
 {
 	glfwPollEvents();
-	// TODO: Update input handler here
 }
 
 void ARC::Window::SwapBuffers()
@@ -210,6 +219,18 @@ void ARC::Window::SetResizable(bool resizable) const
 
 void ARC::Window::Close()
 {
-	glfwTerminate();
-	s_GLFWInitialized = false;
+   std::lock_guard<std::mutex> lock(s_glfwMutex);
+   if (m_windowPointer)
+   {
+      glfwDestroyWindow(m_windowPointer);
+      m_windowPointer = nullptr;
+
+      if (--s_windowCount == 0 && s_GLFWInitialized)
+      {
+         // Wait a bit to ensure no more GLFW calls are in flight
+         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+         glfwTerminate();
+         s_GLFWInitialized = false;
+      }
+   }
 }

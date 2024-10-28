@@ -1,5 +1,10 @@
 #ifdef ARC_PLATFORM_WINDOWS
-   #include <Windows.h>
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #include <Windows.h>
 #endif
 
 #include <algorithm>
@@ -84,9 +89,9 @@
 #include <variant>
 #include <vector>
 
-#include "Common.h"
+#include "Core/Common.h"
+
 #include "Core/Assert.h"
 #include "Core/Result.h"
 #include "Core/Version.h"
 #include "Logging/Logging.h"
-#include "Util/StringUtil.h"

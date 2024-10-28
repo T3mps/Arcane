@@ -41,6 +41,32 @@ workspace "Arcane"
         runtime "Release"
         optimize "speed"
 
+    defines {
+        "ARC_VERSION_MAJOR=0",
+        "ARC_VERSION_MINOR=1", 
+        "ARC_VERSION_PATCH=1",
+        "ARC_VERSION_BUILD=0"
+    }
+
+    -- TOOD
+    function generateModuleRC(projectName)
+        local rcTemplate = "%{wks.location}/Loom/src/Module.rc.in"
+        local rcOutput = "%{cfg.objdir}/" .. projectName .. ".rc"
+        local pythonCmd = "python %{wks.location}/scripts/generate_module_rc.py"
+        
+        filter "configurations:Debug"
+            prebuildcommands {
+                pythonCmd .. " \"" .. rcTemplate .. "\" \"" .. rcOutput .. "\" %{cfg.buildcfg}"
+            }
+            files { rcOutput }
+
+        filter "configurations:Release"
+            prebuildcommands {
+                pythonCmd .. " \"" .. rcTemplate .. "\" \"" .. rcOutput .. "\" %{cfg.buildcfg}"
+            }
+            files { rcOutput }
+    end
+
     function setupProject(projectName, projectKind)
         location(projectName)
         kind(projectKind)
@@ -88,10 +114,21 @@ workspace "Arcane"
     project "ArcaneTest"
         setupProject("ArcaneTest", "SharedLib")
 
+        defines {
+            "MODULE_VERSION_MAJOR=1",
+            "MODULE_VERSION_MINOR=0",
+            "MODULE_VERSION_PATCH=0",
+            "MODULE_VERSION_BUILD=0"
+        }
+
         pchheader "arcpch.h"
         pchsource "../Arcane/src/arcpch.cpp"
 
         filter "system:windows"
+            defines {
+                "MODULE_COMPANY=\"Starworks\"",
+                "MODULE_DESCRIPTION=\"Test Module for Arcane Engine\""
+            }
             links { "Arcane" }
 
             postbuildcommands {

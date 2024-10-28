@@ -86,7 +86,6 @@ std::string ARC::Logger::BuildMessage(Level level, const std::string& message, c
       }
    }
 
-   formattedMessage += ',';
    return formattedMessage;
 }
 

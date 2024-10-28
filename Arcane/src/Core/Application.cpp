@@ -1,7 +1,11 @@
 #include "arcpch.h"
 #include "Application.h"
 
+#include "Input/ActionSystem.h"
 #include "Input/Input.h"
+#include "Input/InputManager.h"
+#include "Network/Network.h"
+#include "RuntimeLayer.h"
 
 #ifdef ARC_BUILD_DEBUG
    #include "Util/DumpGenerator.h"
@@ -40,31 +44,32 @@ ARC::Application::~Application()
 
 void ARC::Application::Run()
 {
-   using duration = std::chrono::duration<float>;
-   using clock = std::chrono::steady_clock;
-   using time_point = clock::time_point;
+   using Clock = std::chrono::steady_clock;
+   using TimePoint = Clock::time_point;
+   using Duration = std::chrono::duration<float>;
 
-   constexpr const duration fixedDeltaTime = duration(1.0f / TARGET_UPDATES_PER_SECOND);
-   duration accumulator = duration::zero();
+   static constexpr float TARGET_DELTA_TIME = 1.0f / TARGET_UPDATES_PER_SECOND;
+   static constexpr Duration FIXED_DELTA_TIME { TARGET_DELTA_TIME };
+   static constexpr Duration MAX_FRAME_TIME { 0.25f };  // 250ms max frame time
+   static constexpr int MAX_FIXED_UPDATES_PER_FRAME = 5;
 
-   time_point lastTime = clock::now();
-   time_point lastSecond = lastTime;
+   Duration accumulator { 0.0f };
+   TimePoint currentTime = Clock::now();
+   TimePoint lastTime = currentTime;
+   TimePoint fpsCounterTime = currentTime;
 
-   uint32_t frames = 0;
-   uint32_t updates = 0;
-   uint32_t fixedUpdates = 0;
+   PerformanceMetrics metrics;
 
    while (m_running)
    {
-      time_point currentTime = clock::now();
-      duration frameTime = currentTime - lastTime;
+      currentTime = Clock::now();
+      Duration frameTime = currentTime - lastTime;
       lastTime = currentTime;
 
-      constexpr const duration maxFrameTime = duration(0.25f); // 250ms
-      if (frameTime > maxFrameTime)
+      if (frameTime > MAX_FRAME_TIME)
       {
-         ARC_CORE_WARN("Large frame time detected: " + StringUtil::ToString(frameTime.count()));
-         frameTime = maxFrameTime;
+         ARC_CORE_WARN("Frame time spike detected: {}s", frameTime.count());
+         frameTime = MAX_FRAME_TIME;
       }
 
       accumulator += frameTime;
@@ -72,45 +77,38 @@ void ARC::Application::Run()
       ProcessEvents();
 
       Update(frameTime.count());
-      ++updates;
+      ++metrics.updates;
 
       int fixedUpdateCount = 0;
       const int maxFixedUpdatesPerFrame = 5;
 
-      while (accumulator >= fixedDeltaTime && fixedUpdateCount < maxFixedUpdatesPerFrame)
+      int fixedSteps = 0;
+      while (accumulator >= FIXED_DELTA_TIME && fixedSteps < MAX_FIXED_UPDATES_PER_FRAME)
       {
-         FixedUpdate(fixedDeltaTime.count());
-         accumulator -= fixedDeltaTime;
-         ++fixedUpdates;
-         ++fixedUpdateCount;
+         FixedUpdate(FIXED_DELTA_TIME.count());
+         accumulator -= FIXED_DELTA_TIME;
+         ++metrics.fixedUpdates;
+         ++fixedSteps;
       }
 
-      if (fixedUpdateCount == maxFixedUpdatesPerFrame)
+      if (fixedSteps == MAX_FIXED_UPDATES_PER_FRAME)
       {
-         accumulator -= fixedDeltaTime * fixedUpdateCount;
-         ARC_CORE_WARN("FixedUpdate loop exceeded maximum iterations.");
+         ARC_CORE_WARN("Dropping {} seconds of accumulated time", (accumulator - (FIXED_DELTA_TIME * fixedSteps)).count());
+         accumulator = Duration { 0 };
       }
 
-      float alpha = accumulator / fixedDeltaTime;
+      float alpha = std::clamp(accumulator / FIXED_DELTA_TIME, 0.0f, 1.0f);
       Render(alpha);
-      ++frames;
+      ++metrics.frames;
 
       Input::ClearReleasedKeys();
 
-      if (currentTime - lastSecond >= duration(1.0))
+      constexpr Duration oneSecond { 1.0f };
+      if (currentTime - fpsCounterTime >= oneSecond)
       {
-         m_updatesPerSecond = updates;
-         m_fixedUpdatesPerSecond = fixedUpdates;
-         m_framesPerSecond = frames;
-
-         updates = 0;
-         fixedUpdates = 0;
-         frames = 0;
-         lastSecond = currentTime;
-
-         /*ARC_CORE_DEBUG("FPS: "   + std::to_string(m_framesPerSecond)   +
-                        " UPS: "  + std::to_string(m_updatesPerSecond)  +
-                        " FUPS: " + std::to_string(m_fixedUpdatesPerSecond));*/
+         UpdatePerformanceMetrics(metrics);
+         ResetMetrics(metrics);
+         fpsCounterTime = currentTime;
       }
    }
 }
@@ -161,15 +159,7 @@ bool ARC::Application::Initialize(ApplicationInfo info)
 
       //std::filesystem::current_path("/");
 
-      auto& logging = LoggingManager::GetInstance();
-      logging.SetCoreLogger(new Logger(LoggingManager::DEFAULT_CORE_LOGGER_NAME.data()));
-      if (!&logging.GetCoreLogger())
-      {
-         success = false;
-         return;
-      }
-      logging.SetApplicationLogger(new Logger(LoggingManager::DEFAULT_APPLICATION_LOGGER_NAME.data()));
-      if (!&logging.GetApplicationLogger())
+      if (!LoggingManager::InitializeCore() || !LoggingManager::InitializeApplication())
       {
          success = false;
          return;
@@ -191,15 +181,16 @@ bool ARC::Application::Initialize(ApplicationInfo info)
       }
 
       m_window->Initialize();
+      m_window->SetEventCallback([this](Event& e) { OnEvent(e); });
       m_window->CenterInScreen();
       m_window->SetResizable(info.resizableWindow);
 
-      EventBus::GetInstance().Subscribe<WindowClosedEvent>([this](const WindowClosedEvent& event)
-      {
-         Close();
-      });
+      EventBus::GetInstance().Subscribe<WindowClosedEvent>([this](const WindowClosedEvent& event) { Close(); });
 
-      SceneManager::Initialize();
+      auto runtimeLayer = std::make_unique<RuntimeLayer>();
+      PushLayer(std::move(runtimeLayer));
+
+      Network::Initialize();
 
       ARC_CORE_INFO("Application initialized");
    });
@@ -241,6 +232,8 @@ void ARC::Application::ProcessEvents()
          // TODO: Handle or rethrow as appropriate
       }
    }
+
+   InputManager::GetInstance().Update();
 }
 
 bool ARC::Application::GetNextEvent(std::function<void()>& func)
@@ -257,53 +250,85 @@ bool ARC::Application::GetNextEvent(std::function<void()>& func)
 
 void ARC::Application::OnEvent(Event& event)
 {
+   EventBus::GetInstance().Publish(event);
+
+   if (event.handled)
+      return;
+
    for (auto it = m_layerStack.rbegin(); it != m_layerStack.rend(); ++it)
    {
       (*it)->OnEvent(event);
       if (event.handled)
          break;
    }
-
-   if (!event.handled)
-      EventBus::GetInstance().Publish(event);
 }
 
 void ARC::Application::Update(float deltaTime)
 {
-   if (auto currentScene = SceneManager::GetCurrentScene())
-      currentScene->Update(deltaTime);
-
    for (const auto& layer : m_layerStack)
+   {
       layer->OnUpdate(deltaTime);
-
-   if (m_updateCallback)
-      m_updateCallback(deltaTime);
+   }
+   ARC_ASSERT(m_updateCallback, "Attempted to call a null update delegate.");
+   m_updateCallback(deltaTime);
 }
 
 void ARC::Application::FixedUpdate(float timeStep)
 {
-   if (auto currentScene = SceneManager::GetCurrentScene())
-      currentScene->FixedUpdate(timeStep);
-
    for (const auto& layer : m_layerStack)
+   {
       layer->OnFixedUpdate(timeStep);
-
-   if (m_fixedUpdateCallback)
-      m_fixedUpdateCallback(timeStep);
+   }
+   ARC_ASSERT(m_updateCallback, "Attempted to call a null fixed update delegate.");
+   m_fixedUpdateCallback(timeStep);
 }
 
-void ARC::Application::Render(float alpha)
+void ARC::Application::Render(float alpha /* TODO: Implement */)
 {
-   if (auto currentScene = SceneManager::GetCurrentScene())
-      currentScene->Render();
+   for (const auto& layer : m_layerStack)
+   {
+      layer->OnRender();
+   }
+   ARC_ASSERT(m_renderCallback, "Attempted to call a null render delegate.");
+   m_renderCallback();
+}
 
-   if (m_renderCallback)
-      m_renderCallback();
+void ARC::Application::UpdatePerformanceMetrics(const PerformanceMetrics& metrics)
+{
+   m_framesPerSecond = metrics.frames;
+   m_updatesPerSecond = metrics.updates;
+   m_fixedUpdatesPerSecond = metrics.fixedUpdates;
+
+#ifdef ARC_BUILD_DEBUG
+   //ARC_CORE_DEBUG("Performance: FPS={} UPS={} FUPS={}", m_framesPerSecond, m_updatesPerSecond, m_fixedUpdatesPerSecond);
+#endif
+}
+
+void ARC::Application::ResetMetrics(PerformanceMetrics& metrics)
+{
+   metrics = PerformanceMetrics{};
 }
 
 void ARC::Application::Close()
 {
-   m_layerStack.Clear();
+   if (!m_running)
+      return;
 
    m_running = false;
+
+   m_layerStack.Clear();
+
+   if (m_window)
+   {
+      m_window->SetEventCallback([](Event& e) {});
+      m_window->ProcessEvents();
+      m_window.reset();
+   }
+   {
+      std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
+      m_eventQueue.clear();
+   }
+
+   Network::Shutdown();
+   LoggingManager::Shutdown();
 }

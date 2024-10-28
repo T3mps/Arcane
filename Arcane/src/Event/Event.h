@@ -15,10 +15,6 @@ namespace ARC
       WindowMoved,
       WindowTitleBarClicked,
 
-      // Application
-      AppUpdated,
-      AppRendered,
-
       // Keyboard
       KeyPressed,
       KeyReleased,
@@ -35,13 +31,15 @@ namespace ARC
       ScenePreStart,
       ScenePostStart,
       ScenePreStop,
-      ScenePostStop
+      ScenePostStop,
+      ScenePaused,
+      SceneResumed
    };
 
    enum class EventCategory : uint32_t
    {
       None         = 0,
-      Application  = (1U << 0U),
+      Window       = (1U << 0U),
       Input        = (1U << 1U),
       Keyboard     = (1U << 2U),
       Mouse        = (1U << 3U),
@@ -77,8 +75,6 @@ namespace ARC
          case EventType::WindowLostFocus: return "WindowLostFocus";
          case EventType::WindowMoved: return "WindowMoved";
          case EventType::WindowTitleBarClicked: return "WindowTitleBarClicked";
-         case EventType::AppUpdated: return "AppUpdated";
-         case EventType::AppRendered: return "AppRendered";
          case EventType::KeyPressed: return "KeyPressed";
          case EventType::KeyReleased: return "KeyReleased";
          case EventType::KeyTyped: return "KeyTyped";
@@ -94,15 +90,6 @@ namespace ARC
          default: return "Unknown";
       }
    }
-
-   template<typename T>
-   struct EventTypeID
-   {
-      static const std::size_t value;
-   };
-
-   template<typename T>
-   const std::size_t EventTypeID<T>::value = reinterpret_cast<std::size_t>(&EventTypeID<T>::value);
 
    class Event
    {

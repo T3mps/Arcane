@@ -131,8 +131,37 @@ namespace ARC
 		RightControl= 345,
 		RightAlt		= 346,
 		RightSuper	= 347,
-		Menu			= 348
+		Menu			= 348,
+		Invalid
 	};
+
+	enum class ModifierKey : uint8_t
+	{
+		None        = 0,
+		LeftShift   = 1 << 0,
+		RightShift  = 1 << 1,
+		LeftCtrl    = 1 << 2,
+		RightCtrl   = 1 << 3,
+		LeftAlt     = 1 << 4,
+		RightAlt    = 1 << 5,
+		LeftSuper   = 1 << 6,
+		RightSuper  = 1 << 7,
+
+		Shift       = LeftShift | RightShift,
+		Ctrl        = LeftCtrl	| RightCtrl,
+		Alt         = LeftAlt	| RightAlt,
+		Super       = LeftSuper | RightSuper
+	};
+
+	inline ModifierKey operator|(ModifierKey a, ModifierKey b)
+	{
+		return static_cast<ModifierKey>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+	}
+
+	inline ModifierKey operator&(ModifierKey a, ModifierKey b)
+	{
+		return static_cast<ModifierKey>(static_cast<uint8_t>(a) & static_cast<uint8_t>(b));
+	}
 
 	enum class InputState
 	{
@@ -161,7 +190,8 @@ namespace ARC
 		Button5		= 5,
 		Left			= Button0,
 		Right			= Button1,
-		Middle		= Button2
+		Middle		= Button2,
+		Invalid
 	};
 
 	inline std::ostream& operator<<(std::ostream& os, KeyCode keyCode)

@@ -31,25 +31,16 @@ namespace ARC
                 y < other.y + other.height && y + height > other.y;
       }
 
-      void Translate(float dx, float dy)
-      {
-         x += dx;
-         y += dy;
-      }
+      void Translate(float dx, float dy);
 
-      void Expand(float dw, float dh)
-      {
-         x -= dw;
-         y -= dh;
-         width += 2 * dw;
-         height += 2 * dh;
-      }
+      void Expand(float dw, float dh);
 
       bool operator==(const Rectangle& other) const
       {
          return std::abs(x - other.x)         < 0.001f && std::abs(y - other.y) < 0.001f &&
                 std::abs(width - other.width) < 0.001f && std::abs(height - other.height) < 0.001f;
       }
+
       bool operator!=(const Rectangle& other) const { return !(*this == other); }
    };
 } // namespace ARC

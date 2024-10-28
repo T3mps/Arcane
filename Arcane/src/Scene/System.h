@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Util/UUID.h"
+
 namespace ARC
 {
    class Scene;
@@ -7,9 +9,19 @@ namespace ARC
    class System
    {
    public:
-      int32_t priority = 0;
+      using SystemID = UUID;
 
-      bool operator<(const System& other) const { return priority < other.priority; }
+      System() : m_id(SystemID()), m_priority(0) {}
+      virtual ~System() = default;
+
+      SystemID GetID() const { return m_id; }
+      int32_t GetPriority() const { return m_priority; }
+
+      bool operator<(const System& other) const { return m_priority < other.m_priority; }
+
+   protected:
+      SystemID m_id;
+      int32_t m_priority;
    };
 
    struct UpdateSystem : public System
@@ -41,9 +53,25 @@ namespace ARC
 
       void Insert(const SystemType& system)
       {
-         auto it = std::lower_bound(m_systems.begin(), m_systems.end(), system,
-            [](const SystemType& a, const SystemType& b) { return a.priority < b.priority; });
+         RemoveByID(system.GetID());
+
+         auto it = std::lower_bound(m_systems.begin(), m_systems.end(), system, [](const SystemType& a, const SystemType& b)
+            { return a.GetPriority() < b.GetPriority(); });
          m_systems.insert(it, system);
+      }
+
+      void RemoveByID(const typename System::SystemID& id)
+      {
+         m_systems.erase(std::remove_if(m_systems.begin(), m_systems.end(),
+            [&id](const SystemType& system) { return system.GetID() == id; }),
+               m_systems.end());
+      }
+
+      const SystemType* GetByID(const typename System::SystemID& id) const
+      {
+         auto it = std::find_if(m_systems.begin(), m_systems.end(),
+            [&id](const SystemType& system) { return system.GetID() == id; });
+         return it != m_systems.end() ? &(*it) : nullptr;
       }
 
       typename std::vector<SystemType>::const_iterator begin() const { return m_systems.begin(); }

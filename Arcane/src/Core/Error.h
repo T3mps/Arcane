@@ -29,6 +29,7 @@ namespace ARC
       NotImplemented,
       UnsupportedOperation,
       Timeout,
+      FileNotFound,
       UnknownError
    };
 
@@ -77,5 +78,5 @@ namespace ARC
    };
 } // namespace ARC
 
-#define ARC_MAKE_ERROR(code, message, ...) \
-    ARC::Error::Create(code, message, ##__VA_ARGS__, std::source_location::current())
+#define ARC_MAKE_ERROR(code, message) \
+    ARC::Error::Create(code, message, std::source_location::current())

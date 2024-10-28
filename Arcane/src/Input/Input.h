@@ -25,6 +25,57 @@ namespace ARC
    class Input
    {
    public:
+      template <typename InputType>
+      static bool IsInputPressed(InputType input)
+      {
+         if constexpr (std::is_same_v<InputType, KeyCode>)
+         {
+            return IsKeyPressed(input);
+         }
+         else if constexpr (std::is_same_v<InputType, MouseButton>)
+         {
+            return IsMouseButtonPressed(input);
+         }
+         else
+         {
+            ARC_ASSERT(false, "Unsupported InputType in IsInputPressed");
+         }
+      }
+
+      template <typename InputType>
+      static bool IsInputHeld(InputType input)
+      {
+         if constexpr (std::is_same_v<InputType, KeyCode>)
+         {
+            return IsKeyHeld(input);
+         }
+         else if constexpr (std::is_same_v<InputType, MouseButton>)
+         {
+            return IsMouseButtonHeld(input);
+         }
+         else
+         {
+            ARC_ASSERT(false, "Unsupported InputType in IsInputHeld");
+         }
+      }
+
+      template <typename InputType>
+      static bool IsInputReleased(InputType input)
+      {
+         if constexpr (std::is_same_v<InputType, KeyCode>)
+         {
+            return IsKeyReleased(input);
+         }
+         else if constexpr (std::is_same_v<InputType, MouseButton>)
+         {
+            return IsMouseButtonReleased(input);
+         }
+         else
+         {
+            ARC_ASSERT(false, "Unsupported InputType in IsInputReleased");
+         }
+      }
+
       static bool IsKeyPressed(KeyCode keycode);
       static bool IsKeyHeld(KeyCode keycode);
       static bool IsKeyDown(KeyCode keycode);
@@ -52,8 +103,8 @@ namespace ARC
       static void UpdateMouseState(MouseButton button, KeyState newState);
       static void ClearReleasedKeys();
 
-      inline static std::map<KeyCode, KeyData> s_keyData;
-      inline static std::map<MouseButton, MouseData> s_mouseData;
+      inline static std::unordered_map<KeyCode, KeyData> s_keyData;
+      inline static std::unordered_map<MouseButton, MouseData> s_mouseData;
 
       friend class Application;
       friend class Window;

@@ -15,10 +15,51 @@ namespace ARC
       LayerStack();
       ~LayerStack();
 
-      void Push(std::unique_ptr<Layer> layer);
-      void PushFront(std::unique_ptr<Layer> overlay);
-      std::unique_ptr<Layer> Pop(Layer* layer);
-      std::unique_ptr<Layer> PopFront(Layer* overlay);
+      template <typename Layer>
+      void Push(std::unique_ptr<Layer> layer)
+      {
+         std::scoped_lock lock(m_mutex);
+         m_layers.emplace(m_layers.begin() + m_layerInsertIndex, std::move(layer));
+         ++m_layerInsertIndex;
+      }
+      
+      template <typename Layer>
+      void PushFront(std::unique_ptr<Layer> overlay)
+      {
+         std::scoped_lock lock(m_mutex);
+         m_layers.emplace_back(std::move(overlay));
+      }
+
+      template <typename Layer>
+      std::unique_ptr<Layer> Pop(Layer* layer)
+      {
+         std::scoped_lock lock(m_mutex);
+         auto it = std::find_if(m_layers.begin(), m_layers.begin() + m_layerInsertIndex,
+            [layer](const std::unique_ptr<Layer>& l) { return l.get() == layer; });
+         if (it != m_layers.begin() + m_layerInsertIndex)
+         {
+            std::unique_ptr<Layer> removedLayer = std::move(*it);
+            m_layers.erase(it);
+            --m_layerInsertIndex;
+            return removedLayer;
+         }
+         return nullptr;
+      }
+      
+      template <typename Layer>
+      std::unique_ptr<Layer> PopFront(Layer* overlay)
+      {
+         std::scoped_lock lock(m_mutex);
+         auto it = std::find_if(m_layers.begin() + m_layerInsertIndex, m_layers.end(),
+            [overlay](const std::unique_ptr<Layer>& l) { return l.get() == overlay; });
+         if (it != m_layers.end())
+         {
+            std::unique_ptr<Layer> removedOverlay = std::move(*it);
+            m_layers.erase(it);
+            return removedOverlay;
+         }
+         return nullptr;
+      }
 
       void Clear();
 

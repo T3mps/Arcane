@@ -1,12 +1,11 @@
 #pragma once
 
-#include "Event/ApplicationEvent.h"
 #include "Event/Event.h"
 #include "Event/EventBus.h"
 #include "Event/KeyEvent.h"
 #include "Event/MouseEvent.h"
 #include "Event/LayerStack.h"
-#include "Scene/SceneManager.h"
+#include "Event/WindowEvent.h"
 #include "Window.h"
 #include "Util/Delegate.h"
 #include "Version.h"
@@ -45,13 +44,6 @@ namespace ARC
       std::unique_ptr<Layer> PopLayer(Layer* layer);
       std::unique_ptr<Layer> PopOverlay(Layer* overlay);
 
-      template<typename Func>
-      inline void QueueEvent(Func&& func)
-      {
-         std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
-         m_eventQueue.emplace_back(std::forward<Func>(func));
-      }
-
       template<typename E, typename... EventArgs>
       void DispatchEvent(EventArgs&&... args)
       {
@@ -84,10 +76,24 @@ namespace ARC
       static std::thread::id GetMainThreadID();
 
    private:
+      struct PerformanceMetrics
+      {
+         uint32_t frames{0};
+         uint32_t updates{0};
+         uint32_t fixedUpdates{0};
+      };
+
       Application(Application&&) = delete;
       Application& operator=(Application&&) = delete;
 
       bool Initialize(ApplicationInfo info);
+
+      template<typename Func>
+      inline void QueueEvent(Func&& func)
+      {
+         std::scoped_lock<std::mutex> lock(m_eventQueueMutex);
+         m_eventQueue.emplace_back(std::forward<Func>(func));
+      }
 
       void ProcessEvents();
       bool GetNextEvent(std::function<void()>& func);
@@ -96,6 +102,9 @@ namespace ARC
       void Update(float deltaTime);
       void FixedUpdate(float timeStep);
       void Render(float alpha);
+
+      void UpdatePerformanceMetrics(const PerformanceMetrics& metrics);
+      void ResetMetrics(PerformanceMetrics& metrics);
 
       void Close();
 
@@ -106,10 +115,10 @@ namespace ARC
       std::deque<std::function<void()>> m_eventQueue;
       std::mutex m_eventQueueMutex;
 
+      bool m_running;
       uint32_t m_framesPerSecond;
       uint32_t m_fixedUpdatesPerSecond;
       uint32_t m_updatesPerSecond;
-      bool m_running;
 
       Delegate<void(float)> m_updateCallback;
       Delegate<void(float)> m_fixedUpdateCallback;

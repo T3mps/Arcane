@@ -1,10 +1,9 @@
 #pragma once
 
-#include "Common.h"
-
 #pragma once
 
-#include "Common.h"
+// Common
+#include "Core/Common.h"
 
 // Arcane/Algorithm
 #include "Algorithm/Hash.h"
@@ -23,13 +22,13 @@
 #include "Core/Window.h"
 
 // Arcane/Event
-#include "Event/ApplicationEvent.h"
 #include "Event/Event.h"
 #include "Event/KeyEvent.h"
 #include "Event/Layer.h"
 #include "Event/LayerStack.h"
 #include "Event/MouseEvent.h"
 #include "Event/SceneEvent.h"
+#include "Event/WindowEvent.h"
 
 // Arcane/Input
 #include "Input/Input.h"

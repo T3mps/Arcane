@@ -15,8 +15,8 @@ namespace ARC
       {
          std::scoped_lock<std::mutex> lock(m_mutex);
 
-         auto typeID = EventTypeID<EventType>::value;
-         auto& listeners = m_listeners[typeID];
+         auto typeIndex = std::type_index(typeid(EventType));
+         auto& listeners = m_listeners[typeIndex];
          ListenerID id = ++m_lastListenerID;
 
          listeners.emplace_back(id, [listener](const Event& event)
@@ -30,8 +30,8 @@ namespace ARC
       {
          std::scoped_lock<std::mutex> lock(m_mutex);
 
-         auto typeID = EventTypeID<EventType>::value;
-         auto& listeners = m_listeners[typeID];
+         auto typeIndex = std::type_index(typeid(EventType));
+         auto& listeners = m_listeners[typeIndex];
 
          listeners.erase(std::remove_if(listeners.begin(), listeners.end(),
             [listenerID](const Listener& listener) { return listener.id == listenerID; }),
@@ -47,10 +47,12 @@ namespace ARC
          std::function<void(Event&)> callback;
       };
 
+      using ListenerMap = std::unordered_map<std::type_index, std::vector<Listener>>;
+
       EventBus();
       virtual ~EventBus() = default;
 
-      std::unordered_map<size_t, std::vector<Listener>> m_listeners;
+      std::unordered_map<std::type_index, std::vector<Listener>> m_listeners;
       ListenerID m_lastListenerID;
       std::mutex m_mutex;
 

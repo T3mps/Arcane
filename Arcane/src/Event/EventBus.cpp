@@ -9,8 +9,8 @@ void ARC::EventBus::Publish(Event& event)
    {
       std::scoped_lock<std::mutex> lock(m_mutex);
 
-      auto typeID = EventTypeID<EventType>::value;
-      auto it = m_listeners.find(typeID);
+      auto typeIndex = std::type_index(typeid(event));
+      auto it = m_listeners.find(typeIndex);
 
       if (it != m_listeners.end())
          listenersCopy = it->second; // Copy listeners
@@ -22,4 +22,3 @@ void ARC::EventBus::Publish(Event& event)
       listener.callback(event);
    }
 }
-

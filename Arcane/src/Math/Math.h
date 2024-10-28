@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Common.h"
-
 namespace ARC
 {
    static constexpr float32_t MAX_FLOAT = FLT_MAX;
