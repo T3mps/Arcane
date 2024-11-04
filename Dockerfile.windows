@@ -1,0 +1,29 @@
+# escape=`
+FROM mcr.microsoft.com/windows/servercore:ltsc2019
+SHELL ["cmd", "/S", "/C"]
+
+# Download VS Build Tools
+ADD https://aka.ms/vs/17/release/vs_buildtools.exe C:\TEMP\vs_buildtools.exe
+
+# Install VS Build Tools 
+RUN C:\TEMP\vs_buildtools.exe --quiet --wait --norestart --nocache `
+    --installPath C:\BuildTools `
+    --add Microsoft.VisualStudio.Workload.VCTools `
+    --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+    --add Microsoft.VisualStudio.Component.Windows10SDK.19041 `
+    --remove Microsoft.VisualStudio.Component.Windows10SDK.10240 `
+    --remove Microsoft.VisualStudio.Component.Windows10SDK.10586 `
+    --remove Microsoft.VisualStudio.Component.Windows10SDK.14393 `
+    --remove Microsoft.VisualStudio.Component.Windows81SDK `
+ || IF "%ERRORLEVEL%"=="3010" EXIT 0
+
+# Setup environment
+RUN setx /M PATH "%PATH%;C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"
+
+# Add premake
+ADD https://github.com/premake/premake-core/releases/download/v5.0.0-beta2/premake-5.0.0-beta2-windows.zip C:\TEMP\premake.zip
+RUN powershell -Command "Expand-Archive C:\TEMP\premake.zip -DestinationPath C:\BuildTools\premake"
+RUN setx /M PATH "%PATH%;C:\BuildTools\premake"
+
+# Cleanup
+RUN del /Q C:\TEMP\*
