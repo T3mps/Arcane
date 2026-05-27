@@ -1,146 +1,163 @@
-# Rendering Phase 2c — Scene Unification & Color Pipeline Design
+# Rendering Phase 2c — Scene Unification, Layer Compositor & Color Pipeline Design
 
 **Date:** 2026-05-27
 **Scope:** GachaClient (Love2D / LuaJIT / OpenGL)
 **Status:** Approved design, pending implementation plan(s)
-**Parent spec:** `docs/superpowers/specs/2026-05-27-aaa-rendering-design.md` (Phase 2). This sub-spec fills the Phase-2 mechanics that the master spec left underspecified.
+**Parent spec:** `docs/superpowers/specs/2026-05-27-aaa-rendering-design.md` (Phase 2). This sub-spec fills the Phase-2 mechanics the master spec left underspecified.
 
 ## Context
 
-Phase 2a (render-graph foundation: `lib/Pool`, `systems/render/{RenderTargets,Pass,Renderer}`, `love.draw` → one `legacy` pass) and Phase 2b (RenderTargets wired into the Renderer/`ctx` + per-frame `frameReset`; `legacy` split into `scene`/`present`/`hud`; the full-frame AA canvas moved onto the pool) are **DONE and validated**.
+Phase 2a (render-graph foundation: `lib/Pool`, `systems/render/{RenderTargets,Pass,Renderer}`, `love.draw` → one `legacy` pass) and Phase 2b (RenderTargets wired into the Renderer/`ctx` + per-frame `frameReset`; `legacy` split into `scene`/`present`/`hud`; AA canvas onto the pool) are **DONE and validated**.
 
-Phase 2c does the deferred, cross-cutting work: unify the **distributed** per-renderer scene→grade→upscale chains into a shared `sceneRT` consumed by **global** passes, and then flip that path to linear/HDR with an ACES tonemap.
+Phase 2c unifies the **distributed** per-renderer scene→grade→upscale chains into a shared `sceneRT` driven by a **layer compositor**, then flips the scene path to linear/HDR + ACES tonemap.
 
 ### Why this is non-trivial (the current reality)
 
-Scene→post→upscale is **not** centralized. Each producer owns its own chain:
-- **Overworld `RenderSystem`** renders the world into its own `ppCanvas` (internal-res), grades via `PostFx.apply` → `gradeCanvas`, then `RenderScale.upscale` into the externally-set frame target (lines ~1183–1998). It owns 6 canvases.
-- **Screens** draw their own background (bg color + bg shader, e.g. `SpaceBackground`/`pull_tunnel`), optionally wrap content in `PostProcessEffect` (its own capture canvas + the *same* `PostFx` grade shader, UI-flavored defaults) for grading, and optionally call `FrostedGlass.prepare` — which **re-renders the background** into its own 3 canvases to produce the blur source.
-- **`WaveGame` / `CombatRenderer`** follow the same own-chain pattern (combat rendering plumbing only — the abilities system is off-limits).
+Scene→grade→upscale is **not** centralized. Each producer owns its own chain:
+- **Overworld `RenderSystem`** renders the world into its own `ppCanvas` (internal-res), grades via `PostFx.apply` → `gradeCanvas`, then `RenderScale.upscale` into the externally-set frame target. Owns 6 canvases. Invoked indirectly via `state.world:update(0, nil, "draw")` (no `ctx` parameter).
+- **Screens** draw their own background (bg color + bg shader, e.g. `SpaceBackground`/`pull_tunnel`), optionally wrap content in `PostProcessEffect` (own capture canvas + the *same* `PostFx` shader, UI-flavored defaults), and optionally call `FrostedGlass.prepare` — which **re-renders the background** into its own 3 canvases for the blur source.
+- **`WaveGame` / `CombatRenderer`** follow the same own-chain pattern (combat rendering plumbing only — abilities off-limits).
 
-So there are **two** grade paths today (world via `RenderSystem`; screen content via `PostProcessEffect`) and a **third** background render inside `FrostedGlass`. The reveal's ~50fps is `FrostedGlass` re-running the 596-line `pull_tunnel.glsl` 2–3× per frame.
+Two grade paths today (world via `RenderSystem`; screen content via `PostProcessEffect`) + a third background render inside `FrostedGlass`. The reveal's ~50fps is `FrostedGlass` re-running the 596-line `pull_tunnel.glsl` 2–3× per frame.
+
+Today the whole frame (world **and** UI) is composited into one AA canvas and FXAA/MSAA-resolved together, so **UI is currently anti-aliased**.
 
 ## Decisions (locked with the user, 2026-05-27)
 
-- **Per-screen render profile** decides which passes run for a given screen/state (chosen over preserving the current split or a forced global look change).
-- **Profile = a composable capability table, NOT a closed enum of presets** (composition over enumeration — avoids the preset-explosion footgun). Named defaults survive only as optional spread-and-override shorthand.
-- **Order static, enablement dynamic** — one canonical pass order in the Renderer; the active profile flips each pass's `enabled` per frame. Explicitly **not** a per-frame dependency compiler (the master spec's locked non-goal).
-- **Dependencies handled by light normalization, not resolution** — a small `Profile.normalize` enforces sane implications; no input/output graph wiring engine.
-- **Structural first (8-bit, parity-gated), then a separate linear/HDR + ACES flip** — the structural migration is screenshot-identical; the flip is the one deliberate look change.
-- **Color scope: scene-only linear, UI stays sRGB** (drawn after tonemap — industry-standard seam). **Tonemap operator: ACES filmic.**
-- Combat **abilities** system (kits/data/power/execution) is off-limits — rendering plumbing only.
-- **Portal distortion is removed, not migrated** (user, 2026-05-27). The in-world portal pass in `RenderSystem` is already **dead code** — `systems/PortalSystem.lua` is a stub (`entities = {}`, `drawWorld()` a no-op), so the pass's `#PortalSystem.entities > 0` guard never fires. `ui/components/PortalDistortEffect.lua` (referenced only via `shader_registry`'s `portal_distort` factory) is retired. Removing both is visually invisible and sheds RenderSystem's `portalDistortCanvas`/`portalCaptureCanvas` + helpers, simplifying the overworld migration.
-- **The `effects` pass hosts a composable *set* of named screen-space effects** (user, 2026-05-27) — not a single flag. `profile.effects` is a set like `{"frosted"}`; the pass runs when non-empty. `frosted` is the only live effect in 2c; `pixelate` (`ui/components/PixelateEffect.lua`) and any future distortion become first-class effects-pass ops when reintroduced. Portal distortion is **not** reintroduced.
-- **Screen transitions are kept** (user, 2026-05-27), with a possible future rework. The transition-capture layer (`screen.lua` `_transitionCanvas`, per-screen copies in `character_select`/`weapon_select`, `ui_loader` `_contentCanvas`) coexists with the graph; `PostProcessEffect`'s save/restore-the-active-(transition)-canvas semantics MUST be preserved when its grade folds into the `post` pass. A transition/pipeline rework is out of 2c scope.
+- **The frame is an ordered list of uniform rendering layers**, each a composable capability table. The scene/UI distinction and the linear/sRGB seam are **not special cases** — they are different flag values on uniform layers. (Chosen as the full per-layer model over a single profile capability table + hardcoded UI handling.)
+- **Per-layer feature toggles**: `scale`, `grade`, `tonemap`, `aa`, `effects` are independent per layer. Notably **`aa` is per-layer** — so "UI anti-aliased" (today) vs "UI sharp" becomes a one-flag opt-in, not an architecture decision.
+- **Composition over enumeration**: layers and their flags compose freely; named defaults (`WORLD`/`MENU`/`PLAIN_UI`/`OVERLAY`) are spread-and-override shorthand, not a closed set.
+- **Order static, behavior dynamic**: the compositor processes the active profile's ordered layers; it is **not** a per-frame dependency compiler (master-spec non-goal). A small `normalize` enforces per-layer dependency sanity; no input/output wiring engine.
+- **Structural first (8-bit, parity-gated), then a separate linear/HDR + ACES flip.** Defaults reproduce today exactly (scene+ui `aa=true`, hud sharp) so the structural migration is screenshot-identical; the flip is the one deliberate look change.
+- **Color scope: scene-only linear, UI stays sRGB.** Falls out of flags: scene layer `tonemap=true`/HDR; ui/hud `tonemap=false`. **Tonemap operator: ACES filmic.**
+- **Portal distortion is removed, not migrated.** The in-world `RenderSystem` portal pass is **dead code** — `systems/PortalSystem.lua` is a stub (`entities={}`, `drawWorld()` no-op), so the `#PortalSystem.entities > 0` guard never fires. `ui/components/PortalDistortEffect.lua` (referenced only via `shader_registry`'s `portal_distort` factory) is retired. Removing both is visually invisible and sheds `RenderSystem`'s `portalDistortCanvas`/`portalCaptureCanvas` + helpers.
+- **`effects` is a composable *set* of named screen-space effects** per layer — `{"frosted"}` now; `pixelate` (`ui/components/PixelateEffect.lua`) and future distortions reintroducible. Portal distortion is **not** reintroduced.
+- **Screen transitions are kept** (possible future rework). The transition-capture layer (`screen.lua` `_transitionCanvas`, per-screen copies, `ui_loader` `_contentCanvas`) coexists with the compositor; `PostProcessEffect`'s active-canvas save/restore semantics MUST be preserved where its grade folds into a layer's `grade`.
+- Combat **abilities** (kits/data/power/execution) off-limits — rendering plumbing only.
 
 ## Architecture
 
-### Pass graph (full set; the active profile enables a subset per frame)
+### Layer descriptor (the unit)
 
-```
-scene    active producer draws into sceneRT      -> sceneRT   (8-bit now; rgba16f-linear after the flip)
-effects  screen-space sampling of sceneRT        <- sceneRT   (frosted blur, distortion)
-post     PostFx grade                            sceneRT[+effects] -> sceneRT (ping-pong)
-tonemap  (flip phase) ACES + sRGB encode          sceneRT -> sceneRT
-present  blit/upscale sceneRT to the frame canvas (RenderScale) + AA resolve
-ui       UI.draw() widgets on the frame canvas, AFTER present (sRGB, ungraded)
-hud      FPS readout + warp flash                 (from 2b)
-```
-
-`present`/`ui`/`hud` keep the 2b ordering (widgets/HUD stay sharp and ungraded on the frame canvas after the AA resolve). `scene`/`effects`/`post`/`tonemap` slot in *before* `present`. The canonical order is fixed once in the Renderer; profiles never reorder it.
-
-### Render profile (the hybrid: declarative config + one draw hook)
-
-**Data (the mechanism):** each screen and the overworld declares a profile — a plain table:
+A **Layer** is a plain capability table — render-agnostic data, FFI-neutral, headless-testable:
 ```lua
-{ scene   = "world" | "background" | "none",
-  effects = { ... },   -- a SET of named screen-space effects on sceneRT, e.g. {"frosted"}; empty = none
-  post    = boolean,   -- run the PostFx grade
-  tonemap = boolean }  -- (flip phase) run ACES; ignored until the flip lands
+{ name    = "scene"|"ui"|"hud"|<custom>,
+  source  = "world"|"background"|"ui"|"hud"|"none",  -- how the layer's pixels are produced
+  scale   = boolean,    -- render at internal render-scale res into sceneRT, then upscale (else native)
+  grade   = boolean,    -- apply the PostFx grade to this layer
+  tonemap = boolean,    -- linear→display ACES encode (flip phase; HDR layers only)
+  aa      = boolean,    -- this layer joins the anti-aliased resolve group
+  effects = { ... } }   -- ordered set of screen-space effects on this layer's RT, e.g. {"frosted"}
 ```
-Composable — any combination is valid; there is no fixed preset set, and `effects` is an open set so new effects (`pixelate`, future distortions) compose in without a schema change. **Named defaults** (`WORLD`, `MENU`, `PLAIN_UI`, `OVERLAY`) exist only as pre-filled tables a screen may spread and override (e.g. `MENU` is `{ scene="background", effects={"frosted"}, post=true, tonemap=true }`, override `effects={}` to drop frosting), so common screens stay one-liners. The profile lives next to a screen's existing `background` field and is data-drivable from `ui_loader` JSON.
 
-**Hook (the imperative part — one method):** when the active profile's `scene ~= "none"`, the `scene` pass calls `producer:drawScene(ctx)` to fill `sceneRT`. That is the only method a producer implements. The overworld's `RenderSystem:draw` becomes `RenderSystem:drawScene` (renders the world into `ctx.targets`'s `sceneRT`, no longer owning `PostFx`/`RenderScale`); a frosted screen's `drawScene` paints its background once. UI widgets keep drawing through the existing `UI.draw()` in the `ui` pass.
+### Profile = ordered layers
 
-**Per-frame profile selection (handles the screen stack):**
-- `not UI.hasScreens()` → `WORLD` profile (producer = `RenderSystem`).
-- Otherwise the Renderer walks the screen stack top-down and uses the **topmost screen whose profile is not `OVERLAY`** as the active profile; its `drawScene` fills `sceneRT`. `OVERLAY` modals above it contribute only widgets to the `ui` pass — so a modal over a menu keeps the menu's scene, exactly as today.
-- The active profile's flags drive `Renderer:setEnabled` for `scene`/`effects`/`post`/`tonemap` that frame, so a `PLAIN_UI` screen pays for none of the scene pipeline.
+A **profile** (per screen / the overworld) is `{ layers = { <Layer>, ... }, overlay = boolean }`. The scene/UI/HDR distinctions are just flag values:
+- **scene layer:** `{ name="scene", source="world", scale=true, grade=true, tonemap=true, aa=true, effects={} }`
+- **ui layer:** `{ name="ui", source="ui", scale=false, grade=false, tonemap=false, aa=true, effects={} }`  ← set `aa=false` for crisp UI
+- **hud layer:** `{ name="hud", source="hud", scale=false, grade=false, tonemap=false, aa=false, effects={} }`
 
-**Dependency normalization (`Profile.normalize(p)`):** enforces sane implications so a bad combo cannot render garbage, headless-testable, ~a dozen lines:
-- A non-empty `effects` set, `post`, or `tonemap` require `scene ~= "none"` → cleared (the effects set is emptied; `post`/`tonemap` set false; one-time warn) if set without a scene.
-- Each name in the `effects` set requires a scene producer that wrote `sceneRT`; unrecognized effect names are dropped.
-`Pass.inputs/outputs` (already on the descriptor) stay as documentation + an optional debug assert — not a runtime wiring engine.
+**Named defaults** (spread-and-override layer lists):
+- `WORLD` = `{ scene(world), ui, hud }`
+- `MENU`  = `{ scene(background, effects={"frosted"}), ui, hud }`
+- `PLAIN_UI` = `{ ui, hud }` (no scene layer)
+- `OVERLAY` = `{ ui }`, `overlay=true` (a modal — contributes nothing as a scene owner; its widgets still appear because the `ui` layer's `UI.draw()` renders the whole screen stack)
+
+### The compositor (in `Renderer`)
+
+The active profile's layers are processed in order:
+1. For each layer, **produce** its pixels by `source`:
+   - `world`/`background` (scene-type): call `producer:drawScene(ctx)` into a `sceneRT` (sized to internal render-scale res when `scale`, else native); then apply this layer's `effects` (sample `sceneRT`), `grade` (PostFx), `tonemap` (flip phase) in its RT.
+   - `ui`: `UI.draw()` (+ transition) — renders the whole screen stack (so stacked modals' widgets appear).
+   - `hud`: FPS readout + warp flash.
+2. **Composite** per `aa`: layers with `aa=true` are drawn into the shared AA canvas (FrameAA; scene layers upscaled in when `scale`); after the contiguous AA group is composited, **one** AA resolve (`FrameAA.present`); layers with `aa=false` draw sharp, in order, after the resolve. Defaults give the today-exact order: `[scene(aa) → ui(aa)] → resolve → hud(sharp)`.
+
+Producers publish what global stages need on `ctx` (`ctx.sceneRT`, the layer's grade settings). Because `RenderSystem:draw` is reached through the ECS (`state.world:update(...,"draw")`), the scene-producing step sets a small current-frame `ctx` accessor the producer reads synchronously (set-then-use within the same frame — the safe form of the pattern).
+
+### Per-frame profile selection (screen stack)
+
+- `not UI.hasScreens()` → `WORLD`.
+- Else walk the stack top-down; the **topmost non-`overlay` profile** is the active profile (supplies the frame's layer list, including its scene layer). `overlay` modals above it add no scene; their widgets still render via the `ui` layer's `UI.draw()`.
+- All-overlay stack → `PLAIN_UI` (no scene owner).
+
+### Dependency normalization (`normalize`, per layer)
+
+Headless-testable, enforces sanity so a bad layer can't render garbage:
+- `effects`/`grade`/`tonemap`/`scale` require `source ~= "none"` → cleared (effects emptied; the rest false; one-time warn) on a sourceless layer.
+- Effect names not in the recognized set are dropped.
 
 ### How the current paths reconcile
 
-- `RenderSystem`'s internal `PostFx` grade and `PostProcessEffect`'s per-screen grade both fold into the **single** `post` pass, selected by profile. `PostProcessEffect` is retired as a separate capture/grade path (its UI-flavored defaults become a `MENU`-style profile's `post` config).
-- `FrostedGlass` stops re-rendering the background; its `effects`-pass form samples `sceneRT` for the blur source. The reveal's 2–3× collapses to 1×.
-- `RenderScale.upscale` moves into the `present` pass (one place), and its `midCanvas` moves onto the `RenderTargets` pool.
-- The in-world portal distortion pass and `PortalDistortEffect.lua` are **deleted** (dead/retired — see Decisions), removing `RenderSystem`'s `portalDistortCanvas`/`portalCaptureCanvas`/`getPortalDistort*` and the `shader_registry` `portal_distort` entry. `PixelateEffect.lua` is reimplemented as an `effects`-set member when reintroduced (not in 2c-1).
-- The **screen-transition capture layer** is left intact and coexists with the graph: the `ui` pass draws through the existing transition machinery, and the `post` pass preserves `PostProcessEffect`'s active-canvas save/restore so a mid-transition screen still grades into its transition canvas rather than the screen.
+- `RenderSystem`'s internal `PostFx` and `PostProcessEffect`'s per-screen grade both become a layer's `grade=true` (the single PostFx applied by the compositor). `PostProcessEffect` is retired as a separate capture/grade path.
+- `FrostedGlass` stops re-rendering the background; it becomes the `frosted` entry in a scene layer's `effects`, sampling `sceneRT`. The reveal's 2–3× → 1×.
+- `RenderScale.upscale` moves into the compositor's scene-layer upscale step (one place); its `midCanvas` moves onto the `RenderTargets` pool.
+- The in-world portal distortion pass + `PortalDistortEffect.lua` are **deleted** (dead/retired); `PixelateEffect.lua` is reintroduced later as an `effects` member.
+- The **screen-transition capture layer** stays intact; the `ui` layer draws through the existing transition machinery, and the compositor preserves `PostProcessEffect`'s active-canvas save/restore where grade folds in.
+
+## Reconciliation with the executed Plan 2c-1
+
+Plan 2c-1 (done) built `systems/render/Profile.lua` as a **single** capability table (`{scene, effects, post, tonemap, overlay}`) + `Renderer:applyProfile`. The layer model **generalizes** this, low-cost because it has **no in-game consumer yet**:
+- The single capability table becomes the **Layer descriptor** (`scene`→`source`, `post`→`grade`, add `scale`/`aa`/`name`); `resolve` (spread+override) and `normalize` (now per layer) carry over.
+- `overlay` moves from the table to the **profile** level; a profile wraps an **ordered layer list**.
+- `Renderer:applyProfile` (toggle four named passes) is replaced by the **layer compositor** (consumes the layer list). `selectActive` still picks the active profile (now layer-bearing).
+The revised foundation plan (2c-1′) reworks `Profile.lua` → `Layer.lua` + layered `Profile`, retaining the tested `resolve`/`normalize`/`selectActive` logic at the layer/profile levels.
 
 ## Migration plan (structural, 8-bit, parity-gated, one producer at a time)
 
-- **Stage 1 — Scaffolding (parity by inertness):** add the profile field (defaults reproduce today), `sceneRT` acquire infra, and the global `scene`/`effects`/`post`/`tonemap`(passthrough) pass slots — but configured so nothing routes through them yet; existing per-renderer chains run untouched. Identical because no producer is rerouted.
-- **Stage 2 — Overworld:** first a **dead-code cleanup** (delete the in-world portal pass + `getPortalDistort*`/`portal*Canvas` + `PortalDistortEffect.lua` + its `shader_registry` entry — invisible, PortalSystem is a stub), then `RenderSystem:draw` → `drawScene(ctx)` into `sceneRT`; `WORLD` profile enables the global `post` (replacing internal `PostFx`) and `present` upscale (replacing internal `RenderScale`); RenderSystem sheds `ppCanvas`/`gradeCanvas`/internal post+upscale. Gate: overworld pixel-identical.
-- **Stage 3 — Frosted screens (perf win):** screen backgrounds → `drawScene` into `sceneRT`; the `effects` pass samples `sceneRT` for the frosted blur; `FrostedGlass` stops re-rendering the background. Gate: menus/reveal identical **and** the profiler's heavy-shader / `draws` count drops (2–3× → 1×).
+- **Stage 0 — Layer foundation (rework 2c-1):** `Layer` descriptor + layered `Profile` (`resolve`/`normalize`/`selectActive` + named defaults as layer lists) + the compositor in `Renderer`, all headless-tested. No in-game wiring yet.
+- **Stage 1 — Scaffolding (parity by inertness):** `sceneRT` infra; wire the compositor into `love.draw` with every screen/state's profile set to reproduce today (defaults: scene+ui `aa=true`, hud sharp); existing per-renderer chains still run until a producer is migrated.
+- **Stage 2 — Overworld:** dead-code portal cleanup (invisible), then `RenderSystem:draw` → `drawScene(ctx)` into `sceneRT`; the `WORLD` scene layer's `grade`/`scale` replace RenderSystem's internal `PostFx`/`RenderScale`; RenderSystem sheds `ppCanvas`/`gradeCanvas`/present block. Gate: overworld pixel-identical.
+- **Stage 3 — Frosted screens (perf win):** screen backgrounds → `drawScene` into `sceneRT`; the scene layer's `effects={"frosted"}` samples `sceneRT`; `FrostedGlass` stops re-rendering. Gate: menus/reveal identical **and** heavy-shader/`draws` count drops (2–3× → 1×).
 - **Stage 4 — `WaveGame` / `CombatRenderer`-plumbing:** same producer-split pattern (abilities untouched).
 
-Each stage is screenshot-comparable to the prior commit and must not be worse on frame time before proceeding.
+Each stage is screenshot-comparable to the prior commit and must not be worse on frame time.
 
 ## Color flip (separate phase — the one deliberate look change)
 
-Once all producers feed `sceneRT`:
-- `sceneRT` becomes `rgba16f` **linear** (verify availability via `getCanvasFormats`).
-- `tonemap` becomes a real **ACES filmic** pass (linear HDR → display, then sRGB-encode) as the final pre-`present` step.
-- `PostFx` grade math is re-tuned for linear input (saturation/contrast/brightness/bloom).
-- **UI stays sRGB**, drawn after tonemap — unchanged.
-Gated by deliberate before/after screenshots + a mid-gray sRGB→linear→tonemap→sRGB round-trip sanity check (not parity). Tonemap operator is swappable (one shader function) if the look needs tuning.
+Once all producers feed `sceneRT`, the scene layer's flags flip to HDR: `sceneRT` becomes `rgba16f` linear (verify via `getCanvasFormats`); `tonemap=true` runs a real **ACES filmic** encode; `PostFx` grade math re-tuned for linear. UI/hud layers keep `tonemap=false`/sRGB. Gated by deliberate before/after screenshots + a mid-gray sRGB→linear→tonemap→sRGB round-trip sanity check.
 
 ## Decomposition into implementation plans
 
-Each is shippable on its own and mirrors how 2a/2b each got their own plan:
-- **Plan 2c-1:** profile system (`Profile` capability table + `normalize` + named defaults) + `sceneRT` infra + global pass scaffolding + the overworld migration (Stages 1–2).
-- **Plan 2c-2:** frosted screens + remaining producers (`WaveGame`, `CombatRenderer`-plumbing) onto `sceneRT` (Stages 3–4) — kills the reveal 2–3×.
-- **Plan 2c-3:** the linear/HDR `rgba16f` + ACES tonemap flip + `PostFx` linear re-tune.
+- **Plan 2c-1′ (revised foundation):** `Layer` + layered `Profile` (`resolve`/`normalize`/`selectActive`/named defaults) + the `Renderer` compositor — headless-tested, supersedes 2c-1's single-table model.
+- **Plan 2c-1b:** `sceneRT` infra + wire the compositor into `love.draw` (Stage 1) + portal dead-code removal + overworld migration (Stage 2) — visual + F9 parity gated.
+- **Plan 2c-2:** frosted screens + `WaveGame`/`CombatRenderer` producers (Stages 3–4) — kills the reveal 2–3×.
+- **Plan 2c-3:** the linear/HDR `rgba16f` + ACES flip + `PostFx` linear re-tune.
 
 ## Components & ownership
 
 | Unit | Responsibility | New / changed |
 |---|---|---|
-| `systems/render/Profile.lua` | Capability table type, named defaults, `normalize(p)` | New (render-coupled config; headless-testable) |
-| `systems/render/Renderer.lua` | Per-frame profile selection + pass enablement; canonical order | Modify (add profile selection/apply) |
-| `systems/render/passes/*` (or pass fns in `main.lua` initially) | `scene`/`effects`/`post`/`tonemap` | New pass bodies |
-| `systems/RenderSystem.lua` | `:draw` → `:drawScene(ctx)` into `sceneRT`; sheds internal post/upscale | Modify (plumbing) |
-| `ui/components/PostFx.lua` | Shared grade; invoked by the `post` pass | Reused; linear re-tune in 2c-3 |
-| `ui/components/RenderScale.lua` | Upscale; invoked by `present`; `midCanvas` → pool | Modify |
-| `ui/components/FrostedGlass.lua` | `effects`-pass form samples `sceneRT` (no bg re-render) | Modify |
-| `ui/components/PostProcessEffect.lua` | Retired as a separate grade path (folds into `post`) | Removed/absorbed |
-| `RenderSystem.lua` in-world portal pass | Dead (PortalSystem stub); distortion retired | Removed (canvases + helpers + draw block) |
-| `ui/components/PortalDistortEffect.lua` + `shader_registry` entry | Retired portal distortion component | Removed |
-| `ui/components/PixelateEffect.lua` | Reimplemented as an `effects`-set member | Deferred (not 2c-1) |
-| `ui/core/screen.lua` + transition canvases | Screen-transition capture; coexists with graph | Unchanged (rework is a future option) |
-| Screens + overworld | Declare a `renderProfile`; scene owners implement `drawScene(ctx)` | Modify per producer |
-
-Combat **abilities** (kits/data/power/execution) are off-limits; only `CombatRenderer` plumbing is touched.
+| `systems/render/Layer.lua` | Layer capability descriptor + `resolve` + `normalize` | New (generalizes 2c-1's Profile table) |
+| `systems/render/Profile.lua` | Layered profile (ordered layers) + named defaults + `selectActive` | Reworked from 2c-1 |
+| `systems/render/Renderer.lua` | Layer compositor: produce + composite per-layer flags, AA grouping | Modify (compositor replaces `applyProfile`) |
+| `systems/RenderSystem.lua` | `:draw` → `:drawScene(ctx)` into `sceneRT`; sheds internal post/upscale + dead portal pass | Modify (plumbing) |
+| `ui/components/PostFx.lua` | Shared grade; invoked by a layer's `grade` | Reused; linear re-tune in 2c-3 |
+| `ui/components/RenderScale.lua` | Upscale; invoked by the scene-layer composite; `midCanvas` → pool | Modify |
+| `ui/components/FrostedGlass.lua` | `frosted` effect samples `sceneRT` (no bg re-render) | Modify |
+| `ui/components/PostProcessEffect.lua` | Retired as a separate grade path (folds into a layer `grade`) | Removed/absorbed |
+| `ui/components/PortalDistortEffect.lua` + `shader_registry` entry + in-world portal pass | Dead/retired | Removed |
+| `ui/components/PixelateEffect.lua` | Reintroduced later as an `effects` member | Deferred |
+| `ui/core/screen.lua` + transition canvases | Transition capture; coexists with the compositor | Unchanged (rework deferred) |
+| Screens + overworld | Declare a `renderProfile` (layer list); scene owners implement `drawScene(ctx)` | Modify per producer |
 
 ## Testing & verification
 
-- **Headless (`tests/render_harness`):** `Profile.normalize` dependency rules; capability composition (spread + override a named default); Renderer pass enable/disable driven by a profile; per-frame profile selection from a fake screen stack (the top-non-`OVERLAY` rule). All pure logic, no GL.
-- **GL / visual:** boot + visual + F9 profiler parity per migration stage (screenshot-compare to the prior commit). Stage 3 additionally asserts the heavy-shader / `draws` count drops (2–3× → 1×). The color flip uses deliberate before/after + the mid-gray round-trip sanity check.
-- **Honest caveat:** true per-pass GPU time awaits the optional FFI timer-query backend; until then verification is CPU-time + draw-stats + visual (per the master spec).
+- **Headless (`tests/render_harness`):** `Layer.resolve` composition (spread+override, no base mutation); `Layer.normalize` per-layer dependency rules + effect-name filtering; `Profile` named defaults are well-formed layer lists; `selectActive` stack rule (top-non-overlay, empty→world, all-overlay→PLAIN_UI); compositor layer-ordering / AA-grouping logic driven by a fake profile + fake producers (assert produce-order and which layers join the AA group). All pure logic, no GL.
+- **GL / visual:** boot + visual + F9 profiler parity per migration stage (screenshot-compare). Stage 3 asserts heavy-shader/`draws` drop (2–3× → 1×). The flip uses deliberate before/after + the mid-gray round-trip.
+- **Honest caveat:** true per-pass GPU time awaits the optional FFI timer-query backend; until then CPU-time + draw-stats + visual.
 
 ## Risks
 
-- **Producer migration regressions** → mitigated by per-stage parity gating (screenshot + profiler).
-- **Screen-stack edge cases** (modals, transitions) → the top-non-`OVERLAY` selection rule + `PostProcessEffect`'s transition-canvas save/restore behavior must be preserved when folding into `post`; covered by the per-screen migration gate.
-- **Linear flip changes the look** → isolated to its own phase, deliberate, before/after gated; UI seam keeps widgets stable.
-- **`rgba16f` bandwidth** → budgeted by the profiler; render-scale helps; verify format availability first.
+- **Producer migration regressions** → per-stage parity gating (screenshot + profiler).
+- **Compositor AA-grouping edge cases** (non-contiguous `aa` flags) → define simple semantics (contiguous bottom AA group resolved once; non-aa drawn sharp on top in order); the live defaults are the clean contiguous case; nail exact semantics in 2c-1′.
+- **ctx threading to the ECS-invoked `RenderSystem`** → small synchronous current-frame ctx accessor; covered by the overworld migration gate.
+- **Linear flip changes the look** → isolated phase, deliberate, before/after gated; per-layer flags keep UI sRGB.
+- **`rgba16f` bandwidth** → profiler-budgeted; render-scale helps; verify format availability.
 
 ## Open items (resolve during planning)
 
-- Exact named-default tables (`WORLD`/`MENU`/`PLAIN_UI`/`OVERLAY`) — derive from auditing current screens' actual post/frosted usage in Plan 2c-1.
-- Whether `scene`/`effects`/`post`/`tonemap` pass bodies live inline in `main.lua` (like 2b) or move to `systems/render/passes/*` — decide in Plan 2c-1 by size.
-- Per-pass budget values — set empirically once the passes exist.
-- Screen-transition rework (kept-but-could-change): whether transitions eventually become a graph pass vs. staying the current capture layer — deferred; out of 2c scope, revisit after producers are unified.
+- Exact named-default layer lists — derive from auditing current screens' actual grade/frosted usage in Plan 2c-1′/2c-1b.
+- Compositor home: inline layer functions in `main.lua` (like 2b) vs `systems/render/passes/*` — decide by size in 2c-1b.
+- Per-layer/per-pass budget values — set empirically once the compositor exists.
+- Exact AA-grouping semantics for non-contiguous `aa` (degenerate today) — pin down in 2c-1′.
+- Screen-transition rework (kept-but-could-change) — deferred; revisit after producers are unified.
