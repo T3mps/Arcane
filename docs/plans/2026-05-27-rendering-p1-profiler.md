@@ -517,7 +517,7 @@ git -C D:/dev/starworks/Gacha commit -m "feat(render): Profiler overlay HUD"
 
 In `GachaClient/services/Settings.lua`, in the `DEFAULTS` table, add after the `showFps = false,` line:
 ```lua
-    showProfiler   = false,        -- read by love.draw to draw the profiler overlay (F3)
+    showProfiler   = false,        -- read by love.draw to draw the profiler overlay (F9)
 ```
 
 - [ ] **Step 2: Add the getter**
@@ -560,10 +560,10 @@ git -C D:/dev/starworks/Gacha commit -m "feat(settings): showProfiler toggle"
 
 ### Task 6: Wire the profiler into the frame (`main.lua`)
 
-Instruments the real frame: `update` sub-steps + the whole `draw`, draws the overlay, and toggles with **F3**. This is verified by launching the game (`GachaClient/run.bat`) and pressing F3 — visual, not headless.
+Instruments the real frame: `update` sub-steps + the whole `draw`, draws the overlay, and toggles with **F9**. This is verified by launching the game (`GachaClient/run.bat`) and pressing F9 — visual, not headless.
 
 **Files:**
-- Modify: `GachaClient/main.lua` (require Profiler; scope `love.update` steps; frame-scope + overlay in `love.draw`; F3 in `love.keypressed`)
+- Modify: `GachaClient/main.lua` (require Profiler; scope `love.update` steps; frame-scope + overlay in `love.draw`; F9 in `love.keypressed`)
 
 - [ ] **Step 1: Require the profiler at the top of `main.lua`**
 
@@ -613,11 +613,11 @@ Then at the very end of `love.draw()` (after the warp-flash block), add:
     Profiler:drawOverlay(8, 30)
 ```
 
-- [ ] **Step 5: Add the F3 toggle**
+- [ ] **Step 5: Add the F9 toggle**
 
 Find `love.keypressed` in `GachaClient/main.lua`. Add at the top of its body (after any existing early-outs but before other handling):
 ```lua
-    if key == "f3" then
+    if key == "f9" then
         Profiler:toggle()
         require("services.Settings").set("showProfiler", Profiler:isEnabled())
         return
@@ -626,7 +626,7 @@ Find `love.keypressed` in `GachaClient/main.lua`. Add at the top of its body (af
 If `main.lua` has no `love.keypressed`, add one:
 ```lua
 function love.keypressed(key)
-    if key == "f3" then
+    if key == "f9" then
         Profiler:toggle()
         require("services.Settings").set("showProfiler", Profiler:isEnabled())
         return
@@ -634,18 +634,18 @@ function love.keypressed(key)
     guarded("input.keypressed", function() Input.keypressed(key) end)
 end
 ```
-(If one exists, do NOT duplicate it — only insert the F3 block.)
+(If one exists, do NOT duplicate it — only insert the F9 block.)
 
 - [ ] **Step 6: Verify in-game (visual)**
 
 Run: `GachaClient/run.bat`
-Expected: game launches; press **F3** → profiler HUD appears top-left showing `frame X.XX ms`, draw/switch/vram counts, and per-scope rows (`update.input`, `update.ui`, `draw`, …). Press F3 again → it hides. No crash, no fps regression when hidden.
+Expected: game launches; press **F9** → profiler HUD appears top-left showing `frame X.XX ms`, draw/switch/vram counts, and per-scope rows (`update.input`, `update.ui`, `draw`, …). Press F9 again → it hides. No crash, no fps regression when hidden.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git -C D:/dev/starworks/Gacha add GachaClient/main.lua
-git -C D:/dev/starworks/Gacha commit -m "feat(render): wire profiler into frame + F3 overlay toggle"
+git -C D:/dev/starworks/Gacha commit -m "feat(render): wire profiler into frame + F9 overlay toggle"
 ```
 
 ---
@@ -670,7 +670,7 @@ Profiler:setBudget("update.world", 3.0)
 
 - [ ] **Step 2: Verify in-game**
 
-Run: `GachaClient/run.bat`, press F3. Expected: budgets show as `draw X.XX/8.0 ms`; a row turns red if it exceeds its budget (e.g. `update.network` if a regression returns).
+Run: `GachaClient/run.bat`, press F9. Expected: budgets show as `draw X.XX/8.0 ms`; a row turns red if it exceeds its budget (e.g. `update.network` if a regression returns).
 
 - [ ] **Step 3: Commit**
 
