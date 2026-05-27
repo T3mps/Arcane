@@ -29,6 +29,9 @@ So there are **two** grade paths today (world via `RenderSystem`; screen content
 - **Structural first (8-bit, parity-gated), then a separate linear/HDR + ACES flip** — the structural migration is screenshot-identical; the flip is the one deliberate look change.
 - **Color scope: scene-only linear, UI stays sRGB** (drawn after tonemap — industry-standard seam). **Tonemap operator: ACES filmic.**
 - Combat **abilities** system (kits/data/power/execution) is off-limits — rendering plumbing only.
+- **Portal distortion is removed, not migrated** (user, 2026-05-27). The in-world portal pass in `RenderSystem` is already **dead code** — `systems/PortalSystem.lua` is a stub (`entities = {}`, `drawWorld()` a no-op), so the pass's `#PortalSystem.entities > 0` guard never fires. `ui/components/PortalDistortEffect.lua` (referenced only via `shader_registry`'s `portal_distort` factory) is retired. Removing both is visually invisible and sheds RenderSystem's `portalDistortCanvas`/`portalCaptureCanvas` + helpers, simplifying the overworld migration.
+- **The `effects` pass hosts a composable *set* of named screen-space effects** (user, 2026-05-27) — not a single flag. `profile.effects` is a set like `{"frosted"}`; the pass runs when non-empty. `frosted` is the only live effect in 2c; `pixelate` (`ui/components/PixelateEffect.lua`) and any future distortion become first-class effects-pass ops when reintroduced. Portal distortion is **not** reintroduced.
+- **Screen transitions are kept** (user, 2026-05-27), with a possible future rework. The transition-capture layer (`screen.lua` `_transitionCanvas`, per-screen copies in `character_select`/`weapon_select`, `ui_loader` `_contentCanvas`) coexists with the graph; `PostProcessEffect`'s save/restore-the-active-(transition)-canvas semantics MUST be preserved when its grade folds into the `post` pass. A transition/pipeline rework is out of 2c scope.
 
 ## Architecture
 
@@ -50,13 +53,12 @@ hud      FPS readout + warp flash                 (from 2b)
 
 **Data (the mechanism):** each screen and the overworld declares a profile — a plain table:
 ```lua
-{ scene = "world" | "background" | "none",
-  effects = boolean,   -- screen-space sampling of sceneRT (frosted/distortion)
-  frosted = boolean,   -- effects sub-flag: produce the frosted blur from sceneRT
+{ scene   = "world" | "background" | "none",
+  effects = { ... },   -- a SET of named screen-space effects on sceneRT, e.g. {"frosted"}; empty = none
   post    = boolean,   -- run the PostFx grade
   tonemap = boolean }  -- (flip phase) run ACES; ignored until the flip lands
 ```
-Composable — any combination is valid; there is no fixed preset set. **Named defaults** (`WORLD`, `MENU`, `PLAIN_UI`, `OVERLAY`) exist only as pre-filled tables a screen may spread and override (`MENU` with `frosted=false`), so common screens stay one-liners. The profile lives next to a screen's existing `background` field and is data-drivable from `ui_loader` JSON.
+Composable — any combination is valid; there is no fixed preset set, and `effects` is an open set so new effects (`pixelate`, future distortions) compose in without a schema change. **Named defaults** (`WORLD`, `MENU`, `PLAIN_UI`, `OVERLAY`) exist only as pre-filled tables a screen may spread and override (e.g. `MENU` is `{ scene="background", effects={"frosted"}, post=true, tonemap=true }`, override `effects={}` to drop frosting), so common screens stay one-liners. The profile lives next to a screen's existing `background` field and is data-drivable from `ui_loader` JSON.
 
 **Hook (the imperative part — one method):** when the active profile's `scene ~= "none"`, the `scene` pass calls `producer:drawScene(ctx)` to fill `sceneRT`. That is the only method a producer implements. The overworld's `RenderSystem:draw` becomes `RenderSystem:drawScene` (renders the world into `ctx.targets`'s `sceneRT`, no longer owning `PostFx`/`RenderScale`); a frosted screen's `drawScene` paints its background once. UI widgets keep drawing through the existing `UI.draw()` in the `ui` pass.
 
@@ -66,8 +68,8 @@ Composable — any combination is valid; there is no fixed preset set. **Named d
 - The active profile's flags drive `Renderer:setEnabled` for `scene`/`effects`/`post`/`tonemap` that frame, so a `PLAIN_UI` screen pays for none of the scene pipeline.
 
 **Dependency normalization (`Profile.normalize(p)`):** enforces sane implications so a bad combo cannot render garbage, headless-testable, ~a dozen lines:
-- `effects`/`post`/`tonemap` require `scene ~= "none"` → auto-disabled (one-time warn) if set without a scene.
-- `frosted` requires `effects` and a scene producer that wrote `sceneRT`.
+- A non-empty `effects` set, `post`, or `tonemap` require `scene ~= "none"` → cleared (the effects set is emptied; `post`/`tonemap` set false; one-time warn) if set without a scene.
+- Each name in the `effects` set requires a scene producer that wrote `sceneRT`; unrecognized effect names are dropped.
 `Pass.inputs/outputs` (already on the descriptor) stay as documentation + an optional debug assert — not a runtime wiring engine.
 
 ### How the current paths reconcile
@@ -75,11 +77,13 @@ Composable — any combination is valid; there is no fixed preset set. **Named d
 - `RenderSystem`'s internal `PostFx` grade and `PostProcessEffect`'s per-screen grade both fold into the **single** `post` pass, selected by profile. `PostProcessEffect` is retired as a separate capture/grade path (its UI-flavored defaults become a `MENU`-style profile's `post` config).
 - `FrostedGlass` stops re-rendering the background; its `effects`-pass form samples `sceneRT` for the blur source. The reveal's 2–3× collapses to 1×.
 - `RenderScale.upscale` moves into the `present` pass (one place), and its `midCanvas` moves onto the `RenderTargets` pool.
+- The in-world portal distortion pass and `PortalDistortEffect.lua` are **deleted** (dead/retired — see Decisions), removing `RenderSystem`'s `portalDistortCanvas`/`portalCaptureCanvas`/`getPortalDistort*` and the `shader_registry` `portal_distort` entry. `PixelateEffect.lua` is reimplemented as an `effects`-set member when reintroduced (not in 2c-1).
+- The **screen-transition capture layer** is left intact and coexists with the graph: the `ui` pass draws through the existing transition machinery, and the `post` pass preserves `PostProcessEffect`'s active-canvas save/restore so a mid-transition screen still grades into its transition canvas rather than the screen.
 
 ## Migration plan (structural, 8-bit, parity-gated, one producer at a time)
 
 - **Stage 1 — Scaffolding (parity by inertness):** add the profile field (defaults reproduce today), `sceneRT` acquire infra, and the global `scene`/`effects`/`post`/`tonemap`(passthrough) pass slots — but configured so nothing routes through them yet; existing per-renderer chains run untouched. Identical because no producer is rerouted.
-- **Stage 2 — Overworld:** `RenderSystem:draw` → `drawScene(ctx)` into `sceneRT`; `WORLD` profile enables the global `post` (replacing internal `PostFx`) and `present` upscale (replacing internal `RenderScale`); RenderSystem sheds `ppCanvas`/`gradeCanvas`/internal post+upscale. Gate: overworld pixel-identical.
+- **Stage 2 — Overworld:** first a **dead-code cleanup** (delete the in-world portal pass + `getPortalDistort*`/`portal*Canvas` + `PortalDistortEffect.lua` + its `shader_registry` entry — invisible, PortalSystem is a stub), then `RenderSystem:draw` → `drawScene(ctx)` into `sceneRT`; `WORLD` profile enables the global `post` (replacing internal `PostFx`) and `present` upscale (replacing internal `RenderScale`); RenderSystem sheds `ppCanvas`/`gradeCanvas`/internal post+upscale. Gate: overworld pixel-identical.
 - **Stage 3 — Frosted screens (perf win):** screen backgrounds → `drawScene` into `sceneRT`; the `effects` pass samples `sceneRT` for the frosted blur; `FrostedGlass` stops re-rendering the background. Gate: menus/reveal identical **and** the profiler's heavy-shader / `draws` count drops (2–3× → 1×).
 - **Stage 4 — `WaveGame` / `CombatRenderer`-plumbing:** same producer-split pattern (abilities untouched).
 
@@ -113,6 +117,10 @@ Each is shippable on its own and mirrors how 2a/2b each got their own plan:
 | `ui/components/RenderScale.lua` | Upscale; invoked by `present`; `midCanvas` → pool | Modify |
 | `ui/components/FrostedGlass.lua` | `effects`-pass form samples `sceneRT` (no bg re-render) | Modify |
 | `ui/components/PostProcessEffect.lua` | Retired as a separate grade path (folds into `post`) | Removed/absorbed |
+| `RenderSystem.lua` in-world portal pass | Dead (PortalSystem stub); distortion retired | Removed (canvases + helpers + draw block) |
+| `ui/components/PortalDistortEffect.lua` + `shader_registry` entry | Retired portal distortion component | Removed |
+| `ui/components/PixelateEffect.lua` | Reimplemented as an `effects`-set member | Deferred (not 2c-1) |
+| `ui/core/screen.lua` + transition canvases | Screen-transition capture; coexists with graph | Unchanged (rework is a future option) |
 | Screens + overworld | Declare a `renderProfile`; scene owners implement `drawScene(ctx)` | Modify per producer |
 
 Combat **abilities** (kits/data/power/execution) are off-limits; only `CombatRenderer` plumbing is touched.
@@ -135,3 +143,4 @@ Combat **abilities** (kits/data/power/execution) are off-limits; only `CombatRen
 - Exact named-default tables (`WORLD`/`MENU`/`PLAIN_UI`/`OVERLAY`) — derive from auditing current screens' actual post/frosted usage in Plan 2c-1.
 - Whether `scene`/`effects`/`post`/`tonemap` pass bodies live inline in `main.lua` (like 2b) or move to `systems/render/passes/*` — decide in Plan 2c-1 by size.
 - Per-pass budget values — set empirically once the passes exist.
+- Screen-transition rework (kept-but-could-change): whether transitions eventually become a graph pass vs. staying the current capture layer — deferred; out of 2c scope, revisit after producers are unified.
