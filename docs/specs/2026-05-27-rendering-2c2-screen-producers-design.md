@@ -107,8 +107,8 @@ resolveFrame():
   profile selection; `composeScreensScene` re-reads them **bottom→top** for painter order. (Both are
   thin reads over `UI.stack` — `exitingScreens` + `screens`, excluding `overlays`.)
 - `selectActive` stays pure (profiles only). The active profile is the topmost non-overlay screen's
-  `renderProfile`; if it has no `background` scene layer (a screen with no bg), the profile is
-  effectively `PLAIN_UI` and the `background` branch is absent (no scene producer runs).
+  `renderProfile` (every declarative screen is `MENU`-shaped, §6). A hand-coded opt-out resolves to
+  `PLAIN_UI` (no `background` scene layer → the `background` branch is absent, no scene producer runs).
 - `composeFrame` sets `ctx.sceneProducer = producer` before running the plan.
 
 ### 3. Screens as a multi-producer scene layer (`composeScreensScene`)
@@ -117,15 +117,25 @@ The `background` producer composites every visible non-overlay screen's backgrou
 `ctx.sceneRT`, in z-order, each applying its own transition — this is what preserves cross-transitions
 and stacked backgrounds while staying a single shared sceneRT:
 
+Each screen draws its background **opaque**, then composites at its transition `scale`+`alpha` — the
+exact shape of today's per-screen transition canvas (`screen.lua` `beginTransitionDraw`/`endTransitionDraw`),
+just into the shared sceneRT. A scratch canvas (pooled) is used only when the screen is mid-transition
+or there is more than one screen; the common single, settled screen draws straight into `rt`:
+
 ```
 composeScreensScene(ctx):
     rt = ctx.targets:acquire(viewportW, viewportH)   -- menus: sceneScaled=false, internal=window
     setCanvas(rt); clear(0,0,0,1)
-    for screen in visible non-overlay screens, bottom→top:
+    screens = UI.sceneScreens()  bottom→top
+    for screen in screens:
         scale, alpha = screen:getTransitionValues()
-        push; translate/scale about center; setColor(1,1,1,alpha)
-        screen:drawScene(ctx)                        -- bgColor + bgBase + bgShader, NO widgets
-        pop; setColor(1,1,1,1)
+        if alpha == 1 and scale == 1 and #screens == 1:
+            screen:drawScene(ctx)                    -- straight into rt (drawScene clears its own bgColor)
+        else:
+            scr = ctx.targets:acquire(viewportW, viewportH)
+            setCanvas(scr); clear(0,0,0,0); screen:drawScene(ctx)    -- opaque into scratch
+            setCanvas(rt); push; translate(cx,cy); scale; translate(-cx,-cy); setColor(1,1,1,alpha)
+            draw(scr); pop; setColor(1,1,1,1)
     ctx.sceneRT      = rt
     ctx.sceneScaled  = false
     ctx.sceneSettings = topScreen.gradeSettings       -- from def.overlay (or nil → no grade)
@@ -134,8 +144,11 @@ composeScreensScene(ctx):
 (The `frosted` effect is **not** run here — `composeScene` runs `layer.effects` after the producer
 returns, §1/§4. The producer's only job is to fill `ctx.sceneRT`/`sceneSettings`/`sceneScaled`.)
 
-- Single full-screen screen (common) → one iteration. Cross-transition (exiting + entering) → both
-  composite with their own scale+alpha = the cross-fade/pop, matching today.
+- Single settled screen (common) → fast path, no scratch. Cross-transition (exiting + entering, or a
+  scale/fade) → scratch-per-screen composited at scale+alpha = the cross-fade/pop, matching today's
+  transition-canvas behavior exactly.
+- The scratch path mirrors `beginTransitionDraw` (opaque draw → composite at scale+alpha); it is the
+  same mechanism, lifted from the screen into the producer so bg + widgets transition coherently.
 - `ctx.sceneSettings` is the **top** screen's grade settings (the combined sceneRT is graded once).
   Minor accepted deviation vs today's per-screen grade — same family as the option-(b) grade-boundary
   deviation already signed off.
@@ -157,7 +170,13 @@ SCENE_EFFECTS = { frosted = function(ctx) FrostedGlass.fromScene(ctx.sceneRT) en
 Order holds: the scene layer (produce sceneRT → run effects → grade → present) precedes the ui layer,
 so `FrostedGlass.canvas()` is ready when frosted widgets draw. `fromScene` samples the **sharp**
 `ctx.sceneRT` (the grade writes a copy, leaving `ctx.sceneRT` untouched), matching today (`prepare`
-blurred the raw bg). Future effects (`pixelate`) add one dispatch entry — no other change.
+blurred the raw bg).
+
+**Effect taxonomy (homogenization):** the `effects` set is **only** for ops that produce an auxiliary
+resource other widgets sample — `frosted` (→ blurred canvas for frosted panels) is the sole member.
+Fullscreen post (vignette, bloom, grain, chromatic, color grade, **and pixelation**) is **never** an
+effect — it is grade-pass uniforms on the one `PostFx` pass (§5b). So there is exactly one overlay/post
+pass, not a per-kind class hierarchy.
 
 ### 5. Widgets stay in the ui layer; per-layer grade (option b)
 
@@ -184,14 +203,19 @@ screen scales+fades its bg (in `composeScreensScene`) and its widgets (in the ui
 `ui_loader` auto-derives two members on every declarative screen:
 
 - **`screen:drawScene(ctx)`** — `clear(bgColor)` → `_bgBase:draw()` → `_bgShader:draw()`. Background
-  only. Called by `composeScreensScene` into `ctx.sceneRT`. (No transition transform here — the
-  producer applies it around the call so it nests with other screens.)
-- **`screen.renderProfile`** — derived from `def`: has `background`/`background_base` →
-  `MENU`-shaped (`scene(source="background", aa, effects={"frosted"})` + `ui(grade=true)` + `hud`);
-  no bg → `PLAIN_UI`. The `frosted` effect is included for every bg screen (today every declarative
-  screen calls `FrostedGlass.prepare` unconditionally — parity).
-- **`screen.gradeSettings`** — the `def.overlay` grade settings (or `PostProcessEffect` defaults),
-  surfaced for `ctx.sceneSettings`. Replaces the `_overlay` object.
+  only, drawn opaque into the current target (`rt` or a scratch canvas — §3 owns the transition
+  transform/alpha). No widgets.
+- **`screen.renderProfile`** — every declarative screen is `MENU`-shaped: `scene(source="background",
+  aa, effects={"frosted"})` + `ui` + `hud`. `frosted` is included for **all** of them (today every
+  declarative `screen:draw` calls `FrostedGlass.prepare` unconditionally — parity), so even a
+  bgColor-only screen has a sceneRT for its frosted panels to sample. The **`grade` flag** on the
+  scene + ui layers is `def.overlay ~= nil` (only screens with a `post_process` overlay are graded
+  today — `screen_0/1/2`). `PLAIN_UI` is reserved for hand-coded opt-outs (§ below).
+- **`screen.gradeSettings`** — when `def.overlay` is present, this **is** the `_overlay` object
+  (a `PostProcessEffect`, which already carries every grade field + the warp-stress `:update` tick);
+  `nil` otherwise. `composeScreensScene` publishes it as `ctx.sceneSettings`; `PostFx.apply` reads the
+  uniform fields straight off it. This repurposes `_overlay` from a capture/grade object into a plain
+  settings carrier — see §7.
 
 `screen:draw` is reduced to: `beginTransitionDraw` → `drawWidgets` → `endTransitionDraw`. The
 `FrostedGlass.prepare` call and the whole `_overlay` capture/grade block are **removed**.
@@ -202,14 +226,46 @@ to `PLAIN_UI` and renders self-contained in the ui layer (its current behavior) 
 clearly-bounded state, not a parallel pipeline. Migrating the remaining hand-coded screens to the same
 contract is tracked as cleanup so the mandate (§Homogenization) fully lands.
 
-### 7. PostProcessEffect retirement
+### 5b. Overlay homogenization — one grade pass (fold pixelate in, retire the overlay classes)
 
-The declarative path no longer constructs `_overlay`. Its grade is folded into the scene layer
-(`ctx.sceneSettings`) + the ui-layer grade (§5). Its transition-canvas save/restore is **obsolete** —
-the scene/ui split + per-screen transitions replace it. After removing the declarative consumer, grep
-for other `PostProcessEffect` / `:beginCapture` users; if none remain, delete
-`ui/components/PostProcessEffect.lua`. If a hand-coded screen still uses it, leave the file and list
-that screen as a migration follow-up (do not fork a second grade path).
+Today `ShaderRegistry.makeOverlay` returns one of two **classes** per `def.overlay.shader`:
+`post_process` → `PostProcessEffect` (the grade), `pixelate` → `PixelateEffect` (a separate
+capture+quantize pass). No screen uses `pixelate` (only `post_process` on screens 0/1/2); `PixelateEffect`
+is reachable solely via the dormant registry entry. Two overlay classes = two render paths = exactly the
+non-homogenized state to remove.
+
+**Fold pixelation into the single grade pass:**
+- `data/shader/post/post_process.glsl`: add `extern vec2 pixelate_size;` (UV-space block; default 0 = off)
+  and, at the top of `effect()`, quantize `uv` when `pixelate_size.x > 0`
+  (`uv = floor(uv / pixelate_size) * pixelate_size + pixelate_size*0.5`). All grade samples then use `uv`.
+  Additive and parity-safe: 0 = off = today's `post_process`-only screens.
+- `PostFx.send`: **always** send `pixelate_size` (outside the `UNIFORMS` loop, like `bloom`) —
+  `{ b/W, b/H }` from `s.pixelate_block` (screen px), `{0,0}` when absent. Always-send avoids a stale
+  uniform leaking across the shared `PostFx` shader (world + UI reuse one instance).
+- A screen enables pixelation via `def.overlay.pixelate_block` — a normal grade field, same path as
+  `vignette_intensity`.
+
+**Retire the standalone overlay classes:** delete `ui/components/PixelateEffect.lua` and the
+`overlays.pixelate` registry entry (+ its `require`) in `shader_registry.lua`; drop the
+`PixelateEffect.lua` file-existence entry from `tests/assets_harness/main.lua`. Leave
+`data/shader/post/pixelate.glsl` — `RenderSystem.lua:36/1249` (combat abilities / particles, **off-limits**)
+still use it. `makeOverlay` now only maps `post_process`; the `_overlay` it returns is the grade-settings
+carrier (§6, §7).
+
+### 7. PostProcessEffect — retire the capture/grade role
+
+`_overlay` is still **constructed** (`makeOverlay` → `PostProcessEffect`) — it remains the natural home
+for the grade-field defaults + the warp-stress chromatic `:update` tick, and §6 hands it to
+`ctx.sceneSettings`. What retires is its **capture/grade render role**: `beginCapture`/`endCapture`/
+`draw` are no longer called (the grade now flows through `composeScene` → `PostFx.apply`, the one grade
+path). The only caller was `ui_loader` screen:draw (lines 977–983), removed in the §6 simplification.
+
+Concretely: delete `beginCapture`, `endCapture`, `draw`, and the `_canvas`/`_gfxGen`/`globalTime`/
+`lastFrame` capture state from `ui/components/PostProcessEffect.lua`; keep `new`, `DEFAULTS`,
+`_baseChromatic`, and `update` (its warp-stress tick — drop only the `globalTime` accumulation, since
+`composeScene` passes `love.timer.getTime()` to `PostFx.apply`). Update the file header to describe a
+grade-settings carrier, not a capture overlay. This keeps **one** grade path (`PostFx`) with no second
+capture pass — the homogenized end state — without rewriting the warp-stress plumbing.
 
 ---
 
@@ -218,7 +274,8 @@ that screen as a migration follow-up (do not fork a second grade path).
 **In 2c-2:** `composeScene` generalization; frame-setup producer selection (`UI.sceneScreens`,
 `composeScreensScene`); `FrostedGlass.fromScene`; scene-layer `frosted` effect dispatch; ui-layer
 `grade` variant; `ui_loader` auto-derive (`drawScene`/`renderProfile`/`gradeSettings`) + simplified
-`screen:draw`; `PostProcessEffect` removal from the declarative path.
+`screen:draw`; overlay homogenization (fold pixelate into `PostFx`/`post_process.glsl`; retire
+`PixelateEffect` + `PostProcessEffect`'s capture/grade role).
 
 **Deferred to 2c-2b (same `composeScene`, not bespoke):** WaveGame and CombatRenderer become scene
 producers. Combat **abilities** (kits/data/power/execution) are **off-limits** — only `CombatRenderer`
