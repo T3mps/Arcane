@@ -32,7 +32,9 @@ Unified camera (`systems/Camera.lua`), unified asset manager (`services/Assets` 
 - **2D lighting:** full **normal-mapped** lighting (G-buffer, point/directional lights, soft shadows) — accepts the normal-map content-pipeline commitment.
 - **IO threading:** full **worker thread** (network + heavy disk IO on `love.thread`; render thread exchanges plain-data messages via channels, never blocks).
 - **Performance goal:** **hitch-free, no hard fps number** — zero frame spikes, per-pass budgets enforced by the profiler, fps otherwise uncapped.
-- **Reusable primitives:** any general-purpose mechanism (ring buffer, pools, SoA buffers, scoped timer, channel envelope, dirty/interval memo) is extracted into a standalone, independently-testable module — never buried in its first consumer.
+- **Color pipeline:** **linear-space, HDR-intermediate** rendering — scene/light/bloom buffers are `rgba16f` (linear, highlights >1.0), source textures sampled as sRGB→linear, with a **tonemap → sRGB-encode** as the final present step. (Research: bloom/lighting are only correct in linear HDR.)
+- **Lighting model:** **normal-mapped deferred** (per-sprite surface response) **+ Radiance Cascades** for 2D light transport / soft shadows / GI, over an **SDF occluder field built via Jump-Flood**. RC replaces 1D shadow maps; the two are orthogonal (surface detail vs light transport) so we keep both.
+- **Reusable primitives:** any general-purpose mechanism is extracted into a standalone, independently-testable module — never buried in its first consumer. Render-agnostic ones live in `lib/` (ring buffer, pools, SoA buffers, scoped timer, channel envelope, dirty/interval memo); render-coupled reusable helpers (e.g. the SDF/JFA generator) live in `systems/render/`.
 
 ## Architecture
 
@@ -51,8 +53,9 @@ systems/render/
   RenderTargets.lua        -- pooled canvas manager (specialization of lib/Pool) + MSAA/format policy
   Profiler.lua             -- CPU + GPU scoped timing (uses RingBuffer/ScopedTimer), overlay, budgets
   LightManager.lua         -- (P6) registered lights + shadow casters (uses SoA), feeds the lights pass
+  Sdf.lua                  -- (P6b) Jump-Flood signed-distance field from occluders (render-coupled)
   passes/
-    scene.lua  lights.lua  effects.lua  post.lua  ui.lua  present.lua
+    scene.lua  lights.lua  effects.lua  post.lua  tonemap.lua  ui.lua  present.lua
 
 services/io/
   worker.lua               -- (P5) runs on a love.thread; owns sockets; blocking IO is fine here
@@ -68,16 +71,17 @@ services/io/
 
 **Existing systems fold in as passes/params:** `present` = FrameAA-resolve + RenderScale-upscale + FXAA; `post` = PostFx; `effects` = FrostedGlass/distortion (sample `sceneRT`); `scene` = world/screen content (incl. `RenderSystem`); AA-mode and render-scale are present-pass parameters from `Settings`. Camera supplies transforms via `ctx`.
 
-**Standard pass list** (passes skippable per screen profile):
+**Standard pass list** (passes skippable per screen profile; scene/light/grade buffers are linear `rgba16f` HDR — see Color pipeline):
 ```
-scene    world/screen content        -> sceneRT (+ normalRT in P6) at render-scale resolution
-lights   (P6) N·L accumulation       -> lightRT
+scene    world/screen content        -> sceneRT(rgba16f,linear) (+ normalRT in P6), render-scale res
+lights   (P6) RC + N·L accumulation  -> lightRT(rgba16f,linear)
 effects  screen-space (frosted/etc.) <- sceneRT
-post     PostFx grade (+ light composite) -> gradedRT
-ui       immediate-mode UI on top
+post     PostFx grade + bloom        (sceneRT [+ lightRT]) -> gradedRT(rgba16f,linear)
+tonemap  ACES/Reinhard + sRGB encode -> ldrRT(sRGB)        [final linear->display step]
+ui       immediate-mode UI on top    (authored sRGB/LDR — drawn AFTER tonemap so it isn't graded)
 present  resolve MSAA + upscale + FXAA -> screen
 ```
-Menu profile: `[scene(bg) → effects(frosted) → ui → present]`. Combat profile: full set incl. `lights`. Screens declare their profile.
+Menu profile: `[scene(bg) → effects(frosted) → post → tonemap → ui → present]`. Combat profile: full set incl. `lights`. `tonemap` is skipped only when post/HDR is fully off (then the scene is already display-space). Screens declare their profile.
 
 ## Reusable primitives (`lib/`)
 
@@ -104,13 +108,21 @@ Ships first; everything else is validated against it.
 ## Phase 2 — Render-graph + render-target pool
 
 - **`Pass`** is plain data + one `draw` fn (no inheritance).
-- **`RenderTargets`** (over `lib/Pool`): `acquire{w,h,format,msaa}` returns a reused canvas. **Transient** targets (blur scratch, grade) auto-release at frame end; **persistent** ones (cached backgrounds, light buffers) live until invalidated. Single home for MSAA/format policy: **shader-sampled targets are `msaa=0`; only the final AA target is MSAA.** Recreates on resolution / `gfxGeneration` change. Replaces every ad-hoc canvas today (`ppCanvas`, `gradeCanvas`, FrameAA canvas, FrostedGlass ×3, RenderScale `mid`).
+- **`RenderTargets`** (over `lib/Pool`): `acquire{w,h,format,msaa}` returns a reused canvas. **Transient** targets (blur scratch, grade) auto-release at frame end; **persistent** ones (cached backgrounds, light buffers) live until invalidated. Single home for MSAA/format policy: **shader-sampled targets are `msaa=0`; only the final AA target is MSAA;** scene/light/grade intermediates are **`rgba16f` linear HDR**, the post-tonemap target is **8-bit sRGB**. Recreates on resolution / `gfxGeneration` change. Replaces every ad-hoc canvas today (`ppCanvas`, `gradeCanvas`, FrameAA canvas, FrostedGlass ×3, RenderScale `mid`).
 - **Incremental migration (always playable):**
   1. `love.draw → Renderer.frame`; pass list = a single `legacy` pass running today's exact sequence — identical output, now profiled.
   2. Peel off `present` (reads a `sceneRT` the legacy pass renders into) — verify visual + profiler parity.
   3. Then `post`, then `scene`, then add `effects`/`lights`. Each step small and parity-gated.
 
-## Phase 3 — Heavy-shader / background caching
+### Color pipeline (linear / HDR / tonemap) — part of Phase 2
+
+Best-in-class lighting and bloom are only correct in **linear space**. The pipeline:
+- **Linear workflow:** source textures are sampled sRGB→linear (hardware sRGB reads); all scene/light/effect/grade math runs in linear space.
+- **HDR intermediates:** scene/light/bloom/grade targets are `rgba16f` so highlights exceed 1.0 (real bloom, real light accumulation) instead of clipping at 1.0.
+- **Tonemap last:** a dedicated `tonemap` pass maps linear HDR → display, then **sRGB-encodes** — the final color-space step. UI draws *after* tonemap (it's authored in sRGB/LDR and must not be graded/tonemapped). Tonemap operator chosen in planning (ACES filmic vs Reinhard).
+- **Existing `PostFx` grade** moves into linear (its current saturation/contrast/brightness/bloom math re-tuned for linear input).
+
+**Migration risk (called out):** enabling linear/HDR retroactively changes the look of *all* existing content — every background/effect shader and authored color was tuned in gamma space. Two options, decided in planning: (a) migrate everything to linear and re-tune the look (cleaner, more work), or (b) scope linear-HDR to the **scene/lighting path** while the UI layer stays display-space (less re-tuning, a seam between the two). The pass list already separates pre-tonemap (linear) from UI (display), which makes (b) viable.
 
 - **Structural de-duplication (free from P2):** once `scene` renders the background once into `sceneRT`, the `effects` pass **samples `sceneRT`** instead of re-invoking the bg shader — the reveal's 2–3× collapses to 1× with no caching logic.
 - **`CachedPass` (over `lib/Memo`):** re-render heavy time-driven shaders into a *persistent* RT at a throttled rate (e.g. 30 Hz) and/or reduced scale (e.g. 50%), sample on intervening frames. Imperceptible for ambient backgrounds; cuts heavy-shader cost ~½–¾.
@@ -120,9 +132,12 @@ Ships first; everything else is validated against it.
 
 Only touches hotspots the profiler flags (draw-call / canvas-switch / shader-switch counters).
 - **Atlases:** pack sprites/icons into atlases (extend the existing icon-bake registry into a packed atlas); `Assets` gains atlas-region lookup so shared-texture draws auto-batch.
-- **SpriteBatch / mesh** for repeated geometry — tiles and especially **particles** (per-emitter batch, not per-particle draws).
-- **State sorting** within a layer by (shader, texture, blendmode).
+- **SpriteBatch / mesh** for repeated geometry — tiles and especially **particles** (per-emitter batch, not per-particle draws). Use `SpriteBatch:bind()/:unbind()` around bulk add/set (>~a dozen sprites) to avoid per-add buffer flushes.
+- **State sorting** within a layer by (shader, texture, blendmode) to preserve LÖVE's auto-batch (11.0+ batches consecutive same-state draws).
+- **Culling + overdraw:** skip draws fully outside the camera/viewport; minimize layered full-screen overdraw (each extra full-screen pass is W×H fragments). Profiler pixel/draw counters guide this.
 - **UI:** batch the worst offenders (e.g. panel backgrounds as one mesh) — not a UI rewrite.
+
+Scope guard: Phase 4 only touches what the profiler flags as a hotspot — YAGNI on the rest.
 
 ## Phase 5 — IO worker thread
 
@@ -133,26 +148,38 @@ Only touches hotspots the profiler flags (draw-call / canvas-switch / shader-swi
 - **Supersedes** the recent non-blocking `RECV_TIMEOUT=0` fix — the main thread stops touching sockets entirely.
 - Highest-risk phase → sequenced late, validated by the profiler (`network.update` marker → ~0).
 
-## Phase 6 — Normal-mapped 2D lighting
+## Phase 6 — 2D lighting: normal-mapped deferred + Radiance Cascades GI
 
+Runs entirely in linear HDR (Phase 2 color pipeline). Two orthogonal layers — **surface response** (normal maps) and **light transport** (Radiance Cascades over an SDF) — composited together. Split into sub-phases so the achievable base ships before the SOTA GI.
+
+**6a — G-buffer + normal-mapped deferred (base, achievable):**
 - **G-buffer:** `scene` renders to **MRT** (`setCanvas{albedoRT, normalRT}`; shader writes `love_Canvases[0]=albedo`, `[1]=normal`). Sprites without a normal map get a flat `(0,0,1)`.
-- **Asset pipeline:** `Assets` pairs normal maps by convention (`foo.png` + `foo_n.png`) or manifest override. **Content commitment:** lit sprites need authored normals.
-- **`LightManager` + `lights` pass:** registered point/directional lights (pos, color, radius, intensity, falloff) in `lib/SoA`; per-light `N·L` against `normalRT` accumulates additively into a (optionally reduced-res) `lightRT`. View-culled; light-count budgeted by the profiler.
-- **Soft shadows:** per-light **1D shadow maps** (occluders → polar depth buffer, PCF-style softening), with a simpler sprite-alpha occlusion fallback for cheap mode.
-- **Composite:** `albedo × (ambient + lightRT)`; existing bloom in `post` blooms bright lit areas.
-- **Settings (data-driven):** lighting on/off, light-buffer resolution, shadow quality.
+- **Asset pipeline:** `Assets` pairs normal maps by convention (`foo.png` + `foo_n.png`) or manifest override. **Content commitment:** lit sprites need authored normals (flat-normal default keeps unlit sprites working).
+- **`LightManager` + `lights` pass:** point/directional lights (pos, color, radius, intensity, falloff) stored in `lib/SoA`; per-light `N·L` against `normalRT` accumulates additively into a (reduced-res) `lightRT`. View-culled; light-count budgeted by the profiler.
+
+**6b — SDF occluder field (foundation for shadows + RC):**
+- Render occluders (sprite alpha / collision geometry) to a mask, then build a **signed-distance field via the Jump-Flood Algorithm** (`systems/render/Sdf.lua` — render-coupled, uses canvases/shaders, so it lives in the render module not `lib/`). The SDF is the shared scene representation both soft shadows and Radiance Cascades sample. Rebuilt only when occluders move (dirty-tracked via `lib/Memo`).
+
+**6c — Radiance Cascades (light transport / soft shadows / GI):**
+- Replace per-light 1D shadow maps with **Radiance Cascades**: a multi-level radiance-probe structure that ray-marches the SDF to produce natural penumbra (soft shadows), area-light response, and one-bounce GI — the current 2D SOTA (Path-of-Exile-2-class). Evaluate vanilla RC vs **Holographic Radiance Cascades** (2025, adds crisp hard shadows) in this sub-phase.
+- RC handles transport + shadows; the 6a normal-mapped `N·L` provides per-sprite surface detail. Composite: `albedo × (ambient + directLight + RC_GI)`, all linear HDR → bloom (in `post`) → tonemap.
+
+**Settings (data-driven):** lighting off / normal-mapped-only (6a) / full RC (6c); light-buffer + cascade resolution; shadow quality. Lets the RC cost scale down on weaker GPUs or stay off entirely.
 
 ## Sequencing & dependencies
 
 ```
-P1 Profiler        (no deps)
-P2 Render-graph+RT (needs P1 for parity verification)
-P3 BG/shader cache (needs P2)
-P4 Batching        (needs P1)            -- parallelizable
-P5 IO worker       (needs P1)            -- independent of render; resequenceable
-P6 Lighting        (needs P2 MRT + P1)   -- biggest; normal-map authoring can start in parallel
+P1 Profiler         (no deps)
+P2 Render-graph+RT  (needs P1 for parity verification) — includes the linear/HDR/tonemap color pipeline
+P3 BG/shader cache  (needs P2)
+P4 Batching         (needs P1)            -- parallelizable
+P5 IO worker        (needs P1)            -- independent of render; resequenceable
+P6 Lighting         (needs P2 incl. color pipeline + MRT)
+   6a normal-mapped deferred (achievable base; normal-map authoring can start in parallel)
+   6b SDF occluder field via JFA (needs 6a's occluder inputs)
+   6c Radiance Cascades GI + soft shadows (needs 6b)
 ```
-Critical path: **P1 → P2 → {P3, P6}**. P4/P5 only need the profiler.
+Critical path: **P1 → P2 → {P3, P6a → 6b → 6c}**. P4/P5 only need the profiler. The color pipeline is folded into P2 because lighting (P6) and correct bloom depend on it.
 
 ## Verification
 
@@ -160,6 +187,7 @@ Critical path: **P1 → P2 → {P3, P6}**. P4/P5 only need the profiler.
 - **Parity gating (P2 migration):** every peel-off step is visually identical (screenshot compare) and not worse on frame time before proceeding.
 - **Headless harness** (same pattern as the asset-manager harness): unit-test the pure primitives + logic — `RingBuffer`, `Pool` acquire/release, `SoA`, profiler budget math, pass-list ordering/enable, **IO message serialization round-trip**, normal-map pairing. GL passes get a boot smoke + visual check (GL not unit-testable headlessly).
 - **Threading tests:** request/response round-trip through channels; disconnect/reconnect stress; assert zero remaining main-thread socket calls.
+- **Color/lighting correctness:** verify a known mid-gray sRGB input round-trips through linear→tonemap→sRGB within tolerance; confirm bloom only blooms >1.0 HDR values; for Radiance Cascades, compare against a brute-force reference render in a test scene (the RC papers validate this way).
 - **Honest caveat:** true GPU per-pass time depends on the optional FFI timer-query backend (later); until then verification is CPU-time + draw-stats + visual.
 
 ## FFI throughline
@@ -173,6 +201,9 @@ Profiler ring buffers, RT-pool free lists, pass accumulators, and light data (`S
 ## Top risks
 
 - **Graph-migration regressions** → mitigated by parity gating per peel-off step.
+- **Linear/HDR migration changes existing look** → enabling linear space re-renders all gamma-authored content differently. Mitigate by the pass-list seam (linear scene path vs display-space UI) and a deliberate content re-tune pass; decide global-vs-scoped in planning.
+- **Radiance Cascades complexity/cost** → 6c is the hardest, highest-cost work; gated behind 6a (which already gives shippable lighting), reduced-res cascades, and a Settings toggle to scale it down or off. Prototype vanilla vs Holographic RC.
+- **HDR format support/perf** → `rgba16f` doubles bandwidth of intermediates; budgeted by the profiler, render-scale helps. Verify format availability via `getCanvasFormats`.
 - **Threading races / serialization** → plain-data channels, callbacks on main thread, late sequencing, round-trip + stress tests.
 - **Lighting content dependency** → normal maps must be authored; flat-normal default keeps unlit sprites working.
 - **GPU-timing accuracy** limited until the FFI backend lands.
@@ -181,4 +212,6 @@ Profiler ring buffers, RT-pool free lists, pass accumulators, and light data (`S
 
 - Exact `lib/` location/namespace (proposed `lib/`; no existing convention — `core/` is an alternative).
 - Per-pass budget values (set empirically once the profiler exists).
-- Shadow approach final pick (1D shadow maps vs alpha-occlusion) — prototype both in P6, choose by profiler data.
+- **Tonemap operator** (ACES filmic vs Reinhard) — pick by look once HDR is in.
+- **Linear-space scope** — migrate all content to linear vs scope linear-HDR to the scene/lighting path and keep UI display-space.
+- **Radiance Cascades variant** — vanilla RC vs Holographic RC (hard-shadow capable); prototype both in 6c and choose by quality/cost.
