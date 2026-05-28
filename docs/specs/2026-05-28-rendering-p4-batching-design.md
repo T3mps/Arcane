@@ -229,6 +229,8 @@ Each lever ships with a CP-3 `--profile-capture` before/after pair saved to `doc
 
 4. **grid_view state-sort → AUDIT WAS WRONG ABOUT THE INTERLEAVE (2026-05-28, T10 skipped).** Reading `ui/widgets/grid_view.lua:381-409` reveals the build phase is FOUR batched passes (all glows, all cells, all rims, all particles) — NOT alpha→add→alpha→add per card as the audit asserted. There are only 3 pass-level blend boundaries; the auto-batcher coalesces within each pass. The REAL batch-breaker density is INSIDE each cell (`instantiateCell`), where each cell adds 6-8 grandchildren with their own shader/texture changes (gradient body → glass_lattice shader → image → type_glyph icons → labels). Top-level `sortChildren` on grid_view would sort those four pass groups, but they're already homogeneous — the win is zero. To benefit, each Cell sub-container would need its own sortChildren + per-grandchild batchKey, which is a deeper migration than T10's "set sortChildren = true" scope. **Action:** skip T10. The state-sort infra (T9: Widget.sortChildren + BatchKey + stable sort) is in place; future workstreams can opt into it for specific consumers where the in-container interleave is actually present. The audit's qualitative claim doesn't survive reading the code carefully.
 
+5. **Panel chrome batching → AUDIT'S "~8 state ops per panel" OVERSTATES THE COST (2026-05-28, T12 skipped).** Inventory baseline (`docs/audits/p4/inventory-via-atlas-empty`): `ui.drawcalls = 26`, `ui.switches = 0` steady-state across all panels + lists + labels visible at once. Panel:draw uses a setColor + rect/line stream (shadow stack, bg, edge lines, border, brackets) that the auto-batcher already coalesces — the only real batch-breakers are the optional frosted-canvas blit + scissor. A MeshBatch refactor of panel chrome would replicate T5's regression pattern: explicit `love.graphics.draw(mesh)` breaking out of the existing auto-batched setColor/rect chain. **Action:** skip T12. MeshBatch primitive remains valuable for future high-state-change consumers (WaveGame T6 — once interactive profiling lands).
+
 2. **Atlas bake hits at boot.** Boot already does shader compilation + font rasterization + asset preload. Adding ~150ms is fine for dev but tightens once Phase 5 (async loader) lands. Mitigation: bake on a background thread once Phase 5 ships; until then, do it inline.
 
 3. **State-sort + animation.** Widgets that animate must keep their position even if their batchKey doesn't change (it shouldn't, since shader/texture/blend rarely change mid-animation). Verify with AnimPlayer-driven screens (login transitions, the few cards that pulse).
@@ -236,6 +238,16 @@ Each lever ships with a CP-3 `--profile-capture` before/after pair saved to `doc
 4. **Hot-reload + atlas.** Editing one PNG invalidates the whole atlas. Acceptable for dev. The reload cost is the bake cost (~150ms), not noticeable.
 
 5. **Capture deterministic-input.** Today `--profile-capture` boots the engine and captures whatever the engine renders. For reference scenes other than login we'll need either (a) auto-pushing a screen at boot via a `--scene <id>` flag, or (b) a small input scripting that presses F-keys after delay. (a) is the lighter change. Either lives in lever 0 / a CP-3 follow-up.
+
+---
+
+---
+
+## Outcome (2026-05-28)
+
+All 13 plan tasks resolved. See `docs/audits/p4/summary.md` for per-scene metrics and durable lessons. Foundation primitives (`SpriteBatch`, `MeshBatch`, `BatchKey`, `Skyline`, `Atlas`) reusable for Phase 5/6 work. Widget gains three opt-in flags (`batchKey`, `sortChildren`, `cullToViewport`). Three POC consumers skipped after empirical baselines showed the LÖVE 11 auto-batcher already coalescing the target hotspots (T5 combat, T10 grid_view, T12 Panel). T6 WaveGame + T8 atlas-data deferred pending interactive playback profiling + native-side bake hang isolation respectively.
+
+**Net assessment:** Phase 4 shipped infrastructure, not measurable hot-path wins. The auto-batcher reality means future render perf comes from Phase 5/6, not from re-batching what's already auto-batched.
 
 ---
 
