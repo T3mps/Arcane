@@ -151,6 +151,8 @@ Phase 5 ships two measurable wins:
 
 Both pre-Phase-5 baselines captured ahead of time + post-Phase-5 captures committed alongside.
 
+**Important capture caveat (discovered 2026-05-28 at T3 baseline):** the `update.network` profiler scope in `main.lua` is gated to `state.gameState == GAME_STATE.PLAYING` (see `main.lua:502-504`). At login/click-to-play states, `Network.update` is driven by the screen's own update method, NOT by main.lua's scoped call. As a result, the `update.network.ms` metric reads 0.000 at the login screen even though `socket:receive` IS happening (its cost is folded into `update.ui`). For headless captures via `--scene login`, the validation gate has to be either (a) frame-time spike disappearance on the boot-to-PLAYING transition, or (b) a one-time refactor that opens a `Profiler:scope("update.network")` at every `Network.update` call site (login screen + landing screen + main.lua), making the metric universally accurate. **Recommendation: do (b) as a small additional task before T7.**
+
 **Reference scenes:**
 - Cold boot → login (`--scene login --profile-capture 5`) — captures the login network roundtrip
 - Inventory cold open (`--scene inventory --profile-capture 5`) — captures first-time portrait + item-icon decode
