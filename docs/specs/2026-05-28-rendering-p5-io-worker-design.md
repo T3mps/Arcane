@@ -153,7 +153,34 @@ Both pre-Phase-5 baselines captured ahead of time + post-Phase-5 captures commit
 
 **Important capture caveat (discovered 2026-05-28 at T3 baseline; RESOLVED at T3.5):** the `update.network` profiler scope was originally gated to `PLAYING` gameState in `main.lua`. At login/landing, `Network.update` was driven by the screen's own update method, NOT scoped, so the metric read 0.000 even though `socket:receive` was happening. T3.5 (commit `32cb39a`) moved the scope INTO `Network.update` itself so every call site is captured uniformly. New baseline: `update.network.ms = 0.0235` at idle login.
 
-**P5a (T5-T7) PARTIALLY STARTED, MOST DEFERRED (2026-05-28):** `network_tcp.lua` is 1960 lines, 41 public functions, 73 reconnect/circuit-breaker references. Originally framed as a 4-5 day workstream — code reading revised that to ~1-2 sessions for an MVP cutover where the worker owns just sockets + receive loop and main keeps reconnect/session/callback logic. Even the MVP needs interactive login/play/combat validation. **Kickoff shipped (commit `1b651bf`):** `services/io/stream_buffer.lua` — pure-Lua TCP frame extractor lifted out of `network_tcp.lua` so the worker can require it from a worker thread without `love.*` dependencies. 12 framing assertions in the threading_harness validate empty/partial/complete/invalid/multi-frame behavior. `network_tcp.lua` still has its inline copy unchanged — sibling module, no behavior change. **Remaining work (fresh session):** (1) write `services/io/network_worker.lua` — worker entry point owning 3 sockets (auth/account/combatTcp), async-connect polling, receive loop, channel-pushed messages; (2) refactor `Connection` class in `network_tcp.lua` to push commands via channel instead of calling socket methods directly; (3) update `processConnectionMessages` to drain the inbound channel instead of calling `socket:receive`; (4) spawn worker at boot, shutdown via `_quit` sentinel; (5) interactive visual gate covering login → click-to-play → game world → F1/F2/F3/F4/F5 → reconnect-storm; (6) drop `network_tcp.lua`'s inline StreamBuffer once the worker owns framing. The IOClient shim (T4, commit `9573542`) + universal `update.network` profiler scope (T3.5, commit `32cb39a`) are the prereqs already in place. T8-T11 (P5b job pool) shipped independently 2026-05-28.
+**P5a SHIPPED (2026-05-28, commit `d05c9c2`):** Network module fully cut over to the dedicated worker thread. All TCP socket I/O (`socket:connect`, `:send`, `:receive`, async-connect polling) now lives in `services/io/network_worker.lua`; main thread builds frames and pushes channel commands, then drains an event channel on each `Network.update` tick.
+
+- **Channel protocol (locked):** out (main→worker) `connect` / `disconnect` / `send` / `_quit`; in (worker→main) `connected` / `connect_failed` / `message` / `disconnected` / `send_failed` / `_quit_ack`. Connect callbacks are matched back to the originating `Connection` by `reqId` echoed in the event.
+- **`Connection` class shape change:** dropped `socket`, `streamBuffer`, `asyncSocket`, `asyncHost`, `asyncPort`, `asyncStartTime` fields. Added `asyncReqId`. `close` / `startAsyncConnect` / `cancelAsyncConnect` / `send` push channel commands. `pollAsyncConnect` and `receive` deleted entirely (the worker drives both). Callback queues, heartbeat tracking, reconnect/circuit-breaker, and the per-connection FIFO callback dispatch are all unchanged.
+- **`NetworkTCP.update`:** drains inbound worker events FIRST (via new `processInboundEvents` + `dispatchMessageData` helpers), then runs the retry/reconnect/heartbeat/timeout logic. The `pollAsyncConnect` and `processConnectionMessages` loops are gone.
+- **Graceful shutdown:** new `NetworkTCP.shutdown()` pushes `_quit` and `:wait()`s for the worker. Wired into `love.quit` via `Network.shutdown`. `Network.disconnect` is still the in-game teardown — leaves the worker alive so the login screen can reconnect without respawning the thread.
+
+**Measured outcome** (`docs/audits/p5/network-after.csv`, cold-boot 5s capture at login):
+
+| metric                  | before (`network-before.csv`) | after (`network-after.csv`) | delta  |
+|-------------------------|-------------------------------|-----------------------------|--------|
+| `update.network.ms` avg | 0.0235                        | 0.0117                      | −50 %  |
+| `update.network.ms` max | 0.0603                        | 0.1025                      | +70 %* |
+
+\* The single-frame max went up because the channel-drain coalesces multiple worker events into one main-tick dispatch (the auth `connected` event lands together with whatever payload the server emits next). Absolute value is still ~100 µs — negligible. The architectural win is that the worker can now block as long as it wants on `socket:receive` without ever stalling a frame.
+
+The pre-cutover `0.0235` baseline was already low because T3.5 (`32cb39a`) moved the profiler scope into `Network.update`, capturing the universal call site. The bigger pre-P5 mitigation was `RECV_TIMEOUT = 0` (non-blocking receive). P5a's contribution is killing the residual receive-loop overhead on the main thread and removing the entire syscall-from-render-thread risk surface.
+
+**Files shipped this phase:**
+- `services/io/stream_buffer.lua` (commit `1b651bf`) — worker-safe framer with 12 harness assertions
+- `services/io/network_worker.lua` (commit `00cf1c5`) — worker entry point
+- `services/io/IOClient.lua` (commit `9573542`) — main-thread shim; contract locked at T4
+- `network_tcp.lua` / `network.lua` / `main.lua` (commit `d05c9c2`) — the cutover itself (net −102 lines)
+- Universal `update.network` profiler scope (commit `32cb39a`)
+
+**Validation:** three harnesses (assets / render / threading) green; engine boot + auth handshake clean; visual gate on login → play → F1/F2/F3/F4/F5 → reconnect-storm passed.
+
+**T8–T11 (P5b job pool) shipped independently 2026-05-28.**
 
 **Reference scenes:**
 - Cold boot → login (`--scene login --profile-capture 5`) — captures the login network roundtrip
