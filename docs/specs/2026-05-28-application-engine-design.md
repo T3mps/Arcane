@@ -129,10 +129,18 @@ Five duck-typed hooks. Services implement only what they care about; the App's d
 -- Optional methods on any registered service:
 service:init(app)              -- once, after all services registered
 service:fixedUpdate(fixedDt)   -- N times per real frame, fixedDt = 1/60 by default
-service:update(dt, alpha)      -- once per real frame, alpha = accumulator residual
-service:draw()                 -- once per real frame
+service:update(dt)             -- once per real frame; reads/writes authoritative state
+service:draw(alpha)            -- once per real frame; alpha = accumulator residual for render interp
 service:shutdown()             -- once, on love.quit (reverse registration order)
 ```
+
+**Alpha lives on draw, not update.** Render-side smoothing (lerping a Box2D body's
+display position between `_prevX` captured at the last fixed step and the current
+authoritative `e.position`) belongs in the draw path. Update reads + writes
+authoritative state -- AI / collision / quest scripts that consume `e.position`
+during update get the true post-step value, not a visually smoothed one. Renderers
+consume `alpha` via the service's `:draw(alpha)` parameter, which the App threads
+through from `_lastAlpha` stashed at the end of `:update`.
 
 No required methods. A service can be an instance (`Game.new()`) or a module (`require "network"`); the App dispatches via `svc:method(...)` and Lua's colon-call ignores the implicit `self` for modules whose methods are plain functions.
 
@@ -161,10 +169,17 @@ function Application:update(dt)
         self._accum = 0
     end
 
-    -- 3) Variable update, with interpolation alpha for renderers
-    local alpha = self._accum / fixedDt
+    -- 3) Variable update (authoritative state). Stash alpha for the draw path.
+    self._lastAlpha = self._accum / fixedDt
     for _, entry in ipairs(self.services) do
-        if entry.svc.update then entry.svc:update(dt, alpha) end
+        if entry.svc.update then entry.svc:update(dt) end
+    end
+end
+
+function Application:draw()
+    local alpha = self._lastAlpha or 0
+    for _, entry in ipairs(self.services) do
+        if entry.svc.draw then entry.svc:draw(alpha) end
     end
 end
 ```
@@ -176,7 +191,7 @@ end
 | Fixed rate | 60 UPS (`fixedDt = 1/60`) | Matches GachaCombat server `GameLoop.hpp` cadence; standard physics step |
 | Configurable | `Application.new({ fixedRate = 60 })` | Future-proof without committing |
 | Spiral guard | Max 5 fixed steps per real frame; drop excess | A 200ms hitch shouldn't cascade |
-| Alpha | Passed as `service:update(dt, alpha)` | Optional second arg; ignore if not interpolating |
+| Alpha | Passed as `service:draw(alpha)` | Optional arg; ignore if not interpolating. NOT passed to `:update` -- update is for authoritative state, render-side interpolation lives in `:draw`. |
 | Order within tick | All `fixedUpdate` before any `update` before any `draw` | Physics → game logic → render |
 | Bus events on tick | None by default | Add `app.fixed_tick` only if observers need it |
 
@@ -385,7 +400,7 @@ Move main.lua lines 78–373. Register as a service. Network event subscriptions
 
 ### M7 — First `fixedUpdate` consumer: WaveGame + Box2D (1 session, visual gate)
 
-Convert WaveGame's per-frame physics tick to `:fixedUpdate(fixedDt)`. Box2D's `world:step(fixedDt)` moves into the same hook. Alpha-interpolation in `:update(dt, alpha)` for rendering moving bodies between physics steps if visual smoothness needs it (start without, add if combat-style judder appears).
+Convert WaveGame's per-frame physics tick to `:fixedUpdate(fixedDt)`. Box2D's `world:step(fixedDt)` moves into the same hook. Alpha-interpolation in the render path (`:draw(alpha)` -> FrameCtx -> RenderSystem.drawEntity lerping between `_prevX` snapshot and current `e.position`) for rendering moving bodies between physics steps if visual smoothness needs it (start without, add if combat-style judder appears).
 
 This validates the accumulator + alpha pattern under real load. Spiral guard exercised by manually stalling for ~200ms and watching that physics doesn't fast-forward.
 
