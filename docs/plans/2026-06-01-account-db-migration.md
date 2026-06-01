@@ -284,7 +284,7 @@ filter "system:windows"
 - [ ] **Step 4: Verify the build links**
 
 Add a temporary smoke project (or a one-file test) that does `#include <pqxx/pqxx>` and calls `pqxx::connection`. Build it.
-Run: `msbuild Gacha.sln /p:Configuration=Debug`
+Run: `msbuild Aphelyon.slnx /p:Configuration=Debug`
 Expected: clean build. If link errors mention missing symbols like `BIO_new`, add the missing OpenSSL libs from vcpkg.
 
 - [ ] **Step 5: Clean up the no-longer-used vendored libpqxx (optional but recommended)**
@@ -406,7 +406,7 @@ IncludeDir["rapidcheck"] = "../ThirdParty/rapidcheck/include"
 
 - [ ] **Step 3: Verify build**
 
-Run: `cd Server && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:rapidcheck`
+Run: `cd Server && GenerateProjects.bat && msbuild Aphelyon.slnx /p:Configuration=Debug /t:rapidcheck`
 Expected: rapidcheck.lib produced.
 
 - [ ] **Step 4: Commit**
@@ -463,7 +463,7 @@ IncludeDir["Catch2"] = "../ThirdParty/Catch2/src"
 
 - [ ] **Step 3: Verify build**
 
-Run: `cd Server && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:Catch2`
+Run: `cd Server && GenerateProjects.bat && msbuild Aphelyon.slnx /p:Configuration=Debug /t:Catch2`
 Expected: Catch2.lib produced.
 
 - [ ] **Step 4: Commit**
@@ -1056,7 +1056,7 @@ TEST_CASE("UUID v7 round-trips through string", "[uuid]") {
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cd Server && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
+Run: `cd Server && msbuild Aphelyon.slnx /p:Configuration=Debug /t:AccountTests`
 Expected: compile failure (`UuidV7.hpp` doesn't exist).
 
 - [ ] **Step 3: Write implementation**
@@ -1149,11 +1149,11 @@ private:
 
 - [ ] **Step 4: Add test executable to premake**
 
-Modify `Server/Account/premake5.lua` — add a `GachaAccountTests` project that builds `Account/tests/*.cpp` as an executable linking Catch2, rapidcheck, and the Account sources. (If Catch2 isn't vendored, add a vendor task; assume it lives under `ThirdParty/Catch2/include/`.) Run `GenerateProjects.bat`.
+Modify `Server/Account/premake5.lua` — add a `AccountTests` project that builds `Account/tests/*.cpp` as an executable linking Catch2, rapidcheck, and the Account sources. (If Catch2 isn't vendored, add a vendor task; assume it lives under `ThirdParty/Catch2/include/`.) Run `GenerateProjects.bat`.
 
 - [ ] **Step 5: Run tests, confirm pass**
 
-Run: `cd Server && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe`
+Run: `cd Server && msbuild Aphelyon.slnx /p:Configuration=Debug /t:AccountTests && bin\Debug-windows-x86_64\AccountTests\AccountTests.exe`
 Expected: 3 test cases pass.
 
 - [ ] **Step 6: Commit**
@@ -1601,7 +1601,7 @@ TEST_CASE("admin_adjustment_applied works on any currency", "[wallet][reducer]")
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cd Server && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
+Run: `cd Server && msbuild Aphelyon.slnx /p:Configuration=Debug /t:AccountTests`
 Expected: compile failure (WalletReducer doesn't exist).
 
 - [ ] **Step 3: Write WalletReducer**
@@ -1655,7 +1655,7 @@ public:
 
 - [ ] **Step 4: Run tests, verify pass**
 
-Run: `cd Server && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[wallet][reducer]"`
+Run: `cd Server && msbuild Aphelyon.slnx /p:Configuration=Debug /t:AccountTests && bin\Debug-windows-x86_64\AccountTests\AccountTests.exe "[wallet][reducer]"`
 Expected: 4 test cases pass.
 
 - [ ] **Step 5: Commit**
@@ -1765,7 +1765,7 @@ public:
 
 - [ ] **Step 3: Run tests**
 
-Run: `bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[progression][reducer]"`
+Run: `bin\Debug-windows-x86_64\AccountTests\AccountTests.exe "[progression][reducer]"`
 Expected: 3 cases pass.
 
 - [ ] **Step 4: Commit**
@@ -2037,7 +2037,7 @@ public:
 
 - [ ] **Step 3: Tests pass**
 
-Run: `bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[pulls][reducer]"`
+Run: `bin\Debug-windows-x86_64\AccountTests\AccountTests.exe "[pulls][reducer]"`
 Expected: 4 cases pass.
 
 - [ ] **Step 4: Commit**
@@ -2266,7 +2266,7 @@ private:
 - [ ] **Step 3: Run integration tests**
 
 Ensure Postgres is up: `cd Server && scripts\db-setup.bat`
-Then: `bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[integration][event_store]"`
+Then: `bin\Debug-windows-x86_64\AccountTests\AccountTests.exe "[integration][event_store]"`
 Expected: all cases pass.
 
 - [ ] **Step 4: Commit**
@@ -2401,7 +2401,7 @@ struct AccountData {
 
 This change affects Common, which Auth/Account/Combat all link. Build all three and fix call sites that use weapon/gear `instanceId` as a string. Likely affected: `AccountSerializer`, `CollectionActions`, `CollectionReducer`, gear/weapon equipment maps in `AccountData`. For each: convert string-instance-id call sites to `UuidV7` operations, using `UuidV7::ToString` only at JSON/wire boundaries.
 
-Run: `msbuild Gacha.sln /p:Configuration=Debug`
+Run: `msbuild Aphelyon.slnx /p:Configuration=Debug`
 Expected: clean build (fix compile errors as they appear; this is a mechanical pass).
 
 - [ ] **Step 5: Commit**
@@ -2501,7 +2501,7 @@ public:
 
 - [ ] **Step 2: Build + fix call sites**
 
-`msbuild Gacha.sln /p:Configuration=Debug`
+`msbuild Aphelyon.slnx /p:Configuration=Debug`
 
 Find every place in Auth/Account/Combat that mutates an Account field directly and route through setters. The fix is mechanical: `account.credits += 100` → `account.SetCredits(account.Credits() + 100)`.
 
@@ -2949,7 +2949,7 @@ Find and delete every reference to `AccountSerializer::ToJson/FromJson` across t
 
 - [ ] **Step 3: Build, fix compile errors**
 
-`msbuild Gacha.sln /p:Configuration=Debug`
+`msbuild Aphelyon.slnx /p:Configuration=Debug`
 
 - [ ] **Step 4: Commit**
 
