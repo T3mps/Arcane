@@ -6,7 +6,7 @@
 
 **Architecture:** PostgreSQL 16+ as primary store, Docker Compose in dev. Single monthly-partitioned `events` table holds 4 aggregate streams; 13 relational tables hold non-ES player state; 3 support tables (snapshots, outbox, audit_log). Per-RPC Postgres transaction with optimistic concurrency on event append. Dirty-flag flush on relational mutations driven by Account setters. xoshiro256++ PRNG for cross-platform deterministic replay. 64-stripe per-player lock + in-memory cache preserved.
 
-**Tech Stack:** C++20, PostgreSQL 16+, libpqxx (BSD-3, C++ client), xoshiro256++ (vendored header), pg_partman extension, WAL-G (backup), rapidcheck (property testing), clang-tidy custom check. Docker Compose orchestrates Postgres in dev.
+**Tech Stack:** C++20, PostgreSQL 16+, libpqxx 8.0.1 + libpq (from vcpkg overlay — same channel as protobuf/abseil), XoshiroCpp (vendored header by Ryo Suzuki, MIT), pg_partman extension, WAL-G (backup), rapidcheck (vendored, BSD), Catch2 v3 (vendored, Boost), clang-tidy custom check. Docker Compose orchestrates Postgres in dev.
 
 **Spec:** `docs/superpowers/specs/2026-06-01-account-db-migration-design.md`
 
@@ -26,11 +26,10 @@
 | `GachaServer/GachaAccount/migrations/004_quests.sql` | `quest_states`, `quest_objectives`, `world_flags`, `pity_state`. |
 | `GachaServer/GachaAccount/migrations/005_events.sql` | Partitioned `events` table + initial monthly partition + indexes + FK CASCADE. |
 | `GachaServer/GachaAccount/migrations/006_support.sql` | `snapshots`, `outbox`, `audit_log`. |
-| `ThirdParty/libpqxx/` | Vendored C++ Postgres client (BSD-3). |
-| `ThirdParty/libpqxx/premake5.lua` | Static-lib project file. |
-| `ThirdParty/xoshiro/xoshiro256pp.hpp` | Vendored header-only PRNG. |
-| `ThirdParty/rapidcheck/` | Vendored property-testing library for ES correctness tests. |
-| `ThirdParty/rapidcheck/premake5.lua` | Static-lib project file. |
+| `GachaServer/scripts/setup-vcpkg-deps.bat` | MODIFY — add `libpqxx:x64-windows-static` (which transitively pulls `libpq`). |
+| `ThirdParty/Xoshiro/XoshiroCpp.hpp` | Already cloned. Header-only PRNG by Ryo Suzuki (MIT). No premake5 file needed. |
+| `ThirdParty/rapidcheck/premake5.lua` | Create — static-lib project file (sources already cloned). |
+| `ThirdParty/Catch2/premake5.lua` | Create — static-lib project file (Catch2 v3 source already cloned). |
 | `GachaServer/GachaCommon/src/UuidV7.hpp` | UUID v7 generator (time-ordered, RFC 9562). |
 | `GachaServer/GachaAccount/src/db/ConnectionPool.hpp` | Bounded libpqxx connection pool (semaphore-based, ~80 LOC). |
 | `GachaServer/GachaAccount/src/db/MigrationRunner.hpp` | Applies numbered `.sql` files; tracks applied versions in a `schema_migrations` table. |
@@ -77,8 +76,8 @@
 | `tools/clang-tidy/GachaReducerPurityCheck.cpp` | Custom clang-tidy check banning non-deterministic calls in `reducers/`. |
 | `tools/clang-tidy/.clang-tidy` | Project-level clang-tidy config that enables the custom check on `reducers/`. |
 | `GachaServer/scripts/wal-g-setup.sh` | Optional: dev WAL-G config for backup drill (deferred to operational phase). |
-| `GachaServer/GachaAccount/premake5.lua` | MODIFY — link libpqxx, add `migrations/`, add `tests/` executable, add reducers dir. |
-| `GachaServer/premake5.lua` | MODIFY — include libpqxx subproject, include rapidcheck. |
+| `GachaServer/GachaAccount/premake5.lua` | MODIFY — link `libpqxx` + `libpq` from vcpkg, add `migrations/`, add `tests/` executable, add reducers dir. |
+| `GachaServer/premake5.lua` | MODIFY — include rapidcheck + Catch2 subprojects; add vcpkg include dirs for libpqxx/libpq; add IncludeDir entry for XoshiroCpp. |
 
 Conventions used throughout:
 - All migration files apply with `db-setup.bat` (or `docker exec gacha_postgres psql ... -f /migrations/NNN.sql`).
@@ -237,202 +236,140 @@ git commit -m "feat(account): docker-compose Postgres + setup/reset scripts"
 
 ---
 
-### Task 2: Vendor libpqxx
+### Task 2: Add libpqxx + libpq to vcpkg overlay
+
+**Why vcpkg here:** libpqxx generates compiler-feature-detection headers via CMake (`PQXX_HAVE_*` macros) and links against `libpq` — the Postgres C client lib, which is intrinsically tied to Postgres internals. Both fall into the CLAUDE.md "deeply nested build system" case where vcpkg is the right tool. Adding `libpqxx` to the vcpkg manifest transitively pulls in `libpq`.
 
 **Files:**
-- Create: `ThirdParty/libpqxx/` (vendored from upstream)
-- Create: `ThirdParty/libpqxx/premake5.lua`
+- Modify: `GachaServer/scripts/setup-vcpkg-deps.bat`
 - Modify: `GachaServer/premake5.lua`
+- Delete (optional cleanup, see Step 5): `ThirdParty/libpqxx/`
 
-- [ ] **Step 1: Vendor libpqxx 7.10.x**
+- [ ] **Step 1: Add libpqxx to the vcpkg setup script**
 
-Run from repo root:
+Open `GachaServer/scripts/setup-vcpkg-deps.bat`. Find the `vcpkg install` line that currently installs protobuf/abseil with the overlay triplet. Add `libpqxx:x64-windows-static`. The relevant line should look like:
+```bat
+vcpkg install --overlay-triplets=..\vcpkg-triplets protobuf:x64-windows-static abseil:x64-windows-static utf8-range:x64-windows-static libpqxx:x64-windows-static
+```
+
+- [ ] **Step 2: Run the vcpkg install**
+
+Run: `cd GachaServer && scripts\setup-vcpkg-deps.bat`
+Expected: vcpkg builds libpq and libpqxx with the v143 toolset, ~3–8 minutes. Verify with:
+```
+dir vcpkg\installed\x64-windows-static\lib\libpqxx.lib
+dir vcpkg\installed\x64-windows-static\lib\libpq.lib
+```
+
+- [ ] **Step 3: Wire vcpkg paths into premake**
+
+Modify `GachaServer/premake5.lua`. Find the existing `VcpkgDir` definition and `IncludeDir` table. Add:
+```lua
+-- Already exists if protobuf/abseil are wired up; reuse:
+IncludeDir["libpqxx"] = VcpkgDir .. "/include"   -- libpqxx headers
+IncludeDir["libpq"]   = VcpkgDir .. "/include"   -- libpq headers (same dir, same vcpkg install)
+
+-- Library lookup directory (only add if not already present from protobuf wiring):
+VcpkgLibDir = VcpkgDir .. "/lib"
+```
+
+The actual link directives are added per-project in Task 35 / when `GachaAccount/premake5.lua` is updated — wherever a project needs Postgres access. The pattern (copy from how `protobuf` is currently linked):
+```lua
+filter "system:windows"
+    libdirs { VcpkgLibDir }
+    links { "libpqxx", "libpq", "libcrypto", "libssl", "ws2_32", "secur32", "wldap32", "crypt32" }
+```
+(The `ws2_32` / `secur32` / etc. are libpq's Windows transitive dependencies — vcpkg's portfile documents them.)
+
+- [ ] **Step 4: Verify the build links**
+
+Add a temporary smoke project (or a one-file test) that does `#include <pqxx/pqxx>` and calls `pqxx::connection`. Build it.
+Run: `msbuild Gacha.sln /p:Configuration=Debug`
+Expected: clean build. If link errors mention missing symbols like `BIO_new`, add the missing OpenSSL libs from vcpkg.
+
+- [ ] **Step 5: Clean up the no-longer-used vendored libpqxx (optional but recommended)**
+
+The cloned `ThirdParty/libpqxx/` is now dead weight — having two copies of the same library (one ignored, one used) invites confusion. Remove it:
 ```bash
-git clone --depth 1 --branch 7.10.3 https://github.com/jtv/libpqxx.git ThirdParty/libpqxx-src
-mkdir ThirdParty/libpqxx
-cp -r ThirdParty/libpqxx-src/include ThirdParty/libpqxx/include
-cp -r ThirdParty/libpqxx-src/src     ThirdParty/libpqxx/src
-cp ThirdParty/libpqxx-src/COPYING    ThirdParty/libpqxx/LICENSE
-rm -rf ThirdParty/libpqxx-src
+git rm -r ThirdParty/libpqxx/
 ```
+Skip this step if you'd rather keep the source around as reference; just don't reference it from any premake file.
 
-- [ ] **Step 2: Write premake project**
-
-`ThirdParty/libpqxx/premake5.lua`:
-```lua
-project "libpqxx"
-    kind "StaticLib"
-    language "C++"
-    cppdialect "C++20"
-    location "%{wks.location}/projects"
-    targetdir "%{wks.location}/bin/%{cfg.buildcfg}-%{cfg.platform}/%{prj.name}"
-    objdir    "%{wks.location}/obj/%{cfg.buildcfg}-%{cfg.platform}/%{prj.name}"
-
-    files { "src/*.cxx", "include/pqxx/*.hxx", "include/pqxx/internal/*.hxx" }
-    includedirs { "include", "%{VcpkgDir}/include" } -- libpq headers from vcpkg or system
-
-    filter "system:windows"
-        defines { "NOMINMAX", "_CRT_SECURE_NO_WARNINGS" }
-        links { "libpq" }
-```
-
-- [ ] **Step 3: Update top-level premake to include libpqxx**
-
-Modify `GachaServer/premake5.lua`. Find the `include "ThirdParty/..."` block (search for the existing `include "ThirdParty/Astra"` etc.) and add:
-```lua
-include "../ThirdParty/libpqxx"
-```
-
-Also add to the `IncludeDir` table:
-```lua
-IncludeDir["libpqxx"] = "../ThirdParty/libpqxx/include"
-```
-
-- [ ] **Step 4: Verify build**
-
-Run: `cd GachaServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:libpqxx`
-Expected: libpqxx.lib produced under `bin/Debug-windows-x86_64/libpqxx/`.
-
-If libpq is missing, install via vcpkg overlay: `vcpkg install libpq:x64-windows-static`.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add ThirdParty/libpqxx/ GachaServer/premake5.lua
-git commit -m "feat(account): vendor libpqxx 7.10.3 + premake project"
+git add GachaServer/scripts/setup-vcpkg-deps.bat GachaServer/premake5.lua
+git rm -r ThirdParty/libpqxx/  # if Step 5 chosen
+git commit -m "feat(account): libpqxx + libpq via vcpkg overlay (v143 toolset)"
 ```
 
 ---
 
-### Task 3: Vendor xoshiro256++ header
+### Task 3: Wire XoshiroCpp include path
+
+Already cloned at `ThirdParty/Xoshiro/XoshiroCpp.hpp` (Ryo Suzuki, MIT). Header-only — no premake5 project needed, just an include directory.
+
+**Concrete API (verify in `XoshiroCpp.hpp`):**
+- Namespace: `XoshiroCpp`
+- Class for our use: `Xoshiro256PlusPlus`
+- State type: `Xoshiro256PlusPlus::state_type` (`std::array<uint64_t, 4>`)
+- State accessors: `.serialize()` returns state; `.deserialize(state)` sets state
+- Seeder: `XoshiroCpp::SplitMix64(seed).generateSeedSequence<4>()`
 
 **Files:**
-- Create: `ThirdParty/xoshiro/xoshiro256pp.hpp`
-- Create: `ThirdParty/xoshiro/LICENSE`
+- Modify: `GachaServer/premake5.lua`
 
-- [ ] **Step 1: Write the header**
-
-`ThirdParty/xoshiro/xoshiro256pp.hpp`:
-```cpp
-// xoshiro256++ - Vigna 2018. Public domain.
-// https://prng.di.unimi.it/xoshiro256plusplus.c
-#pragma once
-
-#include <cstdint>
-#include <array>
-
-namespace xoshiro {
-
-class Xoshiro256pp {
-public:
-    using StateType = std::array<std::uint64_t, 4>;
-    using result_type = std::uint64_t;
-
-    static constexpr result_type min() noexcept { return 0; }
-    static constexpr result_type max() noexcept { return UINT64_MAX; }
-
-    constexpr Xoshiro256pp() noexcept : s_{1, 0, 0, 0} {}
-    constexpr explicit Xoshiro256pp(StateType s) noexcept : s_(s) {}
-
-    [[nodiscard]] constexpr const StateType& state() const noexcept { return s_; }
-    constexpr void set_state(StateType s) noexcept { s_ = s; }
-
-    constexpr result_type operator()() noexcept {
-        const std::uint64_t result = rotl(s_[0] + s_[3], 23) + s_[0];
-        const std::uint64_t t = s_[1] << 17;
-        s_[2] ^= s_[0];
-        s_[3] ^= s_[1];
-        s_[1] ^= s_[2];
-        s_[0] ^= s_[3];
-        s_[2] ^= t;
-        s_[3] = rotl(s_[3], 45);
-        return result;
-    }
-
-private:
-    static constexpr std::uint64_t rotl(std::uint64_t x, int k) noexcept {
-        return (x << k) | (x >> (64 - k));
-    }
-    StateType s_;
-};
-
-// SplitMix64 seeder: deterministic state expansion from a single 64-bit seed.
-constexpr Xoshiro256pp::StateType seed_from(std::uint64_t seed) noexcept {
-    auto next = [&seed]() -> std::uint64_t {
-        seed += 0x9E3779B97F4A7C15ULL;
-        std::uint64_t z = seed;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-        return z ^ (z >> 31);
-    };
-    return { next(), next(), next(), next() };
-}
-
-} // namespace xoshiro
-```
-
-- [ ] **Step 2: Drop license file**
-
-`ThirdParty/xoshiro/LICENSE`:
-```
-xoshiro256++ - by David Blackman and Sebastiano Vigna (vigna@acm.org)
-To the extent possible under law, the author has dedicated all copyright
-and related and neighboring rights to this software to the public domain
-worldwide. This software is distributed without any warranty.
-See <http://creativecommons.org/publicdomain/zero/1.0/>.
-```
-
-- [ ] **Step 3: Add to premake include dirs**
+- [ ] **Step 1: Add to premake include dirs**
 
 Modify `GachaServer/premake5.lua`. Add to the `IncludeDir` table:
 ```lua
-IncludeDir["xoshiro"] = "../ThirdParty/xoshiro"
+IncludeDir["XoshiroCpp"] = "../ThirdParty/Xoshiro"
 ```
 
-- [ ] **Step 4: Smoke test**
+Then add `IncludeDir["XoshiroCpp"]` to the `includedirs` of every project that uses it (initially just GachaAccount).
+
+- [ ] **Step 2: Smoke test**
 
 Add a temporary `GachaServer/GachaAccount/test_xoshiro.cpp`:
 ```cpp
-#include "xoshiro256pp.hpp"
+#include "XoshiroCpp.hpp"
 #include <iostream>
 int main() {
-    xoshiro::Xoshiro256pp rng(xoshiro::seed_from(0xDEADBEEFCAFEBABE));
+    auto state = XoshiroCpp::SplitMix64(0xDEADBEEFCAFEBABEULL).generateSeedSequence<4>();
+    XoshiroCpp::Xoshiro256PlusPlus rng(state);
     for (int i = 0; i < 3; ++i) std::cout << rng() << "\n";
 }
 ```
 
-Build and run. Confirm the same 3 numbers print on a second run (deterministic). Then delete the temp file.
+Build and run twice. Confirm identical output across runs (deterministic). Delete the temp file.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git rm GachaServer/GachaAccount/test_xoshiro.cpp 2>/dev/null || true
-git add ThirdParty/xoshiro/ GachaServer/premake5.lua
-git commit -m "feat(account): vendor xoshiro256++ PRNG (public domain)"
+git add GachaServer/premake5.lua
+git commit -m "feat(account): wire XoshiroCpp include path (already vendored)"
 ```
+
+> **IMPORTANT — propagate the actual API through later tasks:** the plan's reducer + event code uses `xoshiro::Xoshiro256pp` / `::StateType` / `.state()` / `.set_state()` / `xoshiro::seed_from(...)`. Replace those references throughout with the real API as you implement Tasks 14, 19, and 28:
+> - `xoshiro::Xoshiro256pp` → `XoshiroCpp::Xoshiro256PlusPlus`
+> - `xoshiro::Xoshiro256pp::StateType` → `XoshiroCpp::Xoshiro256PlusPlus::state_type`
+> - `rng.state()` → `rng.serialize()`
+> - `rng.set_state(s)` → `rng.deserialize(s)`
+> - `xoshiro::seed_from(seed)` → `XoshiroCpp::SplitMix64(seed).generateSeedSequence<4>()`
+> - `#include "xoshiro256pp.hpp"` → `#include "XoshiroCpp.hpp"`
 
 ---
 
-### Task 4: Vendor rapidcheck
+### Task 4: Write rapidcheck premake5 project
+
+Source already cloned at `ThirdParty/rapidcheck/` (BSD). No external deps — pure C++.
 
 **Files:**
-- Create: `ThirdParty/rapidcheck/` (vendored)
 - Create: `ThirdParty/rapidcheck/premake5.lua`
 - Modify: `GachaServer/premake5.lua`
 
-- [ ] **Step 1: Vendor rapidcheck**
-
-Run from repo root:
-```bash
-git clone --depth 1 https://github.com/emil-e/rapidcheck.git ThirdParty/rapidcheck-src
-mkdir ThirdParty/rapidcheck
-cp -r ThirdParty/rapidcheck-src/include ThirdParty/rapidcheck/include
-cp -r ThirdParty/rapidcheck-src/src     ThirdParty/rapidcheck/src
-cp ThirdParty/rapidcheck-src/LICENSE.md ThirdParty/rapidcheck/LICENSE
-rm -rf ThirdParty/rapidcheck-src
-```
-
-- [ ] **Step 2: Write premake project**
+- [ ] **Step 1: Write the premake project**
 
 `ThirdParty/rapidcheck/premake5.lua`:
 ```lua
@@ -440,35 +377,100 @@ project "rapidcheck"
     kind "StaticLib"
     language "C++"
     cppdialect "C++20"
+    staticruntime "on"
     location "%{wks.location}/projects"
     targetdir "%{wks.location}/bin/%{cfg.buildcfg}-%{cfg.platform}/%{prj.name}"
     objdir    "%{wks.location}/obj/%{cfg.buildcfg}-%{cfg.platform}/%{prj.name}"
 
-    files { "src/**/*.cpp", "include/**/*.h", "include/**/*.hpp" }
+    files {
+        "src/**.cpp",
+        "include/**.h",
+        "include/**.hpp",
+    }
     includedirs { "include" }
+
+    filter "system:windows"
+        defines { "_CRT_SECURE_NO_WARNINGS", "NOMINMAX" }
 ```
 
-- [ ] **Step 3: Add to top-level premake**
+- [ ] **Step 2: Add to top-level premake**
 
 Modify `GachaServer/premake5.lua`. Add:
 ```lua
 include "../ThirdParty/rapidcheck"
 ```
-And:
+And to the `IncludeDir` table:
 ```lua
 IncludeDir["rapidcheck"] = "../ThirdParty/rapidcheck/include"
 ```
 
-- [ ] **Step 4: Verify build**
+- [ ] **Step 3: Verify build**
 
 Run: `cd GachaServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:rapidcheck`
 Expected: rapidcheck.lib produced.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add ThirdParty/rapidcheck/ GachaServer/premake5.lua
-git commit -m "feat(account): vendor rapidcheck (BSD) for ES property tests"
+git add ThirdParty/rapidcheck/premake5.lua GachaServer/premake5.lua
+git commit -m "feat(account): rapidcheck premake5 project (sources already vendored)"
+```
+
+---
+
+### Task 4.5: Write Catch2 v3 premake5 project
+
+Source already cloned at `ThirdParty/Catch2/` (Boost license). **Catch2 v3 is no longer header-only** — it's a real compiled static library.
+
+**Files:**
+- Create: `ThirdParty/Catch2/premake5.lua`
+- Modify: `GachaServer/premake5.lua`
+
+- [ ] **Step 1: Write the premake project**
+
+`ThirdParty/Catch2/premake5.lua`:
+```lua
+project "Catch2"
+    kind "StaticLib"
+    language "C++"
+    cppdialect "C++20"
+    staticruntime "on"
+    location "%{wks.location}/projects"
+    targetdir "%{wks.location}/bin/%{cfg.buildcfg}-%{cfg.platform}/%{prj.name}"
+    objdir    "%{wks.location}/obj/%{cfg.buildcfg}-%{cfg.platform}/%{prj.name}"
+
+    files {
+        "src/catch2/**.cpp",
+        "src/catch2/**.hpp",
+    }
+    includedirs { "src" }
+    removefiles { "src/catch2/catch_main.cpp" }   -- exclude the main() entry; tests provide their own
+
+    filter "system:windows"
+        defines { "_CRT_SECURE_NO_WARNINGS", "NOMINMAX" }
+```
+
+- [ ] **Step 2: Add to top-level premake**
+
+Modify `GachaServer/premake5.lua`. Add:
+```lua
+include "../ThirdParty/Catch2"
+```
+And to the `IncludeDir` table:
+```lua
+IncludeDir["Catch2"] = "../ThirdParty/Catch2/src"
+```
+
+- [ ] **Step 3: Verify build**
+
+Run: `cd GachaServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:Catch2`
+Expected: Catch2.lib produced.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add ThirdParty/Catch2/premake5.lua GachaServer/premake5.lua
+git commit -m "feat(account): Catch2 v3 premake5 project (sources already vendored)"
 ```
 
 ---
@@ -1283,7 +1285,7 @@ inline nlohmann::json ToJson(const CurrencyDelta& d) {
 `GachaServer/GachaAccount/src/events/PullEvents.hpp`:
 ```cpp
 #pragma once
-#include "xoshiro256pp.hpp"
+#include "XoshiroCpp.hpp"
 #include <nlohmann/json.hpp>
 #include <cstdint>
 #include <optional>
@@ -1305,7 +1307,7 @@ struct PullPerformed {
     std::string cost_currency;               // "tickets" | "limited_tickets"
     std::int64_t cost_amount;
 
-    xoshiro::Xoshiro256pp::StateType rng_state_before;
+    XoshiroCpp::Xoshiro256PlusPlus::state_type rng_state_before;
     int          algorithm_version;
 
     int          pity_5_before;
@@ -1319,7 +1321,7 @@ struct PullPerformed {
     bool         guarantee_5_after;
 };
 
-inline nlohmann::json ToJson(const xoshiro::Xoshiro256pp::StateType& s) {
+inline nlohmann::json ToJson(const XoshiroCpp::Xoshiro256PlusPlus::state_type& s) {
     return nlohmann::json::array({ s[0], s[1], s[2], s[3] });
 }
 
@@ -1993,7 +1995,7 @@ struct PullsState {
     int  pity_5     = 0;
     int  pity_4     = 0;
     bool guarantee_5 = false;
-    xoshiro::Xoshiro256pp::StateType rng_state{ 1, 0, 0, 0 };
+    XoshiroCpp::Xoshiro256PlusPlus::state_type rng_state{ 1, 0, 0, 0 };
 };
 
 class PullsReducer {
@@ -3202,19 +3204,20 @@ git commit -m "feat(account): OutboxRelay with FOR UPDATE SKIP LOCKED dispatch"
 Modify `GachaServer/GachaAccount/src/GachaRNG.hpp` to use xoshiro256++ internally. Surface `state()` and `set_state()` to allow the handler to capture state before/after.
 
 ```cpp
-#include "xoshiro256pp.hpp"
+#include "XoshiroCpp.hpp"
 
 class GachaRNG {
 public:
-    explicit GachaRNG(xoshiro::Xoshiro256pp::StateType s) : rng_(s) {}
+    explicit GachaRNG(XoshiroCpp::Xoshiro256PlusPlus::state_type s) : rng_(s) {}
 
-    xoshiro::Xoshiro256pp::StateType State() const { return rng_.state(); }
-    void SetState(xoshiro::Xoshiro256pp::StateType s) { rng_.set_state(s); }
+    XoshiroCpp::Xoshiro256PlusPlus::state_type State() const { return rng_.serialize(); }
+    void SetState(XoshiroCpp::Xoshiro256PlusPlus::state_type s) { rng_.deserialize(s); }
 
-    // ... existing roll methods, now using rng_() ...
+    // Existing roll methods stay; just replace internal uses of std::mt19937 with rng_().
+    // rng_() returns a uint64_t; convert to whatever range the existing roll method expected.
 
 private:
-    xoshiro::Xoshiro256pp rng_;
+    XoshiroCpp::Xoshiro256PlusPlus rng_;
 };
 ```
 
