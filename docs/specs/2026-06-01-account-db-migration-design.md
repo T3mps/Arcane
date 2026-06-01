@@ -1,12 +1,12 @@
 # Account DB Migration — Design Spec
 
 **Date:** 2026-06-01
-**Scope:** GachaServer / GachaAccount + GachaCommon
+**Scope:** AphelyonServer / AphelyonAccount + AphelyonCommon
 **Status:** Approved design, ready for implementation plan
 
 ## Problem
 
-GachaAccount persists per-player state as one JSON file per account in `bin/*/GachaAccount/data/accounts/acc_<ts>_<rand>.json`, with a flat `index.json` mapping `username → account_id`. Concretely:
+AphelyonAccount persists per-player state as one JSON file per account in `bin/*/AphelyonAccount/data/accounts/acc_<ts>_<rand>.json`, with a flat `index.json` mapping `username → account_id`. Concretely:
 
 - **Current size:** ~2 KB per account today. Projected ~120 KB at a heavy-player profile (1000 weapons + 200 characters + 500 gear pieces + 50 quest states).
 - **Write amplification:** Every state-mutating RPC (12 handler sites across 4 handler files) calls `m_ctx.saveAccount(account)`, which serializes the entire account and writes a new file via temp+rename. One pull = one full-file rewrite. A heavy session is ~10–20 writes per minute.
@@ -26,8 +26,8 @@ GachaAccount persists per-player state as one JSON file per account in `bin/*/Ga
 - Lay the foundation for future features (leaderboards, friend graphs, analytics) without committing to them in this spec.
 
 **Non-goals (now)**
-- GachaAuth persistence (still in-memory sessions; sessions evaporate on restart, which is acceptable for current scale).
-- GachaCombat persistence (still a stub; spec it when the service grows beyond stub).
+- AphelyonAuth persistence (still in-memory sessions; sessions evaporate on restart, which is acceptable for current scale).
+- AphelyonCombat persistence (still a stub; spec it when the service grows beyond stub).
 - Valkey integration (deferred to the spec that introduces the first leaderboard or social feature).
 - Leaderboard schema / friend graph schema (deferred to the spec that needs them).
 - Migrating existing JSON saves (per project dev policy: schema changes during dev delete saves; users re-register).
@@ -72,7 +72,7 @@ The chosen stack — Postgres + selective ES + thin audit table for non-ES paths
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ GachaAccount Service                                                     │
+│ AphelyonAccount Service                                                     │
 │                                                                          │
 │ ┌─────────────────┐    ┌─────────────────────────────────────────────┐  │
 │ │ Handlers        │    │ AccountService                              │  │
@@ -156,7 +156,7 @@ char_traces (
 );
 
 -- Owned weapons (instanced — one row per pull; UUID v7 for time-ordered B-tree append)
--- Note: weapon XP-toward-next-level intentionally omitted — current GachaServer code does
+-- Note: weapon XP-toward-next-level intentionally omitted — current AphelyonServer code does
 -- not model weapon XP. Add `current_xp INT NOT NULL DEFAULT 0` if/when light-cone-style
 -- weapon levelling lands as a feature.
 owned_weapons (
@@ -522,7 +522,7 @@ When any of these lands, it gets its own spec + plan. The `outbox` table + audit
 
 ## Repository / Persistence Layer
 
-A new `AccountRepository` in `GachaAccount/src/` replaces the JSON-file repository. Public surface:
+A new `AccountRepository` in `AphelyonAccount/src/` replaces the JSON-file repository. Public surface:
 
 ```cpp
 class AccountRepository {
@@ -649,7 +649,7 @@ On load: `SELECT state, version, reducer_version FROM snapshots WHERE account_id
 
 Snapshot atomicity: not required to be transactional with event append. Worst case after crash: a snapshot exists for version N but the latest event written is < N — load logic ignores snapshots ahead of the event log. Best case: snapshot stale by some events, replay applies the tail.
 
-**Writer location.** A single dedicated `SnapshotWriter` thread inside the GachaAccount process, fed by a bounded MPMC queue (~capacity 1024). After successful `Transaction::Commit()`, the transaction wrapper enqueues a `SnapshotJob { account_id, aggregate_kind, current_version }` if the snapshot cadence condition fires. The writer thread:
+**Writer location.** A single dedicated `SnapshotWriter` thread inside the AphelyonAccount process, fed by a bounded MPMC queue (~capacity 1024). After successful `Transaction::Commit()`, the transaction wrapper enqueues a `SnapshotJob { account_id, aggregate_kind, current_version }` if the snapshot cadence condition fires. The writer thread:
 1. Drains jobs from the queue.
 2. For each job, acquires the player's stripe lock briefly to take a consistent snapshot of the in-memory aggregate state.
 3. Writes the snapshot row with its own short Postgres transaction (one writer connection from the pool reserved for this).
@@ -672,7 +672,7 @@ Never edit historical events. If a bug caused wrong state, write a **compensatin
 
 1. **Pure-function reducer signature.** Reducers take `const State&`, `const Event&`, `const Clock&` (injected), `RngState&` (from the event payload). No global access, no static state, no I/O.
 
-2. **clang-tidy custom check** (`gacha-reducer-purity`) applied to `GachaAccount/src/reducers/`. Bans:
+2. **clang-tidy custom check** (`gacha-reducer-purity`) applied to `AphelyonAccount/src/reducers/`. Bans:
    - `std::chrono::system_clock::now`, `std::time`, `time()`, `clock_gettime`
    - `std::random_device`, free-function `rand()`, `std::mt19937` constructors
    - `std::filesystem::*`, `std::getenv`, `std::system`
@@ -693,7 +693,7 @@ Two channels, both terminate in the same Postgres transaction as the event appen
 The existing `CollectionReducer` already returns `vector<SideEffectVariant>` (UI toasts, telemetry events). Pattern is preserved and extended to wallet/pulls/quest_claims/progression reducers. The orchestrator dispatches descriptors in live mode and **skips them entirely in replay mode**. A `bool isReplay` parameter is threaded through the dispatch.
 
 **Channel B — Postgres outbox table (cross-service / exactly-once-ish):**
-Side effects that must reach another service (push notifications, friend-feed RPC, analytics) are written to the `outbox` table in the same transaction as the event. A polling relay thread in the GachaAccount process reads with `SELECT ... FOR UPDATE SKIP LOCKED`, dispatches, marks `dispatched_at`. Extraction to a separate worker process is a future scaling step, not part of this spec. Idempotency is the recipient's responsibility.
+Side effects that must reach another service (push notifications, friend-feed RPC, analytics) are written to the `outbox` table in the same transaction as the event. A polling relay thread in the AphelyonAccount process reads with `SELECT ... FOR UPDATE SKIP LOCKED`, dispatches, marks `dispatched_at`. Extraction to a separate worker process is a future scaling step, not part of this spec. Idempotency is the recipient's responsibility.
 
 **State transitions are NOT side effects.** Granting a pulled character/weapon to inventory is part of the event's state transition and lives in the reducer. Notification "you got a 5★!" IS a side effect (Channel A). Push notification to the player's mobile device IS a side effect (Channel B).
 
@@ -746,18 +746,18 @@ Naming convention:
 
 Per project save policy (deletes saves on schema changes during dev, no migration code):
 
-1. Stop GachaAccount.
-2. Delete `bin/*/GachaAccount/data/accounts/` entirely.
+1. Stop AphelyonAccount.
+2. Delete `bin/*/AphelyonAccount/data/accounts/` entirely.
 3. Drop the dev Postgres database (`docker compose down -v` to nuke the volume).
 4. Apply the migration files (Phase 1 in implementation plan) to a fresh database.
-5. Restart GachaAccount; test accounts re-register on next login.
+5. Restart AphelyonAccount; test accounts re-register on next login.
 
 No JSON importer is built. No compatibility shim. Account tables start empty; users re-register; pull-streams start at version 1.
 
 **Dev environment setup:**
-- New `GachaServer/docker-compose.yml` with one `postgres:16` service, mounted volume for `pgdata`, exposed on `5432`.
-- New `GachaServer/scripts/db-setup.bat` (Windows) and `db-setup.sh` (cross-platform) that wait for the container, apply migrations, and seed minimal data.
-- Migrations live in `GachaServer/GachaAccount/migrations/`. Plain `.sql` files, numbered. Applied by a small custom runner (not Flyway / Liquibase — vendoring preference and minimum-viable for now).
+- New `AphelyonServer/docker-compose.yml` with one `postgres:16` service, mounted volume for `pgdata`, exposed on `5432`.
+- New `AphelyonServer/scripts/db-setup.bat` (Windows) and `db-setup.sh` (cross-platform) that wait for the container, apply migrations, and seed minimal data.
+- Migrations live in `AphelyonServer/AphelyonAccount/migrations/`. Plain `.sql` files, numbered. Applied by a small custom runner (not Flyway / Liquibase — vendoring preference and minimum-viable for now).
 - `connection_string` configured via `data/db.json` in the Account service's working dir, with a default for `postgres://gacha:gacha@localhost:5432/gacha`.
 
 ## Testing
@@ -796,8 +796,8 @@ Pyramid for selective-ES correctness:
 
 ## Out of Scope
 
-- **GachaAuth persistence.** Auth remains in-memory (sessions evaporate on restart). Acceptable for current scale; revisit in a dedicated spec when restart-survival becomes required.
-- **GachaCombat persistence.** Combat service is a stub; persistence specced when the service grows beyond stub.
+- **AphelyonAuth persistence.** Auth remains in-memory (sessions evaporate on restart). Acceptable for current scale; revisit in a dedicated spec when restart-survival becomes required.
+- **AphelyonCombat persistence.** Combat service is a stub; persistence specced when the service grows beyond stub.
 - **Valkey / Redis integration.** Deferred to the spec that introduces leaderboards or friend graphs.
 - **Leaderboard schema, friend graph schema.** Deferred.
 - **Event-sourcing additional aggregates** (combat history, social interactions, etc.). Add as needed in separate specs.

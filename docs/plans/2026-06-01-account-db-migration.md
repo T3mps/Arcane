@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate GachaAccount persistence from one-JSON-file-per-player to PostgreSQL with selective event sourcing on wallet/pulls/quest_claims/progression aggregates; relational tables + audit log for the rest.
+**Goal:** Migrate AphelyonAccount persistence from one-JSON-file-per-player to PostgreSQL with selective event sourcing on wallet/pulls/quest_claims/progression aggregates; relational tables + audit log for the rest.
 
 **Architecture:** PostgreSQL 16+ as primary store, Docker Compose in dev. Single monthly-partitioned `events` table holds 4 aggregate streams; 13 relational tables hold non-ES player state; 3 support tables (snapshots, outbox, audit_log). Per-RPC Postgres transaction with optimistic concurrency on event append. Dirty-flag flush on relational mutations driven by Account setters. xoshiro256++ PRNG for cross-platform deterministic replay. 64-stripe per-player lock + in-memory cache preserved.
 
@@ -16,68 +16,68 @@
 
 | File | Responsibility |
 |---|---|
-| `GachaServer/docker-compose.yml` | Postgres 16 + pg_partman container; named volume `gacha_pgdata`; exposed on host `5432`. |
-| `GachaServer/scripts/db-setup.bat` | Windows: bring up Postgres, wait for ready, run migrations. |
-| `GachaServer/scripts/db-setup.sh` | Cross-platform equivalent of the above. |
-| `GachaServer/scripts/db-reset.bat` | Dev-only: nuke volume and `bin/*/GachaAccount/data/accounts/`, then re-setup. |
-| `GachaServer/GachaAccount/migrations/001_accounts.sql` | `accounts` table + soft-delete index. |
-| `GachaServer/GachaAccount/migrations/002_inventory.sql` | `owned_characters`, `char_traces`, `owned_weapons`, `owned_gear`, `gear_substats`. |
-| `GachaServer/GachaAccount/migrations/003_equipment.sql` | `loadouts`, `material_inventory`, `party_slots`. |
-| `GachaServer/GachaAccount/migrations/004_quests.sql` | `quest_states`, `quest_objectives`, `world_flags`, `pity_state`. |
-| `GachaServer/GachaAccount/migrations/005_events.sql` | Partitioned `events` table + initial monthly partition + indexes + FK CASCADE. |
-| `GachaServer/GachaAccount/migrations/006_support.sql` | `snapshots`, `outbox`, `audit_log`. |
-| `GachaServer/scripts/setup-vcpkg-deps.bat` | MODIFY — add `libpqxx:x64-windows-static` (which transitively pulls `libpq`). |
+| `AphelyonServer/docker-compose.yml` | Postgres 16 + pg_partman container; named volume `aphelyon_pgdata`; exposed on host `5432`. |
+| `AphelyonServer/scripts/db-setup.bat` | Windows: bring up Postgres, wait for ready, run migrations. |
+| `AphelyonServer/scripts/db-setup.sh` | Cross-platform equivalent of the above. |
+| `AphelyonServer/scripts/db-reset.bat` | Dev-only: nuke volume and `bin/*/AphelyonAccount/data/accounts/`, then re-setup. |
+| `AphelyonServer/AphelyonAccount/migrations/001_accounts.sql` | `accounts` table + soft-delete index. |
+| `AphelyonServer/AphelyonAccount/migrations/002_inventory.sql` | `owned_characters`, `char_traces`, `owned_weapons`, `owned_gear`, `gear_substats`. |
+| `AphelyonServer/AphelyonAccount/migrations/003_equipment.sql` | `loadouts`, `material_inventory`, `party_slots`. |
+| `AphelyonServer/AphelyonAccount/migrations/004_quests.sql` | `quest_states`, `quest_objectives`, `world_flags`, `pity_state`. |
+| `AphelyonServer/AphelyonAccount/migrations/005_events.sql` | Partitioned `events` table + initial monthly partition + indexes + FK CASCADE. |
+| `AphelyonServer/AphelyonAccount/migrations/006_support.sql` | `snapshots`, `outbox`, `audit_log`. |
+| `AphelyonServer/scripts/setup-vcpkg-deps.bat` | MODIFY — add `libpqxx:x64-windows-static` (which transitively pulls `libpq`). |
 | `ThirdParty/Xoshiro/XoshiroCpp.hpp` | Already cloned. Header-only PRNG by Ryo Suzuki (MIT). No premake5 file needed. |
 | `ThirdParty/rapidcheck/premake5.lua` | Create — static-lib project file (sources already cloned). |
 | `ThirdParty/Catch2/premake5.lua` | Create — static-lib project file (Catch2 v3 source already cloned). |
-| `GachaServer/GachaCommon/src/UuidV7.hpp` | UUID v7 generator (time-ordered, RFC 9562). |
-| `GachaServer/GachaAccount/src/db/ConnectionPool.hpp` | Bounded libpqxx connection pool (semaphore-based, ~80 LOC). |
-| `GachaServer/GachaAccount/src/db/MigrationRunner.hpp` | Applies numbered `.sql` files; tracks applied versions in a `schema_migrations` table. |
-| `GachaServer/GachaAccount/src/events/Event.hpp` | Common event envelope: id, account_id, aggregate_kind, version, type, schema_version, data, metadata, idempotency_key. |
-| `GachaServer/GachaAccount/src/events/WalletEvents.hpp` | Wallet event payload types + JSON serialization. |
-| `GachaServer/GachaAccount/src/events/PullEvents.hpp` | Pull event payload types (with RNG capture fields). |
-| `GachaServer/GachaAccount/src/events/QuestClaimEvents.hpp` | Quest claim event payload types. |
-| `GachaServer/GachaAccount/src/events/ProgressionEvents.hpp` | Progression event payload types. |
-| `GachaServer/GachaAccount/src/reducers/ReducerCommon.hpp` | Shared `ReducerResult<State>`, `SideEffectDescriptor` variants, `Clock` interface. |
-| `GachaServer/GachaAccount/src/reducers/WalletReducer.hpp` | Pure reducer: `(WalletState, WalletEvent) → ReducerResult<WalletState>`. |
-| `GachaServer/GachaAccount/src/reducers/PullsReducer.hpp` | Pure reducer with deterministic RNG state in event. |
-| `GachaServer/GachaAccount/src/reducers/QuestClaimsReducer.hpp` | Pure reducer; emits cross-aggregate references via metadata. |
-| `GachaServer/GachaAccount/src/reducers/ProgressionReducer.hpp` | Pure reducer; can spawn downstream wallet events (overflow credits). |
-| `GachaServer/GachaAccount/src/db/EventStore.hpp` | Append event (optimistic concurrency), load aggregate (snapshot + tail). |
-| `GachaServer/GachaAccount/src/db/SnapshotWriter.hpp` | Background thread + bounded MPMC queue; cadence-driven snapshot writes. |
-| `GachaServer/GachaAccount/src/db/OutboxRelay.hpp` | Background poller using `FOR UPDATE SKIP LOCKED`; dispatches and marks `dispatched_at`. |
-| `GachaServer/GachaAccount/src/db/RelationalFlush.hpp` | Per-table flush implementations driven by `Account::Dirty()`. |
-| `GachaServer/GachaAccount/src/AccountRepository.hpp` | REWRITE — Postgres-backed; replaces the JSON-file repository. |
-| `GachaServer/GachaAccount/src/AccountTransaction.hpp` | Per-RPC transaction wrapper (Begin/Commit/Rollback). |
-| `GachaServer/GachaAccount/src/TickQuests.hpp` | Explicit quest-expiration helper invoked at account-load + quest handlers. |
-| `GachaServer/GachaAccount/src/AccountSerializer.hpp` | DELETE — JSON I/O is gone. |
-| `GachaServer/GachaCommon/src/AccountData.hpp` | MODIFY — private fields, public setters that auto-mark dirty. |
-| `GachaServer/GachaCommon/src/CollectionState.hpp` | MODIFY — UUID instance IDs (`uuids::uuid` instead of `std::string`). |
-| `GachaServer/GachaAccount/src/GachaRNG.hpp` | MODIFY — switch from `std::mt19937` to xoshiro256++; surface RNG state on/before pull. |
-| `GachaServer/GachaAccount/src/GachaHandlers.hpp` | MODIFY — use `AccountTransaction`; emit pull events instead of mutating directly. |
-| `GachaServer/GachaAccount/src/AccountHandlers.hpp` | MODIFY — use `AccountTransaction`; emit wallet events; audit non-ES mutations. |
-| `GachaServer/GachaAccount/src/QuestHandlers.hpp` | MODIFY — call `TickQuests` explicitly; `GetQuestState` becomes a pure read. |
-| `GachaServer/GachaAccount/src/ProgressionHandlers.hpp` | MODIFY — emit progression events. |
-| `GachaServer/GachaAccount/src/AccountServer.hpp` | MODIFY — wire up `ConnectionPool`, `SnapshotWriter`, `OutboxRelay`. |
-| `GachaServer/GachaAccount/tests/ReducerTests/WalletReducerTest.cpp` | Catch2 unit tests for wallet reducer. |
-| `GachaServer/GachaAccount/tests/ReducerTests/PullsReducerTest.cpp` | Catch2 unit tests for pulls reducer. |
-| `GachaServer/GachaAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp` | Catch2 unit tests for quest-claims reducer. |
-| `GachaServer/GachaAccount/tests/ReducerTests/ProgressionReducerTest.cpp` | Catch2 unit tests for progression reducer. |
-| `GachaServer/GachaAccount/tests/PropertyTests/ReplayDeterminismTest.cpp` | rapidcheck triple-replay property. |
-| `GachaServer/GachaAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp` | rapidcheck split-and-fold property. |
-| `GachaServer/GachaAccount/tests/PropertyTests/InvariantTests.cpp` | Domain invariants (currency non-negative, pity bounded). |
-| `GachaServer/GachaAccount/tests/GoldenFile/SchemaMigrationTest.cpp` | Loads `tests/events/v{N}_*.json` → upcasts → folds → asserts. |
-| `GachaServer/GachaAccount/tests/events/v1_pull_performed.json` | Versioned event sample. |
-| `GachaServer/GachaAccount/tests/events/v1_credits_spent.json` | Versioned event sample. |
-| `GachaServer/GachaAccount/tests/events/v1_quest_reward_claimed.json` | Versioned event sample. |
-| `GachaServer/GachaAccount/tests/events/v1_story_level_advanced.json` | Versioned event sample. |
-| `GachaServer/GachaAccount/tests/Integration/EventStoreRoundTripTest.cpp` | testcontainer or docker-spawned Postgres; append + load + replay. |
-| `GachaServer/GachaAccount/tests/Integration/OutboxRelayTest.cpp` | Verifies relay dispatches and marks `dispatched_at`. |
+| `AphelyonServer/AphelyonCommon/src/UuidV7.hpp` | UUID v7 generator (time-ordered, RFC 9562). |
+| `AphelyonServer/AphelyonAccount/src/db/ConnectionPool.hpp` | Bounded libpqxx connection pool (semaphore-based, ~80 LOC). |
+| `AphelyonServer/AphelyonAccount/src/db/MigrationRunner.hpp` | Applies numbered `.sql` files; tracks applied versions in a `schema_migrations` table. |
+| `AphelyonServer/AphelyonAccount/src/events/Event.hpp` | Common event envelope: id, account_id, aggregate_kind, version, type, schema_version, data, metadata, idempotency_key. |
+| `AphelyonServer/AphelyonAccount/src/events/WalletEvents.hpp` | Wallet event payload types + JSON serialization. |
+| `AphelyonServer/AphelyonAccount/src/events/PullEvents.hpp` | Pull event payload types (with RNG capture fields). |
+| `AphelyonServer/AphelyonAccount/src/events/QuestClaimEvents.hpp` | Quest claim event payload types. |
+| `AphelyonServer/AphelyonAccount/src/events/ProgressionEvents.hpp` | Progression event payload types. |
+| `AphelyonServer/AphelyonAccount/src/reducers/ReducerCommon.hpp` | Shared `ReducerResult<State>`, `SideEffectDescriptor` variants, `Clock` interface. |
+| `AphelyonServer/AphelyonAccount/src/reducers/WalletReducer.hpp` | Pure reducer: `(WalletState, WalletEvent) → ReducerResult<WalletState>`. |
+| `AphelyonServer/AphelyonAccount/src/reducers/PullsReducer.hpp` | Pure reducer with deterministic RNG state in event. |
+| `AphelyonServer/AphelyonAccount/src/reducers/QuestClaimsReducer.hpp` | Pure reducer; emits cross-aggregate references via metadata. |
+| `AphelyonServer/AphelyonAccount/src/reducers/ProgressionReducer.hpp` | Pure reducer; can spawn downstream wallet events (overflow credits). |
+| `AphelyonServer/AphelyonAccount/src/db/EventStore.hpp` | Append event (optimistic concurrency), load aggregate (snapshot + tail). |
+| `AphelyonServer/AphelyonAccount/src/db/SnapshotWriter.hpp` | Background thread + bounded MPMC queue; cadence-driven snapshot writes. |
+| `AphelyonServer/AphelyonAccount/src/db/OutboxRelay.hpp` | Background poller using `FOR UPDATE SKIP LOCKED`; dispatches and marks `dispatched_at`. |
+| `AphelyonServer/AphelyonAccount/src/db/RelationalFlush.hpp` | Per-table flush implementations driven by `Account::Dirty()`. |
+| `AphelyonServer/AphelyonAccount/src/AccountRepository.hpp` | REWRITE — Postgres-backed; replaces the JSON-file repository. |
+| `AphelyonServer/AphelyonAccount/src/AccountTransaction.hpp` | Per-RPC transaction wrapper (Begin/Commit/Rollback). |
+| `AphelyonServer/AphelyonAccount/src/TickQuests.hpp` | Explicit quest-expiration helper invoked at account-load + quest handlers. |
+| `AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp` | DELETE — JSON I/O is gone. |
+| `AphelyonServer/AphelyonCommon/src/AccountData.hpp` | MODIFY — private fields, public setters that auto-mark dirty. |
+| `AphelyonServer/AphelyonCommon/src/CollectionState.hpp` | MODIFY — UUID instance IDs (`uuids::uuid` instead of `std::string`). |
+| `AphelyonServer/AphelyonAccount/src/GachaRNG.hpp` | MODIFY — switch from `std::mt19937` to xoshiro256++; surface RNG state on/before pull. |
+| `AphelyonServer/AphelyonAccount/src/GachaHandlers.hpp` | MODIFY — use `AccountTransaction`; emit pull events instead of mutating directly. |
+| `AphelyonServer/AphelyonAccount/src/AccountHandlers.hpp` | MODIFY — use `AccountTransaction`; emit wallet events; audit non-ES mutations. |
+| `AphelyonServer/AphelyonAccount/src/QuestHandlers.hpp` | MODIFY — call `TickQuests` explicitly; `GetQuestState` becomes a pure read. |
+| `AphelyonServer/AphelyonAccount/src/ProgressionHandlers.hpp` | MODIFY — emit progression events. |
+| `AphelyonServer/AphelyonAccount/src/AccountServer.hpp` | MODIFY — wire up `ConnectionPool`, `SnapshotWriter`, `OutboxRelay`. |
+| `AphelyonServer/AphelyonAccount/tests/ReducerTests/WalletReducerTest.cpp` | Catch2 unit tests for wallet reducer. |
+| `AphelyonServer/AphelyonAccount/tests/ReducerTests/PullsReducerTest.cpp` | Catch2 unit tests for pulls reducer. |
+| `AphelyonServer/AphelyonAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp` | Catch2 unit tests for quest-claims reducer. |
+| `AphelyonServer/AphelyonAccount/tests/ReducerTests/ProgressionReducerTest.cpp` | Catch2 unit tests for progression reducer. |
+| `AphelyonServer/AphelyonAccount/tests/PropertyTests/ReplayDeterminismTest.cpp` | rapidcheck triple-replay property. |
+| `AphelyonServer/AphelyonAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp` | rapidcheck split-and-fold property. |
+| `AphelyonServer/AphelyonAccount/tests/PropertyTests/InvariantTests.cpp` | Domain invariants (currency non-negative, pity bounded). |
+| `AphelyonServer/AphelyonAccount/tests/GoldenFile/SchemaMigrationTest.cpp` | Loads `tests/events/v{N}_*.json` → upcasts → folds → asserts. |
+| `AphelyonServer/AphelyonAccount/tests/events/v1_pull_performed.json` | Versioned event sample. |
+| `AphelyonServer/AphelyonAccount/tests/events/v1_credits_spent.json` | Versioned event sample. |
+| `AphelyonServer/AphelyonAccount/tests/events/v1_quest_reward_claimed.json` | Versioned event sample. |
+| `AphelyonServer/AphelyonAccount/tests/events/v1_story_level_advanced.json` | Versioned event sample. |
+| `AphelyonServer/AphelyonAccount/tests/Integration/EventStoreRoundTripTest.cpp` | testcontainer or docker-spawned Postgres; append + load + replay. |
+| `AphelyonServer/AphelyonAccount/tests/Integration/OutboxRelayTest.cpp` | Verifies relay dispatches and marks `dispatched_at`. |
 | `tools/clang-tidy/GachaReducerPurityCheck.cpp` | Custom clang-tidy check banning non-deterministic calls in `reducers/`. |
 | `tools/clang-tidy/.clang-tidy` | Project-level clang-tidy config that enables the custom check on `reducers/`. |
-| `GachaServer/scripts/wal-g-setup.sh` | Optional: dev WAL-G config for backup drill (deferred to operational phase). |
-| `GachaServer/GachaAccount/premake5.lua` | MODIFY — link `libpqxx` + `libpq` from vcpkg, add `migrations/`, add `tests/` executable, add reducers dir. |
-| `GachaServer/premake5.lua` | MODIFY — include rapidcheck + Catch2 subprojects; add vcpkg include dirs for libpqxx/libpq; add IncludeDir entry for XoshiroCpp. |
+| `AphelyonServer/scripts/wal-g-setup.sh` | Optional: dev WAL-G config for backup drill (deferred to operational phase). |
+| `AphelyonServer/AphelyonAccount/premake5.lua` | MODIFY — link `libpqxx` + `libpq` from vcpkg, add `migrations/`, add `tests/` executable, add reducers dir. |
+| `AphelyonServer/premake5.lua` | MODIFY — include rapidcheck + Catch2 subprojects; add vcpkg include dirs for libpqxx/libpq; add IncludeDir entry for XoshiroCpp. |
 
 Conventions used throughout:
 - All migration files apply with `db-setup.bat` (or `docker exec gacha_postgres psql ... -f /migrations/NNN.sql`).
@@ -107,41 +107,41 @@ Expected: working tree clean apart from any in-progress uncommitted work the use
 ### Task 1: Docker Compose for Postgres
 
 **Files:**
-- Create: `GachaServer/docker-compose.yml`
-- Create: `GachaServer/scripts/db-setup.bat`
-- Create: `GachaServer/scripts/db-setup.sh`
-- Create: `GachaServer/scripts/db-reset.bat`
+- Create: `AphelyonServer/docker-compose.yml`
+- Create: `AphelyonServer/scripts/db-setup.bat`
+- Create: `AphelyonServer/scripts/db-setup.sh`
+- Create: `AphelyonServer/scripts/db-reset.bat`
 
 - [ ] **Step 1: Write docker-compose.yml**
 
-`GachaServer/docker-compose.yml`:
+`AphelyonServer/docker-compose.yml`:
 ```yaml
 services:
   postgres:
     image: postgres:16
-    container_name: gacha_postgres
+    container_name: aphelyon_postgres
     environment:
-      POSTGRES_DB: gacha
-      POSTGRES_USER: gacha
-      POSTGRES_PASSWORD: gacha
+      POSTGRES_DB: aphelyon
+      POSTGRES_USER: aphelyon
+      POSTGRES_PASSWORD: aphelyon
     ports:
       - "5432:5432"
     volumes:
-      - gacha_pgdata:/var/lib/postgresql/data
-      - ./GachaAccount/migrations:/migrations:ro
+      - aphelyon_pgdata:/var/lib/postgresql/data
+      - ./AphelyonAccount/migrations:/migrations:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gacha -d gacha"]
+      test: ["CMD-SHELL", "pg_isready -U aphelyon -d aphelyon"]
       interval: 2s
       timeout: 5s
       retries: 30
 
 volumes:
-  gacha_pgdata:
+  aphelyon_pgdata:
 ```
 
 - [ ] **Step 2: Write Windows setup script**
 
-`GachaServer/scripts/db-setup.bat`:
+`AphelyonServer/scripts/db-setup.bat`:
 ```bat
 @echo off
 setlocal
@@ -152,16 +152,16 @@ if errorlevel 1 goto :error
 
 echo Waiting for Postgres to be ready...
 :wait
-docker compose exec -T postgres pg_isready -U gacha -d gacha >nul 2>&1
+docker compose exec -T postgres pg_isready -U aphelyon -d aphelyon >nul 2>&1
 if errorlevel 1 (
     timeout /t 2 /nobreak >nul
     goto :wait
 )
 
 echo Applying migrations in order...
-for %%f in (GachaAccount\migrations\*.sql) do (
+for %%f in (AphelyonAccount\migrations\*.sql) do (
     echo   %%f
-    docker compose exec -T postgres psql -U gacha -d gacha -v ON_ERROR_STOP=1 -f /migrations/%%~nxf
+    docker compose exec -T postgres psql -U aphelyon -d aphelyon -v ON_ERROR_STOP=1 -f /migrations/%%~nxf
     if errorlevel 1 goto :error
 )
 
@@ -179,7 +179,7 @@ exit /b 1
 
 - [ ] **Step 3: Write POSIX setup script**
 
-`GachaServer/scripts/db-setup.sh`:
+`AphelyonServer/scripts/db-setup.sh`:
 ```sh
 #!/usr/bin/env sh
 set -eu
@@ -189,14 +189,14 @@ echo "Bringing up Postgres..."
 docker compose up -d postgres
 
 echo "Waiting for Postgres to be ready..."
-until docker compose exec -T postgres pg_isready -U gacha -d gacha >/dev/null 2>&1; do
+until docker compose exec -T postgres pg_isready -U aphelyon -d aphelyon >/dev/null 2>&1; do
   sleep 2
 done
 
 echo "Applying migrations in order..."
-for f in GachaAccount/migrations/*.sql; do
+for f in AphelyonAccount/migrations/*.sql; do
   echo "  $f"
-  docker compose exec -T postgres psql -U gacha -d gacha -v ON_ERROR_STOP=1 -f "/migrations/$(basename "$f")"
+  docker compose exec -T postgres psql -U aphelyon -d aphelyon -v ON_ERROR_STOP=1 -f "/migrations/$(basename "$f")"
 done
 
 echo "Done."
@@ -204,7 +204,7 @@ echo "Done."
 
 - [ ] **Step 4: Write reset script (dev-only)**
 
-`GachaServer/scripts/db-reset.bat`:
+`AphelyonServer/scripts/db-reset.bat`:
 ```bat
 @echo off
 setlocal
@@ -214,8 +214,8 @@ echo This will DESTROY the dev database and all in-tree JSON saves. Ctrl-C to ab
 pause
 
 docker compose down -v
-if exist bin\Debug-windows-x86_64\GachaAccount\data\accounts rmdir /s /q bin\Debug-windows-x86_64\GachaAccount\data\accounts
-if exist bin\Release-windows-x86_64\GachaAccount\data\accounts rmdir /s /q bin\Release-windows-x86_64\GachaAccount\data\accounts
+if exist bin\Debug-windows-x86_64\AphelyonAccount\data\accounts rmdir /s /q bin\Debug-windows-x86_64\AphelyonAccount\data\accounts
+if exist bin\Release-windows-x86_64\AphelyonAccount\data\accounts rmdir /s /q bin\Release-windows-x86_64\AphelyonAccount\data\accounts
 
 call scripts\db-setup.bat
 popd
@@ -224,13 +224,13 @@ endlocal
 
 - [ ] **Step 5: Bring up Postgres to verify**
 
-Run: `cd GachaServer && docker compose up -d postgres`
+Run: `cd AphelyonServer && docker compose up -d postgres`
 Expected: container started. Verify with `docker compose ps` showing `gacha_postgres` healthy.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add GachaServer/docker-compose.yml GachaServer/scripts/db-setup.bat GachaServer/scripts/db-setup.sh GachaServer/scripts/db-reset.bat
+git add AphelyonServer/docker-compose.yml AphelyonServer/scripts/db-setup.bat AphelyonServer/scripts/db-setup.sh AphelyonServer/scripts/db-reset.bat
 git commit -m "feat(account): docker-compose Postgres + setup/reset scripts"
 ```
 
@@ -241,20 +241,20 @@ git commit -m "feat(account): docker-compose Postgres + setup/reset scripts"
 **Why vcpkg here:** libpqxx generates compiler-feature-detection headers via CMake (`PQXX_HAVE_*` macros) and links against `libpq` — the Postgres C client lib, which is intrinsically tied to Postgres internals. Both fall into the CLAUDE.md "deeply nested build system" case where vcpkg is the right tool. Adding `libpqxx` to the vcpkg manifest transitively pulls in `libpq`.
 
 **Files:**
-- Modify: `GachaServer/scripts/setup-vcpkg-deps.bat`
-- Modify: `GachaServer/premake5.lua`
+- Modify: `AphelyonServer/scripts/setup-vcpkg-deps.bat`
+- Modify: `AphelyonServer/premake5.lua`
 - Delete (optional cleanup, see Step 5): `ThirdParty/libpqxx/`
 
 - [ ] **Step 1: Add libpqxx to the vcpkg setup script**
 
-Open `GachaServer/scripts/setup-vcpkg-deps.bat`. Find the `vcpkg install` line that currently installs protobuf/abseil with the overlay triplet. Add `libpqxx:x64-windows-static`. The relevant line should look like:
+Open `AphelyonServer/scripts/setup-vcpkg-deps.bat`. Find the `vcpkg install` line that currently installs protobuf/abseil with the overlay triplet. Add `libpqxx:x64-windows-static`. The relevant line should look like:
 ```bat
 vcpkg install --overlay-triplets=..\vcpkg-triplets protobuf:x64-windows-static abseil:x64-windows-static utf8-range:x64-windows-static libpqxx:x64-windows-static
 ```
 
 - [ ] **Step 2: Run the vcpkg install**
 
-Run: `cd GachaServer && scripts\setup-vcpkg-deps.bat`
+Run: `cd AphelyonServer && scripts\setup-vcpkg-deps.bat`
 Expected: vcpkg builds libpq and libpqxx with the v143 toolset, ~3–8 minutes. Verify with:
 ```
 dir vcpkg\installed\x64-windows-static\lib\libpqxx.lib
@@ -263,7 +263,7 @@ dir vcpkg\installed\x64-windows-static\lib\libpq.lib
 
 - [ ] **Step 3: Wire vcpkg paths into premake**
 
-Modify `GachaServer/premake5.lua`. Find the existing `VcpkgDir` definition and `IncludeDir` table. Add:
+Modify `AphelyonServer/premake5.lua`. Find the existing `VcpkgDir` definition and `IncludeDir` table. Add:
 ```lua
 -- Already exists if protobuf/abseil are wired up; reuse:
 IncludeDir["libpqxx"] = VcpkgDir .. "/include"   -- libpqxx headers
@@ -273,7 +273,7 @@ IncludeDir["libpq"]   = VcpkgDir .. "/include"   -- libpq headers (same dir, sam
 VcpkgLibDir = VcpkgDir .. "/lib"
 ```
 
-The actual link directives are added per-project in Task 35 / when `GachaAccount/premake5.lua` is updated — wherever a project needs Postgres access. The pattern (copy from how `protobuf` is currently linked):
+The actual link directives are added per-project in Task 35 / when `AphelyonAccount/premake5.lua` is updated — wherever a project needs Postgres access. The pattern (copy from how `protobuf` is currently linked):
 ```lua
 filter "system:windows"
     libdirs { VcpkgLibDir }
@@ -298,7 +298,7 @@ Skip this step if you'd rather keep the source around as reference; just don't r
 - [ ] **Step 6: Commit**
 
 ```bash
-git add GachaServer/scripts/setup-vcpkg-deps.bat GachaServer/premake5.lua
+git add AphelyonServer/scripts/setup-vcpkg-deps.bat AphelyonServer/premake5.lua
 git rm -r ThirdParty/libpqxx/  # if Step 5 chosen
 git commit -m "feat(account): libpqxx + libpq via vcpkg overlay (v143 toolset)"
 ```
@@ -317,20 +317,20 @@ Already cloned at `ThirdParty/Xoshiro/XoshiroCpp.hpp` (Ryo Suzuki, MIT). Header-
 - Seeder: `XoshiroCpp::SplitMix64(seed).generateSeedSequence<4>()`
 
 **Files:**
-- Modify: `GachaServer/premake5.lua`
+- Modify: `AphelyonServer/premake5.lua`
 
 - [ ] **Step 1: Add to premake include dirs**
 
-Modify `GachaServer/premake5.lua`. Add to the `IncludeDir` table:
+Modify `AphelyonServer/premake5.lua`. Add to the `IncludeDir` table:
 ```lua
 IncludeDir["XoshiroCpp"] = "../ThirdParty/Xoshiro"
 ```
 
-Then add `IncludeDir["XoshiroCpp"]` to the `includedirs` of every project that uses it (initially just GachaAccount).
+Then add `IncludeDir["XoshiroCpp"]` to the `includedirs` of every project that uses it (initially just AphelyonAccount).
 
 - [ ] **Step 2: Smoke test**
 
-Add a temporary `GachaServer/GachaAccount/test_xoshiro.cpp`:
+Add a temporary `AphelyonServer/AphelyonAccount/test_xoshiro.cpp`:
 ```cpp
 #include "XoshiroCpp.hpp"
 #include <iostream>
@@ -346,8 +346,8 @@ Build and run twice. Confirm identical output across runs (deterministic). Delet
 - [ ] **Step 3: Commit**
 
 ```bash
-git rm GachaServer/GachaAccount/test_xoshiro.cpp 2>/dev/null || true
-git add GachaServer/premake5.lua
+git rm AphelyonServer/AphelyonAccount/test_xoshiro.cpp 2>/dev/null || true
+git add AphelyonServer/premake5.lua
 git commit -m "feat(account): wire XoshiroCpp include path (already vendored)"
 ```
 
@@ -367,7 +367,7 @@ Source already cloned at `ThirdParty/rapidcheck/` (BSD). No external deps — pu
 
 **Files:**
 - Create: `ThirdParty/rapidcheck/premake5.lua`
-- Modify: `GachaServer/premake5.lua`
+- Modify: `AphelyonServer/premake5.lua`
 
 - [ ] **Step 1: Write the premake project**
 
@@ -395,7 +395,7 @@ project "rapidcheck"
 
 - [ ] **Step 2: Add to top-level premake**
 
-Modify `GachaServer/premake5.lua`. Add:
+Modify `AphelyonServer/premake5.lua`. Add:
 ```lua
 include "../ThirdParty/rapidcheck"
 ```
@@ -406,13 +406,13 @@ IncludeDir["rapidcheck"] = "../ThirdParty/rapidcheck/include"
 
 - [ ] **Step 3: Verify build**
 
-Run: `cd GachaServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:rapidcheck`
+Run: `cd AphelyonServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:rapidcheck`
 Expected: rapidcheck.lib produced.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add ThirdParty/rapidcheck/premake5.lua GachaServer/premake5.lua
+git add ThirdParty/rapidcheck/premake5.lua AphelyonServer/premake5.lua
 git commit -m "feat(account): rapidcheck premake5 project (sources already vendored)"
 ```
 
@@ -424,7 +424,7 @@ Source already cloned at `ThirdParty/Catch2/` (Boost license). **Catch2 v3 is no
 
 **Files:**
 - Create: `ThirdParty/Catch2/premake5.lua`
-- Modify: `GachaServer/premake5.lua`
+- Modify: `AphelyonServer/premake5.lua`
 
 - [ ] **Step 1: Write the premake project**
 
@@ -452,7 +452,7 @@ project "Catch2"
 
 - [ ] **Step 2: Add to top-level premake**
 
-Modify `GachaServer/premake5.lua`. Add:
+Modify `AphelyonServer/premake5.lua`. Add:
 ```lua
 include "../ThirdParty/Catch2"
 ```
@@ -463,13 +463,13 @@ IncludeDir["Catch2"] = "../ThirdParty/Catch2/src"
 
 - [ ] **Step 3: Verify build**
 
-Run: `cd GachaServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:Catch2`
+Run: `cd AphelyonServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:Catch2`
 Expected: Catch2.lib produced.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add ThirdParty/Catch2/premake5.lua GachaServer/premake5.lua
+git add ThirdParty/Catch2/premake5.lua AphelyonServer/premake5.lua
 git commit -m "feat(account): Catch2 v3 premake5 project (sources already vendored)"
 ```
 
@@ -478,14 +478,14 @@ git commit -m "feat(account): Catch2 v3 premake5 project (sources already vendor
 ### Task 5: Migration runner
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/db/MigrationRunner.hpp`
-- Create: `GachaServer/GachaAccount/src/db/ConnectionPool.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/db/MigrationRunner.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/db/ConnectionPool.hpp`
 
 (These are written together since the migration runner needs a connection.)
 
 - [ ] **Step 1: Write ConnectionPool**
 
-`GachaServer/GachaAccount/src/db/ConnectionPool.hpp`:
+`AphelyonServer/AphelyonAccount/src/db/ConnectionPool.hpp`:
 ```cpp
 #pragma once
 #include <pqxx/pqxx>
@@ -495,7 +495,7 @@ git commit -m "feat(account): Catch2 v3 premake5 project (sources already vendor
 #include <queue>
 #include <string>
 
-namespace gacha::db {
+namespace aphelyon::db {
 
 class ConnectionPool {
 public:
@@ -547,12 +547,12 @@ private:
     std::queue<std::unique_ptr<pqxx::connection>> free_;
 };
 
-} // namespace gacha::db
+} // namespace aphelyon::db
 ```
 
 - [ ] **Step 2: Write MigrationRunner**
 
-`GachaServer/GachaAccount/src/db/MigrationRunner.hpp`:
+`AphelyonServer/AphelyonAccount/src/db/MigrationRunner.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -562,7 +562,7 @@ private:
 #include <sstream>
 #include <stdexcept>
 
-namespace gacha::db {
+namespace aphelyon::db {
 
 class MigrationRunner {
 public:
@@ -632,13 +632,13 @@ private:
     ConnectionPool& pool_;
 };
 
-} // namespace gacha::db
+} // namespace aphelyon::db
 ```
 
 - [ ] **Step 3: Commit (no test yet; migrations don't exist)**
 
 ```bash
-git add GachaServer/GachaAccount/src/db/ConnectionPool.hpp GachaServer/GachaAccount/src/db/MigrationRunner.hpp
+git add AphelyonServer/AphelyonAccount/src/db/ConnectionPool.hpp AphelyonServer/AphelyonAccount/src/db/MigrationRunner.hpp
 git commit -m "feat(account): Postgres ConnectionPool + MigrationRunner skeleton"
 ```
 
@@ -646,16 +646,16 @@ git commit -m "feat(account): Postgres ConnectionPool + MigrationRunner skeleton
 
 ## Phase 1 — SQL schema migrations
 
-Each migration file is one task. Files apply in numeric order. All `.sql` files live under `GachaServer/GachaAccount/migrations/`.
+Each migration file is one task. Files apply in numeric order. All `.sql` files live under `AphelyonServer/AphelyonAccount/migrations/`.
 
 ### Task 6: `001_accounts.sql`
 
 **Files:**
-- Create: `GachaServer/GachaAccount/migrations/001_accounts.sql`
+- Create: `AphelyonServer/AphelyonAccount/migrations/001_accounts.sql`
 
 - [ ] **Step 1: Write migration**
 
-`GachaServer/GachaAccount/migrations/001_accounts.sql`:
+`AphelyonServer/AphelyonAccount/migrations/001_accounts.sql`:
 ```sql
 CREATE TABLE accounts (
     account_id              BIGSERIAL PRIMARY KEY,
@@ -680,24 +680,24 @@ CREATE INDEX accounts_deleted_idx ON accounts (deleted_at) WHERE deleted_at IS N
 
 - [ ] **Step 2: Apply and verify**
 
-Run: `cd GachaServer && scripts\db-setup.bat`
-Expected: migration applied; verify with `docker compose exec postgres psql -U gacha -d gacha -c "\d accounts"`.
+Run: `cd AphelyonServer && scripts\db-setup.bat`
+Expected: migration applied; verify with `docker compose exec postgres psql -U aphelyon -d aphelyon -c "\d accounts"`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/migrations/001_accounts.sql
+git add AphelyonServer/AphelyonAccount/migrations/001_accounts.sql
 git commit -m "feat(account): migration 001 - accounts table"
 ```
 
 ### Task 7: `002_inventory.sql`
 
 **Files:**
-- Create: `GachaServer/GachaAccount/migrations/002_inventory.sql`
+- Create: `AphelyonServer/AphelyonAccount/migrations/002_inventory.sql`
 
 - [ ] **Step 1: Write migration**
 
-`GachaServer/GachaAccount/migrations/002_inventory.sql`:
+`AphelyonServer/AphelyonAccount/migrations/002_inventory.sql`:
 ```sql
 CREATE TABLE owned_characters (
     account_id   BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -758,24 +758,24 @@ CREATE INDEX gear_substats_stat_idx ON gear_substats (account_id, stat_type);
 
 - [ ] **Step 2: Apply**
 
-Run: `cd GachaServer && scripts\db-setup.bat`
+Run: `cd AphelyonServer && scripts\db-setup.bat`
 Expected: migration applied.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/migrations/002_inventory.sql
+git add AphelyonServer/AphelyonAccount/migrations/002_inventory.sql
 git commit -m "feat(account): migration 002 - inventory (characters, weapons, gear)"
 ```
 
 ### Task 8: `003_equipment.sql`
 
 **Files:**
-- Create: `GachaServer/GachaAccount/migrations/003_equipment.sql`
+- Create: `AphelyonServer/AphelyonAccount/migrations/003_equipment.sql`
 
 - [ ] **Step 1: Write migration**
 
-`GachaServer/GachaAccount/migrations/003_equipment.sql`:
+`AphelyonServer/AphelyonAccount/migrations/003_equipment.sql`:
 ```sql
 CREATE TABLE loadouts (
     account_id          BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -809,23 +809,23 @@ CREATE TABLE party_slots (
 
 - [ ] **Step 2: Apply**
 
-Run: `cd GachaServer && scripts\db-setup.bat`
+Run: `cd AphelyonServer && scripts\db-setup.bat`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/migrations/003_equipment.sql
+git add AphelyonServer/AphelyonAccount/migrations/003_equipment.sql
 git commit -m "feat(account): migration 003 - loadouts, materials, party_slots"
 ```
 
 ### Task 9: `004_quests.sql`
 
 **Files:**
-- Create: `GachaServer/GachaAccount/migrations/004_quests.sql`
+- Create: `AphelyonServer/AphelyonAccount/migrations/004_quests.sql`
 
 - [ ] **Step 1: Write migration**
 
-`GachaServer/GachaAccount/migrations/004_quests.sql`:
+`AphelyonServer/AphelyonAccount/migrations/004_quests.sql`:
 ```sql
 CREATE TABLE quest_states (
     account_id   BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -874,23 +874,23 @@ CREATE TABLE pity_state (
 
 - [ ] **Step 2: Apply**
 
-Run: `cd GachaServer && scripts\db-setup.bat`
+Run: `cd AphelyonServer && scripts\db-setup.bat`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/migrations/004_quests.sql
+git add AphelyonServer/AphelyonAccount/migrations/004_quests.sql
 git commit -m "feat(account): migration 004 - quests, world_flags, pity_state"
 ```
 
 ### Task 10: `005_events.sql`
 
 **Files:**
-- Create: `GachaServer/GachaAccount/migrations/005_events.sql`
+- Create: `AphelyonServer/AphelyonAccount/migrations/005_events.sql`
 
 - [ ] **Step 1: Write migration**
 
-`GachaServer/GachaAccount/migrations/005_events.sql`:
+`AphelyonServer/AphelyonAccount/migrations/005_events.sql`:
 ```sql
 -- pg_partman extension for partition rollover (must be installed in container image;
 -- postgres:16 ships it as an available extension that just needs CREATE EXTENSION).
@@ -940,24 +940,24 @@ SELECT partman.create_parent(
 
 - [ ] **Step 2: Apply**
 
-Run: `cd GachaServer && scripts\db-setup.bat`
-Expected: migration applied. Verify partitions: `docker compose exec postgres psql -U gacha -d gacha -c "\d+ events"`.
+Run: `cd AphelyonServer && scripts\db-setup.bat`
+Expected: migration applied. Verify partitions: `docker compose exec postgres psql -U aphelyon -d aphelyon -c "\d+ events"`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/migrations/005_events.sql
+git add AphelyonServer/AphelyonAccount/migrations/005_events.sql
 git commit -m "feat(account): migration 005 - events table (partitioned, LZ4)"
 ```
 
 ### Task 11: `006_support.sql`
 
 **Files:**
-- Create: `GachaServer/GachaAccount/migrations/006_support.sql`
+- Create: `AphelyonServer/AphelyonAccount/migrations/006_support.sql`
 
 - [ ] **Step 1: Write migration**
 
-`GachaServer/GachaAccount/migrations/006_support.sql`:
+`AphelyonServer/AphelyonAccount/migrations/006_support.sql`:
 ```sql
 CREATE TABLE snapshots (
     account_id       BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -998,17 +998,17 @@ ALTER TABLE audit_log ALTER COLUMN after  SET COMPRESSION lz4;
 
 - [ ] **Step 2: Apply**
 
-Run: `cd GachaServer && scripts\db-setup.bat`
+Run: `cd AphelyonServer && scripts\db-setup.bat`
 
 - [ ] **Step 3: Verify all migrations applied**
 
-Run: `docker compose exec postgres psql -U gacha -d gacha -c "SELECT version, filename FROM schema_migrations ORDER BY version"`
+Run: `docker compose exec postgres psql -U aphelyon -d aphelyon -c "SELECT version, filename FROM schema_migrations ORDER BY version"`
 Expected: rows 1..6 present.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/migrations/006_support.sql
+git add AphelyonServer/AphelyonAccount/migrations/006_support.sql
 git commit -m "feat(account): migration 006 - snapshots, outbox, audit_log"
 ```
 
@@ -1019,12 +1019,12 @@ git commit -m "feat(account): migration 006 - snapshots, outbox, audit_log"
 ### Task 12: UUID v7 generator
 
 **Files:**
-- Create: `GachaServer/GachaCommon/src/UuidV7.hpp`
-- Create: `GachaServer/GachaAccount/tests/UuidV7Test.cpp`
+- Create: `AphelyonServer/AphelyonCommon/src/UuidV7.hpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/UuidV7Test.cpp`
 
 - [ ] **Step 1: Write failing test**
 
-`GachaServer/GachaAccount/tests/UuidV7Test.cpp`:
+`AphelyonServer/AphelyonAccount/tests/UuidV7Test.cpp`:
 ```cpp
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_test_macros.hpp>
@@ -1033,35 +1033,35 @@ git commit -m "feat(account): migration 006 - snapshots, outbox, audit_log"
 #include <thread>
 
 TEST_CASE("UUID v7 generates time-ordered values", "[uuid]") {
-    auto a = gacha::UuidV7::Generate();
+    auto a = aphelyon::UuidV7::Generate();
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    auto b = gacha::UuidV7::Generate();
+    auto b = aphelyon::UuidV7::Generate();
     REQUIRE(a < b);  // lexicographic, by construction
 }
 
 TEST_CASE("UUID v7 has version 7 in correct nibble", "[uuid]") {
-    auto u = gacha::UuidV7::Generate();
-    auto s = gacha::UuidV7::ToString(u);
+    auto u = aphelyon::UuidV7::Generate();
+    auto s = aphelyon::UuidV7::ToString(u);
     // Format: xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, M=7 for v7
     REQUIRE(s[14] == '7');
 }
 
 TEST_CASE("UUID v7 round-trips through string", "[uuid]") {
-    auto u = gacha::UuidV7::Generate();
-    auto s = gacha::UuidV7::ToString(u);
-    auto u2 = gacha::UuidV7::FromString(s);
+    auto u = aphelyon::UuidV7::Generate();
+    auto s = aphelyon::UuidV7::ToString(u);
+    auto u2 = aphelyon::UuidV7::FromString(s);
     REQUIRE(u == u2);
 }
 ```
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cd GachaServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
+Run: `cd AphelyonServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
 Expected: compile failure (`UuidV7.hpp` doesn't exist).
 
 - [ ] **Step 3: Write implementation**
 
-`GachaServer/GachaCommon/src/UuidV7.hpp`:
+`AphelyonServer/AphelyonCommon/src/UuidV7.hpp`:
 ```cpp
 #pragma once
 #include <array>
@@ -1071,7 +1071,7 @@ Expected: compile failure (`UuidV7.hpp` doesn't exist).
 #include <string>
 #include <stdexcept>
 
-namespace gacha {
+namespace aphelyon {
 
 class UuidV7 {
 public:
@@ -1144,22 +1144,22 @@ private:
     }
 };
 
-} // namespace gacha
+} // namespace aphelyon
 ```
 
 - [ ] **Step 4: Add test executable to premake**
 
-Modify `GachaServer/GachaAccount/premake5.lua` — add a `GachaAccountTests` project that builds `GachaAccount/tests/*.cpp` as an executable linking Catch2, rapidcheck, and the GachaAccount sources. (If Catch2 isn't vendored, add a vendor task; assume it lives under `ThirdParty/Catch2/include/`.) Run `GenerateProjects.bat`.
+Modify `AphelyonServer/AphelyonAccount/premake5.lua` — add a `GachaAccountTests` project that builds `AphelyonAccount/tests/*.cpp` as an executable linking Catch2, rapidcheck, and the AphelyonAccount sources. (If Catch2 isn't vendored, add a vendor task; assume it lives under `ThirdParty/Catch2/include/`.) Run `GenerateProjects.bat`.
 
 - [ ] **Step 5: Run tests, confirm pass**
 
-Run: `cd GachaServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe`
+Run: `cd AphelyonServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe`
 Expected: 3 test cases pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add GachaServer/GachaCommon/src/UuidV7.hpp GachaServer/GachaAccount/tests/UuidV7Test.cpp GachaServer/GachaAccount/premake5.lua
+git add AphelyonServer/AphelyonCommon/src/UuidV7.hpp AphelyonServer/AphelyonAccount/tests/UuidV7Test.cpp AphelyonServer/AphelyonAccount/premake5.lua
 git commit -m "feat(common): UUID v7 generator + tests"
 ```
 
@@ -1168,11 +1168,11 @@ git commit -m "feat(common): UUID v7 generator + tests"
 ### Task 13: Event envelope + JSON serialization
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/events/Event.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/events/Event.hpp`
 
 - [ ] **Step 1: Write envelope**
 
-`GachaServer/GachaAccount/src/events/Event.hpp`:
+`AphelyonServer/AphelyonAccount/src/events/Event.hpp`:
 ```cpp
 #pragma once
 #include "UuidV7.hpp"
@@ -1180,7 +1180,7 @@ git commit -m "feat(common): UUID v7 generator + tests"
 #include <chrono>
 #include <string>
 
-namespace gacha::events {
+namespace aphelyon::events {
 
 enum class AggregateKind {
     Wallet,
@@ -1212,13 +1212,13 @@ struct Event {
     std::chrono::system_clock::time_point created_at = std::chrono::system_clock::now();
 };
 
-} // namespace gacha::events
+} // namespace aphelyon::events
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/events/Event.hpp
+git add AphelyonServer/AphelyonAccount/src/events/Event.hpp
 git commit -m "feat(account): Event envelope type"
 ```
 
@@ -1227,14 +1227,14 @@ git commit -m "feat(account): Event envelope type"
 ### Task 14: Per-aggregate event payload types
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/events/WalletEvents.hpp`
-- Create: `GachaServer/GachaAccount/src/events/PullEvents.hpp`
-- Create: `GachaServer/GachaAccount/src/events/QuestClaimEvents.hpp`
-- Create: `GachaServer/GachaAccount/src/events/ProgressionEvents.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/events/WalletEvents.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/events/PullEvents.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/events/QuestClaimEvents.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/events/ProgressionEvents.hpp`
 
 - [ ] **Step 1: WalletEvents.hpp**
 
-`GachaServer/GachaAccount/src/events/WalletEvents.hpp`:
+`AphelyonServer/AphelyonAccount/src/events/WalletEvents.hpp`:
 ```cpp
 #pragma once
 #include <nlohmann/json.hpp>
@@ -1242,7 +1242,7 @@ git commit -m "feat(account): Event envelope type"
 #include <optional>
 #include <string>
 
-namespace gacha::events::wallet {
+namespace aphelyon::events::wallet {
 
 enum class Currency { Credits, UniversalCredits, Tickets, LimitedTickets, Scrap };
 
@@ -1277,12 +1277,12 @@ inline nlohmann::json ToJson(const CurrencyDelta& d) {
     return j;
 }
 
-} // namespace gacha::events::wallet
+} // namespace aphelyon::events::wallet
 ```
 
 - [ ] **Step 2: PullEvents.hpp**
 
-`GachaServer/GachaAccount/src/events/PullEvents.hpp`:
+`AphelyonServer/AphelyonAccount/src/events/PullEvents.hpp`:
 ```cpp
 #pragma once
 #include "XoshiroCpp.hpp"
@@ -1292,7 +1292,7 @@ inline nlohmann::json ToJson(const CurrencyDelta& d) {
 #include <string>
 #include <vector>
 
-namespace gacha::events::pulls {
+namespace aphelyon::events::pulls {
 
 struct PullResult {
     std::string template_id;
@@ -1355,12 +1355,12 @@ inline nlohmann::json ToJson(const PullPerformed& p) {
     return j;
 }
 
-} // namespace gacha::events::pulls
+} // namespace aphelyon::events::pulls
 ```
 
 - [ ] **Step 3: QuestClaimEvents.hpp**
 
-`GachaServer/GachaAccount/src/events/QuestClaimEvents.hpp`:
+`AphelyonServer/AphelyonAccount/src/events/QuestClaimEvents.hpp`:
 ```cpp
 #pragma once
 #include <nlohmann/json.hpp>
@@ -1368,7 +1368,7 @@ inline nlohmann::json ToJson(const PullPerformed& p) {
 #include <string>
 #include <vector>
 
-namespace gacha::events::quest_claims {
+namespace aphelyon::events::quest_claims {
 
 enum class RewardKind { Credits, UniversalCredits, Tickets, LimitedTickets, Scrap, Material, Character, Weapon };
 
@@ -1418,18 +1418,18 @@ inline nlohmann::json ToJson(const QuestRewardClaimed& q) {
     return j;
 }
 
-} // namespace gacha::events::quest_claims
+} // namespace aphelyon::events::quest_claims
 ```
 
 - [ ] **Step 4: ProgressionEvents.hpp**
 
-`GachaServer/GachaAccount/src/events/ProgressionEvents.hpp`:
+`AphelyonServer/AphelyonAccount/src/events/ProgressionEvents.hpp`:
 ```cpp
 #pragma once
 #include <nlohmann/json.hpp>
 #include <optional>
 
-namespace gacha::events::progression {
+namespace aphelyon::events::progression {
 
 struct StoryLevelAdvanced {
     int from_level;
@@ -1451,13 +1451,13 @@ inline nlohmann::json ToJson(const StoryLevelAdvanced& s) {
     return j;
 }
 
-} // namespace gacha::events::progression
+} // namespace aphelyon::events::progression
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/events/
+git add AphelyonServer/AphelyonAccount/src/events/
 git commit -m "feat(account): per-aggregate event payload types + JSON serialization"
 ```
 
@@ -1465,16 +1465,16 @@ git commit -m "feat(account): per-aggregate event payload types + JSON serializa
 
 ## Phase 3 — Reducers (TDD)
 
-Each reducer is a pure function: `(State, Event) → ReducerResult<State>`. Reducer code lives under `GachaAccount/src/reducers/`. Tests live under `GachaAccount/tests/ReducerTests/`. Each reducer is a fresh task with explicit TDD steps.
+Each reducer is a pure function: `(State, Event) → ReducerResult<State>`. Reducer code lives under `AphelyonAccount/src/reducers/`. Tests live under `AphelyonAccount/tests/ReducerTests/`. Each reducer is a fresh task with explicit TDD steps.
 
 ### Task 15: ReducerCommon shared types
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/reducers/ReducerCommon.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/reducers/ReducerCommon.hpp`
 
 - [ ] **Step 1: Write the shared types**
 
-`GachaServer/GachaAccount/src/reducers/ReducerCommon.hpp`:
+`AphelyonServer/AphelyonAccount/src/reducers/ReducerCommon.hpp`:
 ```cpp
 #pragma once
 #include <chrono>
@@ -1482,7 +1482,7 @@ Each reducer is a pure function: `(State, Event) → ReducerResult<State>`. Redu
 #include <variant>
 #include <vector>
 
-namespace gacha::reducers {
+namespace aphelyon::reducers {
 
 // Injected clock — never call system_clock::now() inside a reducer.
 class Clock {
@@ -1522,32 +1522,32 @@ struct ReducerResult {
     std::vector<SideEffectVariant> effects;
 };
 
-} // namespace gacha::reducers
+} // namespace aphelyon::reducers
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/reducers/ReducerCommon.hpp
+git add AphelyonServer/AphelyonAccount/src/reducers/ReducerCommon.hpp
 git commit -m "feat(account): reducer common types (Clock, SideEffectVariant)"
 ```
 
 ### Task 16: Wallet reducer (TDD)
 
 **Files:**
-- Create: `GachaServer/GachaAccount/tests/ReducerTests/WalletReducerTest.cpp`
-- Create: `GachaServer/GachaAccount/src/reducers/WalletReducer.hpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/ReducerTests/WalletReducerTest.cpp`
+- Create: `AphelyonServer/AphelyonAccount/src/reducers/WalletReducer.hpp`
 
 - [ ] **Step 1: Write failing tests**
 
-`GachaServer/GachaAccount/tests/ReducerTests/WalletReducerTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/ReducerTests/WalletReducerTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/WalletReducer.hpp"
 #include "events/WalletEvents.hpp"
 
-using namespace gacha;
-using namespace gacha::reducers;
+using namespace aphelyon;
+using namespace aphelyon::reducers;
 
 TEST_CASE("wallet starts at zero across all currencies", "[wallet][reducer]") {
     WalletState s;
@@ -1601,12 +1601,12 @@ TEST_CASE("admin_adjustment_applied works on any currency", "[wallet][reducer]")
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cd GachaServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
+Run: `cd AphelyonServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
 Expected: compile failure (WalletReducer doesn't exist).
 
 - [ ] **Step 3: Write WalletReducer**
 
-`GachaServer/GachaAccount/src/reducers/WalletReducer.hpp`:
+`AphelyonServer/AphelyonAccount/src/reducers/WalletReducer.hpp`:
 ```cpp
 #pragma once
 #include "ReducerCommon.hpp"
@@ -1615,7 +1615,7 @@ Expected: compile failure (WalletReducer doesn't exist).
 #include <stdexcept>
 #include <string>
 
-namespace gacha::reducers {
+namespace aphelyon::reducers {
 
 class WalletInvariantViolation : public std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -1650,37 +1650,37 @@ public:
     }
 };
 
-} // namespace gacha::reducers
+} // namespace aphelyon::reducers
 ```
 
 - [ ] **Step 4: Run tests, verify pass**
 
-Run: `cd GachaServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[wallet][reducer]"`
+Run: `cd AphelyonServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[wallet][reducer]"`
 Expected: 4 test cases pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/reducers/WalletReducer.hpp GachaServer/GachaAccount/tests/ReducerTests/WalletReducerTest.cpp
+git add AphelyonServer/AphelyonAccount/src/reducers/WalletReducer.hpp AphelyonServer/AphelyonAccount/tests/ReducerTests/WalletReducerTest.cpp
 git commit -m "feat(account): WalletReducer + TDD tests"
 ```
 
 ### Task 17: Progression reducer (TDD)
 
 **Files:**
-- Create: `GachaServer/GachaAccount/tests/ReducerTests/ProgressionReducerTest.cpp`
-- Create: `GachaServer/GachaAccount/src/reducers/ProgressionReducer.hpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/ReducerTests/ProgressionReducerTest.cpp`
+- Create: `AphelyonServer/AphelyonAccount/src/reducers/ProgressionReducer.hpp`
 
 - [ ] **Step 1: Write failing tests**
 
-`GachaServer/GachaAccount/tests/ReducerTests/ProgressionReducerTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/ReducerTests/ProgressionReducerTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/ProgressionReducer.hpp"
 #include "events/ProgressionEvents.hpp"
 
-using namespace gacha::reducers;
-using namespace gacha::events::progression;
+using namespace aphelyon::reducers;
+using namespace aphelyon::events::progression;
 
 TEST_CASE("level advance updates story_level + xp", "[progression][reducer]") {
     ProgressionReducer r;
@@ -1724,13 +1724,13 @@ TEST_CASE("level advance with overflow_credits emits GrantCurrencyEffect", "[pro
 
 - [ ] **Step 2: Confirm failure, then write implementation**
 
-`GachaServer/GachaAccount/src/reducers/ProgressionReducer.hpp`:
+`AphelyonServer/AphelyonAccount/src/reducers/ProgressionReducer.hpp`:
 ```cpp
 #pragma once
 #include "ReducerCommon.hpp"
 #include "events/ProgressionEvents.hpp"
 
-namespace gacha::reducers {
+namespace aphelyon::reducers {
 
 struct ProgressionState {
     int story_level     = 1;
@@ -1743,7 +1743,7 @@ public:
     ReducerResult<ProgressionState> Apply(
         const ProgressionState& s,
         const std::string& event_type,
-        const gacha::events::progression::StoryLevelAdvanced& evt) const
+        const aphelyon::events::progression::StoryLevelAdvanced& evt) const
     {
         ReducerResult<ProgressionState> out{ s, {} };
         out.state.story_level = evt.to_level;
@@ -1760,7 +1760,7 @@ public:
     }
 };
 
-} // namespace gacha::reducers
+} // namespace aphelyon::reducers
 ```
 
 - [ ] **Step 3: Run tests**
@@ -1771,25 +1771,25 @@ Expected: 3 cases pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/reducers/ProgressionReducer.hpp GachaServer/GachaAccount/tests/ReducerTests/ProgressionReducerTest.cpp
+git add AphelyonServer/AphelyonAccount/src/reducers/ProgressionReducer.hpp AphelyonServer/AphelyonAccount/tests/ReducerTests/ProgressionReducerTest.cpp
 git commit -m "feat(account): ProgressionReducer + TDD tests"
 ```
 
 ### Task 18: QuestClaims reducer (TDD)
 
 **Files:**
-- Create: `GachaServer/GachaAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp`
-- Create: `GachaServer/GachaAccount/src/reducers/QuestClaimsReducer.hpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp`
+- Create: `AphelyonServer/AphelyonAccount/src/reducers/QuestClaimsReducer.hpp`
 
 - [ ] **Step 1: Write failing tests**
 
-`GachaServer/GachaAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/QuestClaimsReducer.hpp"
 
-using namespace gacha::reducers;
-using namespace gacha::events::quest_claims;
+using namespace aphelyon::reducers;
+using namespace aphelyon::events::quest_claims;
 
 TEST_CASE("claim records the quest_id in state.claimed_quest_ids", "[quest_claims][reducer]") {
     QuestClaimsReducer r;
@@ -1829,7 +1829,7 @@ TEST_CASE("claiming the same quest twice throws (idempotency belongs at the even
 
 - [ ] **Step 2: Implementation**
 
-`GachaServer/GachaAccount/src/reducers/QuestClaimsReducer.hpp`:
+`AphelyonServer/AphelyonAccount/src/reducers/QuestClaimsReducer.hpp`:
 ```cpp
 #pragma once
 #include "ReducerCommon.hpp"
@@ -1837,7 +1837,7 @@ TEST_CASE("claiming the same quest twice throws (idempotency belongs at the even
 #include <stdexcept>
 #include <unordered_set>
 
-namespace gacha::reducers {
+namespace aphelyon::reducers {
 
 class QuestClaimInvariantViolation : public std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -1852,14 +1852,14 @@ public:
     ReducerResult<QuestClaimsState> Apply(
         const QuestClaimsState& s,
         const std::string& event_type,
-        const gacha::events::quest_claims::QuestRewardClaimed& evt) const
+        const aphelyon::events::quest_claims::QuestRewardClaimed& evt) const
     {
         ReducerResult<QuestClaimsState> out{ s, {} };
         if (out.state.claimed_quest_ids.count(evt.quest_id))
             throw QuestClaimInvariantViolation("Quest already claimed: " + evt.quest_id);
         out.state.claimed_quest_ids.insert(evt.quest_id);
 
-        using namespace gacha::events::quest_claims;
+        using namespace aphelyon::events::quest_claims;
         for (const auto& r : evt.rewards) {
             switch (r.kind) {
                 case RewardKind::Credits:
@@ -1885,33 +1885,33 @@ public:
     }
 };
 
-} // namespace gacha::reducers
+} // namespace aphelyon::reducers
 ```
 
 - [ ] **Step 3: Tests pass; commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/reducers/QuestClaimsReducer.hpp GachaServer/GachaAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp
+git add AphelyonServer/AphelyonAccount/src/reducers/QuestClaimsReducer.hpp AphelyonServer/AphelyonAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp
 git commit -m "feat(account): QuestClaimsReducer + TDD tests"
 ```
 
 ### Task 19: Pulls reducer (TDD) — the complex one
 
 **Files:**
-- Create: `GachaServer/GachaAccount/tests/ReducerTests/PullsReducerTest.cpp`
-- Create: `GachaServer/GachaAccount/src/reducers/PullsReducer.hpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/ReducerTests/PullsReducerTest.cpp`
+- Create: `AphelyonServer/AphelyonAccount/src/reducers/PullsReducer.hpp`
 
 The pulls reducer is **the most important** because RNG capture lives here. The reducer applies the event's recorded outcomes; it does NOT roll RNG itself. RNG is rolled at the handler layer before the event is constructed.
 
 - [ ] **Step 1: Write failing tests**
 
-`GachaServer/GachaAccount/tests/ReducerTests/PullsReducerTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/ReducerTests/PullsReducerTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/PullsReducer.hpp"
 
-using namespace gacha::reducers;
-using namespace gacha::events::pulls;
+using namespace aphelyon::reducers;
+using namespace aphelyon::events::pulls;
 
 PullPerformed MakePull(int rarity, bool featured = false, int p5_before = 49, int p5_after = 50) {
     return PullPerformed{
@@ -1978,14 +1978,14 @@ TEST_CASE("invariant: post-state pity matches event-recorded pity_5_after", "[pu
 
 - [ ] **Step 2: Implementation**
 
-`GachaServer/GachaAccount/src/reducers/PullsReducer.hpp`:
+`AphelyonServer/AphelyonAccount/src/reducers/PullsReducer.hpp`:
 ```cpp
 #pragma once
 #include "ReducerCommon.hpp"
 #include "events/PullEvents.hpp"
 #include <stdexcept>
 
-namespace gacha::reducers {
+namespace aphelyon::reducers {
 
 class PullsInvariantViolation : public std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -2003,7 +2003,7 @@ public:
     ReducerResult<PullsState> Apply(
         const PullsState& s,
         const std::string& event_type,
-        const gacha::events::pulls::PullPerformed& evt) const
+        const aphelyon::events::pulls::PullPerformed& evt) const
     {
         ReducerResult<PullsState> out{ s, {} };
 
@@ -2032,7 +2032,7 @@ public:
     }
 };
 
-} // namespace gacha::reducers
+} // namespace aphelyon::reducers
 ```
 
 - [ ] **Step 3: Tests pass**
@@ -2043,7 +2043,7 @@ Expected: 4 cases pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/reducers/PullsReducer.hpp GachaServer/GachaAccount/tests/ReducerTests/PullsReducerTest.cpp
+git add AphelyonServer/AphelyonAccount/src/reducers/PullsReducer.hpp AphelyonServer/AphelyonAccount/tests/ReducerTests/PullsReducerTest.cpp
 git commit -m "feat(account): PullsReducer + TDD tests (Pattern C RNG capture)"
 ```
 
@@ -2054,22 +2054,22 @@ git commit -m "feat(account): PullsReducer + TDD tests (Pattern C RNG capture)"
 ### Task 20: EventStore append + load (with integration test)
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/db/EventStore.hpp`
-- Create: `GachaServer/GachaAccount/tests/Integration/EventStoreRoundTripTest.cpp`
+- Create: `AphelyonServer/AphelyonAccount/src/db/EventStore.hpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/Integration/EventStoreRoundTripTest.cpp`
 
 - [ ] **Step 1: Write integration test (requires running Postgres)**
 
-`GachaServer/GachaAccount/tests/Integration/EventStoreRoundTripTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/Integration/EventStoreRoundTripTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "db/EventStore.hpp"
 #include "db/ConnectionPool.hpp"
 #include "events/WalletEvents.hpp"
 
-using namespace gacha;
-using namespace gacha::db;
+using namespace aphelyon;
+using namespace aphelyon::db;
 
-const std::string kConn = "postgresql://gacha:gacha@localhost:5432/gacha";
+const std::string kConn = "postgresql://aphelyon:aphelyon@localhost:5432/aphelyon";
 
 // Helper: insert a test account and return its id.
 static std::int64_t MakeAccount(ConnectionPool& pool, const std::string& uname) {
@@ -2154,7 +2154,7 @@ TEST_CASE("EventStore treats duplicate idempotency_key as success", "[integratio
 
 - [ ] **Step 2: Confirm failure, then implementation**
 
-`GachaServer/GachaAccount/src/db/EventStore.hpp`:
+`AphelyonServer/AphelyonAccount/src/db/EventStore.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -2164,7 +2164,7 @@ TEST_CASE("EventStore treats duplicate idempotency_key as success", "[integratio
 #include <stdexcept>
 #include <vector>
 
-namespace gacha::db {
+namespace aphelyon::db {
 
 class EventStore {
 public:
@@ -2182,7 +2182,7 @@ public:
                    data, metadata, idempotency_key)
                 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
             )SQL",
-                gacha::UuidV7::ToString(ev.event_id),
+                aphelyon::UuidV7::ToString(ev.event_id),
                 ev.account_id,
                 events::AggregateKindToStr(ev.aggregate_kind),
                 ev.version,
@@ -2232,7 +2232,7 @@ public:
         out.reserve(r.size());
         for (const auto& row : r) {
             events::Event ev;
-            ev.event_id        = gacha::UuidV7::FromString(row[0].as<std::string>());
+            ev.event_id        = aphelyon::UuidV7::FromString(row[0].as<std::string>());
             ev.account_id      = account_id;
             ev.aggregate_kind  = kind;
             ev.version         = row[1].as<int>();
@@ -2260,19 +2260,19 @@ private:
     ConnectionPool& pool_;
 };
 
-} // namespace gacha::db
+} // namespace aphelyon::db
 ```
 
 - [ ] **Step 3: Run integration tests**
 
-Ensure Postgres is up: `cd GachaServer && scripts\db-setup.bat`
+Ensure Postgres is up: `cd AphelyonServer && scripts\db-setup.bat`
 Then: `bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[integration][event_store]"`
 Expected: all cases pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/db/EventStore.hpp GachaServer/GachaAccount/tests/Integration/EventStoreRoundTripTest.cpp
+git add AphelyonServer/AphelyonAccount/src/db/EventStore.hpp AphelyonServer/AphelyonAccount/tests/Integration/EventStoreRoundTripTest.cpp
 git commit -m "feat(account): EventStore append/load with optimistic concurrency"
 ```
 
@@ -2283,15 +2283,15 @@ git commit -m "feat(account): EventStore append/load with optimistic concurrency
 ### Task 21: Make Account fields private, add dirty tracking
 
 **Files:**
-- Modify: `GachaServer/GachaCommon/src/AccountData.hpp`
-- Modify: `GachaServer/GachaCommon/src/CollectionState.hpp`
-- Create: `GachaServer/GachaAccount/src/AccountDirty.hpp`
+- Modify: `AphelyonServer/AphelyonCommon/src/AccountData.hpp`
+- Modify: `AphelyonServer/AphelyonCommon/src/CollectionState.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/AccountDirty.hpp`
 
 This task is large. Approach: introduce a `DirtyState` shadow struct alongside the existing `AccountData` first, with all fields still public; then in a follow-up task swap callers to setters and make fields private.
 
 - [ ] **Step 1: Write DirtyState**
 
-`GachaServer/GachaAccount/src/AccountDirty.hpp`:
+`AphelyonServer/AphelyonAccount/src/AccountDirty.hpp`:
 ```cpp
 #pragma once
 #include "UuidV7.hpp"
@@ -2300,7 +2300,7 @@ This task is large. Approach: introduce a `DirtyState` shadow struct alongside t
 #include <string>
 #include <unordered_set>
 
-namespace gacha {
+namespace aphelyon {
 
 struct DirtyState {
     // Scalar table dirty bits
@@ -2340,17 +2340,17 @@ struct DirtyState {
     void Clear() { *this = DirtyState{}; }
 };
 
-} // namespace gacha
+} // namespace aphelyon
 ```
 
 - [ ] **Step 2: Modify CollectionState — UUIDs**
 
-Modify `GachaServer/GachaCommon/src/CollectionState.hpp`:
+Modify `AphelyonServer/AphelyonCommon/src/CollectionState.hpp`:
 
-Change `OwnedWeapon::instanceId` from `std::string` to `gacha::UuidV7::ValueType`:
+Change `OwnedWeapon::instanceId` from `std::string` to `aphelyon::UuidV7::ValueType`:
 ```cpp
 struct OwnedWeapon {
-    gacha::UuidV7::ValueType instanceId;        // was std::string
+    aphelyon::UuidV7::ValueType instanceId;        // was std::string
     std::string              templateId;
     std::uint8_t             level;
     std::uint8_t             ascension;
@@ -2364,9 +2364,9 @@ Update map keys in `CollectionState`:
 ```cpp
 struct CollectionState {
     std::unordered_map<std::string, OwnedCharacter>             characters;
-    std::unordered_map<gacha::UuidV7::ValueType, OwnedWeapon,
+    std::unordered_map<aphelyon::UuidV7::ValueType, OwnedWeapon,
                        UuidV7Hash>                              weapons;
-    std::unordered_map<gacha::UuidV7::ValueType, OwnedGear,
+    std::unordered_map<aphelyon::UuidV7::ValueType, OwnedGear,
                        UuidV7Hash>                              gear;
 };
 ```
@@ -2374,7 +2374,7 @@ struct CollectionState {
 Add a `UuidV7Hash` helper:
 ```cpp
 struct UuidV7Hash {
-    std::size_t operator()(const gacha::UuidV7::ValueType& u) const noexcept {
+    std::size_t operator()(const aphelyon::UuidV7::ValueType& u) const noexcept {
         // FNV-1a over 16 bytes
         std::size_t h = 1469598103934665603ULL;
         for (auto b : u) { h ^= b; h *= 1099511628211ULL; }
@@ -2385,21 +2385,21 @@ struct UuidV7Hash {
 
 - [ ] **Step 3: Add embedded DirtyState to AccountData**
 
-Modify `GachaServer/GachaCommon/src/AccountData.hpp`. Keep existing fields public for now; add at the bottom of the struct:
+Modify `AphelyonServer/AphelyonCommon/src/AccountData.hpp`. Keep existing fields public for now; add at the bottom of the struct:
 
 ```cpp
-#include "../../GachaAccount/src/AccountDirty.hpp"  // path may need adjustment per project layout
+#include "../../AphelyonAccount/src/AccountDirty.hpp"  // path may need adjustment per project layout
 
 struct AccountData {
     // ... existing fields ...
 
-    gacha::DirtyState dirty;                        // tracks changes since last flush
+    aphelyon::DirtyState dirty;                        // tracks changes since last flush
 };
 ```
 
 - [ ] **Step 4: Update compilation across all three services**
 
-This change affects GachaCommon, which Auth/Account/Combat all link. Build all three and fix call sites that use weapon/gear `instanceId` as a string. Likely affected: `AccountSerializer`, `CollectionActions`, `CollectionReducer`, gear/weapon equipment maps in `AccountData`. For each: convert string-instance-id call sites to `UuidV7` operations, using `UuidV7::ToString` only at JSON/wire boundaries.
+This change affects AphelyonCommon, which Auth/Account/Combat all link. Build all three and fix call sites that use weapon/gear `instanceId` as a string. Likely affected: `AccountSerializer`, `CollectionActions`, `CollectionReducer`, gear/weapon equipment maps in `AccountData`. For each: convert string-instance-id call sites to `UuidV7` operations, using `UuidV7::ToString` only at JSON/wire boundaries.
 
 Run: `msbuild Gacha.sln /p:Configuration=Debug`
 Expected: clean build (fix compile errors as they appear; this is a mechanical pass).
@@ -2407,14 +2407,14 @@ Expected: clean build (fix compile errors as they appear; this is a mechanical p
 - [ ] **Step 5: Commit**
 
 ```bash
-git add GachaServer/GachaCommon/src/CollectionState.hpp GachaServer/GachaCommon/src/AccountData.hpp GachaServer/GachaAccount/src/AccountDirty.hpp GachaServer/GachaAccount/src/AccountSerializer.hpp GachaServer/GachaAccount/src/CollectionActions.hpp GachaServer/GachaAccount/src/CollectionReducer.hpp
+git add AphelyonServer/AphelyonCommon/src/CollectionState.hpp AphelyonServer/AphelyonCommon/src/AccountData.hpp AphelyonServer/AphelyonAccount/src/AccountDirty.hpp AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp AphelyonServer/AphelyonAccount/src/CollectionActions.hpp AphelyonServer/AphelyonAccount/src/CollectionReducer.hpp
 git commit -m "refactor(common): UUID v7 instance IDs + DirtyState tracking"
 ```
 
 ### Task 22: Setters that auto-mark dirty
 
 **Files:**
-- Modify: `GachaServer/GachaCommon/src/AccountData.hpp`
+- Modify: `AphelyonServer/AphelyonCommon/src/AccountData.hpp`
 
 - [ ] **Step 1: Add setter methods**
 
@@ -2463,7 +2463,7 @@ public:
         dirty.weapon_instance_ids.insert(id);
     }
 
-    void RefineOwnedWeapon(gacha::UuidV7::ValueType id) {
+    void RefineOwnedWeapon(aphelyon::UuidV7::ValueType id) {
         auto& w = collection.weapons.at(id);
         w.refinement += 1;
         dirty.weapon_instance_ids.insert(id);
@@ -2475,7 +2475,7 @@ public:
         dirty.gear_instance_ids.insert(id);
     }
 
-    void SetLoadoutSlot(const std::string& char_id, int16_t preset, GearSlot slot, gacha::UuidV7::ValueType gear_id) {
+    void SetLoadoutSlot(const std::string& char_id, int16_t preset, GearSlot slot, aphelyon::UuidV7::ValueType gear_id) {
         gearEquipment[char_id][static_cast<uint8_t>(slot)] = gear_id;
         dirty.loadout_keys.insert({char_id, preset});
     }
@@ -2508,7 +2508,7 @@ Find every place in Auth/Account/Combat that mutates an Account field directly a
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaCommon/src/AccountData.hpp GachaServer/GachaAccount/src/
+git add AphelyonServer/AphelyonCommon/src/AccountData.hpp AphelyonServer/AphelyonAccount/src/
 git commit -m "refactor(account): Account fields private; setters auto-mark dirty"
 ```
 
@@ -2519,18 +2519,18 @@ git commit -m "refactor(account): Account fields private; setters auto-mark dirt
 ### Task 23: Relational flush methods
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/db/RelationalFlush.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/db/RelationalFlush.hpp`
 
 - [ ] **Step 1: Write the flush implementation**
 
-`GachaServer/GachaAccount/src/db/RelationalFlush.hpp`:
+`AphelyonServer/AphelyonAccount/src/db/RelationalFlush.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
 #include "AccountData.hpp"
 #include <pqxx/pqxx>
 
-namespace gacha::db {
+namespace aphelyon::db {
 
 // Writes only the tables marked dirty in account.dirty.
 // Called inside an open pqxx::work transaction.
@@ -2592,7 +2592,7 @@ private:
                   SET level = EXCLUDED.level,
                       ascension = EXCLUDED.ascension,
                       refinement = EXCLUDED.refinement
-            )SQL", a.NumericId(), gacha::UuidV7::ToString(id), w.templateId, w.level, w.ascension, w.refinement);
+            )SQL", a.NumericId(), aphelyon::UuidV7::ToString(id), w.templateId, w.level, w.ascension, w.refinement);
         }
     }
 
@@ -2602,7 +2602,7 @@ private:
     //      driven by the corresponding dirty set on `a.dirty`.] ...
 };
 
-} // namespace gacha::db
+} // namespace aphelyon::db
 ```
 
 (In practice this file is ~400 LOC by the time every dirty set has a flush implementation. The pattern is the same: walk dirty set → emit one UPSERT / DELETE per id.)
@@ -2637,18 +2637,18 @@ TEST_CASE("RelationalFlush updates accounts row", "[integration][flush]") {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/db/RelationalFlush.hpp GachaServer/GachaAccount/tests/Integration/RelationalFlushTest.cpp
+git add AphelyonServer/AphelyonAccount/src/db/RelationalFlush.hpp AphelyonServer/AphelyonAccount/tests/Integration/RelationalFlushTest.cpp
 git commit -m "feat(account): RelationalFlush — dirty-driven UPSERT per table"
 ```
 
 ### Task 24: AccountTransaction wrapper
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/AccountTransaction.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/AccountTransaction.hpp`
 
 - [ ] **Step 1: Write transaction wrapper**
 
-`GachaServer/GachaAccount/src/AccountTransaction.hpp`:
+`AphelyonServer/AphelyonAccount/src/AccountTransaction.hpp`:
 ```cpp
 #pragma once
 #include "AccountData.hpp"
@@ -2660,7 +2660,7 @@ git commit -m "feat(account): RelationalFlush — dirty-driven UPSERT per table"
 #include <stdexcept>
 #include <vector>
 
-namespace gacha {
+namespace aphelyon {
 
 class AccountTransaction {
 public:
@@ -2771,7 +2771,7 @@ private:
     std::vector<AuditRow> audits_;
 };
 
-} // namespace gacha
+} // namespace aphelyon
 ```
 
 - [ ] **Step 2: Add `MarkStaleForReload()` to AccountData**
@@ -2789,7 +2789,7 @@ struct AccountData {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/AccountTransaction.hpp GachaServer/GachaCommon/src/AccountData.hpp
+git add AphelyonServer/AphelyonAccount/src/AccountTransaction.hpp AphelyonServer/AphelyonCommon/src/AccountData.hpp
 git commit -m "feat(account): AccountTransaction — Commit() does events+flush+outbox+audit atomically"
 ```
 
@@ -2800,12 +2800,12 @@ git commit -m "feat(account): AccountTransaction — Commit() does events+flush+
 ### Task 25: New AccountRepository (Postgres-backed)
 
 **Files:**
-- Modify (rewrite): `GachaServer/GachaAccount/src/AccountRepository.hpp`
-- Delete: `GachaServer/GachaAccount/src/AccountSerializer.hpp`
+- Modify (rewrite): `AphelyonServer/AphelyonAccount/src/AccountRepository.hpp`
+- Delete: `AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp`
 
 - [ ] **Step 1: Rewrite AccountRepository**
 
-`GachaServer/GachaAccount/src/AccountRepository.hpp`:
+`AphelyonServer/AphelyonAccount/src/AccountRepository.hpp`:
 ```cpp
 #pragma once
 #include "AccountData.hpp"
@@ -2821,7 +2821,7 @@ git commit -m "feat(account): AccountTransaction — Commit() does events+flush+
 #include <pqxx/pqxx>
 #include <string>
 
-namespace gacha {
+namespace aphelyon {
 
 constexpr int kReducerVersion = 1;
 
@@ -2936,14 +2936,14 @@ private:
     reducers::ProgressionReducer  progression_reducer_;
 };
 
-} // namespace gacha
+} // namespace aphelyon
 ```
 
 (The `LoadAccountsRow` and friends contain row-shaped mapping logic — straightforward but verbose. The plan-phase researcher / executor fills these in based on the field list known from `AccountData.hpp`.)
 
 - [ ] **Step 2: Delete AccountSerializer.hpp**
 
-Run: `git rm GachaServer/GachaAccount/src/AccountSerializer.hpp`
+Run: `git rm AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp`
 
 Find and delete every reference to `AccountSerializer::ToJson/FromJson` across the codebase. Replace with `repository.Load(account_id)`.
 
@@ -2954,8 +2954,8 @@ Find and delete every reference to `AccountSerializer::ToJson/FromJson` across t
 - [ ] **Step 4: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/AccountRepository.hpp
-git rm GachaServer/GachaAccount/src/AccountSerializer.hpp
+git add AphelyonServer/AphelyonAccount/src/AccountRepository.hpp
+git rm AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp
 git commit -m "refactor(account): replace JSON AccountRepository with Postgres-backed"
 ```
 
@@ -2966,11 +2966,11 @@ git commit -m "refactor(account): replace JSON AccountRepository with Postgres-b
 ### Task 26: SnapshotWriter thread
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/db/SnapshotWriter.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/db/SnapshotWriter.hpp`
 
 - [ ] **Step 1: Write the snapshot writer**
 
-`GachaServer/GachaAccount/src/db/SnapshotWriter.hpp`:
+`AphelyonServer/AphelyonAccount/src/db/SnapshotWriter.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -2983,7 +2983,7 @@ git commit -m "refactor(account): replace JSON AccountRepository with Postgres-b
 #include <nlohmann/json.hpp>
 #include <thread>
 
-namespace gacha::db {
+namespace aphelyon::db {
 
 struct SnapshotJob {
     std::int64_t            account_id;
@@ -3054,24 +3054,24 @@ private:
     std::thread worker_;
 };
 
-} // namespace gacha::db
+} // namespace aphelyon::db
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/db/SnapshotWriter.hpp
+git add AphelyonServer/AphelyonAccount/src/db/SnapshotWriter.hpp
 git commit -m "feat(account): SnapshotWriter thread with bounded queue + drop-on-overflow"
 ```
 
 ### Task 27: Outbox relay (shared thread with SnapshotWriter)
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/db/OutboxRelay.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/db/OutboxRelay.hpp`
 
 - [ ] **Step 1: Write the relay**
 
-`GachaServer/GachaAccount/src/db/OutboxRelay.hpp`:
+`AphelyonServer/AphelyonAccount/src/db/OutboxRelay.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -3081,7 +3081,7 @@ git commit -m "feat(account): SnapshotWriter thread with bounded queue + drop-on
 #include <thread>
 #include <unordered_map>
 
-namespace gacha::db {
+namespace aphelyon::db {
 
 using OutboxHandler = std::function<bool(const nlohmann::json& payload)>;
 
@@ -3147,12 +3147,12 @@ private:
     std::thread worker_;
 };
 
-} // namespace gacha::db
+} // namespace aphelyon::db
 ```
 
 - [ ] **Step 2: Integration test**
 
-`GachaServer/GachaAccount/tests/Integration/OutboxRelayTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/Integration/OutboxRelayTest.cpp`:
 ```cpp
 TEST_CASE("OutboxRelay dispatches and marks rows", "[integration][outbox]") {
     ConnectionPool pool(kConn, 4);
@@ -3185,7 +3185,7 @@ TEST_CASE("OutboxRelay dispatches and marks rows", "[integration][outbox]") {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/db/OutboxRelay.hpp GachaServer/GachaAccount/tests/Integration/OutboxRelayTest.cpp
+git add AphelyonServer/AphelyonAccount/src/db/OutboxRelay.hpp AphelyonServer/AphelyonAccount/tests/Integration/OutboxRelayTest.cpp
 git commit -m "feat(account): OutboxRelay with FOR UPDATE SKIP LOCKED dispatch"
 ```
 
@@ -3196,12 +3196,12 @@ git commit -m "feat(account): OutboxRelay with FOR UPDATE SKIP LOCKED dispatch"
 ### Task 28: Migrate GachaHandlers to AccountTransaction
 
 **Files:**
-- Modify: `GachaServer/GachaAccount/src/GachaHandlers.hpp`
-- Modify: `GachaServer/GachaAccount/src/GachaRNG.hpp`
+- Modify: `AphelyonServer/AphelyonAccount/src/GachaHandlers.hpp`
+- Modify: `AphelyonServer/AphelyonAccount/src/GachaRNG.hpp`
 
 - [ ] **Step 1: Switch GachaRNG to xoshiro256++**
 
-Modify `GachaServer/GachaAccount/src/GachaRNG.hpp` to use xoshiro256++ internally. Surface `state()` and `set_state()` to allow the handler to capture state before/after.
+Modify `AphelyonServer/AphelyonAccount/src/GachaRNG.hpp` to use xoshiro256++ internally. Surface `state()` and `set_state()` to allow the handler to capture state before/after.
 
 ```cpp
 #include "XoshiroCpp.hpp"
@@ -3288,7 +3288,7 @@ Build and exercise via the existing GachaTest client (or write an integration te
 - [ ] **Step 4: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/GachaHandlers.hpp GachaServer/GachaAccount/src/GachaRNG.hpp
+git add AphelyonServer/AphelyonAccount/src/GachaHandlers.hpp AphelyonServer/AphelyonAccount/src/GachaRNG.hpp
 git commit -m "refactor(account): GachaHandlers use AccountTransaction; xoshiro RNG capture"
 ```
 
@@ -3310,32 +3310,32 @@ Each follows the same pattern as Task 28. Apply mechanically:
 - [ ] **Step 4: Commit each batch**
 
 ```bash
-git add GachaServer/GachaAccount/src/AccountHandlers.hpp
+git add AphelyonServer/AphelyonAccount/src/AccountHandlers.hpp
 git commit -m "refactor(account): AccountHandlers use AccountTransaction"
 
-git add GachaServer/GachaAccount/src/QuestHandlers.hpp
+git add AphelyonServer/AphelyonAccount/src/QuestHandlers.hpp
 git commit -m "refactor(account): QuestHandlers use AccountTransaction + quest_claims events"
 
-git add GachaServer/GachaAccount/src/ProgressionHandlers.hpp
+git add AphelyonServer/AphelyonAccount/src/ProgressionHandlers.hpp
 git commit -m "refactor(account): ProgressionHandlers use AccountTransaction + progression events"
 ```
 
 ### Task 30: TickQuests helper
 
 **Files:**
-- Create: `GachaServer/GachaAccount/src/TickQuests.hpp`
-- Modify: `GachaServer/GachaAccount/src/QuestHandlers.hpp`
+- Create: `AphelyonServer/AphelyonAccount/src/TickQuests.hpp`
+- Modify: `AphelyonServer/AphelyonAccount/src/QuestHandlers.hpp`
 
 - [ ] **Step 1: Write the helper**
 
-`GachaServer/GachaAccount/src/TickQuests.hpp`:
+`AphelyonServer/AphelyonAccount/src/TickQuests.hpp`:
 ```cpp
 #pragma once
 #include "AccountData.hpp"
 #include "AccountTransaction.hpp"
 #include <chrono>
 
-namespace gacha {
+namespace aphelyon {
 
 class TickQuests {
 public:
@@ -3378,7 +3378,7 @@ private:
     }
 };
 
-} // namespace gacha
+} // namespace aphelyon
 ```
 
 - [ ] **Step 2: Update QuestHandlers**
@@ -3408,7 +3408,7 @@ ResponseFrame HandleGetQuestState(const RequestFrame& req, HandlerContext& ctx) 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/src/TickQuests.hpp GachaServer/GachaAccount/src/QuestHandlers.hpp
+git add AphelyonServer/AphelyonAccount/src/TickQuests.hpp AphelyonServer/AphelyonAccount/src/QuestHandlers.hpp
 git commit -m "fix(account): explicit TickQuests; GetQuestState is now a pure read"
 ```
 
@@ -3419,21 +3419,21 @@ git commit -m "fix(account): explicit TickQuests; GetQuestState is now a pure re
 ### Task 31: rapidcheck property tests
 
 **Files:**
-- Create: `GachaServer/GachaAccount/tests/PropertyTests/ReplayDeterminismTest.cpp`
-- Create: `GachaServer/GachaAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp`
-- Create: `GachaServer/GachaAccount/tests/PropertyTests/InvariantTests.cpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/PropertyTests/ReplayDeterminismTest.cpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/PropertyTests/InvariantTests.cpp`
 
 - [ ] **Step 1: Replay determinism**
 
-`GachaServer/GachaAccount/tests/PropertyTests/ReplayDeterminismTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/PropertyTests/ReplayDeterminismTest.cpp`:
 ```cpp
 #include <rapidcheck.h>
 #include <rapidcheck/catch.h>
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/WalletReducer.hpp"
 
-using namespace gacha::reducers;
-using namespace gacha::events::wallet;
+using namespace aphelyon::reducers;
+using namespace aphelyon::events::wallet;
 
 namespace rc {
 template<>
@@ -3472,7 +3472,7 @@ TEST_CASE("Wallet reducer is deterministic across triple replay", "[property][wa
 
 - [ ] **Step 2: Snapshot equivalence**
 
-`GachaServer/GachaAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp`:
 ```cpp
 #include <rapidcheck/catch.h>
 #include "reducers/WalletReducer.hpp"
@@ -3487,7 +3487,7 @@ TEST_CASE("split-and-fold equals full-fold", "[property][wallet][snapshot]") {
 
 - [ ] **Step 3: Domain invariants**
 
-`GachaServer/GachaAccount/tests/PropertyTests/InvariantTests.cpp`:
+`AphelyonServer/AphelyonAccount/tests/PropertyTests/InvariantTests.cpp`:
 ```cpp
 #include <rapidcheck/catch.h>
 
@@ -3508,22 +3508,22 @@ TEST_CASE("Pity counters never exceed hard-pity threshold", "[property][pulls][i
 - [ ] **Step 4: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/tests/PropertyTests/
+git add AphelyonServer/AphelyonAccount/tests/PropertyTests/
 git commit -m "test(account): rapidcheck property tests (replay/snapshot/invariants)"
 ```
 
 ### Task 32: Golden-file schema migration tests
 
 **Files:**
-- Create: `GachaServer/GachaAccount/tests/events/v1_pull_performed.json`
-- Create: `GachaServer/GachaAccount/tests/events/v1_credits_spent.json`
-- Create: `GachaServer/GachaAccount/tests/events/v1_quest_reward_claimed.json`
-- Create: `GachaServer/GachaAccount/tests/events/v1_story_level_advanced.json`
-- Create: `GachaServer/GachaAccount/tests/GoldenFile/SchemaMigrationTest.cpp`
+- Create: `AphelyonServer/AphelyonAccount/tests/events/v1_pull_performed.json`
+- Create: `AphelyonServer/AphelyonAccount/tests/events/v1_credits_spent.json`
+- Create: `AphelyonServer/AphelyonAccount/tests/events/v1_quest_reward_claimed.json`
+- Create: `AphelyonServer/AphelyonAccount/tests/events/v1_story_level_advanced.json`
+- Create: `AphelyonServer/AphelyonAccount/tests/GoldenFile/SchemaMigrationTest.cpp`
 
 - [ ] **Step 1: Write golden event files**
 
-`GachaServer/GachaAccount/tests/events/v1_pull_performed.json`:
+`AphelyonServer/AphelyonAccount/tests/events/v1_pull_performed.json`:
 ```json
 {
   "event_id": "01923000-0000-7000-8000-000000000001",
@@ -3551,7 +3551,7 @@ git commit -m "test(account): rapidcheck property tests (replay/snapshot/invaria
 
 - [ ] **Step 2: Write the test**
 
-`GachaServer/GachaAccount/tests/GoldenFile/SchemaMigrationTest.cpp`:
+`AphelyonServer/AphelyonAccount/tests/GoldenFile/SchemaMigrationTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
@@ -3564,9 +3564,9 @@ TEST_CASE("Golden v1 pull_performed event folds to expected state", "[golden][sc
     nlohmann::json j; f >> j;
     auto evt_data = j["data"];
 
-    gacha::events::pulls::PullPerformed evt = FromJson<gacha::events::pulls::PullPerformed>(evt_data);
-    gacha::reducers::PullsReducer r;
-    gacha::reducers::PullsState s;
+    aphelyon::events::pulls::PullPerformed evt = FromJson<aphelyon::events::pulls::PullPerformed>(evt_data);
+    aphelyon::reducers::PullsReducer r;
+    aphelyon::reducers::PullsState s;
     s.pity_5 = 49; s.pity_4 = 7;
     auto out = r.Apply(s, "pull_performed", evt);
 
@@ -3580,7 +3580,7 @@ TEST_CASE("Golden v1 pull_performed event folds to expected state", "[golden][sc
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/GachaAccount/tests/events/ GachaServer/GachaAccount/tests/GoldenFile/
+git add AphelyonServer/AphelyonAccount/tests/events/ AphelyonServer/AphelyonAccount/tests/GoldenFile/
 git commit -m "test(account): v1 golden event files + schema migration tests"
 ```
 
@@ -3611,7 +3611,7 @@ using namespace clang;
 using namespace clang::ast_matchers;
 using namespace clang::tidy;
 
-namespace gacha::tidy {
+namespace aphelyon::tidy {
 
 class ReducerPurityCheck : public ClangTidyCheck {
 public:
@@ -3637,16 +3637,16 @@ public:
     }
 };
 
-class GachaModule : public ClangTidyModule {
+class AphelyonModule : public ClangTidyModule {
 public:
     void addCheckFactories(ClangTidyCheckFactories& f) override {
-        f.registerCheck<ReducerPurityCheck>("gacha-reducer-purity");
+        f.registerCheck<ReducerPurityCheck>("aphelyon-reducer-purity");
     }
 };
 
 } // namespace
 
-static ClangTidyModuleRegistry::Add<gacha::tidy::GachaModule> X("gacha-module", "Gacha-specific checks");
+static ClangTidyModuleRegistry::Add<aphelyon::tidy::AphelyonModule> X("aphelyon-module", "Aphelyon-specific checks");
 ```
 
 - [ ] **Step 2: Add config**
@@ -3654,7 +3654,7 @@ static ClangTidyModuleRegistry::Add<gacha::tidy::GachaModule> X("gacha-module", 
 `tools/clang-tidy/.clang-tidy`:
 ```yaml
 Checks: '-*,gacha-reducer-purity'
-WarningsAsErrors: 'gacha-reducer-purity'
+WarningsAsErrors: 'aphelyon-reducer-purity'
 HeaderFilterRegex: '.*/reducers/.*\.hpp$'
 ```
 
@@ -3668,7 +3668,7 @@ This requires building against the clang-tools-extra source tree, which is a hea
 set -e
 FORBIDDEN='\b(time\(|system_clock::now|random_device|std::rand|std::getenv|std::system|std::filesystem::)\b'
 FAIL=0
-for f in GachaServer/GachaAccount/src/reducers/*.hpp; do
+for f in AphelyonServer/AphelyonAccount/src/reducers/*.hpp; do
   if grep -nE "$FORBIDDEN" "$f"; then
     echo "FORBIDDEN call found in $f"
     FAIL=1
@@ -3693,12 +3693,12 @@ git commit -m "feat(tooling): reducer purity linter (grep-based for solo CI)"
 ### Task 34: WAL-G configuration
 
 **Files:**
-- Create: `GachaServer/scripts/wal-g-setup.sh`
-- Create: `GachaServer/docs/operations/backup-drill.md`
+- Create: `AphelyonServer/scripts/wal-g-setup.sh`
+- Create: `AphelyonServer/docs/operations/backup-drill.md`
 
 - [ ] **Step 1: WAL-G setup script**
 
-`GachaServer/scripts/wal-g-setup.sh`:
+`AphelyonServer/scripts/wal-g-setup.sh`:
 ```sh
 #!/usr/bin/env sh
 # Configure WAL-G in the Postgres container for continuous WAL archive to S3-compatible storage.
@@ -3730,7 +3730,7 @@ docker compose restart postgres
 
 - [ ] **Step 2: Drill documentation**
 
-`GachaServer/docs/operations/backup-drill.md`:
+`AphelyonServer/docs/operations/backup-drill.md`:
 ```markdown
 # Backup restore drill
 
@@ -3752,7 +3752,7 @@ Run quarterly. A backup you have never restored is theoretical.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add GachaServer/scripts/wal-g-setup.sh GachaServer/docs/operations/backup-drill.md
+git add AphelyonServer/scripts/wal-g-setup.sh AphelyonServer/docs/operations/backup-drill.md
 git commit -m "feat(ops): WAL-G setup + quarterly drill documentation"
 ```
 
@@ -3763,13 +3763,13 @@ git commit -m "feat(ops): WAL-G setup + quarterly drill documentation"
 ### Task 35: Final cutover
 
 **Files:**
-- Delete: `GachaServer/bin/Debug-windows-x86_64/GachaAccount/data/accounts/*.json`
-- Delete: `GachaServer/bin/Release-windows-x86_64/GachaAccount/data/accounts/*.json`
+- Delete: `AphelyonServer/bin/Debug-windows-x86_64/AphelyonAccount/data/accounts/*.json`
+- Delete: `AphelyonServer/bin/Release-windows-x86_64/AphelyonAccount/data/accounts/*.json`
 - Modify: `CLAUDE.md`
 
 - [ ] **Step 1: Run reset script**
 
-Run: `cd GachaServer && scripts\db-reset.bat`
+Run: `cd AphelyonServer && scripts\db-reset.bat`
 Expected: dev volume wiped, JSON accounts wiped, migrations re-applied.
 
 - [ ] **Step 2: Smoke test full stack**
@@ -3780,7 +3780,7 @@ Pull on a banner. Verify in Postgres: `SELECT * FROM events WHERE aggregate_kind
 
 - [ ] **Step 3: Update CLAUDE.md**
 
-Modify `CLAUDE.md` — update the "Data files" section under GachaCombat / Architecture to note that GachaAccount now persists to Postgres rather than JSON files. Update memory entries that referenced `bin/*/GachaAccount/data/accounts/`.
+Modify `CLAUDE.md` — update the "Data files" section under AphelyonCombat / Architecture to note that AphelyonAccount now persists to Postgres rather than JSON files. Update memory entries that referenced `bin/*/AphelyonAccount/data/accounts/`.
 
 - [ ] **Step 4: Final commit**
 
