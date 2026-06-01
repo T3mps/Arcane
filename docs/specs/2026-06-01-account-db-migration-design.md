@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-01
 **Scope:** GachaServer / GachaAccount + GachaCommon
-**Status:** Approved design, pending schema review against industry patterns, then implementation plan
+**Status:** Approved design, ready for implementation plan
 
 ## Problem
 
@@ -156,12 +156,14 @@ char_traces (
 );
 
 -- Owned weapons (instanced — one row per pull; UUID v7 for time-ordered B-tree append)
+-- Note: weapon XP-toward-next-level intentionally omitted — current GachaServer code does
+-- not model weapon XP. Add `current_xp INT NOT NULL DEFAULT 0` if/when light-cone-style
+-- weapon levelling lands as a feature.
 owned_weapons (
   account_id      BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
   instance_id     UUID NOT NULL,                  -- UUID v7
   template_id     TEXT NOT NULL,                  -- content slug
   level           SMALLINT NOT NULL DEFAULT 1,
-  current_xp      INT NOT NULL DEFAULT 0,
   ascension       SMALLINT NOT NULL DEFAULT 0,
   refinement      SMALLINT NOT NULL DEFAULT 0,
   acquired_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -302,7 +304,8 @@ CREATE TABLE events (
   -- Partitioned-table constraint: every unique/PK index must include the partition column (created_at).
   PRIMARY KEY (event_id, created_at),
   UNIQUE (account_id, aggregate_kind, version, created_at),
-  UNIQUE (account_id, idempotency_key, created_at)
+  UNIQUE (account_id, idempotency_key, created_at),
+  FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 ) PARTITION BY RANGE (created_at);
 
 CREATE INDEX events_account_aggregate_version_idx
@@ -320,6 +323,8 @@ CREATE INDEX events_pulls_banner_idx
 **Why `(event_id, created_at)` as PK:** PostgreSQL requires unique constraints on a partitioned table to include the partition key. `event_id` is globally unique by construction (UUID v7), so the composite constraint enforces global uniqueness via per-partition local indexes without coordination overhead.
 
 **Idempotency scope:** `(account_id, idempotency_key)`. Clients send a stable key with each mutation (UUID v4 generated client-side, reused on retry). A duplicate insert returns `23505`; the handler treats it as success and reads back the prior event.
+
+**GDPR / hard-delete propagation:** The `FOREIGN KEY ... ON DELETE CASCADE` on `accounts(account_id)` means the scheduled hard-delete job runs a single `DELETE FROM accounts WHERE deleted_at < now() - interval '30 days'` and Postgres cascades the delete to events and all other child tables atomically. Postgres 12+ supports FK from a partitioned child to a non-partitioned parent; no special partition-level handling needed. Events never contain PII directly (only `account_id` and content slugs); admin-action metadata uses opaque admin IDs.
 
 **Per-stream version** is supplied by the application from the loaded aggregate's current version + 1. On `INSERT`, the `UNIQUE (account_id, aggregate_kind, version)` constraint catches concurrent writes; the application catches `SQLSTATE 23505` and retries after re-loading the aggregate.
 
@@ -365,6 +370,52 @@ Past-tense, verb-in-middle, no generic `updated`/`changed`. Cron and admin actio
 ```
 
 Multi-pulls are **one event** (`multi_pull_performed`) containing the full result vector — one business decision, one event. `banner_version` is mandatory on every pull event; without it, post-hoc analytics on banner reruns silently merge two distinct events.
+
+**Example: `credits_spent` payload (wallet aggregate):**
+
+```json
+{
+  "amount": 160,
+  "reason": "pull_cost",
+  "reason_ref": { "kind": "pull", "event_id": "0192...uuid-of-pull-event" },
+  "balance_before": 3200,
+  "balance_after": 3040
+}
+```
+
+`balance_before` / `balance_after` aren't strictly required (deltas reduce deterministically) but recording them makes audit trivially auditable without folding the full stream. `reason` is a fixed enum (`pull_cost` | `shop_purchase` | `quest_reward` | `daily_login` | `admin_grant` | `compensation`); `reason_ref` links to the originating event when applicable.
+
+**Example: `quest_reward_claimed` payload (quest_claims aggregate):**
+
+```json
+{
+  "quest_id": "daily_login_2026_06_01",
+  "quest_type": 1,
+  "rewards": [
+    { "kind": "credits",  "amount": 60 },
+    { "kind": "scrap",    "amount": 5000 },
+    { "kind": "material", "material_id": "mat_xp_book_2", "quantity": 3 }
+  ],
+  "claimed_at_streak_day": 5
+}
+```
+
+The `quest_reward_claimed` event is the authoritative record of what was granted. The wallet credit / scrap / material grants are *projected* into their respective state from this event during the reducer — the wallet events for those grants are NOT separately recorded (they're derived from the claim). This avoids double-recording and keeps the player-recovery story clean: replaying `quest_claims` from event 0 reconstructs every reward delivery.
+
+**Example: `story_level_advanced` payload (progression aggregate):**
+
+```json
+{
+  "from_level": 14,
+  "to_level": 15,
+  "xp_consumed": 4500,
+  "xp_carried_over": 320,
+  "difficulty_tier_unlocked": null,
+  "overflow_credits": 0
+}
+```
+
+`difficulty_tier_unlocked` is non-null only at TL/EL milestone events (HSR-analogue). `overflow_credits` captures the XP-to-credits conversion when leveling at the cap (per progression spec). Reducer applies `accounts.story_level`, `accounts.story_xp`, optional `accounts.difficulty_tier`, and emits a downstream `wallet.credits_added` event ID into `metadata.spawned_events` if overflow fired.
 
 ## Schema — Support tables
 
@@ -560,11 +611,10 @@ public:
 2. Flush dirty relational tables.
 3. Insert outbox rows.
 4. Insert audit log rows.
-5. Update `accounts.next_event_seq` (per-aggregate counters held elsewhere — see implementation).
-6. `COMMIT`.
-7. Mark cache fields clean.
+5. `COMMIT`.
+6. Mark cache fields clean; update the cached `current_version` for any aggregates that emitted events.
 
-Step 7 happens AFTER successful commit. If commit fails, the cache is reverted (next access re-fetches from DB).
+Per-aggregate `current_version` is held in the in-memory `Account` cache only, not duplicated on the `accounts` row (see §Sequence numbers). Step 6 happens AFTER successful commit. If commit fails, the cache is reverted (next access re-fetches from DB).
 
 ## Concurrency
 
@@ -598,6 +648,14 @@ Per-aggregate, per-account `snapshots` row. Written **asynchronously after the R
 On load: `SELECT state, version, reducer_version FROM snapshots WHERE account_id = $1 AND aggregate_kind = $2`. If `reducer_version` mismatches the current `REDUCER_VERSION` constant, the snapshot is **ignored** and the aggregate replays from event 0. Otherwise: replay events with `version > snapshot.version`.
 
 Snapshot atomicity: not required to be transactional with event append. Worst case after crash: a snapshot exists for version N but the latest event written is < N — load logic ignores snapshots ahead of the event log. Best case: snapshot stale by some events, replay applies the tail.
+
+**Writer location.** A single dedicated `SnapshotWriter` thread inside the GachaAccount process, fed by a bounded MPMC queue (~capacity 1024). After successful `Transaction::Commit()`, the transaction wrapper enqueues a `SnapshotJob { account_id, aggregate_kind, current_version }` if the snapshot cadence condition fires. The writer thread:
+1. Drains jobs from the queue.
+2. For each job, acquires the player's stripe lock briefly to take a consistent snapshot of the in-memory aggregate state.
+3. Writes the snapshot row with its own short Postgres transaction (one writer connection from the pool reserved for this).
+4. On queue overflow, the oldest pending job is dropped — snapshots are an optimization, not durability; missing one is harmless (the next commit re-enqueues).
+
+This avoids spawning a separate worker process now while preserving the path to extraction later. The same thread can host the outbox relay loop (separate concerns, shared thread; split when traffic justifies).
 
 ### Schema evolution
 
@@ -646,6 +704,21 @@ Side effects that must reach another service (push notifications, friend-feed RP
 - Global `BIGSERIAL sequence` column on `events` is for the future projection daemon / read-model cursor. Not consulted by write path.
 - Gaps in `sequence` are expected (rolled-back transactions, in-flight commits). Projection daemon reads with `WHERE xid < pg_snapshot_xmin(pg_current_snapshot())` to skip gaps safely (per Event-Driven.io ordering guide).
 
+### Fix: `GetQuestState` read-RPC-writes-disk pattern
+
+Today `GetQuestState` is nominally a read RPC but auto-resets expired daily/weekly quests inline, which writes to disk. This is a half-wired workaround for a missing "tick" mechanism. With explicit transaction boundaries (read RPCs do not open write transactions), the bug becomes a load-bearing fix, not a polish item.
+
+**Decision:** Quest expiration / reset becomes an **explicit `TickQuests` operation**, not a side effect of a read.
+
+- `TickQuests(account_id)` is an internal helper (not an RPC) invoked at well-defined moments where a fresh quest view is required:
+  - Account load (first access after eviction or process restart).
+  - The start of any handler that operates on quest state (`ReportQuestProgress`, `ClaimQuestReward`, `CompleteQuest`).
+  - Optionally on demand from a future client-side "refresh" affordance.
+- `GetQuestState` becomes a pure read — no transaction, no mutation, no auto-reset. It returns the current snapshot of `quest_states` + `quest_objectives` as stored, plus the next reset timestamp for each quest so the client can render a countdown.
+- `TickQuests` itself opens a write transaction only if it actually has work to do (any quest whose `reset_at <= now()`). Most calls find nothing and exit without writing.
+
+This eliminates the read-writes-disk pattern entirely while preserving the user-visible behavior (a daily quest *does* reset by the time the player opens the quest UI, because the handlers that observe its state tick first).
+
 ### Action vocabulary scope
 
 Every state change that must be reproducible from replay gets an event. Including:
@@ -654,7 +727,9 @@ Every state change that must be reproducible from replay gets an event. Includin
 - Admin / support actions (`admin_adjustment_applied`, with `metadata.actor` and `metadata.reason`).
 
 Excluded (these go to relational tables + audit log):
-- Settings, party slots, equipment changes.
+- Settings, party slots, loadout changes (active equipment + saved presets).
+- Character / weapon level-ups, ascensions, refinements, unlocked traces.
+- Material inventory deltas (additions and consumption).
 - World flag set/clear.
 - Quest objective progress (until claim — claim is the event).
 - Pity counters (derived from pull stream).
@@ -729,9 +804,14 @@ Pyramid for selective-ES correctness:
 - **Distributed SQL** (Cockroach / Yugabyte / Spanner). Single Postgres handles target scale; revisit at 100k+ DAU or multi-region requirements.
 - **Multi-tenant or sharded deployment.** Single-tenant single-server now; sharding can be added at the service layer when needed without re-architecting.
 
-## Follow-ups before implementation plan
+## Open considerations (informational, not blockers)
 
-- **Schema review against industry patterns for games like ours.** Current schema is essentially a 1:1 mapping of today's `AccountData` shape into normalized tables. Worth a comparative pass against MMO/gacha-standard data layouts (player/character separation, inventory item-bag patterns, currency wallet conventions, item instance lineage) to surface any structural improvements before locking in the migration. This is the next discussion before writing-plans is invoked.
+Items the implementation plan will need to make concrete calls on, but which the spec deliberately leaves as design space:
+
+- **Connection-pool implementation choice.** Roll a thin custom pool against `pqxx::connection` (50-LOC wrapper around a semaphore), or pull in an existing one (e.g., `pqxx_pool` if mature). Either is fine; the surface is small and tested.
+- **rapidcheck integration mechanism.** Vendored as header + impl in `ThirdParty/rapidcheck/`, vs. vcpkg overlay. CLAUDE.md prefers vendoring; defer to plan-phase researcher.
+- **Cross-player wallet view.** No materialized `wallet_balances` table is in this spec — wallet balance per account is reconstructed from snapshot + tail. If a future feature needs "top N spenders across all players" without walking every account, that spec adds a materialized view fed by the wallet projection daemon. Not a current need; the projection daemon itself isn't built in this migration.
+- **Rollback semantics on `Transaction::Rollback`.** Either re-fetch the Account on next access, or snapshot pre-mutation state. Plan-phase decides.
 
 ## Sources / research artifacts
 
