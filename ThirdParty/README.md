@@ -10,7 +10,7 @@ Every vendored dependency lives in its own subdir alongside a `LICENSE` file. Th
 - Lua libs: single-file libraries at `<name>/<name>.lua`; multi-file packages at `<name>/init.lua` (plus internal modules).
 - Binaries (build tools, runtimes): tracked in the subdir (`love2d/`, `premake5/`).
 
-vcpkg-managed deps (libpqxx, libpq) do **not** live here — they're installed under `$VCPKG_ROOT/installed/` and pulled in via include/link paths from `Server/premake5.lua`. See [`../Server/BUILD.md`](../Server/BUILD.md#why-vcpkg).
+vcpkg-managed deps (libpqxx, libpq) do **not** live here — they're installed under `$VCPKG_ROOT/installed/` and pulled in via include/link paths from `Server/premake5.lua`. See the "Why vcpkg?" section in `Server/BUILD.md`.
 
 ## Inventory
 
@@ -44,4 +44,4 @@ vcpkg-managed deps (libpqxx, libpq) do **not** live here — they're installed u
    - **Lua**: no build step. The package loader in `Client/conf.lua` resolves `require("thirdparty.<name>")` automatically as long as the layout matches (`ThirdParty/<name>/<name>.lua` for single-file libs, `ThirdParty/<name>/init.lua` for multi-file).
 5. Update consumer READMEs (`Client/README.md`, `Tools/README.md`, etc.) if the dep is user-facing.
 
-**Prefer vendoring over vcpkg.** vcpkg is reserved for libraries whose build system is genuinely too complex to drive from premake5 (currently: libpqxx only). See [`../Server/BUILD.md`](../Server/BUILD.md) for the rationale.
+**Prefer vendoring over vcpkg.** vcpkg is reserved for libraries whose build system is genuinely too complex to drive from premake5 (currently: libpqxx only). See `Server/BUILD.md` for the rationale.
