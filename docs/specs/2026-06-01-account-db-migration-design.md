@@ -62,6 +62,11 @@ The chosen stack — Postgres + selective ES + thin audit table for non-ES paths
 | Side effects | **Two channels** | In-process descriptors (replay-skippable) + Postgres outbox table (cross-service, dispatched by polling relay with `FOR UPDATE SKIP LOCKED`). |
 | Migration approach | **Big bang, no importer** | Per project dev policy. Delete existing JSON saves; re-register test accounts. |
 | Backup/DR | **WAL-G + S3-compatible bucket** | Continuous WAL archive + nightly full + 30/12/3 retention + quarterly restore drill. ~$10/mo, ~1 min RPO. |
+| Instance IDs | **UUID v7 (16-byte `UUID` column)** | Replaces `wpn_<ts>_<rand>` TEXT strings. Time-ordered B-tree append, RFC 9562. Content IDs stay TEXT. |
+| Idempotency | **`idempotency_key` UNIQUE on every event** | Client-supplied per request; prevents double-charge / double-grant on network retries. |
+| Soft delete | **`accounts.deleted_at TIMESTAMPTZ` + scheduled hard-delete job** | GDPR-compliant 30-day horizon; preserves audit trail vs. immediate `ON DELETE CASCADE` everywhere. |
+| Loadouts | **`loadouts` table with `preset_id`** (preset 0 = active) | Replaces `equipment` + `gear_equipment`. Reserves shape for relic/build presets without future data migration. |
+| Material economy | **`material_inventory` table** | HSR-style ascension/trace/level-up consumes dozens of stackable material types; schema must support this from day one. |
 
 ## Architecture
 
@@ -105,36 +110,37 @@ The chosen stack — Postgres + selective ES + thin audit table for non-ES paths
 
 The account in memory remains the source of truth *during a request*. The Postgres DB becomes the source of truth *between* requests. The cache is a write-through hot set keyed by player ID. The 64-stripe lock continues to enforce per-player serialization at the application layer.
 
-## Schema — Relational (12 tables)
+## Schema — Relational (13 tables)
 
 These hold all *non-event-sourced* player state. Mutations are direct UPDATEs through the dirty-flag flush mechanism.
 
 ```sql
 -- Account header (scalars, counters, progression cursors)
 accounts (
-  account_id        BIGSERIAL PRIMARY KEY,
-  username          TEXT NOT NULL UNIQUE,         -- replaces index.json
-  password_hash     TEXT NOT NULL,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_login        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  login_streak      INT NOT NULL DEFAULT 0,
-  last_streak_day   DATE,
-  story_level       INT NOT NULL DEFAULT 1,
-  story_xp          INT NOT NULL DEFAULT 0,
-  difficulty_tier   INT NOT NULL DEFAULT 1,
-  party_slot_0      TEXT,                         -- character_id, nullable
-  party_slot_1      TEXT,
-  party_slot_2      TEXT,
-  party_slot_3      TEXT,
-  reducer_version   INT NOT NULL DEFAULT 1,       -- snapshot invalidation marker
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  account_id              BIGSERIAL PRIMARY KEY,
+  username                TEXT NOT NULL UNIQUE,            -- replaces index.json
+  password_hash           TEXT NOT NULL,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_login              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  login_streak            INT NOT NULL DEFAULT 0,
+  last_streak_day         DATE,
+  last_login_claim_at     TIMESTAMPTZ,                     -- when the most recent daily reward was claimed
+  last_login_claim_day_idx SMALLINT,                       -- position in the daily-reward cycle (0..6 etc.)
+  story_level             INT NOT NULL DEFAULT 1,
+  story_xp                INT NOT NULL DEFAULT 0,
+  difficulty_tier         INT NOT NULL DEFAULT 1,
+  reducer_version         INT NOT NULL DEFAULT 1,          -- snapshot invalidation marker
+  deleted_at              TIMESTAMPTZ,                     -- soft delete; hard-delete job purges after grace period
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX accounts_deleted_idx ON accounts (deleted_at) WHERE deleted_at IS NOT NULL;
 
 -- Owned characters (bounded ~50 per account, by template_id)
 owned_characters (
   account_id      BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-  character_id    TEXT NOT NULL,                  -- template ID
+  character_id    TEXT NOT NULL,                  -- template ID (content slug)
   level           SMALLINT NOT NULL DEFAULT 1,
+  current_xp      INT NOT NULL DEFAULT 0,         -- XP toward next level
   ascension       SMALLINT NOT NULL DEFAULT 0,
   resonance       SMALLINT NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, character_id)
@@ -149,28 +155,31 @@ char_traces (
   FOREIGN KEY (account_id, character_id) REFERENCES owned_characters
 );
 
--- Owned weapons (instanced — one row per pull)
+-- Owned weapons (instanced — one row per pull; UUID v7 for time-ordered B-tree append)
 owned_weapons (
   account_id      BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-  instance_id     TEXT NOT NULL,
-  template_id     TEXT NOT NULL,
+  instance_id     UUID NOT NULL,                  -- UUID v7
+  template_id     TEXT NOT NULL,                  -- content slug
   level           SMALLINT NOT NULL DEFAULT 1,
+  current_xp      INT NOT NULL DEFAULT 0,
   ascension       SMALLINT NOT NULL DEFAULT 0,
   refinement      SMALLINT NOT NULL DEFAULT 0,
+  acquired_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (account_id, instance_id)
 );
 CREATE INDEX owned_weapons_template_idx ON owned_weapons (account_id, template_id);
 
--- Owned gear (instanced — one row per drop)
+-- Owned gear (instanced — one row per drop; UUID v7)
 owned_gear (
   account_id      BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-  instance_id     TEXT NOT NULL,
-  set_id          TEXT NOT NULL,
+  instance_id     UUID NOT NULL,                  -- UUID v7
+  set_id          TEXT NOT NULL,                  -- content slug
   slot            SMALLINT NOT NULL,              -- GearSlot enum
   rarity          SMALLINT NOT NULL,
   level           SMALLINT NOT NULL DEFAULT 0,
   main_stat       SMALLINT NOT NULL,              -- StatType enum
   main_value      REAL NOT NULL,
+  acquired_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (account_id, instance_id)
 );
 CREATE INDEX owned_gear_set_slot_idx ON owned_gear (account_id, set_id, slot);
@@ -178,30 +187,39 @@ CREATE INDEX owned_gear_set_slot_idx ON owned_gear (account_id, set_id, slot);
 -- Gear substats (0..4 per gear piece; normalized for future filter queries)
 gear_substats (
   account_id      BIGINT NOT NULL,
-  instance_id     TEXT NOT NULL,
-  slot_idx        SMALLINT NOT NULL,              -- 0..3
+  instance_id     UUID NOT NULL,
+  slot_idx        SMALLINT NOT NULL CHECK (slot_idx BETWEEN 0 AND 3),
   stat_type       SMALLINT NOT NULL,
   value           REAL NOT NULL,
   PRIMARY KEY (account_id, instance_id, slot_idx),
-  FOREIGN KEY (account_id, instance_id) REFERENCES owned_gear
+  UNIQUE (account_id, instance_id, stat_type),    -- no duplicate substat type per gear
+  FOREIGN KEY (account_id, instance_id) REFERENCES owned_gear ON DELETE CASCADE
 );
 CREATE INDEX gear_substats_stat_idx ON gear_substats (account_id, stat_type);
 
--- Equipped weapon per character
-equipment (
-  account_id      BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-  character_id    TEXT NOT NULL,
-  weapon_instance_id TEXT,
-  PRIMARY KEY (account_id, character_id)
+-- Loadouts (per character, multiple presets; preset 0 = active)
+-- Replaces the old `equipment` + `gear_equipment` tables.
+loadouts (
+  account_id           BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+  character_id         TEXT NOT NULL,
+  preset_id            SMALLINT NOT NULL,         -- 0 = active; 1..N = saved presets
+  name                 TEXT,                      -- user-given name; null for preset 0
+  weapon_instance_id   UUID,
+  slot_helmet          UUID,
+  slot_gauntlets       UUID,
+  slot_chest           UUID,
+  slot_boots           UUID,
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, character_id, preset_id)
 );
+CREATE INDEX loadouts_active_idx ON loadouts (account_id) WHERE preset_id = 0;
 
--- Equipped gear per character per slot
-gear_equipment (
-  account_id      BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-  character_id    TEXT NOT NULL,
-  slot            SMALLINT NOT NULL,
-  gear_instance_id TEXT,
-  PRIMARY KEY (account_id, character_id, slot)
+-- Material inventory (stackable items: XP books, ascension mats, etc.)
+material_inventory (
+  account_id     BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+  material_id    TEXT NOT NULL,                   -- content slug
+  quantity       INT NOT NULL CHECK (quantity >= 0),
+  PRIMARY KEY (account_id, material_id)
 );
 
 -- Quest state (heavily queried — GetByType, GetByState, GetExpiredStates)
@@ -213,12 +231,16 @@ quest_states (
   started_at      TIMESTAMPTZ,
   completed_at    TIMESTAMPTZ,
   reset_at        TIMESTAMPTZ,
-  metadata        JSONB NOT NULL DEFAULT '{}',    -- freeform per quest type
+  metadata        JSONB NOT NULL DEFAULT '{}'
+                  CHECK (jsonb_typeof(metadata) = 'object'),
   PRIMARY KEY (account_id, quest_id)
 );
 CREATE INDEX quest_states_type_state_idx ON quest_states (account_id, quest_type, state);
 CREATE INDEX quest_states_reset_idx     ON quest_states (account_id, reset_at)
   WHERE reset_at IS NOT NULL;
+-- Active quests are <1% of historical rows but 100% of reads — partial index pays off:
+CREATE INDEX quest_states_active_idx    ON quest_states (account_id, quest_type)
+  WHERE state IN (1, 2);                          -- 1=ACTIVE, 2=CLAIMABLE (placeholder enum values)
 
 -- Quest objectives
 quest_objectives (
@@ -231,10 +253,11 @@ quest_objectives (
   FOREIGN KEY (account_id, quest_id) REFERENCES quest_states
 );
 
--- World flags (HasAll / HasAny queries)
+-- World flags (HasAll / HasAny queries; also hosts first-time-clear via `ftc:<content_id>` namespace)
 world_flags (
   account_id      BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
   flag            TEXT NOT NULL,
+  unlocked_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (account_id, flag)
 );
 
@@ -247,9 +270,15 @@ pity_state (
   guarantee_5     BOOLEAN NOT NULL DEFAULT false,
   PRIMARY KEY (account_id, slot_id)
 );
-```
 
-**Party slots:** stored as `accounts.party_slot_{0..3}` columns (4 fixed slots, no growth). Alternative is a `party_slots(account_id, slot_idx, character_id)` table; columns are simpler and the cardinality is fixed.
+-- Party slots (normalized; lets us grow to 5/6 slots later without ALTER TABLE)
+party_slots (
+  account_id     BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+  slot_idx       SMALLINT NOT NULL CHECK (slot_idx BETWEEN 0 AND 3),
+  character_id   TEXT,                            -- null = empty slot
+  PRIMARY KEY (account_id, slot_idx)
+);
+```
 
 ## Schema — Event-Sourced (4 streams)
 
@@ -257,27 +286,40 @@ Single `events` table, monthly RANGE partitioned on `created_at`. Each aggregate
 
 ```sql
 CREATE TABLE events (
-  sequence       BIGSERIAL,                       -- global, may have gaps; projection cursor
-  account_id     BIGINT NOT NULL,
-  aggregate_kind TEXT   NOT NULL,                 -- 'wallet' | 'pulls' | 'quest_claims' | 'progression'
-  version        INT    NOT NULL,                 -- per (account_id, aggregate_kind), 1..N, gapless
-  event_type     TEXT   NOT NULL,                 -- e.g. 'pull_performed'
-  schema_version INT    NOT NULL DEFAULT 1,
-  data           JSONB  NOT NULL,
-  metadata       JSONB  NOT NULL DEFAULT '{}',    -- source, idempotency_key, request_id
-  xid            XID8   NOT NULL DEFAULT pg_current_xact_id(),
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (sequence, created_at),
-  UNIQUE (account_id, aggregate_kind, version)
+  event_id        UUID NOT NULL DEFAULT gen_random_uuid(),  -- UUID v7 generated client-side; v4 fallback
+  sequence        BIGSERIAL,                                 -- global cursor; may have gaps
+  account_id      BIGINT NOT NULL,
+  aggregate_kind  TEXT   NOT NULL,                           -- 'wallet' | 'pulls' | 'quest_claims' | 'progression'
+  version         INT    NOT NULL,                           -- per (account_id, aggregate_kind), 1..N, gapless
+  event_type      TEXT   NOT NULL,                           -- e.g. 'pull_performed'
+  schema_version  INT    NOT NULL DEFAULT 1,
+  data            JSONB  NOT NULL,
+  metadata        JSONB  NOT NULL DEFAULT '{}',              -- source, request_id, actor
+  idempotency_key TEXT   NOT NULL,                           -- client-supplied; prevents double-process on retry
+  xid             XID8   NOT NULL DEFAULT pg_current_xact_id(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- Partitioned-table constraint: every unique/PK index must include the partition column (created_at).
+  PRIMARY KEY (event_id, created_at),
+  UNIQUE (account_id, aggregate_kind, version, created_at),
+  UNIQUE (account_id, idempotency_key, created_at)
 ) PARTITION BY RANGE (created_at);
 
 CREATE INDEX events_account_aggregate_version_idx
   ON events (account_id, aggregate_kind, version);
 CREATE INDEX events_xid_seq_idx
   ON events (xid, sequence);
+CREATE INDEX events_wallet_recent_idx
+  ON events (account_id, created_at DESC) WHERE aggregate_kind = 'wallet';
+CREATE INDEX events_pulls_banner_idx
+  ON events (account_id, (data->>'banner_id'), created_at) WHERE aggregate_kind = 'pulls';
 
 -- Initial partitions managed by pg_partman, monthly cadence.
 ```
+
+**Why `(event_id, created_at)` as PK:** PostgreSQL requires unique constraints on a partitioned table to include the partition key. `event_id` is globally unique by construction (UUID v7), so the composite constraint enforces global uniqueness via per-partition local indexes without coordination overhead.
+
+**Idempotency scope:** `(account_id, idempotency_key)`. Clients send a stable key with each mutation (UUID v4 generated client-side, reused on retry). A duplicate insert returns `23505`; the handler treats it as success and reads back the prior event.
 
 **Per-stream version** is supplied by the application from the loaded aggregate's current version + 1. On `INSERT`, the `UNIQUE (account_id, aggregate_kind, version)` constraint catches concurrent writes; the application catches `SQLSTATE 23505` and retries after re-loading the aggregate.
 
@@ -297,6 +339,7 @@ Past-tense, verb-in-middle, no generic `updated`/`changed`. Cron and admin actio
 ```json
 {
   "banner_id": "char_event_001",
+  "banner_version": "2.7",                       // disambiguates banner reruns
   "cost": { "currency": "tickets", "amount": 1 },
 
   "rng_state_before": "0x9e3779b97f4a7c15...",   // xoshiro256++ state, hex
@@ -310,7 +353,7 @@ Past-tense, verb-in-middle, no generic `updated`/`changed`. Cron and admin actio
     {
       "template_id": "char_4star_001",
       "rarity": 4,
-      "instance_id": null,                       // weapons get instances; characters keyed by template
+      "instance_id": null,                       // weapons get UUID v7 instances; characters keyed by template
       "was_featured": true
     }
   ],
@@ -321,7 +364,7 @@ Past-tense, verb-in-middle, no generic `updated`/`changed`. Cron and admin actio
 }
 ```
 
-Multi-pulls are **one event** (`multi_pull_performed`) containing the full result vector — one business decision, one event.
+Multi-pulls are **one event** (`multi_pull_performed`) containing the full result vector — one business decision, one event. `banner_version` is mandatory on every pull event; without it, post-hoc analytics on banner reruns silently merge two distinct events.
 
 ## Schema — Support tables
 
@@ -363,7 +406,68 @@ CREATE TABLE audit_log (
 CREATE INDEX audit_log_account_time_idx ON audit_log (account_id, occurred_at DESC);
 ```
 
-The audit log is the recovery story for non-ES paths: if a player loses their party composition or equipped gear, we can see exactly when it changed and roll back manually — without paying the full ES tax on those tables.
+The audit log is the recovery story for non-ES paths: if a player loses their party composition or active loadout, we can see exactly when it changed and roll back manually — without paying the full ES tax on those tables.
+
+## Schema — Future seams (deferred, but shape documented to avoid corner-painting)
+
+These tables are NOT in scope for this migration. They are documented here so that (a) the table names are reserved, (b) the implementation plan knows what shape to expect, and (c) the relational design doesn't accidentally close off the path to them.
+
+### Friends / social — `friendships` (Nakama pattern)
+
+Directed-edge storage, two rows per friendship (one per direction). Symmetric for `mutual`; asymmetric for `pending`. Supports geo-sharding by `source_account_id` later.
+
+```sql
+-- DEFERRED, not in this migration
+friendships (
+  source_account_id  BIGINT NOT NULL,
+  target_account_id  BIGINT NOT NULL,
+  state              SMALLINT NOT NULL,   -- 0=pending_outgoing, 1=pending_incoming, 2=mutual, 3=blocked
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_account_id, state, target_account_id)
+);
+```
+
+### Mail / inbox — compensation gifts, event mail
+
+Universal in gachas. Attachments delivered via the `outbox` table on send for exactly-once-ish semantics.
+
+```sql
+-- DEFERRED, not in this migration
+mail (
+  mail_id         UUID PRIMARY KEY,
+  account_id      BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+  sender          TEXT NOT NULL,                  -- 'system' | 'event:<id>' | 'admin:<id>'
+  subject         TEXT NOT NULL,
+  body            TEXT NOT NULL,
+  attachments     JSONB NOT NULL DEFAULT '[]',    -- [{ kind, content_id, qty }, ...]
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at      TIMESTAMPTZ,
+  read_at         TIMESTAMPTZ,
+  claimed_at      TIMESTAMPTZ
+);
+CREATE INDEX mail_pending_idx ON mail (account_id, expires_at) WHERE claimed_at IS NULL;
+```
+
+### Achievements / first-time-clear
+
+Folded into `world_flags` via flag namespace (`ftc:stage_1_3`, `achv:first_5star`). No separate table needed at this stage. If achievement metadata grows beyond "yes/no + timestamp" (progress bars, tiered rewards), a dedicated `achievements` table mirrors the `quest_states` shape.
+
+### Battle / season pass
+
+```sql
+-- DEFERRED, not in this migration
+season_pass (
+  account_id        BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+  season_id         TEXT NOT NULL,
+  tier              INT NOT NULL DEFAULT 0,
+  xp                INT NOT NULL DEFAULT 0,
+  is_premium        BOOLEAN NOT NULL DEFAULT false,
+  claimed_tiers     INT[] NOT NULL DEFAULT '{}',  -- bitset alternative: BIT VARYING
+  PRIMARY KEY (account_id, season_id)
+);
+```
+
+When any of these lands, it gets its own spec + plan. The `outbox` table + audit log infrastructure built in this migration are reused as-is.
 
 ## Repository / Persistence Layer
 
@@ -416,8 +520,8 @@ public:
 **Transaction boundary = RPC handler.** Each write handler calls `repo.Begin(playerId)` at entry, mutates the cached `Account`, and calls `Commit()` on success. Read handlers do not open a transaction (or open a read-only one). On `Rollback()`, the cached Account must be reverted — either by re-fetching from DB on the next access, or by snapshot/restore of pre-mutation state (decided in implementation).
 
 **Dirty-flag flush.** Two layers of tracking on `Account`:
-- **Scalar-table dirty bits:** one bit per table (`accounts`, `pity_state`).
-- **Row-per-entity dirty sets:** per sub-collection, an `unordered_set<string>` of changed IDs. E.g., `dirtyCharacterIds`, `dirtyWeaponIds`, `dirtyGearIds`, `dirtyQuestIds`, `dirtyWorldFlagAdds`, `dirtyWorldFlagRemoves`.
+- **Scalar-table dirty bits:** one bit per scalar table (`accounts`, `pity_state` per slot).
+- **Row-per-entity dirty sets:** per sub-collection, a set of changed IDs typed to match the table's PK. E.g., `unordered_set<string> dirtyCharacterIds` (TEXT content IDs), `unordered_set<uuid> dirtyWeaponInstanceIds`, `unordered_set<uuid> dirtyGearInstanceIds`, `unordered_set<string> dirtyQuestIds`, `unordered_set<string> dirtyWorldFlagAdds`, `unordered_set<string> dirtyWorldFlagRemoves`, `unordered_set<pair<string,int>> dirtyLoadoutKeys` (character_id, preset_id), `unordered_set<string> dirtyMaterialIds`, `unordered_set<int16> dirtyPartySlots`.
 
 Mutations on `Account` go through setter methods that mark dirty automatically. Fields become private. There is no other way to mutate state — making it impossible for a developer to forget to dirty-flag.
 
@@ -428,14 +532,17 @@ public:
     // Scalar setters (mark account-row dirty)
     void SetCredits(int amount);
     void SetTickets(int amount);
-    void AdvanceStoryXp(int delta);            // marks accounts dirty + emits progression event
+    void AdvanceStoryXp(int delta);              // marks accounts dirty + emits progression event
+    void SetPartySlot(int16_t idx, std::string character_id);
     // ...
 
     // Row-per-entity setters (mark id dirty)
     void SetOwnedCharacterLevel(const std::string& id, int level);
-    void AddOwnedWeapon(OwnedWeapon w);         // marks weapon id dirty
-    void RefineOwnedWeapon(const std::string& id);
-    void AddOwnedGear(OwnedGear g);
+    void AddOwnedWeapon(OwnedWeapon w);          // generates UUID v7, marks weapon id dirty
+    void RefineOwnedWeapon(uuids::uuid id);
+    void AddOwnedGear(OwnedGear g);              // generates UUID v7
+    void SetLoadoutSlot(const std::string& character_id, int16_t preset_id, GearSlot slot, uuids::uuid gear_id);
+    void AddMaterial(const std::string& material_id, int quantity);
     void AddWorldFlag(const std::string& flag);
     void RemoveWorldFlag(const std::string& flag);
     // ...
