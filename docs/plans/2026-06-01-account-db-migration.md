@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate AphelyonAccount persistence from one-JSON-file-per-player to PostgreSQL with selective event sourcing on wallet/pulls/quest_claims/progression aggregates; relational tables + audit log for the rest.
+**Goal:** Migrate Account persistence from one-JSON-file-per-player to PostgreSQL with selective event sourcing on wallet/pulls/quest_claims/progression aggregates; relational tables + audit log for the rest.
 
 **Architecture:** PostgreSQL 16+ as primary store, Docker Compose in dev. Single monthly-partitioned `events` table holds 4 aggregate streams; 13 relational tables hold non-ES player state; 3 support tables (snapshots, outbox, audit_log). Per-RPC Postgres transaction with optimistic concurrency on event append. Dirty-flag flush on relational mutations driven by Account setters. xoshiro256++ PRNG for cross-platform deterministic replay. 64-stripe per-player lock + in-memory cache preserved.
 
@@ -16,68 +16,68 @@
 
 | File | Responsibility |
 |---|---|
-| `AphelyonServer/docker-compose.yml` | Postgres 16 + pg_partman container; named volume `aphelyon_pgdata`; exposed on host `5432`. |
-| `AphelyonServer/scripts/db-setup.bat` | Windows: bring up Postgres, wait for ready, run migrations. |
-| `AphelyonServer/scripts/db-setup.sh` | Cross-platform equivalent of the above. |
-| `AphelyonServer/scripts/db-reset.bat` | Dev-only: nuke volume and `bin/*/AphelyonAccount/data/accounts/`, then re-setup. |
-| `AphelyonServer/AphelyonAccount/migrations/001_accounts.sql` | `accounts` table + soft-delete index. |
-| `AphelyonServer/AphelyonAccount/migrations/002_inventory.sql` | `owned_characters`, `char_traces`, `owned_weapons`, `owned_gear`, `gear_substats`. |
-| `AphelyonServer/AphelyonAccount/migrations/003_equipment.sql` | `loadouts`, `material_inventory`, `party_slots`. |
-| `AphelyonServer/AphelyonAccount/migrations/004_quests.sql` | `quest_states`, `quest_objectives`, `world_flags`, `pity_state`. |
-| `AphelyonServer/AphelyonAccount/migrations/005_events.sql` | Partitioned `events` table + initial monthly partition + indexes + FK CASCADE. |
-| `AphelyonServer/AphelyonAccount/migrations/006_support.sql` | `snapshots`, `outbox`, `audit_log`. |
-| `AphelyonServer/scripts/setup-vcpkg-deps.bat` | MODIFY — add `libpqxx:x64-windows-static` (which transitively pulls `libpq`). |
+| `Server/docker-compose.yml` | Postgres 16 + pg_partman container; named volume `aphelyon_pgdata`; exposed on host `5432`. |
+| `Server/scripts/db-setup.bat` | Windows: bring up Postgres, wait for ready, run migrations. |
+| `Server/scripts/db-setup.sh` | Cross-platform equivalent of the above. |
+| `Server/scripts/db-reset.bat` | Dev-only: nuke volume and `bin/*/Account/data/accounts/`, then re-setup. |
+| `Server/Account/migrations/001_accounts.sql` | `accounts` table + soft-delete index. |
+| `Server/Account/migrations/002_inventory.sql` | `owned_characters`, `char_traces`, `owned_weapons`, `owned_gear`, `gear_substats`. |
+| `Server/Account/migrations/003_equipment.sql` | `loadouts`, `material_inventory`, `party_slots`. |
+| `Server/Account/migrations/004_quests.sql` | `quest_states`, `quest_objectives`, `world_flags`, `pity_state`. |
+| `Server/Account/migrations/005_events.sql` | Partitioned `events` table + initial monthly partition + indexes + FK CASCADE. |
+| `Server/Account/migrations/006_support.sql` | `snapshots`, `outbox`, `audit_log`. |
+| `Server/scripts/setup-vcpkg-deps.bat` | MODIFY — add `libpqxx:x64-windows-static` (which transitively pulls `libpq`). |
 | `ThirdParty/Xoshiro/XoshiroCpp.hpp` | Already cloned. Header-only PRNG by Ryo Suzuki (MIT). No premake5 file needed. |
 | `ThirdParty/rapidcheck/premake5.lua` | Create — static-lib project file (sources already cloned). |
 | `ThirdParty/Catch2/premake5.lua` | Create — static-lib project file (Catch2 v3 source already cloned). |
-| `AphelyonServer/AphelyonCommon/src/UuidV7.hpp` | UUID v7 generator (time-ordered, RFC 9562). |
-| `AphelyonServer/AphelyonAccount/src/db/ConnectionPool.hpp` | Bounded libpqxx connection pool (semaphore-based, ~80 LOC). |
-| `AphelyonServer/AphelyonAccount/src/db/MigrationRunner.hpp` | Applies numbered `.sql` files; tracks applied versions in a `schema_migrations` table. |
-| `AphelyonServer/AphelyonAccount/src/events/Event.hpp` | Common event envelope: id, account_id, aggregate_kind, version, type, schema_version, data, metadata, idempotency_key. |
-| `AphelyonServer/AphelyonAccount/src/events/WalletEvents.hpp` | Wallet event payload types + JSON serialization. |
-| `AphelyonServer/AphelyonAccount/src/events/PullEvents.hpp` | Pull event payload types (with RNG capture fields). |
-| `AphelyonServer/AphelyonAccount/src/events/QuestClaimEvents.hpp` | Quest claim event payload types. |
-| `AphelyonServer/AphelyonAccount/src/events/ProgressionEvents.hpp` | Progression event payload types. |
-| `AphelyonServer/AphelyonAccount/src/reducers/ReducerCommon.hpp` | Shared `ReducerResult<State>`, `SideEffectDescriptor` variants, `Clock` interface. |
-| `AphelyonServer/AphelyonAccount/src/reducers/WalletReducer.hpp` | Pure reducer: `(WalletState, WalletEvent) → ReducerResult<WalletState>`. |
-| `AphelyonServer/AphelyonAccount/src/reducers/PullsReducer.hpp` | Pure reducer with deterministic RNG state in event. |
-| `AphelyonServer/AphelyonAccount/src/reducers/QuestClaimsReducer.hpp` | Pure reducer; emits cross-aggregate references via metadata. |
-| `AphelyonServer/AphelyonAccount/src/reducers/ProgressionReducer.hpp` | Pure reducer; can spawn downstream wallet events (overflow credits). |
-| `AphelyonServer/AphelyonAccount/src/db/EventStore.hpp` | Append event (optimistic concurrency), load aggregate (snapshot + tail). |
-| `AphelyonServer/AphelyonAccount/src/db/SnapshotWriter.hpp` | Background thread + bounded MPMC queue; cadence-driven snapshot writes. |
-| `AphelyonServer/AphelyonAccount/src/db/OutboxRelay.hpp` | Background poller using `FOR UPDATE SKIP LOCKED`; dispatches and marks `dispatched_at`. |
-| `AphelyonServer/AphelyonAccount/src/db/RelationalFlush.hpp` | Per-table flush implementations driven by `Account::Dirty()`. |
-| `AphelyonServer/AphelyonAccount/src/AccountRepository.hpp` | REWRITE — Postgres-backed; replaces the JSON-file repository. |
-| `AphelyonServer/AphelyonAccount/src/AccountTransaction.hpp` | Per-RPC transaction wrapper (Begin/Commit/Rollback). |
-| `AphelyonServer/AphelyonAccount/src/TickQuests.hpp` | Explicit quest-expiration helper invoked at account-load + quest handlers. |
-| `AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp` | DELETE — JSON I/O is gone. |
-| `AphelyonServer/AphelyonCommon/src/AccountData.hpp` | MODIFY — private fields, public setters that auto-mark dirty. |
-| `AphelyonServer/AphelyonCommon/src/CollectionState.hpp` | MODIFY — UUID instance IDs (`uuids::uuid` instead of `std::string`). |
-| `AphelyonServer/AphelyonAccount/src/GachaRNG.hpp` | MODIFY — switch from `std::mt19937` to xoshiro256++; surface RNG state on/before pull. |
-| `AphelyonServer/AphelyonAccount/src/GachaHandlers.hpp` | MODIFY — use `AccountTransaction`; emit pull events instead of mutating directly. |
-| `AphelyonServer/AphelyonAccount/src/AccountHandlers.hpp` | MODIFY — use `AccountTransaction`; emit wallet events; audit non-ES mutations. |
-| `AphelyonServer/AphelyonAccount/src/QuestHandlers.hpp` | MODIFY — call `TickQuests` explicitly; `GetQuestState` becomes a pure read. |
-| `AphelyonServer/AphelyonAccount/src/ProgressionHandlers.hpp` | MODIFY — emit progression events. |
-| `AphelyonServer/AphelyonAccount/src/AccountServer.hpp` | MODIFY — wire up `ConnectionPool`, `SnapshotWriter`, `OutboxRelay`. |
-| `AphelyonServer/AphelyonAccount/tests/ReducerTests/WalletReducerTest.cpp` | Catch2 unit tests for wallet reducer. |
-| `AphelyonServer/AphelyonAccount/tests/ReducerTests/PullsReducerTest.cpp` | Catch2 unit tests for pulls reducer. |
-| `AphelyonServer/AphelyonAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp` | Catch2 unit tests for quest-claims reducer. |
-| `AphelyonServer/AphelyonAccount/tests/ReducerTests/ProgressionReducerTest.cpp` | Catch2 unit tests for progression reducer. |
-| `AphelyonServer/AphelyonAccount/tests/PropertyTests/ReplayDeterminismTest.cpp` | rapidcheck triple-replay property. |
-| `AphelyonServer/AphelyonAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp` | rapidcheck split-and-fold property. |
-| `AphelyonServer/AphelyonAccount/tests/PropertyTests/InvariantTests.cpp` | Domain invariants (currency non-negative, pity bounded). |
-| `AphelyonServer/AphelyonAccount/tests/GoldenFile/SchemaMigrationTest.cpp` | Loads `tests/events/v{N}_*.json` → upcasts → folds → asserts. |
-| `AphelyonServer/AphelyonAccount/tests/events/v1_pull_performed.json` | Versioned event sample. |
-| `AphelyonServer/AphelyonAccount/tests/events/v1_credits_spent.json` | Versioned event sample. |
-| `AphelyonServer/AphelyonAccount/tests/events/v1_quest_reward_claimed.json` | Versioned event sample. |
-| `AphelyonServer/AphelyonAccount/tests/events/v1_story_level_advanced.json` | Versioned event sample. |
-| `AphelyonServer/AphelyonAccount/tests/Integration/EventStoreRoundTripTest.cpp` | testcontainer or docker-spawned Postgres; append + load + replay. |
-| `AphelyonServer/AphelyonAccount/tests/Integration/OutboxRelayTest.cpp` | Verifies relay dispatches and marks `dispatched_at`. |
+| `Server/Common/src/UuidV7.hpp` | UUID v7 generator (time-ordered, RFC 9562). |
+| `Server/Account/src/db/ConnectionPool.hpp` | Bounded libpqxx connection pool (semaphore-based, ~80 LOC). |
+| `Server/Account/src/db/MigrationRunner.hpp` | Applies numbered `.sql` files; tracks applied versions in a `schema_migrations` table. |
+| `Server/Account/src/events/Event.hpp` | Common event envelope: id, account_id, aggregate_kind, version, type, schema_version, data, metadata, idempotency_key. |
+| `Server/Account/src/events/WalletEvents.hpp` | Wallet event payload types + JSON serialization. |
+| `Server/Account/src/events/PullEvents.hpp` | Pull event payload types (with RNG capture fields). |
+| `Server/Account/src/events/QuestClaimEvents.hpp` | Quest claim event payload types. |
+| `Server/Account/src/events/ProgressionEvents.hpp` | Progression event payload types. |
+| `Server/Account/src/reducers/ReducerCommon.hpp` | Shared `ReducerResult<State>`, `SideEffectDescriptor` variants, `Clock` interface. |
+| `Server/Account/src/reducers/WalletReducer.hpp` | Pure reducer: `(WalletState, WalletEvent) → ReducerResult<WalletState>`. |
+| `Server/Account/src/reducers/PullsReducer.hpp` | Pure reducer with deterministic RNG state in event. |
+| `Server/Account/src/reducers/QuestClaimsReducer.hpp` | Pure reducer; emits cross-aggregate references via metadata. |
+| `Server/Account/src/reducers/ProgressionReducer.hpp` | Pure reducer; can spawn downstream wallet events (overflow credits). |
+| `Server/Account/src/db/EventStore.hpp` | Append event (optimistic concurrency), load aggregate (snapshot + tail). |
+| `Server/Account/src/db/SnapshotWriter.hpp` | Background thread + bounded MPMC queue; cadence-driven snapshot writes. |
+| `Server/Account/src/db/OutboxRelay.hpp` | Background poller using `FOR UPDATE SKIP LOCKED`; dispatches and marks `dispatched_at`. |
+| `Server/Account/src/db/RelationalFlush.hpp` | Per-table flush implementations driven by `Account::Dirty()`. |
+| `Server/Account/src/AccountRepository.hpp` | REWRITE — Postgres-backed; replaces the JSON-file repository. |
+| `Server/Account/src/AccountTransaction.hpp` | Per-RPC transaction wrapper (Begin/Commit/Rollback). |
+| `Server/Account/src/TickQuests.hpp` | Explicit quest-expiration helper invoked at account-load + quest handlers. |
+| `Server/Account/src/AccountSerializer.hpp` | DELETE — JSON I/O is gone. |
+| `Server/Common/src/AccountData.hpp` | MODIFY — private fields, public setters that auto-mark dirty. |
+| `Server/Common/src/CollectionState.hpp` | MODIFY — UUID instance IDs (`uuids::uuid` instead of `std::string`). |
+| `Server/Account/src/GachaRNG.hpp` | MODIFY — switch from `std::mt19937` to xoshiro256++; surface RNG state on/before pull. |
+| `Server/Account/src/GachaHandlers.hpp` | MODIFY — use `AccountTransaction`; emit pull events instead of mutating directly. |
+| `Server/Account/src/AccountHandlers.hpp` | MODIFY — use `AccountTransaction`; emit wallet events; audit non-ES mutations. |
+| `Server/Account/src/QuestHandlers.hpp` | MODIFY — call `TickQuests` explicitly; `GetQuestState` becomes a pure read. |
+| `Server/Account/src/ProgressionHandlers.hpp` | MODIFY — emit progression events. |
+| `Server/Account/src/AccountServer.hpp` | MODIFY — wire up `ConnectionPool`, `SnapshotWriter`, `OutboxRelay`. |
+| `Server/Account/tests/ReducerTests/WalletReducerTest.cpp` | Catch2 unit tests for wallet reducer. |
+| `Server/Account/tests/ReducerTests/PullsReducerTest.cpp` | Catch2 unit tests for pulls reducer. |
+| `Server/Account/tests/ReducerTests/QuestClaimsReducerTest.cpp` | Catch2 unit tests for quest-claims reducer. |
+| `Server/Account/tests/ReducerTests/ProgressionReducerTest.cpp` | Catch2 unit tests for progression reducer. |
+| `Server/Account/tests/PropertyTests/ReplayDeterminismTest.cpp` | rapidcheck triple-replay property. |
+| `Server/Account/tests/PropertyTests/SnapshotEquivalenceTest.cpp` | rapidcheck split-and-fold property. |
+| `Server/Account/tests/PropertyTests/InvariantTests.cpp` | Domain invariants (currency non-negative, pity bounded). |
+| `Server/Account/tests/GoldenFile/SchemaMigrationTest.cpp` | Loads `tests/events/v{N}_*.json` → upcasts → folds → asserts. |
+| `Server/Account/tests/events/v1_pull_performed.json` | Versioned event sample. |
+| `Server/Account/tests/events/v1_credits_spent.json` | Versioned event sample. |
+| `Server/Account/tests/events/v1_quest_reward_claimed.json` | Versioned event sample. |
+| `Server/Account/tests/events/v1_story_level_advanced.json` | Versioned event sample. |
+| `Server/Account/tests/Integration/EventStoreRoundTripTest.cpp` | testcontainer or docker-spawned Postgres; append + load + replay. |
+| `Server/Account/tests/Integration/OutboxRelayTest.cpp` | Verifies relay dispatches and marks `dispatched_at`. |
 | `tools/clang-tidy/GachaReducerPurityCheck.cpp` | Custom clang-tidy check banning non-deterministic calls in `reducers/`. |
 | `tools/clang-tidy/.clang-tidy` | Project-level clang-tidy config that enables the custom check on `reducers/`. |
-| `AphelyonServer/scripts/wal-g-setup.sh` | Optional: dev WAL-G config for backup drill (deferred to operational phase). |
-| `AphelyonServer/AphelyonAccount/premake5.lua` | MODIFY — link `libpqxx` + `libpq` from vcpkg, add `migrations/`, add `tests/` executable, add reducers dir. |
-| `AphelyonServer/premake5.lua` | MODIFY — include rapidcheck + Catch2 subprojects; add vcpkg include dirs for libpqxx/libpq; add IncludeDir entry for XoshiroCpp. |
+| `Server/scripts/wal-g-setup.sh` | Optional: dev WAL-G config for backup drill (deferred to operational phase). |
+| `Server/Account/premake5.lua` | MODIFY — link `libpqxx` + `libpq` from vcpkg, add `migrations/`, add `tests/` executable, add reducers dir. |
+| `Server/premake5.lua` | MODIFY — include rapidcheck + Catch2 subprojects; add vcpkg include dirs for libpqxx/libpq; add IncludeDir entry for XoshiroCpp. |
 
 Conventions used throughout:
 - All migration files apply with `db-setup.bat` (or `docker exec gacha_postgres psql ... -f /migrations/NNN.sql`).
@@ -107,14 +107,14 @@ Expected: working tree clean apart from any in-progress uncommitted work the use
 ### Task 1: Docker Compose for Postgres
 
 **Files:**
-- Create: `AphelyonServer/docker-compose.yml`
-- Create: `AphelyonServer/scripts/db-setup.bat`
-- Create: `AphelyonServer/scripts/db-setup.sh`
-- Create: `AphelyonServer/scripts/db-reset.bat`
+- Create: `Server/docker-compose.yml`
+- Create: `Server/scripts/db-setup.bat`
+- Create: `Server/scripts/db-setup.sh`
+- Create: `Server/scripts/db-reset.bat`
 
 - [ ] **Step 1: Write docker-compose.yml**
 
-`AphelyonServer/docker-compose.yml`:
+`Server/docker-compose.yml`:
 ```yaml
 services:
   postgres:
@@ -128,7 +128,7 @@ services:
       - "5432:5432"
     volumes:
       - aphelyon_pgdata:/var/lib/postgresql/data
-      - ./AphelyonAccount/migrations:/migrations:ro
+      - ./Account/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aphelyon -d aphelyon"]
       interval: 2s
@@ -141,7 +141,7 @@ volumes:
 
 - [ ] **Step 2: Write Windows setup script**
 
-`AphelyonServer/scripts/db-setup.bat`:
+`Server/scripts/db-setup.bat`:
 ```bat
 @echo off
 setlocal
@@ -159,7 +159,7 @@ if errorlevel 1 (
 )
 
 echo Applying migrations in order...
-for %%f in (AphelyonAccount\migrations\*.sql) do (
+for %%f in (Account\migrations\*.sql) do (
     echo   %%f
     docker compose exec -T postgres psql -U aphelyon -d aphelyon -v ON_ERROR_STOP=1 -f /migrations/%%~nxf
     if errorlevel 1 goto :error
@@ -179,7 +179,7 @@ exit /b 1
 
 - [ ] **Step 3: Write POSIX setup script**
 
-`AphelyonServer/scripts/db-setup.sh`:
+`Server/scripts/db-setup.sh`:
 ```sh
 #!/usr/bin/env sh
 set -eu
@@ -194,7 +194,7 @@ until docker compose exec -T postgres pg_isready -U aphelyon -d aphelyon >/dev/n
 done
 
 echo "Applying migrations in order..."
-for f in AphelyonAccount/migrations/*.sql; do
+for f in Account/migrations/*.sql; do
   echo "  $f"
   docker compose exec -T postgres psql -U aphelyon -d aphelyon -v ON_ERROR_STOP=1 -f "/migrations/$(basename "$f")"
 done
@@ -204,7 +204,7 @@ echo "Done."
 
 - [ ] **Step 4: Write reset script (dev-only)**
 
-`AphelyonServer/scripts/db-reset.bat`:
+`Server/scripts/db-reset.bat`:
 ```bat
 @echo off
 setlocal
@@ -214,8 +214,8 @@ echo This will DESTROY the dev database and all in-tree JSON saves. Ctrl-C to ab
 pause
 
 docker compose down -v
-if exist bin\Debug-windows-x86_64\AphelyonAccount\data\accounts rmdir /s /q bin\Debug-windows-x86_64\AphelyonAccount\data\accounts
-if exist bin\Release-windows-x86_64\AphelyonAccount\data\accounts rmdir /s /q bin\Release-windows-x86_64\AphelyonAccount\data\accounts
+if exist bin\Debug-windows-x86_64\Account\data\accounts rmdir /s /q bin\Debug-windows-x86_64\Account\data\accounts
+if exist bin\Release-windows-x86_64\Account\data\accounts rmdir /s /q bin\Release-windows-x86_64\Account\data\accounts
 
 call scripts\db-setup.bat
 popd
@@ -224,13 +224,13 @@ endlocal
 
 - [ ] **Step 5: Bring up Postgres to verify**
 
-Run: `cd AphelyonServer && docker compose up -d postgres`
+Run: `cd Server && docker compose up -d postgres`
 Expected: container started. Verify with `docker compose ps` showing `gacha_postgres` healthy.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add AphelyonServer/docker-compose.yml AphelyonServer/scripts/db-setup.bat AphelyonServer/scripts/db-setup.sh AphelyonServer/scripts/db-reset.bat
+git add Server/docker-compose.yml Server/scripts/db-setup.bat Server/scripts/db-setup.sh Server/scripts/db-reset.bat
 git commit -m "feat(account): docker-compose Postgres + setup/reset scripts"
 ```
 
@@ -241,20 +241,20 @@ git commit -m "feat(account): docker-compose Postgres + setup/reset scripts"
 **Why vcpkg here:** libpqxx generates compiler-feature-detection headers via CMake (`PQXX_HAVE_*` macros) and links against `libpq` — the Postgres C client lib, which is intrinsically tied to Postgres internals. Both fall into the CLAUDE.md "deeply nested build system" case where vcpkg is the right tool. Adding `libpqxx` to the vcpkg manifest transitively pulls in `libpq`.
 
 **Files:**
-- Modify: `AphelyonServer/scripts/setup-vcpkg-deps.bat`
-- Modify: `AphelyonServer/premake5.lua`
+- Modify: `Server/scripts/setup-vcpkg-deps.bat`
+- Modify: `Server/premake5.lua`
 - Delete (optional cleanup, see Step 5): `ThirdParty/libpqxx/`
 
 - [ ] **Step 1: Add libpqxx to the vcpkg setup script**
 
-Open `AphelyonServer/scripts/setup-vcpkg-deps.bat`. Find the `vcpkg install` line that currently installs protobuf/abseil with the overlay triplet. Add `libpqxx:x64-windows-static`. The relevant line should look like:
+Open `Server/scripts/setup-vcpkg-deps.bat`. Find the `vcpkg install` line that currently installs protobuf/abseil with the overlay triplet. Add `libpqxx:x64-windows-static`. The relevant line should look like:
 ```bat
 vcpkg install --overlay-triplets=..\vcpkg-triplets protobuf:x64-windows-static abseil:x64-windows-static utf8-range:x64-windows-static libpqxx:x64-windows-static
 ```
 
 - [ ] **Step 2: Run the vcpkg install**
 
-Run: `cd AphelyonServer && scripts\setup-vcpkg-deps.bat`
+Run: `cd Server && scripts\setup-vcpkg-deps.bat`
 Expected: vcpkg builds libpq and libpqxx with the v143 toolset, ~3–8 minutes. Verify with:
 ```
 dir vcpkg\installed\x64-windows-static\lib\libpqxx.lib
@@ -263,7 +263,7 @@ dir vcpkg\installed\x64-windows-static\lib\libpq.lib
 
 - [ ] **Step 3: Wire vcpkg paths into premake**
 
-Modify `AphelyonServer/premake5.lua`. Find the existing `VcpkgDir` definition and `IncludeDir` table. Add:
+Modify `Server/premake5.lua`. Find the existing `VcpkgDir` definition and `IncludeDir` table. Add:
 ```lua
 -- Already exists if protobuf/abseil are wired up; reuse:
 IncludeDir["libpqxx"] = VcpkgDir .. "/include"   -- libpqxx headers
@@ -273,7 +273,7 @@ IncludeDir["libpq"]   = VcpkgDir .. "/include"   -- libpq headers (same dir, sam
 VcpkgLibDir = VcpkgDir .. "/lib"
 ```
 
-The actual link directives are added per-project in Task 35 / when `AphelyonAccount/premake5.lua` is updated — wherever a project needs Postgres access. The pattern (copy from how `protobuf` is currently linked):
+The actual link directives are added per-project in Task 35 / when `Account/premake5.lua` is updated — wherever a project needs Postgres access. The pattern (copy from how `protobuf` is currently linked):
 ```lua
 filter "system:windows"
     libdirs { VcpkgLibDir }
@@ -298,7 +298,7 @@ Skip this step if you'd rather keep the source around as reference; just don't r
 - [ ] **Step 6: Commit**
 
 ```bash
-git add AphelyonServer/scripts/setup-vcpkg-deps.bat AphelyonServer/premake5.lua
+git add Server/scripts/setup-vcpkg-deps.bat Server/premake5.lua
 git rm -r ThirdParty/libpqxx/  # if Step 5 chosen
 git commit -m "feat(account): libpqxx + libpq via vcpkg overlay (v143 toolset)"
 ```
@@ -317,20 +317,20 @@ Already cloned at `ThirdParty/Xoshiro/XoshiroCpp.hpp` (Ryo Suzuki, MIT). Header-
 - Seeder: `XoshiroCpp::SplitMix64(seed).generateSeedSequence<4>()`
 
 **Files:**
-- Modify: `AphelyonServer/premake5.lua`
+- Modify: `Server/premake5.lua`
 
 - [ ] **Step 1: Add to premake include dirs**
 
-Modify `AphelyonServer/premake5.lua`. Add to the `IncludeDir` table:
+Modify `Server/premake5.lua`. Add to the `IncludeDir` table:
 ```lua
 IncludeDir["XoshiroCpp"] = "../ThirdParty/Xoshiro"
 ```
 
-Then add `IncludeDir["XoshiroCpp"]` to the `includedirs` of every project that uses it (initially just AphelyonAccount).
+Then add `IncludeDir["XoshiroCpp"]` to the `includedirs` of every project that uses it (initially just Account).
 
 - [ ] **Step 2: Smoke test**
 
-Add a temporary `AphelyonServer/AphelyonAccount/test_xoshiro.cpp`:
+Add a temporary `Server/Account/test_xoshiro.cpp`:
 ```cpp
 #include "XoshiroCpp.hpp"
 #include <iostream>
@@ -346,8 +346,8 @@ Build and run twice. Confirm identical output across runs (deterministic). Delet
 - [ ] **Step 3: Commit**
 
 ```bash
-git rm AphelyonServer/AphelyonAccount/test_xoshiro.cpp 2>/dev/null || true
-git add AphelyonServer/premake5.lua
+git rm Server/Account/test_xoshiro.cpp 2>/dev/null || true
+git add Server/premake5.lua
 git commit -m "feat(account): wire XoshiroCpp include path (already vendored)"
 ```
 
@@ -367,7 +367,7 @@ Source already cloned at `ThirdParty/rapidcheck/` (BSD). No external deps — pu
 
 **Files:**
 - Create: `ThirdParty/rapidcheck/premake5.lua`
-- Modify: `AphelyonServer/premake5.lua`
+- Modify: `Server/premake5.lua`
 
 - [ ] **Step 1: Write the premake project**
 
@@ -395,7 +395,7 @@ project "rapidcheck"
 
 - [ ] **Step 2: Add to top-level premake**
 
-Modify `AphelyonServer/premake5.lua`. Add:
+Modify `Server/premake5.lua`. Add:
 ```lua
 include "../ThirdParty/rapidcheck"
 ```
@@ -406,13 +406,13 @@ IncludeDir["rapidcheck"] = "../ThirdParty/rapidcheck/include"
 
 - [ ] **Step 3: Verify build**
 
-Run: `cd AphelyonServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:rapidcheck`
+Run: `cd Server && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:rapidcheck`
 Expected: rapidcheck.lib produced.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add ThirdParty/rapidcheck/premake5.lua AphelyonServer/premake5.lua
+git add ThirdParty/rapidcheck/premake5.lua Server/premake5.lua
 git commit -m "feat(account): rapidcheck premake5 project (sources already vendored)"
 ```
 
@@ -424,7 +424,7 @@ Source already cloned at `ThirdParty/Catch2/` (Boost license). **Catch2 v3 is no
 
 **Files:**
 - Create: `ThirdParty/Catch2/premake5.lua`
-- Modify: `AphelyonServer/premake5.lua`
+- Modify: `Server/premake5.lua`
 
 - [ ] **Step 1: Write the premake project**
 
@@ -452,7 +452,7 @@ project "Catch2"
 
 - [ ] **Step 2: Add to top-level premake**
 
-Modify `AphelyonServer/premake5.lua`. Add:
+Modify `Server/premake5.lua`. Add:
 ```lua
 include "../ThirdParty/Catch2"
 ```
@@ -463,13 +463,13 @@ IncludeDir["Catch2"] = "../ThirdParty/Catch2/src"
 
 - [ ] **Step 3: Verify build**
 
-Run: `cd AphelyonServer && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:Catch2`
+Run: `cd Server && GenerateProjects.bat && msbuild Gacha.sln /p:Configuration=Debug /t:Catch2`
 Expected: Catch2.lib produced.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add ThirdParty/Catch2/premake5.lua AphelyonServer/premake5.lua
+git add ThirdParty/Catch2/premake5.lua Server/premake5.lua
 git commit -m "feat(account): Catch2 v3 premake5 project (sources already vendored)"
 ```
 
@@ -478,14 +478,14 @@ git commit -m "feat(account): Catch2 v3 premake5 project (sources already vendor
 ### Task 5: Migration runner
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/db/MigrationRunner.hpp`
-- Create: `AphelyonServer/AphelyonAccount/src/db/ConnectionPool.hpp`
+- Create: `Server/Account/src/db/MigrationRunner.hpp`
+- Create: `Server/Account/src/db/ConnectionPool.hpp`
 
 (These are written together since the migration runner needs a connection.)
 
 - [ ] **Step 1: Write ConnectionPool**
 
-`AphelyonServer/AphelyonAccount/src/db/ConnectionPool.hpp`:
+`Server/Account/src/db/ConnectionPool.hpp`:
 ```cpp
 #pragma once
 #include <pqxx/pqxx>
@@ -552,7 +552,7 @@ private:
 
 - [ ] **Step 2: Write MigrationRunner**
 
-`AphelyonServer/AphelyonAccount/src/db/MigrationRunner.hpp`:
+`Server/Account/src/db/MigrationRunner.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -638,7 +638,7 @@ private:
 - [ ] **Step 3: Commit (no test yet; migrations don't exist)**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/db/ConnectionPool.hpp AphelyonServer/AphelyonAccount/src/db/MigrationRunner.hpp
+git add Server/Account/src/db/ConnectionPool.hpp Server/Account/src/db/MigrationRunner.hpp
 git commit -m "feat(account): Postgres ConnectionPool + MigrationRunner skeleton"
 ```
 
@@ -646,16 +646,16 @@ git commit -m "feat(account): Postgres ConnectionPool + MigrationRunner skeleton
 
 ## Phase 1 — SQL schema migrations
 
-Each migration file is one task. Files apply in numeric order. All `.sql` files live under `AphelyonServer/AphelyonAccount/migrations/`.
+Each migration file is one task. Files apply in numeric order. All `.sql` files live under `Server/Account/migrations/`.
 
 ### Task 6: `001_accounts.sql`
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/migrations/001_accounts.sql`
+- Create: `Server/Account/migrations/001_accounts.sql`
 
 - [ ] **Step 1: Write migration**
 
-`AphelyonServer/AphelyonAccount/migrations/001_accounts.sql`:
+`Server/Account/migrations/001_accounts.sql`:
 ```sql
 CREATE TABLE accounts (
     account_id              BIGSERIAL PRIMARY KEY,
@@ -680,24 +680,24 @@ CREATE INDEX accounts_deleted_idx ON accounts (deleted_at) WHERE deleted_at IS N
 
 - [ ] **Step 2: Apply and verify**
 
-Run: `cd AphelyonServer && scripts\db-setup.bat`
+Run: `cd Server && scripts\db-setup.bat`
 Expected: migration applied; verify with `docker compose exec postgres psql -U aphelyon -d aphelyon -c "\d accounts"`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/migrations/001_accounts.sql
+git add Server/Account/migrations/001_accounts.sql
 git commit -m "feat(account): migration 001 - accounts table"
 ```
 
 ### Task 7: `002_inventory.sql`
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/migrations/002_inventory.sql`
+- Create: `Server/Account/migrations/002_inventory.sql`
 
 - [ ] **Step 1: Write migration**
 
-`AphelyonServer/AphelyonAccount/migrations/002_inventory.sql`:
+`Server/Account/migrations/002_inventory.sql`:
 ```sql
 CREATE TABLE owned_characters (
     account_id   BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -758,24 +758,24 @@ CREATE INDEX gear_substats_stat_idx ON gear_substats (account_id, stat_type);
 
 - [ ] **Step 2: Apply**
 
-Run: `cd AphelyonServer && scripts\db-setup.bat`
+Run: `cd Server && scripts\db-setup.bat`
 Expected: migration applied.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/migrations/002_inventory.sql
+git add Server/Account/migrations/002_inventory.sql
 git commit -m "feat(account): migration 002 - inventory (characters, weapons, gear)"
 ```
 
 ### Task 8: `003_equipment.sql`
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/migrations/003_equipment.sql`
+- Create: `Server/Account/migrations/003_equipment.sql`
 
 - [ ] **Step 1: Write migration**
 
-`AphelyonServer/AphelyonAccount/migrations/003_equipment.sql`:
+`Server/Account/migrations/003_equipment.sql`:
 ```sql
 CREATE TABLE loadouts (
     account_id          BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -809,23 +809,23 @@ CREATE TABLE party_slots (
 
 - [ ] **Step 2: Apply**
 
-Run: `cd AphelyonServer && scripts\db-setup.bat`
+Run: `cd Server && scripts\db-setup.bat`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/migrations/003_equipment.sql
+git add Server/Account/migrations/003_equipment.sql
 git commit -m "feat(account): migration 003 - loadouts, materials, party_slots"
 ```
 
 ### Task 9: `004_quests.sql`
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/migrations/004_quests.sql`
+- Create: `Server/Account/migrations/004_quests.sql`
 
 - [ ] **Step 1: Write migration**
 
-`AphelyonServer/AphelyonAccount/migrations/004_quests.sql`:
+`Server/Account/migrations/004_quests.sql`:
 ```sql
 CREATE TABLE quest_states (
     account_id   BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -874,23 +874,23 @@ CREATE TABLE pity_state (
 
 - [ ] **Step 2: Apply**
 
-Run: `cd AphelyonServer && scripts\db-setup.bat`
+Run: `cd Server && scripts\db-setup.bat`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/migrations/004_quests.sql
+git add Server/Account/migrations/004_quests.sql
 git commit -m "feat(account): migration 004 - quests, world_flags, pity_state"
 ```
 
 ### Task 10: `005_events.sql`
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/migrations/005_events.sql`
+- Create: `Server/Account/migrations/005_events.sql`
 
 - [ ] **Step 1: Write migration**
 
-`AphelyonServer/AphelyonAccount/migrations/005_events.sql`:
+`Server/Account/migrations/005_events.sql`:
 ```sql
 -- pg_partman extension for partition rollover (must be installed in container image;
 -- postgres:16 ships it as an available extension that just needs CREATE EXTENSION).
@@ -940,24 +940,24 @@ SELECT partman.create_parent(
 
 - [ ] **Step 2: Apply**
 
-Run: `cd AphelyonServer && scripts\db-setup.bat`
+Run: `cd Server && scripts\db-setup.bat`
 Expected: migration applied. Verify partitions: `docker compose exec postgres psql -U aphelyon -d aphelyon -c "\d+ events"`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/migrations/005_events.sql
+git add Server/Account/migrations/005_events.sql
 git commit -m "feat(account): migration 005 - events table (partitioned, LZ4)"
 ```
 
 ### Task 11: `006_support.sql`
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/migrations/006_support.sql`
+- Create: `Server/Account/migrations/006_support.sql`
 
 - [ ] **Step 1: Write migration**
 
-`AphelyonServer/AphelyonAccount/migrations/006_support.sql`:
+`Server/Account/migrations/006_support.sql`:
 ```sql
 CREATE TABLE snapshots (
     account_id       BIGINT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -998,7 +998,7 @@ ALTER TABLE audit_log ALTER COLUMN after  SET COMPRESSION lz4;
 
 - [ ] **Step 2: Apply**
 
-Run: `cd AphelyonServer && scripts\db-setup.bat`
+Run: `cd Server && scripts\db-setup.bat`
 
 - [ ] **Step 3: Verify all migrations applied**
 
@@ -1008,7 +1008,7 @@ Expected: rows 1..6 present.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/migrations/006_support.sql
+git add Server/Account/migrations/006_support.sql
 git commit -m "feat(account): migration 006 - snapshots, outbox, audit_log"
 ```
 
@@ -1019,12 +1019,12 @@ git commit -m "feat(account): migration 006 - snapshots, outbox, audit_log"
 ### Task 12: UUID v7 generator
 
 **Files:**
-- Create: `AphelyonServer/AphelyonCommon/src/UuidV7.hpp`
-- Create: `AphelyonServer/AphelyonAccount/tests/UuidV7Test.cpp`
+- Create: `Server/Common/src/UuidV7.hpp`
+- Create: `Server/Account/tests/UuidV7Test.cpp`
 
 - [ ] **Step 1: Write failing test**
 
-`AphelyonServer/AphelyonAccount/tests/UuidV7Test.cpp`:
+`Server/Account/tests/UuidV7Test.cpp`:
 ```cpp
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_test_macros.hpp>
@@ -1056,12 +1056,12 @@ TEST_CASE("UUID v7 round-trips through string", "[uuid]") {
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cd AphelyonServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
+Run: `cd Server && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
 Expected: compile failure (`UuidV7.hpp` doesn't exist).
 
 - [ ] **Step 3: Write implementation**
 
-`AphelyonServer/AphelyonCommon/src/UuidV7.hpp`:
+`Server/Common/src/UuidV7.hpp`:
 ```cpp
 #pragma once
 #include <array>
@@ -1149,17 +1149,17 @@ private:
 
 - [ ] **Step 4: Add test executable to premake**
 
-Modify `AphelyonServer/AphelyonAccount/premake5.lua` — add a `GachaAccountTests` project that builds `AphelyonAccount/tests/*.cpp` as an executable linking Catch2, rapidcheck, and the AphelyonAccount sources. (If Catch2 isn't vendored, add a vendor task; assume it lives under `ThirdParty/Catch2/include/`.) Run `GenerateProjects.bat`.
+Modify `Server/Account/premake5.lua` — add a `GachaAccountTests` project that builds `Account/tests/*.cpp` as an executable linking Catch2, rapidcheck, and the Account sources. (If Catch2 isn't vendored, add a vendor task; assume it lives under `ThirdParty/Catch2/include/`.) Run `GenerateProjects.bat`.
 
 - [ ] **Step 5: Run tests, confirm pass**
 
-Run: `cd AphelyonServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe`
+Run: `cd Server && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe`
 Expected: 3 test cases pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonCommon/src/UuidV7.hpp AphelyonServer/AphelyonAccount/tests/UuidV7Test.cpp AphelyonServer/AphelyonAccount/premake5.lua
+git add Server/Common/src/UuidV7.hpp Server/Account/tests/UuidV7Test.cpp Server/Account/premake5.lua
 git commit -m "feat(common): UUID v7 generator + tests"
 ```
 
@@ -1168,11 +1168,11 @@ git commit -m "feat(common): UUID v7 generator + tests"
 ### Task 13: Event envelope + JSON serialization
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/events/Event.hpp`
+- Create: `Server/Account/src/events/Event.hpp`
 
 - [ ] **Step 1: Write envelope**
 
-`AphelyonServer/AphelyonAccount/src/events/Event.hpp`:
+`Server/Account/src/events/Event.hpp`:
 ```cpp
 #pragma once
 #include "UuidV7.hpp"
@@ -1218,7 +1218,7 @@ struct Event {
 - [ ] **Step 2: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/events/Event.hpp
+git add Server/Account/src/events/Event.hpp
 git commit -m "feat(account): Event envelope type"
 ```
 
@@ -1227,14 +1227,14 @@ git commit -m "feat(account): Event envelope type"
 ### Task 14: Per-aggregate event payload types
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/events/WalletEvents.hpp`
-- Create: `AphelyonServer/AphelyonAccount/src/events/PullEvents.hpp`
-- Create: `AphelyonServer/AphelyonAccount/src/events/QuestClaimEvents.hpp`
-- Create: `AphelyonServer/AphelyonAccount/src/events/ProgressionEvents.hpp`
+- Create: `Server/Account/src/events/WalletEvents.hpp`
+- Create: `Server/Account/src/events/PullEvents.hpp`
+- Create: `Server/Account/src/events/QuestClaimEvents.hpp`
+- Create: `Server/Account/src/events/ProgressionEvents.hpp`
 
 - [ ] **Step 1: WalletEvents.hpp**
 
-`AphelyonServer/AphelyonAccount/src/events/WalletEvents.hpp`:
+`Server/Account/src/events/WalletEvents.hpp`:
 ```cpp
 #pragma once
 #include <nlohmann/json.hpp>
@@ -1282,7 +1282,7 @@ inline nlohmann::json ToJson(const CurrencyDelta& d) {
 
 - [ ] **Step 2: PullEvents.hpp**
 
-`AphelyonServer/AphelyonAccount/src/events/PullEvents.hpp`:
+`Server/Account/src/events/PullEvents.hpp`:
 ```cpp
 #pragma once
 #include "XoshiroCpp.hpp"
@@ -1360,7 +1360,7 @@ inline nlohmann::json ToJson(const PullPerformed& p) {
 
 - [ ] **Step 3: QuestClaimEvents.hpp**
 
-`AphelyonServer/AphelyonAccount/src/events/QuestClaimEvents.hpp`:
+`Server/Account/src/events/QuestClaimEvents.hpp`:
 ```cpp
 #pragma once
 #include <nlohmann/json.hpp>
@@ -1423,7 +1423,7 @@ inline nlohmann::json ToJson(const QuestRewardClaimed& q) {
 
 - [ ] **Step 4: ProgressionEvents.hpp**
 
-`AphelyonServer/AphelyonAccount/src/events/ProgressionEvents.hpp`:
+`Server/Account/src/events/ProgressionEvents.hpp`:
 ```cpp
 #pragma once
 #include <nlohmann/json.hpp>
@@ -1457,7 +1457,7 @@ inline nlohmann::json ToJson(const StoryLevelAdvanced& s) {
 - [ ] **Step 5: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/events/
+git add Server/Account/src/events/
 git commit -m "feat(account): per-aggregate event payload types + JSON serialization"
 ```
 
@@ -1465,16 +1465,16 @@ git commit -m "feat(account): per-aggregate event payload types + JSON serializa
 
 ## Phase 3 — Reducers (TDD)
 
-Each reducer is a pure function: `(State, Event) → ReducerResult<State>`. Reducer code lives under `AphelyonAccount/src/reducers/`. Tests live under `AphelyonAccount/tests/ReducerTests/`. Each reducer is a fresh task with explicit TDD steps.
+Each reducer is a pure function: `(State, Event) → ReducerResult<State>`. Reducer code lives under `Account/src/reducers/`. Tests live under `Account/tests/ReducerTests/`. Each reducer is a fresh task with explicit TDD steps.
 
 ### Task 15: ReducerCommon shared types
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/reducers/ReducerCommon.hpp`
+- Create: `Server/Account/src/reducers/ReducerCommon.hpp`
 
 - [ ] **Step 1: Write the shared types**
 
-`AphelyonServer/AphelyonAccount/src/reducers/ReducerCommon.hpp`:
+`Server/Account/src/reducers/ReducerCommon.hpp`:
 ```cpp
 #pragma once
 #include <chrono>
@@ -1528,19 +1528,19 @@ struct ReducerResult {
 - [ ] **Step 2: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/reducers/ReducerCommon.hpp
+git add Server/Account/src/reducers/ReducerCommon.hpp
 git commit -m "feat(account): reducer common types (Clock, SideEffectVariant)"
 ```
 
 ### Task 16: Wallet reducer (TDD)
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/tests/ReducerTests/WalletReducerTest.cpp`
-- Create: `AphelyonServer/AphelyonAccount/src/reducers/WalletReducer.hpp`
+- Create: `Server/Account/tests/ReducerTests/WalletReducerTest.cpp`
+- Create: `Server/Account/src/reducers/WalletReducer.hpp`
 
 - [ ] **Step 1: Write failing tests**
 
-`AphelyonServer/AphelyonAccount/tests/ReducerTests/WalletReducerTest.cpp`:
+`Server/Account/tests/ReducerTests/WalletReducerTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/WalletReducer.hpp"
@@ -1601,12 +1601,12 @@ TEST_CASE("admin_adjustment_applied works on any currency", "[wallet][reducer]")
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cd AphelyonServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
+Run: `cd Server && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests`
 Expected: compile failure (WalletReducer doesn't exist).
 
 - [ ] **Step 3: Write WalletReducer**
 
-`AphelyonServer/AphelyonAccount/src/reducers/WalletReducer.hpp`:
+`Server/Account/src/reducers/WalletReducer.hpp`:
 ```cpp
 #pragma once
 #include "ReducerCommon.hpp"
@@ -1655,25 +1655,25 @@ public:
 
 - [ ] **Step 4: Run tests, verify pass**
 
-Run: `cd AphelyonServer && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[wallet][reducer]"`
+Run: `cd Server && msbuild Gacha.sln /p:Configuration=Debug /t:GachaAccountTests && bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[wallet][reducer]"`
 Expected: 4 test cases pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/reducers/WalletReducer.hpp AphelyonServer/AphelyonAccount/tests/ReducerTests/WalletReducerTest.cpp
+git add Server/Account/src/reducers/WalletReducer.hpp Server/Account/tests/ReducerTests/WalletReducerTest.cpp
 git commit -m "feat(account): WalletReducer + TDD tests"
 ```
 
 ### Task 17: Progression reducer (TDD)
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/tests/ReducerTests/ProgressionReducerTest.cpp`
-- Create: `AphelyonServer/AphelyonAccount/src/reducers/ProgressionReducer.hpp`
+- Create: `Server/Account/tests/ReducerTests/ProgressionReducerTest.cpp`
+- Create: `Server/Account/src/reducers/ProgressionReducer.hpp`
 
 - [ ] **Step 1: Write failing tests**
 
-`AphelyonServer/AphelyonAccount/tests/ReducerTests/ProgressionReducerTest.cpp`:
+`Server/Account/tests/ReducerTests/ProgressionReducerTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/ProgressionReducer.hpp"
@@ -1724,7 +1724,7 @@ TEST_CASE("level advance with overflow_credits emits GrantCurrencyEffect", "[pro
 
 - [ ] **Step 2: Confirm failure, then write implementation**
 
-`AphelyonServer/AphelyonAccount/src/reducers/ProgressionReducer.hpp`:
+`Server/Account/src/reducers/ProgressionReducer.hpp`:
 ```cpp
 #pragma once
 #include "ReducerCommon.hpp"
@@ -1771,19 +1771,19 @@ Expected: 3 cases pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/reducers/ProgressionReducer.hpp AphelyonServer/AphelyonAccount/tests/ReducerTests/ProgressionReducerTest.cpp
+git add Server/Account/src/reducers/ProgressionReducer.hpp Server/Account/tests/ReducerTests/ProgressionReducerTest.cpp
 git commit -m "feat(account): ProgressionReducer + TDD tests"
 ```
 
 ### Task 18: QuestClaims reducer (TDD)
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp`
-- Create: `AphelyonServer/AphelyonAccount/src/reducers/QuestClaimsReducer.hpp`
+- Create: `Server/Account/tests/ReducerTests/QuestClaimsReducerTest.cpp`
+- Create: `Server/Account/src/reducers/QuestClaimsReducer.hpp`
 
 - [ ] **Step 1: Write failing tests**
 
-`AphelyonServer/AphelyonAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp`:
+`Server/Account/tests/ReducerTests/QuestClaimsReducerTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/QuestClaimsReducer.hpp"
@@ -1829,7 +1829,7 @@ TEST_CASE("claiming the same quest twice throws (idempotency belongs at the even
 
 - [ ] **Step 2: Implementation**
 
-`AphelyonServer/AphelyonAccount/src/reducers/QuestClaimsReducer.hpp`:
+`Server/Account/src/reducers/QuestClaimsReducer.hpp`:
 ```cpp
 #pragma once
 #include "ReducerCommon.hpp"
@@ -1891,21 +1891,21 @@ public:
 - [ ] **Step 3: Tests pass; commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/reducers/QuestClaimsReducer.hpp AphelyonServer/AphelyonAccount/tests/ReducerTests/QuestClaimsReducerTest.cpp
+git add Server/Account/src/reducers/QuestClaimsReducer.hpp Server/Account/tests/ReducerTests/QuestClaimsReducerTest.cpp
 git commit -m "feat(account): QuestClaimsReducer + TDD tests"
 ```
 
 ### Task 19: Pulls reducer (TDD) — the complex one
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/tests/ReducerTests/PullsReducerTest.cpp`
-- Create: `AphelyonServer/AphelyonAccount/src/reducers/PullsReducer.hpp`
+- Create: `Server/Account/tests/ReducerTests/PullsReducerTest.cpp`
+- Create: `Server/Account/src/reducers/PullsReducer.hpp`
 
 The pulls reducer is **the most important** because RNG capture lives here. The reducer applies the event's recorded outcomes; it does NOT roll RNG itself. RNG is rolled at the handler layer before the event is constructed.
 
 - [ ] **Step 1: Write failing tests**
 
-`AphelyonServer/AphelyonAccount/tests/ReducerTests/PullsReducerTest.cpp`:
+`Server/Account/tests/ReducerTests/PullsReducerTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "reducers/PullsReducer.hpp"
@@ -1978,7 +1978,7 @@ TEST_CASE("invariant: post-state pity matches event-recorded pity_5_after", "[pu
 
 - [ ] **Step 2: Implementation**
 
-`AphelyonServer/AphelyonAccount/src/reducers/PullsReducer.hpp`:
+`Server/Account/src/reducers/PullsReducer.hpp`:
 ```cpp
 #pragma once
 #include "ReducerCommon.hpp"
@@ -2043,7 +2043,7 @@ Expected: 4 cases pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/reducers/PullsReducer.hpp AphelyonServer/AphelyonAccount/tests/ReducerTests/PullsReducerTest.cpp
+git add Server/Account/src/reducers/PullsReducer.hpp Server/Account/tests/ReducerTests/PullsReducerTest.cpp
 git commit -m "feat(account): PullsReducer + TDD tests (Pattern C RNG capture)"
 ```
 
@@ -2054,12 +2054,12 @@ git commit -m "feat(account): PullsReducer + TDD tests (Pattern C RNG capture)"
 ### Task 20: EventStore append + load (with integration test)
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/db/EventStore.hpp`
-- Create: `AphelyonServer/AphelyonAccount/tests/Integration/EventStoreRoundTripTest.cpp`
+- Create: `Server/Account/src/db/EventStore.hpp`
+- Create: `Server/Account/tests/Integration/EventStoreRoundTripTest.cpp`
 
 - [ ] **Step 1: Write integration test (requires running Postgres)**
 
-`AphelyonServer/AphelyonAccount/tests/Integration/EventStoreRoundTripTest.cpp`:
+`Server/Account/tests/Integration/EventStoreRoundTripTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include "db/EventStore.hpp"
@@ -2154,7 +2154,7 @@ TEST_CASE("EventStore treats duplicate idempotency_key as success", "[integratio
 
 - [ ] **Step 2: Confirm failure, then implementation**
 
-`AphelyonServer/AphelyonAccount/src/db/EventStore.hpp`:
+`Server/Account/src/db/EventStore.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -2265,14 +2265,14 @@ private:
 
 - [ ] **Step 3: Run integration tests**
 
-Ensure Postgres is up: `cd AphelyonServer && scripts\db-setup.bat`
+Ensure Postgres is up: `cd Server && scripts\db-setup.bat`
 Then: `bin\Debug-windows-x86_64\GachaAccountTests\GachaAccountTests.exe "[integration][event_store]"`
 Expected: all cases pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/db/EventStore.hpp AphelyonServer/AphelyonAccount/tests/Integration/EventStoreRoundTripTest.cpp
+git add Server/Account/src/db/EventStore.hpp Server/Account/tests/Integration/EventStoreRoundTripTest.cpp
 git commit -m "feat(account): EventStore append/load with optimistic concurrency"
 ```
 
@@ -2283,15 +2283,15 @@ git commit -m "feat(account): EventStore append/load with optimistic concurrency
 ### Task 21: Make Account fields private, add dirty tracking
 
 **Files:**
-- Modify: `AphelyonServer/AphelyonCommon/src/AccountData.hpp`
-- Modify: `AphelyonServer/AphelyonCommon/src/CollectionState.hpp`
-- Create: `AphelyonServer/AphelyonAccount/src/AccountDirty.hpp`
+- Modify: `Server/Common/src/AccountData.hpp`
+- Modify: `Server/Common/src/CollectionState.hpp`
+- Create: `Server/Account/src/AccountDirty.hpp`
 
 This task is large. Approach: introduce a `DirtyState` shadow struct alongside the existing `AccountData` first, with all fields still public; then in a follow-up task swap callers to setters and make fields private.
 
 - [ ] **Step 1: Write DirtyState**
 
-`AphelyonServer/AphelyonAccount/src/AccountDirty.hpp`:
+`Server/Account/src/AccountDirty.hpp`:
 ```cpp
 #pragma once
 #include "UuidV7.hpp"
@@ -2345,7 +2345,7 @@ struct DirtyState {
 
 - [ ] **Step 2: Modify CollectionState — UUIDs**
 
-Modify `AphelyonServer/AphelyonCommon/src/CollectionState.hpp`:
+Modify `Server/Common/src/CollectionState.hpp`:
 
 Change `OwnedWeapon::instanceId` from `std::string` to `aphelyon::UuidV7::ValueType`:
 ```cpp
@@ -2385,10 +2385,10 @@ struct UuidV7Hash {
 
 - [ ] **Step 3: Add embedded DirtyState to AccountData**
 
-Modify `AphelyonServer/AphelyonCommon/src/AccountData.hpp`. Keep existing fields public for now; add at the bottom of the struct:
+Modify `Server/Common/src/AccountData.hpp`. Keep existing fields public for now; add at the bottom of the struct:
 
 ```cpp
-#include "../../AphelyonAccount/src/AccountDirty.hpp"  // path may need adjustment per project layout
+#include "../../Account/src/AccountDirty.hpp"  // path may need adjustment per project layout
 
 struct AccountData {
     // ... existing fields ...
@@ -2399,7 +2399,7 @@ struct AccountData {
 
 - [ ] **Step 4: Update compilation across all three services**
 
-This change affects AphelyonCommon, which Auth/Account/Combat all link. Build all three and fix call sites that use weapon/gear `instanceId` as a string. Likely affected: `AccountSerializer`, `CollectionActions`, `CollectionReducer`, gear/weapon equipment maps in `AccountData`. For each: convert string-instance-id call sites to `UuidV7` operations, using `UuidV7::ToString` only at JSON/wire boundaries.
+This change affects Common, which Auth/Account/Combat all link. Build all three and fix call sites that use weapon/gear `instanceId` as a string. Likely affected: `AccountSerializer`, `CollectionActions`, `CollectionReducer`, gear/weapon equipment maps in `AccountData`. For each: convert string-instance-id call sites to `UuidV7` operations, using `UuidV7::ToString` only at JSON/wire boundaries.
 
 Run: `msbuild Gacha.sln /p:Configuration=Debug`
 Expected: clean build (fix compile errors as they appear; this is a mechanical pass).
@@ -2407,14 +2407,14 @@ Expected: clean build (fix compile errors as they appear; this is a mechanical p
 - [ ] **Step 5: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonCommon/src/CollectionState.hpp AphelyonServer/AphelyonCommon/src/AccountData.hpp AphelyonServer/AphelyonAccount/src/AccountDirty.hpp AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp AphelyonServer/AphelyonAccount/src/CollectionActions.hpp AphelyonServer/AphelyonAccount/src/CollectionReducer.hpp
+git add Server/Common/src/CollectionState.hpp Server/Common/src/AccountData.hpp Server/Account/src/AccountDirty.hpp Server/Account/src/AccountSerializer.hpp Server/Account/src/CollectionActions.hpp Server/Account/src/CollectionReducer.hpp
 git commit -m "refactor(common): UUID v7 instance IDs + DirtyState tracking"
 ```
 
 ### Task 22: Setters that auto-mark dirty
 
 **Files:**
-- Modify: `AphelyonServer/AphelyonCommon/src/AccountData.hpp`
+- Modify: `Server/Common/src/AccountData.hpp`
 
 - [ ] **Step 1: Add setter methods**
 
@@ -2508,7 +2508,7 @@ Find every place in Auth/Account/Combat that mutates an Account field directly a
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonCommon/src/AccountData.hpp AphelyonServer/AphelyonAccount/src/
+git add Server/Common/src/AccountData.hpp Server/Account/src/
 git commit -m "refactor(account): Account fields private; setters auto-mark dirty"
 ```
 
@@ -2519,11 +2519,11 @@ git commit -m "refactor(account): Account fields private; setters auto-mark dirt
 ### Task 23: Relational flush methods
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/db/RelationalFlush.hpp`
+- Create: `Server/Account/src/db/RelationalFlush.hpp`
 
 - [ ] **Step 1: Write the flush implementation**
 
-`AphelyonServer/AphelyonAccount/src/db/RelationalFlush.hpp`:
+`Server/Account/src/db/RelationalFlush.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -2637,18 +2637,18 @@ TEST_CASE("RelationalFlush updates accounts row", "[integration][flush]") {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/db/RelationalFlush.hpp AphelyonServer/AphelyonAccount/tests/Integration/RelationalFlushTest.cpp
+git add Server/Account/src/db/RelationalFlush.hpp Server/Account/tests/Integration/RelationalFlushTest.cpp
 git commit -m "feat(account): RelationalFlush — dirty-driven UPSERT per table"
 ```
 
 ### Task 24: AccountTransaction wrapper
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/AccountTransaction.hpp`
+- Create: `Server/Account/src/AccountTransaction.hpp`
 
 - [ ] **Step 1: Write transaction wrapper**
 
-`AphelyonServer/AphelyonAccount/src/AccountTransaction.hpp`:
+`Server/Account/src/AccountTransaction.hpp`:
 ```cpp
 #pragma once
 #include "AccountData.hpp"
@@ -2789,7 +2789,7 @@ struct AccountData {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/AccountTransaction.hpp AphelyonServer/AphelyonCommon/src/AccountData.hpp
+git add Server/Account/src/AccountTransaction.hpp Server/Common/src/AccountData.hpp
 git commit -m "feat(account): AccountTransaction — Commit() does events+flush+outbox+audit atomically"
 ```
 
@@ -2800,12 +2800,12 @@ git commit -m "feat(account): AccountTransaction — Commit() does events+flush+
 ### Task 25: New AccountRepository (Postgres-backed)
 
 **Files:**
-- Modify (rewrite): `AphelyonServer/AphelyonAccount/src/AccountRepository.hpp`
-- Delete: `AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp`
+- Modify (rewrite): `Server/Account/src/AccountRepository.hpp`
+- Delete: `Server/Account/src/AccountSerializer.hpp`
 
 - [ ] **Step 1: Rewrite AccountRepository**
 
-`AphelyonServer/AphelyonAccount/src/AccountRepository.hpp`:
+`Server/Account/src/AccountRepository.hpp`:
 ```cpp
 #pragma once
 #include "AccountData.hpp"
@@ -2943,7 +2943,7 @@ private:
 
 - [ ] **Step 2: Delete AccountSerializer.hpp**
 
-Run: `git rm AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp`
+Run: `git rm Server/Account/src/AccountSerializer.hpp`
 
 Find and delete every reference to `AccountSerializer::ToJson/FromJson` across the codebase. Replace with `repository.Load(account_id)`.
 
@@ -2954,8 +2954,8 @@ Find and delete every reference to `AccountSerializer::ToJson/FromJson` across t
 - [ ] **Step 4: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/AccountRepository.hpp
-git rm AphelyonServer/AphelyonAccount/src/AccountSerializer.hpp
+git add Server/Account/src/AccountRepository.hpp
+git rm Server/Account/src/AccountSerializer.hpp
 git commit -m "refactor(account): replace JSON AccountRepository with Postgres-backed"
 ```
 
@@ -2966,11 +2966,11 @@ git commit -m "refactor(account): replace JSON AccountRepository with Postgres-b
 ### Task 26: SnapshotWriter thread
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/db/SnapshotWriter.hpp`
+- Create: `Server/Account/src/db/SnapshotWriter.hpp`
 
 - [ ] **Step 1: Write the snapshot writer**
 
-`AphelyonServer/AphelyonAccount/src/db/SnapshotWriter.hpp`:
+`Server/Account/src/db/SnapshotWriter.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -3060,18 +3060,18 @@ private:
 - [ ] **Step 2: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/db/SnapshotWriter.hpp
+git add Server/Account/src/db/SnapshotWriter.hpp
 git commit -m "feat(account): SnapshotWriter thread with bounded queue + drop-on-overflow"
 ```
 
 ### Task 27: Outbox relay (shared thread with SnapshotWriter)
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/db/OutboxRelay.hpp`
+- Create: `Server/Account/src/db/OutboxRelay.hpp`
 
 - [ ] **Step 1: Write the relay**
 
-`AphelyonServer/AphelyonAccount/src/db/OutboxRelay.hpp`:
+`Server/Account/src/db/OutboxRelay.hpp`:
 ```cpp
 #pragma once
 #include "ConnectionPool.hpp"
@@ -3152,7 +3152,7 @@ private:
 
 - [ ] **Step 2: Integration test**
 
-`AphelyonServer/AphelyonAccount/tests/Integration/OutboxRelayTest.cpp`:
+`Server/Account/tests/Integration/OutboxRelayTest.cpp`:
 ```cpp
 TEST_CASE("OutboxRelay dispatches and marks rows", "[integration][outbox]") {
     ConnectionPool pool(kConn, 4);
@@ -3185,7 +3185,7 @@ TEST_CASE("OutboxRelay dispatches and marks rows", "[integration][outbox]") {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/db/OutboxRelay.hpp AphelyonServer/AphelyonAccount/tests/Integration/OutboxRelayTest.cpp
+git add Server/Account/src/db/OutboxRelay.hpp Server/Account/tests/Integration/OutboxRelayTest.cpp
 git commit -m "feat(account): OutboxRelay with FOR UPDATE SKIP LOCKED dispatch"
 ```
 
@@ -3196,12 +3196,12 @@ git commit -m "feat(account): OutboxRelay with FOR UPDATE SKIP LOCKED dispatch"
 ### Task 28: Migrate GachaHandlers to AccountTransaction
 
 **Files:**
-- Modify: `AphelyonServer/AphelyonAccount/src/GachaHandlers.hpp`
-- Modify: `AphelyonServer/AphelyonAccount/src/GachaRNG.hpp`
+- Modify: `Server/Account/src/GachaHandlers.hpp`
+- Modify: `Server/Account/src/GachaRNG.hpp`
 
 - [ ] **Step 1: Switch GachaRNG to xoshiro256++**
 
-Modify `AphelyonServer/AphelyonAccount/src/GachaRNG.hpp` to use xoshiro256++ internally. Surface `state()` and `set_state()` to allow the handler to capture state before/after.
+Modify `Server/Account/src/GachaRNG.hpp` to use xoshiro256++ internally. Surface `state()` and `set_state()` to allow the handler to capture state before/after.
 
 ```cpp
 #include "XoshiroCpp.hpp"
@@ -3288,7 +3288,7 @@ Build and exercise via the existing GachaTest client (or write an integration te
 - [ ] **Step 4: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/GachaHandlers.hpp AphelyonServer/AphelyonAccount/src/GachaRNG.hpp
+git add Server/Account/src/GachaHandlers.hpp Server/Account/src/GachaRNG.hpp
 git commit -m "refactor(account): GachaHandlers use AccountTransaction; xoshiro RNG capture"
 ```
 
@@ -3310,25 +3310,25 @@ Each follows the same pattern as Task 28. Apply mechanically:
 - [ ] **Step 4: Commit each batch**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/AccountHandlers.hpp
+git add Server/Account/src/AccountHandlers.hpp
 git commit -m "refactor(account): AccountHandlers use AccountTransaction"
 
-git add AphelyonServer/AphelyonAccount/src/QuestHandlers.hpp
+git add Server/Account/src/QuestHandlers.hpp
 git commit -m "refactor(account): QuestHandlers use AccountTransaction + quest_claims events"
 
-git add AphelyonServer/AphelyonAccount/src/ProgressionHandlers.hpp
+git add Server/Account/src/ProgressionHandlers.hpp
 git commit -m "refactor(account): ProgressionHandlers use AccountTransaction + progression events"
 ```
 
 ### Task 30: TickQuests helper
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/src/TickQuests.hpp`
-- Modify: `AphelyonServer/AphelyonAccount/src/QuestHandlers.hpp`
+- Create: `Server/Account/src/TickQuests.hpp`
+- Modify: `Server/Account/src/QuestHandlers.hpp`
 
 - [ ] **Step 1: Write the helper**
 
-`AphelyonServer/AphelyonAccount/src/TickQuests.hpp`:
+`Server/Account/src/TickQuests.hpp`:
 ```cpp
 #pragma once
 #include "AccountData.hpp"
@@ -3408,7 +3408,7 @@ ResponseFrame HandleGetQuestState(const RequestFrame& req, HandlerContext& ctx) 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/src/TickQuests.hpp AphelyonServer/AphelyonAccount/src/QuestHandlers.hpp
+git add Server/Account/src/TickQuests.hpp Server/Account/src/QuestHandlers.hpp
 git commit -m "fix(account): explicit TickQuests; GetQuestState is now a pure read"
 ```
 
@@ -3419,13 +3419,13 @@ git commit -m "fix(account): explicit TickQuests; GetQuestState is now a pure re
 ### Task 31: rapidcheck property tests
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/tests/PropertyTests/ReplayDeterminismTest.cpp`
-- Create: `AphelyonServer/AphelyonAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp`
-- Create: `AphelyonServer/AphelyonAccount/tests/PropertyTests/InvariantTests.cpp`
+- Create: `Server/Account/tests/PropertyTests/ReplayDeterminismTest.cpp`
+- Create: `Server/Account/tests/PropertyTests/SnapshotEquivalenceTest.cpp`
+- Create: `Server/Account/tests/PropertyTests/InvariantTests.cpp`
 
 - [ ] **Step 1: Replay determinism**
 
-`AphelyonServer/AphelyonAccount/tests/PropertyTests/ReplayDeterminismTest.cpp`:
+`Server/Account/tests/PropertyTests/ReplayDeterminismTest.cpp`:
 ```cpp
 #include <rapidcheck.h>
 #include <rapidcheck/catch.h>
@@ -3472,7 +3472,7 @@ TEST_CASE("Wallet reducer is deterministic across triple replay", "[property][wa
 
 - [ ] **Step 2: Snapshot equivalence**
 
-`AphelyonServer/AphelyonAccount/tests/PropertyTests/SnapshotEquivalenceTest.cpp`:
+`Server/Account/tests/PropertyTests/SnapshotEquivalenceTest.cpp`:
 ```cpp
 #include <rapidcheck/catch.h>
 #include "reducers/WalletReducer.hpp"
@@ -3487,7 +3487,7 @@ TEST_CASE("split-and-fold equals full-fold", "[property][wallet][snapshot]") {
 
 - [ ] **Step 3: Domain invariants**
 
-`AphelyonServer/AphelyonAccount/tests/PropertyTests/InvariantTests.cpp`:
+`Server/Account/tests/PropertyTests/InvariantTests.cpp`:
 ```cpp
 #include <rapidcheck/catch.h>
 
@@ -3508,22 +3508,22 @@ TEST_CASE("Pity counters never exceed hard-pity threshold", "[property][pulls][i
 - [ ] **Step 4: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/tests/PropertyTests/
+git add Server/Account/tests/PropertyTests/
 git commit -m "test(account): rapidcheck property tests (replay/snapshot/invariants)"
 ```
 
 ### Task 32: Golden-file schema migration tests
 
 **Files:**
-- Create: `AphelyonServer/AphelyonAccount/tests/events/v1_pull_performed.json`
-- Create: `AphelyonServer/AphelyonAccount/tests/events/v1_credits_spent.json`
-- Create: `AphelyonServer/AphelyonAccount/tests/events/v1_quest_reward_claimed.json`
-- Create: `AphelyonServer/AphelyonAccount/tests/events/v1_story_level_advanced.json`
-- Create: `AphelyonServer/AphelyonAccount/tests/GoldenFile/SchemaMigrationTest.cpp`
+- Create: `Server/Account/tests/events/v1_pull_performed.json`
+- Create: `Server/Account/tests/events/v1_credits_spent.json`
+- Create: `Server/Account/tests/events/v1_quest_reward_claimed.json`
+- Create: `Server/Account/tests/events/v1_story_level_advanced.json`
+- Create: `Server/Account/tests/GoldenFile/SchemaMigrationTest.cpp`
 
 - [ ] **Step 1: Write golden event files**
 
-`AphelyonServer/AphelyonAccount/tests/events/v1_pull_performed.json`:
+`Server/Account/tests/events/v1_pull_performed.json`:
 ```json
 {
   "event_id": "01923000-0000-7000-8000-000000000001",
@@ -3551,7 +3551,7 @@ git commit -m "test(account): rapidcheck property tests (replay/snapshot/invaria
 
 - [ ] **Step 2: Write the test**
 
-`AphelyonServer/AphelyonAccount/tests/GoldenFile/SchemaMigrationTest.cpp`:
+`Server/Account/tests/GoldenFile/SchemaMigrationTest.cpp`:
 ```cpp
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
@@ -3580,7 +3580,7 @@ TEST_CASE("Golden v1 pull_performed event folds to expected state", "[golden][sc
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/AphelyonAccount/tests/events/ AphelyonServer/AphelyonAccount/tests/GoldenFile/
+git add Server/Account/tests/events/ Server/Account/tests/GoldenFile/
 git commit -m "test(account): v1 golden event files + schema migration tests"
 ```
 
@@ -3668,7 +3668,7 @@ This requires building against the clang-tools-extra source tree, which is a hea
 set -e
 FORBIDDEN='\b(time\(|system_clock::now|random_device|std::rand|std::getenv|std::system|std::filesystem::)\b'
 FAIL=0
-for f in AphelyonServer/AphelyonAccount/src/reducers/*.hpp; do
+for f in Server/Account/src/reducers/*.hpp; do
   if grep -nE "$FORBIDDEN" "$f"; then
     echo "FORBIDDEN call found in $f"
     FAIL=1
@@ -3693,12 +3693,12 @@ git commit -m "feat(tooling): reducer purity linter (grep-based for solo CI)"
 ### Task 34: WAL-G configuration
 
 **Files:**
-- Create: `AphelyonServer/scripts/wal-g-setup.sh`
-- Create: `AphelyonServer/docs/operations/backup-drill.md`
+- Create: `Server/scripts/wal-g-setup.sh`
+- Create: `Server/docs/operations/backup-drill.md`
 
 - [ ] **Step 1: WAL-G setup script**
 
-`AphelyonServer/scripts/wal-g-setup.sh`:
+`Server/scripts/wal-g-setup.sh`:
 ```sh
 #!/usr/bin/env sh
 # Configure WAL-G in the Postgres container for continuous WAL archive to S3-compatible storage.
@@ -3730,7 +3730,7 @@ docker compose restart postgres
 
 - [ ] **Step 2: Drill documentation**
 
-`AphelyonServer/docs/operations/backup-drill.md`:
+`Server/docs/operations/backup-drill.md`:
 ```markdown
 # Backup restore drill
 
@@ -3752,7 +3752,7 @@ Run quarterly. A backup you have never restored is theoretical.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add AphelyonServer/scripts/wal-g-setup.sh AphelyonServer/docs/operations/backup-drill.md
+git add Server/scripts/wal-g-setup.sh Server/docs/operations/backup-drill.md
 git commit -m "feat(ops): WAL-G setup + quarterly drill documentation"
 ```
 
@@ -3763,13 +3763,13 @@ git commit -m "feat(ops): WAL-G setup + quarterly drill documentation"
 ### Task 35: Final cutover
 
 **Files:**
-- Delete: `AphelyonServer/bin/Debug-windows-x86_64/AphelyonAccount/data/accounts/*.json`
-- Delete: `AphelyonServer/bin/Release-windows-x86_64/AphelyonAccount/data/accounts/*.json`
+- Delete: `Server/bin/Debug-windows-x86_64/Account/data/accounts/*.json`
+- Delete: `Server/bin/Release-windows-x86_64/Account/data/accounts/*.json`
 - Modify: `CLAUDE.md`
 
 - [ ] **Step 1: Run reset script**
 
-Run: `cd AphelyonServer && scripts\db-reset.bat`
+Run: `cd Server && scripts\db-reset.bat`
 Expected: dev volume wiped, JSON accounts wiped, migrations re-applied.
 
 - [ ] **Step 2: Smoke test full stack**
@@ -3780,7 +3780,7 @@ Pull on a banner. Verify in Postgres: `SELECT * FROM events WHERE aggregate_kind
 
 - [ ] **Step 3: Update CLAUDE.md**
 
-Modify `CLAUDE.md` — update the "Data files" section under AphelyonCombat / Architecture to note that AphelyonAccount now persists to Postgres rather than JSON files. Update memory entries that referenced `bin/*/AphelyonAccount/data/accounts/`.
+Modify `CLAUDE.md` — update the "Data files" section under Combat / Architecture to note that Account now persists to Postgres rather than JSON files. Update memory entries that referenced `bin/*/Account/data/accounts/`.
 
 - [ ] **Step 4: Final commit**
 
