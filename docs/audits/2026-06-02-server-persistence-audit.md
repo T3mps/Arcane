@@ -45,13 +45,10 @@ Compounds C1. When `CleanupIdleAccounts` or `OnStopped` flushes the cache, a sta
 
 **Fix:** Default to `true`. Gate disablement behind a Debug-only CLI flag. Assert on startup if Release + disabled.
 
-### C4. `HandleAddCurrency` has no enforcement against client misuse
+### C4. ~~`HandleAddCurrency` has no enforcement against client misuse~~ — DISMISSED
 **Files:** `Server/data/protocol.json` (AddCurrency msg id 7), `Server/Account/src/AccountHandlers.hpp:278`
 **Found by:** Security agent
-
-`AddCurrency` has `requires_auth: true` but no `debug_only` gate, and the protocol parser doesn't enforce `debug_only` anyway. Combined with C3, an authenticated player can mint up to 1,000,000 per request, unlimited.
-
-**Fix:** Add `debug_only` enforcement to the message dispatcher and gate `AddCurrency` behind it; require server-side admin role to call it in non-dev.
+**Status:** DISMISSED 2026-06-02. `AddCurrency` is the **official canonical** wallet-grant message — every legitimate currency addition (purchases, quest rewards, achievement payouts) flows through it. It is not debug-only and it is not admin-only. The auditor's recommendation to add a `debug_only` gate is wrong for this codebase, and the alternative "admin role" framing is also wrong: legitimate game flows depend on this handler. The real burst-mint concern this finding raised was the absent rate limit, which is now closed by C3 (rate limiter defaults to enabled, AddCurrency budget = 30/min). Any future hardening must be designed around the legitimate grant flows (purchase proof, quest-completion proof, achievement-unlock proof) — not by gating the handler itself.
 
 ### C5. PBKDF2 iterations 10x too low
 **File:** `Server/Common/src/Crypto.hpp:34`
@@ -247,7 +244,7 @@ The 142-assertion suite is reducer-heavy + thin on integration. Recent fixes hav
 5. H3 — Length-cap client idempotency keys.
 
 **Before launch:**
-6. C4 + M3 — AddCurrency debug gate + internal-RPC HMAC.
+6. M3 — Internal-RPC HMAC. (C4 dismissed — AddCurrency is the official canonical wallet-grant path used by purchases / quests / achievements; not debug-only, not admin-only. C3 closed the burst-mint surface via rate limiting.)
 7. C6 — Either route through `EventStore::Append` or replicate the version pre-check in `Commit`.
 8. C7 + H1 — Refactor handler-state semantics so rolled-back commits don't leak corrupt state; stripe-lock `VerifyCredentials`.
 9. H4–H6 — Last-login source-of-truth; pool exhaustion timeout; session IP binding.
