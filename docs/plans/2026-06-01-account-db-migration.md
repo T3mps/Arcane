@@ -26,6 +26,7 @@
 | `Server/Account/migrations/004_quests.sql` | `quest_states`, `quest_objectives`, `world_flags`, `pity_state`. |
 | `Server/Account/migrations/005_events.sql` | Partitioned `events` table + initial monthly partition + indexes + FK CASCADE. |
 | `Server/Account/migrations/006_support.sql` | `snapshots`, `outbox`, `audit_log`. |
+| `Server/Account/migrations/007_public_uid.sql` | 9-digit `accounts.public_uid` + per-region sequence (NA prefix = 1). |
 | `Server/scripts/setup-vcpkg-deps.bat` | MODIFY — add `libpqxx:x64-windows-static` (which transitively pulls `libpq`). |
 | `ThirdParty/Xoshiro/XoshiroCpp.hpp` | Already cloned. Header-only PRNG by Ryo Suzuki (MIT). No premake5 file needed. |
 | `ThirdParty/rapidcheck/premake5.lua` | Create — static-lib project file (sources already cloned). |
@@ -1011,6 +1012,66 @@ Expected: rows 1..6 present.
 git add Server/Account/migrations/006_support.sql
 git commit -m "feat(account): migration 006 - snapshots, outbox, audit_log"
 ```
+
+---
+
+### Task 11.5: `007_public_uid.sql`
+
+Player-facing 9-digit UID (Genshin/HSR style, our own region taxonomy). Decouples display ID from internal FK: the BIGSERIAL `account_id` keeps owning every join (`events`, `owned_weapons`, ...), and `public_uid` is what the client sees, what friend lookups key on, and what support tickets quote. A future region (EU, APAC, etc.) gets its own sequence on its own shard — no schema change required.
+
+**Files:**
+- Create: `Server/Account/migrations/007_public_uid.sql`
+
+- [ ] **Step 1: Write migration**
+
+`Server/Account/migrations/007_public_uid.sql`:
+```sql
+-- Format: [region prefix][8-digit per-region sequence]
+--   1xxxxxxxx  = NA (this deployment)
+--   2-5        = EU / APAC / LATAM / ANZ (reserved)
+--   6-8        = reserved
+--   9          = internal / dev / QA (never overlaps with prod)
+--   0          = avoided (leading zero renders as <9 digits)
+
+CREATE SEQUENCE public_uid_seq
+    AS BIGINT
+    START WITH 100000001
+    INCREMENT BY 1
+    MINVALUE 100000001
+    MAXVALUE 199999999      -- 100M accounts per region prefix
+    NO CYCLE;
+
+ALTER TABLE accounts
+    ADD COLUMN public_uid BIGINT NOT NULL DEFAULT nextval('public_uid_seq');
+
+ALTER TABLE accounts
+    ADD CONSTRAINT accounts_public_uid_key UNIQUE (public_uid);
+```
+
+- [ ] **Step 2: Apply**
+
+Run: `cd Server && scripts\db-setup.bat`
+
+- [ ] **Step 3: Verify**
+
+Run: `docker compose exec postgres psql -U aphelyon -d aphelyon -c "SELECT version, filename FROM schema_migrations ORDER BY version"`
+Expected: row 7 present.
+
+Run: `docker compose exec postgres psql -U aphelyon -d aphelyon -c "SELECT last_value FROM public_uid_seq;"`
+Expected: at least `100000001` (advances each time an account is inserted).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add Server/Account/migrations/007_public_uid.sql
+git commit -m "feat(account): migration 007 - public_uid + per-region sequence"
+```
+
+**Downstream wiring (handled in later phases, not here):**
+- `AccountRepository::Create` / `Register` paths must read `public_uid` back into `AccountData` so the response can surface it. Plain INSERTs already populate the column via DEFAULT, but the C++ side needs an additional `RETURNING public_uid` to round-trip it.
+- `protocol.json` register/login responses gain a `public_uid` field.
+- `AccountData` gains a `std::int64_t public_uid` field (or `std::uint32_t` — fits in 30 bits).
+- Friend / lookup flows query by `public_uid`, not `username` or `account_id`.
 
 ---
 

@@ -63,6 +63,7 @@ The chosen stack — Postgres + selective ES + thin audit table for non-ES paths
 | Migration approach | **Big bang, no importer** | Per project dev policy. Delete existing JSON saves; re-register test accounts. |
 | Backup/DR | **WAL-G + S3-compatible bucket** | Continuous WAL archive + nightly full + 30/12/3 retention + quarterly restore drill. ~$10/mo, ~1 min RPO. |
 | Instance IDs | **UUID v7 (16-byte `UUID` column)** | Replaces `wpn_<ts>_<rand>` TEXT strings. Time-ordered B-tree append, RFC 9562. Content IDs stay TEXT. |
+| Player UID | **9-digit `public_uid` from per-region sequence (NA prefix = 1)** | Decoupled from internal `account_id BIGSERIAL`. Mirrors Genshin/HSR's `[region][8-digit serial]` format. Friend lookups, profile display, support search key on this; FKs stay on the dense BIGSERIAL. Future regions get their own sequences on their own shards, no schema change. |
 | Idempotency | **`idempotency_key` UNIQUE on every event** | Client-supplied per request; prevents double-charge / double-grant on network retries. |
 | Soft delete | **`accounts.deleted_at TIMESTAMPTZ` + scheduled hard-delete job** | GDPR-compliant 30-day horizon; preserves audit trail vs. immediate `ON DELETE CASCADE` everywhere. |
 | Loadouts | **`loadouts` table with `preset_id`** (preset 0 = active) | Replaces `equipment` + `gear_equipment`. Reserves shape for relic/build presets without future data migration. |
@@ -117,7 +118,9 @@ These hold all *non-event-sourced* player state. Mutations are direct UPDATEs th
 ```sql
 -- Account header (scalars, counters, progression cursors)
 accounts (
-  account_id              BIGSERIAL PRIMARY KEY,
+  account_id              BIGSERIAL PRIMARY KEY,            -- internal FK target; never surfaced to clients
+  public_uid              BIGINT NOT NULL UNIQUE            -- 9-digit Genshin-style display ID (NA prefix = 1)
+                              DEFAULT nextval('public_uid_seq'),
   username                TEXT NOT NULL UNIQUE,            -- replaces index.json
   password_hash           TEXT NOT NULL,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -134,6 +137,9 @@ accounts (
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX accounts_deleted_idx ON accounts (deleted_at) WHERE deleted_at IS NOT NULL;
+-- public_uid sequence is bounded to the region's 100M slot. See migration 007.
+CREATE SEQUENCE public_uid_seq AS BIGINT
+    START 100000001 MINVALUE 100000001 MAXVALUE 199999999 NO CYCLE;
 
 -- Owned characters (bounded ~50 per account, by template_id)
 owned_characters (
