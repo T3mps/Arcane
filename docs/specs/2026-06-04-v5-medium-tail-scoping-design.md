@@ -17,11 +17,13 @@ This design specifies the four work items, the rationale for the chosen approach
 | 1 | NAT cap configurability + log throttle | M-V5-6 net / M-V5-1 sec | ~70 | Low | 6 |
 | 2 | ServiceEndpoint loopback caps | M-V5-7 net | ~15 | Low | 1 |
 | 3 | Advisory lock in AppendIdempotent recheck | event-sourcing M-V5-1 | ~5 | Low | 1 |
-| 4 | Pull / MultiPull stripe-lock duration | concurrency M-V5-4 | ~80-120 | Moderate | 1 |
+| 4 | Per-account locks (replace 1/64 stripe false-contention) | concurrency M-V5-4 | ~150-250 | **High** | 4-6 |
 
-**Implementation order is independent** — each scope touches disjoint files, no ordering constraint. Reasonable batch sequence: 2 → 3 → 1 → 4 (small to large LOC).
+**Implementation order is independent for 1-3** — each touches disjoint files. **Scope 4 is structurally separate** and the largest-risk item in this design; recommended to ship in its own dedicated batch after 1-3 are merged.
 
-**Tests:** all four are paired with pinned regression tests where deterministically testable; the MultiPull lock-duration win is verified by review (no perf harness exists pre-launch).
+**Tests:** scopes 1-3 paired with pinned regression tests where deterministically testable. Scope 4 needs both new unit tests for the cache machinery AND a regression-guard pass against every existing handler test (any path through the cache must still produce a consistent Account view).
+
+**Spec self-review surfaced:** the original Scope 4 design (snapshot pattern to move response build outside the stripe lock) contradicts the documented idempotency-atomicity invariant at `GachaHandlers.hpp:270-273` — the response payload IS what gets buffered into `idempotency_cache.response_payload` during Commit, and a retried call must return that exact buffered byte sequence. The "obvious" lock-duration optimization is therefore wrong. The real fix to the 1/64 false-contention is to eliminate stripe collisions entirely via per-account locks.
 
 ---
 
@@ -188,90 +190,146 @@ Low. Single lock-acquire + single commit on a path that's already on a fresh tx.
 
 ---
 
-## Scope 4 — Pull / MultiPull stripe-lock duration (concurrency M-V5-4)
+## Scope 4 — Per-account locks (replace stripe-lock 1/64 false-contention) — concurrency M-V5-4
 
 ### Problem
 
-`HandleMultiPull` (`GachaHandlers.hpp:307-543`) holds the stripe lock through ~240 LOC including:
+`AccountCache` uses `StripedMutex<64>` (`StripedMutex.hpp`) for per-player serialization: handlers acquire the stripe via `m_playerLocks.LockFor(playerId)` and hold it for the entire handler duration (`AccountCache.hpp:64`, `HandlerContext.hpp:28-34`). Two players whose `hash(playerId) % 64` collides serialize their handlers even though they're touching unrelated state. At any given moment, ~1.6% of concurrent player pairs experience false contention.
 
-- **Must be locked** (mutates Account state or DB):
-  - RNG advance (up to 10 pulls via `GachaRNG::Roll`)
-  - Reducer apply (pity, guarantee, wallet)
-  - `AccountTransaction::Commit` → events flush → outbox → audit_log
-  - DB commit (~50-150ms under pq round-trip — the long pole)
-- **Does NOT need the lock** (CPU work on already-resolved data):
-  - Response payload build (JSON encoding of every pull result)
-  - Outbox payload formatting (stringification of currency deltas)
-  - String concatenation for log lines
+In `HandleMultiPull` (`GachaHandlers.hpp:307-543`), the stripe lock is held through ~240 LOC including the DB commit (~50-150ms under pq round-trip). At meaningful concurrent load, the false-contention rate × handler duration becomes throughput-limiting.
 
-At 1/64 stripe-collision probability, two simultaneous 10-pulls by players who hash to the same stripe serialize through the entire 240-LOC body. The "must be locked" part is ~80-120 LOC; the rest could move outside.
+**Why the "snapshot pattern" alternative was abandoned:** `GachaHandlers.hpp:270-273` carries a documented invariant that the response payload IS the value buffered into `idempotency_cache.response_payload` during `txn.StoreIdempotency` + `txn.Commit`. A retried call must return that exact byte sequence. Moving response build outside the lock would either cache a stale projection (breaks retry contract) or store a different value than is returned (breaks retry contract differently). The lock is wide for a correctness reason; the only honest fix to the false-contention class is to **eliminate stripe collisions entirely**.
 
-`HandlePull` (single-pull) carries the same shape with smaller numbers. The audit named only `HandleMultiPull` but both are restructured here — keeping their lock patterns symmetric prevents a future audit flagging the inconsistency.
+### Approach — hybrid stripe-for-load + per-account-for-handler
 
-### Approach — snapshot pattern
+Two-phase locking with a stripe lock for the get-or-load critical section and a per-account mutex for the long-held handler-scope lock.
 
-**Two-phase restructure within `HandleMultiPull` and `HandlePull`:**
+**1. Account gains a handler-scope mutex.**
 
 ```cpp
-// === LOCKED PHASE (stripe lock held) ===
-LockedAccountRef ref = cache.GetLockedAccount(playerId);
-Account& account = *ref.account;
-
-std::vector<PullResult> results;
-results.reserve(count);
-for (int i = 0; i < count; ++i) {
-    results.push_back(SimulateOnePull(account, banner));  // mutates pity/RNG
-}
-
-auto txn = repo.Begin(account);
-txn.AppendEvents(EventsFor(results));
-txn.Commit();  // DB commit — stays under lock
-
-// Snapshot post-mutation values for the response BEFORE releasing lock.
-// By-value copies; the response builder consumes them without re-reading
-// Account state.
-auto walletSnapshot = account.GetWallet();
-auto pitySnapshot   = account.GetPityState(slotId);
-// ... (any other field the response payload reads from `account`)
-
-// === LOCK RELEASES at end of scope ===
-}
-
-// === UNLOCKED PHASE: response prep + serialization ===
-Json responseBody = BuildResponsePayload(results, walletSnapshot, pitySnapshot);
-return CreateResponse(MsgType, responseBody.dump());
+class Account {
+    // Audit M-V5-4 concurrency (2026-06-04): per-account mutex
+    // replaces the per-stripe mutex for handler-scope serialization.
+    // Held by LockedAccountRef for the full handler duration; only
+    // GetLockedAccount's brief get-or-load critical section touches
+    // the stripe lock.
+    mutable std::mutex m_handlerMutex;
+    ...
+};
 ```
 
-**Key invariant:** never capture `account` by reference into the unlocked phase. Every value the response payload reads from Account state must be snapshotted (by value) inside the lock. A compile-time guard: extract `BuildResponsePayload(results, walletSnapshot, pitySnapshot, ...)` into a free function whose signature takes the snapshot types directly — the function can't accidentally read `account` because it doesn't have one.
+**2. AccountCache map promotes to `shared_ptr<Account>`.**
 
-**Keep the DB commit inside the lock.** A more aggressive optimization would release the lock before `txn.Commit()`. Risk: if commit fails, in-memory Account state has been mutated and a concurrent reader could observe post-mutation state while DB still has pre-mutation state. Rollback-snapshot handles in-process recovery but cross-request visibility leaks briefly. Modest latency win not worth the correctness risk.
+Today: `std::unordered_map<std::string, std::unique_ptr<Account>> m_accounts;`
+After: `std::unordered_map<std::string, std::shared_ptr<Account>> m_accounts;`
 
-### Apply same restructure to HandlePull
+Reason: with per-account locks, a handler holds the lock through I/O while the cleanup thread may evict the entry from the map. The `shared_ptr` keeps the Account alive (and its embedded mutex valid) until the handler's `LockedAccountRef` destructs. Without this, the cleanup thread could erase a unique_ptr<Account> while the handler still holds the lock → use-after-free.
 
-`HandlePull` has the same lock-around-everything shape with `count=1`. Apply the same two-phase pattern:
+**3. LockedAccountRef changes shape (field order matters).**
 
-- Locked phase: 1 SimulateOnePull + txn.AppendEvents + txn.Commit + snapshot
-- Unlocked phase: BuildResponsePayload + serialize
+```cpp
+struct LockedAccountRef {
+    // Audit M-V5-4 concurrency (2026-06-04): field order is load-bearing.
+    // accountLock declared SECOND, so it destructs FIRST (reverse-order
+    // destruction). The lock releases before the shared_ptr's refcount
+    // decrement, so the Account is guaranteed alive while another thread
+    // could acquire the same mutex. If the shared_ptr destructs first
+    // and triggers ~Account, a racing acquirer of the (now-dangling)
+    // mutex would crash.
+    std::shared_ptr<Account>     account;
+    std::unique_lock<std::mutex> accountLock;
+    std::string                  error;
+};
+```
 
-Smaller absolute win (single-pull is faster than 10-pull), but keeps the lock pattern consistent across the two handlers. A future audit comparing the two would re-flag any asymmetry.
+Add a `static_assert` (or compile-time check) verifying the field order at compile time.
+
+**4. GetLockedAccount refactored.**
+
+```cpp
+LockedAccountRef GetLockedAccount(const std::string& playerId) {
+    LockedAccountRef ref;
+    
+    // Phase 1: get-or-load under stripe lock (brief).
+    std::shared_ptr<Account> acctPtr;
+    {
+        auto stripeLock = m_playerLocks.LockFor(playerId);  // RAII, released at scope end
+        std::lock_guard<std::mutex> mapLock(m_mapMutex);
+        m_pendingCleanup.erase(playerId);
+        m_lastAccess[playerId] = std::chrono::steady_clock::now();
+        auto it = m_accounts.find(playerId);
+        if (it != m_accounts.end() && it->second && !it->second->IsStale()) {
+            acctPtr = it->second;  // shared_ptr copy bumps refcount
+        } else {
+            // load-from-DB path; same shape as today, but emplaces
+            // shared_ptr<Account> instead of unique_ptr<Account>
+            ...
+        }
+    }  // stripe lock + map lock release here
+    
+    if (!acctPtr) { ref.error = "Account not found"; return ref; }
+    
+    // Phase 2: acquire per-account handler lock (held for handler scope).
+    ref.accountLock = std::unique_lock<std::mutex>(acctPtr->m_handlerMutex);
+    ref.account     = std::move(acctPtr);
+    return ref;
+}
+```
+
+**Stripe lock is now only for "find-or-load-then-bump-refcount"** — typically nanoseconds. The per-account lock is what serializes concurrent same-player handlers. Different-player handlers never serialize.
+
+**5. CleanupIdleAccounts coordinates with per-account locks.**
+
+The existing two-phase snapshot+evict pattern stays, with one change: the per-candidate eviction must acquire the per-account `m_handlerMutex` via `try_lock` to detect "a handler is mid-call" — if contended, skip this iteration; the candidate gets re-considered next sweep. The `shared_ptr` keeps the Account alive even if the map entry is erased while a handler holds the lock — the handler's local `shared_ptr<Account>` keeps the object live until its `LockedAccountRef` destructs.
+
+### Why this preserves the stripe-lock's safety invariants
+
+The original stripe-lock design defends against two distinct races:
+1. **Same-player handler serialization** — two concurrent requests for the same playerId must serialize so the wallet/pity/reducer state isn't torn.
+2. **Get-or-load atomicity** — a fresh request for an unloaded player triggers a DB load + insert; a racing concurrent request must not load+insert a *second* instance.
+
+The hybrid design covers both:
+- (1) by per-account lock — handlers for the same account always serialize on the *same* mutex (since both `GetLockedAccount` calls find the same `shared_ptr<Account>`).
+- (2) by the stripe lock held during the get-or-load phase — two racing first-loads for the same player hash to the same stripe, so the second waits, finds the first's insert, copies the shared_ptr, and acquires the same per-account lock the first one is holding.
 
 ### Files touched
 
-- `Server/Account/src/Handlers/GachaHandlers.hpp` — both `HandlePull` (single-pull) and `HandleMultiPull` (10-pull)
-- Possibly extract a free function or static helper `BuildPullResponsePayload(results, walletSnapshot, pitySnapshot, ...)` into the same file or a sibling header if the body becomes substantial. Reuse between the two handlers if shapes are identical; separate functions if they diverge.
+- `Server/Account/src/State/Account.hpp` — add `m_handlerMutex` member; thread through `Snapshot` mechanism (the mutex shouldn't participate in snapshot/rollback; verify the X-macro doesn't include it)
+- `Server/Account/src/Cache/AccountCache.hpp` — map type change + `GetLockedAccount` restructure + `CleanupIdleAccounts` coordination
+- `Server/Account/src/Cache/HandlerContext.hpp` — `LockedAccountRef` field order + type change + static_assert
+- `Server/Account/src/Cache/AccountHydrator.hpp` — return type may change from `std::unique_ptr<Account>` to `std::shared_ptr<Account>` depending on cache's emplace pattern
+- `Server/Account/src/Cache/AccountRepository.hpp` — `Save` takes `Account&` today, so no change unless we change the call shape
+- Existing handler call sites all use `lockedRef.account->Foo()` or `*lockedRef.account` — both work transparently with `shared_ptr<Account>` (operator-> and operator* match the raw-pointer pattern). No handler changes expected.
 
 ### Tests
 
-- Existing `HandlePull` / `HandleMultiPull` integration tests stay green — observable behavior is unchanged.
-- Add a focused regression test asserting the response payload's `wallet.tickets` value equals the post-pull wallet (regression guard for "snapshot captured the right field"). Pins snapshot correctness without needing concurrent threads.
-- No perf test. The lock-duration win is verified by code review (the diff makes the change visible). A microbenchmark belongs in a perf harness when one exists.
+- **New AccountCache unit tests:** explicit two-thread tests asserting that (a) two concurrent `GetLockedAccount` calls for the *same* playerId serialize on the per-account lock (the second waits for the first to release), and (b) two concurrent calls for *different* playerIds DON'T serialize (the second proceeds immediately). The first test is structural — pins the per-player serialization invariant. The second is the actual win — pins no-cross-account-contention.
+- **Eviction race test:** thread A acquires LockedAccountRef, thread B triggers CleanupIdleAccounts. Assert B skips A's account, A's handler completes successfully, A's account is no longer in the cache after A releases (or, if A's release happens during B's sweep, the next sweep evicts cleanly).
+- **All existing handler integration tests stay green** — observable behavior is unchanged.
+- **Existing `AccountCacheTest.cpp` cases** (stale-flag round-trip, etc.) need a careful re-read; some may be coupled to the unique_ptr/stripe-lock shape.
 
-### Risk
+### Risk — High
 
-Moderate. The most invasive of the four — touching the highest-traffic handler in the gacha-loop hot path. Two specific risks:
+This is the most invasive change of the four. Specific risks:
 
-1. **Snapshot completeness.** Forgetting to snapshot a field the response payload needs would either (a) compile-fail (good — caught at edit time) or (b) compile-pass and read live Account state via a captured reference (bad — torn response). Mitigation: extract `BuildResponsePayload` to a free function whose signature only accepts snapshot types — the captured-reference path becomes syntactically impossible.
-2. **Symmetry maintenance.** `HandlePull` and `HandleMultiPull` restructured together; future edits must preserve symmetry. Cross-reference comments in both handlers naming the other.
+1. **UAF on field-order regression.** A future edit that flips the `LockedAccountRef` field order causes ~Account to run while another thread acquires the just-released lock. Mitigation: `static_assert` on the field offsets at the struct definition (or a unit test that asserts destruction order via instrumentation).
+2. **Stale-flag interaction.** The current `IsStale()` check at `AccountCache.hpp:80-89` causes a stale Account to be evicted under the stripe lock and reloaded. With per-account locks, if thread A holds the handler lock on a stale Account, thread B's `GetLockedAccount` sees the stale flag — but A still has the shared_ptr. B's reload creates a fresh Account, and B's `GetLockedAccount` returns the NEW account. Now A is mid-handler on the OLD account, holding a lock on a mutex that's about to be destroyed when A's LockedAccountRef destructs. Need to verify: does the old Account's handlerMutex destruct cleanly because A holds the only remaining shared_ptr? Yes — A's lock is on the OLD mutex, B's lock is on the NEW mutex, they're independent. The OLD Account dies when A's shared_ptr decrements. Safe but subtle; should be explicitly tested.
+3. **Cache map mutation invariants.** `m_accounts` is now `unordered_map<string, shared_ptr<Account>>`. The shared_ptr type carries thread-safe refcount, but the map itself is not thread-safe; `m_mapMutex` still guards iteration/insert/erase. The handler-held `shared_ptr<Account>` is its own pinning mechanism, independent of `m_accounts`.
+4. **AccountTransaction interaction with the new lock shape.** AccountTransaction reads/writes from `Account&` references. As long as the LockedAccountRef stays alive through `txn.Commit()` (which it does today — the handler keeps it in scope), the transaction sees consistent state. Verify no path destructs LockedAccountRef before the transaction completes.
+5. **Snapshot mechanism (X-macro).** The X-macro at `Account.hpp:117-148` captures Account's mutable state for Rollback. The new `m_handlerMutex` MUST NOT be part of the snapshot. Verify the X-macro doesn't include it; if needed, mark it `mutable` and document it as "not snapshotted; lifetime is handler-scope, not Account-scope."
+
+### Implementation order within Scope 4
+
+Sub-batched to bound the diff per commit:
+
+1. **Promote `m_accounts` to `shared_ptr<Account>` with stripe-lock still active.** Backward-compatible: handler shape unchanged, cache shape changed but lock pattern same. Tests stay green.
+2. **Add `m_handlerMutex` to Account, threaded through hydration without yet using it.** Account compiles, mutex exists but unused.
+3. **Refactor `GetLockedAccount` to the hybrid pattern (stripe brief, per-account held).** Handler lock acquisition shifts; this is the behavior change.
+4. **Refactor `CleanupIdleAccounts` to try-lock the per-account mutex.** Eviction race-safe under the new lock pattern.
+5. **Remove the stripe-lock-as-handler-duration code path.** `StripedMutex<64>`'s remaining role is just brief load-path serialization.
+6. **Add the new unit tests** (concurrent-same-player, concurrent-different-player, eviction-race).
+
+Each sub-batch is its own commit; the entire Scope 4 series is ~5-6 commits.
 
 ---
 
@@ -290,14 +348,15 @@ These v5 mediums are **not** in this design and the rationale for deferral is pi
 
 ## Implementation order
 
-Scopes are independent. Recommended sequence by ascending LOC / risk:
+**Scopes 1-3 are independent** (touch disjoint files); ship in ascending LOC / risk order:
 
 1. **Scope 2** (~15 LOC, low risk) — quick win, establishes the constant-pattern for Scope 1 to mirror
 2. **Scope 3** (~5 LOC, low risk) — single-file change, low blast radius
 3. **Scope 1** (~70 LOC, low risk) — touches 6 files but each change is small and consistent
-4. **Scope 4** (~80-120 LOC, moderate risk) — most invasive; do last so the others' risk-budget is clear before touching the hot path
 
-Each scope is its own commit (matching the `chore: v5 medium batch (X) — ...` pattern from prior batches a-i).
+**Scope 4 ships separately** as its own batch — substantially higher risk than 1-3, larger LOC, and 5-6 sub-commits internally. Do *after* 1-3 are merged so the risk budget is clear before touching the cache foundation.
+
+Each scope (and each Scope 4 sub-batch) is its own commit (matching the `chore: v5 medium batch (X) — ...` pattern from prior batches a-i).
 
 ## Open questions / future work
 
