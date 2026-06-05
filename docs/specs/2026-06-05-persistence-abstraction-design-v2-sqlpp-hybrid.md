@@ -94,6 +94,8 @@ Every layer has one clear job. sqlpp23 syntax is confined to the `select_by_owne
 
 Three small, single-purpose files. Each has one job.
 
+> **Code samples below are illustrative, not literal.** sqlpp23's extension API (`value_type_of`, `bind_traits`, the connector's bind/extract entry points) uses symbol names that may differ from what I've sketched here. The Phase A spike confirms the actual API shapes by getting the trait to compile and round-trip against the live DB; the *structure* (tag type → library trait specialization → connector specialization → descriptor consumes it transparently) is what the spec commits to, not the exact symbol names.
+
 ```cpp
 // ThirdParty/aphelyon-sql-types/include/aphelyon/sql/types/jsonb.hpp
 //
