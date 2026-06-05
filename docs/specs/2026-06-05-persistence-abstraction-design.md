@@ -1,9 +1,19 @@
 # Persistence Abstraction Design
 
 **Date:** 2026-06-05
-**Status:** Design approved; ready for implementation planning
+**Status:** **SUPERSEDED** — see `2026-06-05-persistence-abstraction-design-v2-sqlpp-hybrid.md`
 **Scope:** All 17 tables, all persistence shapes (scalars + row-per-entity + JSONB + event-sourced), big-bang migration
 **Bundles:** The `cached_snapshot_*_version` cursor-propagation bug introduced by C-V5-1 Task 5
+
+---
+
+## SUPERSEDED — pivot to sqlpp11 hybrid (2026-06-05)
+
+After the related-work research surfaced sqlpp11's compile-time SQL safety as a genuinely larger gain than initially credited, this fully-hand-rolled design was superseded by a **hybrid approach**: sqlpp11 as the typed row-IO primitive underneath, our orchestration layer (TableRegistry / TableDescriptor / Owner+DirtyState discipline) on top. See `2026-06-05-persistence-abstraction-design-v2-sqlpp-hybrid.md` for the active design.
+
+This document is retained for historical reference — the Data Mapper + Repository pattern analysis, the deferral list, the AccountHydrator-deletion rationale, and the bundled cursor bug fix all carry forward to v2 unchanged. Only the row-IO layer's internals (sqlpp11 typed queries instead of hand-rolled FieldDescriptor lambdas + SQL string builders) differ.
+
+---
 
 ---
 
