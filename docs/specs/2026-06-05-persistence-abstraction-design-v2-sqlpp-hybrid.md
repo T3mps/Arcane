@@ -294,7 +294,7 @@ The spike artifacts (vendoring layout, premake fragment, trait headers) carry fo
 
 ## Migration plan (revised)
 
-Big-bang single arc, ~12-14 commits. Adjusted from v1 to reflect:
+Big-bang single arc, ~13-14 commits (Phase A=3 + B=3 + C=4 + D=3-4). Adjusted from v1 to reflect:
 
 - Adding the spike + dialect bump as Phase A
 - Removing the SQL-builder helpers (don't need them; sqlpp23 builds SQL)
@@ -324,7 +324,7 @@ Big-bang single arc, ~12-14 commits. Adjusted from v1 to reflect:
 
 11. Wire `AccountRepository::LoadByAccountId` to use `Registry::Hydrate`; delete the per-table `Load*` methods. Delete `AccountHydrator.hpp` (TickQuests inlined). Delete `Common/Types/AccountData.hpp` (Row types replace it).
 12. Wire `AccountRepository::Save` and `AccountTransaction::Commit`'s relational-flush stage to `Registry::Flush`; delete `RelationalFlush.hpp`. Bundle the `cached_snapshot_*_version` cursor fix (structural via the registry).
-13. Wire `SnapshotWriter` + `OutboxRelay` + idempotency UPSERT to `RowWriter`-equivalent typed queries (descriptor `upsert` lambdas).
+13. Wire `SnapshotWriter` + `OutboxRelay` + idempotency UPSERT through the registry — each goes through the relevant descriptor's `upsert` lambda (typed sqlpp23 INSERT ... ON CONFLICT), matching the events table cutover from commit 10.
 14. libpqxx removal sweep + schema-vs-descriptor consistency test (now asserting against `information_schema.columns` AND against sqlpp23's generated table classes).
 
 ---
@@ -385,9 +385,9 @@ After writing this v2 spec I checked:
 
 **Placeholder scan:** No TBD / TODO. Every section is complete.
 
-**Internal consistency:** The architecture diagram, the migration plan's commits, the testing strategy, and the dependency-change table all reference the same set of libraries (sqlpp23 + sqlpp23-connector-postgresql + libpq + nlohmann::json + spdlog + xoshiro + Catch2 + rapidcheck). libpqxx appears only in the "Removed" line of the dependency table. The architecture diagram shows sqlpp23 between TableDescriptor and the connector — matches every other section's wording.
+**Internal consistency:** The architecture diagram, the migration plan's commits, the testing strategy, and the dependency-change table all reference the same set of libraries (sqlpp23 + sqlpp23-connector-postgresql + libpq + nlohmann::json + spdlog + xoshiro + Catch2 + rapidcheck). libpqxx is referenced only as something being removed — it appears in the dependency-change table's "before" column, the "Removed" prose line, the `vcpkg-triplets` bullet that drops it from the install set, the open-risks "libpq direct dependency" entry (libpq stays after libpqxx leaves), and Phase D's commit-14 removal sweep. Every mention is part of the same removal arc; there is no path where libpqxx survives the migration. The architecture diagram shows sqlpp23 between TableDescriptor and the connector — matches every other section's wording.
 
-**Scope check:** Arc is large (12-14 commits, vendored library, language-standard bump, every SQL call site touched) but bounded — fits a 5-7 week scope per the earlier estimate. Phase A's 3-day spike is the gate that confirms the foundational assumptions before the big-bang migration begins.
+**Scope check:** Arc is large (13-14 commits, vendored library, language-standard bump, every SQL call site touched) but bounded — fits a 5-7 week scope per the earlier estimate. Phase A's 3-day spike is the gate that confirms the foundational assumptions before the big-bang migration begins.
 
 **Ambiguity check:** Three places I made explicit on this pass:
 
