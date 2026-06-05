@@ -544,6 +544,49 @@ A 12-commit big-bang has many opportunities for "test fails on commit N, but the
 
 ---
 
+## Related work and considered alternatives
+
+The design lands in well-trodden territory: the **Data Mapper** pattern from Fowler's *Patterns of Enterprise Application Architecture* — "a layer that moves data between objects and a database, keeping them independent of each other" — with the **Repository** pattern (a collection-like façade over the Data Mapper) as the call-site interface. Naming this explicitly so future readers can recognize the shape rather than think we invented something novel.
+
+Four modern C++ alternatives were evaluated and rejected:
+
+### sqlpp11 / sqlpp23
+
+The canonical modern type-safe SQL builder. Tables are types, queries are typed AST expressions, type errors caught at compile time. Strong safety guarantees. Rejected because:
+
+- Template error messages on type mismatches are notoriously hostile. The audit-comment culture in this codebase prizes legibility; sqlpp11's typed-AST template errors work against that.
+- Would coexist alongside hand-written pqxx for anything outside the EDSL (custom JOINs, analytics queries, partman calls) — parallel idiom rather than a clean wrapper.
+- The codebase already has working pqxx everywhere; we'd be rewriting on a different DSL rather than adding a thin layer.
+
+### Boost.Describe + Boost.MP11
+
+C++14 macro-based struct reflection via `BOOST_DESCRIBE_STRUCT`. The `mp_for_each` iteration is genuinely zero-runtime-cost — the compiler expands the loop and inlines per-field operations directly. Could replace our `std::function`-based field descriptors with compile-time field iteration on each Row type. Rejected because:
+
+- The brainstorming session explicitly chose struct-literal designated-initializer form over macros. Boost.Describe is fundamentally macro-based.
+- The Row type would have to be a plain aggregate that Describe can introspect, removing our ability to mediate column-to-field projection via lambdas. The `enumerate_dirty` callback that reads from `Owner::DirtyState` and synthesizes Row values requires a function, not a struct-field walk.
+- Per-field `doc` intent strings on `FieldDescriptor` would have to live somewhere outside the macro — recreating the multi-touch-point fragility we're fixing.
+
+The cost we pay for rejecting it: ~1ns indirect-call-per-field-per-row at flush time, against a multi-millisecond DB round-trip. Quantified as invisible in the Risks section.
+
+### C++26 static reflection (P2996)
+
+The language-level future. Would let us derive field metadata directly from struct definitions without macros or descriptor literals — likely the eventual right answer. Rejected because MSVC has no public support as of mid-2026 and no published ETA; the typical Microsoft adoption window for major C++ features is 12–24 months from first experimental shipment, putting practical adoption on this codebase in the 2027–2028 range. The TableDescriptor surface is intentionally compatible with a future migration: the `FieldDescriptor.read` / `.write` callbacks can be replaced with constexpr reflection predicates without changing the descriptor's external shape.
+
+### QxOrm
+
+Full-fledged C++ ORM with serialization, persistence, and Qt integration. Heavier than we want; we're building a thin Data Mapper, not an ORM. Also pulls in Qt as a transitive dependency, which conflicts with the codebase's vendor-light philosophy (CLAUDE.md vendoring preference for header-only / minimal deps).
+
+### Why hand-rolled type-erased + `std::function`
+
+Runtime field descriptors, `std::function`-based read/write callbacks, named-column access via pqxx. Picked for:
+
+1. **Self-documenting via struct-literal form** (per user aesthetic). One descriptor literal per column reads top-to-bottom.
+2. **Per-field intent docstrings live next to the read/write callbacks.** A future reader of `AccountSchema.hpp` sees the schema's semantic intent inline.
+3. **No macro and no template metaprogramming in the dev-facing API.** Writing a new descriptor is plain C++ struct construction.
+4. **Forward-compatible with C++26 reflection.** The `FieldDescriptor` surface remains stable; only the SQL/value plumbing inside changes when MSVC catches up.
+
+**One honest concession to call out:** the design claims "no template metaprogramming" — that holds for the **dev-facing API** (writing a descriptor literal), but not for the registry's internals. `TableRegistry<Owner>::Add<Row>` is a templated method that performs type erasure of `TableDescriptor<Owner, Row>` into the registry's `TypeErasedOps` storage. This is one-time at static-init and invisible to anyone writing a descriptor. The template-free promise is for the public surface, not the implementation plumbing.
+
 ## Self-review
 
 After writing this spec I checked:
@@ -563,3 +606,5 @@ After writing this spec I checked:
 5. The owner-column convention (every Account-owned table has `account_id`) is explicit; the consistency test enforces it. Noted in the TableRegistry section.
 
 **One thing I'd want a senior reviewer to push back on:** the choice of `std::function` for the descriptor lambdas vs. raw function pointers + a small payload struct. The performance argument lands ("indirect call cost is invisible at our scale"), but raw function pointers would also save the heap allocation that `std::function`'s SBO may not avoid for some captures. The trade is small; explicitness of `std::function` in the descriptor's type signature ("yes, this holds a callable") is the readability reason I kept it.
+
+**Research pass:** Added the "Related work and considered alternatives" section after a brief survey of how others have approached the same problem. The Data Mapper + Repository pattern from Fowler PEAA is the canonical reference; sqlpp11/sqlpp23, Boost.Describe + MP11, C++26 reflection, and QxOrm are the four modern C++ contenders. Each is rejected for a specific reason captured inline — sqlpp11 for template-error-message legibility (against the codebase's audit-comment culture); Boost.Describe for incompatibility with the chosen struct-literal aesthetic AND its requirement that Row types be plain aggregates (we mediate via lambdas, which Boost.Describe can't introspect); C++26 reflection for MSVC compiler-support timing (no public support as of mid-2026, ~12-24 month MS adoption window); QxOrm for being a full ORM rather than a thin Data Mapper. The design is consciously the simplest thing that gives the user's stated aesthetic (self-documenting struct literals, per-field intent docstrings) without forcing a macro layer or template-error-hostile DSL.
