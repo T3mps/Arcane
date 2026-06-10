@@ -890,7 +890,27 @@ inline MetaRegistry& TypeContext::Meta()
 // the singleton API is preserved for all existing callers:
 static MetaRegistry& Instance() { return GetTypeContext()->Meta(); }
 ```
-Include order ends up: `TypeID.hpp → TypeContext.hpp` and `MetaRegistry.hpp → TypeContext.hpp` — no cycle, regardless of MetaRegistry's own TypeID usage. `StaticTypeRegistrar` (Macros.hpp) keeps calling `MetaRegistry::Instance()` and now lands in the active context automatically.
+Include order ends up: `TypeID.hpp → TypeContext.hpp` and `MetaRegistry.hpp → TypeContext.hpp` — no cycle, regardless of MetaRegistry's own TypeID usage.
+
+**Static-init ordering (DLL-critical):** `StaticTypeRegistrar` (Macros.hpp) runs during module static initialization — in a plugin DLL that is DURING `LoadLibrary`, before the host can call `SetTypeContext`. Registrations must therefore NOT hit a context eagerly. Change `StaticTypeRegistrar` to push its builder lambda into a **module-local pending queue** instead of calling `MetaRegistry::Instance()` directly:
+```cpp
+// TypeContext.hpp (module-local, deliberately):
+namespace Detail
+{
+    using PendingMetaRegistration = std::function<void(TypeContext&)>;
+    inline std::vector<PendingMetaRegistration>& PendingMetaQueue()
+    {
+        static std::vector<PendingMetaRegistration> s_queue;
+        return s_queue;
+    }
+    inline void DrainPendingMeta(TypeContext& ctx)
+    {
+        for (auto& reg : PendingMetaQueue()) reg(ctx);
+        PendingMetaQueue().clear();
+    }
+}
+```
+`SetTypeContext(ctx)` calls `Detail::DrainPendingMeta(*ctx)` after installing; `GetTypeContext()`'s lazy default-creation path drains into the default context (standalone behavior unchanged — registrations just become lazy). `StaticTypeRegistrar`'s constructor becomes `PendingMetaQueue().emplace_back([fn](TypeContext& c){ /* existing registration body against c.Meta() */ });`. Add a test: queue a registration before `SetTypeContext`, install a fresh context, verify the type is registered THERE and not in the default. **Documented contract** (Task 11 DLL section): plugin code must not call `TypeID<T>::Value()` from its own static initializers — IDs cache per-module on first call and would bind to the wrong context.
 
 In `TypeID.hpp`: delete `TypeIDGenerator`; rewrite `TypeIDStorage`:
 ```cpp
