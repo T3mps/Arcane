@@ -1,7 +1,14 @@
 # Client Physics Engine Design
 
 **Date:** 2026-06-10
-**Status:** DRAFT — pending review
+**Status:** IMPLEMENTED — all milestones (M1–M4) landed 2026-06-10. Plans:
+`2026-06-10-physics-m1.md`, `2026-06-10-physics-m2-m4.md`. Notes vs spec:
+GJK serves distance/shapeCast/CCD on shape cores (no EPA — SAT/specials own
+penetration manifolds); polygon vert cap revised 8→128; slide is substepped
+discrete depenetration (true sweep available via shapeCast); Fixture record
+folded into Body until multi-fixture need; event ORDER is deterministic
+in-process (sorted pairs), positions deterministic across runs AND across
+broadphase strategies (harness-proven).
 **Scope:** Hand-rolled 2D physics engine replacing Box2D in the Love2D client, tailored to a tile-based isometric world with off-grid objects and cells-authoritative passability. Collider→Fixture→Rigidbody model, GJK (distance/CCD) + SAT (polygons) + specialized circle/capsule tests, constraints/joints, PhysicsWorld with contact management, constraint graph + islanding, solver abstraction, pluggable broadphase (spatial hash / SAP / dynamic AABB tree).
 **Companion:** `2026-06-10-overworld-iso-map-movement-design.md` (the first consumer: WASD character controller + kinematic path follower against cell statics)
 
