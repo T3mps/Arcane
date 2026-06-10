@@ -62,9 +62,15 @@ versioned serialization are better-fitted to the editor than either.
 **The Astra hardening workstream is a booked prerequisite** (its own milestone, in the
 Astra repo, pulled in via subtree):
 
-1. **enkiTS-backed executors** — `ParallelForEach` and `ISystemExecutor` currently
-   spawn ad-hoc threads; measured wall-clock at 1M entities is 2.43 ms parallel vs
-   1.30 ms sequential (thread-spawn overhead). Persistent worker pool fixes it.
+1. **Pure `IWorkScheduler` seam (zero threads in Astra)** — `ParallelForEach` and
+   `ISystemExecutor` currently spawn ad-hoc `std::async` threads; measured wall-clock
+   at 1M entities is 2.43 ms parallel vs 1.30 ms sequential (thread-spawn overhead).
+   Decision 2026-06-10: Astra's core is intentionally single-threaded (CommandBuffer
+   defers modifications; the job system is an open seam). The fix removes the
+   `std::async` sites entirely: Astra ships only the `IWorkScheduler` interface,
+   Parallel* APIs run sequentially inline when no scheduler is injected, and the
+   **enkiTS adapter is implemented in the ENGINE repo** — enkiTS and Astra stay
+   separate. A reference pool lives in Astra's test support only.
 2. **CI matrix (MSVC + gcc + clang)** — the g++ claim is currently unverified; this
    gates the engine's Linux build.
 3. **Doc reconciliation** — README documents `config.threadSafe` (doesn't exist),
@@ -153,7 +159,8 @@ throwaway — its pieces graduate into the engine.
 **The scene:** balls bouncing and ricocheting inside the window. Each ball is an
 **Astra** entity (Position/Velocity/Radius/Color components); movement + collision
 systems are registered with Astra's **SystemScheduler** and executed on **enkiTS**
-workers via the new executor (hardening item 1's first consumer). Every
+workers via the engine's `IWorkScheduler` adapter (first consumer of hardening
+item 1's seam — the adapter is engine code, not Astra code). Every
 collision plays a **miniaudio** tone (pitch scaled by impact speed). Ball sprites
 load through **stb_image**; HUD text (entity count, frame ms, backend name) renders
 through **FreeType** + the first-party atlas. Math is **glm**. Frame and system zones

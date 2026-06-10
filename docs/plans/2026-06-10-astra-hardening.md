@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Harden the Astra ECS (the engine's adopted ECS pillar) per the 5-item workstream in `docs/superpowers/specs/2026-06-10-engine-thirdparty-stack-design.md`: persistent worker pool replacing ad-hoc `std::async`, cross-DLL TypeContext, container differential-fuzz tests, MSVC+gcc+clang CI, and doc reconciliation.
+**Goal:** Harden the Astra ECS (the engine's adopted ECS pillar) per the 5-item workstream in `docs/superpowers/specs/2026-06-10-engine-thirdparty-stack-design.md`: pure `IWorkScheduler` seam replacing ad-hoc `std::async` (Astra creates ZERO threads — user decision 2026-06-10: core is single-threaded, CommandBuffer defers modifications, job system stays open-ended; enkiTS adapter lives in the engine, never in Astra), cross-DLL TypeContext, container differential-fuzz tests, MSVC+gcc+clang CI, and doc reconciliation.
 
 **Architecture:** All work happens in **`D:\dev\starworks\Astra`** (the user's working copy — NOT a git repo). Code verifies locally via MSVC build + GoogleTest suite. Each task group ends with a sync to the git repo `D:\dev\github\Astra` (branch `hardening/v3.1`) where commits happen; GitHub Actions CI (Task 11) is the gcc/clang verifier. Library is header-only C++20, exception-free (Result types), GoogleTest + GoogleBenchmark vendored, premake5.
 
@@ -72,27 +72,34 @@ git -C D:\dev\github\Astra add -A; git -C D:\dev\github\Astra commit -m "chore: 
 
 ---
 
-### Task 1: WorkerPool — failing tests first
+### Task 1: IWorkScheduler seam (interface-only) + reference test pool
+
+**Design (user decision, 2026-06-10):** Astra ships NO threads. `include/Astra/Core/WorkScheduler.hpp` contains only the `IWorkScheduler` interface; every Parallel* API runs sequentially inline when no scheduler is injected. The multithreaded fork-join pool below exists ONLY as test/benchmark support (`tests/Support/TestWorkerPool.hpp`) so the parallel code paths get exercised — the real scheduler is the engine's enkiTS adapter, which stays in the engine repo.
 
 **Files:**
-- Create: `tests/Core/WorkerPoolTest.cpp`
-- Modify: `premake5.lua` is NOT needed (AstraTest globs `tests/**.cpp`) — regenerate the solution so the new file is picked up.
+- Create: `include/Astra/Core/WorkScheduler.hpp` (interface only)
+- Create: `tests/Support/TestWorkerPool.hpp` (reference implementation, NOT shipped in include/)
+- Create: `tests/Core/WorkSchedulerTest.cpp`
+- Modify: `premake5.lua` — add `"tests"` to AstraBenchmark's `includedirs` (benchmarks reuse the reference pool in Task 4); AstraTest needs nothing (it globs `tests/**`). Regenerate the solution.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```cpp
-// tests/Core/WorkerPoolTest.cpp
+// tests/Core/WorkSchedulerTest.cpp
 #include <gtest/gtest.h>
 #include <atomic>
 #include <thread>
 #include <vector>
-#include <Astra/Core/WorkerPool.hpp>
+#include <Astra/Core/WorkScheduler.hpp>
+#include "../Support/TestWorkerPool.hpp"
+
+using Astra::Testing::TestWorkerPool;
 
 namespace
 {
     TEST(WorkerPool, ProcessesEveryIndexExactlyOnce)
     {
-        Astra::WorkerPool pool;
+        TestWorkerPool pool;
         constexpr size_t kCount = 100'000;
         std::vector<std::atomic<int>> hits(kCount);
         pool.ParallelFor(kCount, 64, [&](size_t begin, size_t end)
@@ -106,7 +113,7 @@ namespace
 
     TEST(WorkerPool, ReusableAcrossManyCalls)
     {
-        Astra::WorkerPool pool;
+        TestWorkerPool pool;
         for (int iter = 0; iter < 200; ++iter)
         {
             std::atomic<size_t> sum{0};
@@ -120,7 +127,7 @@ namespace
 
     TEST(WorkerPool, SmallCountRunsInline)
     {
-        Astra::WorkerPool pool;
+        TestWorkerPool pool;
         const auto caller = std::this_thread::get_id();
         std::atomic<bool> sameThread{true};
         pool.ParallelFor(8, 64, [&](size_t, size_t)  // count <= minBatch
@@ -132,7 +139,7 @@ namespace
 
     TEST(WorkerPool, ZeroCountIsNoop)
     {
-        Astra::WorkerPool pool;
+        TestWorkerPool pool;
         bool called = false;
         pool.ParallelFor(0, 16, [&](size_t, size_t) { called = true; });
         EXPECT_FALSE(called);
@@ -140,7 +147,7 @@ namespace
 
     TEST(WorkerPool, NestedCallRunsInline)
     {
-        Astra::WorkerPool pool;
+        TestWorkerPool pool;
         std::atomic<size_t> inner{0};
         pool.ParallelFor(4 * pool.WorkerCount() + 4, 1, [&](size_t b, size_t e)
         {
@@ -155,7 +162,7 @@ namespace
 
     TEST(WorkerPool, ConcurrentExternalCallersAreSafe)
     {
-        Astra::WorkerPool pool;
+        TestWorkerPool pool;
         std::vector<std::thread> callers;
         std::atomic<size_t> total{0};
         for (int t = 0; t < 4; ++t)
@@ -173,7 +180,7 @@ namespace
 
     TEST(WorkerPool, ExplicitThreadCount)
     {
-        Astra::WorkerPool pool(2);
+        TestWorkerPool pool(2);
         EXPECT_EQ(pool.WorkerCount(), 2u);
         std::atomic<size_t> sum{0};
         pool.ParallelFor(10'000, 64, [&](size_t b, size_t e) { sum += e - b; });
@@ -184,29 +191,25 @@ namespace
 
 - [ ] **Step 2: Regenerate + build to verify failure**
 
-Run the local build loop. Expected: **compile error** — `Astra/Core/WorkerPool.hpp` not found.
+Run the local build loop. Expected: **compile error** — `Astra/Core/WorkScheduler.hpp` not found.
 
-- [ ] **Step 3: Implement `include/Astra/Core/WorkerPool.hpp`**
-
-Design: fork-join pool, one in-flight job at a time (external `ParallelFor` calls serialized by `m_submitMutex`); the calling thread participates; job state is a `std::shared_ptr` copied by workers under lock (lifetime-safe against late wakers); nested calls from worker threads detected via `thread_local` and run inline (no deadlock). Exception-free (matches library policy).
+- [ ] **Step 3a: Implement `include/Astra/Core/WorkScheduler.hpp` (interface ONLY)**
 
 ```cpp
 #pragma once
 
-#include <atomic>
-#include <condition_variable>
+#include <cstddef>
 #include <functional>
-#include <memory>
-#include <mutex>
-#include <thread>
-#include <vector>
 
 #include "Base.hpp"
 
 namespace Astra
 {
-    // Abstraction seam: the engine injects an enkiTS-backed implementation;
-    // standalone users get the built-in WorkerPool.
+    // Astra deliberately creates NO threads. Every Parallel* API accepts an
+    // implementation of this seam (see Registry::Config::workScheduler);
+    // when none is provided, the API executes sequentially inline. Hook up
+    // the job system of your choice in the host application (e.g. an
+    // enkiTS-backed adapter) — Astra itself stays scheduler-agnostic.
     class IWorkScheduler
     {
     public:
@@ -222,11 +225,32 @@ namespace Astra
 
         ASTRA_NODISCARD virtual size_t WorkerCount() const noexcept = 0;
     };
+}
+```
 
-    class WorkerPool final : public IWorkScheduler
+- [ ] **Step 3b: Implement `tests/Support/TestWorkerPool.hpp` (reference pool, test-side only)**
+
+Design: fork-join pool, one in-flight job at a time (external `ParallelFor` calls serialized by `m_submitMutex`); the calling thread participates; job state is a `std::shared_ptr` copied by workers under lock (lifetime-safe against late wakers); nested calls from worker threads detected via `thread_local` and run inline (no deadlock). Exception-free (matches library policy). Lives in `Astra::Testing` so it can never be mistaken for shipped API.
+
+```cpp
+#pragma once
+
+#include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+#include <Astra/Core/WorkScheduler.hpp>
+
+namespace Astra::Testing
+{
+    class TestWorkerPool final : public IWorkScheduler
     {
     public:
-        explicit WorkerPool(size_t threadCount = 0)
+        explicit TestWorkerPool(size_t threadCount = 0)
         {
             if (threadCount == 0)
             {
@@ -238,7 +262,7 @@ namespace Astra
                 m_threads.emplace_back([this] { WorkerLoop(); });
         }
 
-        ~WorkerPool() override
+        ~TestWorkerPool() override
         {
             {
                 std::lock_guard lock(m_mutex);
@@ -248,8 +272,8 @@ namespace Astra
             for (auto& t : m_threads) t.join();
         }
 
-        WorkerPool(const WorkerPool&) = delete;
-        WorkerPool& operator=(const WorkerPool&) = delete;
+        TestWorkerPool(const TestWorkerPool&) = delete;
+        TestWorkerPool& operator=(const TestWorkerPool&) = delete;
 
         void ParallelFor(size_t count, size_t minBatch,
                          const std::function<void(size_t, size_t)>& fn) override
@@ -356,28 +380,19 @@ namespace Astra
         bool m_stop = false;
         std::mutex m_submitMutex;
     };
-
-    // Process-default scheduler for standalone use. NOTE: function-local
-    // static — one instance PER MODULE on Windows. Hosts with multiple
-    // modules must inject a shared scheduler explicitly (Registry::Config).
-    inline const std::shared_ptr<IWorkScheduler>& DefaultWorkScheduler()
-    {
-        static std::shared_ptr<IWorkScheduler> s_pool = std::make_shared<WorkerPool>();
-        return s_pool;
-    }
 }
 ```
 
 - [ ] **Step 4: Build + run the new tests**
 
 Run: local build loop, then `AstraTest.exe --gtest_filter=WorkerPool.* --gtest_brief=1`.
-Expected: 7 tests PASS. Then full suite: 455 + 7 pass.
+Expected: 7 tests PASS. Then full suite: 455 + 7 pass. Also verify the library stays thread-free: `rg "std::thread|std::async" D:\dev\starworks\Astra\include` must show NO matches in `Core/WorkScheduler.hpp` (the View/Relations/SystemExecutor matches disappear in Tasks 2-3; CommandBuffer's `hardware_concurrency` sizing hint may remain — it creates no threads).
 
 - [ ] **Step 5: Sync + commit**
 
 ```powershell
 powershell -File D:\dev\starworks\Astra\scripts\sync_to_github.ps1
-git -C D:\dev\github\Astra add -A; git -C D:\dev\github\Astra commit -m "feat(core): WorkerPool fork-join scheduler + IWorkScheduler seam"
+git -C D:\dev\github\Astra add -A; git -C D:\dev\github\Astra commit -m "feat(core): IWorkScheduler seam (interface-only, zero threads in library) + reference test pool"
 ```
 
 ---
@@ -396,13 +411,17 @@ git -C D:\dev\github\Astra add -A; git -C D:\dev\github\Astra commit -m "feat(co
 #include <gtest/gtest.h>
 #include <atomic>
 #include <Astra/Astra.hpp>
+#include "../Support/TestWorkerPool.hpp"
 #include "../TestComponents.hpp"
 
 namespace
 {
     // Uses Position/Velocity from TestComponents.hpp (adjust names to that
     // header's actual component types if they differ).
-    TEST(ParallelIteration, VisitsEveryEntityExactlyOnce)
+
+    // No scheduler injected => ParallelForEach degrades to sequential inline
+    // execution (Astra creates no threads). Correctness must be identical.
+    TEST(ParallelIteration, NoSchedulerFallsBackSequentially)
     {
         Astra::Registry registry;
         constexpr size_t kCount = 50'000;
@@ -431,7 +450,8 @@ namespace
     {
         struct CountingScheduler final : Astra::IWorkScheduler
         {
-            std::shared_ptr<Astra::WorkerPool> inner = std::make_shared<Astra::WorkerPool>();
+            std::shared_ptr<Astra::Testing::TestWorkerPool> inner =
+                std::make_shared<Astra::Testing::TestWorkerPool>();
             std::atomic<int> calls{0};
             void ParallelFor(size_t count, size_t minBatch,
                              const std::function<void(size_t, size_t)>& fn) override
@@ -464,27 +484,30 @@ Expected: compile error — `Config` has no member `workScheduler`.
 
 - [ ] **Step 3: Implement**
 
-In `Registry.hpp`: include `"../Core/WorkerPool.hpp"`; add to `Registry::Config`:
+In `Registry.hpp`: include `"../Core/WorkScheduler.hpp"`; add to `Registry::Config`:
 ```cpp
-// Scheduler used by parallel iteration/execution. Null = process default.
-// Hosts with multiple modules (DLLs) should inject one shared instance.
+// Scheduler used by parallel iteration/execution. Astra creates no threads:
+// null (the default) means every Parallel* API runs sequentially inline.
+// Hosts inject one shared instance (e.g. an enkiTS adapter) — and in
+// multi-module (DLL) setups, the SAME instance into every module.
 std::shared_ptr<IWorkScheduler> workScheduler;
 ```
-In every Registry constructor, after the existing member inits:
-```cpp
-m_workScheduler = config.workScheduler ? config.workScheduler : DefaultWorkScheduler();
-```
-(the two ctors that don't take `Config` use `DefaultWorkScheduler()`; add `std::shared_ptr<IWorkScheduler> m_workScheduler;` to members). In `CreateView` (line ~971) pass `m_workScheduler` as second ctor arg.
+In the constructors that take a `Config`, copy it straight through (`m_workScheduler = config.workScheduler;` — null stays null); the ctors without a `Config` leave it null. Add `std::shared_ptr<IWorkScheduler> m_workScheduler;` to members. In `CreateView` (line ~971) pass `m_workScheduler` as second ctor arg.
 
 In `View.hpp`: add member `std::shared_ptr<IWorkScheduler> m_scheduler;`, extend the ctor:
 ```cpp
 explicit View(std::shared_ptr<ArchetypeManager> manager,
               std::shared_ptr<IWorkScheduler> scheduler = nullptr) :
     m_archetypeManager(manager),
-    m_scheduler(scheduler ? std::move(scheduler) : DefaultWorkScheduler()),
+    m_scheduler(std::move(scheduler)),   // null => sequential fallback
     ...
 ```
-Replace the body of `ParallelForEach` from the thread-count selection through the join (current lines ~127-152) with:
+In `ParallelForEach`, right after the existing manager/empty early-outs, add the no-scheduler fallback:
+```cpp
+if (!m_scheduler)
+    return ForEach(std::forward<Func>(func));   // Astra spawns no threads
+```
+then replace the body from the thread-count selection through the join (current lines ~127-152) with:
 ```cpp
 m_scheduler->ParallelFor(chunkWork.size(), MIN_CHUNKS_PER_THREAD,
     [&](size_t begin, size_t end)
@@ -496,7 +519,7 @@ m_scheduler->ParallelFor(chunkWork.size(), MIN_CHUNKS_PER_THREAD,
         }
     });
 ```
-Keep the existing sequential-fallback thresholds above it unchanged. Remove now-unused `<future>`/`<thread>` includes from View.hpp if nothing else uses them.
+Keep the existing sequential-fallback thresholds unchanged. Remove the now-unused `<future>`/`<thread>` includes from View.hpp if nothing else uses them.
 
 - [ ] **Step 4: Build + run**
 
@@ -524,7 +547,9 @@ git -C D:\dev\github\Astra add -A; git -C D:\dev\github\Astra commit -m "feat(vi
 ```cpp
     TEST(ParallelIteration, ParallelForEachDescendantVisitsAll)
     {
-        Astra::Registry registry;
+        Astra::Registry::Config config;
+        config.workScheduler = std::make_shared<Astra::Testing::TestWorkerPool>();
+        Astra::Registry registry(config);
         auto root = registry.CreateEntity<Position>();
         constexpr size_t kChildren = 5'000;
         std::vector<Astra::Entity> kids(kChildren);
@@ -548,8 +573,14 @@ git -C D:\dev\github\Astra add -A; git -C D:\dev\github\Astra commit -m "feat(vi
         // Two trait-less lambdas => conservative sequential groups; still must all run.
         scheduler.AddSystem([&](Astra::Registry&) { ran.fetch_add(1); });
         scheduler.AddSystem([&](Astra::Registry&) { ran.fetch_add(1); });
-        Astra::ParallelExecutor executor(Astra::DefaultWorkScheduler());
+        Astra::ParallelExecutor executor(std::make_shared<Astra::Testing::TestWorkerPool>());
         scheduler.Execute(registry, &executor);
+        EXPECT_EQ(ran.load(), 2);
+
+        // No scheduler => degrades to sequential, still runs everything.
+        ran = 0;
+        Astra::ParallelExecutor sequentialFallback;
+        scheduler.Execute(registry, &sequentialFallback);
         EXPECT_EQ(ran.load(), 2);
     }
 ```
@@ -561,8 +592,15 @@ Expected: compile error — `ParallelExecutor` has no scheduler ctor (and/or Rel
 
 - [ ] **Step 3: Implement**
 
-`Relations.hpp`: add `std::shared_ptr<IWorkScheduler> m_scheduler;` member (default `DefaultWorkScheduler()` in ctor; `Registry::GetRelations` passes `m_workScheduler` — mirror exactly how Task 2 threaded it into View). Replace the worker-spawn block (lines ~212-267) with:
+`Relations.hpp`: add `std::shared_ptr<IWorkScheduler> m_scheduler;` member (null by default; `Registry::GetRelations` passes `m_workScheduler` — mirror exactly how Task 2 threaded it into View). In `ParallelForEachDescendant`, extend the existing sequential fallback so null-scheduler also takes it, then replace the worker-spawn block (lines ~212-267) with:
 ```cpp
+if (!m_scheduler || count < MIN_ENTITIES_FOR_PARALLEL)
+{
+    // Sequential path (Astra spawns no threads) — reuse the existing
+    // sequential descendant loop above.
+    ...existing sequential traversal...
+    return;
+}
 m_scheduler->ParallelFor(count, 64, [&](size_t begin, size_t end)
 {
     for (size_t i = begin; i < end; ++i)
@@ -573,23 +611,24 @@ m_scheduler->ParallelFor(count, 64, [&](size_t begin, size_t end)
     }
 });
 ```
-Keep the `MIN_ENTITIES_FOR_PARALLEL` sequential fallback.
 
-`SystemExecutor.hpp`: rewrite `ParallelExecutor`:
+`SystemExecutor.hpp`: rewrite `ParallelExecutor` (null scheduler = sequential):
 ```cpp
 struct ParallelExecutor : public ISystemExecutor
 {
-    explicit ParallelExecutor(std::shared_ptr<IWorkScheduler> scheduler = nullptr) :
-        m_scheduler(scheduler ? std::move(scheduler) : DefaultWorkScheduler())
+    ParallelExecutor() = default;  // no scheduler => sequential execution
+    explicit ParallelExecutor(std::shared_ptr<IWorkScheduler> scheduler) :
+        m_scheduler(std::move(scheduler))
     {}
 
     void Execute(const SystemExecutionContext& context) override
     {
         for (const auto& group : context.parallelGroups)
         {
-            if (group.size() == 1)
+            if (group.size() == 1 || !m_scheduler)
             {
-                context.systems[group[0]](*context.registry);
+                for (size_t systemIdx : group)
+                    context.systems[systemIdx](*context.registry);
             }
             else
             {
@@ -606,7 +645,7 @@ private:
     std::shared_ptr<IWorkScheduler> m_scheduler;
 };
 ```
-Add `#include "../Core/WorkerPool.hpp"` to SystemExecutor.hpp.
+Add `#include "../Core/WorkScheduler.hpp"` to SystemExecutor.hpp; remove `<future>` if now unused.
 
 - [ ] **Step 4: Build + run full suite** — all pass.
 
@@ -624,7 +663,27 @@ git -C D:\dev\github\Astra add -A; git -C D:\dev\github\Astra commit -m "feat(pa
 **Files:**
 - Modify: `benchmark/Benchmark.cpp` (lines ~1093-1282: `BM_SystemScheduler_Parallel` currently passes no executor — make it construct and pass `Astra::ParallelExecutor`)
 
-- [ ] **Step 1: Fix BM_SystemScheduler_Parallel** to actually exercise `ParallelExecutor`: construct `Astra::ParallelExecutor executor;` once outside the loop and call `scheduler.Execute(registry, &executor);` inside it. Also add a sibling `BM_ParallelIterateSingleComponent_Pooled` is NOT needed — the existing `BM_ParallelIterate*` now run on the pool automatically.
+- [ ] **Step 1: Inject the reference pool into the parallel benchmarks.** With the pure seam, a plain `Registry` runs Parallel* sequentially — so every `BM_ParallelIterate*` / `BM_ParallelForEachDescendant` benchmark must construct its registry with the pool injected, and `BM_SystemScheduler_Parallel` must actually pass a `ParallelExecutor` (today it passes nothing — pre-existing bug):
+```cpp
+// top of benchmark/Benchmark.cpp (after includes):
+#include <Support/TestWorkerPool.hpp>   // via the new "tests" includedir from Task 1
+
+static std::shared_ptr<Astra::IWorkScheduler> BenchPool()
+{
+    static auto s_pool = std::make_shared<Astra::Testing::TestWorkerPool>();
+    return s_pool;
+}
+
+// in each BM_Parallel* benchmark, replace `Astra::Registry registry;` with:
+Astra::Registry::Config config;
+config.workScheduler = BenchPool();
+Astra::Registry registry(config);
+
+// in BM_SystemScheduler_Parallel, construct once outside the timing loop:
+Astra::ParallelExecutor executor(BenchPool());
+// and inside the loop:
+scheduler.Execute(registry, &executor);
+```
 
 - [ ] **Step 2: Verify no `std::async` remains in the library**
 
@@ -1358,14 +1417,14 @@ Apply the verified drift list (every item below was confirmed against code durin
   4. **Range-for example (lines ~213-217):** open `include/Astra/Registry/ViewIterator.hpp`, check what `operator*` yields (pointers vs references) and make the example match reality (`pos->x` vs `pos.x`).
   5. **Batch-create example (lines ~263-270):** the generator overload is `CreateEntitiesWith(count, outSpan, generator)` — rename in the example.
   6. **Add a "Threading model" section** (replaces the deleted threadSafe lie):
-     > Registries are single-threaded by design: structural changes (create/destroy/add/remove) must not race. Parallel work goes through `ParallelForEach` / `ParallelExecutor` (read/write component data concurrently, never structural) and structural changes from worker threads are deferred via `CommandBuffer` (thread-safe). `RelationshipGraph` traversal caches and `MetaRegistry` are internally synchronized. All parallel execution runs on an injectable `IWorkScheduler` (built-in `WorkerPool` by default).
+     > Astra creates no threads. Registries are single-threaded by design: structural changes (create/destroy/add/remove) must not race. The job system is an open seam: inject an `IWorkScheduler` (e.g. an enkiTS adapter) via `Registry::Config::workScheduler` and `ParallelForEach` / `ParallelForEachDescendant` / `ParallelExecutor` will use it — with no scheduler injected they run sequentially inline. Structural changes from worker threads are deferred via `CommandBuffer` (thread-safe). `RelationshipGraph` traversal caches and `MetaRegistry` are internally synchronized so concurrent *reads* through an injected scheduler stay safe.
   7. **Add a "Multi-module (DLL) usage" section** documenting `TypeContext`: host calls `CreateTypeContext`-equivalent (`auto ctx = std::make_unique<Astra::TypeContext>()`), passes `ctx.get()` to each plugin which calls `Astra::SetTypeContext(ctx)` before any ECS use; hot reload sequence: serialize world → unload → load → `SetTypeContext` → `ReRegisterComponent` per type → deserialize.
 
 - [ ] **Step 2: CLAUDE.md fixes**
   1. `Platform/Simd.hpp` → `Core/Simd.hpp` (line ~111).
   2. Entity config wording (line ~69): "Entities default to 32 bits total: 24-bit ID + 8-bit version."
   3. Remove "premake5 is not available in Claude Code environment" (it is; document the bundled-premake path used locally and `scripts/` generators).
-  4. Document the new pieces: `Core/WorkerPool.hpp` (IWorkScheduler/WorkerPool), `Core/TypeContext.hpp`, `ReRegisterComponent`, the fuzz-test convention (`tests/Container/*FuzzTest.cpp`), and CI (`.github/workflows/ci.yml`).
+  4. Document the new pieces: `Core/WorkScheduler.hpp` (the IWorkScheduler seam — Astra ships no threads; `tests/Support/TestWorkerPool.hpp` is the test-only reference), `Core/TypeContext.hpp`, `ReRegisterComponent`, the fuzz-test convention (`tests/Container/*FuzzTest.cpp`), and CI (`.github/workflows/ci.yml`).
 
 - [ ] **Step 3: Verify every claim you wrote** — for each API name/field mentioned in the edited docs, `rg` it in `include/` and confirm exact spelling.
 
@@ -1392,9 +1451,9 @@ git -C D:\dev\github\Astra add -A; git -C D:\dev\github\Astra commit -m "docs: r
 # Astra v3.1.0 — Hardening Release
 
 ## Parallel Execution
-- New `IWorkScheduler` seam + built-in persistent `WorkerPool` (fork-join, caller participates, nested-call safe).
-- `View::ParallelForEach`, `Relations::ParallelForEachDescendant`, and `ParallelExecutor` now run on the scheduler — ad-hoc `std::async` removed. Inject your own (e.g. enkiTS-backed) via `Registry::Config::workScheduler`.
-- Wall-time at 1M entities: <before> → <after> (fill from Task 4 measurements).
+- Astra now creates **zero threads**. New `IWorkScheduler` seam: inject your job system (e.g. an enkiTS adapter) via `Registry::Config::workScheduler`; without one, all Parallel* APIs run sequentially inline.
+- `View::ParallelForEach`, `Relations::ParallelForEachDescendant`, and `ParallelExecutor` route through the seam — the ad-hoc `std::async` thread spawning (which lost to sequential in wall-time) is removed.
+- Reference fork-join pool lives in test support (`tests/Support/TestWorkerPool.hpp`); benchmark wall-time at 1M entities through it: <before> → <after> (fill from Task 4 measurements).
 
 ## Multi-Module / DLL Support
 - New `TypeContext`: process-shared type identity keyed by stable XXHash64 type-name hashes; dense sequential ComponentIDs preserved (mask-compatible). `SetTypeContext()` per module.
@@ -1429,7 +1488,7 @@ gh run watch --repo T3mps/Astra
 
 ## Deferred (explicitly NOT in this plan)
 
-- enkiTS-backed `IWorkScheduler` implementation — lives in the ENGINE repo (enkiTS is not an Astra dependency; Astra ships the seam + default pool only).
+- enkiTS-backed `IWorkScheduler` implementation — lives in the ENGINE repo (enkiTS is not and will never be an Astra dependency; Astra ships the seam ONLY — no threads, no pool, in the library).
 - libFuzzer/sanitizer harnesses — YAGNI for now; the differential suites run on all three compilers in CI. Revisit if a fuzz finding suggests deeper state-space issues.
 - True two-DLL integration test for TypeContext — requires a multi-module test rig; lands with the engine's plugin-ABI milestone (the context API is unit-tested here).
 - Separating system TypeIDs from the component ID space — preserved single-counter semantics deliberately (pre-existing behavior; masks only ever index component IDs that components actually use). Revisit if MAX_COMPONENTS pressure appears.
