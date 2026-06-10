@@ -28,7 +28,6 @@ vcpkg-managed deps (libpqxx, libpq) do **not** live here — they're installed u
 | **premake5** | 5.0-beta8 | BSD 3-Clause | Server, Tools | Build-system generator (vendored binary) | https://github.com/premake/premake-core |
 | **rapidcheck** | — | BSD 2-Clause | Server | Property-based test generator (reducer determinism tests) | https://github.com/emil-e/rapidcheck |
 | **spdlog** | 1.17.0 | MIT | Server | Header-only logging with fmt | https://github.com/gabime/spdlog |
-| **sti** | 1.2.3 | MIT/X11 | Client | Simple Tiled Implementation — Tiled map loader (`thirdparty.sti`) | https://github.com/karai17/Simple-Tiled-Implementation |
 | **strict** | — | MIT (Lua) | Client | Catches undeclared globals (`thirdparty.strict`) | https://www.lua.org/extras/5.1/strict.lua |
 | **tiny** | — | MIT | Client | tiny-ecs entity-component system (`thirdparty.tiny`) | https://github.com/bakpakin/tiny-ecs |
 | **Xoshiro** | — | MIT | Server | xoshiro256++ PRNG for deterministic gacha-pull event replay | https://github.com/Reputeless/Xoshiro-cpp |
