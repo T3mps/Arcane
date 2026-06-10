@@ -75,7 +75,7 @@ Schema facts:
 
 ## IsoProjection — shared module
 
-`src/world/IsoProjection.lua`: `TILE_W`, `TILE_H`, `toScreen(cx, cy)`, `toCell(sx, sy)` (exact inverse for picking), `cellCenter(cx, cy)`. Constants are lifted from `combat/Grid.lua` so the two views are pixel-identical. Combat's `Grid` should eventually delegate to this module — that refactor touches `combat/` and needs a sync with the combat-abilities owner first; until then the constants are mirrored with a lockstep comment on both sides.
+`src/world/IsoProjection.lua`: `TILE_W`, `TILE_H`, `toScreen(cx, cy)`, `toCell(sx, sy)` (exact inverse for picking), `cellCenter(cx, cy)`. Constants are lifted from `combat/Grid.lua` so the two views are pixel-identical. `combat/Grid` delegates to this module **in P1** — the combat-code ownership boundary was lifted 2026-06-10, so no mirroring/lockstep-comment interim is needed.
 
 ## Runtime model + loader
 

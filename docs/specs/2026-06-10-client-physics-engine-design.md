@@ -68,6 +68,7 @@ src/physics/
 1. Integrate velocities (gravity is configurable and **off** for this game's top-down world; the abstraction keeps it).
 2. Broadphase update → candidate pairs (per-strategy; static tile pairs come from `TileGrid`).
 3. Narrowphase dispatch → contact manifolds; `ContactManager` persists pairs (warm-start impulses cached per pair), emits begin/end/stay + sensor events (queued, delivered after step — no user code mutates mid-solve).
+   **Event gating (decided 2026-06-10):** two granularities. Per-body `eventsEnabled` — combat participants get muted when a Combat Sphere forms while the rest of the world keeps simulating around the fight (the Wakfu model: bystanders/roamers stay live). World-level gate for genuinely global moments (cutscenes, map swap). Gated events are **dropped, not queued** (replaying a stale `begin` after unfreeze could fire triggers for contacts that already ended). On re-enable, every *currently overlapping* persistent pair emits a fresh `begin` (level-triggered re-arm — the ContactManager already tracks its pairs, so nothing is missed and nothing stale fires).
 4. (M3) Build constraint graph (bodies = nodes; contacts + joints = edges), extract islands, sleep idle islands.
 5. Solve: `Solver` interface — default `SequentialImpulse` (velocity iterations then position correction; iteration counts configurable per world). Solver is swappable for the editor-era "anything that would be expected here" cases (e.g., a soft/XPBD experiment) without touching the world.
 6. (M2) CCD pass for flagged fast movers: GJK conservative advancement against statics, clamp to time-of-impact.
@@ -89,7 +90,7 @@ src/physics/
 ### Character control (the actual consumers)
 
 `CharacterController` wraps a body per mode (the overworld spec's `MovementController` drives it):
-- **WASD:** kinematic-style slide-move — desired velocity in, swept AABB/capsule vs statics, slide along contact normals (two-pass), step-free (no stairs yet). Deterministic, no solver involvement; dynamics can still push/be blocked via standard contacts if we later make the player dynamic.
+- **WASD:** kinematic-style slide-move — desired velocity in, swept capsule vs statics, slide along contact normals (two-pass), step-free (no stairs yet). Deterministic, no solver involvement; dynamics can still push/be blocked via standard contacts if we later make the player dynamic. Player shape is a **capsule from M1** (decided 2026-06-10) — best slide feel on tile corners.
 - **Click-to-move:** plain kinematic body; the PathFollower sets velocity along the path; physics only reports overlaps (sensors, future combat-contact initiation) and never deflects it — paths are cell-safe by construction (pathfinder reads the same flags).
 
 ### FFI layout (mandate)
@@ -100,8 +101,8 @@ SoA `ffi` arrays on the world: `posX/posY/prevX/prevY/velX/velY/invMass/...` (`d
 
 ## Milestones
 
-- **M1 — what the overworld needs (with P2 of the companion spec):** shapes (Circle/AABB/Polygon), `TileGrid` + `SpatialHash` broadphases, specialized circle/AABB tests + SAT, ContactManager with events/sensors, static/kinematic bodies, `CharacterController` (both modes), `queryAABB` + `raycast`, DebugDraw, SoA core. *No dynamics solving yet* — nothing in the overworld needs impulse response on day one.
-- **M2 — queries + CCD:** GJK distance/closest-points, `shapeCast`, conservative-advancement CCD, Capsule shape. (Raycast vs TALL cells here doubles as the LOS primitive the Combat Sphere phase will want.)
+- **M1 — what the overworld needs (with P2 of the companion spec):** shapes (Circle/Capsule/AABB/Polygon — capsule in from day one for the player controller), `TileGrid` + `SpatialHash` broadphases, specialized circle/capsule/AABB tests + SAT, ContactManager with events/sensors + the two-granularity event gating, static/kinematic bodies, `CharacterController` (both modes), `queryAABB` + `raycast`, DebugDraw, SoA core. *No dynamics solving yet* — nothing in the overworld needs impulse response on day one.
+- **M2 — queries + CCD:** GJK distance/closest-points, `shapeCast`, conservative-advancement CCD. (Raycast vs TALL cells here doubles as the LOS primitive the Combat Sphere phase will want.)
 - **M3 — dynamics:** dynamic bodies, `SequentialImpulse` solver, constraint graph + islanding + sleeping, joints (Distance, Revolute, Prismatic, Weld, Mouse/target for editor manipulation).
 - **M4 — alternates + tuning:** SAP + AABBTree broadphases, profiling harness, FFI pass audit, determinism replay test (record input → identical state hash).
 
@@ -112,8 +113,8 @@ Each milestone lands with a `physics_harness` (existing harness pattern): geomet
 - `PhysicsSystem` (tiny-ECS Box2D wrapper) is replaced by a thin system calling `PhysicsWorld:step(fixedDt)`; `MovementSystem` routes intent through `CharacterController`. Box2D usage and STI's collision import are deleted with the Tiled removal (companion spec).
 - DebugDraw rides the canonical pipeline as an overlay (homogenization-compliant), toggled by a dev key.
 
-## Open questions (for review)
+## Resolved decisions (2026-06-10 review)
 
-1. Player body shape: circle vs capsule for slide feel (M1 starts circle; capsule arrives M2).
-2. Polygon vertex cap (8 proposed) — enough for props? Editor era may want more; cap is a constant.
-3. Should sensors fire during placement-frozen states (combat initiation later)? Proposed: world-level event gate flag.
+1. Player body shape: **capsule from M1**.
+2. Polygon vertex cap: 8, as a single constant — revisit if editor-era props need more.
+3. Sensor gating: **per-body `eventsEnabled` + world-level gate; drop-don't-queue; level-triggered re-arm on re-enable** (see step pipeline §3).
