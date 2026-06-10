@@ -116,5 +116,5 @@ Each milestone lands with a `physics_harness` (existing harness pattern): geomet
 ## Resolved decisions (2026-06-10 review)
 
 1. Player body shape: **capsule from M1**.
-2. Polygon vertex cap: 8, as a single constant — revisit if editor-era props need more.
+2. Polygon vertex cap: 128, as a single constant (`shapes.MAX_POLY_VERTS`). Originally 8; raised 2026-06-10 during M1 execution for editor-era props. SAT poly-vs-poly is O(nA·nB) over edge axes — big polys are fine as occasional statics, not as common mover shapes.
 3. Sensor gating: **per-body `eventsEnabled` + world-level gate; drop-don't-queue; level-triggered re-arm on re-enable** (see step pipeline §3).
