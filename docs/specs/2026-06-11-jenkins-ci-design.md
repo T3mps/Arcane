@@ -16,7 +16,9 @@ commitment), `2026-06-11-engine-architecture-design.md` (workspace layout M0 bui
 1. **Jenkins** (user mandate), self-hosted. Controller + agents on a dedicated
    mini-PC: **Minisforum X1-255** (Ryzen 7 255 = 8c/16t Zen 4, Radeon 780M,
    32 GB DDR5 dual SO-DIMM, 1 TB NVMe + free M.2 slot, OCuLink) — on order.
-2. **Multibranch pipeline** over `https://github.com/T3mps/Aphelyon`, chosen for
+2. **Multibranch pipeline** over `https://github.com/StarworksDev/Aphelyon`
+   (transferred from the personal account to the StarworksDev org during this
+   build-out; CI authenticates as the `StarworksBuilder` machine account), chosen for
    the planned branch model: solo trunk on `main` today; `dev` -> `milestone/*`
    branches with per-milestone deployments when live (game-studio convention).
    The Jenkinsfile is identical under single-job and multibranch operation; the
