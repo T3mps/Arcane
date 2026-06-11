@@ -1,0 +1,41 @@
+# Build directories
+bin/
+bin-int/
+
+# IDE project files
+ide/
+*.sln
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.db
+*.opendb
+.vs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Premake generated files
+Makefile
+*.make
+*.xcworkspace
+*.xcodeproj
+
+# Visual Studio Code
+.vscode/
+
+# CLion / IntelliJ
+.idea/
+cmake-build-*/
+
+# Compiled files
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
