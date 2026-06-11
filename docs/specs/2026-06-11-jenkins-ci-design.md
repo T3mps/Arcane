@@ -123,6 +123,32 @@ In-repo (all reviewable, all portable):
 
 On-box only: Jenkins home, the two credentials, agent auto-logon configuration.
 
+## Bootstrap and portability (dev box now, X1-255 on arrival)
+
+The hardware ships in ~a week; the design is explicitly dual-host so CI is fully
+usable on the dev box immediately and moves to the X1 without rework:
+
+- **All CI artifacts are host-agnostic**: `provision-agent.ps1` is idempotent and
+  detection-based (skips already-installed toolchain on the dev box, installs
+  everything on the fresh X1); the Jenkinsfile targets agent *labels*, never
+  hostnames; the Linux agent is a container image that runs on either machine.
+- **Phase 0 (now):** controller + `windows && gpu` agent + `linux-1` container
+  on the dev box. Full pipeline operational.
+- **Phase 1 (X1 arrives):** run `provision-agent.ps1` on the X1, install the
+  controller per `ci/README.md` (its real state is one multibranch job + two
+  credentials + a plugin list — the README checklist IS the migration), connect
+  the X1 agents, delete the dev-box controller. Fresh-install is preferred over
+  copying JENKINS_HOME because it proves the README is complete.
+- **Phase 2 (optional):** the dev box remains registered as a second agent,
+  offline by default, brought online for ad-hoc builds.
+
+Dev-box-phase guardrails:
+- The CI Postgres (project `aphelyon_ci`, port 5433, own volume) coexists with
+  the dev DB (5432) by construction; project-scoped `down -v` cannot touch it.
+- Do NOT run CI builds while the game services are up locally — AccountTests
+  wedges when live services hold the internal RPC ports (observed 2026-06-11).
+  Operator discipline on the dev box; structurally impossible on the X1.
+
 ## Acceptance criteria
 
 1. Push to `main` -> GitHub status pending -> green in ~35 min, all stages incl.
