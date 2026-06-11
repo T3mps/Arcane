@@ -9,9 +9,39 @@ echo.
 set "PROJECT_ROOT=%~dp0.."
 
 :: -------------------------------------------------------------------
+:: Resolve vcpkg (required for SDL3 -- see scripts\setup-vcpkg-deps.bat)
+:: -------------------------------------------------------------------
+echo [1/2] Checking vcpkg...
+
+if defined VCPKG_ROOT (
+    set "VCPKG_PATH=%VCPKG_ROOT%"
+) else if exist "C:\vcpkg\vcpkg.exe" (
+    set "VCPKG_PATH=C:\vcpkg"
+) else (
+    echo ERROR: vcpkg not found.
+    echo Set the VCPKG_ROOT environment variable or install vcpkg to C:\vcpkg.
+    echo.
+    if not defined _APH_NOPAUSE pause
+    exit /b 1
+)
+
+if not exist "%VCPKG_PATH%\vcpkg.exe" (
+    echo ERROR: vcpkg.exe not found at %VCPKG_PATH%
+    echo Verify your VCPKG_ROOT is correct.
+    echo.
+    if not defined _APH_NOPAUSE pause
+    exit /b 1
+)
+echo   vcpkg: %VCPKG_PATH%
+
+:: Export VCPKG_ROOT into the environment so premake5.lua's os.getenv()
+:: succeeds even when this script used a fallback path.
+set "VCPKG_ROOT=%VCPKG_PATH%"
+
+:: -------------------------------------------------------------------
 :: Generate Visual Studio solution
 :: -------------------------------------------------------------------
-echo [1/1] Generating Visual Studio 2026 solution...
+echo [2/2] Generating Visual Studio 2026 solution...
 
 set "PREMAKE5=%PROJECT_ROOT%\..\ThirdParty\premake5\premake5.exe"
 if not exist "%PREMAKE5%" (

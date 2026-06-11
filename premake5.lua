@@ -6,6 +6,14 @@
 -- Game.dll boundary, so all modules must share one heap. Server/ and
 -- Tools/ keep their static-runtime conventions, unaffected.
 
+-- vcpkg required for SDL3 (platform layer; deep build system -> vcpkg per
+-- the repo rule). Overlay triplet x64-windows-static-md pins v143 + /MD.
+VCPKG_ROOT = os.getenv("VCPKG_ROOT")
+if not VCPKG_ROOT then
+    error("VCPKG_ROOT environment variable is not set.\nSet it to your vcpkg installation directory, e.g.:\n  setx VCPKG_ROOT C:\\vcpkg\nThen restart your terminal and re-run GenerateProjects.bat.")
+end
+VCPKG_INSTALLED_MD = VCPKG_ROOT .. "/installed/x64-windows-static-md"
+
 workspace "Arcane"
     architecture "x64"
     startproject "ArcaneTests"
@@ -36,10 +44,25 @@ workspace "Arcane"
     IncludeDir["Catch2"]           = "%{wks.location}/../ThirdParty/Catch2/src"
     IncludeDir["rapidcheck"]       = "%{wks.location}/../ThirdParty/rapidcheck/include"
     IncludeDir["rapidcheck_catch"] = "%{wks.location}/../ThirdParty/rapidcheck/extras/catch/include"
+    IncludeDir["glm"]              = "%{wks.location}/../ThirdParty/glm"
+    IncludeDir["stb"]              = "%{wks.location}/../ThirdParty/stb"
+    IncludeDir["miniaudio"]        = "%{wks.location}/../ThirdParty/miniaudio"
+    IncludeDir["Astra"]            = "%{wks.location}/../ThirdParty/Astra/include"
+    IncludeDir["enkiTS"]           = "%{wks.location}/../ThirdParty/enkiTS/src"
+    IncludeDir["tracy"]            = "%{wks.location}/../ThirdParty/tracy/public"
+    IncludeDir["freetype"]         = "%{wks.location}/../ThirdParty/freetype/include"
+    IncludeDir["nvrhi"]            = "%{wks.location}/../ThirdParty/nvrhi/include"
+    IncludeDir["VulkanHeaders"]    = "%{wks.location}/../ThirdParty/Vulkan-Headers/include"
+    IncludeDir["DirectXHeaders"]   = "%{wks.location}/../ThirdParty/DirectX-Headers/include"
+    IncludeDir["SDL3"]             = VCPKG_INSTALLED_MD .. "/include"
 
 group "Dependencies"
     include "../ThirdParty/Catch2"
     include "../ThirdParty/rapidcheck"
+    include "../ThirdParty/enkiTS"
+    include "../ThirdParty/tracy"
+    include "../ThirdParty/freetype"
+    include "../ThirdParty/nvrhi"
 group ""
 
 -- ============================================================================
@@ -121,9 +144,19 @@ project "ArcaneTests"
         "%{IncludeDir.Catch2}",
         "%{IncludeDir.rapidcheck}",
         "%{IncludeDir.rapidcheck_catch}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.stb}",
+        "%{IncludeDir.miniaudio}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+        "%{IncludeDir.freetype}",
+        "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.VulkanHeaders}",
+        "%{IncludeDir.DirectXHeaders}",
+        "%{IncludeDir.SDL3}",
     }
 
-    links { "Core", "Catch2", "rapidcheck" }
+    links { "Core", "Catch2", "rapidcheck", "enkiTS", "freetype", "nvrhi" }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
@@ -133,7 +166,19 @@ project "ArcaneTests"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
-        links { "ws2_32" }
+        -- ws2_32: Core TcpSocket. d3d12/dxgi/dxguid: NVRHI D3D12 backend.
+        -- SDL3-static system deps from its pkgconfig Libs line.
+        links {
+            "ws2_32", "d3d12", "dxgi", "dxguid",
+            "SDL3-static",
+            "user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32",
+            "version", "uuid", "advapi32", "setupapi", "shell32", "dinput8",
+        }
+
+    filter { "system:windows", "configurations:Debug" }
+        libdirs { VCPKG_INSTALLED_MD .. "/debug/lib" }
+    filter { "system:windows", "configurations:Release or configurations:Dist" }
+        libdirs { VCPKG_INSTALLED_MD .. "/lib" }
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
