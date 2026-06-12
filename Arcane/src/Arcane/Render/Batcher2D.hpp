@@ -62,6 +62,14 @@ namespace Arcane
                           glm::vec2 uvMin, glm::vec2 uvMax,
                           glm::vec4 color) = 0;
 
+        // MSDF glyph quad: same geometry as Quad but rendered through the
+        // msdf pipeline (median-of-3 distance + screen-space AA). Text
+        // stays on the single submission path.
+        virtual void Glyph(glm::vec2 dstPos, glm::vec2 dstSize,
+                           nvrhi::ITexture* atlas,
+                           glm::vec2 uvMin, glm::vec2 uvMax,
+                           glm::vec4 color) = 0;
+
         // Untextured primitives (white-texture quads / SDF circle quads).
         virtual void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 color) = 0;
         virtual void Line(glm::vec2 a, glm::vec2 b, float thickness,

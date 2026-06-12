@@ -27,7 +27,8 @@ namespace Arcane
             glm::vec2 pad;
         };
 
-        enum class BatchKind : uint8_t { Sprite, Circle };
+        enum class BatchKind : uint8_t { Sprite, Circle, Text };
+        constexpr size_t kBatchKindCount = 3;
 
         // One recorded draw (a quad: 4 vertices already in m_vertices).
         // End() stable-sorts records by key, then builds index data and
@@ -110,7 +111,9 @@ namespace Arcane
                     !m_inputLayout ||
                     !m_shaders.Get("sprite_ps", nvrhi::ShaderType::Pixel) ||
                     !m_shaders.Get("circle_vs", nvrhi::ShaderType::Vertex) ||
-                    !m_shaders.Get("circle_ps", nvrhi::ShaderType::Pixel))
+                    !m_shaders.Get("circle_ps", nvrhi::ShaderType::Pixel) ||
+                    !m_shaders.Get("msdf_vs", nvrhi::ShaderType::Vertex) ||
+                    !m_shaders.Get("msdf_ps", nvrhi::ShaderType::Pixel))
                     return false;
 
                 // Upload the white texel once at creation through a transient
@@ -155,6 +158,14 @@ namespace Arcane
                       glm::vec4 color) override
             {
                 PushQuad(BatchKind::Sprite, texture ? texture : m_whiteTexture.Get(),
+                         dstPos, dstSize, uvMin, uvMax, color);
+            }
+
+            void Glyph(glm::vec2 dstPos, glm::vec2 dstSize,
+                       nvrhi::ITexture* atlas, glm::vec2 uvMin,
+                       glm::vec2 uvMax, glm::vec4 color) override
+            {
+                PushQuad(BatchKind::Text, atlas ? atlas : m_whiteTexture.Get(),
                          dstPos, dstSize, uvMin, uvMax, color);
             }
 
@@ -354,18 +365,31 @@ namespace Arcane
                     m_pipelines.clear();
                     m_pipelineGeneration = m_shaders.Generation();
                 }
+                // Pipeline cache key: framebuffer hash * kindCount + kind, so
+                // keys stay disjoint across all BatchKinds (sprite/circle/text).
                 const size_t key =
-                    std::hash<nvrhi::FramebufferInfo>{}(m_target->getFramebufferInfo()) * 2 + (size_t)kind;
+                    std::hash<nvrhi::FramebufferInfo>{}(m_target->getFramebufferInfo())
+                        * kBatchKindCount + (size_t)kind;
                 nvrhi::GraphicsPipelineHandle& pipeline = m_pipelines[key];
                 if (!pipeline)
                 {
-                    const bool circle = (kind == BatchKind::Circle);
+                    // kind -> shader pair; all kinds share blend/raster/depth.
+                    const char* vsName = "sprite_vs";
+                    const char* psName = "sprite_ps";
+                    switch (kind)
+                    {
+                    case BatchKind::Circle:
+                        vsName = "circle_vs"; psName = "circle_ps"; break;
+                    case BatchKind::Text:
+                        vsName = "msdf_vs"; psName = "msdf_ps"; break;
+                    case BatchKind::Sprite:
+                    default:
+                        break;
+                    }
                     nvrhi::ShaderHandle vs = m_shaders.Get(
-                        circle ? "circle_vs" : "sprite_vs",
-                        nvrhi::ShaderType::Vertex);
+                        vsName, nvrhi::ShaderType::Vertex);
                     nvrhi::ShaderHandle ps = m_shaders.Get(
-                        circle ? "circle_ps" : "sprite_ps",
-                        nvrhi::ShaderType::Pixel);
+                        psName, nvrhi::ShaderType::Pixel);
                     if (!vs || !ps)
                         return nullptr;
 
