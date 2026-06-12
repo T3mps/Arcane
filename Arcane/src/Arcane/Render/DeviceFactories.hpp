@@ -11,4 +11,5 @@
 namespace Arcane
 {
     std::unique_ptr<RenderDevice> CreateDeviceD3D12(const RenderDeviceDesc& desc);
+    std::unique_ptr<RenderDevice> CreateDeviceVulkan(const RenderDeviceDesc& desc);
 }

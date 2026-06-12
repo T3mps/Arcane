@@ -21,10 +21,10 @@ namespace Arcane
         {
         case GraphicsBackend::D3D12:
             return CreateDeviceD3D12(desc);
-        default:
-            ARC_ERROR("RenderDevice::Create: backend {} not available",
-                      ToString(desc.backend));
-            return nullptr;
+        case GraphicsBackend::Vulkan:
+            return CreateDeviceVulkan(desc);
         }
+        ARC_ERROR("RenderDevice::Create: unknown backend");
+        return nullptr;
     }
 }

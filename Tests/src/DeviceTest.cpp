@@ -22,3 +22,16 @@ TEST_CASE("d3d12: headless device creates and clears an offscreen target", "[gpu
 
     CheckOffscreenClear(*device);
 }
+
+TEST_CASE("vulkan: headless device creates and clears an offscreen target", "[gpu][vulkan]")
+{
+    Arcane::RenderDeviceDesc desc;
+    desc.backend = Arcane::GraphicsBackend::Vulkan;
+    auto device = Arcane::RenderDevice::Create(desc);
+    REQUIRE(device != nullptr);
+    REQUIRE(device->Nvrhi() != nullptr);
+    REQUIRE_FALSE(device->AdapterName().empty());
+    CHECK(std::string(Arcane::ToString(device->Backend())) == "Vulkan");
+
+    CheckOffscreenClear(*device);
+}

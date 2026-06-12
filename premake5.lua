@@ -106,7 +106,7 @@ project "Core"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE" }
+        defines { "ARCANE_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
@@ -188,7 +188,11 @@ project "Arcane"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE" }
+        -- NDEBUG must match NVRHI's Release build (nvrhi/premake5.lua defines
+        -- NDEBUG in Release). DispatchLoaderDynamic has NDEBUG-gated fields;
+        -- a layout mismatch between Arcane.dll and the statically-linked NVRHI
+        -- causes every Vulkan function-pointer lookup to read the wrong offset.
+        defines { "ARCANE_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
@@ -259,7 +263,7 @@ project "ArcaneTests"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE" }
+        defines { "ARCANE_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
