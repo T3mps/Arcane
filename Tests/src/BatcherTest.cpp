@@ -171,3 +171,76 @@ TEST_CASE("vulkan: batcher quad fills the canvas; sort keys order and coalesce",
     CheckQuadFillsCanvas(Arcane::GraphicsBackend::Vulkan);
     CheckSortKeys(Arcane::GraphicsBackend::Vulkan);
 }
+
+namespace
+{
+    void CheckCircleCoverage(Arcane::GraphicsBackend backend)
+    {
+        GpuFixture fx(backend, /*size=*/16);
+        fx.commandList->open();
+        fx.commandList->clearTextureFloat(fx.canvas->Texture(),
+                                          nvrhi::AllSubresources,
+                                          nvrhi::Color(0, 0, 0, 1));
+        fx.batcher->Begin(fx.commandList, fx.canvas->Framebuffer(), 16, 16);
+        fx.batcher->Circle(glm::vec2(8, 8), 6.0f, glm::vec4(0, 1, 0, 1));
+        fx.batcher->End();
+        fx.commandList->copyTexture(fx.staging, nvrhi::TextureSlice(),
+                                    fx.canvas->Texture(), nvrhi::TextureSlice());
+        fx.Flush();
+
+        size_t rowPitch = 0;
+        const auto* pixels = static_cast<const uint8_t*>(
+            fx.device->Nvrhi()->mapStagingTexture(
+                fx.staging, nvrhi::TextureSlice(),
+                nvrhi::CpuAccessMode::Read, &rowPitch));
+        REQUIRE(pixels != nullptr);
+        CheckPixel(pixels, rowPitch, 8, 8, 0.0f, 1.0f, 0.0f);   // center: solid
+        CheckPixel(pixels, rowPitch, 0, 0, 0.0f, 0.0f, 0.0f);   // corner: untouched
+        CheckPixel(pixels, rowPitch, 15, 0, 0.0f, 0.0f, 0.0f);
+        fx.device->Nvrhi()->unmapStagingTexture(fx.staging);
+        fx.device->Nvrhi()->runGarbageCollection();
+        CHECK(Arcane::RenderErrorCount() == 0);
+    }
+
+    void CheckLineCoverage(Arcane::GraphicsBackend backend)
+    {
+        GpuFixture fx(backend, /*size=*/16);
+        fx.commandList->open();
+        fx.commandList->clearTextureFloat(fx.canvas->Texture(),
+                                          nvrhi::AllSubresources,
+                                          nvrhi::Color(0, 0, 0, 1));
+        fx.batcher->Begin(fx.commandList, fx.canvas->Framebuffer(), 16, 16);
+        // Horizontal line through y=8, 4px thick.
+        fx.batcher->Line(glm::vec2(0, 8), glm::vec2(16, 8), 4.0f,
+                         glm::vec4(1, 0, 1, 1));
+        fx.batcher->End();
+        fx.commandList->copyTexture(fx.staging, nvrhi::TextureSlice(),
+                                    fx.canvas->Texture(), nvrhi::TextureSlice());
+        fx.Flush();
+
+        size_t rowPitch = 0;
+        const auto* pixels = static_cast<const uint8_t*>(
+            fx.device->Nvrhi()->mapStagingTexture(
+                fx.staging, nvrhi::TextureSlice(),
+                nvrhi::CpuAccessMode::Read, &rowPitch));
+        REQUIRE(pixels != nullptr);
+        CheckPixel(pixels, rowPitch, 8, 8, 1.0f, 0.0f, 1.0f);   // on the line
+        CheckPixel(pixels, rowPitch, 8, 1, 0.0f, 0.0f, 0.0f);   // above it
+        CheckPixel(pixels, rowPitch, 8, 14, 0.0f, 0.0f, 0.0f);  // below it
+        fx.device->Nvrhi()->unmapStagingTexture(fx.staging);
+        fx.device->Nvrhi()->runGarbageCollection();
+        CHECK(Arcane::RenderErrorCount() == 0);
+    }
+}
+
+TEST_CASE("d3d12: batcher circle and line coverage", "[gpu][d3d12]")
+{
+    CheckCircleCoverage(Arcane::GraphicsBackend::D3D12);
+    CheckLineCoverage(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("vulkan: batcher circle and line coverage", "[gpu][vulkan]")
+{
+    CheckCircleCoverage(Arcane::GraphicsBackend::Vulkan);
+    CheckLineCoverage(Arcane::GraphicsBackend::Vulkan);
+}

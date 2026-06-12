@@ -167,12 +167,30 @@ namespace Arcane
             void Line(glm::vec2 a, glm::vec2 b, float thickness,
                       glm::vec4 color) override
             {
-                ARC_ERROR("Batcher2D::Line lands with the primitives task");
+                const glm::vec2 delta = b - a;
+                const float len = glm::length(delta);
+                if (len <= 0.0f || thickness <= 0.0f)
+                    return;
+                const glm::vec2 normal =
+                    glm::vec2(-delta.y, delta.x) * (0.5f * thickness / len);
+                // Oriented quad through the shared record path; reuses the
+                // sprite pipeline with the white texture (uv constant).
+                const glm::vec2 uv(0.5f);
+                PushQuadVertices(BatchKind::Sprite, m_whiteTexture.Get(),
+                                 { a - normal, uv, color },
+                                 { b - normal, uv, color },
+                                 { b + normal, uv, color },
+                                 { a + normal, uv, color });
             }
 
             void Circle(glm::vec2 center, float radius, glm::vec4 color) override
             {
-                ARC_ERROR("Batcher2D::Circle lands with the primitives task");
+                if (radius <= 0.0f)
+                    return;
+                // SDF quad: uv spans [-1,1]; circle.hlsl keeps the unit disc.
+                PushQuad(BatchKind::Circle, m_whiteTexture.Get(),
+                         center - glm::vec2(radius), glm::vec2(radius * 2.0f),
+                         glm::vec2(-1.0f), glm::vec2(1.0f), color);
             }
 
             void End() override
