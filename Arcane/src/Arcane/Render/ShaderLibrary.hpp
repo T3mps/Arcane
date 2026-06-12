@@ -21,6 +21,9 @@ namespace Arcane
     class ARCANE_API ShaderLibrary
     {
     public:
+        // Relative shaderDir resolves against the executable's directory
+        // (artifacts are postbuild-copied next to consumer exes); ARCANE_SHADER_DIR
+        // overrides; absolute paths pass through.
         // Returns null (with ARC_ERROR) when the directory is missing.
         static std::unique_ptr<ShaderLibrary> Create(
             nvrhi::IDevice* device, GraphicsBackend backend,
