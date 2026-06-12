@@ -234,12 +234,9 @@ project "ArcaneTests"
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.freetype}",
         "%{IncludeDir.nvrhi}",
-        "%{IncludeDir.VulkanHeaders}",
-        "%{IncludeDir.DirectXHeaders}",
-        "%{IncludeDir.SDL3}",
     }
 
-    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "nvrhi" }
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype" }
 
     -- The test exe loads Arcane.dll from its own directory.
     postbuildcommands {
@@ -254,19 +251,7 @@ project "ArcaneTests"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
-        -- ws2_32: Core TcpSocket. d3d12/dxgi/dxguid: NVRHI D3D12 backend.
-        -- SDL3-static system deps from its pkgconfig Libs line.
-        links {
-            "ws2_32", "d3d12", "dxgi", "dxguid",
-            "SDL3-static",
-            "user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32",
-            "version", "uuid", "advapi32", "setupapi", "shell32", "dinput8",
-        }
-
-    filter { "system:windows", "configurations:Debug" }
-        libdirs { VCPKG_INSTALLED_MD .. "/debug/lib" }
-    filter { "system:windows", "configurations:Release or configurations:Dist" }
-        libdirs { VCPKG_INSTALLED_MD .. "/lib" }
+        links { "ws2_32" }  -- Core TcpSocket
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
