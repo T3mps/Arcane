@@ -106,11 +106,25 @@ namespace Arcane
                 m_inputLayout = m_device->createInputLayout(
                     attributes, (uint32_t)std::size(attributes), spriteVs);
 
-                return m_whiteTexture && m_sampler && m_bindingLayout &&
-                       m_inputLayout &&
-                       m_shaders.Get("sprite_ps", nvrhi::ShaderType::Pixel) &&
-                       m_shaders.Get("circle_vs", nvrhi::ShaderType::Vertex) &&
-                       m_shaders.Get("circle_ps", nvrhi::ShaderType::Pixel);
+                if (!m_whiteTexture || !m_sampler || !m_bindingLayout ||
+                    !m_inputLayout ||
+                    !m_shaders.Get("sprite_ps", nvrhi::ShaderType::Pixel) ||
+                    !m_shaders.Get("circle_vs", nvrhi::ShaderType::Vertex) ||
+                    !m_shaders.Get("circle_ps", nvrhi::ShaderType::Pixel))
+                    return false;
+
+                // Upload the white texel once at creation through a transient
+                // command list -- Begin() must not depend on its first
+                // caller's list actually being executed.
+                {
+                    nvrhi::CommandListHandle upload = m_device->createCommandList();
+                    upload->open();
+                    const uint32_t white = 0xFFFFFFFFu;
+                    upload->writeTexture(m_whiteTexture, 0, 0, &white, 4);
+                    upload->close();
+                    m_device->executeCommandList(upload);
+                }
+                return true;
             }
 
             void Begin(nvrhi::ICommandList* commandList,
@@ -128,8 +142,6 @@ namespace Arcane
                 m_textureSlotLookup.clear();
                 m_layer = 0;
                 m_order = 0;
-                if (!m_whiteUploaded)
-                    UploadWhiteTexture();
             }
 
             void SetLayer(uint16_t layer, uint16_t orderInLayer) override
@@ -236,13 +248,6 @@ namespace Arcane
             Batch2DStats Stats() const override { return m_stats; }
 
         private:
-            void UploadWhiteTexture()
-            {
-                const uint32_t white = 0xFFFFFFFFu;
-                m_commandList->writeTexture(m_whiteTexture, 0, 0, &white, 4);
-                m_whiteUploaded = true;
-            }
-
             uint16_t TextureSlot(nvrhi::ITexture* texture)
             {
                 auto [it, inserted] = m_textureSlotLookup.try_emplace(
@@ -377,6 +382,10 @@ namespace Arcane
             nvrhi::InputLayoutHandle m_inputLayout;
             nvrhi::BufferHandle m_vertexBuffer;
             nvrhi::BufferHandle m_indexBuffer;
+            // Entries are never evicted: every current texture (white + future
+            // atlases) is engine-lifetime. When M2b brings dynamic texture
+            // lifetimes, add a RemoveTexture(ITexture*) hook the asset system
+            // calls on teardown (cached sets pin their textures alive).
             std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_bindingSets;
             std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_pipelines;
             uint64_t m_pipelineGeneration = 0;
@@ -393,7 +402,6 @@ namespace Arcane
             uint16_t m_layer = 0;
             uint16_t m_order = 0;
             Batch2DStats m_stats;
-            bool m_whiteUploaded = false;
         };
     }
 

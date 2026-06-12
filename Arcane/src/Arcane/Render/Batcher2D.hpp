@@ -48,9 +48,12 @@ namespace Arcane
         // Sorting: every draw carries the current (layer, orderInLayer).
         // End() stable-sorts draws by a 64-bit key -- layer(16) | order(16)
         // | pipelineKind(8) | textureSlot(16) -- giving correct transparency
-        // ordering AND minimal state changes in one pass. Draws sharing
-        // (layer, order) may be reordered for batching; give overlapping
-        // content distinct orders. Resets to (0, 0) at Begin().
+        // ordering AND minimal state changes in one pass. Ordering WITHIN one
+        // (layer, order) is non-deterministic and can change frame to frame
+        // (texture slots are assigned per-Begin in first-use order) --
+        // overlapping translucent content at the same (layer, order) can
+        // flicker. Give overlapping content distinct orderInLayer values.
+        // Resets to (0, 0) at Begin().
         virtual void SetLayer(uint16_t layer, uint16_t orderInLayer) = 0;
 
         // Textured quad: dstPos/dstSize in pixels, uvMin/uvMax in [0,1].
@@ -68,6 +71,7 @@ namespace Arcane
         virtual void End() = 0;
 
         // Stats for the most recently End()ed batch.
+        // Valid after End() until the next Begin(); an empty batch reports all-zero.
         virtual Batch2DStats Stats() const = 0;
     };
 }
