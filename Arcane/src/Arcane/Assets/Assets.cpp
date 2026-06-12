@@ -37,6 +37,9 @@ namespace Arcane
 
         // Read all bytes from a file. Returns empty on any failure (mirrors
         // ShaderLibrary::ReadFileBytes; kept local -- not exported).
+        // A legitimately empty file is treated as missing and callers memoize
+        // it as a failure -- empty assets are unsupported (matches ShaderLibrary
+        // semantics).
         std::vector<uint8_t> ReadFileBytes(const std::filesystem::path& path)
         {
             std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -98,6 +101,15 @@ namespace Arcane
                     // RenderErrorCount() == 0 assertion clean in the GPU test.
                     ARC_WARN("Assets: texture not found or decode failed: {}",
                              resolved.string());
+                    m_textures.PutFailure(key);
+                    return nullptr;
+                }
+
+                if (w <= 0 || h <= 0)
+                {
+                    ARC_WARN("Assets: texture has non-positive dimensions ({}x{}): {}",
+                             w, h, resolved.string());
+                    stbi_image_free(data);
                     m_textures.PutFailure(key);
                     return nullptr;
                 }

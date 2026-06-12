@@ -49,6 +49,10 @@ namespace Arcane
         void Put(const std::string& key, T obj, uint64_t bytes)
         {
             Entry& e = m_entries[key];
+            // Unsigned wraparound is intentional and exact: two's-complement
+            // modular arithmetic makes total + (bytes - e.bytes) correct even
+            // when bytes < e.bytes (update shrinks the entry). The running
+            // total never goes below zero because we only put real sizes.
             m_totalBytes += bytes - e.bytes;
             e.obj = std::move(obj);
             e.bytes = bytes;
@@ -59,6 +63,7 @@ namespace Arcane
         void PutFailure(const std::string& key)
         {
             Entry& e = m_entries[key];
+            // e.bytes is 0 for a fresh entry, so the subtraction is a no-op there.
             m_totalBytes -= e.bytes;
             e.obj = T{};
             e.bytes = 0;
@@ -92,6 +97,7 @@ namespace Arcane
         }
 
         // Oldest unpinned entry's key, or empty when none (LRU sweep seam).
+        // O(n) scan -- adequate for v1 cache sizes.
         std::string LeastRecentKey() const
         {
             std::string best;

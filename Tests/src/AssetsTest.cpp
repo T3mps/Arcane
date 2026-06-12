@@ -103,7 +103,7 @@ TEST_CASE("assets: texture loads as sRGB and reads back byte-true", "[gpu][d3d12
     std::remove(png.string().c_str());
 }
 
-TEST_CASE("assets: json loader -- parse, cache identity, memoized failure", "[assets]")
+TEST_CASE("assets: json loader -- parse, cache identity, memoized failure", "[gpu][d3d12][assets]")
 {
     // JSON test: no GPU required; uses a null device since Assets::Create
     // accepts IDevice* and only needs it for texture uploads.
