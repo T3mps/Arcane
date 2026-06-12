@@ -12,12 +12,14 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 namespace
 {
@@ -54,7 +56,14 @@ int main(int argc, char** argv)
         }
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
         {
-            maxFrames = std::strtoull(argv[++i], nullptr, 10);
+            char* end = nullptr;
+            errno = 0;
+            maxFrames = std::strtoull(argv[++i], &end, 10);
+            if (errno != 0 || end == argv[i] || *end != '\0' || maxFrames == 0)
+            {
+                std::fprintf(stderr, "error: --frames requires a positive integer\n");
+                return 2;
+            }
         }
         else if (std::strcmp(argv[i], "--no-vsync") == 0)
         {
@@ -104,7 +113,13 @@ int main(int argc, char** argv)
         if (events.resized)
             swapchain->Resize(events.width, events.height);
         if (window.IsMinimized())
+        {
+            // No rendering while minimized; don't burn a core when vsync
+            // isn't throttling the loop. (std sleep, not SDL_Delay -- SDL
+            // stays behind the Platform module.)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
+        }
 
         nvrhi::ITexture* backbuffer = swapchain->BeginFrame();
         if (!backbuffer)
@@ -125,7 +140,7 @@ int main(int argc, char** argv)
         swapchain->Present();
 
         ++frameCount;
-        ++framesSinceTitle;
+        ++framesSinceTitle;  // incremented before the title block: never 0 when sinceTitle >= 0.5
         const auto now = std::chrono::steady_clock::now();
         const double sinceTitle =
             std::chrono::duration<double>(now - lastTitleUpdate).count();
