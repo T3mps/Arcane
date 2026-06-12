@@ -140,6 +140,12 @@ project "Arcane"
         "%{prj.location}/src/**.cpp",
     }
 
+    -- Shaders are data: compiled at build time, loaded by name at runtime,
+    -- hot-reloadable. The script is the single swap point for ShaderMake.
+    prebuildcommands {
+        'call "%{wks.location}/shaders/compile-shaders.bat"',
+    }
+
     includedirs {
         "%{prj.location}/src",
         "%{IncludeDir.Core}",
@@ -151,6 +157,7 @@ project "Arcane"
         "%{IncludeDir.DirectXHeaders}",
         "%{IncludeDir.DirectXHeaders}/directx",
         "%{IncludeDir.SDL3}",
+        "%{IncludeDir.glm}",
     }
 
     links { "Core", "nvrhi" }
@@ -228,6 +235,7 @@ project "Playground"
         "%{IncludeDir.Core}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.glm}",
     }
 
     links { "Arcane" }
@@ -239,6 +247,7 @@ project "Playground"
 
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+        '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
     }
 
     filter "system:windows"
@@ -308,6 +317,7 @@ project "ArcaneTests"
     -- The test exe loads Arcane.dll from its own directory.
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+        '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
     }
 
     defines {

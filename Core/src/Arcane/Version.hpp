@@ -8,5 +8,5 @@ namespace Arcane
     inline constexpr int kVersionMajor = 0;
     inline constexpr int kVersionMinor = 1;
 
-    inline const char* VersionString() { return "Arcane 0.1 (M1)"; }
+    inline const char* VersionString() { return "Arcane 0.1 (M2a)"; }
 }

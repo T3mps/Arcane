@@ -1,16 +1,22 @@
-// Arcane Playground -- M1: window + NVRHI device + clear + present.
-// The clear color animates so a working present loop is visually obvious.
+// Arcane Playground -- M2a: canvas -> batcher (bouncing shapes + HDR swatch)
+// -> ACES tonemap -> present. ShaderLibrary::Poll at 1 Hz enables the
+// hot-reload dev loop (set ARCANE_SHADER_DIR to shaders/generated/ and
+// run compile-shaders.bat while the app runs).
 // Scripted verification: --frames N renders N frames and exits 0.
-// The direct backbuffer clear is M1 scaffolding -- the M2 renderer
-// replaces it; do not grow rendering helpers here.
 
 #include <Arcane/Base/Engine.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Window.hpp>
+#include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Render/Canvas.hpp>
 #include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/ShaderLibrary.hpp>
 #include <Arcane/Render/Swapchain.hpp>
+#include <Arcane/Render/TonemapPass.hpp>
 
 #include <nvrhi/nvrhi.h>
+
+#include <glm/glm.hpp>
 
 #include <cerrno>
 #include <chrono>
@@ -20,13 +26,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <unordered_map>
 
 namespace
 {
     void PrintUsage()
     {
         std::printf(
-            "Arcane Playground (M1: window + device + clear + present)\n"
+            "Arcane Playground (M2a: canvas/batcher/tonemap canonical path)\n"
             "  --backend dx12|vulkan   graphics backend (default dx12)\n"
             "  --frames N              render N frames then exit (default: until closed)\n"
             "  --no-vsync              present without vsync\n");
@@ -97,7 +104,26 @@ int main(int argc, char** argv)
     if (!swapchain)
         return 1;
 
+    auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend,
+                                                 "shaders");
+    if (!shaders)
+        return 1;
+    auto canvas = Arcane::CreateCanvas(device->Nvrhi(),
+                                       swapchain->Width(), swapchain->Height());
+    if (!canvas)
+        return 1;
+    auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+    if (!batcher)
+        return 1;
+    auto tonemap = Arcane::TonemapPass::Create(device->Nvrhi(), *shaders);
+    if (!tonemap)
+        return 1;
+
     nvrhi::CommandListHandle commandList = device->Nvrhi()->createCommandList();
+    // Swapchain backbuffer framebuffer views; reset on resize.
+    std::unordered_map<nvrhi::ITexture*, nvrhi::FramebufferHandle>
+        backbufferFramebuffers;
+    auto lastShaderPoll = std::chrono::steady_clock::now();
 
     const auto start = std::chrono::steady_clock::now();
     auto lastTitleUpdate = start;
@@ -111,7 +137,11 @@ int main(int argc, char** argv)
         if (events.quitRequested)
             break;
         if (events.resized)
+        {
+            backbufferFramebuffers.clear();
             swapchain->Resize(events.width, events.height);
+            canvas->Resize(swapchain->Width(), swapchain->Height());
+        }
         if (window.IsMinimized())
         {
             // No rendering while minimized; don't burn a core when vsync
@@ -125,15 +155,64 @@ int main(int argc, char** argv)
         if (!backbuffer)
             continue;
 
+        // Hot reload: poll once a second; pipeline caches rebuild lazily.
+        const auto now0 = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(now0 - lastShaderPoll).count() >= 1.0)
+        {
+            shaders->Poll();
+            lastShaderPoll = now0;
+        }
+
         const double t = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - start).count();
-        const float r = 0.5f + 0.5f * (float)std::sin(t * 0.7);
-        const float g = 0.5f + 0.5f * (float)std::sin(t * 0.9 + 2.0);
-        const float b = 0.5f + 0.5f * (float)std::sin(t * 1.1 + 4.0);
+        const float w = (float)canvas->Width();
+        const float h = (float)canvas->Height();
 
         commandList->open();
-        commandList->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
-                                       nvrhi::Color(r, g, b, 1.0f));
+        commandList->clearTextureFloat(canvas->Texture(), nvrhi::AllSubresources,
+                                       nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
+
+        batcher->Begin(commandList, canvas->Framebuffer(),
+                       canvas->Width(), canvas->Height());
+
+        // Three bouncing rects (linear colors).
+        for (int i = 0; i < 3; ++i)
+        {
+            const float phase = (float)i * 2.1f;
+            const float x = (0.5f + 0.4f * (float)std::sin(t * 0.8 + phase)) * w;
+            const float y = (0.5f + 0.4f * (float)std::cos(t * 1.1 + phase)) * h;
+            const glm::vec4 colors[3] = { { 0.9f, 0.2f, 0.2f, 1.0f },
+                                          { 0.2f, 0.9f, 0.3f, 1.0f },
+                                          { 0.2f, 0.4f, 0.9f, 1.0f } };
+            batcher->Rect(glm::vec2(x - 40.0f, y - 40.0f), glm::vec2(80.0f),
+                          colors[i]);
+        }
+
+        // Orbiting circle + a connecting line leash.
+        const glm::vec2 middle(w * 0.5f, h * 0.5f);
+        const glm::vec2 orbit = middle +
+            glm::vec2((float)std::cos(t) * 0.3f * w, (float)std::sin(t) * 0.3f * h);
+        batcher->Line(middle, orbit, 3.0f, glm::vec4(0.7f, 0.7f, 0.8f, 0.8f));
+        batcher->Circle(orbit, 24.0f, glm::vec4(1.0f, 0.8f, 0.2f, 1.0f));
+
+        // HDR swatch on a high sorting layer (always on top): linear value
+        // up to 4.0 -- visibly rolls off to white through ACES instead of
+        // hard-clipping. Proves the HDR shoulder is working.
+        batcher->SetLayer(10, 0);
+        const float hdr = 2.0f + 2.0f * (float)std::sin(t * 2.0);
+        batcher->Rect(glm::vec2(20.0f, 20.0f), glm::vec2(120.0f, 60.0f),
+                      glm::vec4(hdr, hdr, hdr, 1.0f));
+
+        batcher->End();
+
+        // The ONLY writer of the display-referred backbuffer. Framebuffers
+        // are cached per backbuffer texture (cleared on resize above).
+        nvrhi::FramebufferHandle& backbufferFb = backbufferFramebuffers[backbuffer];
+        if (!backbufferFb)
+            backbufferFb = device->Nvrhi()->createFramebuffer(
+                nvrhi::FramebufferDesc().addColorAttachment(backbuffer));
+        tonemap->Run(commandList, canvas->Texture(), backbufferFb);
+
         commandList->close();
         device->Nvrhi()->executeCommandList(commandList);
 
@@ -147,11 +226,13 @@ int main(int argc, char** argv)
         if (sinceTitle >= 0.5)
         {
             const double frameMs = sinceTitle * 1000.0 / (double)framesSinceTitle;
-            char title[160];
+            const Arcane::Batch2DStats stats = batcher->Stats();
+            char title[200];
             std::snprintf(title, sizeof(title),
-                          "Arcane Playground -- %s -- %s -- %.2f ms",
+                          "Arcane Playground -- %s -- %s -- %.2f ms -- %u quads / %u draws",
                           Arcane::ToString(device->Backend()),
-                          device->AdapterName().c_str(), frameMs);
+                          device->AdapterName().c_str(), frameMs,
+                          stats.quads, stats.drawCalls);
             window.SetTitle(title);
             lastTitleUpdate = now;
             framesSinceTitle = 0;

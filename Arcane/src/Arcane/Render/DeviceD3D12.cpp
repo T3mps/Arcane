@@ -145,7 +145,7 @@ namespace Arcane
 
         // ----------------------------------------------------------------
         // DXGI flip-discard swapchain: 3 backbuffers, BGRA8_UNORM.
-        // M1 pacing: waitForIdle after each Present (one frame in flight).
+        // M2 pacing: kSwapchainFramesInFlight slots, EventQuery-gated.
         // ----------------------------------------------------------------
 
         class SwapchainD3D12 final : public Swapchain
@@ -168,6 +168,8 @@ namespace Arcane
             DeviceD3D12* m_device = nullptr;
             ComPtr<IDXGISwapChain3> m_swapchain;
             std::vector<nvrhi::TextureHandle> m_backbuffers;
+            nvrhi::EventQueryHandle m_frameQueries[kSwapchainFramesInFlight];
+            uint64_t m_frameCounter = 0;
             uint32_t m_width = 0;
             uint32_t m_height = 0;
             bool m_vsync = true;
@@ -205,7 +207,11 @@ namespace Arcane
                 ARC_ERROR("IDXGISwapChain3 not available");
                 return false;
             }
-            return CreateBackbufferHandles();
+            if (!CreateBackbufferHandles())
+                return false;
+            for (uint32_t i = 0; i < kSwapchainFramesInFlight; ++i)
+                m_frameQueries[i] = m_device->Nvrhi()->createEventQuery();
+            return true;
         }
 
         bool SwapchainD3D12::CreateBackbufferHandles()
@@ -251,6 +257,17 @@ namespace Arcane
         {
             if (m_width == 0 || m_height == 0 || m_backbuffers.empty())
                 return nullptr;
+
+            // Slot gating: before reusing this slot's per-frame resources,
+            // wait until the frame that last used it (N - framesInFlight)
+            // has retired on the GPU.
+            if (m_frameCounter >= kSwapchainFramesInFlight)
+            {
+                nvrhi::IEventQuery* slotQuery =
+                    m_frameQueries[m_frameCounter % kSwapchainFramesInFlight];
+                m_device->Nvrhi()->waitEventQuery(slotQuery);
+                m_device->Nvrhi()->resetEventQuery(slotQuery);
+            }
             return m_backbuffers[m_swapchain->GetCurrentBackBufferIndex()];
         }
 
@@ -262,14 +279,20 @@ namespace Arcane
             const HRESULT hr = m_swapchain->Present(m_vsync ? 1 : 0, 0);
             if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
             {
-                // The natural seam for device-lost recovery (a stated
-                // foundation goal); recovery itself is a later milestone.
                 ARC_ERROR("Present failed: device removed/reset (0x{:08X}), reason 0x{:08X}",
                           (uint32_t)hr,
                           (uint32_t)m_device->D3D12Device()->GetDeviceRemovedReason());
             }
-            // M1 pacing: one frame in flight, idle after present.
-            m_device->Nvrhi()->waitForIdle();
+
+            // Mark this slot's command-work completion point (the display-side
+            // headroom comes from the backbuffer count, not this fence);
+            // BeginFrame N+2 waits on it.
+            m_device->Nvrhi()->setEventQuery(
+                m_frameQueries[m_frameCounter % kSwapchainFramesInFlight],
+                nvrhi::CommandQueue::Graphics);
+            ++m_frameCounter;
+
+            // Recycle retired command-list instances and upload regions.
             m_device->Nvrhi()->runGarbageCollection();
         }
 
