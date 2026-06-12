@@ -43,6 +43,14 @@ namespace Arcane
                 if (!pipeline)
                     return;
 
+                // One live source per pass today: evict stale entries so
+                // their strong handles stop pinning a destroyed canvas's
+                // texture memory (one full RGBA16F target per resize).
+                // Replace with a real LRU when canvases multiply.
+                if (!m_bindingSets.empty() &&
+                    m_bindingSets.find(source) == m_bindingSets.end())
+                    m_bindingSets.clear();
+
                 nvrhi::BindingSetHandle& bindingSet = m_bindingSets[source];
                 if (!bindingSet)
                 {
@@ -115,8 +123,9 @@ namespace Arcane
             // Pipeline cache: key = hash of FramebufferInfo (format + sample count).
             std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_pipelines;
             // Binding set cache: keyed on raw ITexture* (one canvas in M2a;
-            // stale entries leak one set until the pass dies -- revisit when
-            // canvases multiply).
+            // eviction in Run() clears the map when a new source pointer
+            // arrives, preventing strong handles from pinning a destroyed
+            // canvas's full RGBA16F texture allocation across Canvas::Resize).
             std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_bindingSets;
             uint64_t m_pipelineGeneration = 0;
         };

@@ -100,6 +100,10 @@ namespace Arcane
                     if (suffix == "_ps") return "ps_main";
                     if (suffix == "_cs") return "cs_main";
                 }
+                ARC_WARN("Shader '{}' has no _vs/_ps/_cs suffix; entry name "
+                         "falls back to 'main' (SPIR-V needs an exact "
+                         "OpEntryPoint match -- check compile-shaders.bat)",
+                         stem);
                 return "main";
             }
 

@@ -7,6 +7,10 @@
 :: SPIR-V register shifts MUST match nvrhi::VulkanBindingOffsets defaults
 :: (t=0, s=128, b=256, u=384). ShaderMake (vendored) replaces this script
 :: when the shader count outgrows explicit lines.
+::
+:: INVARIANT: the output stem's _vs/_ps/_cs suffix (4th arg) must agree with
+:: the entry point's <type>_main prefix (2nd arg) -- ShaderLibrary derives the
+:: SPIR-V entry name from the stem suffix. Mismatch = late Vulkan failure.
 setlocal
 set DXC=%~dp0..\..\ThirdParty\tools\dxc\dxc.exe
 set SRC=%~dp0
