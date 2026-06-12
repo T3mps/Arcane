@@ -160,6 +160,7 @@ project "Arcane"
         "%{IncludeDir.DirectXHeaders}/directx",
         "%{IncludeDir.SDL3}",
         "%{IncludeDir.glm}",
+        "%{IncludeDir.stb}",
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.freetype}",
     }
