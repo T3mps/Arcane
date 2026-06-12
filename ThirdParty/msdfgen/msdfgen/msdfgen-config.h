@@ -5,7 +5,7 @@
 // match a static-library build with no SVG/PNG/Skia extensions.
 
 #define MSDFGEN_PUBLIC
-#define MSDFGEN_EXT_PUBLIC
+#define MSDFGEN_EXT_PUBLIC  // unused in this minimal vendoring (static lib, no DLL export); kept because upstream headers reference it
 
 #define MSDFGEN_VERSION "1.12.0"
 #define MSDFGEN_VERSION_MAJOR 1

@@ -12,22 +12,30 @@
 #include <msdfgen.h>
 #include <msdfgen-ext.h>
 
-#include <cmath>
-
 TEST_CASE("msdfgen: glyph MSDF has signal", "[vendor][msdfgen]")
 {
-    msdfgen::FreetypeHandle* ft = msdfgen::initializeFreetype();
-    REQUIRE(ft != nullptr);
+    // RAII guard: ensures destroyFont + deinitializeFreetype run even when a
+    // REQUIRE assertion throws mid-test.
+    struct FtGuard {
+        msdfgen::FreetypeHandle* ft   = nullptr;
+        msdfgen::FontHandle*     font = nullptr;
+        ~FtGuard() {
+            if (font) msdfgen::destroyFont(font);
+            if (ft)   msdfgen::deinitializeFreetype(ft);
+        }
+    } g;
 
-    msdfgen::FontHandle* font =
-        msdfgen::loadFont(ft, "data/fonts/Roboto-Regular.ttf");
-    REQUIRE(font != nullptr);
+    g.ft = msdfgen::initializeFreetype();
+    REQUIRE(g.ft != nullptr);
+
+    g.font = msdfgen::loadFont(g.ft, "data/fonts/Roboto-Regular.ttf");
+    REQUIRE(g.font != nullptr);
 
     msdfgen::Shape shape;
     double advance = 0.0;
     // v1.12: loadGlyph requires FontCoordinateScaling; EM_NORMALIZED is
     // recommended for new code (legacy FONT_SCALING_LEGACY divides by 64).
-    REQUIRE(msdfgen::loadGlyph(shape, font, (msdfgen::unicode_t)'A',
+    REQUIRE(msdfgen::loadGlyph(shape, g.font, (msdfgen::unicode_t)'A',
                                msdfgen::FONT_SCALING_EM_NORMALIZED, &advance));
     shape.normalize();
     msdfgen::edgeColoringSimple(shape, 3.0);
@@ -60,7 +68,4 @@ TEST_CASE("msdfgen: glyph MSDF has signal", "[vendor][msdfgen]")
                 if (v > maxV) maxV = v;
             }
     REQUIRE(maxV - minV > 0.25f);   // real distance signal, not a flat field
-
-    msdfgen::destroyFont(font);
-    msdfgen::deinitializeFreetype(ft);
 }
