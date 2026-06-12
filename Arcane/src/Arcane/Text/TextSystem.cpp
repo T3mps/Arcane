@@ -196,7 +196,9 @@ namespace Arcane
                 font.handle = handle;
                 font.bytes = std::move(bytes);
                 font.ascender = metrics.ascenderY;
-                font.lineHeight = metrics.lineHeight;
+                // Defensive against a future msdfgen contract change; zero line
+                // height would stack lines on the baseline.
+                font.lineHeight = metrics.lineHeight > 0 ? metrics.lineHeight : 1.0;
                 m_fonts.push_back(std::move(font));
                 return (FontId)m_fonts.size();  // FontId = index + 1
             }
@@ -295,6 +297,9 @@ namespace Arcane
                 }
                 maxWidth = std::max(maxWidth, x);
 
+                // Returned height is the LINE-BOX height (lines * lineHeight),
+                // not ink bounds -- callers centering vertically should account
+                // for ascender/descender if pixel-perfect placement is required.
                 return glm::vec2(maxWidth,
                                  (float)lines * (float)f->lineHeight * sizePx);
             }
@@ -415,7 +420,10 @@ namespace Arcane
                         const float* texel = bitmap(bx, by);
                         for (int c = 0; c < 3; ++c)
                         {
-                            const float v = std::clamp(texel[c], 0.0f, 1.0f);
+                            // NaN-safe clamp: clamp(NaN) would propagate into
+                            // the uint8 cast (UB); NaN fails "> 0.0f", pins 0.
+                            float v = texel[c];
+                            v = v > 0.0f ? (v < 1.0f ? v : 1.0f) : 0.0f;
                             dst[bx * 4 + c] = (uint8_t)(v * 255.0f + 0.5f);
                         }
                         dst[bx * 4 + 3] = 255;

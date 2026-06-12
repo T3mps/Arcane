@@ -159,7 +159,8 @@ namespace
         // Stem on the left: more ink left than right.
         CHECK(leftCols > rightCols);
         // Top-right quadrant of an 'L' is empty -- a vertical flip (foot at
-        // top) or a mirror would light it up.
+        // top) or a mirror would light it up. Window (y<24, x>=40) is sized
+        // for the 56px draw at baseline (6,56); change those together.
         CHECK(topRight < 10);
 
         device->Nvrhi()->unmapStagingTexture(staging);
