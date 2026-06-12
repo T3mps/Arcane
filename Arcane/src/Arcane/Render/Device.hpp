@@ -62,6 +62,8 @@ namespace Arcane
 
         // The window must outlive the swapchain. For Vulkan, the window
         // must have been created with WindowDesc::vulkan = true.
+        // The swapchain must be destroyed before the RenderDevice that
+        // created it (its teardown uses the device's native handles).
         virtual std::unique_ptr<Swapchain> CreateSwapchain(Window& window,
                                                            bool vsync) = 0;
     };

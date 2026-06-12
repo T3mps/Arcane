@@ -266,6 +266,14 @@ namespace Arcane
 
         nvrhi::ITexture* SwapchainVulkan::BeginFrame()
         {
+            if (m_acquired)
+            {
+                // Double BeginFrame without Present: re-acquiring would reuse
+                // the already-signaled binary semaphore (VUID 01286). Hand
+                // back the image we already hold.
+                return m_backbuffers[m_currentImage];
+            }
+
             if (m_width == 0 || m_height == 0 || m_backbuffers.empty())
                 return nullptr;
 

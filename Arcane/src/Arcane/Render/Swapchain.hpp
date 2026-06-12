@@ -25,6 +25,10 @@ namespace Arcane
 
         virtual void Present() = 0;
 
+        // Width()/Height() afterwards reflect the ACTUAL surface extent --
+        // on Vulkan/Win32 that is the window's real pixel size, which may
+        // differ from the requested values. Callers should treat resize
+        // events' pixel sizes as the source of truth.
         virtual void Resize(uint32_t width, uint32_t height) = 0;
 
         virtual uint32_t Width() const = 0;
