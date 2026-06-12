@@ -106,7 +106,156 @@ project "Core"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE" }
+        defines { "ARCANE_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+
+-- ============================================================================
+-- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
+-- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
+-- NVRHI and SDL3 link INTO this DLL; consumers link only the import lib.
+-- Second namespaced include root: src/Arcane/{Base,Platform,Render} --
+-- relative paths are disjoint from Core's root (Net/Crypto/Types/Util),
+-- so <Arcane/...> resolves unambiguously across both.
+-- ============================================================================
+project "Arcane"
+    location "Arcane"
+    kind "SharedLib"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.hpp",
+        "%{prj.location}/src/**.cpp",
+    }
+
+    includedirs {
+        "%{prj.location}/src",
+        "%{IncludeDir.Core}",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.picosha2}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.VulkanHeaders}",
+        "%{IncludeDir.DirectXHeaders}",
+        "%{IncludeDir.DirectXHeaders}/directx",
+        "%{IncludeDir.SDL3}",
+    }
+
+    links { "Core", "nvrhi" }
+
+    defines {
+        "ARCANE_BUILD_DLL",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        "VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1",
+        "NOMINMAX",
+        "WIN32_LEAN_AND_MEAN",
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        defines { "VK_USE_PLATFORM_WIN32_KHR" }
+        -- d3d12/dxgi/dxguid: D3D12 backend. SDL3-static + system libs:
+        -- the platform layer (list mirrors SDL3's pkgconfig Libs line).
+        links {
+            "d3d12", "dxgi", "dxguid",
+            "SDL3-static",
+            "user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32",
+            "version", "uuid", "advapi32", "setupapi", "shell32", "dinput8",
+        }
+
+    filter { "system:windows", "configurations:Debug" }
+        libdirs { VCPKG_INSTALLED_MD .. "/debug/lib" }
+    filter { "system:windows", "configurations:Release or configurations:Dist" }
+        libdirs { VCPKG_INSTALLED_MD .. "/lib" }
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        -- NDEBUG must match NVRHI's Release build (nvrhi/premake5.lua defines
+        -- NDEBUG in Release). DispatchLoaderDynamic has NDEBUG-gated fields;
+        -- a layout mismatch between Arcane.dll and the statically-linked NVRHI
+        -- causes every Vulkan function-pointer lookup to read the wrong offset.
+        defines { "ARCANE_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+
+-- ============================================================================
+-- Playground: standalone exe, the living integration test (stack spec).
+-- M1 scope: window + device + clear + present on both backends. Becomes
+-- PlaygroundGame.dll under Loom in M4.
+-- ============================================================================
+project "Playground"
+    location "Playground"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.cpp",
+        "%{prj.location}/src/**.hpp",
+    }
+
+    includedirs {
+        "%{wks.location}/Arcane/src",
+        "%{IncludeDir.Core}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.nvrhi}",
+    }
+
+    links { "Arcane" }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+    }
+
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus" }
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        -- NDEBUG must match NVRHI's Release build (nvrhi/premake5.lua defines
+        -- NDEBUG in Release). DispatchLoaderDynamic has NDEBUG-gated fields;
+        -- a layout mismatch between Arcane.dll and the statically-linked NVRHI
+        -- causes every Vulkan function-pointer lookup to read the wrong offset.
+        defines { "ARCANE_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
@@ -138,6 +287,7 @@ project "ArcaneTests"
 
     includedirs {
         "%{IncludeDir.Core}",
+        "%{wks.location}/Arcane/src",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",
@@ -151,12 +301,14 @@ project "ArcaneTests"
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.freetype}",
         "%{IncludeDir.nvrhi}",
-        "%{IncludeDir.VulkanHeaders}",
-        "%{IncludeDir.DirectXHeaders}",
-        "%{IncludeDir.SDL3}",
     }
 
-    links { "Core", "Catch2", "rapidcheck", "enkiTS", "freetype", "nvrhi" }
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype" }
+
+    -- The test exe loads Arcane.dll from its own directory.
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+    }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
@@ -166,19 +318,7 @@ project "ArcaneTests"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
-        -- ws2_32: Core TcpSocket. d3d12/dxgi/dxguid: NVRHI D3D12 backend.
-        -- SDL3-static system deps from its pkgconfig Libs line.
-        links {
-            "ws2_32", "d3d12", "dxgi", "dxguid",
-            "SDL3-static",
-            "user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32",
-            "version", "uuid", "advapi32", "setupapi", "shell32", "dinput8",
-        }
-
-    filter { "system:windows", "configurations:Debug" }
-        libdirs { VCPKG_INSTALLED_MD .. "/debug/lib" }
-    filter { "system:windows", "configurations:Release or configurations:Dist" }
-        libdirs { VCPKG_INSTALLED_MD .. "/lib" }
+        links { "ws2_32" }  -- Core TcpSocket
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
@@ -186,7 +326,7 @@ project "ArcaneTests"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE" }
+        defines { "ARCANE_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"

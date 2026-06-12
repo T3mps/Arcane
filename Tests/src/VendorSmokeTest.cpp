@@ -119,34 +119,3 @@ TEST_CASE("FreeType: library init/done and version", "[vendor][freetype]")
     REQUIRE(FT_Done_FreeType(lib) == 0);
 }
 
-// ---------------------------------------------------------------- NVRHI
-// Link smoke only: taking the factory addresses forces both backend
-// objects to link (pulling in d3d12/dxgi and the Vulkan-Hpp dynamic
-// dispatch path). Real device creation is M1's Playground gate.
-#include <nvrhi/nvrhi.h>
-#include <nvrhi/d3d12.h>
-#include <nvrhi/vulkan.h>
-
-TEST_CASE("NVRHI: both backend factories link", "[vendor][nvrhi]")
-{
-    auto* d3d12Factory  = &nvrhi::d3d12::createDevice;
-    auto* vulkanFactory = &nvrhi::vulkan::createDevice;
-    REQUIRE(d3d12Factory != nullptr);
-    REQUIRE(vulkanFactory != nullptr);
-
-    // Header-level sanity: descriptor defaults exist and compile.
-    nvrhi::TextureDesc desc;
-    desc.width = 1920;
-    REQUIRE(desc.width == 1920);
-}
-
-// ---------------------------------------------------------------- SDL3
-// Version query only -- no SDL_Init, no window. Proves the vcpkg
-// static-md triplet links against /MD (retires stack-spec risk R2).
-#include <SDL3/SDL_version.h>
-
-TEST_CASE("SDL3: links and reports its version", "[vendor][sdl3]")
-{
-    const int v = SDL_GetVersion();
-    REQUIRE(SDL_VERSIONNUM_MAJOR(v) == 3);
-}
