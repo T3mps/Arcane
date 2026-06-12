@@ -26,6 +26,8 @@ call :compile circle  vs_main vs_6_5 circle_vs  || exit /b 1
 call :compile circle  ps_main ps_6_5 circle_ps  || exit /b 1
 call :compile msdf    vs_main vs_6_5 msdf_vs    || exit /b 1
 call :compile msdf    ps_main ps_6_5 msdf_ps    || exit /b 1
+call :compile imgui   vs_main vs_6_5 imgui_vs   || exit /b 1
+call :compile imgui   ps_main ps_6_5 imgui_ps   || exit /b 1
 call :compile tonemap vs_main vs_6_5 tonemap_vs || exit /b 1
 call :compile tonemap ps_main ps_6_5 tonemap_ps || exit /b 1
 echo Shaders compiled to %OUT%

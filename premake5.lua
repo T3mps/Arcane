@@ -38,6 +38,12 @@ workspace "Arcane"
     -- imgui wrapper: SDL3 backend includes come from the same vcpkg -md install
     -- used by the rest of the workspace (identical path to IncludeDir["SDL3"]).
     THIRDPARTY_SDL3_INCLUDE     = VCPKG_INSTALLED_MD .. "/include"
+    -- imgui lives inside Arcane.dll (ImGuiLayer + first-party imgui_impl_nvrhi).
+    -- Export it so GImGui and the sdl3 backend symbols live in ONE module:
+    -- the imgui static lib builds with dllexport, the DLL's own TUs match,
+    -- and consumers (ArcaneTests/Playground) import. Without this each module
+    -- keeps its own null GImGui and ShowDemoWindow() from the test exe asserts.
+    THIRDPARTY_IMGUI_API        = "__declspec(dllexport)"
 
     IncludeDir = {}
     IncludeDir["Core"]             = "%{wks.location}/Core/src"
@@ -173,6 +179,13 @@ project "Arcane"
 
     links { "Core", "nvrhi", "msdfgen", "freetype", "imgui" }
 
+    -- Force EVERY imgui object (incl. imgui_demo's ShowDemoWindow) into the
+    -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
+    -- object only produces an export when the linker actually pulls that
+    -- object in, and the DLL itself references only a subset of the imgui API.
+    -- /WHOLEARCHIVE exports the full surface for consumers (tests/Playground).
+    linkoptions { "/WHOLEARCHIVE:imgui" }
+
     defines {
         "ARCANE_BUILD_DLL",
         "_CRT_SECURE_NO_WARNINGS",
@@ -180,6 +193,10 @@ project "Arcane"
         "VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1",
         "NOMINMAX",
         "WIN32_LEAN_AND_MEAN",
+        -- This DLL's own TUs include imgui.h; they must export the same
+        -- IMGUI_API as the imgui static lib's object files (set via the
+        -- THIRDPARTY_IMGUI_API workspace global). IMGUI_IMPL_API follows.
+        "IMGUI_API=__declspec(dllexport)",
     }
 
     filter "system:windows"
@@ -247,6 +264,7 @@ project "Playground"
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.glm}",
+        "%{IncludeDir.imgui}",
     }
 
     links { "Arcane" }
@@ -254,6 +272,9 @@ project "Playground"
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        -- imgui is exported from Arcane.dll; the demo's stats overlay (Task 8)
+        -- imports it. Matches the DLL's dllexport.
+        "IMGUI_API=__declspec(dllimport)",
     }
 
     postbuildcommands {
@@ -330,7 +351,10 @@ project "ArcaneTests"
     -- msdfgen and freetype are static libs compiled separately; the smoke test
     -- calls them directly (not via Arcane.dll), so both appear in links here.
     -- Two static copies in different modules is the established pattern for this workspace.
-    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "imgui" }
+    -- imgui is NOT linked here: it is exported from Arcane.dll (IMGUI_API =
+    -- dllimport below), so the test exe shares the DLL's single GImGui rather
+    -- than carrying a second null context. The import lib comes via "Arcane".
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen" }
 
     -- The test exe loads Arcane.dll from its own directory.
     postbuildcommands {
@@ -343,6 +367,9 @@ project "ArcaneTests"
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        -- imgui is exported from Arcane.dll; this exe imports it (matches the
+        -- DLL's dllexport so <imgui.h> here resolves to the DLL's symbols).
+        "IMGUI_API=__declspec(dllimport)",
     }
 
     filter "system:windows"

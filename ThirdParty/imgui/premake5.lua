@@ -22,10 +22,22 @@ project "imgui"
 
     includedirs { ".", THIRDPARTY_SDL3_INCLUDE or "." }
 
+    -- IMGUI_API: when the consuming workspace exports imgui from an engine
+    -- DLL (Arcane sets THIRDPARTY_IMGUI_API = "__declspec(dllexport)"), the
+    -- static-lib object files must agree with the DLL's own imgui.h includes
+    -- so GImGui and the backend symbols live in ONE module (otherwise each
+    -- module gets its own null GImGui). IMGUI_IMPL_API defaults to IMGUI_API
+    -- inside imgui's headers, so the sdl3 backend exports too. Default
+    -- (global unset) leaves IMGUI_API undefined -- Tools and any other
+    -- consumer that lists sources directly are unaffected.
     defines { "_CRT_SECURE_NO_WARNINGS" }
+    if THIRDPARTY_IMGUI_API then
+        defines { "IMGUI_API=" .. THIRDPARTY_IMGUI_API }
+    end
 
     filter "system:windows"
         systemversion "latest"
+
     filter "configurations:Debug"
         runtime "Debug"
         symbols "on"

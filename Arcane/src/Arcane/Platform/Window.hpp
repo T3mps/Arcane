@@ -46,6 +46,14 @@ namespace Arcane
 
         void SetTitle(const std::string& title);
         void SetSize(uint32_t width, uint32_t height);
+
+        // Native event tap for engine-internal modules (ImGui): invoked
+        // once per SDL event during PumpEvents, BEFORE Window's own
+        // handling. `event` is a const SDL_Event* passed opaquely so SDL
+        // types stay out of public headers. One tap; null uninstalls.
+        using NativeEventTap = void (*)(const void* event, void* user);
+        void SetNativeEventTap(NativeEventTap tap, void* user);
+
         void GetPixelSize(uint32_t& width, uint32_t& height) const;
         bool IsMinimized() const;
 
@@ -53,6 +61,8 @@ namespace Arcane
         SDL_Window* SdlWindow() const { return m_window; }
 
     private:
-        SDL_Window* m_window = nullptr;
+        SDL_Window*    m_window  = nullptr;
+        NativeEventTap m_tap     = nullptr;
+        void*          m_tapUser = nullptr;
     };
 }
