@@ -2,9 +2,15 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
+#include <Arcane/Render/NvrhiMessageCallback.hpp>
 
 namespace Arcane
 {
+    uint64_t RenderErrorCount()
+    {
+        return NvrhiMessageCallback::Instance().ErrorCount();
+    }
+
     const char* ToString(GraphicsBackend backend)
     {
         switch (backend)

@@ -56,6 +56,9 @@ namespace
 
         for (int i = 0; i < 2; ++i)
             renderFrame(0.8f);
+
+        // Foundation rule: NVRHI validation stays silent.
+        CHECK(Arcane::RenderErrorCount() == 0);
     }
 }
 

@@ -7,6 +7,9 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <atomic>
+#include <cstdint>
+
 namespace Arcane
 {
     class NvrhiMessageCallback final : public nvrhi::IMessageCallback
@@ -17,6 +20,8 @@ namespace Arcane
             static NvrhiMessageCallback s_instance;
             return s_instance;
         }
+
+        uint64_t ErrorCount() const { return m_errorCount.load(); }
 
         void message(nvrhi::MessageSeverity severity, const char* messageText) override
         {
@@ -29,12 +34,17 @@ namespace Arcane
                 ARC_WARN("[nvrhi] {}", messageText);
                 break;
             case nvrhi::MessageSeverity::Error:
+                ++m_errorCount;
                 ARC_ERROR("[nvrhi] {}", messageText);
                 break;
             case nvrhi::MessageSeverity::Fatal:
+                ++m_errorCount;
                 ARC_CRITICAL("[nvrhi] {}", messageText);
                 break;
             }
         }
+
+    private:
+        std::atomic<uint64_t> m_errorCount{0};
     };
 }

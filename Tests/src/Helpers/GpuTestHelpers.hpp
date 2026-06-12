@@ -57,4 +57,7 @@ inline void CheckOffscreenClear(Arcane::RenderDevice& device)
     CHECK((int)pixels[3] == 255);
     nv->unmapStagingTexture(staging);
     nv->runGarbageCollection();
+
+    // Foundation rule: NVRHI validation stays silent.
+    CHECK(Arcane::RenderErrorCount() == 0);
 }

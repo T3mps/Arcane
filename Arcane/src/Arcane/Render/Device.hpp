@@ -25,6 +25,11 @@ namespace Arcane
 
     ARCANE_API const char* ToString(GraphicsBackend backend);
 
+    // Total NVRHI Error/Fatal diagnostics since process start (all devices).
+    // GPU tests assert this stays zero -- the machine-enforced form of the
+    // "validation must stay silent" foundation rule.
+    ARCANE_API uint64_t RenderErrorCount();
+
     struct RenderDeviceDesc
     {
         GraphicsBackend backend = GraphicsBackend::D3D12;

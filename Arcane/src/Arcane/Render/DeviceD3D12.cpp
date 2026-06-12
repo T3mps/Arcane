@@ -39,6 +39,7 @@ namespace Arcane
 
             IDXGIFactory6* Factory() const { return m_factory.Get(); }
             ID3D12CommandQueue* GraphicsQueue() const { return m_graphicsQueue.Get(); }
+            ID3D12Device* D3D12Device() const { return m_device.Get(); }
 
             std::unique_ptr<Swapchain> CreateSwapchain(Window& window,
                                                        bool vsync) override;
@@ -255,7 +256,18 @@ namespace Arcane
 
         void SwapchainD3D12::Present()
         {
-            m_swapchain->Present(m_vsync ? 1 : 0, 0);
+            if (m_backbuffers.empty())
+                return;  // nothing acquired (zero-size window); see BeginFrame
+
+            const HRESULT hr = m_swapchain->Present(m_vsync ? 1 : 0, 0);
+            if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+            {
+                // The natural seam for device-lost recovery (a stated
+                // foundation goal); recovery itself is a later milestone.
+                ARC_ERROR("Present failed: device removed/reset (0x{:08X}), reason 0x{:08X}",
+                          (uint32_t)hr,
+                          (uint32_t)m_device->D3D12Device()->GetDeviceRemovedReason());
+            }
             // M1 pacing: one frame in flight, idle after present.
             m_device->Nvrhi()->waitForIdle();
             m_device->Nvrhi()->runGarbageCollection();
