@@ -204,6 +204,69 @@ project "Arcane"
         symbols "off"
 
 -- ============================================================================
+-- Playground: standalone exe, the living integration test (stack spec).
+-- M1 scope: window + device + clear + present on both backends. Becomes
+-- PlaygroundGame.dll under Loom in M4.
+-- ============================================================================
+project "Playground"
+    location "Playground"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.cpp",
+        "%{prj.location}/src/**.hpp",
+    }
+
+    includedirs {
+        "%{wks.location}/Arcane/src",
+        "%{IncludeDir.Core}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.nvrhi}",
+    }
+
+    links { "Arcane" }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+    }
+
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus" }
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        -- NDEBUG must match NVRHI's Release build (nvrhi/premake5.lua defines
+        -- NDEBUG in Release). DispatchLoaderDynamic has NDEBUG-gated fields;
+        -- a layout mismatch between Arcane.dll and the statically-linked NVRHI
+        -- causes every Vulkan function-pointer lookup to read the wrong offset.
+        defines { "ARCANE_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+
+-- ============================================================================
 -- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links Core
 -- directly -- Core links into exactly ONE module per process.
 -- ============================================================================
