@@ -89,8 +89,7 @@ namespace Arcane
         // ----------------------------------------------------------------
         // Vulkan KHR swapchain: SDL surface, acquire/present semaphore
         // bridge into NVRHI, resize/out-of-date handling.
-        // M1 pacing: waitForIdle + runGarbageCollection inside Present
-        // (one frame in flight) -- makes the single semaphore pair safe.
+        // M2 pacing: kSwapchainFramesInFlight slots, EventQuery-gated.
         // ----------------------------------------------------------------
 
         class SwapchainVulkan final : public Swapchain
@@ -115,8 +114,16 @@ namespace Arcane
             vk::SurfaceKHR m_surface;
             vk::SwapchainKHR m_swapchain;
             std::vector<nvrhi::TextureHandle> m_backbuffers;
-            vk::Semaphore m_acquireSemaphore;
-            vk::Semaphore m_presentSemaphore;
+            // Acquire semaphores are indexed by frame slot: they are consumed
+            // (waited on) by the GPU in the same frame, and the EventQuery
+            // ensures that submission is done before we reuse the slot.
+            vk::Semaphore m_acquireSemaphores[kSwapchainFramesInFlight];
+            // Present semaphores are indexed by swapchain image index: the
+            // presentation engine holds them asynchronously until the image
+            // is released, so slot-based reuse would fire VUID-00067.
+            std::vector<vk::Semaphore> m_presentSemaphores;
+            nvrhi::EventQueryHandle m_frameQueries[kSwapchainFramesInFlight];
+            uint64_t m_frameCounter = 0;
             uint32_t m_currentImage = 0;
             uint32_t m_width = 0;
             uint32_t m_height = 0;
@@ -149,8 +156,12 @@ namespace Arcane
                 return false;
             }
 
-            m_acquireSemaphore = device.Device().createSemaphore({});
-            m_presentSemaphore = device.Device().createSemaphore({});
+            for (uint32_t i = 0; i < kSwapchainFramesInFlight; ++i)
+            {
+                m_acquireSemaphores[i] = device.Device().createSemaphore({});
+                m_frameQueries[i] = device.Nvrhi()->createEventQuery();
+            }
+            // Present semaphores are per-image and created in CreateSwapchainObjects.
 
             return CreateSwapchainObjects();
         }
@@ -254,6 +265,18 @@ namespace Arcane
                 }
                 m_backbuffers.push_back(handle);
             }
+
+            // One present semaphore per swapchain image: the presentation
+            // engine holds a semaphore asynchronously until the image is
+            // released, so we cannot index by frame slot (VUID-00067).
+            // Destroy any semaphores from a previous swapchain rebuild first.
+            for (auto& sem : m_presentSemaphores)
+                m_device->Device().destroySemaphore(sem);
+            m_presentSemaphores.clear();
+            m_presentSemaphores.reserve(images.size());
+            for (size_t i = 0; i < images.size(); ++i)
+                m_presentSemaphores.push_back(m_device->Device().createSemaphore({}));
+
             return true;
         }
 
@@ -261,6 +284,9 @@ namespace Arcane
         {
             m_device->Nvrhi()->waitForIdle();
             m_backbuffers.clear();
+            for (auto& sem : m_presentSemaphores)
+                m_device->Device().destroySemaphore(sem);
+            m_presentSemaphores.clear();
             m_device->Nvrhi()->runGarbageCollection();
         }
 
@@ -273,14 +299,24 @@ namespace Arcane
                 // back the image we already hold.
                 return m_backbuffers[m_currentImage];
             }
-
             if (m_width == 0 || m_height == 0 || m_backbuffers.empty())
                 return nullptr;
+
+            const uint32_t slot = (uint32_t)(m_frameCounter % kSwapchainFramesInFlight);
+
+            // Slot gating: frame N-2's submits (which consumed this slot's
+            // acquire semaphore and queued its present signal) must have
+            // retired before the slot's binary semaphores are reused.
+            if (m_frameCounter >= kSwapchainFramesInFlight)
+            {
+                m_device->Nvrhi()->waitEventQuery(m_frameQueries[slot]);
+                m_device->Nvrhi()->resetEventQuery(m_frameQueries[slot]);
+            }
 
             try
             {
                 auto acquired = m_device->Device().acquireNextImageKHR(
-                    m_swapchain, UINT64_MAX, m_acquireSemaphore, nullptr);
+                    m_swapchain, UINT64_MAX, m_acquireSemaphores[slot], nullptr);
                 if (acquired.result != vk::Result::eSuccess &&
                     acquired.result != vk::Result::eSuboptimalKHR)
                     return nullptr;
@@ -289,14 +325,16 @@ namespace Arcane
             catch (const vk::OutOfDateKHRError&)
             {
                 // Surface changed under us: rebuild at the current size and
-                // skip this frame.
+                // skip this frame. (A throwing acquire does NOT signal the
+                // semaphore -- safe to reuse.)
+                m_device->Nvrhi()->waitForIdle();
                 ReleaseBackbufferHandles();
                 CreateSwapchainObjects();
                 return nullptr;
             }
 
             m_device->VulkanNvrhi()->queueWaitForSemaphore(
-                nvrhi::CommandQueue::Graphics, m_acquireSemaphore, 0);
+                nvrhi::CommandQueue::Graphics, m_acquireSemaphores[slot], 0);
             m_acquired = true;
             return m_backbuffers[m_currentImage];
         }
@@ -307,17 +345,21 @@ namespace Arcane
                 return;
             m_acquired = false;
 
+            const uint32_t slot = (uint32_t)(m_frameCounter % kSwapchainFramesInFlight);
+
+            // Present semaphore is per-image (not per-slot): the presentation
+            // engine holds it asynchronously; slot-based reuse fires VUID-00067.
             m_device->VulkanNvrhi()->queueSignalSemaphore(
-                nvrhi::CommandQueue::Graphics, m_presentSemaphore, 0);
-            // Empty submit flushes the queued semaphore signal (donut pattern).
-            // Must go through VulkanNvrhi() (raw backend) -- the validation
-            // wrapper short-circuits executeCommandLists when numCommandLists==0
-            // and would leave the signal semaphore un-submitted.
+                nvrhi::CommandQueue::Graphics, m_presentSemaphores[m_currentImage], 0);
+            // Empty submit flushes the queued semaphore signal. Must go
+            // through the UNWRAPPED device: the validation wrapper
+            // short-circuits executeCommandLists when numCommandLists == 0
+            // and would leave the signal un-submitted.
             m_device->VulkanNvrhi()->executeCommandLists(nullptr, 0);
 
             auto presentInfo = vk::PresentInfoKHR()
                 .setWaitSemaphoreCount(1)
-                .setPWaitSemaphores(&m_presentSemaphore)
+                .setPWaitSemaphores(&m_presentSemaphores[m_currentImage])
                 .setSwapchainCount(1)
                 .setPSwapchains(&m_swapchain)
                 .setPImageIndices(&m_currentImage);
@@ -330,9 +372,12 @@ namespace Arcane
                 // Rebuilt on the next BeginFrame/Resize.
             }
 
-            // M1 pacing: one frame in flight, idle after present -- also what
-            // makes the single acquire/present semaphore pair safe to reuse.
-            m_device->Nvrhi()->waitForIdle();
+            // Completion point for this slot: covers the flush submit above,
+            // i.e. every queue operation of this frame.
+            m_device->Nvrhi()->setEventQuery(m_frameQueries[slot],
+                                             nvrhi::CommandQueue::Graphics);
+            ++m_frameCounter;
+
             m_device->Nvrhi()->runGarbageCollection();
         }
 
@@ -350,13 +395,16 @@ namespace Arcane
         {
             if (!m_device)
                 return;
+            // ReleaseBackbufferHandles drains the GPU, clears backbuffers,
+            // and destroys per-image present semaphores.
             ReleaseBackbufferHandles();
             if (m_swapchain)
                 m_device->Device().destroySwapchainKHR(m_swapchain);
-            if (m_acquireSemaphore)
-                m_device->Device().destroySemaphore(m_acquireSemaphore);
-            if (m_presentSemaphore)
-                m_device->Device().destroySemaphore(m_presentSemaphore);
+            for (uint32_t i = 0; i < kSwapchainFramesInFlight; ++i)
+            {
+                if (m_acquireSemaphores[i])
+                    m_device->Device().destroySemaphore(m_acquireSemaphores[i]);
+            }
             if (m_surface)
                 m_device->Instance().destroySurfaceKHR(m_surface);
         }

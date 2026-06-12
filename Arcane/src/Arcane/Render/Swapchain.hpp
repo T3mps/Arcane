@@ -1,9 +1,10 @@
 #pragma once
 
-// Render module: backbuffer presentation against a Window. M1 pacing rule:
-// Present() waits for GPU idle (one frame in flight) -- correct-first;
-// real frame pacing arrives with the M2 renderer work. Present() promises
-// presentation only: callers must NOT assume the GPU is idle afterwards.
+// Render module: backbuffer presentation against a Window.
+// Pacing (M2): kSwapchainFramesInFlight frames in flight, slot-gated with
+// nvrhi::EventQuery inside the swapchain implementations. Present() still
+// promises presentation only -- callers must NOT assume any GPU sync
+// happened. Anything needing the GPU drained calls waitForIdle() itself.
 
 #include <Arcane/Base/Api.hpp>
 
@@ -13,6 +14,10 @@
 
 namespace Arcane
 {
+    // CPU may run this many frames ahead of the GPU. Slot gating lives
+    // INSIDE the swapchains; nothing above this interface sees it.
+    inline constexpr uint32_t kSwapchainFramesInFlight = 2;
+
     class ARCANE_API Swapchain
     {
     public:
@@ -23,6 +28,7 @@ namespace Arcane
         // callers skip rendering for that frame.
         virtual nvrhi::ITexture* BeginFrame() = 0;
 
+        // Presents the acquired frame. Promises presentation, not synchronization.
         virtual void Present() = 0;
 
         // Width()/Height() afterwards reflect the ACTUAL surface extent --
