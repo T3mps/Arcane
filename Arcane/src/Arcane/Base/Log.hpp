@@ -4,6 +4,9 @@
 // Deliberately separate from Core's server-flavored Logger (which writes
 // logs/gacha_server.log with Auth/Gacha/... categories). File sinks and
 // per-module categories can grow here when the engine needs them.
+// spdlog is header-only in this workspace: each module has its OWN spdlog
+// registry. Consumers must reach this logger via Engine() / the ARC_*
+// macros -- spdlog::get("Arcane") in another module returns null.
 
 #include <Arcane/Base/Api.hpp>
 

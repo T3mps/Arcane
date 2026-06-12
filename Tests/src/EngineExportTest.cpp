@@ -1,5 +1,7 @@
-// Proves the Arcane.dll boundary: an exported function is callable through
-// the import lib and the DLL actually loads at run time.
+// BuildInfo() proves the Arcane.dll boundary (ARCANE_API export resolved
+// through the import lib at run time). The VersionString() check is a
+// Core-consistency pin, not a boundary check -- it is inline and compiles
+// into this exe.
 
 #include <catch2/catch_test_macros.hpp>
 
