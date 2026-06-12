@@ -118,6 +118,88 @@ project "Core"
         symbols "off"
 
 -- ============================================================================
+-- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
+-- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
+-- NVRHI and SDL3 link INTO this DLL; consumers link only the import lib.
+-- Second namespaced include root: src/Arcane/{Base,Platform,Render} --
+-- relative paths are disjoint from Core's root (Net/Crypto/Types/Util),
+-- so <Arcane/...> resolves unambiguously across both.
+-- ============================================================================
+project "Arcane"
+    location "Arcane"
+    kind "SharedLib"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.hpp",
+        "%{prj.location}/src/**.cpp",
+    }
+
+    includedirs {
+        "%{prj.location}/src",
+        "%{IncludeDir.Core}",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.picosha2}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.VulkanHeaders}",
+        "%{IncludeDir.DirectXHeaders}",
+        "%{IncludeDir.DirectXHeaders}/directx",
+        "%{IncludeDir.SDL3}",
+    }
+
+    links { "Core", "nvrhi" }
+
+    defines {
+        "ARCANE_BUILD_DLL",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        "VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1",
+        "NOMINMAX",
+        "WIN32_LEAN_AND_MEAN",
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        defines { "VK_USE_PLATFORM_WIN32_KHR" }
+        -- d3d12/dxgi/dxguid: D3D12 backend. SDL3-static + system libs:
+        -- the platform layer (list mirrors SDL3's pkgconfig Libs line).
+        links {
+            "d3d12", "dxgi", "dxguid",
+            "SDL3-static",
+            "user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32",
+            "version", "uuid", "advapi32", "setupapi", "shell32", "dinput8",
+        }
+
+    filter { "system:windows", "configurations:Debug" }
+        libdirs { VCPKG_INSTALLED_MD .. "/debug/lib" }
+    filter { "system:windows", "configurations:Release or configurations:Dist" }
+        libdirs { VCPKG_INSTALLED_MD .. "/lib" }
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARCANE_RELEASE" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+
+-- ============================================================================
 -- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links Core
 -- directly -- Core links into exactly ONE module per process.
 -- ============================================================================
@@ -138,6 +220,7 @@ project "ArcaneTests"
 
     includedirs {
         "%{IncludeDir.Core}",
+        "%{wks.location}/Arcane/src",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",
@@ -156,7 +239,12 @@ project "ArcaneTests"
         "%{IncludeDir.SDL3}",
     }
 
-    links { "Core", "Catch2", "rapidcheck", "enkiTS", "freetype", "nvrhi" }
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "nvrhi" }
+
+    -- The test exe loads Arcane.dll from its own directory.
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+    }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
