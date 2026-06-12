@@ -85,6 +85,24 @@ namespace Arcane
                 nvrhi::ShaderHandle handle;
             };
 
+            // Derive the HLSL entry-point name from the artifact stem.
+            // Convention (from compile-shaders.bat): <shader>_vs -> vs_main,
+            // <shader>_ps -> ps_main, <shader>_cs -> cs_main.
+            // Falls back to "main" so DXIL artifacts (which embed the real
+            // name) still work -- the D3D12 backend ignores entryName for DXIL
+            // (DXIL encodes it). Vulkan uses it for SPIR-V OpEntryPoint lookup.
+            static std::string EntryNameFromStem(std::string_view stem)
+            {
+                if (stem.size() >= 3)
+                {
+                    const auto suffix = stem.substr(stem.size() - 3);
+                    if (suffix == "_vs") return "vs_main";
+                    if (suffix == "_ps") return "ps_main";
+                    if (suffix == "_cs") return "cs_main";
+                }
+                return "main";
+            }
+
             bool LoadEntry(Entry& entry)
             {
                 std::error_code ec;
@@ -112,8 +130,13 @@ namespace Arcane
                     return false;
                 }
 
+                // entryName must match the HLSL function name in SPIR-V
+                // (Vulkan requires an exact OpEntryPoint match). For DXIL the
+                // D3D12 backend ignores this field, but set it for symmetry.
+                const std::string stem = entry.path.stem().string();
                 auto desc = nvrhi::ShaderDesc()
                     .setShaderType(entry.type)
+                    .setEntryName(EntryNameFromStem(stem))
                     .setDebugName(entry.path.filename().string());
                 entry.handle =
                     m_device->createShader(desc, bytes.data(), bytes.size());

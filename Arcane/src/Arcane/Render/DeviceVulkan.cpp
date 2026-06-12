@@ -592,8 +592,13 @@ namespace Arcane
             // NVRHI also calls vkCmdPipelineBarrier2 (Vulkan 1.3 core /
             // KHR_synchronization2) -- synchronization2 must be enabled or the
             // validation layer fires on every command list barrier.
+            // dynamicRendering (Vulkan 1.3 core): nvrhi's Vulkan pipeline
+            // creation uses VkPipelineRenderingCreateInfo (pNext chain) instead
+            // of a VkRenderPass object -- enabling this feature is required or
+            // vkCreateGraphicsPipelines fails with VUID-06576.
             auto vulkan13Features = vk::PhysicalDeviceVulkan13Features()
-                .setSynchronization2(true);
+                .setSynchronization2(true)
+                .setDynamicRendering(true);
 
             auto vulkan12Features = vk::PhysicalDeviceVulkan12Features()
                 .setTimelineSemaphore(true)
