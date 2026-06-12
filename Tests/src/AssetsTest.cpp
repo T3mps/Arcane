@@ -31,10 +31,11 @@ namespace
     }
 
     // Writes a temp JSON file; returns its path.
-    std::filesystem::path WriteTestJson(const std::string& content)
+    std::filesystem::path WriteTestJson(const std::string& content,
+                                        const char* name = "arcane-assets-test.json")
     {
         const auto path =
-            std::filesystem::temp_directory_path() / "arcane-assets-test.json";
+            std::filesystem::temp_directory_path() / name;
         std::ofstream f(path, std::ios::binary);
         REQUIRE(f.is_open());
         f << content;
@@ -128,8 +129,10 @@ TEST_CASE("assets: json loader -- parse, cache identity, memoized failure", "[as
     CHECK(assets->GetJson("does/not/exist.json") == nullptr);
     CHECK(assets->GetJson("does/not/exist.json") == nullptr);
 
-    // Malformed JSON: null both times.
-    const auto badPath = WriteTestJson("{ not valid json !!!}");
+    // Malformed JSON: null both times. Use a distinct filename so this path
+    // has no prior cache entry from the valid-JSON write above.
+    const auto badPath = WriteTestJson("{ not valid json !!!}",
+                                       "arcane-assets-test-bad.json");
     CHECK(assets->GetJson(badPath) == nullptr);
     CHECK(assets->GetJson(badPath) == nullptr);
 
