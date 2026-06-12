@@ -113,7 +113,7 @@ namespace
             nv->waitForIdle();
         };
 
-        drawDemoFrame(outputFb);  // frame 1: window settles its auto-fit size
+        drawDemoFrame(outputFb);  // frame 1: services initial font-atlas/texture creation (SetNextWindowPos/Size pins the window every frame, so auto-fit is not the reason for two frames)
         drawDemoFrame(outputFb);  // frame 2: the demo paints
 
         nvrhi::CommandListHandle commandList = nv->createCommandList();

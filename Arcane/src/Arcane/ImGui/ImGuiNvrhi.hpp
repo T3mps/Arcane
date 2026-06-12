@@ -63,6 +63,9 @@ namespace Arcane
         uint64_t m_pipelineGeneration = 0;
 
         // Per-ITexture* binding-set cache (one set per atlas/user texture).
+        // ABA safety is load-bearing: DestroyTexture evicts the cache entry
+        // BEFORE releasing the texture handle, and a cached binding set pins
+        // its texture -- so a live ITexture* key is always unique.
         std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_bindingSets;
 
         // ImTextureData-owned GPU textures (font atlas + any user textures).

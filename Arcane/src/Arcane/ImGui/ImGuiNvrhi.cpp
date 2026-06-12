@@ -338,15 +338,21 @@ namespace Arcane
 
     void ImGuiNvrhiRenderer::Shutdown()
     {
-        // Destroy ImTextureData-owned textures (dx11 reference shutdown path):
-        // mark each as destroyed so a later InvalidateDeviceObjects/re-init is
-        // clean, then release our handles + caches.
-        for (auto& [tex, handle] : m_textures)
-        {
-            tex->SetTexID(ImTextureID_Invalid);
-            tex->SetStatus(ImTextureStatus_Destroyed);
-            (void)handle;
-        }
+        // Mirror the dx11 reference InvalidateDeviceObjects shutdown path
+        // (imgui_impl_dx11.cpp): iterate the platform texture list rather than
+        // only our own m_textures map. This catches any ImTextureData entries
+        // that were never serviced -- e.g. a stuck WantCreate that arrived after
+        // the last RenderDrawData, or a WantDestroy with UnusedFrames==0 -- and
+        // leaves their status as Destroyed so a later re-Init is clean.
+        //
+        // Guard: the dx11 reference checks RefCount == 1 (only the platform list
+        // holds a ref). We replicate that intent: only destroy textures this
+        // backend owns. DestroyTexture is safe on a texture absent from m_textures
+        // (an unserviced WantCreate has no handle to evict) -- it tolerates that.
+        for (ImTextureData* tex : ImGui::GetPlatformIO().Textures)
+            if (tex->RefCount == 1)
+                DestroyTexture(tex);
+
         m_textures.clear();
         m_bindingSets.clear();
         m_pipelines.clear();

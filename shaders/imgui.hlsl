@@ -1,7 +1,8 @@
 // Dear ImGui render shader. Vertices arrive in display pixels; push
 // constants carry scale/translate to clip space (the standard ImGui
-// orthographic transform). Vertex color is sRGB-ish UI color -- ImGui
-// draws POST-tonemap into the display-referred backbuffer.
+// orthographic transform). Vertex colors and the RGBA8 (non-sRGB) font
+// atlas are display-referred; no linearization -- ImGui draws POST-tonemap
+// into the display-referred backbuffer.
 
 struct ImGuiConstants
 {

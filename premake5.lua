@@ -184,7 +184,10 @@ project "Arcane"
     -- object only produces an export when the linker actually pulls that
     -- object in, and the DLL itself references only a subset of the imgui API.
     -- /WHOLEARCHIVE exports the full surface for consumers (tests/Playground).
-    linkoptions { "/WHOLEARCHIVE:imgui" }
+    -- NOTE: Linux port needs --whole-archive/-l imgui --no-whole-archive instead.
+    filter "system:windows"
+        linkoptions { "/WHOLEARCHIVE:imgui" }
+    filter {}
 
     defines {
         "ARCANE_BUILD_DLL",

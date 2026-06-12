@@ -26,7 +26,9 @@ namespace Arcane
                                                   ShaderLibrary& shaders);
         virtual ~ImGuiLayer() = default;
 
-        virtual void BeginFrame() = 0;  // sdl3 NewFrame + ImGui::NewFrame
+        // sdl3 NewFrame + ImGui::NewFrame. Caller MUST pair every BeginFrame
+        // with exactly one Render; a double-Begin trips ImGui's own asserts.
+        virtual void BeginFrame() = 0;
         // ImGui::Render + draw into target (an OPEN command list).
         virtual void Render(nvrhi::ICommandList* commandList,
                             nvrhi::IFramebuffer* target) = 0;
