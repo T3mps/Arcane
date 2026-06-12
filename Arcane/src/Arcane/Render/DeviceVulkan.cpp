@@ -14,11 +14,17 @@
 #include <Arcane/Render/NvrhiMessageCallback.hpp>
 #include <Arcane/Render/Swapchain.hpp>
 
+#include <SDL3/SDL.h>
+
 #include <nvrhi/vulkan.h>
 #include <nvrhi/validation.h>
 
+// VK_USE_PLATFORM_WIN32_KHR enables Win32SurfaceCreateInfoKHR in vulkan.hpp.
+// SDL3 was built without SDL_VULKAN; we create the surface via the
+// VK_KHR_win32_surface extension directly (Window::NativeHandle -> HWND).
 #include <vulkan/vulkan.hpp>
 
+#include <algorithm>
 #include <iterator>
 #include <string>
 #include <string_view>
@@ -39,6 +45,9 @@ namespace Arcane
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
         constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
+
+        constexpr nvrhi::Format kSwapchainFormat    = nvrhi::Format::BGRA8_UNORM;
+        constexpr vk::Format    kSwapchainFormatVk  = vk::Format::eB8G8R8A8Unorm;
 
         class DeviceVulkan final : public RenderDevice
         {
@@ -64,15 +73,8 @@ namespace Arcane
                 return static_cast<nvrhi::vulkan::IDevice*>(m_nvrhiBackend.Get());
             }
 
-            // Vulkan swapchain not implemented yet -- replaced wholesale in the
-            // next task (VK_KHR_swapchain surface/present path).
             std::unique_ptr<Swapchain> CreateSwapchain(Window& window,
-                                                       bool vsync) override
-            {
-                (void)window; (void)vsync;
-                ARC_ERROR("Vulkan swapchain not implemented yet (next task)");
-                return nullptr;
-            }
+                                                       bool vsync) override;
 
         private:
             vk::detail::DynamicLoader m_loader;  // must outlive everything below
@@ -85,6 +87,298 @@ namespace Arcane
             nvrhi::DeviceHandle m_nvrhi;         // possibly validation-wrapped
             std::string         m_adapterName;
         };
+
+        // ----------------------------------------------------------------
+        // Vulkan KHR swapchain: SDL surface, acquire/present semaphore
+        // bridge into NVRHI, resize/out-of-date handling.
+        // M1 pacing: waitForIdle + runGarbageCollection inside Present
+        // (one frame in flight) -- makes the single semaphore pair safe.
+        // ----------------------------------------------------------------
+
+        class SwapchainVulkan final : public Swapchain
+        {
+        public:
+            ~SwapchainVulkan() override;
+            bool Init(DeviceVulkan& device, Window& window, bool vsync);
+
+            nvrhi::ITexture* BeginFrame() override;
+            void Present() override;
+            void Resize(uint32_t width, uint32_t height) override;
+            uint32_t Width() const override { return m_width; }
+            uint32_t Height() const override { return m_height; }
+            nvrhi::Format Format() const override { return kSwapchainFormat; }
+
+        private:
+            bool CreateSwapchainObjects();
+            void ReleaseBackbufferHandles();
+
+            DeviceVulkan* m_device = nullptr;
+            Window*        m_window = nullptr;   // for SDL_SetWindowSize in Resize()
+            vk::SurfaceKHR m_surface;
+            vk::SwapchainKHR m_swapchain;
+            std::vector<nvrhi::TextureHandle> m_backbuffers;
+            vk::Semaphore m_acquireSemaphore;
+            vk::Semaphore m_presentSemaphore;
+            uint32_t m_currentImage = 0;
+            uint32_t m_width = 0;
+            uint32_t m_height = 0;
+            bool m_vsync = true;
+            bool m_acquired = false;
+        };
+
+        bool SwapchainVulkan::Init(DeviceVulkan& device, Window& window, bool vsync)
+        {
+            m_device = &device;
+            m_window = &window;
+            m_vsync = vsync;
+            window.GetPixelSize(m_width, m_height);
+
+            // SDL3 is built without SDL_VULKAN in the vcpkg triplet
+            // (-DSDL_VULKAN=OFF).  Create the VkSurface via the raw Win32
+            // extension (VK_KHR_win32_surface / VK_USE_PLATFORM_WIN32_KHR
+            // is a project-wide define) using the HWND from Window.
+            HWND hwnd = static_cast<HWND>(window.NativeHandle());
+            if (!hwnd)
+            {
+                ARC_ERROR("Window::NativeHandle() returned null; cannot create VkSurface");
+                return false;
+            }
+            try
+            {
+                auto win32Info = vk::Win32SurfaceCreateInfoKHR()
+                    .setHinstance(GetModuleHandle(nullptr))
+                    .setHwnd(hwnd);
+                m_surface = device.Instance().createWin32SurfaceKHR(win32Info);
+            }
+            catch (const vk::SystemError& e)
+            {
+                ARC_ERROR("vkCreateWin32SurfaceKHR failed: {}", e.what());
+                return false;
+            }
+
+            if (!device.PhysicalDevice().getSurfaceSupportKHR(
+                    device.GraphicsQueueFamily(), m_surface))
+            {
+                ARC_ERROR("Graphics queue family cannot present to this surface");
+                return false;
+            }
+
+            m_acquireSemaphore = device.Device().createSemaphore({});
+            m_presentSemaphore = device.Device().createSemaphore({});
+
+            return CreateSwapchainObjects();
+        }
+
+        bool SwapchainVulkan::CreateSwapchainObjects()
+        {
+            vk::PhysicalDevice physical = m_device->PhysicalDevice();
+            auto caps = physical.getSurfaceCapabilitiesKHR(m_surface);
+
+            vk::Extent2D extent = caps.currentExtent;
+            if (extent.width == UINT32_MAX)  // surface lets us choose
+            {
+                extent.width = std::clamp(m_width, caps.minImageExtent.width,
+                                          caps.maxImageExtent.width);
+                extent.height = std::clamp(m_height, caps.minImageExtent.height,
+                                           caps.maxImageExtent.height);
+            }
+            m_width = extent.width;
+            m_height = extent.height;
+            if (m_width == 0 || m_height == 0)
+                return true;  // minimized; BeginFrame skips until restored
+
+            vk::ColorSpaceKHR colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
+            bool formatFound = false;
+            for (const auto& format : physical.getSurfaceFormatsKHR(m_surface))
+            {
+                if (format.format == kSwapchainFormatVk)
+                {
+                    colorSpace = format.colorSpace;
+                    formatFound = true;
+                    break;
+                }
+            }
+            if (!formatFound)
+            {
+                ARC_ERROR("Surface does not support B8G8R8A8_UNORM");
+                return false;
+            }
+
+            vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;  // vsync
+            if (!m_vsync)
+            {
+                presentMode = vk::PresentModeKHR::eImmediate;
+                for (auto mode : physical.getSurfacePresentModesKHR(m_surface))
+                {
+                    if (mode == vk::PresentModeKHR::eMailbox)
+                    {
+                        presentMode = vk::PresentModeKHR::eMailbox;
+                        break;
+                    }
+                }
+            }
+
+            uint32_t imageCount = std::max(3u, caps.minImageCount);
+            if (caps.maxImageCount != 0)
+                imageCount = std::min(imageCount, caps.maxImageCount);
+
+            auto swapchainInfo = vk::SwapchainCreateInfoKHR()
+                .setSurface(m_surface)
+                .setMinImageCount(imageCount)
+                .setImageFormat(kSwapchainFormatVk)
+                .setImageColorSpace(colorSpace)
+                .setImageExtent(extent)
+                .setImageArrayLayers(1)
+                .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment |
+                               vk::ImageUsageFlagBits::eTransferDst)
+                .setImageSharingMode(vk::SharingMode::eExclusive)
+                .setPreTransform(caps.currentTransform)
+                .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
+                .setPresentMode(presentMode)
+                .setClipped(true)
+                .setOldSwapchain(m_swapchain);
+
+            vk::SwapchainKHR newSwapchain =
+                m_device->Device().createSwapchainKHR(swapchainInfo);
+            if (m_swapchain)
+                m_device->Device().destroySwapchainKHR(m_swapchain);
+            m_swapchain = newSwapchain;
+
+            auto images = m_device->Device().getSwapchainImagesKHR(m_swapchain);
+            m_backbuffers.clear();
+            m_backbuffers.reserve(images.size());
+            for (size_t i = 0; i < images.size(); ++i)
+            {
+                auto texDesc = nvrhi::TextureDesc()
+                    .setWidth(m_width)
+                    .setHeight(m_height)
+                    .setFormat(kSwapchainFormat)
+                    .setIsRenderTarget(true)
+                    .setInitialState(nvrhi::ResourceStates::Present)
+                    .setKeepInitialState(true)
+                    .setDebugName("SwapchainImage");
+                nvrhi::TextureHandle handle =
+                    m_device->Nvrhi()->createHandleForNativeTexture(
+                        nvrhi::ObjectTypes::VK_Image,
+                        nvrhi::Object((VkImage)images[i]), texDesc);
+                if (!handle)
+                {
+                    ARC_ERROR("createHandleForNativeTexture failed for image {}", i);
+                    return false;
+                }
+                m_backbuffers.push_back(handle);
+            }
+            return true;
+        }
+
+        void SwapchainVulkan::ReleaseBackbufferHandles()
+        {
+            m_device->Nvrhi()->waitForIdle();
+            m_backbuffers.clear();
+            m_device->Nvrhi()->runGarbageCollection();
+        }
+
+        nvrhi::ITexture* SwapchainVulkan::BeginFrame()
+        {
+            if (m_width == 0 || m_height == 0 || m_backbuffers.empty())
+                return nullptr;
+
+            try
+            {
+                auto acquired = m_device->Device().acquireNextImageKHR(
+                    m_swapchain, UINT64_MAX, m_acquireSemaphore, nullptr);
+                if (acquired.result != vk::Result::eSuccess &&
+                    acquired.result != vk::Result::eSuboptimalKHR)
+                    return nullptr;
+                m_currentImage = acquired.value;
+            }
+            catch (const vk::OutOfDateKHRError&)
+            {
+                // Surface changed under us: rebuild at the current size and
+                // skip this frame.
+                ReleaseBackbufferHandles();
+                CreateSwapchainObjects();
+                return nullptr;
+            }
+
+            m_device->VulkanNvrhi()->queueWaitForSemaphore(
+                nvrhi::CommandQueue::Graphics, m_acquireSemaphore, 0);
+            m_acquired = true;
+            return m_backbuffers[m_currentImage];
+        }
+
+        void SwapchainVulkan::Present()
+        {
+            if (!m_acquired)
+                return;
+            m_acquired = false;
+
+            m_device->VulkanNvrhi()->queueSignalSemaphore(
+                nvrhi::CommandQueue::Graphics, m_presentSemaphore, 0);
+            // Empty submit flushes the queued semaphore signal (donut pattern).
+            // Must go through VulkanNvrhi() (raw backend) -- the validation
+            // wrapper short-circuits executeCommandLists when numCommandLists==0
+            // and would leave the signal semaphore un-submitted.
+            m_device->VulkanNvrhi()->executeCommandLists(nullptr, 0);
+
+            auto presentInfo = vk::PresentInfoKHR()
+                .setWaitSemaphoreCount(1)
+                .setPWaitSemaphores(&m_presentSemaphore)
+                .setSwapchainCount(1)
+                .setPSwapchains(&m_swapchain)
+                .setPImageIndices(&m_currentImage);
+            try
+            {
+                (void)m_device->GraphicsQueue().presentKHR(presentInfo);
+            }
+            catch (const vk::OutOfDateKHRError&)
+            {
+                // Rebuilt on the next BeginFrame/Resize.
+            }
+
+            // M1 pacing: one frame in flight, idle after present -- also what
+            // makes the single acquire/present semaphore pair safe to reuse.
+            m_device->Nvrhi()->waitForIdle();
+            m_device->Nvrhi()->runGarbageCollection();
+        }
+
+        void SwapchainVulkan::Resize(uint32_t width, uint32_t height)
+        {
+            if (width == m_width && height == m_height)
+                return;
+            // On Win32, VkSurfaceCapabilitiesKHR::currentExtent always tracks
+            // the window's client area -- we must resize the window first so
+            // the surface capabilities report the new extent.
+            SDL_SetWindowSize(m_window->SdlWindow(), (int)width, (int)height);
+            m_width = width;
+            m_height = height;
+            ReleaseBackbufferHandles();
+            CreateSwapchainObjects();
+        }
+
+        SwapchainVulkan::~SwapchainVulkan()
+        {
+            if (!m_device)
+                return;
+            ReleaseBackbufferHandles();
+            if (m_swapchain)
+                m_device->Device().destroySwapchainKHR(m_swapchain);
+            if (m_acquireSemaphore)
+                m_device->Device().destroySemaphore(m_acquireSemaphore);
+            if (m_presentSemaphore)
+                m_device->Device().destroySemaphore(m_presentSemaphore);
+            if (m_surface)
+                m_device->Instance().destroySurfaceKHR(m_surface);
+        }
+
+        std::unique_ptr<Swapchain> DeviceVulkan::CreateSwapchain(Window& window,
+                                                                 bool vsync)
+        {
+            auto swapchain = std::make_unique<SwapchainVulkan>();
+            if (!swapchain->Init(*this, window, vsync))
+                return nullptr;
+            return swapchain;
+        }
 
         bool DeviceVulkan::Init(const RenderDeviceDesc& desc)
         {

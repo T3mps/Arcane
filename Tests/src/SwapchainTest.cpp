@@ -66,3 +66,8 @@ TEST_CASE("d3d12: windowed swapchain clears, presents, resizes", "[gpu][d3d12]")
 {
     RunWindowedClearFrames(Arcane::GraphicsBackend::D3D12);
 }
+
+TEST_CASE("vulkan: windowed swapchain clears, presents, resizes", "[gpu][vulkan]")
+{
+    RunWindowedClearFrames(Arcane::GraphicsBackend::Vulkan);
+}

@@ -23,7 +23,6 @@ namespace Arcane
         SDL_WindowFlags flags = 0;
         if (desc.resizable) flags |= SDL_WINDOW_RESIZABLE;
         if (desc.hidden)    flags |= SDL_WINDOW_HIDDEN;
-        if (desc.vulkan)    flags |= SDL_WINDOW_VULKAN;
 
         m_window = SDL_CreateWindow(desc.title.c_str(),
                                     (int)desc.width, (int)desc.height, flags);

@@ -20,8 +20,8 @@ namespace Arcane
         uint32_t height   = 720;
         bool resizable    = true;
         bool hidden       = false;  // tests create hidden windows
-        bool vulkan       = false;  // SDL_WINDOW_VULKAN: required before a
-                                    // VkSurfaceKHR can be created on it
+        bool vulkan       = false;  // reserved: marks window intended for Vulkan
+                                    // (surface created via Win32 ext, not SDL)
     };
 
     struct WindowEvents
