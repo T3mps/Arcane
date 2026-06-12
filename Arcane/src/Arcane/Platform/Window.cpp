@@ -8,6 +8,12 @@ namespace Arcane
 {
     bool Window::Create(const WindowDesc& desc)
     {
+        if (m_window)
+        {
+            ARC_WARN("Window::Create called on an already-created window");
+            return false;
+        }
+
         if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
         {
             ARC_ERROR("SDL_InitSubSystem(VIDEO) failed: {}", SDL_GetError());
@@ -50,6 +56,9 @@ namespace Arcane
     WindowEvents Window::PumpEvents()
     {
         WindowEvents events;
+        if (!m_window) return events;
+
+        const SDL_WindowID myId = SDL_GetWindowID(m_window);
         SDL_Event e;
         while (SDL_PollEvent(&e))
         {
@@ -59,15 +68,15 @@ namespace Arcane
                 events.quitRequested = true;
                 break;
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-                if (e.window.windowID == SDL_GetWindowID(m_window))
+                if (e.window.windowID == myId)
                     events.quitRequested = true;
                 break;
             case SDL_EVENT_KEY_DOWN:
-                if (e.key.key == SDLK_ESCAPE)
+                if (e.key.windowID == myId && e.key.key == SDLK_ESCAPE)
                     events.quitRequested = true;
                 break;
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                if (e.window.windowID == SDL_GetWindowID(m_window))
+                if (e.window.windowID == myId)
                 {
                     events.resized = true;
                     events.width   = (uint32_t)e.window.data1;
@@ -83,11 +92,13 @@ namespace Arcane
 
     void Window::SetTitle(const std::string& title)
     {
+        if (!m_window) return;
         SDL_SetWindowTitle(m_window, title.c_str());
     }
 
     void Window::GetPixelSize(uint32_t& width, uint32_t& height) const
     {
+        if (!m_window) { width = 0; height = 0; return; }
         int w = 0, h = 0;
         SDL_GetWindowSizeInPixels(m_window, &w, &h);
         width  = (uint32_t)w;
@@ -96,11 +107,13 @@ namespace Arcane
 
     bool Window::IsMinimized() const
     {
+        if (!m_window) return false;
         return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MINIMIZED) != 0;
     }
 
     void* Window::NativeHandle() const
     {
+        if (!m_window) return nullptr;
         return SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),
                                       SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
     }
