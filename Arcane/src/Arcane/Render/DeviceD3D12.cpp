@@ -1,10 +1,11 @@
 // D3D12 backend: DXGI factory + adapter + device + direct queue, wrapped
-// by nvrhi::d3d12::createDevice. Headless here; the swapchain half of this
-// TU arrives with the windowed milestone task.
+// by nvrhi::d3d12::createDevice. Swapchain: DXGI flip-discard, 3 backbuffers.
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
 #include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/Swapchain.hpp>
 
 #include <nvrhi/d3d12.h>
 #include <nvrhi/validation.h>
@@ -15,6 +16,7 @@
 
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -22,6 +24,10 @@ namespace Arcane
 {
     namespace
     {
+        constexpr uint32_t kBackbufferCount = 3;
+        constexpr DXGI_FORMAT kSwapchainFormatDxgi = DXGI_FORMAT_B8G8R8A8_UNORM;
+        constexpr nvrhi::Format kSwapchainFormat = nvrhi::Format::BGRA8_UNORM;
+
         class DeviceD3D12 final : public RenderDevice
         {
         public:
@@ -33,6 +39,9 @@ namespace Arcane
 
             IDXGIFactory6* Factory() const { return m_factory.Get(); }
             ID3D12CommandQueue* GraphicsQueue() const { return m_graphicsQueue.Get(); }
+
+            std::unique_ptr<Swapchain> CreateSwapchain(Window& window,
+                                                       bool vsync) override;
 
         private:
             // Declaration order is destruction order in reverse: the nvrhi
@@ -49,7 +58,7 @@ namespace Arcane
         bool DeviceD3D12::Init(const RenderDeviceDesc& desc)
         {
             UINT factoryFlags = 0;
-            if (desc.enableValidation)
+            if (desc.enableD3D12DebugLayer)
             {
                 ComPtr<ID3D12Debug> debug;
                 if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
@@ -90,6 +99,22 @@ namespace Arcane
                 return false;
             }
 
+            // The D3D12 debug layer defaults to break-on-error, which calls
+            // __fastfail when the info queue receives a D3D12_MESSAGE_SEVERITY_ERROR
+            // or CORRUPTION message. Route all validation through NVRHI's message
+            // callback (which logs them at the appropriate level) rather than
+            // aborting the process on first error.
+            if (desc.enableD3D12DebugLayer)
+            {
+                ComPtr<ID3D12InfoQueue> infoQueue;
+                if (SUCCEEDED(m_device.As(&infoQueue)))
+                {
+                    infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
+                    infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
+                    infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
+                }
+            }
+
             D3D12_COMMAND_QUEUE_DESC queueDesc{};
             queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
             if (FAILED(m_device->CreateCommandQueue(&queueDesc,
@@ -115,6 +140,158 @@ namespace Arcane
 
             ARC_INFO("D3D12 device created on '{}'", m_adapterName);
             return true;
+        }
+
+        // ----------------------------------------------------------------
+        // DXGI flip-discard swapchain: 3 backbuffers, BGRA8_UNORM.
+        // M1 pacing: waitForIdle after each Present (one frame in flight).
+        // ----------------------------------------------------------------
+
+        class SwapchainD3D12 final : public Swapchain
+        {
+        public:
+            ~SwapchainD3D12() override;
+            bool Init(DeviceD3D12& device, Window& window, bool vsync);
+
+            nvrhi::ITexture* BeginFrame() override;
+            void Present() override;
+            void Resize(uint32_t width, uint32_t height) override;
+            uint32_t Width() const override { return m_width; }
+            uint32_t Height() const override { return m_height; }
+            nvrhi::Format Format() const override { return kSwapchainFormat; }
+
+        private:
+            bool CreateBackbufferHandles();
+            void ReleaseBackbufferHandles();
+
+            DeviceD3D12* m_device = nullptr;
+            ComPtr<IDXGISwapChain3> m_swapchain;
+            std::vector<nvrhi::TextureHandle> m_backbuffers;
+            uint32_t m_width = 0;
+            uint32_t m_height = 0;
+            bool m_vsync = true;
+        };
+
+        bool SwapchainD3D12::Init(DeviceD3D12& device, Window& window, bool vsync)
+        {
+            m_device = &device;
+            m_vsync = vsync;
+            window.GetPixelSize(m_width, m_height);
+
+            DXGI_SWAP_CHAIN_DESC1 scDesc{};
+            scDesc.Width = m_width;
+            scDesc.Height = m_height;
+            scDesc.Format = kSwapchainFormatDxgi;
+            scDesc.SampleDesc = { 1, 0 };
+            scDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            scDesc.BufferCount = kBackbufferCount;
+            scDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+            HWND hwnd = static_cast<HWND>(window.NativeHandle());
+            ComPtr<IDXGISwapChain1> swapchain1;
+            if (FAILED(device.Factory()->CreateSwapChainForHwnd(
+                    device.GraphicsQueue(), hwnd, &scDesc, nullptr, nullptr,
+                    &swapchain1)))
+            {
+                ARC_ERROR("CreateSwapChainForHwnd failed");
+                return false;
+            }
+            // Prevent DXGI from intercepting Alt+Enter; the engine manages
+            // presentation mode explicitly.
+            device.Factory()->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+            if (FAILED(swapchain1.As(&m_swapchain)))
+            {
+                ARC_ERROR("IDXGISwapChain3 not available");
+                return false;
+            }
+            return CreateBackbufferHandles();
+        }
+
+        bool SwapchainD3D12::CreateBackbufferHandles()
+        {
+            m_backbuffers.resize(kBackbufferCount);
+            for (uint32_t i = 0; i < kBackbufferCount; ++i)
+            {
+                ComPtr<ID3D12Resource> buffer;
+                if (FAILED(m_swapchain->GetBuffer(i, IID_PPV_ARGS(&buffer))))
+                {
+                    ARC_ERROR("Swapchain GetBuffer({}) failed", i);
+                    return false;
+                }
+
+                auto texDesc = nvrhi::TextureDesc()
+                    .setWidth(m_width)
+                    .setHeight(m_height)
+                    .setFormat(kSwapchainFormat)
+                    .setIsRenderTarget(true)
+                    .setInitialState(nvrhi::ResourceStates::Present)
+                    .setKeepInitialState(true)
+                    .setDebugName("SwapchainBuffer");
+                m_backbuffers[i] = m_device->Nvrhi()->createHandleForNativeTexture(
+                    nvrhi::ObjectTypes::D3D12_Resource,
+                    nvrhi::Object(buffer.Get()), texDesc);
+                if (!m_backbuffers[i])
+                {
+                    ARC_ERROR("createHandleForNativeTexture failed for buffer {}", i);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        void SwapchainD3D12::ReleaseBackbufferHandles()
+        {
+            m_device->Nvrhi()->waitForIdle();
+            m_backbuffers.clear();
+            m_device->Nvrhi()->runGarbageCollection();
+        }
+
+        nvrhi::ITexture* SwapchainD3D12::BeginFrame()
+        {
+            if (m_width == 0 || m_height == 0 || m_backbuffers.empty())
+                return nullptr;
+            return m_backbuffers[m_swapchain->GetCurrentBackBufferIndex()];
+        }
+
+        void SwapchainD3D12::Present()
+        {
+            m_swapchain->Present(m_vsync ? 1 : 0, 0);
+            // M1 pacing: one frame in flight, idle after present.
+            m_device->Nvrhi()->waitForIdle();
+            m_device->Nvrhi()->runGarbageCollection();
+        }
+
+        void SwapchainD3D12::Resize(uint32_t width, uint32_t height)
+        {
+            if (width == m_width && height == m_height)
+                return;
+            m_width = width;
+            m_height = height;
+            ReleaseBackbufferHandles();
+            if (width == 0 || height == 0)
+                return;  // minimized; BeginFrame returns null until restored
+            if (FAILED(m_swapchain->ResizeBuffers(kBackbufferCount, width, height,
+                                                  kSwapchainFormatDxgi, 0)))
+            {
+                ARC_ERROR("ResizeBuffers({}x{}) failed", width, height);
+                return;
+            }
+            CreateBackbufferHandles();
+        }
+
+        SwapchainD3D12::~SwapchainD3D12()
+        {
+            if (m_device)
+                ReleaseBackbufferHandles();
+        }
+
+        std::unique_ptr<Swapchain> DeviceD3D12::CreateSwapchain(Window& window,
+                                                                bool vsync)
+        {
+            auto swapchain = std::make_unique<SwapchainD3D12>();
+            if (!swapchain->Init(*this, window, vsync))
+                return nullptr;
+            return swapchain;
         }
     }
 

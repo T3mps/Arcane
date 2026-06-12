@@ -9,8 +9,10 @@
 // premake5.lua) so both sides agree on the struct layout.
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/DeviceFactories.hpp>
 #include <Arcane/Render/NvrhiMessageCallback.hpp>
+#include <Arcane/Render/Swapchain.hpp>
 
 #include <nvrhi/vulkan.h>
 #include <nvrhi/validation.h>
@@ -60,6 +62,16 @@ namespace Arcane
             nvrhi::vulkan::IDevice* VulkanNvrhi() const
             {
                 return static_cast<nvrhi::vulkan::IDevice*>(m_nvrhiBackend.Get());
+            }
+
+            // Vulkan swapchain not implemented yet -- replaced wholesale in the
+            // next task (VK_KHR_swapchain surface/present path).
+            std::unique_ptr<Swapchain> CreateSwapchain(Window& window,
+                                                       bool vsync) override
+            {
+                (void)window; (void)vsync;
+                ARC_ERROR("Vulkan swapchain not implemented yet (next task)");
+                return nullptr;
             }
 
         private:
