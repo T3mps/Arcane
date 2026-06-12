@@ -284,7 +284,9 @@ namespace Arcane
                           (uint32_t)m_device->D3D12Device()->GetDeviceRemovedReason());
             }
 
-            // Mark this slot's GPU completion point; BeginFrame N+2 waits on it.
+            // Mark this slot's command-work completion point (the display-side
+            // headroom comes from the backbuffer count, not this fence);
+            // BeginFrame N+2 waits on it.
             m_device->Nvrhi()->setEventQuery(
                 m_frameQueries[m_frameCounter % kSwapchainFramesInFlight],
                 nvrhi::CommandQueue::Graphics);

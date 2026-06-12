@@ -47,6 +47,24 @@ namespace Arcane
         constexpr nvrhi::Format kSwapchainFormat    = nvrhi::Format::BGRA8_UNORM;
         constexpr vk::Format    kSwapchainFormatVk  = vk::Format::eB8G8R8A8Unorm;
 
+        // Routes VK validation-layer output into the SAME latch as NVRHI
+        // diagnostics: errors increment RenderErrorCount(), so a raw VUID
+        // fails the GPU tests exactly like an [nvrhi] error would.
+        VKAPI_ATTR VkBool32 VKAPI_CALL VkDebugCallback(
+            VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+            VkDebugUtilsMessageTypeFlagsEXT /*types*/,
+            const VkDebugUtilsMessengerCallbackDataEXT* data,
+            void* /*userData*/)
+        {
+            const char* text = (data && data->pMessage) ? data->pMessage : "";
+            if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+                NvrhiMessageCallback::Instance().message(
+                    nvrhi::MessageSeverity::Error, text);
+            else
+                ARC_WARN("[vk] {}", text);
+            return VK_FALSE;
+        }
+
         class DeviceVulkan final : public RenderDevice
         {
         public:
@@ -75,9 +93,10 @@ namespace Arcane
                                                        bool vsync) override;
 
         private:
-            vk::detail::DynamicLoader m_loader;  // must outlive everything below
-            vk::Instance       m_instance;
-            vk::PhysicalDevice m_physicalDevice;
+            vk::detail::DynamicLoader        m_loader;  // must outlive everything below
+            vk::Instance                     m_instance;
+            vk::DebugUtilsMessengerEXT       m_debugMessenger;
+            vk::PhysicalDevice               m_physicalDevice;
             vk::Device         m_device;
             vk::Queue          m_graphicsQueue;
             int                m_graphicsQueueFamily = -1;
@@ -327,6 +346,8 @@ namespace Arcane
                 // Surface changed under us: rebuild at the current size and
                 // skip this frame. (A throwing acquire does NOT signal the
                 // semaphore -- safe to reuse.)
+                // (m_acquired is false here -- a held image returns at the
+                // top -- so no pending acquire-wait needs draining.)
                 m_device->Nvrhi()->waitForIdle();
                 ReleaseBackbufferHandles();
                 CreateSwapchainObjects();
@@ -373,7 +394,8 @@ namespace Arcane
             }
 
             // Completion point for this slot: covers the flush submit above,
-            // i.e. every queue operation of this frame.
+            // i.e. every queue operation of this frame (the present signal is
+            // folded into the flush submit; scan-out itself is outside the timeline).
             m_device->Nvrhi()->setEventQuery(m_frameQueries[slot],
                                              nvrhi::CommandQueue::Graphics);
             ++m_frameCounter;
@@ -395,6 +417,16 @@ namespace Arcane
         {
             if (!m_device)
                 return;
+            // If an acquire-wait was queued (BeginFrame) but never consumed
+            // by a Present submit, drain it now: nvrhi's Queue outlives this
+            // swapchain and waitForIdle does NOT clear pending wait
+            // semaphores -- only a submit does. Without this, the destroyed
+            // semaphore attaches to the queue's next submit (use-after-free).
+            if (m_acquired)
+            {
+                m_device->VulkanNvrhi()->executeCommandLists(nullptr, 0);
+                m_acquired = false;
+            }
             // ReleaseBackbufferHandles drains the GPU, clears backbuffers,
             // and destroys per-image present semaphores.
             ReleaseBackbufferHandles();
@@ -452,6 +484,23 @@ namespace Arcane
                     ARC_WARN("{} not installed; continuing without it", kValidationLayer);
             }
 
+            std::vector<const char*> instanceExtensions(
+                std::begin(kInstanceExtensions), std::end(kInstanceExtensions));
+            bool debugUtils = false;
+            if (desc.enableValidation)
+            {
+                for (const auto& ext : vk::enumerateInstanceExtensionProperties())
+                {
+                    if (std::string_view(ext.extensionName) ==
+                        VK_EXT_DEBUG_UTILS_EXTENSION_NAME)
+                    {
+                        instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+                        debugUtils = true;
+                        break;
+                    }
+                }
+            }
+
             try
             {
                 auto appInfo = vk::ApplicationInfo()
@@ -462,8 +511,8 @@ namespace Arcane
                     .setPApplicationInfo(&appInfo)
                     .setEnabledLayerCount((uint32_t)layers.size())
                     .setPpEnabledLayerNames(layers.data())
-                    .setEnabledExtensionCount((uint32_t)std::size(kInstanceExtensions))
-                    .setPpEnabledExtensionNames(kInstanceExtensions);
+                    .setEnabledExtensionCount((uint32_t)instanceExtensions.size())
+                    .setPpEnabledExtensionNames(instanceExtensions.data());
 
                 m_instance = vk::createInstance(instanceInfo);
             }
@@ -474,6 +523,19 @@ namespace Arcane
             }
 
             VULKAN_HPP_DEFAULT_DISPATCHER.init(m_instance);
+
+            if (debugUtils)
+            {
+                using Severity = vk::DebugUtilsMessageSeverityFlagBitsEXT;
+                using Type = vk::DebugUtilsMessageTypeFlagBitsEXT;
+                auto messengerInfo = vk::DebugUtilsMessengerCreateInfoEXT()
+                    .setMessageSeverity(Severity::eError | Severity::eWarning)
+                    .setMessageType(Type::eValidation | Type::eGeneral |
+                                    Type::ePerformance)
+                    .setPfnUserCallback(&VkDebugCallback);
+                m_debugMessenger =
+                    m_instance.createDebugUtilsMessengerEXT(messengerInfo);
+            }
 
             std::vector<vk::PhysicalDevice> physicalDevices;
             try
@@ -568,8 +630,8 @@ namespace Arcane
             nvrhiDesc.device = m_device;
             nvrhiDesc.graphicsQueue = m_graphicsQueue;
             nvrhiDesc.graphicsQueueIndex = m_graphicsQueueFamily;
-            nvrhiDesc.instanceExtensions = kInstanceExtensions;
-            nvrhiDesc.numInstanceExtensions = std::size(kInstanceExtensions);
+            nvrhiDesc.instanceExtensions = instanceExtensions.data();
+            nvrhiDesc.numInstanceExtensions = instanceExtensions.size();
             nvrhiDesc.deviceExtensions = kDeviceExtensions;
             nvrhiDesc.numDeviceExtensions = std::size(kDeviceExtensions);
 
@@ -599,6 +661,8 @@ namespace Arcane
             m_nvrhiBackend = nullptr;
             if (m_device)
                 m_device.destroy();
+            if (m_debugMessenger)
+                m_instance.destroyDebugUtilsMessengerEXT(m_debugMessenger);
             if (m_instance)
                 m_instance.destroy();
         }
