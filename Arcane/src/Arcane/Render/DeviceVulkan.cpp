@@ -210,6 +210,10 @@ namespace Arcane
                 return false;
             }
 
+            // The per-module default dispatcher binds ONE VkDevice: a second
+            // simultaneous Vulkan device would re-point the device-level
+            // entry points and corrupt the first. Fine by design -- one
+            // engine instance per process (see VulkanDispatchStorage.cpp).
             VULKAN_HPP_DEFAULT_DISPATCHER.init(m_device);
             m_graphicsQueue = m_device.getQueue((uint32_t)m_graphicsQueueFamily, 0);
 
@@ -258,9 +262,20 @@ namespace Arcane
 
     std::unique_ptr<RenderDevice> CreateDeviceVulkan(const RenderDeviceDesc& desc)
     {
-        auto device = std::make_unique<DeviceVulkan>();
-        if (!device->Init(desc))
+        try
+        {
+            // DynamicLoader's constructor throws when vulkan-1.dll is
+            // absent; honor RenderDevice::Create's nullptr-on-failure
+            // contract on Vulkan-less hosts.
+            auto device = std::make_unique<DeviceVulkan>();
+            if (!device->Init(desc))
+                return nullptr;
+            return device;
+        }
+        catch (const std::exception& e)
+        {
+            ARC_ERROR("Vulkan device creation failed: {}", e.what());
             return nullptr;
-        return device;
+        }
     }
 }
