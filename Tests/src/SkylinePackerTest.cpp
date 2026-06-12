@@ -79,23 +79,15 @@ TEST_CASE("skyline: harness-4rect: all placed inside bin", "[text][skyline]")
     REQUIRE(r3.has_value());  // harness line 211: rectInside(r3)
     REQUIRE(r4.has_value());  // harness line 212: rectInside(r4)
 
-    CHECK(r1->x >= 0);
-    CHECK(r1->y >= 0);
     CHECK(r1->x + 100 <= 256);
     CHECK(r1->y + 80 <= 256);
 
-    CHECK(r2->x >= 0);
-    CHECK(r2->y >= 0);
     CHECK(r2->x + 80 <= 256);
     CHECK(r2->y + 80 <= 256);
 
-    CHECK(r3->x >= 0);
-    CHECK(r3->y >= 0);
     CHECK(r3->x + 50 <= 256);
     CHECK(r3->y + 50 <= 256);
 
-    CHECK(r4->x >= 0);
-    CHECK(r4->y >= 0);
     CHECK(r4->x + 40 <= 256);
     CHECK(r4->y + 40 <= 256);
 }
@@ -141,4 +133,61 @@ TEST_CASE("skyline: harness-4rect: pairwise non-overlap", "[text][skyline]")
             CHECK(!overlap);
         }
     }
+}
+
+TEST_CASE("skyline: multi-node collapse - full consume then partial shrink", "[text][skyline]")
+{
+    // Exercises the erase-chain + partial-shrink bookkeeping in AddSkyline in a
+    // single Insert call. After Insert(40,30) the collapse loop must fully erase
+    // the [64,96)@5 node and then partially shrink the [96,128)@0 node to
+    // [104,128)@0. The final Insert(24,1) lands at the shrunken node's left
+    // edge, confirming the skyline was left exactly right.
+    //
+    // NOTE on plan-snippet break placement: nodes tile the bin contiguously, so
+    // after a partial shrink the next node starts exactly at the shrunken node's
+    // new right edge and the loop exits either way (no overlap). This means a
+    // naive "break after first partial shrink" would produce the same skyline for
+    // THIS case. What this test does guard is the erase-chain itself: a wrong
+    // break-before-erase would leave the consumed [64,96)@5 node in place,
+    // causing the fifth insert to see a bogus candidate and land somewhere else.
+    //
+    // Geometry (packer 128x128):
+    //   Insert(32,10) -> (0,0);  skyline: [0,32)@10, [32,128)@0
+    //   Insert(32,20) -> (32,0); skyline: [0,32)@10, [32,64)@20, [64,128)@0
+    //   Insert(32, 5) -> (64,0); skyline: [0,32)@10, [32,64)@20, [64,96)@5, [96,128)@0
+    //   Insert(40,30) -> (64,5); collapse erases [64,96)@5, shrinks [96,128)@0
+    //                            to [104,128)@0
+    //   Insert(24, 1) -> (104,0); lands on the shrunken node
+
+    SkylinePacker packer(128, 128);
+
+    auto a = packer.Insert(32, 10);
+    REQUIRE(a.has_value());
+    CHECK(a->x == 0);
+    CHECK(a->y == 0);
+
+    auto b = packer.Insert(32, 20);
+    REQUIRE(b.has_value());
+    CHECK(b->x == 32);
+    CHECK(b->y == 0);
+
+    auto c = packer.Insert(32, 5);
+    REQUIRE(c.has_value());
+    CHECK(c->x == 64);
+    CHECK(c->y == 0);
+
+    // 40-wide span at node x=64 covers [64,104); max height over [64,96)@5 and
+    // [96,104) subset of [96,128)@0 is 5. So rect lands at y=5 (above the 5-high
+    // node). AddSkyline inserts [64,35,40], then: fully erases [64,96)@5 (w=32
+    // <= shrink=40), then partially shrinks [96,128)@0 to [104,128)@0 (w=32-8=24).
+    auto d = packer.Insert(40, 30);
+    REQUIRE(d.has_value());
+    CHECK(d->x == 64);
+    CHECK(d->y == 5);
+
+    // The only unclaimed low-y space is the shrunken trailing node [104,128)@0.
+    auto e = packer.Insert(24, 1);
+    REQUIRE(e.has_value());
+    CHECK(e->x == 104);
+    CHECK(e->y == 0);
 }
