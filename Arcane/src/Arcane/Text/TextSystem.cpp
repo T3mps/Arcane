@@ -203,70 +203,29 @@ namespace Arcane
                 return (FontId)m_fonts.size();  // FontId = index + 1
             }
 
-            void Draw(Batcher2D& batcher, FontId font, float sizePx,
-                      glm::vec2 baselinePos, std::string_view utf8,
-                      glm::vec4 color) override
+            // ForEachGlyph -- single layout walk used by both Draw and Measure.
+            //
+            // Iterates every codepoint in utf8, handling UTF-8 decode, newline
+            // line-breaks, FreeType kern (kern table only; GPOS kerning, e.g.
+            // Roboto's "AV" pair, is NOT read by FT_Get_Kerning -- zero kerning
+            // on those pairs is expected and correct), and advance accumulation.
+            //
+            // For each non-newline glyph, calls:
+            //   callback(penX, penY, glyph)
+            // where penX/penY are the pen position BEFORE the glyph's advance is
+            // applied (i.e., the left bearing origin), and glyph is the cached
+            // GlyphEntry. The callback fires even for glyphs without ink (e.g.
+            // space), so callers must check g.hasInk themselves if needed.
+            //
+            // Returns the layout extents: (maxLineWidth, lines*lineHeight*sizePx).
+            template <typename Callback>
+            glm::vec2 ForEachGlyph(Font& f, float sizePx, std::string_view utf8,
+                                   float startX, float startY,
+                                   Callback&& callback)
             {
-                Font* f = Resolve(font);
-                if (!f)
-                    return;
-
-                const float startX = baselinePos.x;
-                float x = baselinePos.x;
-                float y = baselinePos.y;
-                uint32_t prev = 0;
-
-                const char* it = utf8.data();
-                const char* end = it + utf8.size();
-                while (it < end)
-                {
-                    const uint32_t cp = DecodeUtf8(it, end);
-                    if (cp == '\n')
-                    {
-                        x = startX;
-                        y += (float)(f->lineHeight) * sizePx;
-                        prev = 0;
-                        continue;
-                    }
-
-                    const GlyphEntry& g = EnsureGlyph(*f, cp);
-
-                    if (prev != 0)
-                    {
-                        double k = 0.0;
-                        msdfgen::getKerning(k, f->handle, prev, cp,
-                                            msdfgen::FONT_SCALING_EM_NORMALIZED);
-                        x += (float)k * sizePx;
-                    }
-
-                    if (g.hasInk)
-                    {
-                        // plane is y-up em; screen is y-down px. Glyph top in
-                        // screen-y is baseline - planeMax.y; left is + planeMin.x.
-                        const glm::vec2 dstPos(
-                            x + g.planeMin.x * sizePx,
-                            y - g.planeMax.y * sizePx);
-                        const glm::vec2 dstSize(
-                            (g.planeMax.x - g.planeMin.x) * sizePx,
-                            (g.planeMax.y - g.planeMin.y) * sizePx);
-                        batcher.Glyph(dstPos, dstSize, m_atlas,
-                                      g.uvMin, g.uvMax, color);
-                    }
-
-                    x += (float)g.advance * sizePx;
-                    prev = cp;
-                }
-            }
-
-            glm::vec2 Measure(FontId font, float sizePx,
-                              std::string_view utf8) override
-            {
-                Font* f = Resolve(font);
-                if (!f || utf8.empty())
-                    return glm::vec2(0.0f);
-
-                float x = 0.0f;
-                float maxWidth = 0.0f;
+                float x = startX;
+                float y = startY;
+                float maxWidth = startX;
                 uint32_t lines = 1;
                 uint32_t prev = 0;
 
@@ -278,30 +237,78 @@ namespace Arcane
                     if (cp == '\n')
                     {
                         maxWidth = std::max(maxWidth, x);
-                        x = 0.0f;
+                        x = startX;
+                        y += (float)(f.lineHeight) * sizePx;
                         ++lines;
                         prev = 0;
                         continue;
                     }
 
-                    const GlyphEntry& g = EnsureGlyph(*f, cp);
+                    const GlyphEntry& g = EnsureGlyph(f, cp);
+
                     if (prev != 0)
                     {
                         double k = 0.0;
-                        msdfgen::getKerning(k, f->handle, prev, cp,
+                        msdfgen::getKerning(k, f.handle, prev, cp,
                                             msdfgen::FONT_SCALING_EM_NORMALIZED);
                         x += (float)k * sizePx;
                     }
+
+                    callback(x, y, g);
+
                     x += (float)g.advance * sizePx;
                     prev = cp;
                 }
                 maxWidth = std::max(maxWidth, x);
 
+                // Width is relative to startX; callers that pass startX=0
+                // (Measure) get absolute px; Draw passes baselinePos.x and
+                // discards the returned extents.
+                return glm::vec2(maxWidth - startX,
+                                 (float)lines * (float)f.lineHeight * sizePx);
+            }
+
+            void Draw(Batcher2D& batcher, FontId font, float sizePx,
+                      glm::vec2 baselinePos, std::string_view utf8,
+                      glm::vec4 color) override
+            {
+                Font* f = Resolve(font);
+                if (!f)
+                    return;
+
+                ForEachGlyph(*f, sizePx, utf8,
+                             baselinePos.x, baselinePos.y,
+                             [&](float penX, float penY, const GlyphEntry& g)
+                             {
+                                 if (!g.hasInk)
+                                     return;
+                                 // plane is y-up em; screen is y-down px. Glyph
+                                 // top in screen-y is baseline - planeMax.y;
+                                 // left is pen + planeMin.x.
+                                 const glm::vec2 dstPos(
+                                     penX + g.planeMin.x * sizePx,
+                                     penY - g.planeMax.y * sizePx);
+                                 const glm::vec2 dstSize(
+                                     (g.planeMax.x - g.planeMin.x) * sizePx,
+                                     (g.planeMax.y - g.planeMin.y) * sizePx);
+                                 batcher.Glyph(dstPos, dstSize, m_atlas,
+                                               g.uvMin, g.uvMax, color);
+                             });
+            }
+
+            glm::vec2 Measure(FontId font, float sizePx,
+                              std::string_view utf8) override
+            {
+                Font* f = Resolve(font);
+                if (!f || utf8.empty())
+                    return glm::vec2(0.0f);
+
                 // Returned height is the LINE-BOX height (lines * lineHeight),
                 // not ink bounds -- callers centering vertically should account
                 // for ascender/descender if pixel-perfect placement is required.
-                return glm::vec2(maxWidth,
-                                 (float)lines * (float)f->lineHeight * sizePx);
+                return ForEachGlyph(*f, sizePx, utf8,
+                                    0.0f, 0.0f,
+                                    [](float, float, const GlyphEntry&) {});
             }
 
             void Flush(nvrhi::ICommandList* commandList) override

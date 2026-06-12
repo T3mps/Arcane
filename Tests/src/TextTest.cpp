@@ -180,3 +180,50 @@ TEST_CASE("vulkan: MSDF glyph renders through the batcher", "[gpu][vulkan][text]
     CheckGlyphRenders(Arcane::GraphicsBackend::Vulkan);
     CheckGlyphOrientation(Arcane::GraphicsBackend::Vulkan);
 }
+
+// CPU layout invariants: only Measure is exercised (no canvas/batcher needed).
+// A single D3D12 device is required because TextSystem::Create initialises the
+// glyph atlas texture -- Measure itself never touches the GPU.
+//
+// Kerning note: Roboto carries its "AV" (and similar diagonal-pair) kerning in
+// the GPOS table, which FreeType's FT_Get_Kerning does NOT read (kern table
+// only). The "AV <= sum" check therefore observes ZERO kern adjustment and
+// passes trivially -- this is expected and correct given the current stack.
+// HarfBuzz (deferred, stack-spec non-Latin shaping task) would surface GPOS.
+TEST_CASE("text: measure and layout invariants", "[gpu][d3d12][text]")
+{
+    Arcane::RenderDeviceDesc desc;
+    desc.backend = Arcane::GraphicsBackend::D3D12;
+    auto device = Arcane::RenderDevice::Create(desc);
+    REQUIRE(device != nullptr);
+    auto text = Arcane::TextSystem::Create(device->Nvrhi());
+    const Arcane::FontId font = text->LoadFont("data/fonts/Roboto-Regular.ttf");
+    REQUIRE(font != Arcane::kInvalidFontId);
+
+    const float size = 32.0f;
+    const auto wide = text->Measure(font, size, "MMMM");
+    const auto narrow = text->Measure(font, size, "iiii");
+    CHECK(wide.x > narrow.x);                    // proportional advances
+    CHECK(wide.x > 4 * 0.5f * size);             // 'M' is a wide glyph
+
+    const auto one = text->Measure(font, size, "Hello");
+    const auto two = text->Measure(font, size, "Hello\nHello");
+    CHECK(two.y > one.y * 1.7f);                 // second line adds height
+    CHECK(std::abs(two.x - one.x) < 0.5f);       // same widest line
+
+    const auto scaled = text->Measure(font, size * 2.0f, "Hello");
+    CHECK(std::abs(scaled.x - one.x * 2.0f) < 1.0f);  // linear in size
+
+    CHECK(text->Measure(font, size, "").x == 0.0f);
+
+    // Kerning: "AV" should be no wider than advance-sum "A"+"V".
+    // FT_Get_Kerning reads kern table only (not GPOS); Roboto stores its
+    // diagonal-pair kern in GPOS, so the adjustment observed here is 0.
+    // The assertion still holds (av == sum when kern == 0).
+    const float av = text->Measure(font, size, "AV").x;
+    const float sum = text->Measure(font, size, "A").x +
+                      text->Measure(font, size, "V").x;
+    CHECK(av <= sum + 0.01f);
+
+    CHECK(Arcane::RenderErrorCount() == 0);
+}
