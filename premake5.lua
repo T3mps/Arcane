@@ -51,6 +51,7 @@ workspace "Arcane"
     IncludeDir["enkiTS"]           = "%{wks.location}/../ThirdParty/enkiTS/src"
     IncludeDir["tracy"]            = "%{wks.location}/../ThirdParty/tracy/public"
     IncludeDir["freetype"]         = "%{wks.location}/../ThirdParty/freetype/include"
+    IncludeDir["msdfgen"]          = "%{wks.location}/../ThirdParty/msdfgen"
     IncludeDir["nvrhi"]            = "%{wks.location}/../ThirdParty/nvrhi/include"
     IncludeDir["VulkanHeaders"]    = "%{wks.location}/../ThirdParty/Vulkan-Headers/include"
     IncludeDir["DirectXHeaders"]   = "%{wks.location}/../ThirdParty/DirectX-Headers/include"
@@ -62,6 +63,7 @@ group "Dependencies"
     include "../ThirdParty/enkiTS"
     include "../ThirdParty/tracy"
     include "../ThirdParty/freetype"
+    include "../ThirdParty/msdfgen"
     include "../ThirdParty/nvrhi"
 group ""
 
@@ -158,9 +160,11 @@ project "Arcane"
         "%{IncludeDir.DirectXHeaders}/directx",
         "%{IncludeDir.SDL3}",
         "%{IncludeDir.glm}",
+        "%{IncludeDir.msdfgen}",
+        "%{IncludeDir.freetype}",
     }
 
-    links { "Core", "nvrhi" }
+    links { "Core", "nvrhi", "msdfgen", "freetype" }
 
     defines {
         "ARCANE_BUILD_DLL",
@@ -248,6 +252,8 @@ project "Playground"
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
+        '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
     }
 
     filter "system:windows"
@@ -309,15 +315,21 @@ project "ArcaneTests"
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.freetype}",
+        "%{IncludeDir.msdfgen}",
         "%{IncludeDir.nvrhi}",
     }
 
-    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype" }
+    -- msdfgen and freetype are static libs compiled separately; the smoke test
+    -- calls them directly (not via Arcane.dll), so both appear in links here.
+    -- Two static copies in different modules is the established pattern for this workspace.
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen" }
 
     -- The test exe loads Arcane.dll from its own directory.
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
+        '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
     }
 
     defines {
