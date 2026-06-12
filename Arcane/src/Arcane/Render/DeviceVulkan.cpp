@@ -15,13 +15,11 @@
 #include <Arcane/Render/Swapchain.hpp>
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 
 #include <nvrhi/vulkan.h>
 #include <nvrhi/validation.h>
 
-// VK_USE_PLATFORM_WIN32_KHR enables Win32SurfaceCreateInfoKHR in vulkan.hpp.
-// SDL3 was built without SDL_VULKAN; we create the surface via the
-// VK_KHR_win32_surface extension directly (Window::NativeHandle -> HWND).
 #include <vulkan/vulkan.hpp>
 
 #include <algorithm>
@@ -113,7 +111,7 @@ namespace Arcane
             void ReleaseBackbufferHandles();
 
             DeviceVulkan* m_device = nullptr;
-            Window*        m_window = nullptr;   // for SDL_SetWindowSize in Resize()
+            Window*        m_window = nullptr;
             vk::SurfaceKHR m_surface;
             vk::SwapchainKHR m_swapchain;
             std::vector<nvrhi::TextureHandle> m_backbuffers;
@@ -133,28 +131,16 @@ namespace Arcane
             m_vsync = vsync;
             window.GetPixelSize(m_width, m_height);
 
-            // SDL3 is built without SDL_VULKAN in the vcpkg triplet
-            // (-DSDL_VULKAN=OFF).  Create the VkSurface via the raw Win32
-            // extension (VK_KHR_win32_surface / VK_USE_PLATFORM_WIN32_KHR
-            // is a project-wide define) using the HWND from Window.
-            HWND hwnd = static_cast<HWND>(window.NativeHandle());
-            if (!hwnd)
+            VkSurfaceKHR surface = VK_NULL_HANDLE;
+            if (!SDL_Vulkan_CreateSurface(window.SdlWindow(), device.Instance(),
+                                          nullptr, &surface))
             {
-                ARC_ERROR("Window::NativeHandle() returned null; cannot create VkSurface");
+                ARC_ERROR("SDL_Vulkan_CreateSurface failed: {} "
+                          "(was the window created with WindowDesc::vulkan?)",
+                          SDL_GetError());
                 return false;
             }
-            try
-            {
-                auto win32Info = vk::Win32SurfaceCreateInfoKHR()
-                    .setHinstance(GetModuleHandle(nullptr))
-                    .setHwnd(hwnd);
-                m_surface = device.Instance().createWin32SurfaceKHR(win32Info);
-            }
-            catch (const vk::SystemError& e)
-            {
-                ARC_ERROR("vkCreateWin32SurfaceKHR failed: {}", e.what());
-                return false;
-            }
+            m_surface = surface;
 
             if (!device.PhysicalDevice().getSurfaceSupportKHR(
                     device.GraphicsQueueFamily(), m_surface))
@@ -346,10 +332,6 @@ namespace Arcane
         {
             if (width == m_width && height == m_height)
                 return;
-            // On Win32, VkSurfaceCapabilitiesKHR::currentExtent always tracks
-            // the window's client area -- we must resize the window first so
-            // the surface capabilities report the new extent.
-            SDL_SetWindowSize(m_window->SdlWindow(), (int)width, (int)height);
             m_width = width;
             m_height = height;
             ReleaseBackbufferHandles();

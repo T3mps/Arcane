@@ -37,9 +37,9 @@ echo   vcpkg: %VCPKG_PATH%
 :: workspace is /MD everywhere (see Arcane/premake5.lua); the triplet
 :: pins the v143 toolset like the Server's x64-windows-static one.
 :: -------------------------------------------------------------------
-echo [2/2] Installing sdl3:x64-windows-static-md...
+echo [2/2] Installing sdl3[vulkan]:x64-windows-static-md...
 
-"%VCPKG_PATH%\vcpkg.exe" install sdl3:x64-windows-static-md --overlay-triplets="%~dp0..\..\vcpkg-triplets"
+"%VCPKG_PATH%\vcpkg.exe" install "sdl3[vulkan]:x64-windows-static-md" --overlay-triplets="%~dp0..\..\vcpkg-triplets"
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: vcpkg install failed.
     echo.
@@ -49,7 +49,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo ============================================
-echo  Success! SDL3 installed.
+echo  Success! SDL3 (with Vulkan support) installed.
 echo ============================================
 echo.
 if not defined _APH_NOPAUSE pause

@@ -20,8 +20,7 @@ namespace Arcane
         uint32_t height   = 720;
         bool resizable    = true;
         bool hidden       = false;  // tests create hidden windows
-        bool vulkan       = false;  // reserved: marks window intended for Vulkan
-                                    // (surface created via Win32 ext, not SDL)
+        bool vulkan       = false;  // set true for Vulkan windows (SDL_WINDOW_VULKAN)
     };
 
     struct WindowEvents
@@ -46,6 +45,7 @@ namespace Arcane
         WindowEvents PumpEvents();
 
         void SetTitle(const std::string& title);
+        void SetSize(uint32_t width, uint32_t height);
         void GetPixelSize(uint32_t& width, uint32_t& height) const;
         bool IsMinimized() const;
 

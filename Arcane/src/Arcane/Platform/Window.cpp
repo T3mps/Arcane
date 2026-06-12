@@ -23,6 +23,7 @@ namespace Arcane
         SDL_WindowFlags flags = 0;
         if (desc.resizable) flags |= SDL_WINDOW_RESIZABLE;
         if (desc.hidden)    flags |= SDL_WINDOW_HIDDEN;
+        if (desc.vulkan)    flags |= SDL_WINDOW_VULKAN;
 
         m_window = SDL_CreateWindow(desc.title.c_str(),
                                     (int)desc.width, (int)desc.height, flags);
@@ -93,6 +94,13 @@ namespace Arcane
     {
         if (!m_window) return;
         SDL_SetWindowTitle(m_window, title.c_str());
+    }
+
+    void Window::SetSize(uint32_t width, uint32_t height)
+    {
+        if (!m_window)
+            return;
+        SDL_SetWindowSize(m_window, (int)width, (int)height);
     }
 
     void Window::GetPixelSize(uint32_t& width, uint32_t& height) const

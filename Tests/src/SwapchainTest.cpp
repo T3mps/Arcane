@@ -50,6 +50,8 @@ namespace
         for (int i = 0; i < 5; ++i)
             renderFrame(0.1f * (float)i);
 
+        window.SetSize(800, 450);
+        (void)window.PumpEvents();
         swapchain->Resize(800, 450);
         REQUIRE(swapchain->Width() == 800);
         REQUIRE(swapchain->Height() == 450);
