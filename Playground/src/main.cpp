@@ -136,10 +136,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // ImGuiLayer must be declared (and thus destroyed) before window -- stack
-    // unwinds in reverse declaration order, and the layer taps window events.
-    // window was declared first above, so it is destroyed last; imgui here is
-    // destroyed before window. Correct lifetime ordering satisfied.
+    // ImGuiLayer must be destroyed before window (the layer taps window
+    // events), so it is declared AFTER window -- stack unwinds in reverse
+    // declaration order: imgui here is destroyed first, window last.
     auto imgui = Arcane::ImGuiLayer::Create(window, *device, *shaders);
     if (!imgui)
     {
