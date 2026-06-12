@@ -16,12 +16,12 @@ if not exist "%OUT%\spirv" mkdir "%OUT%\spirv"
 
 set SPIRV_FLAGS=-spirv -D SPIRV=1 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0
 
-call :compile sprite  vs_main vs_6_5 sprite_vs
-call :compile sprite  ps_main ps_6_5 sprite_ps
-call :compile circle  vs_main vs_6_5 circle_vs
-call :compile circle  ps_main ps_6_5 circle_ps
-call :compile tonemap vs_main vs_6_5 tonemap_vs
-call :compile tonemap ps_main ps_6_5 tonemap_ps
+call :compile sprite  vs_main vs_6_5 sprite_vs  || exit /b 1
+call :compile sprite  ps_main ps_6_5 sprite_ps  || exit /b 1
+call :compile circle  vs_main vs_6_5 circle_vs  || exit /b 1
+call :compile circle  ps_main ps_6_5 circle_ps  || exit /b 1
+call :compile tonemap vs_main vs_6_5 tonemap_vs || exit /b 1
+call :compile tonemap ps_main ps_6_5 tonemap_ps || exit /b 1
 echo Shaders compiled to %OUT%
 exit /b 0
 

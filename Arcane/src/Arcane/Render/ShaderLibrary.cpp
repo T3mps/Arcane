@@ -87,13 +87,31 @@ namespace Arcane
 
             bool LoadEntry(Entry& entry)
             {
-                const std::vector<char> bytes = ReadFileBytes(entry.path);
-                if (bytes.empty())
+                std::error_code ec;
+                const auto sizeBefore =
+                    std::filesystem::file_size(entry.path, ec);
+                if (ec)
                 {
                     ARC_ERROR("Shader artifact missing/unreadable: {}",
                               entry.path.string());
                     return false;
                 }
+
+                const std::vector<char> bytes = ReadFileBytes(entry.path);
+
+                const auto sizeAfter =
+                    std::filesystem::file_size(entry.path, ec);
+                if (ec || bytes.empty() || bytes.size() != sizeBefore ||
+                    sizeAfter != sizeBefore)
+                {
+                    // Likely a torn read: the compiler is still writing.
+                    // Keep the previous handle; Poll retries next cycle
+                    // (the stamp was not refreshed).
+                    ARC_WARN("Shader artifact changed mid-read, retrying: {}",
+                             entry.path.string());
+                    return false;
+                }
+
                 auto desc = nvrhi::ShaderDesc()
                     .setShaderType(entry.type)
                     .setDebugName(entry.path.filename().string());
@@ -104,7 +122,6 @@ namespace Arcane
                     ARC_ERROR("createShader failed: {}", entry.path.string());
                     return false;
                 }
-                std::error_code ec;
                 entry.stamp = std::filesystem::last_write_time(entry.path, ec);
                 return true;
             }
