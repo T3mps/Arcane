@@ -25,7 +25,7 @@ Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on
 | **freetype** | VER-2-13-3 | FTL | Arcane | Font rasterizer | https://github.com/freetype/freetype |
 | **fun** | — | MIT | Client | Functional library for LuaJIT (`thirdparty.fun`) | https://github.com/luafun/luafun |
 | **glm** | 1.0.1 | MIT | Arcane | Math (vectors/matrices) | https://github.com/g-truc/glm |
-| **imgui** | docking | MIT | Tools | Dear ImGui — editor UI | https://github.com/ocornut/imgui |
+| **imgui** | docking @ 00abd2c | MIT | Tools, Arcane | Dear ImGui — editor UI (Tools: DX11+Win32 backends compiled directly into vcxproj; Arcane: core + SDL3 backend via `ThirdParty/imgui/premake5.lua`, Arcane-consumer-only wrapper) | https://github.com/ocornut/imgui |
 | **imgui-node-editor** | — | MIT | Tools | Node-graph editor (BehaviorGraph panel) | https://github.com/thedmd/imgui-node-editor |
 | **inspect** | 3.1.0 | MIT | Client | Human-readable table dump (`thirdparty.inspect`) | https://github.com/kikito/inspect.lua |
 | **json** | — | MIT | Client | Lua JSON encode/decode (`thirdparty.json`) | https://github.com/rxi/json.lua |

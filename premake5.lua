@@ -35,6 +35,9 @@ workspace "Arcane"
     -- Server/Tools behavior (static CRT, vcxproj in the dep root).
     THIRDPARTY_STATICRUNTIME    = "off"
     THIRDPARTY_PROJECT_LOCATION = "ide-md"
+    -- imgui wrapper: SDL3 backend includes come from the same vcpkg -md install
+    -- used by the rest of the workspace (identical path to IncludeDir["SDL3"]).
+    THIRDPARTY_SDL3_INCLUDE     = VCPKG_INSTALLED_MD .. "/include"
 
     IncludeDir = {}
     IncludeDir["Core"]             = "%{wks.location}/Core/src"
@@ -56,6 +59,7 @@ workspace "Arcane"
     IncludeDir["VulkanHeaders"]    = "%{wks.location}/../ThirdParty/Vulkan-Headers/include"
     IncludeDir["DirectXHeaders"]   = "%{wks.location}/../ThirdParty/DirectX-Headers/include"
     IncludeDir["SDL3"]             = VCPKG_INSTALLED_MD .. "/include"
+    IncludeDir["imgui"]            = "%{wks.location}/../ThirdParty/imgui"
 
 group "Dependencies"
     include "../ThirdParty/Catch2"
@@ -65,6 +69,7 @@ group "Dependencies"
     include "../ThirdParty/freetype"
     include "../ThirdParty/msdfgen"
     include "../ThirdParty/nvrhi"
+    include "../ThirdParty/imgui"
 group ""
 
 -- ============================================================================
@@ -163,9 +168,10 @@ project "Arcane"
         "%{IncludeDir.stb}",
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.freetype}",
+        "%{IncludeDir.imgui}",
     }
 
-    links { "Core", "nvrhi", "msdfgen", "freetype" }
+    links { "Core", "nvrhi", "msdfgen", "freetype", "imgui" }
 
     defines {
         "ARCANE_BUILD_DLL",
@@ -318,12 +324,13 @@ project "ArcaneTests"
         "%{IncludeDir.freetype}",
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.imgui}",
     }
 
     -- msdfgen and freetype are static libs compiled separately; the smoke test
     -- calls them directly (not via Arcane.dll), so both appear in links here.
     -- Two static copies in different modules is the established pattern for this workspace.
-    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen" }
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "imgui" }
 
     -- The test exe loads Arcane.dll from its own directory.
     postbuildcommands {
