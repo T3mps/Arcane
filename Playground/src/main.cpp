@@ -39,7 +39,7 @@ namespace
     void PrintUsage()
     {
         std::printf(
-            "Arcane Playground (M2b: MSDF HUD text + ImGui stats overlay)\n"
+            "Arcane Playground (M3: input action system demo)\n"
             "  --backend dx12|vulkan   graphics backend (default dx12)\n"
             "  --frames N              render N frames then exit (default: until closed)\n"
             "  --no-vsync              present without vsync\n");
@@ -158,7 +158,6 @@ int main(int argc, char** argv)
     input->SetBaseContext("demo");
     bool showStats = true;
     glm::vec2 moveOffset(0.0f);
-    auto lastFrameTime = std::chrono::steady_clock::now();
 
     nvrhi::CommandListHandle commandList = device->Nvrhi()->createCommandList();
     // Swapchain backbuffer framebuffer views; reset on resize.
@@ -168,6 +167,9 @@ int main(int argc, char** argv)
 
     const auto start = std::chrono::steady_clock::now();
     auto lastTitleUpdate = start;
+    // First-frame input dt is measured from here (just before the loop) so it
+    // is ~0 rather than the full subsystem-init wall time.
+    auto lastFrameTime = start;
     uint64_t frameCount = 0;
     uint64_t framesSinceTitle = 0;
 
@@ -285,7 +287,7 @@ int main(int argc, char** argv)
         // contract (Flush records the atlas upload before End records draws).
         batcher->SetLayer(10, 1);
         char hud[96];
-        std::snprintf(hud, sizeof(hud), "Arcane M2b -- %s",
+        std::snprintf(hud, sizeof(hud), "Arcane M3 -- %s",
                       Arcane::ToString(device->Backend()));
         text->Draw(*batcher, hudFont, 22.0f, glm::vec2(20.0f, h - 24.0f),
                    hud, glm::vec4(0.9f, 0.9f, 1.0f, 1.0f));
