@@ -62,6 +62,11 @@ namespace Arcane
         SDL_Event e;
         while (SDL_PollEvent(&e))
         {
+            // Engine-internal modules (ImGui) see every event first, before
+            // Window's own quit/resize handling.
+            if (m_tap)
+                m_tap(&e, m_tapUser);
+
             switch (e.type)
             {
             case SDL_EVENT_QUIT:
@@ -101,6 +106,12 @@ namespace Arcane
         if (!m_window)
             return;
         SDL_SetWindowSize(m_window, (int)width, (int)height);
+    }
+
+    void Window::SetNativeEventTap(NativeEventTap tap, void* user)
+    {
+        m_tap     = tap;
+        m_tapUser = user;
     }
 
     void Window::GetPixelSize(uint32_t& width, uint32_t& height) const

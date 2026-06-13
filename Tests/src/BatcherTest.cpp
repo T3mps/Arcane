@@ -13,6 +13,8 @@
 #include <Arcane/Render/Device.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 
+#include "Helpers/GpuTestHelpers.hpp"
+
 namespace
 {
     struct GpuFixture
@@ -56,22 +58,7 @@ namespace
         }
     };
 
-    // fp16 -> float for readback checks.
-    float HalfToFloat(uint16_t h)
-    {
-        const uint32_t sign = (uint32_t)(h >> 15) & 1;
-        const uint32_t expo = (uint32_t)(h >> 10) & 0x1F;
-        const uint32_t mant = (uint32_t)h & 0x3FF;
-        if (expo == 0)
-            return (sign ? -1.0f : 1.0f) * (float)mant * 5.9604645e-8f;
-        if (expo == 31)
-            return sign ? -65504.0f : 65504.0f;  // inf/nan clamped; unused here
-        const uint32_t bits = (sign << 31) | ((expo - 15 + 127) << 23) | (mant << 13);
-        float result;
-        std::memcpy(&result, &bits, sizeof(result));
-        return result;
-    }
-
+    // HalfToFloat moved to Helpers/GpuTestHelpers.hpp (shared with TextTest).
     void CheckPixel(const uint8_t* base, size_t rowPitch, uint32_t x, uint32_t y,
                     float r, float g, float b, float tolerance = 0.02f)
     {

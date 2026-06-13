@@ -8,8 +8,26 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 
 #include <Arcane/Render/Device.hpp>
+
+// fp16 -> float for RGBA16_FLOAT readback checks. Shared by every GPU test
+// that maps an HDR canvas (BatcherTest, TextTest, ...).
+inline float HalfToFloat(uint16_t h)
+{
+    const uint32_t sign = (uint32_t)(h >> 15) & 1;
+    const uint32_t expo = (uint32_t)(h >> 10) & 0x1F;
+    const uint32_t mant = (uint32_t)h & 0x3FF;
+    if (expo == 0)
+        return (sign ? -1.0f : 1.0f) * (float)mant * 5.9604645e-8f;
+    if (expo == 31)
+        return sign ? -65504.0f : 65504.0f;  // inf/nan clamped; unused here
+    const uint32_t bits = (sign << 31) | ((expo - 15 + 127) << 23) | (mant << 13);
+    float result;
+    std::memcpy(&result, &bits, sizeof(result));
+    return result;
+}
 
 inline void CheckOffscreenClear(Arcane::RenderDevice& device)
 {

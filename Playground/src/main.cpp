@@ -1,11 +1,13 @@
-// Arcane Playground -- M2a: canvas -> batcher (bouncing shapes + HDR swatch)
-// -> ACES tonemap -> present. ShaderLibrary::Poll at 1 Hz enables the
-// hot-reload dev loop (set ARCANE_SHADER_DIR to shaders/generated/ and
-// run compile-shaders.bat while the app runs).
+// Arcane Playground -- M2b: MSDF HUD text + ImGui stats overlay added on top
+// of the M2a canvas -> batcher (bouncing shapes + HDR swatch) -> ACES tonemap
+// -> present path. ShaderLibrary::Poll at 1 Hz enables the hot-reload dev loop
+// (set ARCANE_SHADER_DIR to shaders/generated/ and run compile-shaders.bat
+// while the app runs).
 // Scripted verification: --frames N renders N frames and exits 0.
 
 #include <Arcane/Base/Engine.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/ImGui/ImGuiLayer.hpp>
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
@@ -13,10 +15,12 @@
 #include <Arcane/Render/ShaderLibrary.hpp>
 #include <Arcane/Render/Swapchain.hpp>
 #include <Arcane/Render/TonemapPass.hpp>
+#include <Arcane/Text/TextSystem.hpp>
 
 #include <nvrhi/nvrhi.h>
 
 #include <glm/glm.hpp>
+#include <imgui.h>
 
 #include <cerrno>
 #include <chrono>
@@ -33,7 +37,7 @@ namespace
     void PrintUsage()
     {
         std::printf(
-            "Arcane Playground (M2a: canvas/batcher/tonemap canonical path)\n"
+            "Arcane Playground (M2b: MSDF HUD text + ImGui stats overlay)\n"
             "  --backend dx12|vulkan   graphics backend (default dx12)\n"
             "  --frames N              render N frames then exit (default: until closed)\n"
             "  --no-vsync              present without vsync\n");
@@ -119,6 +123,29 @@ int main(int argc, char** argv)
     if (!tonemap)
         return 1;
 
+    auto text = Arcane::TextSystem::Create(device->Nvrhi());
+    if (!text)
+    {
+        std::fprintf(stderr, "error: TextSystem::Create failed\n");
+        return 1;
+    }
+    const Arcane::FontId hudFont = text->LoadFont("data/fonts/Roboto-Regular.ttf");
+    if (hudFont == Arcane::kInvalidFontId)
+    {
+        std::fprintf(stderr, "error: failed to load HUD font\n");
+        return 1;
+    }
+
+    // ImGuiLayer must be destroyed before window (the layer taps window
+    // events), so it is declared AFTER window -- stack unwinds in reverse
+    // declaration order: imgui here is destroyed first, window last.
+    auto imgui = Arcane::ImGuiLayer::Create(window, *device, *shaders);
+    if (!imgui)
+    {
+        std::fprintf(stderr, "error: ImGuiLayer::Create failed\n");
+        return 1;
+    }
+
     nvrhi::CommandListHandle commandList = device->Nvrhi()->createCommandList();
     // Swapchain backbuffer framebuffer views; reset on resize.
     std::unordered_map<nvrhi::ITexture*, nvrhi::FramebufferHandle>
@@ -150,6 +177,14 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
+
+        imgui->BeginFrame();
+        ImGui::Begin("Arcane Stats");
+        ImGui::Text("Backend: %s", Arcane::ToString(device->Backend()));
+        ImGui::Text("Adapter: %s", device->AdapterName().c_str());
+        const Arcane::Batch2DStats lastStats = batcher->Stats();
+        ImGui::Text("Quads: %u  Draws: %u", lastStats.quads, lastStats.drawCalls);
+        ImGui::End();
 
         nvrhi::ITexture* backbuffer = swapchain->BeginFrame();
         if (!backbuffer)
@@ -203,6 +238,18 @@ int main(int argc, char** argv)
         batcher->Rect(glm::vec2(20.0f, 20.0f), glm::vec2(120.0f, 60.0f),
                       glm::vec4(hdr, hdr, hdr, 1.0f));
 
+        // HUD text line: MSDF at layer 10/orderInLayer 1 (same layer as the
+        // HDR swatch but drawn on top of it via orderInLayer). Bottom-left.
+        // Recording order: Draw -> Flush(commandList) -> End, per TextSystem
+        // contract (Flush records the atlas upload before End records draws).
+        batcher->SetLayer(10, 1);
+        char hud[96];
+        std::snprintf(hud, sizeof(hud), "Arcane M2b -- %s",
+                      Arcane::ToString(device->Backend()));
+        text->Draw(*batcher, hudFont, 22.0f, glm::vec2(20.0f, h - 24.0f),
+                   hud, glm::vec4(0.9f, 0.9f, 1.0f, 1.0f));
+        text->Flush(commandList);
+
         batcher->End();
 
         // The ONLY writer of the display-referred backbuffer. Framebuffers
@@ -212,6 +259,9 @@ int main(int argc, char** argv)
             backbufferFb = device->Nvrhi()->createFramebuffer(
                 nvrhi::FramebufferDesc().addColorAttachment(backbuffer));
         tonemap->Run(commandList, canvas->Texture(), backbufferFb);
+
+        // ImGui renders post-tonemap into the display-referred backbuffer.
+        imgui->Render(commandList, backbufferFb);
 
         commandList->close();
         device->Nvrhi()->executeCommandList(commandList);
