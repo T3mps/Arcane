@@ -2,7 +2,9 @@
 
 #include <TaskScheduler.h>
 
+#include <cassert>
 #include <functional>
+#include <limits>
 
 namespace Arcane
 {
@@ -20,7 +22,11 @@ namespace Arcane
             {
                 if (count == 0)
                     return;
+                // enkiTS ranges are uint32_t; guard against silent truncation.
+                assert(count <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()));
+                assert(minBatch <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()));
 
+                // fn outlives the task: WaitforTask blocks until all partitions complete.
                 enki::TaskSet task(
                     static_cast<uint32_t>(count),
                     [&fn](enki::TaskSetPartition range, uint32_t /*threadnum*/)
@@ -35,6 +41,8 @@ namespace Arcane
 
             size_t WorkerCount() const noexcept override
             {
+                // enkiTS counts the calling thread among task threads; this inclusive
+                // total is the right parallelism figure for batch-size heuristics.
                 return static_cast<size_t>(m_ts.GetNumTaskThreads());
             }
 
@@ -62,7 +70,7 @@ namespace Arcane
     {
         // Drop the adapter before the scheduler shuts down (adapter holds a ref).
         m_impl->adapter.reset();
-        m_impl->ts.WaitforAll();
+        m_impl->ts.WaitforAllAndShutdown();
     }
 
     std::shared_ptr<Astra::IWorkScheduler> JobSystem::WorkScheduler() const

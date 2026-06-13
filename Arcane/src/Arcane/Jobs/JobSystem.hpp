@@ -15,6 +15,10 @@
 
 namespace Arcane
 {
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4251)  // unique_ptr<Impl> member on a dll-exported class: benign under /MD (shared CRT heap)
+#endif
     class ARCANE_API JobSystem
     {
     public:
@@ -35,4 +39,7 @@ namespace Arcane
         struct Impl;
         std::unique_ptr<Impl> m_impl;
     };
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 }
