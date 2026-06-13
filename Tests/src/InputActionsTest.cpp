@@ -276,3 +276,26 @@ TEST_CASE("input: max-magnitude binding wins (stick vs wasd)", "[input]")
     input->Update(1.0 / 60.0, both);
     CHECK(input->Axis("move").x == Approx(1.0f).margin(1e-4));
 }
+
+TEST_CASE("input: radial deadzone scales a stick vector", "[input]")
+{
+    // leftStick binding in MoveDoc has processors: [ "deadzone(min=0.125,max=0.925)" ]
+    // only -- no normalizeVector2 (that lives on the WASD composite).
+    // Input: (0.3, 0), len=0.3 inside [0.125, 0.925].
+    //   scaled = (0.3 - 0.125) / (0.925 - 0.125) = 0.175 / 0.8 = 0.21875
+    //   k      = scaled / len  = 0.21875 / 0.3
+    //   result = (0.3 * k, 0)  = (0.21875, 0)
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(MoveDoc()));
+    input->SetBaseContext("world");
+
+    InputSnapshot snap;
+    snap.gamepadConnected = true;
+    snap.gamepadAxes[0] = 0.3f;   // leftStick/x
+    snap.gamepadAxes[1] = 0.0f;   // leftStick/y
+    input->Update(1.0 / 60.0, snap);
+
+    auto v = input->Axis("move");
+    CHECK(v.x == Approx(0.21875f).margin(1e-4));
+    CHECK(v.y == Approx(0.0f).margin(1e-4));
+}

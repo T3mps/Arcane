@@ -66,7 +66,7 @@ namespace Arcane
             MouseButton,
             GamepadButton,
             GamepadAxis,
-            GamepadStick,   // resolved as a 2D vector (Task 3)
+            GamepadStick,   // resolved as a 2D vector (gamepad stick)
         };
 
         struct ControlId
@@ -109,10 +109,8 @@ namespace Arcane
 
         // ── Gamepad token tables ─────────────────────────────────────────────
         // Token -> GamepadButton bit index (must match InputDevices bit order).
-        // Task 1: these tables exist for compilation (unknown path handling),
-        // but GamepadButton/Axis resolution itself returns 0 (snap.gamepadButtons /
-        // snap.gamepadAxes access is implemented in Task 2). Storing the token
-        // so at least the ControlId is properly typed.
+        // Token tables: control name -> bit/index. The bit/index order MUST match
+        // the InputDevices sampler's snapshot layout (gamepadButtons bits, gamepadAxes).
         constexpr int kNoGamepadToken = -1;
 
         int GamepadButtonToken(const std::string& token)
@@ -169,7 +167,7 @@ namespace Arcane
         // ── Path compiler ─────────────────────────────────────────────────────
         // Compiles a single simple path (no '+') to a ControlId.
         // Returns {None,0} + one ARC_WARN for unknown device tokens.
-        // <Gamepad>/ paths compile to a typed ControlId returning 0 until Task 2.
+        // <Gamepad>/ paths compile to typed GamepadButton/Axis/Stick ControlIds.
         ControlId CompileSinglePath(const std::string& path,
                                     const std::string& mapName,
                                     const std::string& actionName)
@@ -359,7 +357,7 @@ namespace Arcane
             return minMag;
         }
 
-        // ── Processor ops (Task 2 fully; stubs placed now for LoadJson) ──────
+        // ── Processor ops ──────────────────────────────────────────────────────
         struct ProcessorOp
         {
             enum class Kind { Invert, Scale, Deadzone, NormalizeVector2 } kind;
@@ -917,7 +915,9 @@ namespace Arcane
                                 bestScalarMag = mag;
                                 bestScalar    = val;
                             }
-                            // Device contribution: composite parts are keyboard (scancodes)
+                            // Composite parts are assumed keyboard-sourced (all authored composites are
+                            // WASD today). Gamepad-sourced composites would need device plumbing from
+                            // PartStrength; deferred until an asset needs it.
                             if (mag >= kBtnThreshold) kbmContrib = true;
                         }
                         else  // 2DVector (default)
