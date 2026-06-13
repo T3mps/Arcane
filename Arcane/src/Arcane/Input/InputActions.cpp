@@ -429,11 +429,12 @@ namespace Arcane
         {
             std::vector<ControlId> chord;   // size 1 = simple path; size>1 = chord
             std::string path;               // original string (deferred features)
-            std::vector<ProcessorOp> processors;  // Task 2
-            bool isComposite = false;       // Task 3 fields join then
-            // Task 3 composite fields (stubs; parsed at Task 3):
+            std::vector<ProcessorOp> processors;
+            bool isComposite = false;
             std::string compositeType;      // "2DVector" or "1DAxis"
-            // parts[part_name] = array of CompiledBinding
+            // Compiled composite parts: parts[part_name] = array of CompiledBinding
+            // Populated at load for 2DVector (up/down/left/right) and 1DAxis (positive/negative).
+            std::unordered_map<std::string, std::vector<CompiledBinding>> parts;
         };
 
         // ── Interaction ───────────────────────────────────────────────────────
@@ -522,6 +523,24 @@ namespace Arcane
         };
 
         // ── Compile bindings from JSON ────────────────────────────────────────
+        // Forward declaration needed because CompileBinding calls itself recursively
+        // for composite parts.
+        CompiledBinding CompileBinding(const nlohmann::json& bj,
+                                       const std::string& mapName,
+                                       const std::string& actionName);
+
+        // Compile an array of binding JSON objects into a vector of CompiledBinding.
+        std::vector<CompiledBinding> CompileBindingArray(const nlohmann::json& arr,
+                                                          const std::string& mapName,
+                                                          const std::string& actionName)
+        {
+            std::vector<CompiledBinding> result;
+            if (!arr.is_array()) return result;
+            for (const auto& bj : arr)
+                result.push_back(CompileBinding(bj, mapName, actionName));
+            return result;
+        }
+
         CompiledBinding CompileBinding(const nlohmann::json& bj,
                                        const std::string& mapName,
                                        const std::string& actionName)
@@ -533,7 +552,30 @@ namespace Arcane
             {
                 cb.isComposite = true;
                 cb.compositeType = bj["composite"].get<std::string>();
-                // Task 3 will populate parts; for Task 1 just mark as composite.
+
+                // Parse composite parts (oracle: binding.parts[key] = array of bindings).
+                // 2DVector: up/down/left/right; 1DAxis: positive/negative.
+                if (bj.contains("parts") && bj["parts"].is_object())
+                {
+                    const auto& partsJson = bj["parts"];
+                    if (cb.compositeType == "2DVector")
+                    {
+                        for (const char* key : { "up", "down", "left", "right" })
+                        {
+                            if (partsJson.contains(key))
+                                cb.parts[key] = CompileBindingArray(partsJson[key], mapName, actionName);
+                        }
+                    }
+                    else if (cb.compositeType == "1DAxis")
+                    {
+                        for (const char* key : { "positive", "negative" })
+                        {
+                            if (partsJson.contains(key))
+                                cb.parts[key] = CompileBindingArray(partsJson[key], mapName, actionName);
+                        }
+                    }
+                }
+
                 // Processors on composites
                 if (bj.contains("processors") && bj["processors"].is_array())
                 {
@@ -832,33 +874,99 @@ namespace Arcane
                 return nullptr;
             }
 
-            // Evaluate one action (oracle evalAction, button path).
-            // Task 1: implements scalar bindings (Keyboard/Mouse) + button edges.
-            // Composite bindings are skipped (isComposite=true) until Task 3.
+            // Evaluate one action (oracle evalAction).
+            // Implements composite resolution, GamepadStick vector path,
+            // best-vector / best-scalar split, and Vector2 action reporting.
             void EvalAction(Action& a, double dt, const InputSnapshot& snap)
             {
                 bool isVec = (a.controlType == "Vector2");
                 float bestScalar = 0.0f;
                 float bestScalarMag = 0.0f;
+                glm::vec2 bestVec(0.0f, 0.0f);
+                float bestVecLen = 0.0f;
                 bool kbmContrib = false;
                 bool padContrib = false;
 
                 for (const auto& b : a.bindings)
                 {
-                    if (b.isComposite) continue;  // Task 3
+                    if (b.isComposite)
+                    {
+                        // Composite resolution (oracle: resolveComposite / partStrength).
+                        auto getPartBindings = [&](const std::string& key) -> const std::vector<CompiledBinding>*
+                        {
+                            auto it = b.parts.find(key);
+                            return (it != b.parts.end()) ? &it->second : nullptr;
+                        };
 
+                        static const std::vector<CompiledBinding> kEmpty;
+                        auto getPart = [&](const std::string& key) -> const std::vector<CompiledBinding>&
+                        {
+                            const auto* p = getPartBindings(key);
+                            return p ? *p : kEmpty;
+                        };
+
+                        if (b.compositeType == "1DAxis")
+                        {
+                            // oracle: pos - neg, then scalar processors
+                            float pos = PartStrength(getPart("positive"), snap);
+                            float neg = PartStrength(getPart("negative"), snap);
+                            float val = ApplyScalarProcessors(b.processors, pos - neg);
+                            float mag = std::abs(val);
+                            if (mag > bestScalarMag)
+                            {
+                                bestScalarMag = mag;
+                                bestScalar    = val;
+                            }
+                            // Device contribution: composite parts are keyboard (scancodes)
+                            if (mag >= kBtnThreshold) kbmContrib = true;
+                        }
+                        else  // 2DVector (default)
+                        {
+                            // oracle: vec = {right-left, down-up}, then vector processors
+                            float up    = PartStrength(getPart("up"),    snap);
+                            float down  = PartStrength(getPart("down"),  snap);
+                            float left  = PartStrength(getPart("left"),  snap);
+                            float right = PartStrength(getPart("right"), snap);
+                            glm::vec2 rawVec(right - left, down - up);
+                            glm::vec2 vec = ApplyVectorProcessors(b.processors, rawVec);
+                            float len = glm::length(vec);
+                            if (len > bestVecLen)
+                            {
+                                bestVecLen = len;
+                                bestVec    = vec;
+                            }
+                            // Device contribution: composite parts are keyboard (scancodes)
+                            if (len >= kBtnThreshold) kbmContrib = true;
+                        }
+                        continue;
+                    }
+
+                    // Simple / chord path -- check for GamepadStick (vector path)
+                    if (b.chord.size() == 1 && b.chord[0].source == ControlSource::GamepadStick)
+                    {
+                        glm::vec2 rawVec = ResolveControlVec(b.chord[0], snap);
+                        glm::vec2 vec = ApplyVectorProcessors(b.processors, rawVec);
+                        float len = glm::length(vec);
+                        if (len > bestVecLen)
+                        {
+                            bestVecLen = len;
+                            bestVec    = vec;
+                        }
+                        if (len >= kBtnThreshold) padContrib = true;
+                        continue;
+                    }
+
+                    // Scalar path (keyboard / mouse / gamepad button / gamepad axis / chord)
                     float raw = ResolveChord(b.chord, snap);
-                    // Apply processors (scalar, Task 2 fully; basic ops work now)
                     float val = ApplyScalarProcessors(b.processors, raw);
-
                     float mag = std::abs(val);
                     if (mag > bestScalarMag)
                     {
                         bestScalarMag = mag;
-                        bestScalar = val;
+                        bestScalar    = val;
                     }
 
-                    // Device contribution tracking: check what sourced this binding
+                    // Device contribution tracking
                     if (mag >= kBtnThreshold)
                     {
                         for (const auto& id : b.chord)
@@ -883,10 +991,11 @@ namespace Arcane
 
                 if (isVec)
                 {
-                    // Task 3: composites set this. For Task 1, scalar fallback.
-                    a.vec      = glm::vec2(0.0f);
-                    a.strength = bestScalarMag;
-                    a.curDown  = bestScalarMag >= kBtnThreshold;
+                    // Vector2 action: report the winning vector binding (max length).
+                    // strength = length (oracle: a.strength = bestVecLen for hysteresis).
+                    a.vec      = bestVec;
+                    a.strength = bestVecLen;
+                    a.curDown  = bestVecLen >= kBtnThreshold;
                 }
                 else
                 {
@@ -951,7 +1060,7 @@ namespace Arcane
                 }
             }
 
-            // Apply scalar processors in order (Task 2 extends this; basic ops work now).
+            // Apply scalar processors in order.
             static float ApplyScalarProcessors(const std::vector<ProcessorOp>& procs, float v)
             {
                 for (const auto& op : procs)
@@ -974,11 +1083,87 @@ namespace Arcane
                         break;
                     }
                     case ProcessorOp::Kind::NormalizeVector2:
-                        // Scalar NormalizeVector2 is a no-op on scalars (Task 3 handles vectors)
+                        // Scalar NormalizeVector2 is a no-op on scalars (vectors handled below)
                         break;
                     }
                 }
                 return v;
+            }
+
+            // Apply vector processors in order (oracle: applyVector in Input.lua).
+            // NormalizeVector2: len > 1e-6 -> v/len, else {0,0}.
+            // Deadzone (radial): len < min -> {0,0}; else scale = (len>max?1:(len-min)/(max-min));
+            //   k = scale/len; return v*k.
+            // Invert: {-v.x, -v.y}.
+            // Scale: v * factor (passthrough).
+            static glm::vec2 ApplyVectorProcessors(const std::vector<ProcessorOp>& procs, glm::vec2 v)
+            {
+                for (const auto& op : procs)
+                {
+                    switch (op.kind)
+                    {
+                    case ProcessorOp::Kind::NormalizeVector2:
+                    {
+                        float len = glm::length(v);
+                        v = (len > 1e-6f) ? (v / len) : glm::vec2(0.0f, 0.0f);
+                        break;
+                    }
+                    case ProcessorOp::Kind::Deadzone:
+                    {
+                        float len = glm::length(v);
+                        if (len < op.min)
+                        {
+                            v = glm::vec2(0.0f, 0.0f);
+                        }
+                        else
+                        {
+                            float scaled = (len > op.max) ? 1.0f : (len - op.min) / (op.max - op.min);
+                            float k = scaled / len;
+                            v = v * k;
+                        }
+                        break;
+                    }
+                    case ProcessorOp::Kind::Invert:
+                        v = glm::vec2(-v.x, -v.y);
+                        break;
+                    case ProcessorOp::Kind::Scale:
+                        v = v * op.factor;
+                        break;
+                    }
+                }
+                return v;
+            }
+
+            // Resolve a GamepadStick control to a 2D vector.
+            // idx=0 -> leftStick (axes 0,1); idx=1 -> rightStick (axes 2,3).
+            // Gamepad is NOT capture-suppressed (spec rule; captured by ResolveControl
+            // for scalar paths -- sticks use this dedicated vec path instead).
+            static glm::vec2 ResolveControlVec(const ControlId& id, const InputSnapshot& snap)
+            {
+                if (id.source == ControlSource::GamepadStick && snap.gamepadConnected)
+                {
+                    uint32_t base = id.code * 2;  // 0->axes[0,1], 1->axes[2,3]
+                    if (base + 1 < 6)
+                        return glm::vec2(snap.gamepadAxes[base], snap.gamepadAxes[base + 1]);
+                }
+                return glm::vec2(0.0f, 0.0f);
+            }
+
+            // Compute the max-magnitude scalar strength for a composite part's
+            // binding array (oracle: partStrength in Input.lua).
+            // Each binding in the array is a simple/chord path (no nested composites).
+            static float PartStrength(const std::vector<CompiledBinding>& partBindings,
+                                      const InputSnapshot& snap)
+            {
+                float best = 0.0f;
+                for (const auto& pb : partBindings)
+                {
+                    float raw = ResolveChord(pb.chord, snap);
+                    float val = ApplyScalarProcessors(pb.processors, raw);
+                    float mag = std::abs(val);
+                    if (mag > best) best = mag;
+                }
+                return best;
             }
         };
 

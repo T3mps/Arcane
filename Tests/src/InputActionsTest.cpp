@@ -175,3 +175,104 @@ TEST_CASE("input: chord requires every part", "[input]")
     CHECK(input->Down("save"));                // lctrl+s
     CHECK(input->Pressed("save"));
 }
+
+// ── Task 3: Composites, vector processors, max-magnitude ─────────────────────
+
+namespace
+{
+    constexpr uint32_t kScancodeA  = 4;   // SDL_SCANCODE_A
+    constexpr uint32_t kScancodeS2 = 22;  // SDL_SCANCODE_S
+    constexpr uint32_t kScancodeD  = 7;   // SDL_SCANCODE_D
+
+    nlohmann::json MoveDoc()
+    {
+        // RAW-STRING NOTE: deadzone(min=0.125,max=0.925) contains )"
+        // which would close a plain R"(...)". Use tagged delimiter R"JSON(...)JSON".
+        return nlohmann::json::parse(R"JSON({
+          "actionMaps": [
+            { "name": "world", "actions": [
+              { "name": "move", "type": "Value", "controlType": "Vector2",
+                "bindings": [
+                  { "composite": "2DVector",
+                    "parts": {
+                      "up":    [ { "path": "<Keyboard>/scancode/w" } ],
+                      "down":  [ { "path": "<Keyboard>/scancode/s" } ],
+                      "left":  [ { "path": "<Keyboard>/scancode/a" } ],
+                      "right": [ { "path": "<Keyboard>/scancode/d" } ]
+                    },
+                    "processors": [ "normalizeVector2" ] },
+                  { "path": "<Gamepad>/leftStick",
+                    "processors": [ "deadzone(min=0.125,max=0.925)" ] }
+                ] },
+              { "name": "zoom", "type": "Value",
+                "bindings": [
+                  { "composite": "1DAxis",
+                    "parts": {
+                      "positive": [ { "path": "<Keyboard>/scancode/w" } ],
+                      "negative": [ { "path": "<Keyboard>/scancode/s" } ]
+                    } } ] }
+            ] }
+          ]
+        })JSON");
+    }
+}
+
+TEST_CASE("input: 2DVector composite with normalize", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(MoveDoc()));
+    input->SetBaseContext("world");
+
+    InputSnapshot snap;
+    snap.SetScancode(kScancodeW);          // up only
+    input->Update(1.0 / 60.0, snap);
+    auto v = input->Axis("move");
+    CHECK(v.x == Approx(0.0f));
+    CHECK(v.y == Approx(-1.0f));    // up = -y (screen y-down, oracle)
+    CHECK(input->Down("move"));            // magnitude >= 0.5
+
+    InputSnapshot diag;
+    diag.SetScancode(kScancodeW);
+    diag.SetScancode(kScancodeD);          // up+right
+    input->Update(1.0 / 60.0, diag);
+    v = input->Axis("move");
+    CHECK(v.x == Approx(0.70710678f).margin(1e-4));   // normalized
+    CHECK(v.y == Approx(-0.70710678f).margin(1e-4));
+    CHECK(input->Strength("move") == Approx(1.0f).margin(1e-4));
+}
+
+TEST_CASE("input: 1DAxis composite", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(MoveDoc()));
+    input->SetBaseContext("world");
+
+    InputSnapshot snap;
+    snap.SetScancode(kScancodeS2);
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Strength("zoom") == Approx(-1.0f));  // negative - positive
+}
+
+TEST_CASE("input: max-magnitude binding wins (stick vs wasd)", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(MoveDoc()));
+    input->SetBaseContext("world");
+
+    // Stick at full right, no keys: stick binding supplies the vector.
+    InputSnapshot snap;
+    snap.gamepadConnected = true;
+    snap.gamepadAxes[0] = 1.0f;            // leftStick/x
+    input->Update(1.0 / 60.0, snap);
+    auto v = input->Axis("move");
+    CHECK(v.x == Approx(1.0f).margin(1e-4));
+    CHECK(v.y == Approx(0.0f).margin(1e-4));
+
+    // Weak stick + full WASD: the larger (keyboard) vector wins.
+    InputSnapshot both;
+    both.gamepadConnected = true;
+    both.gamepadAxes[0] = 0.3f;
+    both.SetScancode(kScancodeD);
+    input->Update(1.0 / 60.0, both);
+    CHECK(input->Axis("move").x == Approx(1.0f).margin(1e-4));
+}
