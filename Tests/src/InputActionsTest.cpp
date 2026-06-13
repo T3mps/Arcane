@@ -391,3 +391,115 @@ TEST_CASE("input: radial deadzone scales a stick vector", "[input]")
     CHECK(v.x == Approx(0.21875f).margin(1e-4));
     CHECK(v.y == Approx(0.0f).margin(1e-4));
 }
+
+// ── Task 5: Context stack, active-device hysteresis, capture suppression ──────
+
+namespace
+{
+    nlohmann::json ContextDoc()
+    {
+        return nlohmann::json::parse(R"JSON({
+          "actionMaps": [
+            { "name": "world", "actions": [
+              { "name": "interact", "type": "Button",
+                "bindings": [ { "path": "<Keyboard>/space" } ] },
+              { "name": "fire", "type": "Button",
+                "bindings": [ { "path": "<Mouse>/leftButton" } ] },
+              { "name": "move", "type": "Value", "controlType": "Vector2",
+                "bindings": [ { "path": "<Gamepad>/leftStick" } ] }
+            ] },
+            { "name": "menu", "blocking": true, "actions": [
+              { "name": "confirm", "type": "Button",
+                "bindings": [ { "path": "<Keyboard>/space" } ] }
+            ] }
+          ]
+        })JSON");
+    }
+}
+
+TEST_CASE("input: blocking map shadows lower contexts", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(ContextDoc()));
+    input->SetBaseContext("world");
+
+    InputSnapshot snap; snap.AddKeycode(kKeycodeSpace);
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("interact"));
+
+    input->PushContext("menu");                  // blocking
+    CHECK(input->ActiveContext() == "menu");
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("confirm"));
+    CHECK_FALSE(input->Down("interact"));        // blocked below the menu
+
+    input->PopContext();
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("interact"));
+
+    input->PushContext("nope");                  // unknown: warn + no-op
+    CHECK(input->ActiveContext() == "world");
+
+    input->PushContext("menu");
+    input->SwapBaseContext("world");             // bottom swap keeps the menu
+    CHECK(input->ActiveContext() == "menu");
+}
+
+TEST_CASE("input: active-device hysteresis", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(ContextDoc()));
+    input->SetBaseContext("world");
+
+    CHECK(input->ActiveDevice() == Arcane::InputDevice::Kbm);   // default
+
+    InputSnapshot stick;
+    stick.gamepadConnected = true;
+    stick.gamepadAxes[0] = 0.9f;                 // strong stick
+    input->Update(1.0 / 60.0, stick);
+    CHECK(input->ActiveDevice() == Arcane::InputDevice::Gamepad);
+
+    InputSnapshot weak;
+    weak.gamepadConnected = true;
+    weak.gamepadAxes[0] = 0.3f;                  // below 0.5: no flip back
+    input->Update(1.0 / 60.0, weak);
+    CHECK(input->ActiveDevice() == Arcane::InputDevice::Gamepad);
+
+    InputSnapshot key; key.AddKeycode(kKeycodeSpace);
+    input->Update(1.0 / 60.0, key);              // kbm wins immediately
+    CHECK(input->ActiveDevice() == Arcane::InputDevice::Kbm);
+}
+
+TEST_CASE("input: ImGui capture suppresses kbm, not pad, with clean edges", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(ContextDoc()));
+    input->SetBaseContext("world");
+
+    InputSnapshot snap;
+    snap.AddKeycode(kKeycodeSpace);
+    snap.gamepadConnected = true;
+    snap.gamepadAxes[0] = 0.9f;
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("interact"));
+
+    snap.wantCaptureKeyboard = true;             // text field grabs focus mid-hold
+    input->Update(1.0 / 60.0, snap);
+    CHECK_FALSE(input->Down("interact"));
+    CHECK(input->Released("interact"));          // falling edge fires (no stuck press)
+    CHECK(input->Axis("move").x > 0.5f);         // gamepad unaffected
+
+    snap.wantCaptureKeyboard = false;
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Pressed("interact"));           // returns as a fresh press
+
+    // Mouse capture is independent of keyboard capture.
+    snap.mouseButtons = 0x1;                     // LMB
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("fire"));
+    snap.wantCaptureMouse = true;                // ImGui drag grabs the mouse
+    input->Update(1.0 / 60.0, snap);
+    CHECK_FALSE(input->Down("fire"));
+    CHECK(input->Released("fire"));
+    CHECK(input->Down("interact"));              // keyboard unaffected
+}
