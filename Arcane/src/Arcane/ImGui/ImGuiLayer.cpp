@@ -78,6 +78,16 @@ namespace Arcane
                                           target);
             }
 
+            bool WantCaptureKeyboard() const override
+            {
+                return ImGui::GetIO().WantCaptureKeyboard;
+            }
+
+            bool WantCaptureMouse() const override
+            {
+                return ImGui::GetIO().WantCaptureMouse;
+            }
+
         private:
             // The native event tap: the platform backend consumes SDL events
             // for input. `event` is a const SDL_Event* (see Window.hpp).

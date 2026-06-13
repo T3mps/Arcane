@@ -65,8 +65,9 @@ Arcane/                          (top-level, beside Server/ Client/ Tools/)
 ```
 
 `Arcane.dll` internal module responsibilities (one folder = one responsibility):
-- **Base**: logging (spdlog), assertions, ids, config. **Platform**: SDL3 window/events/
-  input (input_actions.json semantics), app lifecycle. **Render**: NVRHI device/swapchain
+- **Base**: logging (spdlog), assertions, ids, config. **Platform**: SDL3 window/events,
+  app lifecycle. **Input**: snapshot-driven action system (input_actions.json semantics;
+  design: 2026-06-12-arcane-input-actions-design.md). **Render**: NVRHI device/swapchain
   (D3D12+Vulkan), 2D batcher, canvases, shader system (HLSL/DXC artifacts), render graph
   seam. **Audio**: miniaudio engine. **Text**: FreeType + skyline atlas + layout.
   **Assets**: loaders (stb images, fonts, shaders, JSON), lifetime/refcounts — semantics
@@ -183,7 +184,8 @@ authoring against the live sim. Grimoire UI = Dear ImGui via first-party
 2. **M1** — window + NVRHI device on BOTH backends + clear + present (Playground.exe).
 3. **M2** — 2D renderer (batcher/canvas/shaders), text, asset loaders, ImGui backends.
 4. **M3** — Playground full demo: Astra ball scene on enkiTS, collision tones, FreeType
-   HUD, Tracy zones, runtime D3D12<->Vulkan swap (the stack spec's cohesive sample).
+   HUD, Tracy zones, runtime D3D12<->Vulkan swap (the stack spec's cohesive sample)
+   + input action system (snapshot-driven, ImGui-capture-aware; landed as the M3 tail).
 5. **M4** — Plugin module: PluginHost + Game DLL + hot reload; Playground scene becomes
    `PlaygroundGame.dll` under Loom — first live ABI/hot-reload consumer.
 6. **M5** — physics port (oracle-gated, hash parity with the Lua reference) into the

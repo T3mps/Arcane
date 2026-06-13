@@ -1,8 +1,7 @@
 #pragma once
 
-// Platform module: SDL3 window + event pump. M1 surfaces only what the
-// host loop needs (quit, resize); the input-action layer
-// (input_actions.json semantics) is a later milestone.
+// Platform module: SDL3 window + event pump. Quit/resize surface only;
+// input lives in Arcane/Input (snapshot-driven action system).
 
 #include <Arcane/Base/Api.hpp>
 
@@ -25,7 +24,7 @@ namespace Arcane
 
     struct WindowEvents
     {
-        bool quitRequested = false;  // SDL_EVENT_QUIT, window close, or ESC
+        bool quitRequested = false;  // SDL_EVENT_QUIT or window close (ESC is the host's business via InputActions)
         bool resized       = false;  // pixel size changed since last pump
         uint32_t width     = 0;      // valid when resized
         uint32_t height    = 0;
