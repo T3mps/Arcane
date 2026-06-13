@@ -1,0 +1,107 @@
+// End-to-end slice: substrate (Registry+schedulers+RunLoop) advances a parented
+// scene, then the render phase submits sprites to a Batcher2D into an offscreen
+// HDR canvas. Asserts both sprites are submitted and NVRHI validation is silent.
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <Arcane/Jobs/JobSystem.hpp>
+#include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Render/Canvas.hpp>
+#include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/ShaderLibrary.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/RenderSystems.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Scene/TransformSystems.hpp>
+#include <Arcane/Sim/RunLoop.hpp>
+#include <Arcane/Sim/SystemSchedulers.hpp>
+
+#include <Astra/Registry/Registry.hpp>
+
+#include <memory>
+
+namespace
+{
+    void RunSlice(Arcane::GraphicsBackend backend)
+    {
+        Arcane::RenderDeviceDesc desc;
+        desc.backend = backend;
+        auto device = Arcane::RenderDevice::Create(desc);
+        REQUIRE(device != nullptr);
+        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
+        REQUIRE(shaders != nullptr);
+        auto canvas = Arcane::CreateCanvas(device->Nvrhi(), 64, 64);
+        REQUIRE(canvas != nullptr);
+        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+        REQUIRE(batcher != nullptr);
+
+        Arcane::JobSystem jobs;
+        auto sched = jobs.WorkScheduler();
+
+        Astra::Registry::Config cfg;
+        cfg.workScheduler = sched;
+        Astra::Registry reg(cfg);
+        Arcane::RegisterSceneComponents(reg);
+
+        Arcane::SystemSchedulers schedulers(sched);
+        schedulers.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
+        schedulers.render.AddSystem<Arcane::RenderSubmissionSystem>();
+
+        Astra::Entity root = reg.CreateEntity();
+        reg.AddComponent<Arcane::LocalTransform>(root, Arcane::LocalTransform{});
+        reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+
+        Astra::Entity parent = reg.CreateEntity();
+        Arcane::LocalTransform pT; pT.position = glm::vec2(10, 10);
+        reg.AddComponent<Arcane::LocalTransform>(parent, pT);
+        reg.AddComponent<Arcane::WorldTransform>(parent, Arcane::WorldTransform{});
+        reg.AddComponent<Arcane::SpriteRenderer>(parent, Arcane::SpriteRenderer{});
+        reg.SetParent(parent, root);
+
+        Astra::Entity child = reg.CreateEntity();
+        Arcane::LocalTransform cT; cT.position = glm::vec2(5, 5);
+        reg.AddComponent<Arcane::LocalTransform>(child, cT);
+        reg.AddComponent<Arcane::WorldTransform>(child, Arcane::WorldTransform{});
+        Arcane::SpriteRenderer csr; csr.tint = glm::vec4(0.2f, 0.8f, 0.3f, 1.0f);
+        reg.AddComponent<Arcane::SpriteRenderer>(child, csr);
+        reg.SetParent(child, parent);
+
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+        // TextureTable is not set: GetResource<TextureTable>() returns nullptr,
+        // so RenderSubmissionSystem falls back to Rect() for all sprites (correct
+        // for textureId==0). Avoids registering a non-trivially-copyable resource
+        // whose unordered_map<uint32_t,ITexture*> the Astra binary writer can't handle.
+
+        Arcane::RunLoop loop(reg, schedulers);
+        for (int i = 0; i < 4; ++i)
+            loop.Advance(1.0 / 60.0);   // FixedUpdate: transform propagation
+
+        nvrhi::CommandListHandle cl = device->Nvrhi()->createCommandList();
+        cl->open();
+        cl->clearTextureFloat(canvas->Texture(), nvrhi::AllSubresources,
+                              nvrhi::Color(0, 0, 0, 1));
+        batcher->Begin(cl, canvas->Framebuffer(), canvas->Width(), canvas->Height());
+        reg.SetResource<Arcane::RenderContext2D>(
+            Arcane::RenderContext2D{batcher.get(), glm::vec2(0, 0)});
+        loop.SubmitRender();   // RenderSubmissionSystem -> batcher
+        batcher->End();
+        cl->close();
+        device->Nvrhi()->executeCommandList(cl);
+        device->Nvrhi()->waitForIdle();
+
+        CHECK(batcher->Stats().quads >= 2);
+        CHECK(Arcane::RenderErrorCount() == 0);
+        device->Nvrhi()->runGarbageCollection();
+    }
+}
+
+TEST_CASE("d3d12: scene slice submits sprites with no validation errors", "[gpu][d3d12][scene]")
+{
+    RunSlice(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("vulkan: scene slice submits sprites with no validation errors", "[gpu][vulkan][scene]")
+{
+    RunSlice(Arcane::GraphicsBackend::Vulkan);
+}
