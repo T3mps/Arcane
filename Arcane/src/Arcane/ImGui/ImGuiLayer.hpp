@@ -32,5 +32,11 @@ namespace Arcane
         // ImGui::Render + draw into target (an OPEN command list).
         virtual void Render(nvrhi::ICommandList* commandList,
                             nvrhi::IFramebuffer* target) = 0;
+
+        // ImGui capture state for the input layer: pass these into
+        // InputDevices::Sample so kbm actions release while ImGui owns the
+        // keyboard/mouse (text fields, drags). Valid between frames.
+        virtual bool WantCaptureKeyboard() const = 0;
+        virtual bool WantCaptureMouse() const = 0;
     };
 }
