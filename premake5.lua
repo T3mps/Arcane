@@ -175,9 +175,11 @@ project "Arcane"
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.freetype}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
     }
 
-    links { "Core", "nvrhi", "msdfgen", "freetype", "imgui" }
+    links { "Core", "nvrhi", "msdfgen", "freetype", "imgui", "enkiTS" }
 
     -- Force EVERY imgui object (incl. imgui_demo's ShowDemoWindow) into the
     -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
@@ -269,6 +271,8 @@ project "Playground"
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.glm}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
     }
 
     links { "Arcane" }
