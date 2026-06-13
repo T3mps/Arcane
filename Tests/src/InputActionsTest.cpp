@@ -3,6 +3,7 @@
 // subset; snapshot-driven so every case runs headless on fabricated
 // snapshots. Grows across the input tasks.
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Input/InputActions.hpp>
@@ -11,6 +12,7 @@
 
 using Arcane::InputActions;
 using Arcane::InputSnapshot;
+using Catch::Approx;
 
 namespace
 {
@@ -93,4 +95,83 @@ TEST_CASE("input: load failures", "[input]")
 
     // A good load after a bad one works (full replace).
     CHECK(input->LoadJson(ButtonMapDoc()));
+}
+
+namespace
+{
+    nlohmann::json PadAndChordDoc()
+    {
+        return nlohmann::json::parse(R"JSON({
+          "actionMaps": [
+            { "name": "demo", "actions": [
+              { "name": "confirm", "type": "Button",
+                "bindings": [ { "path": "<Gamepad>/buttonSouth" } ] },
+              { "name": "aim", "type": "Value",
+                "bindings": [ { "path": "<Gamepad>/leftTrigger",
+                                "processors": [ "deadzone(min=0.125,max=0.925)" ] } ] },
+              { "name": "save", "type": "Button",
+                "bindings": [ { "path": "<Keyboard>/lctrl+<Keyboard>/s" } ] },
+              { "name": "throttle", "type": "Value",
+                "bindings": [ { "path": "<Gamepad>/rightTrigger",
+                                "processors": [ "invert", "scale(factor=2)" ] } ] }
+            ] }
+          ]
+        })JSON");
+    }
+}
+
+TEST_CASE("input: gamepad buttons and trigger axes", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(PadAndChordDoc()));
+    input->SetBaseContext("demo");
+
+    InputSnapshot snap;
+    snap.gamepadConnected = true;
+    snap.gamepadButtons   = 1 << 0;   // buttonSouth
+    snap.gamepadAxes[4]   = 0.6f;     // leftTrigger
+    snap.gamepadAxes[5]   = 0.5f;     // rightTrigger
+
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("confirm"));
+    // deadzone(0.125, 0.925): 0.6 -> (0.6-0.125)/(0.925-0.125) = 0.59375
+    CHECK(input->Strength("aim") == Approx(0.59375f).margin(1e-4));
+    // invert then scale(2): 0.5 -> -0.5 -> -1.0
+    CHECK(input->Strength("throttle") == Approx(-1.0f).margin(1e-4));
+    CHECK(input->Down("throttle"));   // |strength| >= 0.5 counts as down
+}
+
+TEST_CASE("input: deadzone boundary values", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(PadAndChordDoc()));
+    input->SetBaseContext("demo");
+
+    InputSnapshot snap;
+    snap.gamepadConnected = true;
+
+    snap.gamepadAxes[4] = 0.1f;   // below min -> 0
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Strength("aim") == 0.0f);
+
+    snap.gamepadAxes[4] = 0.95f;  // above max -> 1
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Strength("aim") == Approx(1.0f));
+}
+
+TEST_CASE("input: chord requires every part", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(PadAndChordDoc()));
+    input->SetBaseContext("demo");
+
+    InputSnapshot snap;
+    snap.AddKeycode(kKeycodeS);
+    input->Update(1.0 / 60.0, snap);
+    CHECK_FALSE(input->Down("save"));          // s alone
+
+    snap.AddKeycode(kKeycodeLCtrl);
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("save"));                // lctrl+s
+    CHECK(input->Pressed("save"));
 }
