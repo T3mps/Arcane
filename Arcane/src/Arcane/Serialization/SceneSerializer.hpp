@@ -52,25 +52,24 @@ namespace Arcane::Scene
             return -1;
         };
 
-        auto& mutableReg = const_cast<Astra::Registry&>(reg);  // GetComponent is non-const
         for (Astra::Entity e : order)
         {
             nlohmann::json entry;
-            if (auto* lt = mutableReg.GetComponent<LocalTransform>(e))
+            if (const auto* lt = reg.GetComponent<LocalTransform>(e))
             {
                 nlohmann::json j;
                 ReflectionJsonWriter w(j);
-                ForEachReflectedField<LocalTransform>(lt, w);
+                ForEachReflectedField<LocalTransform>(const_cast<LocalTransform*>(lt), w);
                 entry["local"] = std::move(j);
             }
-            if (auto* sr = mutableReg.GetComponent<SpriteRenderer>(e))
+            if (const auto* sr = reg.GetComponent<SpriteRenderer>(e))
             {
                 nlohmann::json j;
                 ReflectionJsonWriter w(j);
-                ForEachReflectedField<SpriteRenderer>(sr, w);
+                ForEachReflectedField<SpriteRenderer>(const_cast<SpriteRenderer*>(sr), w);
                 entry["sprite"] = std::move(j);
             }
-            entry["parent"] = indexOf(mutableReg.GetParent(e));
+            entry["parent"] = indexOf(reg.GetParent(e));
             doc["entities"].push_back(std::move(entry));
         }
         return doc;

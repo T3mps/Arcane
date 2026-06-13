@@ -60,4 +60,17 @@ TEST_CASE("scene round-trips through JSON (typed roster)", "[json][scene]")
     const Arcane::SceneRoot* root = reg.GetResource<Arcane::SceneRoot>();
     REQUIRE(root != nullptr);
     CHECK(reg.GetChildCount(root->entity) == 1);
+
+    bool foundChild = false;
+    auto ltView = reg.CreateView<Arcane::LocalTransform>();
+    ltView.ForEach([&](Astra::Entity, Arcane::LocalTransform& lt)
+    {
+        if (lt.position.x > 5.0f && lt.position.x < 15.0f)   // the child at (10,5)
+        {
+            foundChild = true;
+            CHECK(lt.position.x == Approx(10.0f));
+            CHECK(lt.position.y == Approx(5.0f));
+        }
+    });
+    CHECK(foundChild);
 }
