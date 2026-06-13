@@ -321,19 +321,17 @@ namespace Arcane
                 return ((snap.mouseButtons >> id.code) & 1) ? 1.0f : 0.0f;
 
             case ControlSource::GamepadButton:
-                // Task 2: full impl. Task 1 stub returns 0 (gamepad unresolved).
                 if (!snap.gamepadConnected) return 0.0f;
                 return ((snap.gamepadButtons >> id.code) & 1) ? 1.0f : 0.0f;
 
             case ControlSource::GamepadAxis:
-                // Task 2: full impl. Task 1 stub.
                 if (!snap.gamepadConnected) return 0.0f;
                 if (id.code < 6) return snap.gamepadAxes[id.code];
                 return 0.0f;
 
             case ControlSource::GamepadStick:
-                // Task 3: GamepadStick returns a vec2; scalar form returns magnitude.
-                // Task 1 stub: return 0 (sticks resolved in Task 3).
+                // Sticks resolve to a vec2 via the composite/vector path
+                // (the scalar ResolveControl path is not used for sticks).
                 return 0.0f;
 
             case ControlSource::None:
@@ -417,13 +415,9 @@ namespace Arcane
             }
             else
             {
-                // Unknown processor: warn, use as Invert (no-op effectively - see Task 2)
+                // Unknown processor: warn at load time, evaluate as passthrough
+                // (Scale by 1 is identity for both scalar and vector forms).
                 ARC_WARN("input: unknown processor '{}' (ignored)", name);
-                op.kind = ProcessorOp::Kind::Invert; // will be skipped in apply if needed
-                // We'll treat unknown as a passthrough: use a dedicated sentinel in Task 2.
-                // For now, flag it. Since we warn at load time, return invert which is
-                // effectively identity if we handle it as "unknown" later.
-                // Actually: returning Invert would change behavior. Return Scale(factor=1).
                 op.kind = ProcessorOp::Kind::Scale;
                 op.factor = 1.0f;
             }
@@ -785,7 +779,7 @@ namespace Arcane
                 return a ? a->vec : glm::vec2(0.0f);
             }
 
-            bool Buffered(std::string_view action, int frames = 6) override
+            bool Buffered(std::string_view action, int frames) override
             {
                 Action* a = ResolveMutable(action);
                 if (!a || a->bufConsumed) return false;

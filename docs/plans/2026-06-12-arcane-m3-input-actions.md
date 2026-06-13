@@ -613,10 +613,10 @@ TEST_CASE("input: hold fires performed once at duration", "[input]")
 
     InputSnapshot down; down.AddKeycode(kKeycodeSpace);
 
-    input->Update(0.1, down);
+    input->Update(0.1, down);                  // rising frame: heldTime stays 0
     CHECK(input->Started("charge"));
     CHECK_FALSE(input->Performed("charge"));
-    input->Update(0.1, down);                  // held 0.1 -> heldTime 0.2
+    input->Update(0.2, down);                  // heldTime 0.2 (rising adds nothing)
     CHECK_FALSE(input->Performed("charge"));
     input->Update(0.15, down);                 // heldTime 0.35 >= 0.3
     CHECK(input->Performed("charge"));
@@ -639,9 +639,9 @@ TEST_CASE("input: hold canceled on early release; tap is the inverse", "[input]"
     CHECK(input->Canceled("charge"));
     CHECK(input->Performed("flick"));          // 0.1 <= tap 0.2 -> performed
 
-    input->Update(0.1, down);                  // press again
-    input->Update(0.15, down);
-    input->Update(0.1, down);                  // heldTime 0.35 > 0.2: tap invalid
+    input->Update(0.1, down);                  // press again (rising: heldTime 0)
+    input->Update(0.15, down);                 // heldTime 0.15
+    input->Update(0.1, down);                  // heldTime 0.25 > 0.2: tap invalid
     input->Update(0.1, InputSnapshot{});
     CHECK(input->Canceled("flick"));
 
