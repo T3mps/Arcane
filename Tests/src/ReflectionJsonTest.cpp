@@ -68,6 +68,40 @@ TEST_CASE("component round-trips through JSON via the visitFields seam", "[json]
     CHECK(b.color.w == Approx(1.0f));
 }
 
+namespace { enum class Mode { Off, On, Auto }; struct Knob { Mode mode = Mode::Off; int level = 0; }; }
+
+ASTRA_REFLECT_ENUM(Mode)
+    ASTRA_REFLECT_ENUM_VALUE(Mode, Off)
+    ASTRA_REFLECT_ENUM_VALUE(Mode, On)
+    ASTRA_REFLECT_ENUM_VALUE(Mode, Auto)
+ASTRA_END_REFLECT_ENUM()
+
+ASTRA_REFLECT_TYPE(Knob)
+    ASTRA_REFLECT_FIELD(Knob, mode)
+    ASTRA_REFLECT_FIELD(Knob, level)
+ASTRA_END_REFLECT_TYPE()
+
+TEST_CASE("enum field round-trips by name through JSON", "[json]")
+{
+    Astra::ComponentRegistry creg;
+    creg.RegisterComponent<Knob>();
+    const auto* desc = creg.GetComponentDescriptor(Astra::TypeID<Knob>::Value());
+    REQUIRE(desc != nullptr);
+
+    Knob a; a.mode = Mode::Auto; a.level = 3;
+    nlohmann::json j;
+    Arcane::ReflectionJsonWriter writer(j);
+    desc->visitFields(&a, writer);
+    CHECK(j["mode"].is_string());          // enum serialized by NAME, not {} or a number
+    CHECK(j["mode"].get<std::string>() == "Auto");
+
+    Knob b;
+    Arcane::ReflectionJsonReader reader(j);
+    desc->visitFields(&b, reader);
+    CHECK(b.level == 3);
+    CHECK(b.mode == Mode::Auto);
+}
+
 TEST_CASE("AliasName recovers a value written under the old field name", "[json]")
 {
     Astra::ComponentRegistry creg;

@@ -114,6 +114,9 @@ namespace Arcane
                 return;
             }
             // Enum: emit the value's name via EnumInfo.
+            // MUST return unconditionally — even when no name is resolvable, an
+            // enum field must never fall through to the nested-struct branch below
+            // (GetMeta returns the enum's TypeMeta too, producing a garbage {} object).
             if (field.isEnum)
             {
                 const Astra::TypeMeta* em = Astra::GetMeta(field.typeHash);
@@ -121,11 +124,10 @@ namespace Arcane
                 {
                     const int64_t raw = Detail::ReadEnumRaw(field, instance);
                     if (auto name = em->EnumToString(raw))
-                    {
                         m_out[std::string(field.name)] = std::string(*name);
-                        return;
-                    }
+                    // else: unresolvable value -> silently skip (not written as {})
                 }
+                return;   // terminal: never reach the nested-struct branch
             }
             // Nested reflected struct: recurse over the sub-instance.
             if (const Astra::TypeMeta* nested = Astra::GetMeta(field.typeHash))
@@ -161,13 +163,19 @@ namespace Arcane
                 Detail::ReadGlm(field, instance, *node))
                 return;
 
-            if (field.isEnum && node->is_string())
+            // Enum: read by name if the node is a string; silently skip otherwise.
+            // MUST return unconditionally — a non-string node for an enum field must
+            // not fall through to the nested-struct branch (same GetMeta ambiguity).
+            if (field.isEnum)
             {
-                const Astra::TypeMeta* em = Astra::GetMeta(field.typeHash);
-                if (em)
-                    if (auto v = em->EnumFromString(node->get<std::string>()))
-                        Detail::WriteEnumRaw(field, instance, *v);
-                return;
+                if (node->is_string())
+                {
+                    const Astra::TypeMeta* em = Astra::GetMeta(field.typeHash);
+                    if (em)
+                        if (auto v = em->EnumFromString(node->get<std::string>()))
+                            Detail::WriteEnumRaw(field, instance, *v);
+                }
+                return;   // terminal: never reach the nested-struct branch
             }
             if (const Astra::TypeMeta* nested = Astra::GetMeta(field.typeHash))
             {
