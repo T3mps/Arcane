@@ -186,11 +186,22 @@ authoring against the live sim. Grimoire UI = Dear ImGui via first-party
 4. **M3** — Playground full demo: Astra ball scene on enkiTS, collision tones, FreeType
    HUD, Tracy zones, runtime D3D12<->Vulkan swap (the stack spec's cohesive sample)
    + input action system (snapshot-driven, ImGui-capture-aware; landed as the M3 tail).
-5. **M4** — Plugin module: PluginHost + Game DLL + hot reload; Playground scene becomes
-   `PlaygroundGame.dll` under Loom — first live ABI/hot-reload consumer.
-6. **M5** — physics port (oracle-gated, hash parity with the Lua reference) into the
+5. **M4** — Simulation substrate (Astra Registry + enkiTS via an `IWorkScheduler` adapter +
+   per-phase SystemSchedulers + `Arcane::RunLoop`) + minimal formal scene (LocalTransform/
+   WorldTransform/SpriteRenderer hierarchy, TransformPropagationSystem, RenderSubmissionSystem,
+   binary scene save/load). Gated by **Astra 3.2** (Phase 0: a format-agnostic reflection
+   field-visitor seam + `AliasName`). Spec: `2026-06-13-arcane-m4-sim-substrate-scene.md`.
+   (This is the substrate the old "M3 Playground full demo" assumed; it was deferred when M3
+   shipped only the input action system.)
+6. **M5** — Plugin module: PluginHost + Game DLL + hot reload; Playground scene becomes
+   `PlaygroundGame.dll` under Loom — first live ABI/hot-reload consumer. **Spec deviation
+   (recorded in the M4 spec):** hot-reload state round-trips via `registry.Save(buffer)` /
+   `Registry::Load` — one integrated, CRC'd, versioned snapshot — NOT the per-component
+   `Astra::BinaryWriter` loops the hot-reload sequence above implies; `GamePlugin_SaveState/
+   LoadState` wrap that whole-registry snapshot stream.
+7. **M6** — physics port (oracle-gated, hash parity with the Lua reference) into the
    presentation-free sim layer; Playground swaps its toy collision for the real engine.
-7. **M6** — Grimoire shell + sim-time control; LevelEditor work begins; Combat Sphere
+8. **M7** — Grimoire shell + sim-time control; LevelEditor work begins; Combat Sphere
    designs on top of the now-real engine.
 
 ## Testing
