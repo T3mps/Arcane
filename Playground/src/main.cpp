@@ -1,13 +1,15 @@
-// Arcane Playground -- M2b: MSDF HUD text + ImGui stats overlay added on top
-// of the M2a canvas -> batcher (bouncing shapes + HDR swatch) -> ACES tonemap
-// -> present path. ShaderLibrary::Poll at 1 Hz enables the hot-reload dev loop
-// (set ARCANE_SHADER_DIR to shaders/generated/ and run compile-shaders.bat
-// while the app runs).
+// Arcane Playground -- M3 tail: input action system demo added on top of the
+// M2b canvas -> batcher (bouncing shapes + HDR swatch) -> ACES tonemap -> present
+// path. ESC quits, Tab toggles the stats overlay, WASD/left-stick nudges the
+// orbit center, ctrl+b logs a swap-backend notice. InputActions + InputDevices
+// own the snapshot seam; Window no longer hardcodes ESC.
 // Scripted verification: --frames N renders N frames and exits 0.
 
 #include <Arcane/Base/Engine.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/ImGui/ImGuiLayer.hpp>
+#include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Input/InputDevices.hpp>
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
@@ -146,6 +148,18 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    auto inputDevices = Arcane::InputDevices::Create();
+    auto input = Arcane::InputActions::Create();
+    if (!inputDevices || !input || !input->LoadFile("data/input_actions.json"))
+    {
+        std::fprintf(stderr, "error: input system init failed\n");
+        return 1;
+    }
+    input->SetBaseContext("demo");
+    bool showStats = true;
+    glm::vec2 moveOffset(0.0f);
+    auto lastFrameTime = std::chrono::steady_clock::now();
+
     nvrhi::CommandListHandle commandList = device->Nvrhi()->createCommandList();
     // Swapchain backbuffer framebuffer views; reset on resize.
     std::unordered_map<nvrhi::ITexture*, nvrhi::FramebufferHandle>
@@ -178,13 +192,39 @@ int main(int argc, char** argv)
             continue;
         }
 
+        // Input: sample SDL state, evaluate actions.  Must precede ImGui
+        // BeginFrame so capture flags are set before the evaluator reads them.
+        {
+            const auto nowInput = std::chrono::steady_clock::now();
+            const double frameDt =
+                std::chrono::duration<double>(nowInput - lastFrameTime).count();
+            lastFrameTime = nowInput;
+
+            input->Update(frameDt,
+                          inputDevices->Sample(imgui->WantCaptureKeyboard(),
+                                               imgui->WantCaptureMouse()));
+            if (input->Pressed("quit"))
+                break;
+            if (input->Pressed("toggle_stats"))
+                showStats = !showStats;
+            if (input->Pressed("swap_backend"))
+                ARC_INFO("swap_backend pressed (runtime backend swap lands with the M3 demo proper)");
+            // WASD / left stick nudges the orbit center: composites +
+            // processors visibly live in the demo.
+            const auto mv = input->Axis("move");
+            moveOffset += glm::vec2(mv.x, mv.y) * (float)(300.0 * frameDt);
+        }
+
         imgui->BeginFrame();
-        ImGui::Begin("Arcane Stats");
-        ImGui::Text("Backend: %s", Arcane::ToString(device->Backend()));
-        ImGui::Text("Adapter: %s", device->AdapterName().c_str());
-        const Arcane::Batch2DStats lastStats = batcher->Stats();
-        ImGui::Text("Quads: %u  Draws: %u", lastStats.quads, lastStats.drawCalls);
-        ImGui::End();
+        if (showStats)
+        {
+            ImGui::Begin("Arcane Stats");
+            ImGui::Text("Backend: %s", Arcane::ToString(device->Backend()));
+            ImGui::Text("Adapter: %s", device->AdapterName().c_str());
+            const Arcane::Batch2DStats lastStats = batcher->Stats();
+            ImGui::Text("Quads: %u  Draws: %u", lastStats.quads, lastStats.drawCalls);
+            ImGui::End();
+        }
 
         nvrhi::ITexture* backbuffer = swapchain->BeginFrame();
         if (!backbuffer)
@@ -224,7 +264,8 @@ int main(int argc, char** argv)
         }
 
         // Orbiting circle + a connecting line leash.
-        const glm::vec2 middle(w * 0.5f, h * 0.5f);
+        // moveOffset is nudged by WASD/stick each frame (input demo).
+        const glm::vec2 middle(w * 0.5f + moveOffset.x, h * 0.5f + moveOffset.y);
         const glm::vec2 orbit = middle +
             glm::vec2((float)std::cos(t) * 0.3f * w, (float)std::sin(t) * 0.3f * h);
         batcher->Line(middle, orbit, 3.0f, glm::vec4(0.7f, 0.7f, 0.8f, 0.8f));

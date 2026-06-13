@@ -503,3 +503,19 @@ TEST_CASE("input: ImGui capture suppresses kbm, not pad, with clean edges", "[in
     CHECK(input->Released("fire"));
     CHECK(input->Down("interact"));              // keyboard unaffected
 }
+
+// ── Task 7: Round-trip load of the Playground demo asset ─────────────────────
+
+TEST_CASE("input: round-trip load of the Playground demo asset", "[input]")
+{
+    auto input = Arcane::InputActions::Create();
+    REQUIRE(input->LoadFile("data/input_actions.json"));
+    input->SetBaseContext("demo");
+
+    InputSnapshot snap;
+    snap.SetScancode(kScancodeW);
+    snap.SetScancode(kScancodeD);
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Strength("move") == Approx(1.0f).margin(1e-4));
+    CHECK_FALSE(input->Down("quit"));
+}

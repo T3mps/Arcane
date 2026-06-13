@@ -264,6 +264,7 @@ project "Playground"
     includedirs {
         "%{wks.location}/Arcane/src",
         "%{IncludeDir.Core}",
+        "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.glm}",
@@ -285,6 +286,7 @@ project "Playground"
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/Playground/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
     }
 
     filter "system:windows"
@@ -365,6 +367,7 @@ project "ArcaneTests"
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/Playground/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
     }
 
     defines {

@@ -76,10 +76,6 @@ namespace Arcane
                 if (e.window.windowID == myId)
                     events.quitRequested = true;
                 break;
-            case SDL_EVENT_KEY_DOWN:
-                if (e.key.windowID == myId && e.key.key == SDLK_ESCAPE)
-                    events.quitRequested = true;
-                break;
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 if (e.window.windowID == myId)
                 {

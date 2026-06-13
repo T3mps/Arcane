@@ -1,0 +1,48 @@
+{
+  "actionMaps": [
+    {
+      "name": "demo",
+      "actions": [
+        {
+          "name": "quit",
+          "type": "Button",
+          "bindings": [ { "path": "<Keyboard>/escape" } ]
+        },
+        {
+          "name": "toggle_stats",
+          "type": "Button",
+          "bindings": [
+            { "path": "<Keyboard>/tab" },
+            { "path": "<Gamepad>/back" }
+          ]
+        },
+        {
+          "name": "swap_backend",
+          "type": "Button",
+          "bindings": [ { "path": "<Keyboard>/lctrl+<Keyboard>/b" } ]
+        },
+        {
+          "name": "move",
+          "type": "Value",
+          "controlType": "Vector2",
+          "bindings": [
+            {
+              "composite": "2DVector",
+              "parts": {
+                "up":    [ { "path": "<Keyboard>/scancode/w" } ],
+                "down":  [ { "path": "<Keyboard>/scancode/s" } ],
+                "left":  [ { "path": "<Keyboard>/scancode/a" } ],
+                "right": [ { "path": "<Keyboard>/scancode/d" } ]
+              },
+              "processors": [ "normalizeVector2" ]
+            },
+            {
+              "path": "<Gamepad>/leftStick",
+              "processors": [ "deadzone(min=0.125,max=0.925)" ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
