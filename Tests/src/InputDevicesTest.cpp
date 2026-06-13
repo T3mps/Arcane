@@ -17,10 +17,11 @@ TEST_CASE("input devices: sample from a hidden window", "[input][platform]")
 
     auto devices = Arcane::InputDevices::Create();
     REQUIRE(devices != nullptr);
+    // pump once so SDL's internal device state is initialized before Sample
     (void)window.PumpEvents();
 
     const auto snap = devices->Sample(false, false);
-    CHECK(snap.keycodeCount <= Arcane::InputSnapshot::kMaxKeycodesDown);
+    CHECK(snap.keycodeCount == 0);  // headless hidden window: no keys should be down
     CHECK_FALSE(snap.wantCaptureKeyboard);
 
     const auto captured = devices->Sample(true, true);

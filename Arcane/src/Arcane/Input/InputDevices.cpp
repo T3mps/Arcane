@@ -1,5 +1,7 @@
 #include <Arcane/Input/InputDevices.hpp>
 
+#include <Arcane/Base/Log.hpp>
+
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_keyboard.h>
@@ -44,7 +46,7 @@ namespace Arcane
     {
         // SDL_GAMEPAD_BUTTON_* values mapped to token-table bit positions 0..14.
         // Must stay in sync with GamepadButtonToken() in InputActions.cpp.
-        static const SDL_GamepadButton kButtonMap[15] = {
+        const SDL_GamepadButton kButtonMap[15] = {
             SDL_GAMEPAD_BUTTON_SOUTH,           // bit 0  = buttonSouth
             SDL_GAMEPAD_BUTTON_EAST,            // bit 1  = buttonEast
             SDL_GAMEPAD_BUTTON_WEST,            // bit 2  = buttonWest
@@ -67,9 +69,16 @@ namespace Arcane
         public:
             InputDevicesImpl()
             {
-                // Gamepad subsystem: ref-counted init; paired QuitSubSystem in dtor.
+                // I2: SDL_WasInit returns the mask of already-initialised subsystems.
+                // Video must be up (Window created) before sampling keyboard/mouse.
+                if (!SDL_WasInit(SDL_INIT_VIDEO))
+                    ARC_WARN("InputDevices created before SDL video is up (create a Window first); keyboard/mouse sampling may be empty.");
+
+                // I1: Gamepad subsystem: ref-counted init; paired QuitSubSystem in dtor.
                 // SDL_INIT_GAMEPAD implies SDL_INIT_JOYSTICK per SDL3 init.h.
-                SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+                m_gamepadSubsystemOk = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+                if (!m_gamepadSubsystemOk)
+                    ARC_WARN("InputDevices: SDL_INIT_GAMEPAD failed: {}", SDL_GetError());
             }
 
             ~InputDevicesImpl() override
@@ -79,7 +88,8 @@ namespace Arcane
                     SDL_CloseGamepad(m_gamepad);
                     m_gamepad = nullptr;
                 }
-                SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+                if (m_gamepadSubsystemOk)
+                    SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
             }
 
             InputSnapshot Sample(bool captureKeyboard, bool captureMouse) override
@@ -163,6 +173,7 @@ namespace Arcane
                     // Axes 0..3: left/right stick X/Y, clamped to [-1, 1].
                     // Axes 4..5: left/right trigger, clamped to [0, 1].
                     // Sint16 range is -32768..32767; divide by 32767.0f.
+                    // 32767.0f: +32767 maps exactly to +1.0; -32768/-32767.0f = -1.00003 is clamped below.
                     const SDL_GamepadAxis kAxes[6] = {
                         SDL_GAMEPAD_AXIS_LEFTX,
                         SDL_GAMEPAD_AXIS_LEFTY,
@@ -191,7 +202,8 @@ namespace Arcane
             }
 
         private:
-            SDL_Gamepad* m_gamepad = nullptr;
+            SDL_Gamepad* m_gamepad          = nullptr;
+            bool         m_gamepadSubsystemOk = false;
         };
 
     }  // anonymous namespace
