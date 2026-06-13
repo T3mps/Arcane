@@ -1,8 +1,9 @@
-// Arcane Playground -- M3 tail: input action system demo added on top of the
-// M2b canvas -> batcher (bouncing shapes + HDR swatch) -> ACES tonemap -> present
-// path. ESC quits, Tab toggles the stats overlay, WASD/left-stick nudges the
-// orbit center, ctrl+b logs a swap-backend notice. InputActions + InputDevices
-// own the snapshot seam; Window no longer hardcodes ESC.
+// Arcane Playground -- M4: simulation substrate + parent/child sprite scene
+// wired into the M3 demo (bouncing shapes + HDR swatch + ACES tonemap + input).
+// A Simulation owns the Registry + SystemSchedulers; RunLoop drives FixedUpdate
+// (TransformPropagationSystem) and Render (RenderSubmissionSystem). The orbiter
+// rotation is mutated inline each frame -- NOT as an ECS system -- so it
+// coexists cleanly with the batcher's direct-draw demo path.
 // Scripted verification: --frames N renders N frames and exits 0.
 
 #include <Arcane/Base/Engine.hpp>
@@ -10,6 +11,7 @@
 #include <Arcane/ImGui/ImGuiLayer.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputDevices.hpp>
+#include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
@@ -17,6 +19,13 @@
 #include <Arcane/Render/ShaderLibrary.hpp>
 #include <Arcane/Render/Swapchain.hpp>
 #include <Arcane/Render/TonemapPass.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/RenderSystems.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Scene/TransformSystems.hpp>
+#include <Arcane/Sim/RunLoop.hpp>
+#include <Arcane/Sim/Simulation.hpp>
 #include <Arcane/Text/TextSystem.hpp>
 
 #include <nvrhi/nvrhi.h>
@@ -159,6 +168,47 @@ int main(int argc, char** argv)
     bool showStats = true;
     glm::vec2 moveOffset(0.0f);
 
+    // --- M4 scene slice: substrate + a moving parent/child sprite ---
+    Arcane::JobSystem jobs;
+    Arcane::Simulation sim(jobs.WorkScheduler());
+    Arcane::RegisterSceneComponents(sim.Registry());
+    sim.Schedulers().fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
+    sim.Schedulers().render.AddSystem<Arcane::RenderSubmissionSystem>();
+
+    Astra::Entity sceneRoot = sim.Registry().CreateEntity();
+    sim.Registry().AddComponent<Arcane::LocalTransform>(sceneRoot, Arcane::LocalTransform{});
+    sim.Registry().AddComponent<Arcane::WorldTransform>(sceneRoot, Arcane::WorldTransform{});
+
+    Astra::Entity orbiter = sim.Registry().CreateEntity();
+    {
+        Arcane::LocalTransform t;
+        t.position = glm::vec2((float)canvas->Width() * 0.5f, (float)canvas->Height() * 0.5f);
+        sim.Registry().AddComponent<Arcane::LocalTransform>(orbiter, t);
+        sim.Registry().AddComponent<Arcane::WorldTransform>(orbiter, Arcane::WorldTransform{});
+        Arcane::SpriteRenderer sr; sr.size = glm::vec2(48.0f); sr.tint = glm::vec4(0.9f, 0.7f, 0.2f, 1.0f);
+        sim.Registry().AddComponent<Arcane::SpriteRenderer>(orbiter, sr);
+        sim.Registry().SetParent(orbiter, sceneRoot);
+    }
+    Astra::Entity moon = sim.Registry().CreateEntity();
+    {
+        Arcane::LocalTransform t; t.position = glm::vec2(80.0f, 0.0f);
+        sim.Registry().AddComponent<Arcane::LocalTransform>(moon, t);
+        sim.Registry().AddComponent<Arcane::WorldTransform>(moon, Arcane::WorldTransform{});
+        Arcane::SpriteRenderer sr; sr.size = glm::vec2(20.0f); sr.tint = glm::vec4(0.4f, 0.8f, 1.0f, 1.0f);
+        sim.Registry().AddComponent<Arcane::SpriteRenderer>(moon, sr);
+        sim.Registry().SetParent(moon, orbiter);
+    }
+    sim.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{sceneRoot});
+    // NOTE: no SetResource<TextureTable> -- it would force Astra to serialize a
+    // raw-pointer map (compile error); RenderSubmissionSystem renders Rects when
+    // the table is absent. All slice sprites use textureId 0.
+
+    Arcane::RunLoop runLoop(sim.Registry(), sim.Schedulers());
+    // Separate clock for sim dt so we don't consume lastFrameTime before the
+    // input block reads it (input block updates lastFrameTime each frame).
+    auto simPrev = std::chrono::steady_clock::now();
+    double sceneTime = 0.0;
+
     nvrhi::CommandListHandle commandList = device->Nvrhi()->createCommandList();
     // Swapchain backbuffer framebuffer views; reset on resize.
     std::unordered_map<nvrhi::ITexture*, nvrhi::FramebufferHandle>
@@ -215,6 +265,19 @@ int main(int argc, char** argv)
             // processors visibly live in the demo.
             const auto mv = input->Axis("move");
             moveOffset += glm::vec2(mv.x, mv.y) * (float)(300.0 * frameDt);
+        }
+
+        // Advance the M4 simulation: orbit the parent (inline, not an ECS system),
+        // then RunLoop runs FixedUpdate (transform propagation).
+        {
+            const auto simNow = std::chrono::steady_clock::now();
+            const double simDt =
+                std::chrono::duration<double>(simNow - simPrev).count();
+            simPrev = simNow;
+            sceneTime += simDt;
+            if (auto* lt = sim.Registry().GetComponent<Arcane::LocalTransform>(orbiter))
+                lt->rotation = (float)sceneTime;
+            runLoop.Advance(simDt > 0.25 ? 0.25 : simDt);
         }
 
         imgui->BeginFrame();
@@ -292,6 +355,13 @@ int main(int argc, char** argv)
         text->Draw(*batcher, hudFont, 22.0f, glm::vec2(20.0f, h - 24.0f),
                    hud, glm::vec4(0.9f, 0.9f, 1.0f, 1.0f));
         text->Flush(commandList);
+
+        // M4: submit ECS sprites through the RunLoop render phase.
+        // SetResource each frame so the batcher pointer stays valid (batcher
+        // Begin/End frame state changes; the resource must track the live ptr).
+        sim.Registry().SetResource<Arcane::RenderContext2D>(
+            Arcane::RenderContext2D{batcher.get(), glm::vec2(0, 0)});
+        runLoop.SubmitRender();
 
         batcher->End();
 
