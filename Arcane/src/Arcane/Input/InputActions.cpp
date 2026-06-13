@@ -28,7 +28,7 @@ namespace Arcane
 {
     namespace
     {
-        // ── exe-relative path resolution (Assets.cpp pattern) ───────────────
+        // exe-relative path resolution (Assets.cpp pattern)
         std::filesystem::path ResolveInputPath(const std::filesystem::path& path)
         {
             if (path.is_absolute())
@@ -41,7 +41,7 @@ namespace Arcane
             return path;
         }
 
-        // ── local binary file reader (Assets.cpp pattern) ───────────────────
+        // local binary file reader (Assets.cpp pattern)
         std::vector<uint8_t> ReadInputFileBytes(const std::filesystem::path& path)
         {
             std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -57,7 +57,7 @@ namespace Arcane
             return bytes;
         }
 
-        // ── ControlSource / ControlId ────────────────────────────────────────
+        // ControlSource / ControlId
         enum class ControlSource : uint8_t
         {
             None,
@@ -75,7 +75,7 @@ namespace Arcane
             uint32_t code = 0;
         };
 
-        // ── LOVE->SDL key name translation table ─────────────────────────────
+        // LOVE->SDL key name translation table
         // LOVE names appear in the asset JSON; SDL name-lookup functions want
         // SDL names. Everything not in this table passes through unchanged
         // (single letters, digits, f1..f24 all match SDL names directly).
@@ -107,7 +107,7 @@ namespace Arcane
             return nullptr;  // pass through
         }
 
-        // ── Gamepad token tables ─────────────────────────────────────────────
+        // Gamepad token tables
         // Token -> GamepadButton bit index (must match InputDevices bit order).
         // Token tables: control name -> bit/index. The bit/index order MUST match
         // the InputDevices sampler's snapshot layout (gamepadButtons bits, gamepadAxes).
@@ -164,7 +164,7 @@ namespace Arcane
             return kNoGamepadToken;
         }
 
-        // ── Path compiler ─────────────────────────────────────────────────────
+        // Path compiler
         // Compiles a single simple path (no '+') to a ControlId.
         // Returns {None,0} + one ARC_WARN for unknown device tokens.
         // <Gamepad>/ paths compile to typed GamepadButton/Axis/Stick ControlIds.
@@ -299,7 +299,7 @@ namespace Arcane
             return chord;
         }
 
-        // ── ResolveControl ────────────────────────────────────────────────────
+        // ResolveControl
         // Returns raw value [0,1] for buttons, signed float for axes.
         // Capture suppression lives HERE and only here (spec rule).
         float ResolveControl(const ControlId& id, const InputSnapshot& snap)
@@ -357,7 +357,7 @@ namespace Arcane
             return minMag;
         }
 
-        // ── Processor ops ──────────────────────────────────────────────────────
+        // Processor ops
         struct ProcessorOp
         {
             enum class Kind { Invert, Scale, Deadzone, NormalizeVector2 } kind;
@@ -422,7 +422,7 @@ namespace Arcane
             return op;
         }
 
-        // ── CompiledBinding ───────────────────────────────────────────────────
+        // CompiledBinding
         struct CompiledBinding
         {
             std::vector<ControlId> chord;   // size 1 = simple path; size>1 = chord
@@ -435,7 +435,7 @@ namespace Arcane
             std::unordered_map<std::string, std::vector<CompiledBinding>> parts;
         };
 
-        // ── Interaction ───────────────────────────────────────────────────────
+        // Interaction
         struct Interaction
         {
             enum class Kind { Press, Hold, Tap } kind = Kind::Press;
@@ -479,7 +479,7 @@ namespace Arcane
             return it;
         }
 
-        // ── Action ────────────────────────────────────────────────────────────
+        // Action
         struct Action
         {
             std::string name;
@@ -512,7 +512,7 @@ namespace Arcane
             bool padContrib = false;
         };
 
-        // ── Map ───────────────────────────────────────────────────────────────
+        // Map
         struct Map
         {
             std::string name;
@@ -520,7 +520,7 @@ namespace Arcane
             std::unordered_map<std::string, Action> actions;
         };
 
-        // ── Compile bindings from JSON ────────────────────────────────────────
+        // Compile bindings from JSON
         // Forward declaration needed because CompileBinding calls itself recursively
         // for composite parts.
         CompiledBinding CompileBinding(const nlohmann::json& bj,
@@ -606,7 +606,7 @@ namespace Arcane
             return cb;
         }
 
-        // ── InputActionsImpl ──────────────────────────────────────────────────
+        // InputActionsImpl
         class InputActionsImpl final : public InputActions
         {
         public:

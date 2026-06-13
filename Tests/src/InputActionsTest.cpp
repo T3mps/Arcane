@@ -176,7 +176,7 @@ TEST_CASE("input: chord requires every part", "[input]")
     CHECK(input->Pressed("save"));
 }
 
-// ── Task 3: Composites, vector processors, max-magnitude ─────────────────────
+// Task 3: Composites, vector processors, max-magnitude
 
 namespace
 {
@@ -277,7 +277,7 @@ TEST_CASE("input: max-magnitude binding wins (stick vs wasd)", "[input]")
     CHECK(input->Axis("move").x == Approx(1.0f).margin(1e-4));
 }
 
-// ── Task 4: Interaction phases (press/hold/tap) + Buffered ───────────────────
+// Task 4: Interaction phases (press/hold/tap) + Buffered
 
 namespace
 {
@@ -392,7 +392,7 @@ TEST_CASE("input: radial deadzone scales a stick vector", "[input]")
     CHECK(v.y == Approx(0.0f).margin(1e-4));
 }
 
-// ── Task 5: Context stack, active-device hysteresis, capture suppression ──────
+// Task 5: Context stack, active-device hysteresis, capture suppression
 
 namespace
 {
@@ -504,7 +504,7 @@ TEST_CASE("input: ImGui capture suppresses kbm, not pad, with clean edges", "[in
     CHECK(input->Down("interact"));              // keyboard unaffected
 }
 
-// ── Task 7: Round-trip load of the Playground demo asset ─────────────────────
+// Task 7: Round-trip load of the Playground demo asset
 
 TEST_CASE("input: round-trip load of the Playground demo asset", "[input]")
 {
