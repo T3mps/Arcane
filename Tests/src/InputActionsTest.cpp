@@ -277,6 +277,98 @@ TEST_CASE("input: max-magnitude binding wins (stick vs wasd)", "[input]")
     CHECK(input->Axis("move").x == Approx(1.0f).margin(1e-4));
 }
 
+// ── Task 4: Interaction phases (press/hold/tap) + Buffered ───────────────────
+
+namespace
+{
+    nlohmann::json PhasesDoc()
+    {
+        // RAW-STRING GOTCHA: hold(duration=0.3) and tap(duration=0.2) embed )"
+        // which terminates a plain R"(...)". Use tagged delimiter R"JSON(...)JSON".
+        return nlohmann::json::parse(R"JSON({
+          "actionMaps": [
+            { "name": "demo", "actions": [
+              { "name": "charge", "type": "Button",
+                "interactions": [ "hold(duration=0.3)" ],
+                "bindings": [ { "path": "<Keyboard>/space" } ] },
+              { "name": "flick", "type": "Button",
+                "interactions": [ "tap(duration=0.2)" ],
+                "bindings": [ { "path": "<Keyboard>/space" } ] },
+              { "name": "jump", "type": "Button",
+                "bindings": [ { "path": "<Keyboard>/space" } ] }
+            ] }
+          ]
+        })JSON");
+    }
+}
+
+TEST_CASE("input: hold fires performed once at duration", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(PhasesDoc()));
+    input->SetBaseContext("demo");
+
+    InputSnapshot down; down.AddKeycode(kKeycodeSpace);
+
+    input->Update(0.1, down);                  // rising frame: heldTime stays 0
+    CHECK(input->Started("charge"));
+    CHECK_FALSE(input->Performed("charge"));
+    input->Update(0.2, down);                  // heldTime 0.2 (rising adds nothing)
+    CHECK_FALSE(input->Performed("charge"));
+    input->Update(0.15, down);                 // heldTime 0.35 >= 0.3
+    CHECK(input->Performed("charge"));
+    input->Update(0.1, down);                  // fires only once
+    CHECK_FALSE(input->Performed("charge"));
+    input->Update(0.1, InputSnapshot{});       // release after performing
+    CHECK_FALSE(input->Canceled("charge"));    // _perfFired -> no cancel
+}
+
+TEST_CASE("input: hold canceled on early release; tap is the inverse", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(PhasesDoc()));
+    input->SetBaseContext("demo");
+
+    InputSnapshot down; down.AddKeycode(kKeycodeSpace);
+
+    input->Update(0.1, down);
+    input->Update(0.1, InputSnapshot{});       // released at 0.1 < 0.3
+    CHECK(input->Canceled("charge"));
+    CHECK(input->Performed("flick"));          // 0.1 <= tap 0.2 -> performed
+
+    input->Update(0.1, down);                  // press again (rising: heldTime 0)
+    input->Update(0.15, down);                 // heldTime 0.15
+    input->Update(0.1, down);                  // heldTime 0.25 > 0.2: tap invalid
+    input->Update(0.1, InputSnapshot{});
+    CHECK(input->Canceled("flick"));
+
+    // Default press interaction: performed == rising, canceled == falling.
+    input->Update(0.1, down);
+    CHECK(input->Performed("jump"));
+    input->Update(0.1, InputSnapshot{});
+    CHECK(input->Canceled("jump"));
+}
+
+TEST_CASE("input: buffered press consumes once within window", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(PhasesDoc()));
+    input->SetBaseContext("demo");
+
+    InputSnapshot down; down.AddKeycode(kKeycodeSpace);
+    input->Update(1.0 / 60.0, down);
+    input->Update(1.0 / 60.0, InputSnapshot{});
+    input->Update(1.0 / 60.0, InputSnapshot{});   // 2 frames since press
+
+    CHECK(input->Buffered("jump", 6));
+    CHECK_FALSE(input->Buffered("jump", 6));      // consumed
+
+    input->Update(1.0 / 60.0, down);              // new press
+    for (int i = 0; i < 8; ++i)
+        input->Update(1.0 / 60.0, InputSnapshot{});
+    CHECK_FALSE(input->Buffered("jump", 6));      // outside window
+}
+
 TEST_CASE("input: radial deadzone scales a stick vector", "[input]")
 {
     // leftStick binding in MoveDoc has processors: [ "deadzone(min=0.125,max=0.925)" ]
