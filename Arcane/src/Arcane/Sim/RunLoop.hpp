@@ -40,7 +40,7 @@ namespace Arcane
                 m_accumulator -= fixedDt;
                 ++steps;
             }
-            if (steps == m_cfg.maxStepsPerFrame && m_accumulator > fixedDt)
+            if (steps == m_cfg.maxStepsPerFrame && m_accumulator >= fixedDt)
                 m_accumulator = 0.0;  // dropped the backlog; do not accumulate debt
 
             m_schedulers->update.Execute(*m_registry, &m_schedulers->executor);

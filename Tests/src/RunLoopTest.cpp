@@ -53,4 +53,6 @@ TEST_CASE("RunLoop runs a fixed-rate scheduler and clamps spikes", "[sim][runloo
     loop.Advance(10.0);  // would be 600 steps unclamped
     const int stepsTaken = reg.GetResource<Ticks>()->fixed - before;
     CHECK(stepsTaken == cfg.maxStepsPerFrame);
+    CHECK(loop.Alpha() >= 0.0);
+    CHECK(loop.Alpha() < 1.0);
 }
