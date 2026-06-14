@@ -95,7 +95,8 @@ namespace Arcane
             // they are now SoftStep-private non-virtual helpers (no `override`):
             // SoftStep owns its own phase ordering internally.
             void PrepareContacts(SolverContext& ctx);
-            void PrepareJoints(SolverContext& ctx);            // no-op stub (P2.5)
+            void PrepareJoints(SolverContext& ctx);            // joint Prepare (subDt bias)
+            void SolveJoints(SolverContext& ctx);              // one joint velocity pass (per sub-step)
             void SolveVelocity(SolverContext& ctx, int substep);
             void Relax(SolverContext& ctx, int substep);
             void ApplyRestitution(SolverContext& ctx);

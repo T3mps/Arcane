@@ -23,6 +23,7 @@
 #include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl
 #include <Arcane/Physics/Solver/Baumgarte.hpp>           // Baumgarte oracle impl (A/B)
 #include <Arcane/Physics/Island.hpp>                     // island sleep pass (stage 4)
+#include <Arcane/Physics/Joints/Joints.hpp>              // joint set + MakeJoint factory (P2.5)
 
 namespace Arcane
 {
@@ -267,8 +268,60 @@ namespace Arcane
 
             m_contacts.DropBody(idx);
             m_solver->DropBody(idx); // drop warm-start state for the recycled slot
+
+            // Drop joints referencing the destroyed body (ports PhysicsWorld.lua
+            // 281-286: `j.a.idx == idx or j.b.idx == idx`). Match by HANDLE index
+            // (stable from construction, independent of Prepare). Iterate in
+            // reverse so the swap-free erase keeps the surviving joints' order.
+            for (std::size_t i = m_joints.size(); i-- > 0;)
+            {
+                const Joint* j = m_joints[i].get();
+                const BodyHandle ha = j->HandleA();
+                const BodyHandle hb = j->HandleB();
+                if ((ha.generation != 0u && ha.index == idx) ||
+                    (hb.generation != 0u && hb.index == idx))
+                {
+                    m_joints.erase(m_joints.begin() + static_cast<std::ptrdiff_t>(i));
+                }
+            }
+
             m_shape[idx] = Shape{}; // release polygon storage
             m_free.push_back(idx);
+        }
+
+        Joint* PhysicsWorld::AddJoint(const JointDef& def)
+        {
+            // Build the concrete joint (the Lua Joints.make factory). Unknown
+            // kinds return nullptr (never thrown).
+            std::unique_ptr<Joint> j = MakeJoint(*this, def);
+            if (!j)
+            {
+                return nullptr;
+            }
+            Joint* raw = j.get();
+            m_joints.push_back(std::move(j));
+
+            // Wake the jointed bodies so a sleeping captive rejoins the solve
+            // (ports addJoint's def.a:wake() / def.b:wake()).
+            Wake(def.a);
+            Wake(def.b);
+            return raw;
+        }
+
+        void PhysicsWorld::RemoveJoint(Joint* j)
+        {
+            if (j == nullptr)
+            {
+                return;
+            }
+            for (std::size_t i = 0; i < m_joints.size(); ++i)
+            {
+                if (m_joints[i].get() == j)
+                {
+                    m_joints.erase(m_joints.begin() + static_cast<std::ptrdiff_t>(i));
+                    return;
+                }
+            }
         }
 
         bool PhysicsWorld::IsValid(BodyHandle h) const noexcept
@@ -583,6 +636,17 @@ namespace Arcane
             // the mover broadphase. Run it whenever there are dynamics to move
             // (constraints OR free-falling bodies); the solver is a no-op for a
             // scene with no awake dynamics.
+            // Rebuild the pooled JointConstraint array (Joint* views into the
+            // world-owned m_joints) so the SolverContext keeps its P2.1 shape.
+            // clear() preserves capacity -> zero steady-state alloc.
+            m_jointConstraints.clear();
+            for (std::size_t i = 0; i < m_joints.size(); ++i)
+            {
+                JointConstraint jc;
+                jc.joint = m_joints[i].get();
+                m_jointConstraints.push_back(jc);
+            }
+
             {
                 SolverContext ctx;
                 ctx.world        = this;
@@ -590,8 +654,10 @@ namespace Arcane
                                        ? nullptr
                                        : m_contactConstraints.data();
                 ctx.contactCount = static_cast<std::uint32_t>(m_contactConstraints.size());
-                ctx.joints       = nullptr;
-                ctx.jointCount   = 0;
+                ctx.joints       = m_jointConstraints.empty()
+                                       ? nullptr
+                                       : m_jointConstraints.data();
+                ctx.jointCount   = static_cast<std::uint32_t>(m_jointConstraints.size());
                 ctx.dt           = dt;
                 ctx.substepCount = m_substepCount;
                 ctx.invDt        = dt > Real(0) ? Real(1) / dt : Real(0);
@@ -612,7 +678,8 @@ namespace Arcane
                 *this,
                 m_contactConstraints.empty() ? nullptr : m_contactConstraints.data(),
                 static_cast<std::uint32_t>(m_contactConstraints.size()),
-                /*joints=*/nullptr, /*jointCount=*/0, // joints arrive in P2.5
+                m_jointConstraints.empty() ? nullptr : m_jointConstraints.data(),
+                static_cast<std::uint32_t>(m_jointConstraints.size()),
                 dt);
 
             // ---- stage 5: events + gating + deferred flush -------------------

@@ -14,6 +14,7 @@
 #include <cmath>
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
+#include <Arcane/Physics/Joints/Joint.hpp> // Joint (Prepare/SolveVelocity)
 
 namespace Arcane
 {
@@ -172,8 +173,38 @@ namespace Arcane
 
         void SoftStep::PrepareJoints(SolverContext& ctx)
         {
-            // Joints land in P2.5. No-op stub today.
-            (void)ctx;
+            // Prepare each joint with the SUB-STEP dt so its Baumgarte bias
+            // (BETA/subDt) is per-substep-correct: the bias is applied once per
+            // sub-step's velocity solve, summed over substepCount sub-steps. This
+            // is the "soft-constraint formulation" the plan means -- sub-stepping
+            // softens the Baumgarte joints. The joints read the committed (start-
+            // of-step) positions; SoftStep tracks in-flight motion in deltaPos/
+            // deltaRot (committed only at FinalizePositions), so a single Prepare
+            // with subDt is correct (re-Preparing each sub-step would recompute
+            // the same start-relative bias). Index-ordered (determinism).
+            PhysicsWorld& w = *ctx.world;
+            for (std::uint32_t k = 0; k < ctx.jointCount; ++k)
+            {
+                if (ctx.joints[k].joint != nullptr)
+                {
+                    ctx.joints[k].joint->Prepare(w, ctx.subDt);
+                }
+            }
+        }
+
+        void SoftStep::SolveJoints(SolverContext& ctx)
+        {
+            // One velocity-constraint pass over the joints (per sub-step). Joints
+            // solve alongside contacts in the sub-step velocity solve. Index-
+            // ordered (determinism).
+            PhysicsWorld& w = *ctx.world;
+            for (std::uint32_t k = 0; k < ctx.jointCount; ++k)
+            {
+                if (ctx.joints[k].joint != nullptr)
+                {
+                    ctx.joints[k].joint->SolveVelocity(w);
+                }
+            }
         }
 
         // ISolver phase entry points. The whole-Step Solve() driver above calls
@@ -560,8 +591,10 @@ namespace Arcane
             {
                 IntegrateVelocities(ctx, h);   // gravity + damping (per sub-step)
                 WarmStart(ctx);                // apply accumulated impulses (per sub-step -- v3 stage order)
+                SolveJoints(ctx);              // joints solve first each sub-step (Lua ordering)
                 SolveContacts(ctx, h, /*useBias=*/true);
                 IntegratePositions(ctx, h);    // accumulate deltaPos/deltaRot
+                SolveJoints(ctx);              // relax-side joint pass (drives biased joints, keeps them tight)
                 SolveContacts(ctx, h, /*useBias=*/false); // relax (no bias)
             }
 

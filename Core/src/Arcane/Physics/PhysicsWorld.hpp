@@ -73,6 +73,7 @@
 #include <Arcane/Physics/Broadphase/TileGrid.hpp>
 #include <Arcane/Physics/ContactManager.hpp>
 #include <Arcane/Physics/Solver/Solver.hpp>      // ISolver + ContactConstraint pool type
+#include <Arcane/Physics/Joints/Joint.hpp>       // Joint base + JointDef (P2.5)
 
 namespace Arcane
 {
@@ -380,6 +381,27 @@ namespace Arcane
 
             [[nodiscard]] bool EventsEnabled() const noexcept { return m_eventsEnabled; }
 
+            // ---- joints (P2.5; ports PhysicsWorld.lua addJoint/removeJoint) -
+            //
+            // AddJoint builds a concrete Joint from the def (MakeJoint, the Lua
+            // Joints.make factory) + WAKES its bodies (the Lua def.a/b:wake), so a
+            // sleeping captive rejoins the solve, and returns a borrowed Joint*
+            // (the world owns it; valid until RemoveJoint / RemoveBody-of-a-member
+            // / world destruction). RemoveJoint drops it (the Lua table.remove).
+            // RemoveBody auto-removes joints referencing the destroyed body (Lua
+            // lines 281-286). The joints are solved inside BOTH solvers' velocity
+            // loops (the soft-constraint formulation: sub-stepping softens them).
+            //
+            // Returns nullptr for an unknown JointKind (never throws).
+            Joint* AddJoint(const JointDef& def);
+
+            // Remove a joint by pointer (no-op if not found). Ports removeJoint.
+            void RemoveJoint(Joint* j);
+
+            // Live joint count (test/inspection hook; the harness asserts
+            // removeJoint drops it). Ports `#w.joints`.
+            [[nodiscard]] std::size_t JointCount() const noexcept { return m_joints.size(); }
+
             // ---- step (kinematic subset) -----------------------------------
 
             // Advance the world by dt: prev snapshot + KINEMATIC velocity
@@ -653,6 +675,17 @@ namespace Arcane
             // steady-state allocation in Step.
             std::unique_ptr<ISolver>       m_solver;
             std::vector<ContactConstraint> m_contactConstraints;
+
+            // ---- joints (P2.5) ---------------------------------------------
+            //
+            // The world OWNS the joint objects (ports the Lua self.joints list).
+            // m_jointConstraints is the pooled JointConstraint array fed to the
+            // SolverContext each Step (Joint* views into m_joints); rebuilt in
+            // Step from the live joints -> the SolverContext stays the P2.1 shape.
+            // Both only grow (clear() preserves capacity) -> zero steady-state
+            // alloc in Step; AddJoint/RemoveJoint are setup-time (may alloc).
+            std::vector<std::unique_ptr<Joint>> m_joints;
+            std::vector<JointConstraint>        m_jointConstraints;
 
             // Build the dynamics ContactConstraint array for this Step (Part A):
             // for each awake dynamic body, manifolds vs tile spans + static

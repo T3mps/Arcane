@@ -14,6 +14,7 @@
 #include <cmath>
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
+#include <Arcane/Physics/Joints/Joint.hpp> // Joint (Prepare/SolveVelocity)
 
 namespace Arcane
 {
@@ -239,14 +240,29 @@ namespace Arcane
                 }
             }
 
-            // 3) velIters Gauss-Seidel velocity passes. Joints init/solve are
-            //    P2.5 (stubbed). Then per contact-point: normal impulse with the
-            //    accumulated >=0 clamp, friction in the Coulomb cone. Ports the
-            //    Lua iteration loop (SequentialImpulse.lua:87-128).
-            // [P2.5] joint init: for j in joints: joints[j].init(w, dt)
+            // 3) velIters Gauss-Seidel velocity passes. Joints are prepared ONCE
+            //    before the loop (the Lua :init, full dt -- Baumgarte is single-
+            //    step) then solved FIRST each iteration (the Lua SequentialImpulse
+            //    order, line 88: joints solve before contacts each iter). Then per
+            //    contact-point: normal impulse with the accumulated >=0 clamp,
+            //    friction in the Coulomb cone. Ports SequentialImpulse.lua:87-128.
+            for (std::uint32_t k = 0; k < ctx.jointCount; ++k)
+            {
+                if (ctx.joints[k].joint != nullptr)
+                {
+                    ctx.joints[k].joint->Prepare(w, dt);
+                }
+            }
             for (std::uint32_t iter = 0; iter < iters; ++iter)
             {
-                // [P2.5] joint solve: for j in joints: joints[j].solve(w)
+                // Joints solve first each iteration (Lua ordering).
+                for (std::uint32_t k = 0; k < ctx.jointCount; ++k)
+                {
+                    if (ctx.joints[k].joint != nullptr)
+                    {
+                        ctx.joints[k].joint->SolveVelocity(w);
+                    }
+                }
 
                 for (std::uint32_t c = 0; c < n; ++c)
                 {

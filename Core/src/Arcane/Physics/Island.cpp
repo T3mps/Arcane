@@ -15,6 +15,7 @@
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Solver/Solver.hpp> // ContactConstraint + JointConstraint
+#include <Arcane/Physics/Joints/Joint.hpp>  // Joint (BodyA/BodyB slots)
 
 namespace Arcane
 {
@@ -93,12 +94,31 @@ namespace Arcane
 
                 // Joint-attached dynamic bodies reset their sleep timer so they
                 // never sleep (target joints keep authority over their captives;
-                // ports lines 415-423). The joint constraint list is empty until
-                // P2.5; this loop is a no-op until JointConstraint carries the two
-                // body slots. (When P2.5 lands, reset SleepTimerSlot for each
-                // jointed dynamic body here.)
-                (void)joints;
-                (void)jointCount;
+                // ports lines 415-423). The Lua resets sleepT on jointed bodies
+                // rather than unioning them -- that is the faithful behavior:
+                // jointed dynamic bodies stay AWAKE. The solver Prepared each
+                // joint earlier this Step (stage 3, before this stage-4 pass), so
+                // BodyA()/BodyB() are the resolved slots. Index-ordered.
+                for (std::uint32_t k = 0; k < jointCount; ++k)
+                {
+                    const Joint* j = joints[k].joint;
+                    if (j == nullptr)
+                    {
+                        continue;
+                    }
+                    const std::uint32_t a = j->BodyA();
+                    const std::uint32_t b = j->BodyB();
+                    if (a != kInvalidSlot && a < count &&
+                        world.Alive(a) && world.TypeSlot(a) == BodyType::Dynamic)
+                    {
+                        world.SetSleepTimerSlot(a, Real(0));
+                    }
+                    if (b != kInvalidSlot && b < count &&
+                        world.Alive(b) && world.TypeSlot(b) == BodyType::Dynamic)
+                    {
+                        world.SetSleepTimerSlot(b, Real(0));
+                    }
+                }
 
                 // ---- per-body sleep-timer update (awake dynamics) -----------
                 // Idle: linear speed^2 < kSleepLinVel2 AND |angVel| < kSleepAngVel
