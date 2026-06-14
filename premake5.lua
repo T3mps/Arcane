@@ -365,6 +365,8 @@ project "ArcaneTests"
     -- than carrying a second null context. The import lib comes via "Arcane".
     links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen" }
 
+    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad" }
+
     -- The test exe loads Arcane.dll from its own directory.
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
@@ -372,6 +374,9 @@ project "ArcaneTests"
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/Playground/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
     }
 
     defines {
@@ -403,3 +408,41 @@ project "ArcaneTests"
         runtime "Release"
         optimize "speed"
         symbols "off"
+
+-- ============================================================================
+-- Hot-reload TEST plugins: one source, three DLLs (V1 step=1, V2 step=10,
+-- Bad ABI). SharedLib, /MD, links Arcane (NOT Core -- one Core per process).
+-- Loaded at runtime by PluginHost in ArcaneTests; never linked by the test exe.
+-- ============================================================================
+local function test_plugin(name, defs)
+    project(name)
+        location "Tests/plugins"
+        kind "SharedLib"
+        language "C++"
+        cppdialect "C++23"
+        staticruntime "off"
+        targetname(name)
+        targetdir ("bin/" .. outputdir .. "/" .. name)
+        objdir ("bin-int/" .. outputdir .. "/" .. name)
+        files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/PluginExport.hpp", "%{prj.location}/HotReloadShared.hpp" }
+        includedirs {
+            "%{wks.location}/Arcane/src",
+            "%{IncludeDir.glm}",
+            "%{IncludeDir.nvrhi}",
+            "%{IncludeDir.Astra}",
+            "%{IncludeDir.enkiTS}",
+        }
+        links { "Arcane" }
+        defines (defs)
+        filter "system:windows"
+            systemversion "latest"
+            buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        filter "configurations:Debug"   defines { "ARCANE_DEBUG" }                    runtime "Debug"   symbols "on"
+        filter "configurations:Release" defines { "ARCANE_RELEASE", "NDEBUG" }        runtime "Release" optimize "speed" symbols "on"
+        filter "configurations:Dist"    defines { "ARCANE_DIST", "NDEBUG" }           runtime "Release" optimize "speed" symbols "off"
+        filter {}
+end
+
+test_plugin("HotReloadPluginV1",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=1",  "_CRT_SECURE_NO_WARNINGS" })
+test_plugin("HotReloadPluginV2",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=10", "_CRT_SECURE_NO_WARNINGS" })
+test_plugin("HotReloadPluginBad", { "GAME_BUILD_DLL", "HOTRELOAD_ABI_OFFSET=999", "_CRT_SECURE_NO_WARNINGS" })
