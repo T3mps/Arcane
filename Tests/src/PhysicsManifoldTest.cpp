@@ -82,6 +82,12 @@ namespace
                   Approx(row["ny"].get<double>()).margin(kTol));
 
             const ManifoldPoint& p = m.points[i];
+            // Per-point normal: for poly-poly every point shares the single SAT
+            // axis, so each point's own normal == Manifold::normal == row nx,ny.
+            CHECK(static_cast<double>(p.normal.x) ==
+                  Approx(row["nx"].get<double>()).margin(kTol));
+            CHECK(static_cast<double>(p.normal.y) ==
+                  Approx(row["ny"].get<double>()).margin(kTol));
             CHECK(static_cast<double>(p.point.x) ==
                   Approx(row["x"].get<double>()).margin(kTol));
             CHECK(static_cast<double>(p.point.y) ==

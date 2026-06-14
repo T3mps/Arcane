@@ -103,17 +103,21 @@ namespace Arcane
                     }
                 }
 
+                // Per-point normal == the single SAT axis (poly-poly has one
+                // axis, so every point's normal equals Manifold::normal). The
+                // SAT normal is `nx,ny`.
+                const Vec2 satNormal(nx, ny);
                 m.pointCount = 0;
                 if (cc.has1)
                 {
                     m.points[m.pointCount] =
-                        ManifoldPoint{ cc.p1, cc.d1, keyBase + 1 };
+                        ManifoldPoint{ cc.p1, cc.d1, satNormal, keyBase + 1 };
                     ++m.pointCount;
                 }
                 if (cc.has2)
                 {
                     m.points[m.pointCount] =
-                        ManifoldPoint{ cc.p2, cc.d2, keyBase + 2 };
+                        ManifoldPoint{ cc.p2, cc.d2, satNormal, keyBase + 2 };
                     ++m.pointCount;
                 }
             }
@@ -187,7 +191,7 @@ namespace Arcane
                                          best.y - ny * halfGap);
 
                     m.points[0] =
-                        ManifoldPoint{ cp, spec.depth, keyBase + 1 };
+                        ManifoldPoint{ cp, spec.depth, spec.normal, keyBase + 1 };
                     m.pointCount = 1;
                 }
                 return m;

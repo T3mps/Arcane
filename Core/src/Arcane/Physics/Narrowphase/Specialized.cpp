@@ -63,12 +63,40 @@ namespace Arcane
             }
 
             // Push a contact onto the manifold (max 2 points; the Lua emit()).
+            // Each point carries its OWN normal (round endpoints touching
+            // different poly faces have different normals -- the Lua stores
+            // nx,ny per row). Manifold::normal is the REPRESENTATIVE: the
+            // DEEPEST point's normal, with a deterministic tiebreak on equal
+            // separation (the FIRST emitted / lowest-key point keeps it). We
+            // track that here as we emit so the result is order-independent of
+            // any later compute pass.
+            //
+            // The tie comparison uses a small relative tolerance so an ANALYTIC
+            // tie (e.g. a symmetric capsule grazing both mirror faces of a
+            // diamond, where both endpoints share the same depth) resolves to
+            // the first-emitted point deterministically rather than being
+            // flipped by sub-ULP f32 noise. A genuinely deeper later point
+            // (beyond the tolerance) still wins.
             void Emit(Manifold& m, const Vec2& point, const Vec2& normal,
                       Real depth, std::uint32_t key)
             {
                 if (m.pointCount >= 2) return; // capacity guard (round = <=2)
-                m.normal = normal;
-                m.points[m.pointCount] = ManifoldPoint{ point, depth, key };
+                // First point seeds the representative; a meaningfully-deeper
+                // later point replaces it (an equal-depth tie keeps the earlier
+                // point, which has the lower key).
+                if (m.pointCount == 0)
+                {
+                    m.normal = normal;
+                }
+                else
+                {
+                    const Real incumbent = m.points[0].separation;
+                    const Real tol =
+                        Real(1e-5) * (Real(1) + std::fabs(incumbent));
+                    if (depth > incumbent + tol) m.normal = normal;
+                }
+                m.points[m.pointCount] =
+                    ManifoldPoint{ point, depth, normal, key };
                 ++m.pointCount;
             }
         } // namespace
@@ -196,7 +224,8 @@ namespace Arcane
                     {
                         // depth against inflated radius = (r+margin) - dist, so
                         // dist = (r+margin) - infl.depth; gap = dist - r.
-                        const Real gap = (va.r + speculativeMargin) - infl.depth - va.r;
+                        const Real dist = (va.r + speculativeMargin) - infl.depth; // boundary distance
+                        const Real gap  = dist - va.r;                             // geometric gap (>0 => separated)
                         if (gap > Real(0) && gap <= speculativeMargin)
                         {
                             const Real nx = infl.normal.x, ny = infl.normal.y;
@@ -247,7 +276,8 @@ namespace Arcane
                     const Hit infl = CirclePoly(p, vb.r + speculativeMargin, poly, n);
                     if (infl.hit)
                     {
-                        const Real gap = (vb.r + speculativeMargin) - infl.depth - vb.r;
+                        const Real dist = (vb.r + speculativeMargin) - infl.depth; // boundary distance
+                        const Real gap  = dist - vb.r;                             // geometric gap (>0 => separated)
                         if (gap > Real(0) && gap <= speculativeMargin)
                         {
                             const Real nx = infl.normal.x, ny = infl.normal.y;

@@ -98,7 +98,7 @@ namespace Arcane
         SegSeg ClosestSegSeg(const Vec2& p1, const Vec2& p2,
                              const Vec2& q1, const Vec2& q2)
         {
-            Real bestD = kHuge;
+            Real bestDSq = kHuge; // SQUARED distance accumulator
             Vec2 bp{ Real(0), Real(0) }, bq{ Real(0), Real(0) };
 
             auto consider = [&](const Vec2& a, const Vec2& b)
@@ -106,7 +106,7 @@ namespace Arcane
                 const Real dx = a.x - b.x;
                 const Real dy = a.y - b.y;
                 const Real d = dx * dx + dy * dy;
-                if (d < bestD) { bestD = d; bp = a; bq = b; }
+                if (d < bestDSq) { bestDSq = d; bp = a; bq = b; }
             };
 
             // Each endpoint vs the other segment (point as p, closest as q),
@@ -144,7 +144,7 @@ namespace Arcane
         // --------------------------------------------------------------------
         Boundary ClosestOnPolyBoundary(const Vec2& p, const Vec2* verts, int n)
         {
-            Real bestD = kHuge;
+            Real bestDSq = kHuge; // SQUARED distance accumulator
             Vec2 bp{ Real(0), Real(0) };
             Vec2 bn{ Real(0), Real(0) };
             const Vec2 cc = PolyCentroid(verts, n);
@@ -158,9 +158,9 @@ namespace Arcane
                 const Real dx = p.x - c.point.x;
                 const Real dy = p.y - c.point.y;
                 const Real d = dx * dx + dy * dy;
-                if (d < bestD)
+                if (d < bestDSq)
                 {
-                    bestD = d;
+                    bestDSq = d;
                     bp = c.point;
                     // outward edge normal
                     const Real ex = q.x - a.x;
@@ -174,7 +174,7 @@ namespace Arcane
                     bn = Vec2(nx, ny);
                 }
             }
-            return Boundary{ bp, std::sqrt(bestD), bn };
+            return Boundary{ bp, std::sqrt(bestDSq), bn };
         }
 
         // --------------------------------------------------------------------

@@ -131,6 +131,18 @@ namespace Arcane
         // CirclePoly at the contained endpoint; otherwise the closest pair
         // between the segment and each boundary edge (closestSegSeg) gives the
         // push-out. Normal pushes the capsule out.
+        //
+        // NOTE: CapsulePoly is the direct port of Geometry.lua:capsulePoly and
+        // produces a SINGLE push-out Hit for the whole capsule. It is kept for
+        // Layer-A oracle coverage (geometry.json's capsulePoly entries) and as a
+        // potential single-contact fast path. It is INTENTIONALLY NOT the live
+        // manifold path: Specialized.cpp's CollideRoundPolygon faithfully matches
+        // Manifold.lua:roundVsPoly instead -- it decomposes the capsule via
+        // roundView (its two endpoint circles) and calls CirclePoly per endpoint,
+        // which can yield TWO contact points with DIFFERENT per-point normals.
+        // So CapsulePoly and the roundView+CirclePoly path are two algorithms for
+        // the same problem; the divergence is deliberate, matching where each
+        // Lua source decides the algorithm.
         [[nodiscard]] Hit CapsulePoly(const Vec2& a, const Vec2& b, Real r,
                                       const Vec2* verts, int n);
 

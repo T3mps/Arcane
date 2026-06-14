@@ -88,15 +88,19 @@ namespace
         REQUIRE(m.pointCount == expectCount);
 
         const auto& pts = cs["points"];
+
+        // The Lua stores nx,ny PER ROW; each ManifoldPoint carries its OWN
+        // normal, so we compare every point's normal against its own oracle row
+        // (round endpoints touching different faces have different normals).
         for (int i = 0; i < expectCount; ++i)
         {
             const auto& row = pts[i];
-            CHECK(static_cast<double>(m.normal.x) ==
-                  Approx(row["nx"].get<double>()).margin(kTol));
-            CHECK(static_cast<double>(m.normal.y) ==
-                  Approx(row["ny"].get<double>()).margin(kTol));
 
             const ManifoldPoint& p = m.points[i];
+            CHECK(static_cast<double>(p.normal.x) ==
+                  Approx(row["nx"].get<double>()).margin(kTol));
+            CHECK(static_cast<double>(p.normal.y) ==
+                  Approx(row["ny"].get<double>()).margin(kTol));
             CHECK(static_cast<double>(p.point.x) ==
                   Approx(row["x"].get<double>()).margin(kTol));
             CHECK(static_cast<double>(p.point.y) ==
@@ -105,6 +109,23 @@ namespace
                   Approx(row["depth"].get<double>()).margin(kTol));
             CHECK(p.id == row["key"].get<std::uint32_t>());
         }
+
+        // Manifold::normal is the REPRESENTATIVE: the DEEPEST point's normal,
+        // first-emitted wins on an equal-separation tie. Find that row the same
+        // way and assert m.normal matches it (for single-normal configs this is
+        // identical to every row; for the differing-normal config it is row 0).
+        int deepest = 0;
+        for (int i = 1; i < expectCount; ++i)
+        {
+            if (pts[i]["depth"].get<double>() > pts[deepest]["depth"].get<double>())
+            {
+                deepest = i;
+            }
+        }
+        CHECK(static_cast<double>(m.normal.x) ==
+              Approx(pts[deepest]["nx"].get<double>()).margin(kTol));
+        CHECK(static_cast<double>(m.normal.y) ==
+              Approx(pts[deepest]["ny"].get<double>()).margin(kTol));
     }
 } // namespace
 
@@ -212,6 +233,64 @@ TEST_CASE("physics: CollideShapes matches the round manifold oracle", "[physics]
     CheckRoundCase(j["circle_circle"]);
     CheckRoundCase(j["capsule_capsule_parallel"]);
     CheckRoundCase(j["poly_circle_flipped"]);
+    CheckRoundCase(j["capsule_diamond_two_normals"]);
+}
+
+// ====================================================================
+// Per-point normal fidelity: a flat capsule under a wide DIAMOND grazes its two
+// opposite-sloping lower faces, so its two endpoint contacts carry DIFFERENT
+// per-point normals (the flat-floor case shares (0,-1) and would mask this).
+// This is the regression that motivated ManifoldPoint::normal: the shared
+// Manifold::normal alone cannot represent both contacts. We assert the two
+// points' normals match their own oracle rows AND differ from each other, and
+// that the representative Manifold::normal is the (tied-deepest) first point.
+// ====================================================================
+TEST_CASE("physics: round manifold carries differing per-point normals", "[physics]")
+{
+    const nlohmann::json j = Arcane::Test::LoadOracle("round_manifold");
+    REQUIRE_FALSE(j.empty());
+
+    const auto& cs = j["capsule_diamond_two_normals"];
+    const Shape sa = ShapeFromDesc(cs["shapeA"]);
+    const Shape sb = ShapeFromDesc(cs["shapeB"]);
+    const Transform xfA{ Vec2(cs["ax"].get<Real>(), cs["ay"].get<Real>()), Real(0) };
+    const Transform xfB{ Vec2(cs["bx"].get<Real>(), cs["by"].get<Real>()), Real(0) };
+    const auto keyBase = cs["keyBase"].get<std::uint32_t>();
+
+    const Manifold m = CollideShapes(sa, xfA, sb, xfB, /*margin=*/Real(0), keyBase);
+
+    REQUIRE(m.pointCount == 2);
+
+    const auto& r0 = cs["points"][0];
+    const auto& r1 = cs["points"][1];
+
+    // Each point's own normal == its oracle row.
+    CHECK(static_cast<double>(m.points[0].normal.x) ==
+          Approx(r0["nx"].get<double>()).margin(kTol));
+    CHECK(static_cast<double>(m.points[0].normal.y) ==
+          Approx(r0["ny"].get<double>()).margin(kTol));
+    CHECK(static_cast<double>(m.points[1].normal.x) ==
+          Approx(r1["nx"].get<double>()).margin(kTol));
+    CHECK(static_cast<double>(m.points[1].normal.y) ==
+          Approx(r1["ny"].get<double>()).margin(kTol));
+
+    // The two per-point normals must genuinely DIFFER (the point of this case).
+    const bool oracleNormalsDiffer =
+        std::fabs(r0["nx"].get<double>() - r1["nx"].get<double>()) > 1e-3 ||
+        std::fabs(r0["ny"].get<double>() - r1["ny"].get<double>()) > 1e-3;
+    REQUIRE(oracleNormalsDiffer); // guard: the fixture must encode the contrast
+    const bool gotNormalsDiffer =
+        std::fabs(static_cast<double>(m.points[0].normal.x -
+                                      m.points[1].normal.x)) > 1e-3 ||
+        std::fabs(static_cast<double>(m.points[0].normal.y -
+                                      m.points[1].normal.y)) > 1e-3;
+    CHECK(gotNormalsDiffer);
+
+    // Equal depths -> representative is the first-emitted point's normal.
+    CHECK(static_cast<double>(m.normal.x) ==
+          Approx(r0["nx"].get<double>()).margin(kTol));
+    CHECK(static_cast<double>(m.normal.y) ==
+          Approx(r0["ny"].get<double>()).margin(kTol));
 }
 
 // ====================================================================
