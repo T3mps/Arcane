@@ -9,6 +9,8 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <memory>
+#include <vector>
+#include <functional>
 
 namespace
 {
@@ -26,6 +28,45 @@ namespace
             r.GetResource<Ticks>()->fixed += 1;
         }
     };
+}
+
+namespace
+{
+    // Named engine system — records 'E' each engine fixed step.
+    // Aggregate-initialized by AddSystem<EngineStep>(engineFixed, order).
+    // Explicit ctor required because MSVC doesn't support parenthesized
+    // aggregate init of structs with reference members under all circumstances.
+    struct EngineStep
+    {
+        int&               n;
+        std::vector<char>& order;
+        EngineStep(int& n_, std::vector<char>& o_) : n(n_), order(o_) {}
+        void operator()(Astra::Registry&) const { ++n; order.push_back('E'); }
+    };
+}
+
+TEST_CASE("RunLoop interleaves plugin callbacks with engine fixedUpdate", "[sim][runloop]")
+{
+    Astra::Registry reg;
+    int engineFixed = 0;
+    std::vector<char> order;
+    Arcane::SystemSchedulers sch(nullptr);
+    sch.fixedUpdate.AddSystem<EngineStep>(engineFixed, order);
+
+    Arcane::RunLoop loop(reg, sch);
+    int pluginFixed = 0, pluginUpdate = 0;
+    for (int i = 0; i < 60; ++i)
+        loop.Advance(1.0 / 60.0,
+            [&](double){ ++pluginFixed; order.push_back('P'); },
+            [&](double, double){ ++pluginUpdate; });
+
+    CHECK(pluginFixed >= 58);
+    CHECK(pluginFixed == engineFixed);     // one plugin tick per engine fixed step
+    CHECK(pluginUpdate == 60);             // once per frame
+    // every fixed step is plugin('P') then engine('E'), so the sequence alternates P,E:
+    REQUIRE(order.size() >= 2);
+    CHECK(order[order.size() - 2] == 'P');
+    CHECK(order[order.size() - 1] == 'E');
 }
 
 TEST_CASE("RunLoop runs a fixed-rate scheduler and clamps spikes", "[sim][runloop]")

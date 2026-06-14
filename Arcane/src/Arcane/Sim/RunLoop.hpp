@@ -13,6 +13,8 @@
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <functional>
+
 namespace Arcane
 {
     class RunLoop
@@ -46,6 +48,35 @@ namespace Arcane
             m_schedulers->update.Execute(*m_registry, &m_schedulers->executor);
 
             m_alpha = m_accumulator / fixedDt;
+            return m_alpha;
+        }
+
+        // Host-driven variant: pluginFixed(fixedDt) runs each fixed step BEFORE the engine
+        // fixedUpdate scheduler (gameplay moves transforms; propagation reads them after).
+        // pluginUpdate(dt, alpha) runs once after the Update scheduler. Same spiral-of-death
+        // clamp as Advance(realDt).
+        double Advance(double realDt,
+                       const std::function<void(double)>& pluginFixed,
+                       const std::function<void(double, double)>& pluginUpdate)
+        {
+            const double fixedDt = 1.0 / m_cfg.fixedHz;
+            m_accumulator += realDt;
+
+            int steps = 0;
+            while (m_accumulator >= fixedDt && steps < m_cfg.maxStepsPerFrame)
+            {
+                if (pluginFixed) pluginFixed(fixedDt);
+                m_schedulers->fixedUpdate.Execute(*m_registry, &m_schedulers->executor);
+                m_accumulator -= fixedDt;
+                ++steps;
+            }
+            if (steps == m_cfg.maxStepsPerFrame && m_accumulator >= fixedDt)
+                m_accumulator = 0.0;  // dropped the backlog; do not accumulate debt
+
+            m_schedulers->update.Execute(*m_registry, &m_schedulers->executor);
+
+            m_alpha = m_accumulator / fixedDt;
+            if (pluginUpdate) pluginUpdate(realDt, m_alpha);
             return m_alpha;
         }
 
