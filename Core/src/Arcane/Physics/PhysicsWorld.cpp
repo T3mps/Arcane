@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 
 #include <Arcane/Physics/Body.hpp>
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
@@ -595,6 +596,12 @@ namespace Arcane
             //            [per sub-step: integrate vel, warm-start, solve(bias),
             //            integrate pos, relax] -> restitution -> store impulses
             //            -> commit dynamic positions + mover-broadphase update.
+            //   stage 6: bullet GJK-TOI clamp (P3.1 CCD) -- sweep each isBullet
+            //            body prev->curr vs statics; clamp to time-of-impact so a
+            //            thin static wall cannot be tunneled. (The speculative
+            //            margin in stage 2 is the inline CCD for fast dynamics;
+            //            this is the discrete backup, primarily for kinematics.)
+            //            Runs after the solve, before bookkeeping/events.
             //   stage 4: island sleep bookkeeping            (P2.4 -- deferred)
             //   stage 5: contacts:step (events + gating + deferred flush)
             //
@@ -667,6 +674,17 @@ namespace Arcane
                 m_solver->Solve(ctx);
             }
 
+            // ---- stage 6: bullet GJK-TOI clamp (P3.1 CCD) --------------------
+            // The discrete CCD backup for `isBullet` bodies vs statics. Runs
+            // AFTER the solver commits dynamic positions (so a dynamic bullet's
+            // post-solve sweep is correct) and BEFORE island sleep + events (so
+            // they observe the clamped position). Kinematic bullets -- which the
+            // solver never touches -- are clamped from their stage-1-integrated
+            // position; the speculative margin (stage 2) handles fast dynamics
+            // inline, with this as the safety net. (Numbered "6" per the plan's
+            // [P3.1 CCD] seam; it executes between the solve and the bookkeeping.)
+            BulletSweep();
+
             // ---- stage 4: island sleep bookkeeping (P2.4) --------------------
             // Build the per-Step constraint graph (bodies = nodes, THIS step's
             // contacts = edges), advance per-body sleep timers, and sleep any
@@ -686,9 +704,8 @@ namespace Arcane
             m_contacts.Step(*this);
         }
 
-        void PhysicsWorld::GenerateContacts(Real dt) // reserved for P3.1 speculative margin scaling
+        void PhysicsWorld::GenerateContacts(Real dt)
         {
-            (void)dt; // not yet consumed; P3.1 will use it for speculative contact margin scaling
             // Part A: build the dynamics ContactConstraint array (the Lua step()
             // stage 2 "solver contact generation"). For each awake non-sensor
             // DYNAMIC body, generate manifolds vs static candidates (tile spans +
@@ -701,9 +718,28 @@ namespace Arcane
             // capacity) -> zero steady-state allocation.
             m_contactConstraints.clear();
 
-            // Speculative skin so the solver sees near-touching pairs before
-            // geometric overlap (Box2D v3 stability). kSkin is the engine skin.
-            const Real margin = kSkin;
+            // ---- P3.1 speculative-contact CCD (the PRIMARY fast-mover CCD) ---
+            //
+            // MODERNIZE: the speculative margin (the kSkin skin from P1.2) is
+            // VELOCITY-SCALED for fast movers so the solver sees an impending wall
+            // BEFORE the body reaches it. The margin is the distance the body
+            // would travel this Step (|v| * dt), floored at kSkin: a SLOW body's
+            // margin is just kSkin (resting/settling behavior UNCHANGED), while a
+            // FAST body's margin grows to cover its full sweep so a contact is
+            // generated while it is still on the near side of the wall. The Soft
+            // Step solver's speculative bias (the s > 0 case: bias = s * invSubDt,
+            // which caps the closing velocity to exactly close the gap in ONE
+            // sub-step) then prevents the body from advancing more than the gap
+            // per sub-step -- stopping tunneling WITHOUT a discrete clamp. This is
+            // the modern speculative-contact CCD; the bullet GJK-TOI clamp
+            // (Step stage 6) is the discrete backup for flagged bodies vs statics.
+            //
+            // Per-body margin: max(kSkin, |v| * dt). The query AABB pad and the
+            // CollideShapes speculativeMargin both use it (the AABB must be
+            // expanded by AT LEAST the margin so the wall candidate is FOUND
+            // before geometric overlap, and CollideShapes must report the
+            // near-touching contact within that distance).
+            const Real moveDt = dt > Real(0) ? dt : Real(0);
 
             // ---- helper: append a manifold as a ContactConstraint -----------
             // A is dynamic (aIdx); bIdx is the slot for a real body or
@@ -769,11 +805,22 @@ namespace Arcane
                     continue;
                 }
 
+                // Per-body speculative margin (P3.1): max(kSkin, |v| * dt). For a
+                // slow body this is kSkin (resting unchanged); for a fast body it
+                // grows to cover this Step's sweep so the wall is seen pre-overlap.
+                const Real speedA = std::sqrt(m_velX[i] * m_velX[i] +
+                                              m_velY[i] * m_velY[i]);
+                const Real specMargin = std::max(kSkin, speedA * moveDt);
+
                 const Transform xfA{ Vec2(m_posX[i], m_posY[i]), Real(0) };
                 const Aabb box = SlotAabb(i);
+                // Query pad: at least the legacy +/-2 broadphase skin, expanded to
+                // the speculative margin so a fast mover's wall candidate is FOUND
+                // before geometric overlap (otherwise CollideShapes never sees it).
+                const Real pad = std::max(Real(2), specMargin);
                 Aabb2 query;
-                query.min = Vec2(box.min.x - Real(2), box.min.y - Real(2));
-                query.max = Vec2(box.max.x + Real(2), box.max.y + Real(2));
+                query.min = Vec2(box.min.x - pad, box.min.y - pad);
+                query.max = Vec2(box.max.x + pad, box.max.y + pad);
                 StaticCandidates(query, m_genSpans, m_genStatics);
 
                 // tile spans (Aabb2 rects) -> collide dynamic shape vs span-AABB.
@@ -785,7 +832,7 @@ namespace Arcane
                     const Shape spanShape = MakeAabb(he.x, he.y);
                     const Transform xfB{ c, Real(0) };
                     const Manifold m =
-                        CollideShapes(m_shape[i], xfA, spanShape, xfB, margin);
+                        CollideShapes(m_shape[i], xfA, spanShape, xfB, specMargin);
                     emit(i, kInvalidSlot, /*bIsBody=*/false, /*centerB=*/c, m);
                 }
 
@@ -800,7 +847,7 @@ namespace Arcane
                     const Vec2 posB(m_posX[idx], m_posY[idx]);
                     const Transform xfB{ posB, Real(0) };
                     const Manifold m =
-                        CollideShapes(m_shape[i], xfA, m_shape[idx], xfB, margin);
+                        CollideShapes(m_shape[i], xfA, m_shape[idx], xfB, specMargin);
                     emit(i, idx, /*bIsBody=*/true, /*centerB=*/posB, m);
                 }
             }
@@ -826,7 +873,25 @@ namespace Arcane
                 {
                     continue; // kinematic-kinematic: no dynamic response
                 }
-                if (!AabbOverlap(SlotAabb(a), SlotAabb(b)))
+
+                // Per-pair speculative margin (P3.1): the larger of the two
+                // bodies' velocity-scaled margins (the relative approach speed is
+                // bounded by their sum, but using the max keeps it cheap and still
+                // catches a fast mover closing on a slow/resting one), floored at
+                // kSkin. Expand the tight-AABB overlap test by it so a fast pair is
+                // not rejected here before CollideShapes can emit the speculative
+                // contact (the solver's s > 0 bias then caps the closing velocity).
+                const Real speedAm = std::sqrt(m_velX[a] * m_velX[a] +
+                                               m_velY[a] * m_velY[a]);
+                const Real speedBm = std::sqrt(m_velX[b] * m_velX[b] +
+                                               m_velY[b] * m_velY[b]);
+                const Real pairMargin =
+                    std::max(kSkin, std::max(speedAm, speedBm) * moveDt);
+                Aabb2 boxA = SlotAabb(a);
+                Aabb2 boxB = SlotAabb(b);
+                boxA.min -= Vec2(pairMargin, pairMargin);
+                boxA.max += Vec2(pairMargin, pairMargin);
+                if (!AabbOverlap(boxA, boxB))
                 {
                     continue; // broadphase candidate that is not a true overlap
                 }
@@ -863,8 +928,60 @@ namespace Arcane
                 const Transform xfA{ posA, Real(0) };
                 const Transform xfB{ posB, Real(0) };
                 const Manifold m =
-                    CollideShapes(m_shape[ia], xfA, m_shape[ib], xfB, margin);
+                    CollideShapes(m_shape[ia], xfA, m_shape[ib], xfB, pairMargin);
                 emit(ia, ib, /*bIsBody=*/true, /*centerB=*/posB, m);
+            }
+        }
+
+        void PhysicsWorld::BulletSweep()
+        {
+            // P3.1 CCD bullet clamp (port of PhysicsWorld.lua:313-320). For each
+            // alive `isBullet` body, cast the swept shape from its start-of-step
+            // position (prev, snapshotted in Step stage 1) along this Step's net
+            // displacement vs STATICS ONLY, and clamp the position to the time of
+            // impact so a thin static wall cannot be tunneled.
+            //
+            // The Lua epsilon: clamp = max(0, hit.t - 0.001). Pulling the body a
+            // hair short of the surface keeps it just OUTSIDE the wall (no
+            // depenetration churn next Step).
+            constexpr Real kBulletEpsilon = Real(0.001);
+
+            for (std::uint32_t i = 0; i < m_count; ++i)
+            {
+                if (m_alive[i] == 0 || m_bullet[i] == 0)
+                {
+                    continue;
+                }
+
+                const Vec2 prev(m_prevX[i], m_prevY[i]);
+                const Vec2 curr(m_posX[i], m_posY[i]);
+                const Vec2 delta = curr - prev;
+                // No net travel this Step -> nothing to clamp (ShapeCast also
+                // guards a near-zero delta, but skip the candidate gather too).
+                if (delta.x == Real(0) && delta.y == Real(0))
+                {
+                    continue;
+                }
+
+                // STATICS ONLY: default ShapeCastOpts (movers = false) casts vs
+                // tile spans + non-sensor static bodies. The bullet body is a
+                // mover, so it is never a self-obstacle here (no exclude needed).
+                const std::optional<ShapeCastHit> hit =
+                    ShapeCast(m_shape[i], prev, delta, ShapeCastOpts{});
+                if (!hit || hit->t >= Real(1))
+                {
+                    continue; // clear sweep -> the integrated position stands
+                }
+
+                // Clamp to TOI (a hair short, the Lua's hit.t - 0.001).
+                const Real clamp = std::max(Real(0), hit->t - kBulletEpsilon);
+                const Vec2 clamped = prev + delta * clamp;
+                m_posX[i] = clamped.x;
+                m_posY[i] = clamped.y;
+                if (static_cast<BodyType>(m_btype[i]) != BodyType::Static)
+                {
+                    m_moverBroadphase->Update(i, SlotAabb(i));
+                }
             }
         }
 

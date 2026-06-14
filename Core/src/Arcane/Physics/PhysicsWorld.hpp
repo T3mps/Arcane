@@ -691,7 +691,33 @@ namespace Arcane
             // for each awake dynamic body, manifolds vs tile spans + static
             // bodies (StaticCandidates) and vs mover-mover pairs involving a
             // dynamic (broadphase Pairs, narrowed). Orients A = dynamic.
+            //
+            // P3.1 speculative-contact CCD: the per-body speculative margin fed
+            // to CollideShapes is VELOCITY-SCALED -- max(kSkin, |v| * dt) -- so a
+            // fast mover's wall is seen pre-overlap and the SoftStep solver's
+            // speculative bias (s > 0 -> bias = s * invSubDt) caps the per-sub-step
+            // advance to the gap, stopping tunneling without a discrete clamp.
+            // A slow/resting body's margin is just kSkin (resting UNCHANGED).
             void GenerateContacts(Real dt);
+
+            // ---- P3.1 CCD: bullet GJK-TOI clamp (Step stage 6) ---------------
+            //
+            // PORT of the Lua bullet clamp (PhysicsWorld.lua:313-320): for each
+            // alive `isBullet` body, sweep its start-of-step position (prevX/prevY,
+            // snapshotted in Step stage 1) to its post-integration position
+            // (posX/posY) against STATICS ONLY (tile spans + non-sensor static
+            // bodies -- NOT movers; bullets clamp against statics per the Lua + the
+            // plan) via the conservative-advancement ShapeCast (P1.4/P1.9). If the
+            // sweep hits at fraction t < 1 the body would tunnel a thin static, so
+            // clamp the position to prev + delta * max(0, t - kBulletEpsilon) and
+            // refresh the mover broadphase AABB. This is the discrete BACKUP that
+            // catches what the speculative margin (GenerateContacts) misses --
+            // primarily KINEMATIC bullets, which the solver never touches, but
+            // also fast DYNAMIC bullets as a safety net. Deterministic (the
+            // conservative-advancement cast is fixed-iteration, no wall-clock).
+            // Runs AFTER the solver commits dynamic positions and BEFORE events
+            // (so contact events + island sleep see the clamped position).
+            void BulletSweep();
 
             // ---- query scratch (zero steady-state alloc) -------------------
             //
