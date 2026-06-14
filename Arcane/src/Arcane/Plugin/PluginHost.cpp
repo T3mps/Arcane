@@ -128,13 +128,20 @@ namespace Arcane
         Image img;
         if (!m_impl->CopyVersioned(g, img)) { ARC_ERROR("plugin: cannot copy source DLL"); return false; }
         img.handle = Detail::DLOpen(img.dll);
-        const bool ok = img.handle
+        const bool resolved = img.handle
             && Resolve(img.handle, img.vt)
-            && img.vt.ABIVersion() == kGamePluginABIVersion
-            && img.vt.Init(&m_impl->ctx);
-        if (!ok)
+            && img.vt.ABIVersion() == kGamePluginABIVersion;
+        const bool initRan = resolved && img.vt.Init(&m_impl->ctx);
+        if (!initRan)
         {
-            if (img.handle) Detail::DLClose(img.handle);
+            if (img.handle)
+            {
+                // Init may have registered systems / created entities before failing; clear
+                // them while the DLL is still mapped (their descriptors point into it).
+                m_impl->runtime.ClearSystems();
+                m_impl->runtime.ResetRegistry();
+                Detail::DLClose(img.handle);
+            }
             m_impl->DeleteFiles(img);
             ARC_ERROR("plugin: initial load failed");
             return false;
@@ -161,26 +168,35 @@ namespace Arcane
         if (!m_impl->CopyVersioned(nextGen, next))
             return false;
 
-        // 2. snapshot the live plugin's state (whole-registry, via the engine).
+        // 2. snapshot the live plugin's state. If SaveState errored, ABORT while the live
+        //    plugin is still fully intact (never tear down against a corrupt snapshot).
         std::vector<std::byte> snapshot;
         if (restoreState && m_impl->current.handle && m_impl->current.vt.SaveState)
         {
             Astra::BinaryWriter w(snapshot);
             m_impl->current.vt.SaveState(w);
+            if (w.HasError())
+            {
+                ARC_ERROR("plugin: SaveState failed; aborting reload, keeping live plugin");
+                m_impl->DeleteFiles(next);
+                return false;
+            }
         }
 
-        // 3. tear down the live plugin (keep its versioned files for rollback).
+        // 3. tear down the live plugin (resets the registry while it is still mapped; keeps
+        //    its versioned files for rollback).
         Image previous = m_impl->current;
         m_impl->TeardownLive();
 
         // 4. load + (fresh-reset) + init + (optionally) restore the new image.
         if (!restoreState)
-            m_impl->runtime.ResetRegistry();   // fresh boot: empty registry so Init rebuilds the scene
+            m_impl->runtime.ResetRegistry();   // covers the no-current-plugin case; harmless when TeardownLive already reset
         next.handle = Detail::DLOpen(next.dll);
-        bool ok = next.handle
+        const bool resolved = next.handle
             && Resolve(next.handle, next.vt)
-            && next.vt.ABIVersion() == kGamePluginABIVersion
-            && next.vt.Init(&m_impl->ctx);
+            && next.vt.ABIVersion() == kGamePluginABIVersion;
+        const bool initRan = resolved && next.vt.Init(&m_impl->ctx);
+        bool ok = initRan;
         if (ok && restoreState)
         {
             Astra::BinaryReader r(snapshot);
@@ -197,7 +213,14 @@ namespace Arcane
         }
 
         // 5. FAILURE -> rollback to the previous last-good image; never a lost session.
-        if (next.handle) { if (next.vt.Shutdown) next.vt.Shutdown(); Detail::DLClose(next.handle); }
+        //    Shutdown only if Init actually ran (ABI mismatch never ran Init); reset the
+        //    registry before DLClose so any entities a failed Init created don't outlive it.
+        if (next.handle)
+        {
+            if (initRan && next.vt.Shutdown) next.vt.Shutdown();
+            m_impl->runtime.ResetRegistry();
+            Detail::DLClose(next.handle);
+        }
         m_impl->DeleteFiles(next);
         m_impl->runtime.ClearSystems();
         if (!previous.dll.empty())
@@ -208,7 +231,8 @@ namespace Arcane
                 if (restoreState && !snapshot.empty())
                 {
                     Astra::BinaryReader r(snapshot);
-                    previous.vt.LoadState(r);
+                    if (!previous.vt.LoadState(r))
+                        ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
                 }
             }
         }

@@ -13,6 +13,7 @@ namespace Arcane
 
     // Watches a game DLL, loads versioned copies (PDB-lock dodge), checks the ABI,
     // and rolls back to the last-good image on any failure (never a lost session).
+    // Holds a Runtime& -- a PluginHost must NOT outlive its Runtime (the dtor calls into it).
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4251)  // unique_ptr<Impl> member on a dll-exported class: benign under /MD (shared CRT heap)
