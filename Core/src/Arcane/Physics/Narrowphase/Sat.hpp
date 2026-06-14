@@ -38,10 +38,12 @@ namespace Arcane
         //          left at zero and carry no meaning).
         // normal : unit axis of minimum overlap, oriented from B toward A
         //          (push A out of B), exactly as the Lua resolves it.
-        // depth  : the minimum overlap magnitude (always > 0 when hit). When
-        //          the polygons are separated this is the closest-axis value
-        //          only if `separated` semantics are requested (see below);
-        //          otherwise it is left at 0.
+        // depth  : when hit==true && depth>0  -> real penetration (minimum overlap magnitude).
+        //          when hit==true && depth<0  -> near-touching within the speculative margin;
+        //                                         depth is -separation (the gap), in (-margin, 0).
+        //          when hit==false            -> 0, no meaning.
+        // NOTE: consumers must NOT filter with `depth > 0` if they want speculative contacts;
+        //       test `hit` and treat depth<0 as a valid speculative state.
         struct SatResult
         {
             bool hit    = false;

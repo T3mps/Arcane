@@ -182,13 +182,13 @@ namespace Arcane
             // --- Faithful path (verbatim Geometry.polyPoly) -----------------
             Real bestDepth = kHuge;
             Vec2 bnormal{ Real(0), Real(0) };
-            const bool a = SatAxes(va, na, vb, nb, /*flip=*/false,
-                                   bestDepth, bnormal);
-            if (a)
+            const bool passA = SatAxes(va, na, vb, nb, /*flip=*/false,
+                                      bestDepth, bnormal);
+            if (passA)
             {
-                const bool b = SatAxes(vb, nb, va, na, /*flip=*/true,
-                                       bestDepth, bnormal);
-                if (b)
+                const bool passB = SatAxes(vb, nb, va, na, /*flip=*/true,
+                                           bestDepth, bnormal);
+                if (passB)
                 {
                     // Overlap on every axis: real penetration.
                     r.hit    = true;

@@ -27,8 +27,6 @@
 
 #include <cstdint>
 
-#include <glm/vec2.hpp>
-
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
 
