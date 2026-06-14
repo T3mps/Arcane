@@ -172,7 +172,7 @@ TEST_CASE("CharacterController: slam into a wall advances then stops, never buri
     for (int tick = 0; tick < 200; ++tick)
     {
         w.Step(Real(1.0 / 60.0));
-        cc.SlideMove(Real(20), Real(0)); // 20px/tick to the right
+        (void)cc.SlideMove(Real(20), Real(0)); // 20px/tick to the right
         REQUIRE(MaxPenetration(w, h) < Real(0.5));
     }
 
@@ -212,7 +212,7 @@ TEST_CASE("CharacterController: big-dt slide does not tunnel an interior wall",
 
     w.Step(Real(1.0 / 60.0));
     // One giant 64px displacement straight at the wall cell.
-    cc.SlideMove(Real(64), Real(0));
+    (void)cc.SlideMove(Real(64), Real(0));
 
     // Did NOT tunnel through: the body's center must be left of the wall cell's
     // far side (it stopped at the near face, not popped out the other side).
@@ -246,7 +246,7 @@ TEST_CASE("CharacterController: diagonal into a wall face slides along it",
     for (int tick = 0; tick < 60; ++tick)
     {
         w.Step(Real(1.0 / 60.0));
-        cc.SlideMove(Real(14), Real(14)); // into the wall + downward
+        (void)cc.SlideMove(Real(14), Real(14)); // into the wall + downward
         REQUIRE(MaxPenetration(w, h) < Real(0.5));
     }
 
@@ -293,7 +293,7 @@ TEST_CASE("CharacterController: slides down a seamed wall column without catchin
     for (int tick = 0; tick < 120; ++tick)
     {
         w.Step(Real(1.0 / 60.0));
-        cc.SlideMove(Real(6), Real(18)); // into the face + strong downward
+        (void)cc.SlideMove(Real(6), Real(18)); // into the face + strong downward
         REQUIRE(MaxPenetration(w, h) < Real(0.5));
     }
 
@@ -325,7 +325,7 @@ TEST_CASE("CharacterController: a circle body slams a wall and never buries",
     for (int tick = 0; tick < 200; ++tick)
     {
         w.Step(Real(1.0 / 60.0));
-        cc.SlideMove(Real(20), Real(0));
+        (void)cc.SlideMove(Real(20), Real(0));
         REQUIRE(MaxPenetration(w, h) < Real(0.5));
     }
 
