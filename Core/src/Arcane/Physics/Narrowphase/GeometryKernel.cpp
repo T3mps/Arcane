@@ -26,8 +26,23 @@ namespace Arcane
         } // namespace
 
         // --------------------------------------------------------------------
+        // AabbToCorners -- single source of truth for AABB-to-4-corner
+        // expansion in the canonical Lua aabbPoly order. Called by WorldPoly's
+        // AABB branch, CharacterController::Depenetrate, and PhysicsWorld::
+        // ShapeCast so corner order can never drift between the three sites.
+        // --------------------------------------------------------------------
+        void AabbToCorners(const Aabb& box, Vec2 out[4]) noexcept
+        {
+            out[0] = Vec2(box.min.x, box.min.y);
+            out[1] = Vec2(box.max.x, box.min.y);
+            out[2] = Vec2(box.max.x, box.max.y);
+            out[3] = Vec2(box.min.x, box.max.y);
+        }
+
+        // --------------------------------------------------------------------
         // worldPoly -- expand a poly/aabb into world verts (Manifold.lua:19-39,
-        // translation-only branch).
+        // translation-only branch). AABB branch delegates to AabbToCorners so
+        // corner order is guaranteed identical across all call sites.
         // --------------------------------------------------------------------
         int WorldPoly(const Shape& s, const Transform& xf, Vec2* out)
         {
@@ -38,10 +53,11 @@ namespace Arcane
             {
                 const Real hw = s.halfW;
                 const Real hh = s.halfH;
-                out[0] = Vec2(x - hw, y - hh);
-                out[1] = Vec2(x + hw, y - hh);
-                out[2] = Vec2(x + hw, y + hh);
-                out[3] = Vec2(x - hw, y + hh);
+                const Aabb box{
+                    Vec2(x - hw, y - hh),
+                    Vec2(x + hw, y + hh)
+                };
+                AabbToCorners(box, out);
                 return 4;
             }
 

@@ -16,20 +16,7 @@ namespace Arcane
 {
     namespace Physics
     {
-        namespace
-        {
-            // Expand an AABB (min,max) into its 4 corners in the Lua aabbPoly
-            // order: (x-hw,y-hh),(x+hw,y-hh),(x+hw,y+hh),(x-hw,y+hh) -- i.e.
-            // (min.x,min.y),(max.x,min.y),(max.x,max.y),(min.x,max.y). CapsulePoly
-            // is winding-agnostic, but this matches the Lua corner order exactly.
-            void BoxCorners(const Aabb2& box, std::array<Vec2, 4>& out) noexcept
-            {
-                out[0] = Vec2(box.min.x, box.min.y);
-                out[1] = Vec2(box.max.x, box.min.y);
-                out[2] = Vec2(box.max.x, box.max.y);
-                out[3] = Vec2(box.min.x, box.max.y);
-            }
-        } // namespace
+        // (BoxCorners removed: use AabbToCorners from GeometryKernel.hpp instead.)
 
         Vec2 CharacterController::Depenetrate(Vec2 p)
         {
@@ -61,7 +48,7 @@ namespace Arcane
                 // Tile spans: each merged span rect -> 4-corner poly -> CapsulePoly.
                 for (std::size_t i = 0; i < m_spans.size(); ++i)
                 {
-                    BoxCorners(m_spans[i], m_polyScratch);
+                    AabbToCorners(m_spans[i], m_polyScratch.data());
                     const Hit h = CapsulePoly(segA, segB, r,
                                               m_polyScratch.data(), 4);
                     if (h.hit && h.depth > bdepth)
@@ -97,7 +84,7 @@ namespace Arcane
                             Vec2(opos.x - os.halfW, opos.y - os.halfH),
                             Vec2(opos.x + os.halfW, opos.y + os.halfH)
                         };
-                        BoxCorners(obox, m_polyScratch);
+                        AabbToCorners(obox, m_polyScratch.data());
                         verts = m_polyScratch.data();
                         n     = 4;
                     }
@@ -110,8 +97,10 @@ namespace Arcane
                         // by the body world pos to get world verts. (Static bodies
                         // are typically placed with their poly authored about the
                         // body position.)
+                        // Note: reserve() is intentionally absent here -- the
+                        // clear()+push_back pattern preserves capacity across
+                        // calls (no per-pass realloc in steady state).
                         m_polyWorld.clear();
-                        m_polyWorld.reserve(os.verts.size());
                         for (const Vec2& v : os.verts)
                         {
                             m_polyWorld.push_back(Vec2(opos.x + v.x, opos.y + v.y));
@@ -138,14 +127,19 @@ namespace Arcane
                     return p;
                 }
                 // Push out along the deepest normal, a hair past the surface.
-                p.x += bn.x * (bdepth + kSkin);
-                p.y += bn.y * (bdepth + kSkin);
+                p.x += bn.x * (bdepth + kDepenetrationSkin);
+                p.y += bn.y * (bdepth + kDepenetrationSkin);
             }
             return p;
         }
 
         Vec2 CharacterController::SlideMove(Real dx, Real dy)
         {
+            // Stale-body guard: explicit early-out before reading position.
+            // Matters once P3.3 pools entities (vs the silent zero-displacement
+            // that the IsValid-gated Position fallback would otherwise produce).
+            if (!m_world->IsValid(m_body)) { return Vec2(Real(0), Real(0)); }
+
             const Vec2 start = m_world->Position(m_body);
             Vec2       p     = start;
 

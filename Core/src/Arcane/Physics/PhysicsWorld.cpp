@@ -19,6 +19,7 @@
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
 #include <Arcane/Physics/Broadphase/SpatialHash.hpp>
 #include <Arcane/Physics/Broadphase/SweepAndPrune.hpp>
+#include <Arcane/Physics/Narrowphase/GeometryKernel.hpp>
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
 #include <Arcane/Physics/Narrowphase/Dispatch.hpp>
 
@@ -686,16 +687,12 @@ namespace Arcane
             };
 
             // Tile spans (raw world-space AABB polys -> ShapeCastPoly). The span
-            // is an axis-aligned box; its 4 CCW corners feed ShapeCastPoly.
+            // is an axis-aligned box; AabbToCorners expands to the canonical
+            // corner order shared with Depenetrate and WorldPoly (no drift).
             for (std::size_t i = 0; i < m_scratchSpans.size(); ++i)
             {
-                const Aabb2& sp = m_scratchSpans[i];
-                const Vec2 poly[4] = {
-                    Vec2(sp.min.x, sp.min.y),
-                    Vec2(sp.max.x, sp.min.y),
-                    Vec2(sp.max.x, sp.max.y),
-                    Vec2(sp.min.x, sp.max.y),
-                };
+                Vec2 poly[4];
+                AabbToCorners(m_scratchSpans[i], poly);
                 consider(ShapeCastPoly(shape, xf0, delta, poly, 4), kInvalidBody);
             }
 

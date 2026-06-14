@@ -75,6 +75,16 @@ namespace Arcane
             Vec2 q{ Real(0), Real(0) };
         };
 
+        // Expand an axis-aligned box to its 4 world corners in the canonical
+        // order (min,min)(max,min)(max,max)(min,max) -- the Lua aabbPoly order
+        // used by the narrowphase/CC/casts. `out` must hold 4 Vec2.
+        // This is the single source of truth for AABB-to-corner expansion,
+        // shared by CharacterController (Depenetrate), PhysicsWorld (ShapeCast),
+        // and WorldPoly's AABB branch to prevent corner-order drift.
+        // (Aabb2 = Aabb from Broadphase.hpp; we use Aabb here to avoid
+        // pulling a broadphase header into the narrowphase layer.)
+        void AabbToCorners(const Aabb& box, Vec2 out[4]) noexcept;
+
         // PORT of Manifold.lua worldPoly: expand a poly/aabb shape into
         // world-space verts under the (translation-only) transform xf. The Lua
         // polygon branch rotates by `ang`, but this phase is fixedRotation

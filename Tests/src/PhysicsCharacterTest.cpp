@@ -87,6 +87,8 @@ namespace
     // Deepest capsule penetration of the body at handle `h` against the SOLID
     // tile spans near it (the controller's own probe). Mirrors _depenetrate's
     // span loop: StaticCandidates -> CapsulePoly per span-as-poly, keep deepest.
+    // spans only; static bodies not probed (these scenarios use only
+    // TileGrid/GridPassability).
     Real MaxPenetration(const PhysicsWorld& w, BodyHandle h)
     {
         const Shape* sp = w.GetShape(h);

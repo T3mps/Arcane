@@ -82,8 +82,10 @@ namespace Arcane
             // against 2+ span normals; alternating push-out needs headroom to
             // converge (Lua MAX_PASSES).
             static constexpr int kMaxPasses = 8;
-            // Resolve to a hair outside the surface (Lua SKIN).
-            static constexpr Real kSkin = Real(0.05);
+            // Resolve to a hair outside the surface (Lua SKIN). Named
+            // kDepenetrationSkin to distinguish from Arcane::Physics::kSkin
+            // (the global broadphase skin = 0.01; different purpose/value).
+            static constexpr Real kDepenetrationSkin = Real(0.05);
 
             // `world` and `body` must outlive the controller. The body is the
             // player (a kinematic capsule or circle). The controller never owns
@@ -100,7 +102,7 @@ namespace Arcane
             // Returns the ACTUAL displacement (resolved end pos - start pos).
             // Writes the body position through PhysicsWorld::MovePosition (prev
             // untouched). |d| < 1e-9 -> no-op, returns (0,0). Ports slideMove.
-            Vec2 SlideMove(Real dx, Real dy);
+            [[nodiscard]] Vec2 SlideMove(Real dx, Real dy);
 
             // Click-to-move: hand the velocity to the kinematic body; the world
             // Step integrates it without deflection. Ports followVelocity.
