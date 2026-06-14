@@ -292,33 +292,5 @@ namespace Arcane
             return m;
         }
 
-        // --------------------------------------------------------------------
-        // Router for any round-involved pair.
-        // --------------------------------------------------------------------
-        Manifold CollideShapes(const Shape& a, const Transform& xfA,
-                               const Shape& b, const Transform& xfB,
-                               Real speculativeMargin,
-                               std::uint32_t keyBase)
-        {
-            const bool ra = IsRound(a);
-            const bool rb = IsRound(b);
-
-            if (ra && rb)
-            {
-                return CollideRoundRound(a, xfA, b, xfB, speculativeMargin, keyBase);
-            }
-            if (ra) // A round, B poly/aabb
-            {
-                return CollideRoundPolygon(a, xfA, b, xfB, speculativeMargin, keyBase);
-            }
-            if (rb) // A poly/aabb, B round
-            {
-                return CollidePolygonRound(a, xfA, b, xfB, speculativeMargin, keyBase);
-            }
-            // Neither round: pure poly path is P1.2's CollidePolygons (full
-            // dispatch table is P1.5). Return an empty manifold here.
-            return Manifold{};
-        }
-
     } // namespace Physics
 } // namespace Arcane

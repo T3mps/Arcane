@@ -82,17 +82,10 @@ namespace Arcane
             return s.kind == ShapeKind::Circle || s.kind == ShapeKind::Capsule;
         }
 
-        // Router for ANY pair where at least one shape is round. Dispatches to
-        // CollideRoundRound / CollideRoundPolygon / CollidePolygonRound,
-        // mirroring genPair's round branches. (A pure poly-poly / poly-aabb pair
-        // -- neither shape round -- routes to P1.2's CollidePolygons; the full
-        // dispatch table over all four kinds is P1.5. For P1.3 this router
-        // requires at least one round shape and asserts otherwise via an empty
-        // manifold.)
-        [[nodiscard]] Manifold CollideShapes(const Shape& a, const Transform& xfA,
-                                             const Shape& b, const Transform& xfB,
-                                             Real speculativeMargin = Real(0),
-                                             std::uint32_t keyBase   = 0);
+        // NOTE: the top-level router CollideShapes (dispatching all four shape-kind
+        // combinations) lives in Dispatch.hpp/.cpp (P1.5). This header provides only
+        // the round building blocks; include <Arcane/Physics/Narrowphase/Dispatch.hpp>
+        // for the unified entry point.
 
     } // namespace Physics
 } // namespace Arcane
