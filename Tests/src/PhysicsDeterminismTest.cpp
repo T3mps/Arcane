@@ -316,11 +316,11 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
                 hash = HashStep(hash, p.x, p.y, a);
             }
 
-            // Kinematic mover: position only (kinematics have no rotational
-            // inertia, angle stays 0).
+            // Kinematic mover: position + angle (returns 0; uniform with other bodies).
             {
                 const Vec2 p = w.Position(kin);
-                hash = HashStep(hash, p.x, p.y, Real(0));
+                const Real a = w.GetAngle(kin);
+                hash = HashStep(hash, p.x, p.y, a);
             }
 
             // Bullet-kinematic: position + angle (post-CCD clamp on step 1).
@@ -359,12 +359,19 @@ using namespace Arcane::Physics::P34Determinism;
 //    static wall. This is a focused sub-assert outside the hash loop so the
 //    test reader can see clearly what is being validated.
 //
-//    Wall far face: kWallX + kWallHW = 351.
+//    Wall near face: kWallX - kWallHW = 349.
 //    Without CCD, one-step displacement = kBulletSpeed * kDt = 300 units,
 //    landing the bullet at x ~ 400 — well past the wall.
 //    With CCD (TOI clamp for kinematic; speculative margin for dynamic), the
-//    bullet stops on the near side.
+//    bullet centre stops at or before the near face. Because the bullet shape
+//    has radius kProbeR = 2, the actual stopped centre will be approximately
+//    kWallNearX - kProbeR (= 347); the <= kWallNearX bound has generous margin
+//    while still rejecting any half-tunnel (centre past x = 349 = wall centre
+//    would still be < kWallX = 350 but that corner is already excluded here).
 // ---------------------------------------------------------------------------
+
+// Wall near face constant (near side of the 2-unit-wide wall).
+constexpr Real kWallNearX = kWallX - kWallHW; // = 349
 
 TEST_CASE("P3.4 full-pipeline determinism: bullet bodies do not tunnel (CCD gate)",
           "[physics][determinism]")
@@ -372,15 +379,14 @@ TEST_CASE("P3.4 full-pipeline determinism: bullet bodies do not tunnel (CCD gate
     BulletResult bullets{};
     RunScene(SolverKind::SoftStep, &bullets);
 
-    // Bullet-kinematic: BulletSweep clamps to TOI → stops before the wall face.
-    // Final x must be strictly less than the wall far face (x = 351).
-    REQUIRE(bullets.bulletKinPos.x < kWallX + kWallHW + Real(1));
-    // And it did NOT tunnel through (centre must NOT be beyond kWallX + kWallHW).
-    REQUIRE_FALSE(bullets.bulletKinPos.x > kWallX + kWallHW);
+    // Bullet-kinematic: BulletSweep clamps to TOI → centre at or before near face.
+    // A half-tunnel (centre at wall centre x=350) or full tunnel (x>351) both fail.
+    // Empirical stopped centre: x ≈ 346.7 (≈ kWallNearX - kProbeR, CCD skin margin).
+    REQUIRE(bullets.bulletKinPos.x <= kWallNearX);
 
     // Bullet-dynamic: speculative contacts + GJK-TOI → same invariant.
-    REQUIRE(bullets.bulletDynPos.x < kWallX + kWallHW + Real(1));
-    REQUIRE_FALSE(bullets.bulletDynPos.x > kWallX + kWallHW);
+    // Empirical stopped centre: x ≈ 268.3 (zeroed on first contact step, held far back).
+    REQUIRE(bullets.bulletDynPos.x <= kWallNearX);
 }
 
 // ---------------------------------------------------------------------------
