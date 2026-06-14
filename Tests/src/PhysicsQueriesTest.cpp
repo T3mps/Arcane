@@ -545,3 +545,101 @@ TEST_CASE("QueryAABB: includes overlapping, excludes non-overlapping",
     REQUIRE(n == 1);
     REQUIRE(hits[0] == hin);
 }
+
+// ---------------------------------------------------------------------------
+// OverlapShape includes sensors (contract lock)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("OverlapShape: a sensor body overlapping the query shape IS returned",
+          "[physics][queries][overlap]")
+{
+    // OverlapShape's documented contract: sensor bodies ARE included (unlike
+    // ShapeCast, which skips sensors). This test locks that contract so any
+    // future refactor that accidentally silences sensors will fail here.
+    PhysicsWorld w;
+
+    // A non-sensor body well outside the query (should not appear).
+    BodyDef far;
+    far.type     = BodyType::Static;
+    far.position = Vec2(Real(500), Real(500));
+    far.shape    = MakeCircle(Real(5));
+    w.AddBody(far);
+
+    // A SENSOR body squarely overlapping the query center.
+    BodyDef sensor;
+    sensor.type      = BodyType::Static;
+    sensor.position  = Vec2(Real(0), Real(0));
+    sensor.shape     = MakeCircle(Real(10));
+    sensor.isSensor  = true;
+    BodyHandle hs = w.AddBody(sensor);
+
+    // A non-sensor body also overlapping (included for the non-sensor path too).
+    BodyDef solid;
+    solid.type     = BodyType::Kinematic;
+    solid.position = Vec2(Real(5), Real(0));
+    solid.shape    = MakeCircle(Real(10));
+    BodyHandle hk = w.AddBody(solid);
+
+    // Query circle at origin radius 8: overlaps both the sensor and the solid.
+    const Shape query = MakeCircle(Real(8));
+    const Transform xf{ Vec2(Real(0), Real(0)), Real(0) };
+
+    std::vector<BodyHandle> hits;
+    const int n = w.OverlapShape(query, xf, hits);
+    REQUIRE(n == 2);
+    // Both the sensor (hs) and the solid mover (hk) must appear; index-ordered
+    // (sensor was added second, solid third -> hs < hk by index).
+    bool foundSensor = false;
+    bool foundSolid  = false;
+    for (const BodyHandle h : hits)
+    {
+        if (h == hs) foundSensor = true;
+        if (h == hk) foundSolid  = true;
+    }
+    REQUIRE(foundSensor); // sensor IS included
+    REQUIRE(foundSolid);
+    // Confirm via IsSensor that we are actually testing a sensor body.
+    REQUIRE(w.IsSensor(hs));
+    REQUIRE_FALSE(w.IsSensor(hk));
+}
+
+// ---------------------------------------------------------------------------
+// ShapeCast vs a tile span (exercises the ShapeCastPoly-against-span path)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ShapeCast: a swept circle hits a solid tile span",
+          "[physics][queries][shapecast]")
+{
+    // Build a world with a TileGrid that has a solid run at column 5, row 2.
+    // The merged tile span for that cell is the AABB of cell (5,2):
+    //   x in [50, 60), y in [20, 30)  (cellSize=10, origin=0).
+    // Sweep a circle from the left toward the span; assert it hits (exercises
+    // the ShapeCastPoly-against-tile-span path) and that the hit normal points
+    // back toward the mover (i.e. away from the span, in the -x direction).
+    GridPassability grid(kGridW, kGridH);
+    grid.SetSolid(5, 2, true);
+
+    PhysicsWorld w(MakeWorldDef(grid));
+
+    const Real   circleR = Real(4);
+    const Shape  circle  = MakeCircle(circleR);
+    // Start left of the span, sweeping right along row-2 center (y=25).
+    const Vec2   start(Real(10), Real(25));
+    const Vec2   delta(Real(100), Real(0)); // sweeps from x=10 to x=110
+
+    const auto cast = w.ShapeCast(circle, start, delta);
+    REQUIRE(cast.has_value());
+    // A tile span hit has body == kInvalidBody.
+    REQUIRE(cast->body == kInvalidBody);
+    // The circle must stop BEFORE the span's near face (x=50): its center
+    // lands approximately at x = 50 - circleR (a radius short of the wall).
+    REQUIRE(cast->point.x < Real(50));
+    REQUIRE(cast->point.x == Approx(Real(50) - circleR).margin(Real(0.5)));
+    // The cast terminates at t < 1 (did not pass through).
+    REQUIRE(cast->t > Real(0));
+    REQUIRE(cast->t < Real(1));
+    // Push-back normal faces back toward the mover (negative x direction).
+    REQUIRE(cast->normal.x < Real(0));
+    // Near-touching at impact: surface distance is small.
+    REQUIRE(cast->distance < Real(0.2));
+}

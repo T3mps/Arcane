@@ -460,6 +460,10 @@ namespace Arcane
                 const Real tDeltaY = cdy != Real(0) ? std::abs(Real(1) / cdy) : inf;
 
                 Real t = Real(0);
+                // (W+H)*2 budget: a diagonal visits at most W+H cells; a ray
+                // starting >W+H cells OUTSIDE the grid can exhaust the budget
+                // before reaching a solid cell (faithful to the Lua; fine for
+                // on-map casters).
                 const int budget = (src.Width() + src.Height()) * 2; // bounded
                 for (int it = 0; it < budget; ++it)
                 {
@@ -635,6 +639,8 @@ namespace Arcane
             }
 
             // Swept AABB for candidate collection (+/-2 pad, ports lines 40-43).
+            // +/-2 world-unit skin: broadphase margin for float-error at AABB
+            // edges + endpoint-cell overlap (Lua used 0.5-tile slack).
             const Transform xf0{ pos, Real(0) };
             const Transform xf1{ Vec2(pos.x + delta.x, pos.y + delta.y), Real(0) };
             const Aabb2 a = shape.ComputeAABB(xf0);

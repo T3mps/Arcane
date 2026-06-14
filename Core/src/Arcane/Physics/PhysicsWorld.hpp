@@ -274,6 +274,8 @@ namespace Arcane
             // Raycast(from, to, { tallOnly = true, cellsOnly = true }) == none.
             // A degenerate (zero-length) segment has no LOS (matches the Lua's
             // `if not x1 then return false`).
+            // With no TileGrid, always returns true (cell-only test, no cells to
+            // block).
             [[nodiscard]] bool LineOfSight(const Vec2& from, const Vec2& to) const;
 
             // Cast `shape` from `pos` by `delta` against tile spans + non-sensor
@@ -292,6 +294,9 @@ namespace Arcane
             // statics + movers; self-overlap of the query shape against a body at
             // the same spot counts. `out` is cleared then filled with handles,
             // index-ordered -> deterministic. Returns out.size().
+            // NOTE: sensor bodies ARE included; callers wanting non-sensor
+            // overlaps must filter via IsSensor() (unlike ShapeCast, which skips
+            // sensors).
             int OverlapShape(const Shape& shape, const Transform& xf,
                              std::vector<BodyHandle>& out) const;
 
@@ -391,8 +396,16 @@ namespace Arcane
             // Pooled candidate buffers for ShapeCast / OverlapShape, mirroring
             // the Lua's module-local _spans / _statics. mutable so the const
             // query methods may reuse them (clear()+push_back preserves capacity;
-            // no per-call heap traffic after warmup). NOT re-entrant -- queries
-            // are single-threaded (the physics step is single-threaded too).
+            // no per-call heap traffic after warmup).
+            //
+            // NOT re-entrant. Queries are single-threaded AND must NOT be called
+            // from within a contact callback (OnContact fires inside Step; a
+            // nested query would overwrite these scratch buffers mid-traversal ->
+            // silent wrong results).
+            // Safe call sites: the game-update loop, CharacterController, CCD
+            // pre-step.
+            // If a future system needs a query inside a callback, switch to
+            // thread_local or caller-supplied scratch.
             mutable std::vector<Aabb2>         m_scratchSpans;
             mutable std::vector<std::uint32_t> m_scratchStatics;
         };
