@@ -17,20 +17,29 @@
 //     TileGrid for tile statics + _StaticCandidates (ports staticList /
 //     _staticCandidates).
 //
-// DELIBERATELY NOT PORTED (deferred -- see PORT BOUNDARY below):
-//   * Dynamic velocity integration (gravity / linear damping).
-//   * The solver call, dynamic position integration (stage 4), island sleep
-//     (stage 5), bullet CCD clamp, joints.
+// PORTED IN P2.1 (extends the P1.8 kinematic subset):
+//   * Dynamic velocity integration (gravity + linear damping) and dynamic
+//     position integration (semi-implicit Euler, stage 4).
+//   * Dynamics SoA (m_invMass, m_invInertia, m_angle, m_angVel, m_rest,
+//     m_fric, m_linDamp, m_sleepTimer, m_awake, m_bullet).
+//   * Body dynamics accessors: ApplyImpulse, Wake, IsAwake, GetAngle/SetAngle.
+//   * BodyDef dynamics params: density, mass override, restitution, friction,
+//     linearDamping, fixedRotation, bullet.
+//
+// DELIBERATELY NOT PORTED (still deferred -- see PORT BOUNDARY below):
+//   * The solver call (P2.2 -- bodies free-fall ballistically until SoftStep
+//     wires into the stage 2-3 seam).
+//   * Island sleep (P2.4 -- m_sleepTimer + m_awake SoA is present but the
+//     sleep-island logic that clears m_awake is deferred).
+//   * Joints (P2.5).
+//   * Bullet CCD clamp (P3.1 -- m_bullet stored now, clamp deferred).
 //   * raycast / shapeCast / lineOfSight (P1.9).
-// Dynamic bodies are ACCEPTED + stored (BodyType::Dynamic) but are NEVER
-// integrated or solved in P1.8. They are also registered in the mover
-// broadphase so the ContactManager emits mover-mover events for them.
-// NOTE: dynamic-vs-static-BODY events are KINEMATIC-ONLY (faithful to
-// ContactManager.lua:150 -- the solver owns dynamic-vs-static response in
-// P2.1). The force/impulse/sleep machinery arrives in
-// P2.1 ("extends PhysicsWorld for Dynamic bodies"); the SoA carries the few
-// dynamics fields it needs cheaply (angle/awake) but the solver-only fields
-// (mass/inertia/damping/etc.) are intentionally left for P2.1 to add.
+// Dynamic bodies are ACCEPTED + stored (BodyType::Dynamic) and are
+// integrated by Step (gravity + damping + position). They are also registered
+// in the mover broadphase so the ContactManager emits mover-mover events.
+// NOTE: dynamic-vs-static-BODY collision RESPONSE still requires the solver
+// (P2.2); only kinematics events fire in P2.1 (faithful to
+// ContactManager.lua:150 -- the solver owns dynamic response).
 //
 // DETERMINISM (port + modernize): Step iterates slots by INDEX (never map
 // order); the mover broadphase emits SORTED pairs; the ContactManager sorts
@@ -459,7 +468,7 @@ namespace Arcane
             std::vector<Real>          m_rest, m_fric;        // solver params (P2.2)
             std::vector<Real>          m_linDamp;             // velocity decay
             std::vector<Real>          m_sleepTimer;          // island sleep (P2.4)
-            std::vector<std::uint8_t>  m_awake;               // 1 = integrated/solved
+            std::vector<std::uint8_t>  m_awake;               // 1 = awake (integrates this step; P2.4 sleep clears to 0)
             std::vector<std::uint8_t>  m_bullet;              // CCD clamp (P3)
 
             std::uint32_t              m_count = 0; // high-water slot count

@@ -33,8 +33,8 @@
 //        (Position integration between substeps is owned by the world's stage 4
 //        in P2.1's faithful order; P2.2 may pull the per-substep position
 //        integrate inside the loop -- a signature it is free to add.)
-//        Relax()                -- one TGS pass with NO bias (removes the energy
-//        the biased pass injected; the v3 "relax" stage).
+//        Relax(ctx, substep)    -- one TGS pass with NO bias (removes the energy
+//        the biased SolveVelocity injected for this substep; the v3 "relax" stage).
 //   3. ApplyRestitution() -- a final pass applying restitution to contacts whose
 //      approach speed exceeded the threshold (separated from the soft solve so
 //      bounciness is not damped by the soft target).
@@ -55,6 +55,8 @@ namespace Arcane
     {
         class PhysicsWorld; // the SoA owner; the solver mutates velocities through it
         struct Manifold;    // Narrowphase/Manifold.hpp -- per-pair contact points
+        struct Joint;       // Joints/Joint.hpp (P2.5) -- forward-declared so JointConstraint
+                            // can hold a typed pointer without pulling the full definition.
 
         // ----------------------------------------------------------------
         // ContactConstraint: one solvable contact pair (scaffolding).
@@ -85,7 +87,10 @@ namespace Arcane
         struct JointConstraint
         {
             // P2.2: joint kind + anchors + soft (hertz, dampingRatio) + state.
-            void* joint = nullptr; // opaque until the joint module lands
+            // Typed pointer (forward-declared above) so P2.5's joint module (which
+            // will define `struct Joint` in Physics/Joints/) slots in without a
+            // struct-layout break. A different name in P2.5 is a trivial rename here.
+            Joint* joint = nullptr;
         };
 
         // ----------------------------------------------------------------
@@ -155,9 +160,12 @@ namespace Arcane
             virtual void SolveVelocity(SolverContext& ctx, int substep) = 0;
 
             // One velocity pass with NO bias (the v3 "relax" stage): removes the
-            // energy the biased SolveVelocity injected so soft contacts do not
-            // gain energy. Called once per sub-step after SolveVelocity.
-            virtual void Relax(SolverContext& ctx) = 0;
+            // energy the biased SolveVelocity injected for sub-step `substep` so
+            // soft contacts do not gain energy. `substep` matches the index passed
+            // to the immediately preceding SolveVelocity call, allowing the relax
+            // pass to cancel exactly the bias term that substep introduced.
+            // Called once per sub-step after SolveVelocity.
+            virtual void Relax(SolverContext& ctx, int substep) = 0;
 
             // Final pass: apply restitution to contacts whose approach speed
             // exceeded the threshold (kept out of the soft solve so bounce is not

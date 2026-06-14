@@ -94,6 +94,7 @@ TEST_CASE("PhysicsDynamics: free-fall matches semi-implicit Euler", "[physics][d
         REQUIRE(p.x == Approx(pos0.x).margin(Real(1e-3)));
 
         REQUIRE(v.y == Approx(expV).margin(Real(1e-3) + std::abs(expV) * Real(1e-4)));
+        // generous margin: semi-implicit Euler position error accumulates ~O(k*dt^2)
         REQUIRE(p.y == Approx(expPos).margin(Real(1e-2) + std::abs(expPos) * Real(1e-4)));
     }
 }
