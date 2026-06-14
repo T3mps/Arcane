@@ -46,6 +46,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -106,6 +107,67 @@ namespace Arcane
         };
 
         class Body; // forward decl (Body.hpp); ergonomic view over a handle.
+
+        // ----------------------------------------------------------------
+        // RaycastHit: PhysicsWorld::Raycast result (ports raycast's returned
+        // table). Either a CELL hit (isCell == true; cellX/cellY valid; body is
+        // kInvalidBody) or a BODY hit (isCell == false; body valid; cellX/cellY
+        // unused). t in [0,1] is the parametric fraction along the ray; point is
+        // the world-space hit position (lerp of start..end by t).
+        // ----------------------------------------------------------------
+        struct RaycastHit
+        {
+            Real       t = Real(0);              // parametric fraction in [0,1]
+            Vec2       point{ Real(0), Real(0) }; // world-space hit position
+            bool       isCell = false;           // true: cell hit; false: body hit
+            int        cellX = 0;                // valid iff isCell
+            int        cellY = 0;                // valid iff isCell
+            BodyHandle body = kInvalidBody;      // valid iff !isCell
+        };
+
+        // ----------------------------------------------------------------
+        // RaycastOpts: Raycast modifiers (ports the raycast opts table).
+        // ----------------------------------------------------------------
+        struct RaycastOpts
+        {
+            // tallOnly (the LOS rule): cells block only when they block SIGHT
+            // (BlocksSight), not merely movement (IsSolid). LOW obstacles let a
+            // ray through; TALL obstacles stop it. Ports opts.tallOnly.
+            bool tallOnly = false;
+            // cellsOnly: skip the body tests entirely (only the cell DDA runs).
+            // Ports opts.cellsOnly. LineOfSight uses { tallOnly, cellsOnly }.
+            bool cellsOnly = false;
+        };
+
+        // ----------------------------------------------------------------
+        // ShapeCastHit: PhysicsWorld::ShapeCast result (ports Cast.shapeCast's
+        // returned table { t, x, y, nx, ny, dist, body? }). `point` is the
+        // moving shape's CENTER at the time of impact; `normal` is the push-back
+        // direction; `distance` is the surface distance at the stopping point;
+        // `body` is the hit mover/static body handle (kInvalidBody for a tile
+        // span). t in [0,1] is the parametric fraction along the cast delta.
+        // ----------------------------------------------------------------
+        struct ShapeCastHit
+        {
+            Real       t = Real(0);
+            Vec2       point{ Real(0), Real(0) }; // shape CENTER at TOI
+            Vec2       normal{ Real(0), Real(0) };
+            Real       distance = Real(0);
+            BodyHandle body = kInvalidBody; // valid for body hits; kInvalidBody for spans
+        };
+
+        // ----------------------------------------------------------------
+        // ShapeCastOpts: ShapeCast modifiers (ports Cast.shapeCast opts).
+        // ----------------------------------------------------------------
+        struct ShapeCastOpts
+        {
+            // Include non-static (kinematic/dynamic) bodies as cast obstacles.
+            // Ports opts.movers (statics + tile spans are ALWAYS included).
+            bool movers = false;
+            // Skip this body when casting (e.g. the caster itself). Ports
+            // opts.exclude (a body handle, kInvalidBody = exclude nothing).
+            BodyHandle exclude = kInvalidBody;
+        };
 
         // ----------------------------------------------------------------
         // PhysicsWorld: the SoA body store + Step pipeline (kinematic subset).
@@ -190,9 +252,48 @@ namespace Arcane
 
             // All live bodies whose shape-AABB intersects box. `out` is cleared
             // then filled with handles. Returns out.size(). Linear scan (ports
-            // queryAABB; the richer query suite is P1.9). Index-ordered ->
-            // deterministic.
+            // queryAABB). Index-ordered -> deterministic.
             int QueryAABB(const Aabb2& box, std::vector<BodyHandle>& out) const;
+
+            // Raycast from `from` to `to` (PORT of raycast). Tests SOLID CELLS
+            // (Cartesian DDA over the world's TileGrid lattice, if any) and BODY
+            // shapes (AABB via the exact slab test; circle/capsule/polygon via a
+            // GJK zero-radius point-cast), keeping the NEAREST hit (a body beats
+            // a farther cell and vice versa). Returns std::nullopt for a miss or
+            // a degenerate (zero-length) ray.
+            //
+            // opts.tallOnly  -> cells block only when BlocksSight (the LOS rule).
+            // opts.cellsOnly -> skip body tests (cell DDA only).
+            // With no TileGrid the cell pass is skipped (body tests still run).
+            [[nodiscard]] std::optional<RaycastHit>
+            Raycast(const Vec2& from, const Vec2& to,
+                    const RaycastOpts& opts = {}) const;
+
+            // Line-of-sight (PORT of lineOfSight): true iff NO sight-blocking
+            // (TALL) cell lies between `from` and `to`. Equivalent to
+            // Raycast(from, to, { tallOnly = true, cellsOnly = true }) == none.
+            // A degenerate (zero-length) segment has no LOS (matches the Lua's
+            // `if not x1 then return false`).
+            [[nodiscard]] bool LineOfSight(const Vec2& from, const Vec2& to) const;
+
+            // Cast `shape` from `pos` by `delta` against tile spans + non-sensor
+            // static bodies (+ optional movers via opts), keeping the NEAREST
+            // time of impact (PORT of Cast.shapeCast; reuses the P1.4 GJK
+            // conservative-advancement primitive). Returns std::nullopt for a
+            // miss or a degenerate (zero-length) delta. The hit's `point` is the
+            // shape CENTER at TOI.
+            [[nodiscard]] std::optional<ShapeCastHit>
+            ShapeCast(const Shape& shape, const Vec2& pos, const Vec2& delta,
+                      const ShapeCastOpts& opts = {}) const;
+
+            // All live bodies whose shape OVERLAPS `shape` at transform `xf`
+            // (NEW -- composed, no direct Lua method). Uses a broadphase
+            // candidate pass narrowed by CollideShapes (pointCount > 0). Includes
+            // statics + movers; self-overlap of the query shape against a body at
+            // the same spot counts. `out` is cleared then filled with handles,
+            // index-ordered -> deterministic. Returns out.size().
+            int OverlapShape(const Shape& shape, const Transform& xf,
+                             std::vector<BodyHandle>& out) const;
 
             // ---- ergonomic view --------------------------------------------
 
@@ -252,6 +353,15 @@ namespace Arcane
             // Grow all SoA arrays to hold at least `n` slots.
             void EnsureCapacity(std::uint32_t n);
 
+            // PORT of Cast.rayVsBody: exact TOI of a RAY (a zero-radius circle
+            // cast) against slot `idx`'s shape via the GJK conservative-
+            // advancement primitive. `from` is the ray origin, `delta` its full
+            // displacement (the ray spans from..from+delta). Returns the
+            // parametric t in [0,1] or nullopt (no hit). Internal: used by
+            // Raycast's round/poly body tests.
+            [[nodiscard]] std::optional<Real>
+            RayVsBody(std::uint32_t idx, const Vec2& from, const Vec2& delta) const;
+
             // ---- SoA (port of the Lua FFI arrays; std::vector here) ---------
             std::vector<Real>          m_posX, m_posY;
             std::vector<Real>          m_prevX, m_prevY;
@@ -275,6 +385,16 @@ namespace Arcane
 
             // ---- contacts --------------------------------------------------
             ContactManager m_contacts;
+
+            // ---- query scratch (zero steady-state alloc) -------------------
+            //
+            // Pooled candidate buffers for ShapeCast / OverlapShape, mirroring
+            // the Lua's module-local _spans / _statics. mutable so the const
+            // query methods may reuse them (clear()+push_back preserves capacity;
+            // no per-call heap traffic after warmup). NOT re-entrant -- queries
+            // are single-threaded (the physics step is single-threaded too).
+            mutable std::vector<Aabb2>         m_scratchSpans;
+            mutable std::vector<std::uint32_t> m_scratchStatics;
         };
 
     } // namespace Physics

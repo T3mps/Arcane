@@ -51,6 +51,29 @@ namespace Arcane
             // the Lua's behavior of never visiting cells outside the map.
             [[nodiscard]] virtual bool IsSolid(int cx, int cy) const = 0;
 
+            // OBSTACLE-CLASS TIERING SEAM (M6, Task P1.9 carry-forward).
+            //
+            // Does cell (cx,cy) block line-of-sight? Default: opaque iff solid
+            // (TALL == solid). LOW-obstacle tiers override to return false for
+            // movement-blocking-but-see-through cells.
+            //
+            // PORT NOTE: the binary IsSolid the static broadphase / movement uses
+            // (map:isWalkable) cannot express the LOS rule. PhysicsWorld.lua's
+            // raycast distinguished movement (`not map:isWalkable`) from sight
+            // (`map:obstacleClass(cx,cy) == Map.OBSTACLE_TALL`): a LOW obstacle
+            // BLOCKS MOVEMENT but NOT sight; a TALL obstacle blocks BOTH. The
+            // harness encodes this as cell flags 1=walkable, 2=LOW (blocks
+            // movement, not sight), 4=TALL (blocks both). This non-pure,
+            // defaulted virtual is the minimal faithful seam: Raycast(tallOnly)
+            // / LineOfSight call BlocksSight; everything else (movement,
+            // TileGrid spans) keeps using IsSolid. NON-BREAKING: the default
+            // delegates to IsSolid, so existing impls are unchanged and TileGrid
+            // (movement only) never touches it.
+            [[nodiscard]] virtual bool BlocksSight(int cx, int cy) const
+            {
+                return IsSolid(cx, cy);
+            }
+
             // Cell-grid bounds (the Lua map.w / map.h). Cells are 0-based, so
             // valid indices are cx in [0, Width()) and cy in [0, Height()).
             [[nodiscard]] virtual int Width() const = 0;
@@ -68,6 +91,17 @@ namespace Arcane
         // outside it. TileGrid clamps its scan identically, so the OOB branch is
         // belt-and-braces; making it return false avoids spurious walls at the
         // world edge if a caller ever over-scans.
+        //
+        // SIGHT LAYER (M6, Task P1.9): a SEPARATE per-cell sight-blocking flag
+        // carries the obstacle-class tiering (the harness 1/2/4 flags). A cell
+        // can be solid-for-movement yet see-through (a LOW obstacle): SetSolid
+        // controls movement (IsSolid + TileGrid spans), SetBlocksSight controls
+        // LOS (BlocksSight). The two layers are independent so a test can build:
+        //   TALL = SetSolid(true)  + SetBlocksSight(true)  (blocks both)
+        //   LOW  = SetSolid(true)  + SetBlocksSight(false) (blocks movement only)
+        // SetSolid does NOT touch the sight layer (kept orthogonal); construct a
+        // TALL cell by setting both. (A convenience would be easy to add, but
+        // keeping the layers fully independent is clearer for the tiering test.)
         class GridPassability final : public IPassabilitySource
         {
         public:
@@ -76,11 +110,15 @@ namespace Arcane
                   m_height(height < 0 ? 0 : height),
                   m_solid(static_cast<std::size_t>(m_width) *
                               static_cast<std::size_t>(m_height),
+                          std::uint8_t(0)),
+                  m_sight(static_cast<std::size_t>(m_width) *
+                              static_cast<std::size_t>(m_height),
                           std::uint8_t(0))
             {
             }
 
-            // Mark / clear a cell (no-op if OOB, like the Lua bounds clamp).
+            // Mark / clear a cell's MOVEMENT-solid flag (no-op if OOB, like the
+            // Lua bounds clamp). Does not affect the sight layer.
             void SetSolid(int cx, int cy, bool solid)
             {
                 if (cx < 0 || cy < 0 || cx >= m_width || cy >= m_height)
@@ -90,6 +128,17 @@ namespace Arcane
                 m_solid[Index(cx, cy)] = solid ? std::uint8_t(1) : std::uint8_t(0);
             }
 
+            // Mark / clear a cell's SIGHT-blocking flag (no-op if OOB). A TALL
+            // obstacle sets both solid + sight; a LOW obstacle sets solid only.
+            void SetBlocksSight(int cx, int cy, bool blocks)
+            {
+                if (cx < 0 || cy < 0 || cx >= m_width || cy >= m_height)
+                {
+                    return;
+                }
+                m_sight[Index(cx, cy)] = blocks ? std::uint8_t(1) : std::uint8_t(0);
+            }
+
             [[nodiscard]] bool IsSolid(int cx, int cy) const override
             {
                 if (cx < 0 || cy < 0 || cx >= m_width || cy >= m_height)
@@ -97,6 +146,15 @@ namespace Arcane
                     return false; // OOB == not a wall (see OOB CHOICE above)
                 }
                 return m_solid[Index(cx, cy)] != std::uint8_t(0);
+            }
+
+            [[nodiscard]] bool BlocksSight(int cx, int cy) const override
+            {
+                if (cx < 0 || cy < 0 || cx >= m_width || cy >= m_height)
+                {
+                    return false; // OOB == not an occluder (matches IsSolid OOB)
+                }
+                return m_sight[Index(cx, cy)] != std::uint8_t(0);
             }
 
             [[nodiscard]] int Width() const override { return m_width; }
@@ -113,6 +171,7 @@ namespace Arcane
             int                       m_width = 0;
             int                       m_height = 0;
             std::vector<std::uint8_t> m_solid;
+            std::vector<std::uint8_t> m_sight;
         };
 
     } // namespace Physics
