@@ -5,6 +5,7 @@
 #include <Arcane/Physics/Broadphase/TileGrid.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 namespace Arcane
@@ -20,6 +21,12 @@ namespace Arcane
             {
                 return static_cast<int>(std::floor(x));
             }
+
+            // PAD: cells of slack added around the query's cell range, so a
+            // shape near a cell boundary still sees the walls just past it.
+            // Ported verbatim from TileGrid.lua (PAD = 1). Implementation
+            // constant only -- not part of the public interface.
+            constexpr int kPad = 1;
         } // namespace
 
         TileGrid::TileGrid(const IPassabilitySource& src, Real cellSize,
@@ -28,6 +35,7 @@ namespace Arcane
               m_cellSize(cellSize > Real(0) ? cellSize : Real(1)),
               m_origin(origin)
         {
+            assert(cellSize > Real(0) && "TileGrid: cellSize must be positive");
         }
 
         Aabb2 TileGrid::CellBox(int cx, int cy) const
@@ -49,10 +57,6 @@ namespace Arcane
             // push_back reuses it. (The Lua reused pooled `out` rows; an Aabb2
             // is a trivially-copyable value, so a flat vector is the C++ analog.)
             out.clear();
-            if (m_src == nullptr)
-            {
-                return 0;
-            }
 
             const int width  = m_src->Width();
             const int height = m_src->Height();
@@ -100,7 +104,6 @@ namespace Arcane
             // a row with a gap yields two rects). This eliminates the internal
             // vertical edges between adjacent cells in a run, which is the
             // tile-seam catch the merge exists to kill.
-            int n = 0;
             for (int cy = b; cy <= d; ++cy)
             {
                 int cx = a;
@@ -129,13 +132,12 @@ namespace Arcane
                             m_origin.y +
                                 static_cast<Real>(cy + 1) * m_cellSize);
                         out.push_back(rect);
-                        ++n;
                     }
                     ++cx;
                 }
             }
 
-            return n;
+            return static_cast<int>(out.size());
         }
 
     } // namespace Physics

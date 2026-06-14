@@ -78,11 +78,6 @@ namespace Arcane
         class TileGrid
         {
         public:
-            // PAD: cells of slack added around the query's cell range, so a
-            // shape near a cell boundary still sees the walls just past it.
-            // Ported verbatim from TileGrid.lua (PAD = 1).
-            static constexpr int kPad = 1;
-
             // `src` must outlive this TileGrid (the seam is the single source
             // of truth; TileGrid holds a reference and stores nothing for
             // walls). cellSize > 0 is the side length of one square cell;
@@ -105,10 +100,14 @@ namespace Arcane
             // tests / callers that want a single cell's box.
             [[nodiscard]] Aabb2 CellBox(int cx, int cy) const;
 
+            // Returns the passability source (non-null; src must outlive this TileGrid).
+            [[nodiscard]] const IPassabilitySource& Source() const { return *m_src; }
+
             [[nodiscard]] Real CellSize() const { return m_cellSize; }
             [[nodiscard]] Vec2 Origin() const { return m_origin; }
 
         private:
+            // Must outlive this TileGrid.
             const IPassabilitySource* m_src = nullptr;
             Real                      m_cellSize = Real(1);
             Vec2                      m_origin{ Real(0), Real(0) };
