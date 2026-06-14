@@ -258,6 +258,87 @@ TEST_CASE("PhysicsIsland: stack sleeps as a unit, disturbance wakes a member", "
 }
 
 // ---------------------------------------------------------------------------
+// IslandRootOf: four stacked boxes in mutual contact (all awake) form ONE
+// island; a body far away is in a DIFFERENT island.
+//
+// Gates the P3.6 bug: the old one-hop `m_uf[i]` return gave DIFFERENT values
+// for bodies at depth > 1 in the path-halved union-find.
+//
+// WHY CHECKED WHILE AWAKE: IslandRootOf reads the UF written by the LAST
+// Step's island pass. When all bodies sleep, no contacts are generated (awake
+// gate), so the UF is identity (every body self-roots). The path-halving bug
+// is observable only while the bodies are awake and actively in contact.
+// We therefore sample IslandRootOf while the stack is still settling (awake),
+// specifically on a step where all four boxes are confirmed in contact.
+//
+// WHY 4 BOXES: with 3 bodies (b0→b1→b2), path-halving inside UpdateSleep's
+// inner UfFind scan flattens all to depth 1 before we read (all → b2). With
+// 4 bodies the chain is b0→b1→b2→b3; path-halving makes b0→b2 (still not
+// root b3), so old code returns b2 for b0 but b3 for b3 → different roots.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("PhysicsIsland: IslandRootOf returns the same root for all members of one island",
+          "[physics][island]")
+{
+    WorldDef wd;
+    wd.gravityY = Real(400);
+    PhysicsWorld w(wd);
+
+    // Floor: top surface at y = 0.
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+
+    // A 4-box vertical stack. The boxes start slightly overlapping (0.5 gap)
+    // so dynamic-dynamic contacts form on the VERY FIRST step without having
+    // to fall and settle first. This guarantees the UF has the 4-body chain
+    // (b0↔b1, b1↔b2, b2↔b3 unioned) on each step while all are awake.
+    // fixedRotation keeps them axis-aligned (same as AddBox helper).
+    const Real hw = Real(5), hh = Real(5);
+    // Place boxes 1 unit apart (so they just touch; diameter = 2*hh = 10).
+    // top of box i = center_i - hh; bottom = center_i + hh.
+    // Box0 bottom rests on floor (y=0), so box0 center = 0 - hh = -hh.
+    // Box1 rests on box0: center1 = center0 - 2*hh - 0.5 gap.
+    // (With gravity +Y, "above" means smaller y. Lower y = higher in scene.)
+    const Real gap = Real(0.5); // small gap so they contact quickly
+    const BodyHandle hBox0 = AddBox(w, Vec2(Real(0), -hh),                             hw, hh);
+    const BodyHandle hBox1 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)),        hw, hh);
+    const BodyHandle hBox2 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)*Real(2)), hw, hh);
+    const BodyHandle hBox3 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)*Real(3)), hw, hh);
+
+    // One isolated dynamic body far away (its own island, never contacts the stack).
+    const BodyHandle hFar = AddBox(w, Vec2(Real(500), -hh), hw, hh);
+
+    // Step just enough for all four boxes to fall, contact each other, and form
+    // an island -- but NOT so many steps that they all fall asleep (the bug is
+    // only visible while the UF has the chain, which requires active contacts).
+    // 30 steps: boxes are near the floor, awake, and in mutual contact.
+    for (int k = 0; k < 30; ++k)
+        w.Step(kStep);
+
+    // Sanity: all four boxes must still be awake (if any slept the UF is stale).
+    REQUIRE(w.IsAwake(hBox0));
+    REQUIRE(w.IsAwake(hBox1));
+    REQUIRE(w.IsAwake(hBox2));
+    REQUIRE(w.IsAwake(hBox3));
+
+    // All four stack members must share the SAME island root.
+    // With the old one-hop `m_uf[i]` the chain b0→b1→b2→b3, after path-
+    // halving makes b0 point to b2 (not root b3), IslandRootOf returns
+    // b2 for b0/b1 and b3 for b2/b3 -- different roots for members of the
+    // same island. The root-walk fix makes all four equal.
+    const std::uint32_t root0 = w.IslandRootOf(hBox0.index);
+    const std::uint32_t root1 = w.IslandRootOf(hBox1.index);
+    const std::uint32_t root2 = w.IslandRootOf(hBox2.index);
+    const std::uint32_t root3 = w.IslandRootOf(hBox3.index);
+    CHECK(root0 == root1);
+    CHECK(root0 == root2);
+    CHECK(root0 == root3); // this fails with old one-hop impl (root0 != root3)
+
+    // The isolated far body must be in a DIFFERENT island.
+    const std::uint32_t rootFar = w.IslandRootOf(hFar.index);
+    CHECK(rootFar != root0);
+}
+
+// ---------------------------------------------------------------------------
 // Determinism: a settling-then-sleeping island is identical across two runs.
 // ---------------------------------------------------------------------------
 

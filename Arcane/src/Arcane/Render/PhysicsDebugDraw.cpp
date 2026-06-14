@@ -42,7 +42,7 @@ namespace Arcane
         //
         // 8-color palette keyed by (islandRoot % 8).  These are distinct hues so
         // different islands are visually separate at a glance.
-        static const glm::vec4 kIslandPalette[8] =
+        constexpr glm::vec4 kIslandPalette[8] =
         {
             { 1.0f, 0.35f, 0.35f, 1.0f }, // red
             { 1.0f, 0.65f, 0.15f, 1.0f }, // orange
@@ -169,6 +169,7 @@ namespace Arcane
                 {
                     // Lua: two end circles + two side lines.
                     // Capsule: segment (-halfLen,0)-(+halfLen,0) inflated by radius.
+                    // Capsule axis is always horizontal (fixedRotation world -- see Shapes.hpp); body angle intentionally not applied.
                     const float hl = static_cast<float>(s.halfLen);
                     const float r  = static_cast<float>(s.radius);
                     const glm::vec2 left (spos.x - hl, spos.y);

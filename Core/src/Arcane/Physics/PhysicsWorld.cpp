@@ -1018,7 +1018,20 @@ namespace Arcane
             // island pass (Island::UpdateSleep writes it via UnionFindScratch()).
             // If the island pass has not run or i is beyond the filled range,
             // return i itself (every un-unioned body is its own island root).
-            return (i < m_uf.size()) ? m_uf[i] : i;
+            //
+            // IMPORTANT: Island::UpdateSleep uses PATH-HALVING when unioning, so
+            // m_uf[i] is a halved parent, NOT necessarily the root. Two bodies in
+            // the same island at depth > 1 would yield DIFFERENT m_uf[i] values
+            // if we return the one-hop parent directly. Walk to the root
+            // non-destructively (world is const here -- do NOT mutate m_uf).
+            // Termination: the root satisfies m_uf[root] == root (self-pointing);
+            // path-halving never reparents a root, so the walk always terminates.
+            if (i >= m_uf.size())
+                return i;
+            std::uint32_t x = i;
+            while (m_uf[x] != x)
+                x = m_uf[x];
+            return x;
         }
 
         int PhysicsWorld::QueryAABB(const Aabb2& box,

@@ -543,10 +543,12 @@ namespace Arcane
                 const std::function<void(std::uint32_t a,
                                          std::uint32_t b)>& fn) const;
 
-            // Island root (id) of slot i from the LAST Step's island pass
-            // (debug/inspection).  Bodies in the same dynamic island share a
-            // root.  Returns i itself when the island pass has not run or i is
-            // not a unioned member (m_uf shorter than m_count at that point).
+            // Island ROOT of slot i from the LAST Step's island pass
+            // (debug/inspection).  Bodies in the same dynamic island share the
+            // SAME root (found by walking the path-halved parent chain to the
+            // self-pointing root).  Returns i itself when the island pass has not
+            // run or i >= m_uf.size() (body is not a unioned member at that point).
+            // Walk is non-destructive (world is const; m_uf is not mutated).
             // Reflects the most recently completed Step; stale between Steps.
             [[nodiscard]] std::uint32_t IslandRootOf(std::uint32_t i) const noexcept;
 

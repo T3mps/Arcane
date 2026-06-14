@@ -73,11 +73,12 @@ namespace
         circA.density  = Real(1);
         world.AddBody(circA);
 
-        // Dynamic circle B at (60, 90) -- touching / very near A so a contact
-        // pair forms between the two dynamics as they settle.
+        // Dynamic circle B at (57, 90) -- clearly overlapping A (center distance 17 <
+        // sum of radii 20) so a dynamic-dynamic contact is guaranteed from step 1,
+        // making the ForEachContact / magenta contact-line draw path reliably fire.
         BodyDef circB;
         circB.type     = BodyType::Dynamic;
-        circB.position = Vec2(Real(60), Real(90));
+        circB.position = Vec2(Real(57), Real(90));
         circB.shape    = MakeCircle(Real(10));
         circB.density  = Real(1);
         world.AddBody(circB);
