@@ -1,0 +1,114 @@
+#pragma once
+
+// Core value types for the Arcane 2D physics engine (M6).
+//
+// PORT NOTE: this engine is a first-party port of the proven Lua physics
+// engine at Client/src/physics/*.lua. The Lua engine + its physics_harness
+// are the behavioral oracle. We port named modules; we do not invent
+// algorithms. See docs/superpowers/specs/2026-06-14-* for the milestone plan.
+//
+// PRESENTATION-FREE: this header (and everything under Arcane/Physics/) pulls
+// in only glm + the C++ standard library. No SDL3/NVRHI/Batcher2D/ImGui. It
+// must compile both /MD (into Arcane.dll) and static-CRT/C++20 (the server
+// flavor compiled as project ArcaneCore), so it stays C++20-clean.
+//
+// SCALAR CHOICE (determinism, P1.0 decision): stored physics state uses f32.
+// Per-platform self-consistent determinism (fixed 60 Hz, stable iteration
+// order, /fp:precise, no fast-math) does NOT require f64. f32 halves the SoA
+// footprint and matches the renderer's vec2 width. Switching to f64 if a
+// later determinism test demands it is a ONE-TYPEDEF change here:
+//   using Real = double; using Vec2 = glm::dvec2;
+// glm exposes both widths through the same call sites, so the math headers
+// and SoA arrays follow automatically.
+
+#include <cstdint>
+
+#include <glm/vec2.hpp>
+
+namespace Arcane
+{
+    namespace Physics
+    {
+        // ----------------------------------------------------------------
+        // Scalar + vector aliases
+        // ----------------------------------------------------------------
+
+        // Stored-state scalar. f32 by default (see SCALAR CHOICE above).
+        using Real = float;
+
+        // 2D vector. glm::vec2 is glm::tvec2<float>; if Real switches to
+        // double, change this to glm::dvec2 in lockstep (the only edit).
+        using Vec2 = glm::vec2;
+
+        // ----------------------------------------------------------------
+        // Body classification (ported from PhysicsWorld.lua body "type")
+        // ----------------------------------------------------------------
+
+        // Static  : never integrates; immovable world geometry.
+        // Kinematic: integrated from velocity; pushes dynamics, is never
+        //            pushed (spec: kinematics push, are never pushed).
+        // Dynamic : full force/impulse-driven body (Phase 2+).
+        enum class BodyType : std::uint8_t
+        {
+            Static    = 0,
+            Kinematic = 1,
+            Dynamic   = 2,
+        };
+
+        // ----------------------------------------------------------------
+        // BodyHandle: packed {index, generation} over a free-list.
+        // ----------------------------------------------------------------
+        //
+        // Body/contact state lives in SoA arrays on the world (filled in by
+        // later tasks). A handle is NEVER a pointer: it is a slot index plus
+        // a generation counter. When a slot is freed and later reused its
+        // generation is bumped, so a stale handle (same index, old
+        // generation) compares unequal and is rejected by World::IsValid.
+        // This is the C++ port of the Lua handle/slot-reuse invariant
+        // exercised by the harness ("stale handle stays invalid after slot
+        // reuse").
+        struct BodyHandle
+        {
+            std::uint32_t index      = 0;
+            std::uint32_t generation = 0;
+
+            friend constexpr bool operator==(const BodyHandle& a,
+                                              const BodyHandle& b) noexcept
+            {
+                return a.index == b.index && a.generation == b.generation;
+            }
+            friend constexpr bool operator!=(const BodyHandle& a,
+                                              const BodyHandle& b) noexcept
+            {
+                return !(a == b);
+            }
+        };
+
+        // A null/invalid handle sentinel: index 0, generation 0. Live slots
+        // begin their generation at 1 so the default-constructed handle is
+        // always distinguishable from any real body.
+        inline constexpr BodyHandle kInvalidBody{ 0u, 0u };
+
+        // ----------------------------------------------------------------
+        // Fixed constants
+        // ----------------------------------------------------------------
+
+        // Max vertices for a convex polygon collider. Ported verbatim from
+        // shapes.lua MAX_POLY_VERTS (revised 2026-06-10: 8 -> 128 for
+        // editor-era props). SAT poly-vs-poly is O(nA*nB) over edge axes, so
+        // large polys are fine as occasional statics but not the common
+        // mover shape.
+        inline constexpr std::uint32_t kMaxPolyVerts = 128u;
+
+        // Linear slop: the small overlap the solver tolerates so resting
+        // contacts do not jitter (Box2D-style allowed penetration). Used by
+        // the position-correction / contact code in later tasks.
+        inline constexpr Real kLinearSlop = Real(0.005);
+
+        // Collision skin / polygon radius: a thin shell grown around shapes
+        // so contacts are detected just before geometric touch, keeping the
+        // solver stable. Used by manifold generation in later tasks.
+        inline constexpr Real kSkin = Real(0.01);
+
+    } // namespace Physics
+} // namespace Arcane
