@@ -256,3 +256,40 @@ TEST_CASE("physics: ShapeCast clear miss returns no hit + is deterministic",
     CHECK(h1.normal.x == h2.normal.x);
     CHECK(h1.normal.y == h2.normal.y);
 }
+
+// ====================================================================
+// LAYER B -- ShapeCast t=0 overlap invariant.
+// A moving circle that STARTS already touching or inside the static obstacle
+// (surface distance < kShapeCastTol at t=0) must return hit==true, t==0, and
+// distance < kShapeCastTol without crashing or looping. This guards the
+// "body woken into a wall" case before P1.8/the solver wires ShapeCast in.
+// ====================================================================
+TEST_CASE("physics: ShapeCast returns hit at t=0 when starting overlapping",
+          "[physics]")
+{
+    // Static 1x1 box (half-extents 0.5) at the origin.
+    const Shape box    = MakeAabb(Real(0.5), Real(0.5));
+    const Shape circle = MakeCircle(Real(0.5));
+    const Transform boxXf{ Vec2(Real(0), Real(0)), Real(0) };
+
+    // Circle center at x = -0.5: its right surface touches the box left surface
+    // exactly (circle right edge -0.5+0.5 = 0.0 == box left edge -0.5+0.0?).
+    // Actually place it at x = -0.5 so the surface distance = 0 (touching):
+    //   box left edge = -0.5, circle right edge = -0.5 + 0.5 = 0.0. Hmm, that
+    // gives surface distance = -0.5 - 0.0 = -0.5 (overlap). Good.
+    // Use x = -0.5 so the circle is centered one radius away from box center:
+    // surface dist = |(-0.5) - (-0.5)| - 0.5 - 0 = 0 - 0.5 (negative) -> overlap.
+    //
+    // Simpler: place the circle center INSIDE the box (center at origin).
+    // Surface distance is deeply negative; Advance checks at t=0 first.
+    const Transform startOverlap{ Vec2(Real(0), Real(0)), Real(0) };
+    const Vec2 translation(Real(5), Real(0)); // sweep rightward
+
+    const ShapeCastResult res =
+        ShapeCast(circle, startOverlap, translation, box, boxXf);
+
+    REQUIRE(res.hit);
+    CHECK(static_cast<double>(res.t) == Approx(0.0).margin(1e-4));
+    CHECK(static_cast<double>(res.distance) <
+          static_cast<double>(kShapeCastTol));
+}

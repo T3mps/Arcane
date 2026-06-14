@@ -81,6 +81,12 @@ namespace Arcane
         // --------------------------------------------------------------------
         GjkResult GjkDistance(const Vec2* va, int na, const Vec2* vb, int nb)
         {
+            // Guard: a zero-vert core is degenerate (BuildCore default branch).
+            // Documents the precondition and prevents Support() reading verts[-1]
+            // or verts[0] of a zero-length span (UB).
+            if (na <= 0 || nb <= 0)
+                return GjkResult{};
+
             // Simplex scratch: MD points (smx/smy) + witnesses on A (sax/say)
             // and B (sbx/sby), mirroring the Lua module-local arrays. Capacity 3
             // (a 2D simplex never exceeds 3 verts under this reduction).
@@ -260,7 +266,6 @@ namespace Arcane
                 outCount = 4;
                 return Real(0);
             case ShapeKind::Polygon:
-            default:
             {
                 const int n = static_cast<int>(s.verts.size());
                 for (int i = 0; i < n; ++i)
@@ -270,6 +275,12 @@ namespace Arcane
                 outCount = n;
                 return Real(0);
             }
+            default:
+                // Unknown shape kind -> empty core; GjkDistance guards na/nb <= 0
+                // at entry so a future ShapeKind won't silently run the Polygon
+                // branch with uninitialized verts.
+                outCount = 0;
+                return Real(0);
             }
         }
 
@@ -302,6 +313,9 @@ namespace Arcane
         ShapeDistanceResult ShapeDistance(const Shape& a, const Transform& xfA,
                                           const Shape& b, const Transform& xfB)
         {
+            // kMaxPolyVerts = 128 -> each buffer is 1 KB on the stack (zero per-call
+            // heap, intentional). If kMaxPolyVerts grows substantially, revisit
+            // (thread-local scratch or a small-N fast path).
             Vec2 coreA[kMaxPolyVerts];
             Vec2 coreB[kMaxPolyVerts];
             int na = 0, nb = 0;
@@ -319,6 +333,8 @@ namespace Arcane
                                               const Transform& xfA,
                                               const Vec2* poly, int n)
         {
+            // kMaxPolyVerts = 128 -> 1 KB on the stack (zero per-call heap,
+            // intentional). If kMaxPolyVerts grows substantially, revisit.
             Vec2 coreA[kMaxPolyVerts];
             int na = 0;
             const Real ra = BuildCore(a, xfA, coreA, na);
