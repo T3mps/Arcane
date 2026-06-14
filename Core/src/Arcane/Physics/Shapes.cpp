@@ -64,7 +64,6 @@ namespace Arcane
                     };
 
                 case ShapeKind::Polygon:
-                default:
                 {
                     // Lua: min/max over (v[i]+x, v[i+1]+y) for each vertex.
                     Real x0 = std::numeric_limits<Real>::max();
@@ -83,6 +82,8 @@ namespace Arcane
                     return Aabb{ Vec2(x0, y0), Vec2(x1, y1) };
                 }
             }
+            // unreachable: all ShapeKind cases handled
+            return {};
         }
 
         // --------------------------------------------------------------------
@@ -181,7 +182,6 @@ namespace Arcane
                 }
 
                 case ShapeKind::Polygon:
-                default:
                 {
                     // Standard Box2D b2ComputePolygonMass (radius = 0). Walk
                     // the polygon as a fan of triangles from a reference vertex
@@ -247,6 +247,8 @@ namespace Arcane
                     return md;
                 }
             }
+            // unreachable: all ShapeKind cases handled
+            return {};
         }
 
         // --------------------------------------------------------------------

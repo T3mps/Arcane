@@ -108,13 +108,24 @@ TEST_CASE("physics: MakePolygon enforces the vertex cap", "[physics]")
         j["poly_vert_cap"]["maxPolyVerts"].get<std::uint32_t>();
     REQUIRE(maxVerts == kMaxPolyVerts); // 128
 
-    // accept128 / accept129: exactly kMaxPolyVerts is accepted, +1 rejected.
+    // accept128: exactly kMaxPolyVerts vertices (real convex regular polygon).
     {
-        std::vector<Vec2> ok(kMaxPolyVerts, Vec2(0, 0));
+        std::vector<Vec2> ok;
+        for (int i = 0; i < (int)kMaxPolyVerts; ++i)
+        {
+            float a = (float)i / (float)kMaxPolyVerts * 2.0f * 3.14159265358979323846f;
+            ok.push_back({ std::cos(a) * 50.0f, std::sin(a) * 50.0f });
+        }
         CHECK_NOTHROW(MakePolygon(ok));
     }
+    // reject129: one vertex over the cap must throw.
     {
-        std::vector<Vec2> tooMany(kMaxPolyVerts + 1, Vec2(0, 0));
+        std::vector<Vec2> tooMany;
+        for (int i = 0; i < (int)kMaxPolyVerts + 1; ++i)
+        {
+            float a = (float)i / (float)(kMaxPolyVerts + 1) * 2.0f * 3.14159265358979323846f;
+            tooMany.push_back({ std::cos(a) * 50.0f, std::sin(a) * 50.0f });
+        }
         CHECK_THROWS(MakePolygon(tooMany));
     }
     // Below the minimum (a "polygon" needs >= 3 verts).
@@ -185,8 +196,8 @@ TEST_CASE("physics: ComputeMass box == analytic", "[physics]")
 //   circleInertia = circleMass*(0.5*r^2 + h^2 + 2*h*lc)
 //                 = 12.566...*(2 + 25 + 2*5*0.848826)
 //                 = 12.566...*(27 + 8.488263627) = 12.566...*35.488263627
-//                 = 446.0027357...
-//   I_c = boxInertia + circleInertia = 832.669402...
+//                 = 445.9587...
+//   I_c = boxInertia + circleInertia = 832.6253...
 // ====================================================================
 TEST_CASE("physics: ComputeMass capsule == analytic", "[physics]")
 {

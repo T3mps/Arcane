@@ -129,14 +129,14 @@ namespace Arcane
         // ----------------------------------------------------------------
 
         // Circle of radius r. PORT: shapes.circle(r).
-        Shape MakeCircle(Real r);
+        [[nodiscard]] Shape MakeCircle(Real r);
 
         // Horizontal capsule: segment (-halfLen,0)-(+halfLen,0) inflated by r.
         // PORT: shapes.capsule(halfLen, r).
-        Shape MakeCapsule(Real halfLen, Real r);
+        [[nodiscard]] Shape MakeCapsule(Real halfLen, Real r);
 
         // Axis-aligned box by half-extents. PORT: shapes.aabb(hw, hh).
-        Shape MakeAabb(Real hw, Real hh);
+        [[nodiscard]] Shape MakeAabb(Real hw, Real hh);
 
         // Convex polygon from a flat {x0,y0,x1,y1,...} vertex list in local
         // space. PORT: shapes.polygon(verts) -- requires >= 3 (x,y) verts and
@@ -145,7 +145,7 @@ namespace Arcane
         // to CCW winding and outward unit edge normals + the area centroid are
         // baked. Geometry.polyPoly was winding-agnostic, but the C++ Polygon
         // stores CCW + precomputed normals for the SAT port (P1.2).
-        Shape MakePolygon(const std::vector<Vec2>& verts);
+        [[nodiscard]] Shape MakePolygon(const std::vector<Vec2>& verts);
 
     } // namespace Physics
 } // namespace Arcane
