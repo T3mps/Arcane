@@ -1,0 +1,147 @@
+#pragma once
+
+// SoftStep: the Box2D-v3-class TGS Soft constraint solver (M6, Task P2.2).
+//
+// MODERNIZATION CENTERPIECE -- NOT a port. The Lua engine's solver
+// (SequentialImpulse.lua) is a Baumgarte sequential-impulse PGS solver; it is
+// retained SEPARATELY as the A/B cross-check oracle in P2.3. SoftStep is a
+// from-scratch implementation of the Box2D v3 "Solver2D" / "TGS Soft"
+// algorithm (https://box2d.org/posts/2024/02/solver2d/,
+// https://box2d.org/posts/2024/08/releasing-box2d-3.0/). It is validated by
+// BEHAVIORAL INVARIANTS (a stack settles, a ball rests, restitution rebounds,
+// friction stops a slide, kinematic pushes dynamic, energy stays bounded,
+// determinism holds), NOT bit-matched to the Lua.
+//
+// ALGORITHM (per full Step(dt), substepCount sub-steps, h = dt/substepCount):
+//   1. PrepareContacts (once): per contact point compute anchors, normal +
+//      tangent effective masses, the rest-relative normal velocity (for
+//      restitution), and the SOFT (biasRate, massScale, impulseScale) from
+//      b2MakeSoft(contactHertz, dampingRatio, h). Seed warm-start impulses
+//      from the prior step's cache (keyed by the manifold point id).
+//   2. for substep in [0, substepCount):
+//        a. integrate velocities (gravity + linear damping) for awake dynamics
+//        b. warm start: apply accumulated normal + tangent impulses
+//        c. SolveVelocity(useBias=true): TGS soft normal solve (re-evaluate
+//           separation from the per-body position deltas accumulated this step)
+//           + friction
+//        d. integrate positions: accumulate deltaPos += h*v, deltaRot += h*w
+//        e. Relax(useBias=false): same solve with bias=0, massScale=1,
+//           impulseScale=0 -- removes the bias-injected energy
+//   3. ApplyRestitution (once): add restitution impulse for points whose
+//      approach speed exceeded the threshold.
+//   4. StoreImpulses (once): write accumulated impulses to the warm-start cache.
+// At the end the solver commits each awake dynamic body's accumulated deltaPos
+// /deltaRot to the world position/angle (the world's stage-4 inline dynamic
+// position integrate is SUPERSEDED -- the solver owns dynamic integration).
+//
+// The world drives the phase sequence (PhysicsWorld::Step). The world owns the
+// ContactConstraint pool; the solver owns the warm-start cache + the per-body
+// sub-step scratch (deltaPos/deltaRot), both reused across steps -> zero
+// steady-state allocation. Determinism: fixed iteration order by stable slot
+// index over the world-built (already sorted) contact array; no wall-clock; no
+// fast-math (the workspace builds /fp:precise).
+//
+// PRESENTATION-FREE + C++20-clean: glm::vec2 + std + sibling Physics headers
+// only. No SDL3/NVRHI/ImGui. namespace Arcane::Physics, Core style.
+
+#include <cstdint>
+#include <unordered_map>
+#include <vector>
+
+#include <Arcane/Physics/PhysicsTypes.hpp>
+#include <Arcane/Physics/Solver/Solver.hpp>
+
+namespace Arcane
+{
+    namespace Physics
+    {
+        // ----------------------------------------------------------------
+        // SoftStep: ISolver implementation (Box2D v3 TGS Soft).
+        // ----------------------------------------------------------------
+        class SoftStep final : public ISolver
+        {
+        public:
+            SoftStep() = default;
+            ~SoftStep() override = default;
+
+            // ---- ISolver phases (driven by PhysicsWorld::Step) -------------
+            void PrepareContacts(SolverContext& ctx) override;
+            void PrepareJoints(SolverContext& ctx) override;   // no-op stub (P2.5)
+            void SolveVelocity(SolverContext& ctx, int substep) override;
+            void Relax(SolverContext& ctx, int substep) override;
+            void ApplyRestitution(SolverContext& ctx) override;
+            void SolvePosition(SolverContext& ctx) override;   // no-op (soft handles it)
+
+            // ---- whole-Step driver -----------------------------------------
+            //
+            // The single entry the world calls: runs the full TGS Soft pipeline
+            // (Prepare -> sub-step loop[integrate-vel, warm-start, solve, integrate-
+            // pos, relax] -> restitution -> store impulses -> commit positions).
+            // Keeping the loop here (rather than in the world) lets the solver own
+            // the dynamic velocity + position integration the v3 algorithm folds
+            // into the sub-steps, while the world still owns Step staging.
+            void Solve(SolverContext& ctx);
+
+            // Drop a body from the warm-start cache + scratch (called on
+            // RemoveBody so a recycled slot does not inherit stale impulses).
+            void DropBody(std::uint32_t slot);
+
+            // Test/inspection hook: current warm-start cache entry count.
+            [[nodiscard]] std::size_t WarmStartCacheSize() const noexcept
+            {
+                return m_cache.size();
+            }
+
+        private:
+            // Ensure the per-body sub-step scratch is sized for `n` slots.
+            void EnsureScratch(std::uint32_t n);
+
+            // Integrate awake-dynamic velocities (gravity + linear damping) for
+            // one sub-step of length h. Ports the Lua stage-1 dynamic branch,
+            // moved INTO the sub-step loop (Box2D v3 form).
+            void IntegrateVelocities(SolverContext& ctx, Real h);
+
+            // Warm start: apply the accumulated impulses to body velocities.
+            void WarmStart(SolverContext& ctx);
+
+            // One velocity pass. useBias selects the biased soft solve (true,
+            // the SolveVelocity stage) vs the relax pass (false: bias=0,
+            // massScale=1, impulseScale=0). h is the sub-step length (for the
+            // speculative-contact bias rate). Always runs friction.
+            void SolveContacts(SolverContext& ctx, Real h, bool useBias);
+
+            // Integrate awake-dynamic positions for one sub-step: accumulate the
+            // per-body deltaPos/deltaRot the soft solve re-reads next sub-step.
+            void IntegratePositions(SolverContext& ctx, Real h);
+
+            // Commit the accumulated deltaPos/deltaRot onto the world's
+            // position/angle + refresh the mover broadphase (end of Step).
+            void FinalizePositions(SolverContext& ctx);
+
+            // ---- warm-start cache (per-solver; bounded) --------------------
+            //
+            // Keyed by the manifold point id (the Lua _siCache key). Holds the
+            // last step's accumulated (normal, tangent) impulse + a stamp; stale
+            // entries (unused for kCacheLife stamps) are evicted in StoreImpulses
+            // so the map stays bounded (the harness asserts this).
+            struct CacheEntry
+            {
+                Real          normalImpulse  = Real(0);
+                Real          tangentImpulse = Real(0);
+                std::uint32_t stamp          = 0;
+            };
+            std::unordered_map<std::uint32_t, CacheEntry> m_cache;
+            std::uint32_t m_stamp = 0;
+
+            // ---- per-body sub-step scratch (SoA-indexed; reused) -----------
+            //
+            // deltaPos/deltaRot accumulate this Step's motion across sub-steps
+            // (TGS: positions are tracked as deltas so the soft solve can
+            // re-evaluate the current separation each sub-step, then committed
+            // once at the end). Sized to the world's high-water slot count.
+            std::vector<Vec2> m_deltaPos;
+            std::vector<Real> m_deltaRot;
+        };
+
+    } // namespace Physics
+} // namespace Arcane

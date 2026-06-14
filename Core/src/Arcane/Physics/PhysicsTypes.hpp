@@ -89,6 +89,12 @@ namespace Arcane
         // always distinguishable from any real body.
         inline constexpr BodyHandle kInvalidBody{ 0u, 0u };
 
+        // Sentinel SoA slot index meaning "no body" -- used by the solver's
+        // ContactConstraint to flag a tile-span virtual fixture (bodyB has no
+        // real SoA slot; its inverse mass/inertia are 0 and it is never written
+        // back). Ports the Lua contact-row `b == -1` span marker.
+        inline constexpr std::uint32_t kInvalidSlot = 0xFFFFFFFFu;
+
         // ----------------------------------------------------------------
         // Fixed constants
         // ----------------------------------------------------------------

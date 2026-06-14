@@ -19,6 +19,7 @@
 #include <Arcane/Physics/Broadphase/SpatialHash.hpp>
 #include <Arcane/Physics/Broadphase/SweepAndPrune.hpp>
 #include <Arcane/Physics/Narrowphase/GeometryKernel.hpp> // AabbOverlap (QueryAABB)
+#include <Arcane/Physics/Narrowphase/Dispatch.hpp>       // CollideShapes (contact gen)
 
 namespace Arcane
 {
@@ -47,6 +48,11 @@ namespace Arcane
             : m_moverBroadphase(MakeBroadphase(def))
             , m_gravityX(def.gravityX)
             , m_gravityY(def.gravityY)
+            , m_substepCount(def.substepCount > 0u ? def.substepCount : 1u)
+            , m_contactHertz(def.contactHertz)
+            , m_contactDampingRatio(def.contactDampingRatio)
+            , m_restitutionThreshold(def.restitutionThreshold)
+            , m_contactPushMaxVelocity(def.contactPushMaxVelocity)
         {
             // Optional tile statics: own a TileGrid over the passability seam if
             // one was provided (ports the Lua `tileGrid = map and TileGrid.new`).
@@ -240,6 +246,7 @@ namespace Arcane
             }
 
             m_contacts.DropBody(idx);
+            m_solver.DropBody(idx); // drop warm-start state for the recycled slot
             m_shape[idx] = Shape{}; // release polygon storage
             m_free.push_back(idx);
         }
@@ -497,22 +504,35 @@ namespace Arcane
 
         void PhysicsWorld::Step(Real dt)
         {
-            // PORT of PhysicsWorld.lua step() ORDER:
-            //   stage 1: prev snapshot + velocity integrate (dynamic gravity +
-            //            damping; kinematic move) + mover-broadphase update
-            //   stage 2: dynamics contact generation         (P2.2)
-            //   stage 3: SOLVE velocities (contacts + joints) (P2.2 / P2.3)
-            //   stage 4: dynamic POSITION integrate + broadphase update
-            //   stage 5: island sleep bookkeeping            (P2.4)
-            //   stage 6: contacts:step (events + gating + deferred flush)
+            // STEP ORDER (P2.2 -- Box2D v3 TGS Soft restructure of the P1.8/P2.1
+            // pipeline). The P2.1 INLINE dynamic gravity-integrate (old stage 1)
+            // and dynamic position-integrate (old stage 4) are SUPERSEDED: the
+            // Soft Step solver now OWNS dynamic velocity + position integration,
+            // folded INTO its sub-step loop (the proven-stable v3 form). Dynamics
+            // are therefore integrated EXACTLY ONCE per Step -- by the solver --
+            // with no double-integration.
             //
-            // P2.1 wires stages 1 + 4 + 6 only (no solver yet -> a dynamic body
-            // free-falls under gravity per SEMI-IMPLICIT EULER: velocity is
-            // integrated first, then position uses the NEW velocity). Stages 2,
-            // 3 (solver) and 5 (islands/sleep) land in P2.2-P2.4 at the seams
-            // marked below. Index-ordered, no wall-clock, no fast-math.
+            //   stage 1: prev snapshot (ALL) + KINEMATIC integrate (once/step) +
+            //            kinematic mover-broadphase update.
+            //   stage 2: solver contact generation (Part A) -- manifolds for
+            //            awake-dynamic pairs (vs tile spans + static bodies via
+            //            StaticCandidates; vs mover-mover pairs involving a
+            //            dynamic, narrowed). Builds m_contactConstraints.
+            //   stage 3: SOFT STEP SOLVE (Part B) -- the solver runs Prepare ->
+            //            [per sub-step: integrate vel, warm-start, solve(bias),
+            //            integrate pos, relax] -> restitution -> store impulses
+            //            -> commit dynamic positions + mover-broadphase update.
+            //   stage 4: island sleep bookkeeping            (P2.4 -- deferred)
+            //   stage 5: contacts:step (events + gating + deferred flush)
+            //
+            // Free-fall parity: with NO contacts the solver's sub-step loop is a
+            // pure semi-implicit integrate (gravity per sub-step, position per
+            // sub-step). Summed over substepCount sub-steps of length h = dt/N
+            // this equals the P2.1 single-step semi-implicit Euler to f32
+            // tolerance (the PhysicsDynamics free-fall test's margins absorb the
+            // sub-step regrouping). Index-ordered, no wall-clock, no fast-math.
 
-            // ---- stage 1: prev snapshot + velocity integrate + kinematic move
+            // ---- stage 1: prev snapshot (all) + kinematic integrate ----------
             for (std::uint32_t i = 0; i < m_count; ++i)
             {
                 if (m_alive[i] == 0)
@@ -522,27 +542,11 @@ namespace Arcane
                 m_prevX[i] = m_posX[i];
                 m_prevY[i] = m_posY[i];
 
-                const BodyType bt = static_cast<BodyType>(m_btype[i]);
-                if (bt == BodyType::Dynamic)
-                {
-                    if (m_awake[i] != 0)
-                    {
-                        // Gravity then linear damping (ports lines 302-310). The
-                        // NEW velocity drives this Step's position integrate ->
-                        // semi-implicit (symplectic) Euler.
-                        m_velX[i] += m_gravityX * dt;
-                        m_velY[i] += m_gravityY * dt;
-                        const Real d = m_linDamp[i];
-                        if (d > Real(0))
-                        {
-                            const Real f = Real(1) / (Real(1) + d * dt);
-                            m_velX[i]  *= f;
-                            m_velY[i]  *= f;
-                            m_angVel[i] *= f;
-                        }
-                    }
-                }
-                else if (bt == BodyType::Kinematic)
+                // Kinematic bodies integrate ONCE per Step (unchanged from P2.1).
+                // Dynamic gravity/damping + position now live in the solver's
+                // sub-step loop (stage 3); a dynamic body with no contacts still
+                // gets the same semi-implicit fall, just regrouped over sub-steps.
+                if (static_cast<BodyType>(m_btype[i]) == BodyType::Kinematic)
                 {
                     m_posX[i] += m_velX[i] * dt;
                     m_posY[i] += m_velY[i] * dt;
@@ -550,39 +554,207 @@ namespace Arcane
                 }
             }
 
-            // ---- stage 2-3: dynamics contact generation + velocity solve.
-            // [P2.2 solver] manifold generation (dynamic-vs-static + mover-mover)
-            // and ISolver::PrepareContacts/SolveVelocity/Relax/ApplyRestitution
-            // (Soft Step) land here, between velocity-integrate and
-            // position-integrate. [P2.3 baumgarte] position correction too.
-            // Nothing runs in P2.1 -> dynamic bodies move purely ballistically.
+            // ---- stage 2: solver contact generation (Part A) -----------------
+            GenerateContacts(dt);
 
-            // ---- stage 4: dynamic POSITION integrate + broadphase update.
-            // Uses the velocity produced by stage 1 (and, once it exists, solved
-            // by stages 2-3) -> ports lines 393-401. Awake dynamics only.
+            // ---- stage 3: Soft Step solve (Part B) ---------------------------
+            // The solver integrates dynamic velocity + position across sub-steps,
+            // solves soft contacts, applies restitution, and commits positions +
+            // the mover broadphase. Run it whenever there are dynamics to move
+            // (constraints OR free-falling bodies); the solver is a no-op for a
+            // scene with no awake dynamics.
+            {
+                SolverContext ctx;
+                ctx.world        = this;
+                ctx.contacts     = m_contactConstraints.empty()
+                                       ? nullptr
+                                       : m_contactConstraints.data();
+                ctx.contactCount = static_cast<std::uint32_t>(m_contactConstraints.size());
+                ctx.joints       = nullptr;
+                ctx.jointCount   = 0;
+                ctx.dt           = dt;
+                ctx.substepCount = m_substepCount;
+                ctx.invDt        = dt > Real(0) ? Real(1) / dt : Real(0);
+                ctx.subDt        = dt / static_cast<Real>(m_substepCount);
+                ctx.invSubDt     = ctx.subDt > Real(0) ? Real(1) / ctx.subDt : Real(0);
+                ctx.gravity      = Vec2(m_gravityX, m_gravityY);
+                m_solver.Solve(ctx);
+            }
+
+            // ---- stage 4: island sleep bookkeeping (P2.4 -- deferred) --------
+
+            // ---- stage 5: events + gating + deferred flush -------------------
+            m_contacts.Step(*this);
+        }
+
+        void PhysicsWorld::GenerateContacts(Real /*dt*/)
+        {
+            // Part A: build the dynamics ContactConstraint array (the Lua step()
+            // stage 2 "solver contact generation"). For each awake non-sensor
+            // DYNAMIC body, generate manifolds vs static candidates (tile spans +
+            // static bodies) and vs mover-mover pairs involving a dynamic. A is
+            // ALWAYS the dynamic body (Lua lines 377-378); B may be dynamic,
+            // kinematic, static, or a tile-span virtual fixture (invMass = 0).
+            //
+            // Index-ordered over dynamic bodies, then the broadphase's SORTED
+            // mover pairs -> deterministic. The pool only grows (clear preserves
+            // capacity) -> zero steady-state allocation.
+            m_contactConstraints.clear();
+
+            // Speculative skin so the solver sees near-touching pairs before
+            // geometric overlap (Box2D v3 stability). kSkin is the engine skin.
+            const Real margin = kSkin;
+
+            // ---- helper: append a manifold as a ContactConstraint -----------
+            // A is dynamic (aIdx); bIdx is the slot for a real body or
+            // kInvalidSlot for a span. invMassB/invInertiaB come from the slot
+            // (0 for static/kinematic/span -> push, not pushed).
+            auto emit = [&](std::uint32_t aIdx, std::uint32_t bIdx, bool bIsBody,
+                            const Manifold& m)
+            {
+                if (m.pointCount <= 0)
+                {
+                    return;
+                }
+                ContactConstraint cc;
+                cc.bodyA       = aIdx;
+                cc.bodyB       = bIsBody ? bIdx : 0u;
+                cc.bodyBIsBody = bIsBody;
+                cc.invMassA    = m_invMass[aIdx];
+                cc.invInertiaA = m_invInertia[aIdx];
+                cc.invMassB    = bIsBody ? m_invMass[bIdx] : Real(0);
+                cc.invInertiaB = bIsBody ? m_invInertia[bIdx] : Real(0);
+                cc.normal      = m.normal;
+
+                // Combined material coefficients. Friction is the geometric mean
+                // (the Lua sqrt(fricA*fricB)); restitution is the max (Box2D v3).
+                const Real fricA = m_fric[aIdx];
+                const Real fricB = bIsBody ? m_fric[bIdx] : fricA;
+                cc.friction = std::sqrt(fricA * fricB);
+                const Real restA = m_rest[aIdx];
+                const Real restB = bIsBody ? m_rest[bIdx] : Real(0);
+                cc.restitution = std::max(restA, restB);
+
+                const Vec2 cA(m_posX[aIdx], m_posY[aIdx]);
+                const Vec2 cB = bIsBody ? Vec2(m_posX[bIdx], m_posY[bIdx]) : Vec2(Real(0), Real(0));
+
+                cc.pointCount = m.pointCount;
+                for (int p = 0; p < m.pointCount; ++p)
+                {
+                    const ManifoldPoint& mp = m.points[p];
+                    ContactConstraintPoint& cp = cc.points[p];
+                    cp.anchorA = mp.point - cA;
+                    cp.anchorB = bIsBody ? (mp.point - cB) : (mp.point - cA);
+                    // Manifold separation is POSITIVE for penetration; Box2D's
+                    // signed separation is negative for penetration -> negate.
+                    cp.baseSeparation = -mp.separation;
+                    cp.id = mp.id;
+                }
+                m_contactConstraints.push_back(cc);
+            };
+
+            // ---- per dynamic body: vs spans + static bodies -----------------
             for (std::uint32_t i = 0; i < m_count; ++i)
             {
                 if (m_alive[i] == 0 ||
                     static_cast<BodyType>(m_btype[i]) != BodyType::Dynamic ||
-                    m_awake[i] == 0)
+                    m_awake[i] == 0 || m_sensor[i] != 0)
                 {
                     continue;
                 }
-                m_posX[i]  += m_velX[i] * dt;
-                m_posY[i]  += m_velY[i] * dt;
-                m_angle[i] += m_angVel[i] * dt;
-                m_moverBroadphase->Update(i, SlotAabb(i));
+
+                const Transform xfA{ Vec2(m_posX[i], m_posY[i]), Real(0) };
+                const Aabb box = SlotAabb(i);
+                Aabb2 query;
+                query.min = Vec2(box.min.x - Real(2), box.min.y - Real(2));
+                query.max = Vec2(box.max.x + Real(2), box.max.y + Real(2));
+                StaticCandidates(query, m_genSpans, m_genStatics);
+
+                // tile spans (Aabb2 rects) -> collide dynamic shape vs span-AABB.
+                for (std::size_t s = 0; s < m_genSpans.size(); ++s)
+                {
+                    const Aabb2& span = m_genSpans[s];
+                    const Vec2 c = (span.min + span.max) * Real(0.5);
+                    const Vec2 he = (span.max - span.min) * Real(0.5);
+                    const Shape spanShape = MakeAabb(he.x, he.y);
+                    const Transform xfB{ c, Real(0) };
+                    const Manifold m =
+                        CollideShapes(m_shape[i], xfA, spanShape, xfB, margin);
+                    emit(i, kInvalidSlot, /*bIsBody=*/false, m);
+                }
+
+                // static bodies (non-sensor).
+                for (std::size_t s = 0; s < m_genStatics.size(); ++s)
+                {
+                    const std::uint32_t idx = m_genStatics[s];
+                    if (m_sensor[idx] != 0)
+                    {
+                        continue;
+                    }
+                    const Transform xfB{ Vec2(m_posX[idx], m_posY[idx]), Real(0) };
+                    const Manifold m =
+                        CollideShapes(m_shape[i], xfA, m_shape[idx], xfB, margin);
+                    emit(i, idx, /*bIsBody=*/true, m);
+                }
             }
 
-            // ---- stage 5: island sleep bookkeeping.
-            // [P2.4 islands/sleep] union-find over awake dynamics via this step's
-            // contacts + joints; an island sleeps only when every member is past
-            // the sleep threshold (ports lines 403-452). Not in P2.1 -> dynamic
-            // bodies never sleep yet (m_awake stays 1, m_sleepTimer unused).
+            // ---- mover-mover pairs involving a dynamic ----------------------
+            // The broadphase emits SORTED pairs (a < b). For each pair where at
+            // least one body is dynamic, narrow to true AABB overlap, orient A =
+            // dynamic, and generate. Sleeping dynamics are woken by an awake
+            // mover touch (ports lines 369-381).
+            m_moverBroadphase->Pairs(m_genPairs);
+            for (std::size_t k = 0; k < m_genPairs.size(); ++k)
+            {
+                std::uint32_t a = m_genPairs[k].a;
+                std::uint32_t b = m_genPairs[k].b;
+                if (m_alive[a] == 0 || m_alive[b] == 0 ||
+                    m_sensor[a] != 0 || m_sensor[b] != 0)
+                {
+                    continue;
+                }
+                const bool da = static_cast<BodyType>(m_btype[a]) == BodyType::Dynamic;
+                const bool db = static_cast<BodyType>(m_btype[b]) == BodyType::Dynamic;
+                if (!da && !db)
+                {
+                    continue; // kinematic-kinematic: no dynamic response
+                }
+                if (!AabbOverlap(SlotAabb(a), SlotAabb(b)))
+                {
+                    continue; // broadphase candidate that is not a true overlap
+                }
 
-            // ---- stage 6: events + gating + deferred flush (ports the trailing
-            // contacts:step). prev/curr are published above; DrawPosition lerps.
-            m_contacts.Step(*this);
+                // Wake a sleeping dynamic touched by an awake mover (ports the
+                // Lua wake rules). Note: P2.4 owns sleep; today m_awake stays 1.
+                if (da && m_awake[a] == 0 && (!db || m_awake[b] != 0))
+                {
+                    m_awake[a] = 1;
+                    m_sleepTimer[a] = Real(0);
+                }
+                if (db && m_awake[b] == 0 && (!da || m_awake[a] != 0))
+                {
+                    m_awake[b] = 1;
+                    m_sleepTimer[b] = Real(0);
+                }
+
+                // Orient A = dynamic (lines 377-378). If both dynamic, keep the
+                // sorted (a,b) order so A is the lower index (deterministic).
+                std::uint32_t ia = a, ib = b;
+                if (!da)
+                {
+                    ia = b;
+                    ib = a;
+                }
+                if (m_awake[ia] == 0)
+                {
+                    continue; // A (dynamic) asleep -> no constraint
+                }
+                const Transform xfA{ Vec2(m_posX[ia], m_posY[ia]), Real(0) };
+                const Transform xfB{ Vec2(m_posX[ib], m_posY[ib]), Real(0) };
+                const Manifold m =
+                    CollideShapes(m_shape[ia], xfA, m_shape[ib], xfB, margin);
+                emit(ia, ib, /*bIsBody=*/true, m);
+            }
         }
 
         int PhysicsWorld::QueryAABB(const Aabb2& box,

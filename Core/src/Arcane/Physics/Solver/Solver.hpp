@@ -59,22 +59,73 @@ namespace Arcane
                             // can hold a typed pointer without pulling the full definition.
 
         // ----------------------------------------------------------------
-        // ContactConstraint: one solvable contact pair (scaffolding).
+        // ContactConstraintPoint: one solvable contact point (P2.2 Soft Step).
         // ----------------------------------------------------------------
         //
-        // P2.2 fleshes this out (per-point normal/tangent impulse accumulators
-        // for warm-starting, effective masses, the soft (bias, massScale,
-        // impulseScale) coefficients, bodyA/bodyB SoA indices). For P2.1 it is a
-        // forward-looking placeholder so SolverContext can name an array of them
-        // without pulling in the manifold layout. The world will own the backing
-        // storage (pooled -> zero steady-state alloc), exactly like the Lua
-        // self._contacts scratch.
+        // Per Box2D v3 b2ContactConstraintPoint: the per-point state the TGS
+        // Soft solver carries across the sub-step loop. Anchors are relative to
+        // each body's CENTER at Prepare time; the solver re-derives the current
+        // separation each sub-step from the accumulated position deltas (the TGS
+        // "track per-body deltaPos/deltaRot, re-evaluate separation" scheme).
+        struct ContactConstraintPoint
+        {
+            // Anchors from each body center to the contact point (Prepare-time).
+            Vec2 anchorA{ Real(0), Real(0) };
+            Vec2 anchorB{ Real(0), Real(0) };
+            // Base separation captured at Prepare (manifold separation; positive
+            // = penetration in this engine's convention -> stored as Box2D's
+            // signed separation = -penetration so s>0 means a gap).
+            Real baseSeparation = Real(0);
+            // Effective masses along the normal + tangent (inverse-K scalars).
+            Real normalMass  = Real(0);
+            Real tangentMass = Real(0);
+            // Accumulated impulses (warm-started across steps via the cache).
+            Real normalImpulse  = Real(0);
+            Real tangentImpulse = Real(0);
+            // Relative normal velocity at Prepare (for the restitution pass).
+            Real relativeVelocity = Real(0);
+            // Stable warm-start key (the manifold point id).
+            std::uint32_t id = 0;
+        };
+
+        // ----------------------------------------------------------------
+        // ContactConstraint: one solvable contact pair (P2.2 Soft Step).
+        // ----------------------------------------------------------------
+        //
+        // Built by PhysicsWorld's stage-4 contact generation (Part A) into a
+        // world-owned pool (PhysicsWorld::m_contactConstraints) -> zero
+        // steady-state alloc, exactly like the Lua self._contacts scratch.
+        // bodyA is ALWAYS the dynamic body (the Lua "A must be dynamic"
+        // orientation, PhysicsWorld.lua:377-378). bodyB may be dynamic,
+        // kinematic, static, or a tile-span VIRTUAL fixture (invMassB =
+        // invInertiaB = 0, bodyB = kInvalidSlot). The normal points from B
+        // toward A (push A out of B), matching ManifoldPoint::normal.
         struct ContactConstraint
         {
-            std::uint32_t bodyA = 0;  // SoA slot index (dynamic)
-            std::uint32_t bodyB = 0;  // SoA slot index (dynamic or static/kinematic)
-            const Manifold* manifold = nullptr; // this step's manifold for the pair
-            // P2.2: warm-start impulses, effective masses, soft coefficients.
+            std::uint32_t bodyA = 0;            // SoA slot index (always dynamic)
+            std::uint32_t bodyB = 0;            // SoA slot index, or kInvalidSlot for a span
+            bool          bodyBIsBody = false;  // false -> tile-span virtual fixture
+
+            // Cached inverse mass/inertia (copied at Prepare so the solver does
+            // not re-touch the world SoA per sub-step iteration). For spans /
+            // statics / kinematics these are 0 (immovable: push, not pushed).
+            Real invMassA = Real(0), invInertiaA = Real(0);
+            Real invMassB = Real(0), invInertiaB = Real(0);
+
+            // Representative normal (B -> A) + its tangent (perp, = (-ny, nx)).
+            Vec2 normal{ Real(0), Real(0) };
+
+            // Combined material coefficients (Prepare-time).
+            Real friction    = Real(0);
+            Real restitution = Real(0);
+
+            // Soft coefficients (b2MakeSoft from contact hertz/dampingRatio/h).
+            Real biasRate     = Real(0);
+            Real massScale    = Real(1);
+            Real impulseScale = Real(0);
+
+            int pointCount = 0;
+            ContactConstraintPoint points[2]{};
         };
 
         // ----------------------------------------------------------------

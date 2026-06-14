@@ -64,6 +64,8 @@
 #include <Arcane/Physics/Broadphase/Passability.hpp>
 #include <Arcane/Physics/Broadphase/TileGrid.hpp>
 #include <Arcane/Physics/ContactManager.hpp>
+#include <Arcane/Physics/Solver/Solver.hpp>      // ContactConstraint pool type
+#include <Arcane/Physics/Solver/SoftStep.hpp>    // the installed solver
 
 namespace Arcane
 {
@@ -141,6 +143,29 @@ namespace Arcane
             // gravity 0; the dynamics tests set e.g. gravityY = 400.
             Real gravityX = Real(0);
             Real gravityY = Real(0);
+
+            // ---- Soft Step solver config (P2.2; Box2D v3 TGS Soft) ----------
+            //
+            // substepCount: dt is split into this many sub-steps; each sub-step
+            // integrates gravity + position and runs one biased solve + one
+            // relax pass (the v3 sub-stepping that makes a moderate contact
+            // hertz appear rigid). Box2D v3 default is 4.
+            //
+            // contactHertz / contactDampingRatio feed b2MakeSoft to derive the
+            // soft (biasRate, massScale, impulseScale) per contact. A high hertz
+            // (clamped to 0.25*substepCount/dt so it never out-runs the
+            // sub-step rate) + the small sub-step makes rigid contacts behave
+            // rigidly while staying stable. Box2D v3 defaults: 30 Hz, zeta 10.
+            //
+            // restitutionThreshold: approach speed (world units/s) below which
+            // restitution is suppressed (resting micro-bounces are killed).
+            // contactPushMaxVelocity: clamp on the soft penetration push-out
+            // bias velocity so deep overlaps recover without exploding.
+            std::uint32_t substepCount         = 4u;
+            Real          contactHertz         = Real(30);
+            Real          contactDampingRatio  = Real(10);
+            Real          restitutionThreshold = Real(20);  // Lua REST_VEL = 20
+            Real          contactPushMaxVelocity = Real(300);
         };
 
         class Body; // forward decl (Body.hpp); ergonomic view over a handle.
@@ -419,6 +444,59 @@ namespace Arcane
                 return *m_moverBroadphase;
             }
 
+            // ---- internals consumed by the Soft Step solver (P2.2 seam) -----
+            //
+            // The solver reads/writes the dynamics SoA through these slot
+            // accessors (mirroring the ContactManager seam above) so the raw
+            // vectors stay private. Velocity + angVel are mutated every solve
+            // iteration; position + angle are committed once per Step at the
+            // solver's FinalizePositions. All are inline -> the per-iteration
+            // call cost vanishes in an optimized build.
+            [[nodiscard]] bool AwakeSlot(std::uint32_t i) const noexcept { return m_awake[i] != 0; }
+            [[nodiscard]] Real InvMassSlot(std::uint32_t i) const noexcept { return m_invMass[i]; }
+            [[nodiscard]] Real InvInertiaSlot(std::uint32_t i) const noexcept { return m_invInertia[i]; }
+            [[nodiscard]] Real RestSlot(std::uint32_t i) const noexcept { return m_rest[i]; }
+            [[nodiscard]] Real FricSlot(std::uint32_t i) const noexcept { return m_fric[i]; }
+            [[nodiscard]] Real LinDampSlot(std::uint32_t i) const noexcept { return m_linDamp[i]; }
+            [[nodiscard]] Vec2 VelSlot(std::uint32_t i) const noexcept
+            {
+                return Vec2(m_velX[i], m_velY[i]);
+            }
+            [[nodiscard]] Real AngVelSlot(std::uint32_t i) const noexcept { return m_angVel[i]; }
+            void SetVelSlot(std::uint32_t i, Vec2 v) noexcept
+            {
+                m_velX[i] = v.x;
+                m_velY[i] = v.y;
+            }
+            void SetAngVelSlot(std::uint32_t i, Real w) noexcept { m_angVel[i] = w; }
+            // Commit final position/angle for slot i + refresh the mover
+            // broadphase AABB (solver FinalizePositions). Dynamic-only call site.
+            void CommitSlotPosition(std::uint32_t i, Vec2 p, Real angle) noexcept
+            {
+                m_posX[i]  = p.x;
+                m_posY[i]  = p.y;
+                m_angle[i] = angle;
+                m_moverBroadphase->Update(i, SlotAabb(i));
+            }
+            // Global gravity (solver reads it for the per-sub-step integrate).
+            [[nodiscard]] Vec2 Gravity() const noexcept
+            {
+                return Vec2(m_gravityX, m_gravityY);
+            }
+            // Solver warm-start cache size (inspection/test hook -- the harness
+            // asserts the cache stays bounded as transient contacts come + go).
+            [[nodiscard]] std::size_t SolverWarmStartCacheSize() const noexcept
+            {
+                return m_solver.WarmStartCacheSize();
+            }
+
+            // Soft Step config (solver reads it in Prepare / the sub-step loop).
+            [[nodiscard]] std::uint32_t SubstepCount() const noexcept { return m_substepCount; }
+            [[nodiscard]] Real ContactHertz() const noexcept { return m_contactHertz; }
+            [[nodiscard]] Real ContactDampingRatio() const noexcept { return m_contactDampingRatio; }
+            [[nodiscard]] Real RestitutionThreshold() const noexcept { return m_restitutionThreshold; }
+            [[nodiscard]] Real ContactPushMaxVelocity() const noexcept { return m_contactPushMaxVelocity; }
+
             // World-space tight AABB of slot i. Exposed here (not just private)
             // so ContactManager can use it for the AABB pre-filter on the
             // kinematic-vs-static loop without an extra round-trip through
@@ -481,13 +559,35 @@ namespace Arcane
 
             bool m_eventsEnabled = true;
 
-            // ---- dynamics config (P2.1) ------------------------------------
+            // ---- dynamics config (P2.1 + P2.2) -----------------------------
             // Global gravity applied to awake Dynamic bodies in Step.
             Real m_gravityX = Real(0);
             Real m_gravityY = Real(0);
 
+            // Soft Step config (copied from WorldDef; read by the solver).
+            std::uint32_t m_substepCount         = 4u;
+            Real          m_contactHertz         = Real(30);
+            Real          m_contactDampingRatio  = Real(10);
+            Real          m_restitutionThreshold = Real(20);
+            Real          m_contactPushMaxVelocity = Real(300);
+
             // ---- contacts --------------------------------------------------
             ContactManager m_contacts;
+
+            // ---- solver (P2.2) ---------------------------------------------
+            //
+            // The installed constraint solver + the WORLD-OWNED ContactConstraint
+            // pool (Part A's contact generation fills m_contactConstraints; the
+            // solver reads it). The pool only grows (clear()+emplace each Step
+            // preserves capacity) -> zero steady-state allocation in Step.
+            SoftStep                       m_solver;
+            std::vector<ContactConstraint> m_contactConstraints;
+
+            // Build the dynamics ContactConstraint array for this Step (Part A):
+            // for each awake dynamic body, manifolds vs tile spans + static
+            // bodies (StaticCandidates) and vs mover-mover pairs involving a
+            // dynamic (broadphase Pairs, narrowed). Orients A = dynamic.
+            void GenerateContacts(Real dt);
 
             // ---- query scratch (zero steady-state alloc) -------------------
             //
@@ -506,6 +606,16 @@ namespace Arcane
             // thread_local or caller-supplied scratch.
             mutable std::vector<Aabb2>         m_scratchSpans;
             mutable std::vector<std::uint32_t> m_scratchStatics;
+
+            // ---- contact-gen scratch (Step-only; zero steady-state alloc) ---
+            //
+            // Reused by GenerateContacts each Step: the dynamic body's near-AABB
+            // span/static candidate lists + the broadphase mover-pair buffer.
+            // Distinct from the query scratch above (GenerateContacts runs inside
+            // Step's solver stage, not from a query/callback site).
+            std::vector<Aabb2>          m_genSpans;
+            std::vector<std::uint32_t>  m_genStatics;
+            std::vector<BroadphasePair> m_genPairs;
         };
 
     } // namespace Physics

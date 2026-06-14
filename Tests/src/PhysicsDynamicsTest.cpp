@@ -1,21 +1,25 @@
 // Physics M6 P2.1: dynamic-body velocity integration (NO solver yet).
 //
-// PORT NOTE: P2.1 OPENS Phase 2 (dynamics). It extends PhysicsWorld with the
+// PORT NOTE: P2.1 OPENED Phase 2 (dynamics). It extended PhysicsWorld with the
 // dynamics SoA (mass/invMass/invInertia, angle/angVel, restitution/friction/
 // damping/sleep) + AddBody dynamics params + the Step velocity/position
-// integration stages + the Body dynamics accessors. There is NO solver and NO
-// collision response in P2.1 (those are P2.2). So these tests are PURE
-// integration: a dynamic body free-falls under constant gravity per the
-// SEMI-IMPLICIT (symplectic) EULER scheme the Lua step() implements
-// (PhysicsWorld.lua:302-310 velocity-integrate, then 393-401 position-integrate
-// using the NEW velocity).
+// integration + the Body dynamics accessors. These tests are PURE integration:
+// a dynamic body free-falls under constant gravity with NO collision response.
 //
-// ANALYTIC reference (constant gravity g, start at rest v0=0, pos0):
-//   per step k: v_k = v_{k-1} + g*dt ; pos_k = pos_{k-1} + v_k*dt
-//   closed form: v_k   = g*dt*k
-//                pos_k = pos0 + g*dt^2 * k(k+1)/2
-// (This is semi-implicit Euler: velocity first, then position uses it -- so
-//  the sum runs i=1..k, NOT i=0..k-1 as explicit Euler would.)
+// UPDATED FOR P2.2 (Box2D v3 TGS Soft): the solver now OWNS dynamic velocity +
+// position integration, folded INTO its sub-step loop (gravity + position per
+// sub-step). For a body with NO contacts this is still semi-implicit Euler, but
+// REGROUPED over substepCount sub-steps of length h = dt/N. The analytic
+// reference below is updated to the sub-stepped closed form (the old once-per-
+// step form was the P2.1 integration timing, which the v3 restructure replaced).
+//
+// ANALYTIC reference (constant gravity g, start at rest v0=0, pos0, N sub-steps):
+//   per sub-step: v += g*h ; deltaPos += v*h    (h = dt/N)
+//   VELOCITY is unchanged from once-per-step: v_k = g*dt*k (N applications of
+//     g*h == g*dt per full step).
+//   POSITION regroups: pos_k = pos0 + g*dt^2 * [ k(k-1)/2 + k*(N+1)/(2N) ].
+//   (At N -> infinity this tends to the continuous g*dt^2*k^2/2; at N == 1 it
+//    is exactly the P2.1 once-per-step g*dt^2*k(k+1)/2.)
 //
 // PRESENTATION-FREE + C++20-clean.
 
@@ -58,7 +62,7 @@ namespace
 // Free-fall under constant gravity matches the semi-implicit Euler closed form
 // ---------------------------------------------------------------------------
 
-TEST_CASE("PhysicsDynamics: free-fall matches semi-implicit Euler", "[physics][dynamics]")
+TEST_CASE("PhysicsDynamics: free-fall matches sub-stepped semi-implicit Euler", "[physics][dynamics]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
@@ -69,6 +73,7 @@ TEST_CASE("PhysicsDynamics: free-fall matches semi-implicit Euler", "[physics][d
 
     const Real g  = Real(400);
     const Real dt = kStep;
+    const Real N  = static_cast<Real>(wd.substepCount); // 4 by default
 
     // Body starts at rest, awake, at pos0.
     REQUIRE(w.GetType(h) == BodyType::Dynamic);
@@ -81,10 +86,13 @@ TEST_CASE("PhysicsDynamics: free-fall matches semi-implicit Euler", "[physics][d
     {
         w.Step(dt);
 
-        // v_k = g*dt*k ; pos_k = pos0 + g*dt^2 * k(k+1)/2
-        const Real expV   = g * dt * static_cast<Real>(k);
+        // v_k = g*dt*k (sub-stepping does not change the per-step velocity gain)
+        // pos_k = pos0 + g*dt^2 * [ k(k-1)/2 + k*(N+1)/(2N) ]
+        const Real kf     = static_cast<Real>(k);
+        const Real expV   = g * dt * kf;
         const Real expPos = pos0.y + g * dt * dt
-                          * (static_cast<Real>(k) * static_cast<Real>(k + 1) * Real(0.5));
+                          * (kf * (kf - Real(1)) * Real(0.5)
+                             + kf * (N + Real(1)) / (Real(2) * N));
 
         const Vec2 v = w.Velocity(h);
         const Vec2 p = w.Position(h);
@@ -147,9 +155,13 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
     PhysicsWorld wPlain(wd);
     BodyHandle hp = AddFallingBody(wPlain);
 
-    // Analytic damped recurrence: each step v = (v + g*dt) * 1/(1 + damp*dt).
+    // Analytic damped recurrence (P2.2: gravity + damping run PER SUB-STEP).
+    // Each sub-step: v = (v + g*h) * 1/(1 + damp*h), with h = dt/N, N sub-steps
+    // per full Step. (The old once-per-step recurrence was the P2.1 timing.)
+    const std::uint32_t N = WorldDef{}.substepCount; // 4
+    const Real h  = dt / static_cast<Real>(N);
+    const Real fh = Real(1) / (Real(1) + damp * h);
     Real refV = Real(0);
-    const Real f = Real(1) / (Real(1) + damp * dt);
 
     // Track the recurrence for the first 60 steps (still far from terminal).
     const int kN = 60;
@@ -157,7 +169,10 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
     {
         wDamp.Step(dt);
         wPlain.Step(dt);
-        refV = (refV + g * dt) * f;
+        for (std::uint32_t s = 0; s < N; ++s)
+        {
+            refV = (refV + g * h) * fh;
+        }
 
         const Real vDamp  = wDamp.Velocity(hd).y;
         const Real vPlain = wPlain.Velocity(hp).y;
