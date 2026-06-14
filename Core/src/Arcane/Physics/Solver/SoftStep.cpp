@@ -550,10 +550,16 @@ namespace Arcane
             PrepareJoints(ctx);
 
             // 2) Sub-step loop.
+            //    Stage order per sub-step (matches Box2D v3 b2SolverStage sequence
+            //    in solver.h / solver.c: b2_stageIntegrateVelocities ->
+            //    b2_stageWarmStart -> b2_stageSolve -> b2_stageIntegratePositions ->
+            //    b2_stageRelax). WarmStart is a PER-SUBSTEP stage in v3 (executed
+            //    inside the substep loop, not once before it). The current placement
+            //    is correct and intentional.
             for (int s = 0; s < substeps; ++s)
             {
                 IntegrateVelocities(ctx, h);   // gravity + damping (per sub-step)
-                WarmStart(ctx);                // apply accumulated impulses
+                WarmStart(ctx);                // apply accumulated impulses (per sub-step -- v3 stage order)
                 SolveContacts(ctx, h, /*useBias=*/true);
                 IntegratePositions(ctx, h);    // accumulate deltaPos/deltaRot
                 SolveContacts(ctx, h, /*useBias=*/false); // relax (no bias)
@@ -576,6 +582,9 @@ namespace Arcane
                 }
             }
             // Bounded cache: drop entries unused for more than kCacheLife stamps.
+            // iteration order over m_cache is unobservable here (delete-only);
+            // determinism is preserved (warm-start seeds are loaded by find(id),
+            // not by iteration).
             for (auto it = m_cache.begin(); it != m_cache.end();)
             {
                 if (m_stamp - it->second.stamp > kCacheLife)

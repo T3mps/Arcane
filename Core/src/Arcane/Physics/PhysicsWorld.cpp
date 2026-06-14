@@ -587,8 +587,9 @@ namespace Arcane
             m_contacts.Step(*this);
         }
 
-        void PhysicsWorld::GenerateContacts(Real /*dt*/)
+        void PhysicsWorld::GenerateContacts(Real dt) // reserved for P3.1 speculative margin scaling
         {
+            (void)dt; // not yet consumed; P3.1 will use it for speculative contact margin scaling
             // Part A: build the dynamics ContactConstraint array (the Lua step()
             // stage 2 "solver contact generation"). For each awake non-sensor
             // DYNAMIC body, generate manifolds vs static candidates (tile spans +
@@ -609,8 +610,15 @@ namespace Arcane
             // A is dynamic (aIdx); bIdx is the slot for a real body or
             // kInvalidSlot for a span. invMassB/invInertiaB come from the slot
             // (0 for static/kinematic/span -> push, not pushed).
+            // centerB: for a real body this is the body's world position; for a
+            // tile-span virtual fixture it is the span's geometric center
+            // (span.min+span.max)*0.5. anchorB = mp.point - centerB in both cases.
+            // (Passing it explicitly avoids the old Vec2(0,0) fallback that made
+            // anchorB wrong-looking for spans -- currently harmless because
+            // invInertiaB==0 zeros the lever arm, but would break if spans ever
+            // gained DOF.)
             auto emit = [&](std::uint32_t aIdx, std::uint32_t bIdx, bool bIsBody,
-                            const Manifold& m)
+                            const Vec2& centerB, const Manifold& m)
             {
                 if (m.pointCount <= 0)
                 {
@@ -618,7 +626,7 @@ namespace Arcane
                 }
                 ContactConstraint cc;
                 cc.bodyA       = aIdx;
-                cc.bodyB       = bIsBody ? bIdx : 0u;
+                cc.bodyB       = bIsBody ? bIdx : kInvalidSlot;
                 cc.bodyBIsBody = bIsBody;
                 cc.invMassA    = m_invMass[aIdx];
                 cc.invInertiaA = m_invInertia[aIdx];
@@ -636,7 +644,6 @@ namespace Arcane
                 cc.restitution = std::max(restA, restB);
 
                 const Vec2 cA(m_posX[aIdx], m_posY[aIdx]);
-                const Vec2 cB = bIsBody ? Vec2(m_posX[bIdx], m_posY[bIdx]) : Vec2(Real(0), Real(0));
 
                 cc.pointCount = m.pointCount;
                 for (int p = 0; p < m.pointCount; ++p)
@@ -644,7 +651,7 @@ namespace Arcane
                     const ManifoldPoint& mp = m.points[p];
                     ContactConstraintPoint& cp = cc.points[p];
                     cp.anchorA = mp.point - cA;
-                    cp.anchorB = bIsBody ? (mp.point - cB) : (mp.point - cA);
+                    cp.anchorB = mp.point - centerB;
                     // Manifold separation is POSITIVE for penetration; Box2D's
                     // signed separation is negative for penetration -> negate.
                     cp.baseSeparation = -mp.separation;
@@ -680,7 +687,7 @@ namespace Arcane
                     const Transform xfB{ c, Real(0) };
                     const Manifold m =
                         CollideShapes(m_shape[i], xfA, spanShape, xfB, margin);
-                    emit(i, kInvalidSlot, /*bIsBody=*/false, m);
+                    emit(i, kInvalidSlot, /*bIsBody=*/false, /*centerB=*/c, m);
                 }
 
                 // static bodies (non-sensor).
@@ -691,10 +698,11 @@ namespace Arcane
                     {
                         continue;
                     }
-                    const Transform xfB{ Vec2(m_posX[idx], m_posY[idx]), Real(0) };
+                    const Vec2 posB(m_posX[idx], m_posY[idx]);
+                    const Transform xfB{ posB, Real(0) };
                     const Manifold m =
                         CollideShapes(m_shape[i], xfA, m_shape[idx], xfB, margin);
-                    emit(i, idx, /*bIsBody=*/true, m);
+                    emit(i, idx, /*bIsBody=*/true, /*centerB=*/posB, m);
                 }
             }
 
@@ -749,11 +757,13 @@ namespace Arcane
                 {
                     continue; // A (dynamic) asleep -> no constraint
                 }
-                const Transform xfA{ Vec2(m_posX[ia], m_posY[ia]), Real(0) };
-                const Transform xfB{ Vec2(m_posX[ib], m_posY[ib]), Real(0) };
+                const Vec2 posA(m_posX[ia], m_posY[ia]);
+                const Vec2 posB(m_posX[ib], m_posY[ib]);
+                const Transform xfA{ posA, Real(0) };
+                const Transform xfB{ posB, Real(0) };
                 const Manifold m =
                     CollideShapes(m_shape[ia], xfA, m_shape[ib], xfB, margin);
-                emit(ia, ib, /*bIsBody=*/true, m);
+                emit(ia, ib, /*bIsBody=*/true, /*centerB=*/posB, m);
             }
         }
 
