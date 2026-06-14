@@ -319,6 +319,37 @@ project "Playground"
         symbols "off"
 
 -- ============================================================================
+-- PlaygroundGame: the M4 scene as a game plugin (the first live ABI consumer).
+-- SharedLib, /MD, links Arcane (NOT Core). Loaded by Loom at runtime. The
+-- reserved Game/ slot stays empty for the future Aphelyon client port.
+-- ============================================================================
+project "PlaygroundGame"
+    location "PlaygroundGame"
+    kind "SharedLib"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
+    includedirs {
+        "%{wks.location}/Arcane/src",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+    }
+    links { "Arcane" }
+    defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING" }
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
+    filter {}
+
+-- ============================================================================
 -- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links Core
 -- directly -- Core links into exactly ONE module per process.
 -- ============================================================================
@@ -365,7 +396,7 @@ project "ArcaneTests"
     -- than carrying a second null context. The import lib comes via "Arcane".
     links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen" }
 
-    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad" }
+    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame" }
 
     -- The test exe loads Arcane.dll from its own directory.
     postbuildcommands {
@@ -377,6 +408,7 @@ project "ArcaneTests"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
     }
 
     defines {
