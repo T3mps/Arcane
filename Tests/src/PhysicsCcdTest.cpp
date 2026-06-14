@@ -73,12 +73,13 @@ namespace
     // A fast mover: starts left of the wall, travels far PAST it in one step.
     // Start x = 0; one-step displacement = kSpeed * kStep. With kSpeed chosen so
     // the displacement (~200) clears the 2-wide wall by a wide margin.
-    constexpr Real kSpeed = Real(200) / kStep; // displacement == 200 per step
+    // kSpeed is a velocity (~12000 u/s at 60Hz) chosen so the per-step
+    // displacement is 200 units (clears the 2-wide wall by a wide margin).
+    constexpr Real kSpeed = Real(200) / kStep;
 
-    // Is the moving body buried in the wall span at (x,y)? Penetration deeper
-    // than -0.5 (the harness's "buried" threshold) means it tunneled INTO the
-    // wall rather than stopping at its surface.
-    bool BuriedInWall(PhysicsWorld& w, BodyHandle h)
+    // true if the body center is inside the wall span (i.e. it tunneled into/
+    // through the wall) rather than stopping at the wall surface.
+    bool CenterInsideWall(PhysicsWorld& w, BodyHandle h)
     {
         const Shape* s = w.GetShape(h);
         const Vec2 p = w.Position(h);
@@ -119,7 +120,7 @@ TEST_CASE("PhysicsCcd: a fast dynamic body does not tunnel a thin static wall "
     // of the wall (it did not pass through to x ~ 200).
     REQUIRE(p.x < kWallX);
     // And it is not buried in the wall span (stopped at the surface, not inside).
-    REQUIRE_FALSE(BuriedInWall(w, body));
+    REQUIRE_FALSE(CenterInsideWall(w, body));
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +179,7 @@ TEST_CASE("PhysicsCcd: a bullet kinematic body clamps to TOI against a thin wall
     REQUIRE(p.x < kWallX);                 // before the wall
     REQUIRE(p.x == Approx(kWallX - kWallHW - kProbeR).margin(Real(0.5)));
     // And it is not buried in the wall span.
-    REQUIRE_FALSE(BuriedInWall(w, body));
+    REQUIRE_FALSE(CenterInsideWall(w, body));
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +206,7 @@ TEST_CASE("PhysicsCcd: a bullet dynamic body does not tunnel a thin wall",
 
     const Vec2 p = w.Position(body);
     REQUIRE(p.x < kWallX);                 // on the near side
-    REQUIRE_FALSE(BuriedInWall(w, body));  // not buried in the wall span
+    REQUIRE_FALSE(CenterInsideWall(w, body));  // not buried in the wall span
 }
 
 // ---------------------------------------------------------------------------

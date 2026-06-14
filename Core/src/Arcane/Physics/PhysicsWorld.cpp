@@ -596,14 +596,15 @@ namespace Arcane
             //            [per sub-step: integrate vel, warm-start, solve(bias),
             //            integrate pos, relax] -> restitution -> store impulses
             //            -> commit dynamic positions + mover-broadphase update.
-            //   stage 6: bullet GJK-TOI clamp (P3.1 CCD) -- sweep each isBullet
+            //   stage 4: bullet GJK-TOI clamp (P3.1 CCD) -- sweep each isBullet
             //            body prev->curr vs statics; clamp to time-of-impact so a
             //            thin static wall cannot be tunneled. (The speculative
             //            margin in stage 2 is the inline CCD for fast dynamics;
             //            this is the discrete backup, primarily for kinematics.)
-            //            Runs after the solve, before bookkeeping/events.
-            //   stage 4: island sleep bookkeeping            (P2.4 -- deferred)
-            //   stage 5: contacts:step (events + gating + deferred flush)
+            //            CCD runs after the solver commits positions, before
+            //            island/events.
+            //   stage 5: island sleep bookkeeping            (P2.4 -- deferred)
+            //   stage 6: contacts:step (events + gating + deferred flush)
             //
             // Free-fall parity: with NO contacts the solver's sub-step loop is a
             // pure semi-implicit integrate (gravity per sub-step, position per
@@ -674,18 +675,18 @@ namespace Arcane
                 m_solver->Solve(ctx);
             }
 
-            // ---- stage 6: bullet GJK-TOI clamp (P3.1 CCD) --------------------
+            // ---- stage 4: bullet GJK-TOI clamp (P3.1 CCD) --------------------
             // The discrete CCD backup for `isBullet` bodies vs statics. Runs
             // AFTER the solver commits dynamic positions (so a dynamic bullet's
             // post-solve sweep is correct) and BEFORE island sleep + events (so
             // they observe the clamped position). Kinematic bullets -- which the
             // solver never touches -- are clamped from their stage-1-integrated
             // position; the speculative margin (stage 2) handles fast dynamics
-            // inline, with this as the safety net. (Numbered "6" per the plan's
-            // [P3.1 CCD] seam; it executes between the solve and the bookkeeping.)
+            // inline, with this as the safety net. CCD runs after the solver
+            // commits positions, before island/events.
             BulletSweep();
 
-            // ---- stage 4: island sleep bookkeeping (P2.4) --------------------
+            // ---- stage 5: island sleep bookkeeping (P2.4) --------------------
             // Build the per-Step constraint graph (bodies = nodes, THIS step's
             // contacts = edges), advance per-body sleep timers, and sleep any
             // island whose every member is idle past the threshold. Runs AFTER
@@ -700,7 +701,7 @@ namespace Arcane
                 static_cast<std::uint32_t>(m_jointConstraints.size()),
                 dt);
 
-            // ---- stage 5: events + gating + deferred flush -------------------
+            // ---- stage 6: events + gating + deferred flush -------------------
             m_contacts.Step(*this);
         }
 
@@ -740,6 +741,13 @@ namespace Arcane
             // before geometric overlap, and CollideShapes must report the
             // near-touching contact within that distance).
             const Real moveDt = dt > Real(0) ? dt : Real(0);
+            // Threshold for the sqrt skip (Fix 3): if speedSq <= threshSq then
+            // speed * moveDt <= kSkin, so margin == kSkin (the floor) regardless.
+            // Hoisted once out of both loops; guard moveDt==0 -> threshold 0 so
+            // the sqrt is always taken (but moveDt==0 means dt==0 -> no motion).
+            const Real threshSq = (moveDt > Real(0))
+                                      ? (kSkin / moveDt) * (kSkin / moveDt)
+                                      : Real(0);
 
             // ---- helper: append a manifold as a ContactConstraint -----------
             // A is dynamic (aIdx); bIdx is the slot for a real body or
@@ -808,9 +816,12 @@ namespace Arcane
                 // Per-body speculative margin (P3.1): max(kSkin, |v| * dt). For a
                 // slow body this is kSkin (resting unchanged); for a fast body it
                 // grows to cover this Step's sweep so the wall is seen pre-overlap.
-                const Real speedA = std::sqrt(m_velX[i] * m_velX[i] +
-                                              m_velY[i] * m_velY[i]);
-                const Real specMargin = std::max(kSkin, speedA * moveDt);
+                // Exact sqrt skip (Fix 3): if speedSq <= threshSq the margin is
+                // just kSkin, so a slow/resting body never pays the sqrt.
+                const Real speedSqA = m_velX[i] * m_velX[i] + m_velY[i] * m_velY[i];
+                const Real specMargin = (speedSqA > threshSq)
+                                            ? std::sqrt(speedSqA) * moveDt
+                                            : kSkin;
 
                 const Transform xfA{ Vec2(m_posX[i], m_posY[i]), Real(0) };
                 const Aabb box = SlotAabb(i);
@@ -881,12 +892,14 @@ namespace Arcane
                 // kSkin. Expand the tight-AABB overlap test by it so a fast pair is
                 // not rejected here before CollideShapes can emit the speculative
                 // contact (the solver's s > 0 bias then caps the closing velocity).
-                const Real speedAm = std::sqrt(m_velX[a] * m_velX[a] +
-                                               m_velY[a] * m_velY[a]);
-                const Real speedBm = std::sqrt(m_velX[b] * m_velX[b] +
-                                               m_velY[b] * m_velY[b]);
-                const Real pairMargin =
-                    std::max(kSkin, std::max(speedAm, speedBm) * moveDt);
+                // Exact sqrt skip (Fix 3): use the faster of the pair; only a fast
+                // pair pays the sqrt (slow pairs collapse to the kSkin floor).
+                const Real speedSqAm = m_velX[a] * m_velX[a] + m_velY[a] * m_velY[a];
+                const Real speedSqBm = m_velX[b] * m_velX[b] + m_velY[b] * m_velY[b];
+                const Real maxSpeedSq = std::max(speedSqAm, speedSqBm);
+                const Real pairMargin = (maxSpeedSq > threshSq)
+                                            ? std::sqrt(maxSpeedSq) * moveDt
+                                            : kSkin;
                 Aabb2 boxA = SlotAabb(a);
                 Aabb2 boxB = SlotAabb(b);
                 boxA.min -= Vec2(pairMargin, pairMargin);
@@ -963,6 +976,12 @@ namespace Arcane
                     continue;
                 }
 
+                // INVARIANT: bullets are always movers (Kinematic or Dynamic);
+                // a Static body is never flagged isBullet so this branch is
+                // unreachable for statics.
+                assert(static_cast<BodyType>(m_btype[i]) != BodyType::Static &&
+                       "bullets are never static");
+
                 // STATICS ONLY: default ShapeCastOpts (movers = false) casts vs
                 // tile spans + non-sensor static bodies. The bullet body is a
                 // mover, so it is never a self-obstacle here (no exclude needed).
@@ -978,10 +997,9 @@ namespace Arcane
                 const Vec2 clamped = prev + delta * clamp;
                 m_posX[i] = clamped.x;
                 m_posY[i] = clamped.y;
-                if (static_cast<BodyType>(m_btype[i]) != BodyType::Static)
-                {
-                    m_moverBroadphase->Update(i, SlotAabb(i));
-                }
+                // Unconditional: the assert above guarantees this is always a
+                // mover (never Static), so the broadphase update always applies.
+                m_moverBroadphase->Update(i, SlotAabb(i));
             }
         }
 
