@@ -111,6 +111,14 @@ namespace Arcane
                 Touch(w, bp.a, bp.b, stamp);
             }
 
+            // Kinematic-vs-staticBody: static bodies are NOT in the mover
+            // broadphase, so we iterate them explicitly.  The guard is
+            // `== BodyType::Kinematic` -- FAITHFUL to ContactManager.lua:150
+            // which also guards `== KINEMATIC`.  Dynamic-vs-static-BODY events
+            // deliberately do NOT emit here: the solver owns dynamic-vs-static
+            // response (arriving in P2.1); events are for gameplay triggers on
+            // kinematic movers.  Dynamic movers get mover-mover events via the
+            // broadphase Pairs() loop above.
             const std::vector<std::uint32_t>& statics = w.StaticList();
             const std::uint32_t count = w.Count();
             for (std::uint32_t i = 0; i < count; ++i)
@@ -119,6 +127,15 @@ namespace Arcane
                 {
                     for (std::uint32_t s = 0; s < statics.size(); ++s)
                     {
+                        // Cheap AABB reject before the GJK/SAT overlap test
+                        // (statics are not in the mover broadphase, so we
+                        // pre-filter here to avoid calling CollideShapes on
+                        // clearly-disjoint pairs).  Behavior-preserving:
+                        // non-overlapping pairs never had contact points.
+                        if (!AabbOverlap(w.SlotAabb(i), w.SlotAabb(statics[s])))
+                        {
+                            continue;
+                        }
                         Touch(w, i, statics[s], stamp);
                     }
                 }
@@ -128,7 +145,7 @@ namespace Arcane
             // pairs, SORT by (a,b) for deterministic End order (the map's
             // iteration order is nondeterministic), then emit. Erase ALL
             // untouched pairs (begun or not).
-            m_endScratch.clear();
+            m_workPairs.clear();
             for (auto it = m_pairs.begin(); it != m_pairs.end();)
             {
                 Pair& p = it->second;
@@ -138,7 +155,7 @@ namespace Arcane
                                        !w.EvtOn(p.a) || !w.EvtOn(p.b);
                     if (p.begun && !gated)
                     {
-                        m_endScratch.push_back(p);
+                        m_workPairs.push_back(p);
                     }
                     it = m_pairs.erase(it);
                 }
@@ -147,12 +164,12 @@ namespace Arcane
                     ++it;
                 }
             }
-            std::sort(m_endScratch.begin(), m_endScratch.end(),
+            std::sort(m_workPairs.begin(), m_workPairs.end(),
                       [](const Pair& l, const Pair& r) noexcept
                       {
                           return l.a != r.a ? l.a < r.a : l.b < r.b;
                       });
-            for (const Pair& p : m_endScratch)
+            for (const Pair& p : m_workPairs)
             {
                 Emit(w, ContactEvent::Type::End, p.a, p.b);
             }
@@ -209,7 +226,7 @@ namespace Arcane
             // nondeterministic). We collect the to-rearm pairs, mark begun, SORT
             // by (a,b), then emit -- so the synchronous begin order is
             // deterministic too (matching Step's sorted-end discipline).
-            m_endScratch.clear();
+            m_workPairs.clear();
             for (auto& kv : m_pairs)
             {
                 Pair& p = kv.second;
@@ -225,10 +242,10 @@ namespace Arcane
                     w.EvtOn(p.a) && w.EvtOn(p.b) && ShapesOverlap(w, p.a, p.b))
                 {
                     p.begun = true; // arm now; emission below
-                    m_endScratch.push_back(p);
+                    m_workPairs.push_back(p);
                 }
             }
-            std::sort(m_endScratch.begin(), m_endScratch.end(),
+            std::sort(m_workPairs.begin(), m_workPairs.end(),
                       [](const Pair& l, const Pair& r) noexcept
                       {
                           return l.a != r.a ? l.a < r.a : l.b < r.b;
@@ -237,7 +254,7 @@ namespace Arcane
             {
                 return;
             }
-            for (const Pair& p : m_endScratch)
+            for (const Pair& p : m_workPairs)
             {
                 ContactEvent ev;
                 ev.type   = ContactEvent::Type::Begin;

@@ -168,8 +168,11 @@ namespace Arcane
             std::vector<ContactEvent> m_queue;
             std::uint32_t             m_stamp = 0;
 
-            // Scratch for the deterministic End-event sort (collect-then-sort).
-            std::vector<Pair> m_endScratch;
+            // Neutral scratch buffer: used by Step to collect-then-sort End
+            // events, and by RearmImpl to collect-then-sort rearm Begin events.
+            // Named neutrally because both code paths reuse the same member to
+            // avoid per-call allocation (no dedicated per-purpose scratch).
+            std::vector<Pair> m_workPairs;
             // Scratch for the broadphase mover-mover pairs (reused each Step --
             // Pairs() does clear()+push_back, so capacity is preserved).
             std::vector<BroadphasePair> m_pairScratch;

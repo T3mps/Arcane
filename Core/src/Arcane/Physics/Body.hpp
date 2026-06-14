@@ -57,14 +57,23 @@ namespace Arcane
             }
 
             // Teleport: prev snaps too (ports Body:setPosition).
-            void SetPosition(Vec2 p) noexcept { m_world->SetPosition(m_handle, p); }
+            // Null-guarded: graceful no-op on a default-constructed / post-remove
+            // view (matches the read path which routes through world methods that
+            // already handle invalid handles).
+            void SetPosition(Vec2 p) noexcept
+            {
+                if (m_world) m_world->SetPosition(m_handle, p);
+            }
 
             [[nodiscard]] Vec2 GetVelocity() const noexcept
             {
                 return m_world->Velocity(m_handle);
             }
 
-            void SetVelocity(Vec2 v) noexcept { m_world->SetVelocity(m_handle, v); }
+            void SetVelocity(Vec2 v) noexcept
+            {
+                if (m_world) m_world->SetVelocity(m_handle, v);
+            }
 
             // Render-boundary lerp prev..curr (ports Body:drawPosition).
             [[nodiscard]] Vec2 DrawPosition(Real alpha) const noexcept
@@ -90,7 +99,7 @@ namespace Arcane
             // Per-body event gate (ports Body:setEventsEnabled).
             void SetEventsEnabled(bool on) noexcept
             {
-                m_world->SetBodyEvents(m_handle, on);
+                if (m_world) m_world->SetBodyEvents(m_handle, on);
             }
 
         private:

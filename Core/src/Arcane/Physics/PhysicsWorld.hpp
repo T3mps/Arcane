@@ -24,8 +24,10 @@
 //   * raycast / shapeCast / lineOfSight (P1.9).
 // Dynamic bodies are ACCEPTED + stored (BodyType::Dynamic) but are NEVER
 // integrated or solved in P1.8. They are also registered in the mover
-// broadphase so the ContactManager can still emit events for them, matching
-// the Lua's mover treatment. The force/impulse/sleep machinery arrives in
+// broadphase so the ContactManager emits mover-mover events for them.
+// NOTE: dynamic-vs-static-BODY events are KINEMATIC-ONLY (faithful to
+// ContactManager.lua:150 -- the solver owns dynamic-vs-static response in
+// P2.1). The force/impulse/sleep machinery arrives in
 // P2.1 ("extends PhysicsWorld for Dynamic bodies"); the SoA carries the few
 // dynamics fields it needs cheaply (angle/awake) but the solver-only fields
 // (mass/inertia/damping/etc.) are intentionally left for P2.1 to add.
@@ -232,6 +234,12 @@ namespace Arcane
                 return *m_moverBroadphase;
             }
 
+            // World-space tight AABB of slot i. Exposed here (not just private)
+            // so ContactManager can use it for the AABB pre-filter on the
+            // kinematic-vs-static loop without an extra round-trip through
+            // GetShape + a separate ComputeAABB call.
+            [[nodiscard]] Aabb2 SlotAabb(std::uint32_t i) const noexcept;
+
             // Static collision candidates near a box: merged tile spans (into
             // spansOut) + overlapping static-body slots (into staticsOut). Ports
             // _staticCandidates. Both vectors are cleared then filled. With no
@@ -243,8 +251,6 @@ namespace Arcane
         private:
             // Grow all SoA arrays to hold at least `n` slots.
             void EnsureCapacity(std::uint32_t n);
-            // World-space tight AABB of slot i.
-            [[nodiscard]] Aabb2 SlotAabb(std::uint32_t i) const noexcept;
 
             // ---- SoA (port of the Lua FFI arrays; std::vector here) ---------
             std::vector<Real>          m_posX, m_posY;
@@ -269,10 +275,6 @@ namespace Arcane
 
             // ---- contacts --------------------------------------------------
             ContactManager m_contacts;
-
-            // ---- pooled scratch (zero steady-state alloc) ------------------
-            mutable std::vector<Aabb2>         m_spanScratch;
-            mutable std::vector<std::uint32_t> m_staticScratch;
         };
 
     } // namespace Physics

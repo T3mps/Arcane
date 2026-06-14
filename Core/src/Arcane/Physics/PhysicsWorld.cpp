@@ -60,20 +60,24 @@ namespace Arcane
             {
                 return;
             }
-            // std::vector growth: resize to n (default-fills new slots). gen
-            // defaults to 0 (the Lua's gen[idx] or 0 -> AddBody bumps to 1).
-            m_posX.resize(n);
-            m_posY.resize(n);
-            m_prevX.resize(n);
-            m_prevY.resize(n);
-            m_velX.resize(n);
-            m_velY.resize(n);
-            m_btype.resize(n);
-            m_evtOn.resize(n);
-            m_alive.resize(n);
-            m_sensor.resize(n);
-            m_gen.resize(n, 0u);
-            m_shape.resize(n);
+            // Amortized growth: at least double the current capacity so that
+            // a one-at-a-time fill (AddBody(count+1)) does not realloc all ~12
+            // SoA vectors on every add.  Free-list / steady-state behaviour is
+            // unchanged; only the initial fill is faster.
+            const std::uint32_t next =
+                std::max(n, static_cast<std::uint32_t>(m_posX.capacity() * 2));
+            m_posX.resize(next);
+            m_posY.resize(next);
+            m_prevX.resize(next);
+            m_prevY.resize(next);
+            m_velX.resize(next);
+            m_velY.resize(next);
+            m_btype.resize(next);
+            m_evtOn.resize(next);
+            m_alive.resize(next);
+            m_sensor.resize(next);
+            m_gen.resize(next, 0u); // gen kept zero-filled (live slots start at 1)
+            m_shape.resize(next);
         }
 
         Aabb2 PhysicsWorld::SlotAabb(std::uint32_t i) const noexcept
@@ -119,9 +123,14 @@ namespace Arcane
             }
             else
             {
-                // Kinematic + Dynamic register in the mover broadphase so the
-                // ContactManager can emit events for them (P1.8 integrates only
-                // Kinematic; Dynamic integration is P2).
+                // Kinematic + Dynamic register in the mover broadphase.
+                // Kinematic movers get begin/stay/end events via the broadphase
+                // Pairs() stream AND via the kinematic-vs-static-body loop in
+                // ContactManager::Step.  Dynamic movers get mover-mover events
+                // via broadphase Pairs() only -- dynamic-vs-static-BODY events
+                // are intentionally KINEMATIC-ONLY (faithful to
+                // ContactManager.lua:150); the solver owns dynamic-vs-static
+                // response, which arrives in P2.1.
                 m_moverBroadphase->Update(idx, SlotAabb(idx));
             }
             return BodyHandle{ idx, m_gen[idx] };
@@ -139,12 +148,16 @@ namespace Arcane
 
             if (static_cast<BodyType>(m_btype[idx]) == BodyType::Static)
             {
-                for (std::size_t i = m_staticList.size(); i-- > 0;)
+                // staticList is an unsorted no-duplicate index bag -- swap-and-pop
+                // is O(1) and order-independent (pair keys are canonically keyed
+                // (min,max) so static-loop order does not affect determinism).
+                for (std::size_t i = 0; i < m_staticList.size(); ++i)
                 {
                     if (m_staticList[i] == idx)
                     {
-                        m_staticList.erase(m_staticList.begin() +
-                                           static_cast<std::ptrdiff_t>(i));
+                        m_staticList[i] = m_staticList.back();
+                        m_staticList.pop_back();
+                        break;
                     }
                 }
             }
@@ -161,6 +174,8 @@ namespace Arcane
         bool PhysicsWorld::IsValid(BodyHandle h) const noexcept
         {
             // Ports handleValid: in-range index, matching generation, alive.
+            // gen==0 is NEVER a live slot (AddBody bumps 0->1 on first use), so
+            // the sentinel kInvalidBody{0,0} can never match a live body.
             return h.index < m_count && m_gen[h.index] == h.generation &&
                    m_alive[h.index] != 0;
         }
@@ -313,6 +328,8 @@ namespace Arcane
                 {
                     continue;
                 }
+                // [P2.1] dynamic velocity integrate (gravity/damping) goes here,
+                // before broadphase update
                 m_prevX[i] = m_posX[i];
                 m_prevY[i] = m_posY[i];
                 if (static_cast<BodyType>(m_btype[i]) == BodyType::Kinematic)
@@ -327,6 +344,8 @@ namespace Arcane
             // contacts:step). prev/curr are published by the snapshot +
             // integration above; DrawPosition lerps between them.
             m_contacts.Step(*this);
+            // [P2.1] dynamic stages go here: solver (contacts+joints) ->
+            // dynamic position integrate -> island/sleep
         }
 
         int PhysicsWorld::QueryAABB(const Aabb2& box,
