@@ -85,6 +85,25 @@ namespace Arcane
             Shape    shape{}; // required; stored by value per slot
             bool     isSensor      = false;
             bool     eventsEnabled = true;
+
+            // ---- dynamics (P2.1) -- ignored for Static/Kinematic ------------
+            //
+            // PORT of the Lua addBody dynamics opts (PhysicsWorld.lua:232-250).
+            // On a Dynamic body AddBody computes mass + rotational inertia via
+            // Shape::ComputeMass(density) (NOT a re-ported massProps -- the P1.1
+            // ComputeMass was verified equivalent). invMass/invInertia are
+            // derived from those; Static/Kinematic keep invMass = invInertia = 0
+            // (they never integrate or solve).
+            Real density        = Real(1);     // mass = density * shape area
+            // Optional mass override: if > 0 it REPLACES the computed mass and
+            // scales the inertia by (mass / computedMass) (ports lines 241-243).
+            // <= 0 means "use the density-derived mass".
+            Real mass           = Real(0);
+            Real restitution    = Real(0);     // bounciness (solver, P2.2)
+            Real friction       = Real(0.4);   // Lua default 0.4 (line 233)
+            Real linearDamping  = Real(0);     // per-step velocity decay
+            bool fixedRotation  = false;       // invInertia forced to 0
+            bool bullet         = false;       // CCD clamp (P3); stored now
         };
 
         // ----------------------------------------------------------------
@@ -104,6 +123,15 @@ namespace Arcane
             const IPassabilitySource*  passability = nullptr;   // optional tile statics
             Real                       tileCellSize = Real(1);
             Vec2                       tileOrigin{ Real(0), Real(0) };
+
+            // ---- dynamics config (P2.1) -------------------------------------
+            //
+            // Global gravity (world units / s^2), applied to awake Dynamic
+            // bodies in Step's velocity-integrate stage (ports the Lua
+            // gravityX/gravityY, default 0). The top-down overworld runs at
+            // gravity 0; the dynamics tests set e.g. gravityY = 400.
+            Real gravityX = Real(0);
+            Real gravityY = Real(0);
         };
 
         class Body; // forward decl (Body.hpp); ergonomic view over a handle.
@@ -228,7 +256,35 @@ namespace Arcane
             [[nodiscard]] Vec2 Velocity(BodyHandle h) const noexcept;
 
             // Set velocity (Kinematic + Dynamic accept it; Static ignores).
+            // On a Dynamic body this WAKES it (clears the sleep timer) -- ports
+            // setVelocity (PhysicsWorld.lua:98-104, line 102).
             void SetVelocity(BodyHandle h, Vec2 v);
+
+            // ---- dynamics accessors (P2.1; Dynamic-only effects) ------------
+
+            // Apply a linear impulse at the body center: velocity += i * invMass.
+            // Dynamic only; wakes the body. No-op otherwise. Ports applyImpulse
+            // (PhysicsWorld.lua:107-117, the no-point branch).
+            void ApplyImpulse(BodyHandle h, Vec2 impulse);
+
+            // Apply a linear impulse at world point p: the linear part as above,
+            // plus angVel += cross(p - center, i) * invInertia. Dynamic only;
+            // wakes the body. Ports applyImpulse (the px,py branch).
+            void ApplyImpulse(BodyHandle h, Vec2 impulse, Vec2 worldPoint);
+
+            // Wake a Dynamic body (awake = 1, sleepTimer = 0). No-op for
+            // Static/Kinematic. Ports Body:wake (line 120).
+            void Wake(BodyHandle h);
+
+            // True iff the body is awake (Static/Kinematic report awake; they
+            // never sleep). Ports Body:isAwake (line 119).
+            [[nodiscard]] bool IsAwake(BodyHandle h) const noexcept;
+
+            // Orientation (radians). Integrated from angVel for Dynamic bodies
+            // in Step; identity for Static/Kinematic. Ports getAngle/setAngle
+            // (lines 121-122).
+            [[nodiscard]] Real GetAngle(BodyHandle h) const noexcept;
+            void SetAngle(BodyHandle h, Real angle);
 
             // Render-boundary lerp between prev and current step positions
             // (ports Body:drawPosition).
@@ -392,6 +448,20 @@ namespace Arcane
             std::vector<std::uint32_t> m_gen;     // generation per slot
             std::vector<Shape>         m_shape;   // by value (immutable, small)
 
+            // ---- dynamics SoA (P2.1; zeros for Static/Kinematic) ------------
+            //
+            // PORT of the Lua dynamics arrays (PhysicsWorld.lua:159-163). For
+            // Static/Kinematic bodies these stay at the defaults below (0 inverse
+            // mass/inertia, awake=1) so they never integrate or solve -- the
+            // existing kinematic/static behaviour is unchanged.
+            std::vector<Real>          m_angle, m_angVel;     // orientation + rate
+            std::vector<Real>          m_invMass, m_invInertia;
+            std::vector<Real>          m_rest, m_fric;        // solver params (P2.2)
+            std::vector<Real>          m_linDamp;             // velocity decay
+            std::vector<Real>          m_sleepTimer;          // island sleep (P2.4)
+            std::vector<std::uint8_t>  m_awake;               // 1 = integrated/solved
+            std::vector<std::uint8_t>  m_bullet;              // CCD clamp (P3)
+
             std::uint32_t              m_count = 0; // high-water slot count
             std::vector<std::uint32_t> m_free;      // recycled slot stack
 
@@ -401,6 +471,11 @@ namespace Arcane
             std::unique_ptr<TileGrid>    m_tileGrid;   // optional tile statics
 
             bool m_eventsEnabled = true;
+
+            // ---- dynamics config (P2.1) ------------------------------------
+            // Global gravity applied to awake Dynamic bodies in Step.
+            Real m_gravityX = Real(0);
+            Real m_gravityY = Real(0);
 
             // ---- contacts --------------------------------------------------
             ContactManager m_contacts;

@@ -15,10 +15,10 @@
 // is valid only while world->IsValid(handle); methods on a stale view forward
 // to world methods that no-op / return defaults for invalid handles.
 //
-// DELIBERATELY DEFERRED to P2 (dynamics): applyImpulse, isAwake/wake, getAngle/
-// setAngle. P1.8 is kinematic-only; those would be stubs over fields the SoA
-// does not yet carry, so they are intentionally absent until P2.1 adds the
-// dynamics state. (See PhysicsWorld.hpp PORT BOUNDARY.)
+// DYNAMICS (P2.1): applyImpulse, wake/isAwake, getAngle/setAngle now forward to
+// the world's dynamics surface (the SoA carries mass/inertia/angle/awake as of
+// P2.1). Dynamic-only effects no-op on Static/Kinematic, matching the world
+// methods. (See PhysicsWorld.hpp PORT BOUNDARY.)
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 // namespace Arcane::Physics, Core style.
@@ -70,9 +70,47 @@ namespace Arcane
                 return m_world->Velocity(m_handle);
             }
 
+            // Set velocity (Dynamic wakes; ports Body:setVelocity).
             void SetVelocity(Vec2 v) noexcept
             {
                 if (m_world) m_world->SetVelocity(m_handle, v);
+            }
+
+            // ---- dynamics (P2.1; Dynamic-only effects) ---------------------
+
+            // Linear impulse at the body center (ports Body:applyImpulse, the
+            // no-point branch). Dynamic only; wakes.
+            void ApplyImpulse(Vec2 impulse) noexcept
+            {
+                if (m_world) m_world->ApplyImpulse(m_handle, impulse);
+            }
+
+            // Linear impulse at a world point -> linear + angular (ports
+            // Body:applyImpulse, the px,py branch). Dynamic only; wakes.
+            void ApplyImpulse(Vec2 impulse, Vec2 worldPoint) noexcept
+            {
+                if (m_world) m_world->ApplyImpulse(m_handle, impulse, worldPoint);
+            }
+
+            // Wake a sleeping Dynamic body (ports Body:wake).
+            void Wake() noexcept
+            {
+                if (m_world) m_world->Wake(m_handle);
+            }
+
+            [[nodiscard]] bool IsAwake() const noexcept
+            {
+                return m_world && m_world->IsAwake(m_handle);
+            }
+
+            [[nodiscard]] Real GetAngle() const noexcept
+            {
+                return m_world ? m_world->GetAngle(m_handle) : Real(0);
+            }
+
+            void SetAngle(Real angle) noexcept
+            {
+                if (m_world) m_world->SetAngle(m_handle, angle);
             }
 
             // Render-boundary lerp prev..curr (ports Body:drawPosition).
