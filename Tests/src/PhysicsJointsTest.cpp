@@ -339,8 +339,8 @@ TEST_CASE("PhysicsJoints: motor respects the torque clamp", "[physics][joints]")
     w.Step(kStep);
     const Real a1 = w.GetAngle(disk);
     const Real rate = (a1 - a0) / kStep;
-    // The clamp keeps the rate FAR below the 50 rad/s target after one step.
-    CHECK(rate < Real(50));
+    // clamp keeps the one-step rate far below the 50 rad/s target; a removed clamp would blow past 2.
+    CHECK(rate < Real(2));
     CHECK(rate >= Real(0));
 }
 

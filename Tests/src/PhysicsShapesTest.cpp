@@ -32,7 +32,7 @@ namespace
     // Relative epsilon for the larger-magnitude mass/inertia analytic checks.
     constexpr double kRelEps = 1e-4;
     // pi at f64 precision for the hand-derived expected values.
-    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kPiD = 3.14159265358979323846;
 
     // Pull a 4-tuple [x0,y0,x1,y1] expectation out of the oracle and assert the
     // computed AABB matches it (within the f32 absolute margin).
@@ -146,7 +146,7 @@ TEST_CASE("physics: MakePolygon enforces the vertex cap", "[physics]")
 TEST_CASE("physics: ComputeMass circle == analytic", "[physics]")
 {
     const double r = 2.0, density = 3.0;
-    const double area = kPi * r * r;
+    const double area = kPiD * r * r;
     const double mass = density * area;
     const double I    = mass * 0.5 * r * r;
 
@@ -205,11 +205,11 @@ TEST_CASE("physics: ComputeMass capsule == analytic", "[physics]")
     const double length = 2 * halfLen;       // 10
     const double h      = halfLen;           // 5
     const double boxMass    = density * (2 * r * length);   // 40
-    const double circleMass = density * (kPi * r * r);      // ~12.566
+    const double circleMass = density * (kPiD * r * r);      // ~12.566
     const double mass       = boxMass + circleMass;
 
     const double boxInertia = boxMass * (4 * r * r + length * length) / 12.0;
-    const double lc = 4 * r / (3 * kPi);
+    const double lc = 4 * r / (3 * kPiD);
     const double circleInertia =
         circleMass * (0.5 * r * r + h * h + 2 * h * lc);
     const double I = boxInertia + circleInertia;

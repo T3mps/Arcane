@@ -106,6 +106,9 @@ namespace Arcane
         // mover shape.
         inline constexpr std::uint32_t kMaxPolyVerts = 128u;
 
+        // Pi constant (f64 literal narrowed to Real; shared across physics math).
+        inline constexpr Real kPi = Real(3.14159265358979323846);
+
         // Linear slop: the small overlap the solver tolerates so resting
         // contacts do not jitter (Box2D-style allowed penetration). Used by
         // the position-correction / contact code in later tasks.

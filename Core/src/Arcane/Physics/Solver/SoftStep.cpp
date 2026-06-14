@@ -14,7 +14,8 @@
 #include <cmath>
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Joints/Joint.hpp> // Joint (Prepare/SolveVelocity)
+#include <Arcane/Physics/Joints/Joint.hpp>    // Joint (Prepare/SolveVelocity)
+#include <Arcane/Physics/Solver/SoftCoeffs.hpp> // shared MakeSoft + SoftCoeffs
 
 namespace Arcane
 {
@@ -25,9 +26,6 @@ namespace Arcane
             // Steps a warm-start cache entry survives unused before eviction
             // (the Lua CACHE_LIFE = 2). Bounds the cache.
             constexpr std::uint32_t kCacheLife = 2u;
-
-            // pi (f64 literal narrowed to Real; matches the workspace style).
-            constexpr Real kPi = Real(3.14159265358979323846);
 
             // 2D cross products (port of the Lua applyAt / contact math).
             //   scalar(w) x vec(r) -> vec : (-w*r.y, w*r.x)
@@ -43,27 +41,6 @@ namespace Arcane
             inline Real Dot(const Vec2& a, const Vec2& b) noexcept
             {
                 return a.x * b.x + a.y * b.y;
-            }
-
-            // b2MakeSoft(hertz, zeta, h): the Box2D v3 soft-constraint
-            // coefficients. hertz == 0 -> a hard (un-softened) constraint.
-            struct Soft
-            {
-                Real biasRate     = Real(0);
-                Real massScale    = Real(1);
-                Real impulseScale = Real(0);
-            };
-            Soft MakeSoft(Real hertz, Real zeta, Real h) noexcept
-            {
-                if (hertz <= Real(0))
-                {
-                    return Soft{ Real(0), Real(1), Real(0) };
-                }
-                const Real omega = Real(2) * kPi * hertz;
-                const Real a1 = Real(2) * zeta + h * omega;
-                const Real a2 = h * omega * a1;
-                const Real a3 = Real(1) / (Real(1) + a2);
-                return Soft{ omega / a1, a2 * a3, a3 };
             }
         } // namespace
 
@@ -105,7 +82,7 @@ namespace Arcane
             const Real h = ctx.subDt;
             const Real maxHertz = (h > Real(0)) ? (Real(0.25) / h) : w.ContactHertz();
             const Real contactHertz = std::min(w.ContactHertz(), maxHertz);
-            const Soft contactSoft = MakeSoft(contactHertz, w.ContactDampingRatio(), h);
+            const SoftCoeffs contactSoft = MakeSoft(contactHertz, w.ContactDampingRatio(), h);
 
             for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
             {

@@ -22,14 +22,6 @@ namespace Arcane
 {
     namespace Physics
     {
-        namespace
-        {
-            // pi as a Real. std::numbers::pi is C++20 but lives in <numbers>;
-            // we spell the constant directly to stay header-light and to keep
-            // the value identical across the /MD and static-CRT builds.
-            constexpr Real kPi = Real(3.14159265358979323846);
-        }
-
         // --------------------------------------------------------------------
         // ComputeAABB -- faithful port of shapes.lua aabbOf(s, x, y).
         // P1.1: translation-only (xf.rotation ignored), so the result matches

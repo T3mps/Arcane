@@ -16,6 +16,7 @@
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Joints/JointMath.hpp>
+#include <Arcane/Physics/Solver/SoftCoeffs.hpp> // shared MakeSoft + SoftCoeffs
 
 namespace Arcane
 {
@@ -23,33 +24,22 @@ namespace Arcane
     {
         namespace
         {
-            constexpr Real kPi = Real(3.14159265358979323846);
-
-            // b2MakeSoft (shared with the SoftStep contact solver): the soft-
-            // constraint coefficients from a frequency + damping ratio + step h.
-            struct Soft
-            {
-                Real biasRate     = Real(0);
-                Real massScale    = Real(1);
-                Real impulseScale = Real(0);
-            };
-            Soft MakeSoft(Real hertz, Real zeta, Real h) noexcept
-            {
-                if (hertz <= Real(0) || h <= Real(0))
-                {
-                    return Soft{ Real(0), Real(1), Real(0) };
-                }
-                const Real omega = Real(2) * kPi * hertz;
-                const Real a1 = Real(2) * zeta + h * omega;
-                const Real a2 = h * omega * a1;
-                const Real a3 = Real(1) / (Real(1) + a2);
-                return Soft{ omega / a1, a2 * a3, a3 };
-            }
-
             // 1/dt guarded against dt == 0 (the Lua BETA/dt; a zero dt -> 0 bias).
             Real InvDt(Real dt) noexcept
             {
                 return dt > Real(0) ? Real(1) / dt : Real(0);
+            }
+
+            // Inverse-rotate a world anchor into body-local space (bodies usually unrotated at creation).
+            Vec2 WorldToLocal(const PhysicsWorld& w, BodyHandle h, Vec2 worldPt) noexcept
+            {
+                const Vec2 p   = w.Position(h);
+                const Real ang = w.IsValid(h) ? w.GetAngle(h) : Real(0);
+                const Real dx  = worldPt.x - p.x;
+                const Real dy  = worldPt.y - p.y;
+                const Real c   = std::cos(-ang);
+                const Real s   = std::sin(-ang);
+                return Vec2(dx * c - dy * s, dx * s + dy * c);
             }
         } // namespace
 
@@ -287,7 +277,7 @@ namespace Arcane
             const Real kAxis = iMa + iMb + iIa * m_sAa * m_sAa + iIb * m_sBa * m_sBa;
             m_axMass = kAxis > Real(0) ? Real(1) / kAxis : Real(0);
             m_springSep = dx * m_axis.x + dy * m_axis.y; // current suspension offset
-            const Soft soft = MakeSoft(m_freqHz, m_damping, dt);
+            const SoftCoeffs soft = MakeSoft(m_freqHz, m_damping, dt);
             m_springBiasRate     = soft.biasRate;
             m_springMassScale    = soft.massScale;
             m_springImpulseScale = soft.impulseScale;
@@ -435,17 +425,8 @@ namespace Arcane
                 // Inverse-rotate the world anchor into each body's local frame
                 // (ports the Lua toLocal closure). For unrotated bodies (the
                 // common creation case) this is just anchor - pos.
-                auto toLocal = [&](BodyHandle h) -> Vec2 {
-                    const Vec2 p = w.Position(h);
-                    const Real ang = w.IsValid(h) ? w.GetAngle(h) : Real(0);
-                    const Real dx = def.anchor.x - p.x;
-                    const Real dy = def.anchor.y - p.y;
-                    const Real c = std::cos(-ang);
-                    const Real s = std::sin(-ang);
-                    return Vec2(dx * c - dy * s, dx * s + dy * c);
-                };
-                const Vec2 localA = toLocal(def.a);
-                const Vec2 localB = toLocal(def.b);
+                const Vec2 localA = WorldToLocal(w, def.a, def.anchor);
+                const Vec2 localB = WorldToLocal(w, def.b, def.anchor);
                 const Real refAngle =
                     (w.IsValid(def.b) ? w.GetAngle(def.b) : Real(0)) -
                     (w.IsValid(def.a) ? w.GetAngle(def.a) : Real(0));
@@ -480,17 +461,8 @@ namespace Arcane
             case JointKind::Wheel:
             {
                 // Local anchors (world anchor inverse-rotated into each frame).
-                auto toLocal = [&](BodyHandle h) -> Vec2 {
-                    const Vec2 p = w.Position(h);
-                    const Real ang = w.IsValid(h) ? w.GetAngle(h) : Real(0);
-                    const Real dx = def.anchor.x - p.x;
-                    const Real dy = def.anchor.y - p.y;
-                    const Real c = std::cos(-ang);
-                    const Real s = std::sin(-ang);
-                    return Vec2(dx * c - dy * s, dx * s + dy * c);
-                };
-                const Vec2 localA = toLocal(def.a);
-                const Vec2 localB = toLocal(def.b);
+                const Vec2 localA = WorldToLocal(w, def.a, def.anchor);
+                const Vec2 localB = WorldToLocal(w, def.b, def.anchor);
                 // Suspension axis in A's local frame.
                 Vec2 axis = def.axis;
                 const Real len = std::sqrt(axis.x * axis.x + axis.y * axis.y);
