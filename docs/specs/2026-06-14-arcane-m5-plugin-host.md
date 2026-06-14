@@ -674,6 +674,14 @@ through the plugin's registered `RenderSubmissionSystem`) and `RenderErrorCount(
    deviation; it is what makes reload robust to component-layout changes without
    detection logic. Restore is `Registry::Load(blob, Components(), Config{sched})` (the
    Phase-0 overload) → swap → rebind RunLoop.
+   **IMPORTANT (discovered during M5 execution): `Registry::Save` serializes entities,
+   archetypes (components), and the relationship graph — but NOT resources.** Astra
+   resources (`SetResource<T>`) are intentionally excluded (some hold non-serializable
+   transient state — `RenderContext2D` carries a raw `Batcher2D*`). So a plugin must
+   re-establish any PERSISTENT resource it owns across a restore: PlaygroundGame frames
+   its `SceneRoot` entity id alongside the registry blob in `SaveState` and re-calls
+   `SetResource<SceneRoot>` (+ re-caches handles) in `LoadState` after `RestoreRegistry`.
+   Entity ids ARE stable across Save/Load, so persisting the root id is sufficient.
 5. **Transient resources are re-set, not relied upon post-restore.** `RenderContext2D`
    carries a live `Batcher2D*`; the host re-sets it every frame via
    `Runtime::SetRenderContext` before `SubmitRender`, so the stale pointer a snapshot
