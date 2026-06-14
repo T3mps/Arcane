@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstddef>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace Arcane
@@ -126,7 +127,15 @@ namespace Arcane
     {
         const uint32_t g = m_impl->gen + 1;
         Image img;
-        if (!m_impl->CopyVersioned(g, img)) { ARC_ERROR("plugin: cannot copy source DLL"); return false; }
+        // Bounded retry: a freshly built DLL can be transiently read-locked by antivirus.
+        // (Reload/Poll need no retry -- the watcher reattempts every frame.)
+        bool copied = false;
+        for (int attempt = 0; attempt < 5 && !copied; ++attempt)
+        {
+            copied = m_impl->CopyVersioned(g, img);
+            if (!copied) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (!copied) { ARC_ERROR("plugin: cannot copy source DLL"); return false; }
         img.handle = Detail::DLOpen(img.dll);
         const bool resolved = img.handle
             && Resolve(img.handle, img.vt)

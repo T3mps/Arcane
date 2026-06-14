@@ -28,7 +28,7 @@ namespace Arcane
         PluginHost& operator=(const PluginHost&) = delete;
 
         bool Load();                       // initial load: copy+load+ABI+Init (no state restore)
-        void Unload();                     // Shutdown + ClearSystems + FreeLibrary + delete copies
+        void Unload();                     // Shutdown + ClearSystems + ResetRegistry + FreeLibrary + delete copies
         bool Reload(bool restoreState);    // full sequence; rollback on any failure
         void Poll();                       // debounced mtime watch -> Reload(true) on a stable change
 

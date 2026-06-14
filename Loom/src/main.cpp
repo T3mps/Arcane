@@ -127,9 +127,10 @@ int main(int argc, char** argv)
         // point to unmapped memory. If the TypeContext (and its MetaRegistry) were
         // ever destructed, ~std::function() would invoke those thunks -> crash.
         // Heap-leaking is the correct production pattern for a long-running host;
-        // the OS reclaims all process memory on exit anyway. Tests use the same
-        // approach (Arcane::Test::SharedTypeContext() is a function-static whose
-        // destructor is never observed while plugin thunks are live).
+        // the OS reclaims all process memory on exit anyway.
+        // (The test exe is safe for a different reason: MetaRegistry::Register is first-writer-wins,
+        // and the test TUs that reflect these types are never unloaded, so their thunks -- not the
+        // plugin's -- own the MetaRegistry entries.)
         static Astra::TypeContext* const s_typeContext = new Astra::TypeContext();
         Arcane::Runtime runtime(s_typeContext);
         Arcane::PluginHost plugin(runtime, std::filesystem::path(pluginPath));

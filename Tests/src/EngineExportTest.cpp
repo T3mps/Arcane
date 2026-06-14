@@ -16,6 +16,6 @@ TEST_CASE("engine dll: BuildInfo exports and matches the Core version line", "[e
     REQUIRE(info != nullptr);
     REQUIRE(std::strlen(info) > 0);
     // Same milestone tag as Core's VersionString.
-    REQUIRE(std::strstr(info, "(M2b)") != nullptr);
-    REQUIRE(std::strstr(Arcane::VersionString(), "(M2b)") != nullptr);
+    REQUIRE(std::strstr(info, "(M5)") != nullptr);
+    REQUIRE(std::strstr(Arcane::VersionString(), "(M5)") != nullptr);
 }
