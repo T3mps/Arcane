@@ -51,8 +51,18 @@ namespace Arcane
 
         // --- hot-reload support (plugin Save/LoadState + the host call these) ---
         std::vector<std::byte> SnapshotRegistry() const;          // Registry::Save() -> bytes
-        bool RestoreRegistry(std::span<const std::byte> bytes);   // Load(Config{sched}); swap; rebind RunLoop
-        void ResetRegistry();                                     // swap in a fresh empty registry (fresh-boot reload)
+
+        // Swaps in a registry deserialized from bytes (3.3 Load keeps the workScheduler) and rebinds the
+        // RunLoop. The SystemSchedulers are KEPT; the host clears + re-registers systems around a reload
+        // (ClearSystems before the plugin's Init). Engine systems receive Registry& per Execute, so running
+        // the kept schedulers against the swapped registry is safe.
+        bool RestoreRegistry(std::span<const std::byte> bytes);
+
+        // Swaps in a FRESH empty registry (same shared ComponentRegistry + scheduler) and rebinds the
+        // RunLoop; SystemSchedulers are kept. Used for a fresh-boot reload so the plugin's Init rebuilds
+        // its scene. Caller clears systems first (ClearSystems).
+        void ResetRegistry();
+
         void ClearSystems();                                      // Clear() all three phase schedulers
 
     private:

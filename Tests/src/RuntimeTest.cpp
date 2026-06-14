@@ -72,3 +72,18 @@ TEST_CASE("Runtime ClearSystems empties all phase schedulers", "[runtime]")
     CHECK(rt.Schedulers().update.Empty());
     CHECK(rt.Schedulers().render.Empty());
 }
+
+TEST_CASE("Runtime ResetRegistry empties the registry but keeps the ComponentRegistry", "[runtime]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Counter>();
+    rt.Registry().CreateEntityWith(Counter{42});
+    REQUIRE(rt.Registry().Size() == 1);
+
+    rt.ResetRegistry();
+    CHECK(rt.Registry().IsEmpty());
+
+    // The shared ComponentRegistry still knows Counter -> this must not crash and must land.
+    rt.Registry().CreateEntityWith(Counter{1});
+    CHECK(rt.Registry().Size() == 1);
+}

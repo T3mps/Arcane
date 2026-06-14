@@ -44,6 +44,8 @@ namespace Arcane
         void     (*Shutdown)()                           = nullptr;
         void     (*FixedUpdate)(double dt)               = nullptr;
         void     (*Update)(double dt, double alpha)      = nullptr;
+        // SaveState is void because BinaryWriter is error-latching; callers check writer.HasError()
+        // after the call, mirroring how LoadState signals failure via its bool return.
         void     (*SaveState)(Astra::BinaryWriter&)      = nullptr;
         bool     (*LoadState)(Astra::BinaryReader&)      = nullptr;
     };

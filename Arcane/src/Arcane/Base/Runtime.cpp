@@ -20,7 +20,7 @@ namespace Arcane
         std::unique_ptr<Astra::Registry>            registry;
         std::unique_ptr<SystemSchedulers>           schedulers;
         std::unique_ptr<RunLoop>                    loop;
-        RunLoop::Config                             loopCfg;
+        RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
 
         explicit Impl(Astra::TypeContext* external) : jobs(), sched(jobs.WorkScheduler())
         {
