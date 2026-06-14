@@ -509,12 +509,18 @@ TEST_CASE("PhysicsSolver: warm-start cache evicts stale entries", "[physics][sol
     AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
     BodyHandle ball = AddCircle(w, Vec2(Real(0), Real(-10)), Real(2));
 
-    // Settle the ball so it is generating contacts (cache populated).
+    // Settle the ball so it is generating contacts (cache populated). Capture the
+    // peak cache size WHILE the ball is still in contact -- as of P2.4 the island
+    // pass eventually sleeps a resting ball, which stops contact generation and
+    // legitimately drains the cache, so we must observe the populated state during
+    // the active-contact window rather than at a fixed late step.
+    std::size_t peakCache = 0;
     for (int k = 0; k < 120; ++k)
     {
         w.Step(kStep);
+        peakCache = std::max(peakCache, w.SolverWarmStartCacheSize());
     }
-    REQUIRE(w.SolverWarmStartCacheSize() > std::size_t(0)); // populated
+    REQUIRE(peakCache > std::size_t(0)); // populated while in contact
 
     // Remove the ball -> no more contacts -> the cache must DRAIN to 0 within a
     // few steps (kCacheLife = 2 means an entry survives <= 2 unused stamps).

@@ -22,6 +22,7 @@
 #include <Arcane/Physics/Narrowphase/Dispatch.hpp>       // CollideShapes (contact gen)
 #include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl
 #include <Arcane/Physics/Solver/Baumgarte.hpp>           // Baumgarte oracle impl (A/B)
+#include <Arcane/Physics/Island.hpp>                     // island sleep pass (stage 4)
 
 namespace Arcane
 {
@@ -600,7 +601,19 @@ namespace Arcane
                 m_solver->Solve(ctx);
             }
 
-            // ---- stage 4: island sleep bookkeeping (P2.4 -- deferred) --------
+            // ---- stage 4: island sleep bookkeeping (P2.4) --------------------
+            // Build the per-Step constraint graph (bodies = nodes, THIS step's
+            // contacts = edges), advance per-body sleep timers, and sleep any
+            // island whose every member is idle past the threshold. Runs AFTER
+            // the solve using this step's contacts; sleeping bodies are then
+            // skipped by the next Step's GenerateContacts + solver (the awake
+            // gate), freezing their positions. Ports PhysicsWorld.lua:403-452.
+            Island::UpdateSleep(
+                *this,
+                m_contactConstraints.empty() ? nullptr : m_contactConstraints.data(),
+                static_cast<std::uint32_t>(m_contactConstraints.size()),
+                /*joints=*/nullptr, /*jointCount=*/0, // joints arrive in P2.5
+                dt);
 
             // ---- stage 5: events + gating + deferred flush -------------------
             m_contacts.Step(*this);
@@ -752,7 +765,9 @@ namespace Arcane
                 }
 
                 // Wake a sleeping dynamic touched by an awake mover (ports the
-                // Lua wake rules). Note: P2.4 owns sleep; today m_awake stays 1.
+                // Lua wake rules, PhysicsWorld.lua:369-382). P2.4's island pass
+                // now sleeps idle dynamics, so this wake path is live: a sleeping
+                // dynamic that an awake mover moves into must rejoin the solve.
                 if (da && m_awake[a] == 0 && (!db || m_awake[b] != 0))
                 {
                     m_awake[a] = 1;

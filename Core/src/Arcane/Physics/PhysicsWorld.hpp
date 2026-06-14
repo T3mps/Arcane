@@ -496,6 +496,29 @@ namespace Arcane
                 m_velY[i] = v.y;
             }
             void SetAngVelSlot(std::uint32_t i, Real w) noexcept { m_angVel[i] = w; }
+
+            // ---- internals consumed by the Island sleep module (P2.4 seam) ---
+            //
+            // Island::UpdateSleep reads/writes the sleep-timer SoA + flips the
+            // awake flag through these slot accessors (mirroring the solver seam
+            // above) so the raw vectors stay private. SetAwakeSlot(i, false) +
+            // zeroing the velocities is how an island goes to sleep; the
+            // sleep-timer accumulates idle time per body. Inline -> the
+            // per-body call cost vanishes in an optimized build.
+            [[nodiscard]] Real SleepTimerSlot(std::uint32_t i) const noexcept { return m_sleepTimer[i]; }
+            void SetSleepTimerSlot(std::uint32_t i, Real t) noexcept { m_sleepTimer[i] = t; }
+            void SetAwakeSlot(std::uint32_t i, bool on) noexcept
+            {
+                m_awake[i] = on ? std::uint8_t(1) : std::uint8_t(0);
+            }
+            // Pooled union-find scratch for the island graph (ports the Lua
+            // w._uf). Grown to m_count once per Step; reused -> zero steady-state
+            // alloc. Exposed so Island::UpdateSleep builds the constraint graph
+            // in the world's own buffer instead of allocating its own.
+            [[nodiscard]] std::vector<std::uint32_t>& UnionFindScratch() noexcept
+            {
+                return m_uf;
+            }
             // Commit final position/angle for slot i + refresh the mover
             // broadphase AABB (solver FinalizePositions). Dynamic-only call site.
             void CommitSlotPosition(std::uint32_t i, Vec2 p, Real angle) noexcept
@@ -654,6 +677,14 @@ namespace Arcane
             std::vector<Aabb2>          m_genSpans;
             std::vector<std::uint32_t>  m_genStatics;
             std::vector<BroadphasePair> m_genPairs;
+
+            // ---- island sleep scratch (P2.4; Step-only; zero steady-state) ---
+            //
+            // Union-find parent array for the per-Step constraint graph (bodies =
+            // nodes, contacts = edges). Sized to m_count once per Step and reused
+            // (ports the Lua w._uf). Island::UpdateSleep owns its contents; it
+            // lives here so the island pass allocates nothing after warmup.
+            std::vector<std::uint32_t>  m_uf;
         };
 
     } // namespace Physics
