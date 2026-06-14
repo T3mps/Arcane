@@ -64,8 +64,7 @@
 #include <Arcane/Physics/Broadphase/Passability.hpp>
 #include <Arcane/Physics/Broadphase/TileGrid.hpp>
 #include <Arcane/Physics/ContactManager.hpp>
-#include <Arcane/Physics/Solver/Solver.hpp>      // ContactConstraint pool type
-#include <Arcane/Physics/Solver/SoftStep.hpp>    // the installed solver
+#include <Arcane/Physics/Solver/Solver.hpp>      // ISolver + ContactConstraint pool type
 
 namespace Arcane
 {
@@ -84,6 +83,22 @@ namespace Arcane
             Tree = 0, // DynamicTree (default)
             Hash = 1, // SpatialHash
             Sap  = 2, // SweepAndPrune
+        };
+
+        // ----------------------------------------------------------------
+        // SolverKind: which constraint solver the world installs (P2.3 A/B).
+        // ----------------------------------------------------------------
+        //
+        // SoftStep (default) is the Box2D-v3 TGS Soft modernization centerpiece
+        // (P2.2). Baumgarte is the retained PGS oracle -- a faithful port of the
+        // Lua SequentialImpulse (P2.3). Both implement ISolver and satisfy the
+        // same stability invariants on the same scenes (the A/B cross-check);
+        // running both guards against solver-specific bugs. Parallel to
+        // BroadphaseKind: the world picks one in its constructor.
+        enum class SolverKind : std::uint8_t
+        {
+            SoftStep  = 0, // Box2D-v3 TGS Soft (default)
+            Baumgarte = 1, // Lua SequentialImpulse PGS oracle (A/B cross-check)
         };
 
         // ----------------------------------------------------------------
@@ -166,6 +181,18 @@ namespace Arcane
             Real          contactDampingRatio  = Real(10);
             Real          restitutionThreshold = Real(20);  // Lua REST_VEL = 20
             Real          contactPushMaxVelocity = Real(300);
+
+            // ---- solver selection (P2.3 A/B cross-check) --------------------
+            //
+            // Which ISolver the world installs (parallel to `broadphase`).
+            // SoftStep (default) is the P2.2 TGS Soft solver; Baumgarte is the
+            // P2.3 retained PGS oracle (Lua SequentialImpulse port). Both satisfy
+            // the same stability invariants on the same scenes.
+            SolverKind    solverKind = SolverKind::SoftStep;
+
+            // Baumgarte-only: velocity iterations per Step (the Lua w.velIters,
+            // default 8). Ignored by SoftStep (which iterates by substepCount).
+            std::uint32_t velIters = 8u;
         };
 
         class Body; // forward decl (Body.hpp); ergonomic view over a handle.
@@ -485,9 +512,10 @@ namespace Arcane
             }
             // Solver warm-start cache size (inspection/test hook -- the harness
             // asserts the cache stays bounded as transient contacts come + go).
+            // Routes through the installed ISolver (both solvers report it).
             [[nodiscard]] std::size_t SolverWarmStartCacheSize() const noexcept
             {
-                return m_solver.WarmStartCacheSize();
+                return m_solver ? m_solver->WarmStartCacheSize() : std::size_t(0);
             }
 
             // Soft Step config (solver reads it in Prepare / the sub-step loop).
@@ -496,6 +524,10 @@ namespace Arcane
             [[nodiscard]] Real ContactDampingRatio() const noexcept { return m_contactDampingRatio; }
             [[nodiscard]] Real RestitutionThreshold() const noexcept { return m_restitutionThreshold; }
             [[nodiscard]] Real ContactPushMaxVelocity() const noexcept { return m_contactPushMaxVelocity; }
+
+            // Baumgarte velocity-iteration count (Lua w.velIters; SoftStep
+            // ignores it). Read by the Baumgarte solver in its Solve().
+            [[nodiscard]] std::uint32_t VelIters() const noexcept { return m_velIters; }
 
             // World-space tight AABB of slot i. Exposed here (not just private)
             // so ContactManager can use it for the AABB pre-filter on the
@@ -571,16 +603,22 @@ namespace Arcane
             Real          m_restitutionThreshold = Real(20);
             Real          m_contactPushMaxVelocity = Real(300);
 
+            // Baumgarte-only velocity iterations (copied from WorldDef.velIters).
+            std::uint32_t m_velIters = 8u;
+
             // ---- contacts --------------------------------------------------
             ContactManager m_contacts;
 
-            // ---- solver (P2.2) ---------------------------------------------
+            // ---- solver (P2.2 SoftStep / P2.3 Baumgarte; A/B via solverKind) -
             //
-            // The installed constraint solver + the WORLD-OWNED ContactConstraint
-            // pool (Part A's contact generation fills m_contactConstraints; the
-            // solver reads it). The pool only grows (clear()+emplace each Step
-            // preserves capacity) -> zero steady-state allocation in Step.
-            SoftStep                       m_solver;
+            // The installed constraint solver (polymorphic since P2.3 -- the
+            // world holds an ISolver* chosen by WorldDef::solverKind) + the
+            // WORLD-OWNED ContactConstraint pool. GenerateContacts (Part A) fills
+            // m_contactConstraints with SOLVER-AGNOSTIC raw geometry; the solver
+            // reads it and computes its own effective masses / bias. The pool
+            // only grows (clear()+emplace each Step preserves capacity) -> zero
+            // steady-state allocation in Step.
+            std::unique_ptr<ISolver>       m_solver;
             std::vector<ContactConstraint> m_contactConstraints;
 
             // Build the dynamics ContactConstraint array for this Step (Part A):

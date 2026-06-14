@@ -20,6 +20,8 @@
 #include <Arcane/Physics/Broadphase/SweepAndPrune.hpp>
 #include <Arcane/Physics/Narrowphase/GeometryKernel.hpp> // AabbOverlap (QueryAABB)
 #include <Arcane/Physics/Narrowphase/Dispatch.hpp>       // CollideShapes (contact gen)
+#include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl
+#include <Arcane/Physics/Solver/Baumgarte.hpp>           // Baumgarte oracle impl (A/B)
 
 namespace Arcane
 {
@@ -42,6 +44,21 @@ namespace Arcane
                     return std::make_unique<DynamicTree>();
                 }
             }
+
+            std::unique_ptr<ISolver> MakeSolver(const WorldDef& def)
+            {
+                // P2.3 A/B seam: pick the installed solver by WorldDef::solverKind
+                // (default SoftStep -- the P2.2 TGS Soft solver; Baumgarte is the
+                // retained PGS oracle that runs the same scenes for cross-check).
+                switch (def.solverKind)
+                {
+                case SolverKind::Baumgarte:
+                    return std::make_unique<Baumgarte>();
+                case SolverKind::SoftStep:
+                default:
+                    return std::make_unique<SoftStep>();
+                }
+            }
         } // namespace
 
         PhysicsWorld::PhysicsWorld(const WorldDef& def)
@@ -53,6 +70,8 @@ namespace Arcane
             , m_contactDampingRatio(def.contactDampingRatio)
             , m_restitutionThreshold(def.restitutionThreshold)
             , m_contactPushMaxVelocity(def.contactPushMaxVelocity)
+            , m_velIters(def.velIters > 0u ? def.velIters : 1u)
+            , m_solver(MakeSolver(def))
         {
             // Optional tile statics: own a TileGrid over the passability seam if
             // one was provided (ports the Lua `tileGrid = map and TileGrid.new`).
@@ -246,7 +265,7 @@ namespace Arcane
             }
 
             m_contacts.DropBody(idx);
-            m_solver.DropBody(idx); // drop warm-start state for the recycled slot
+            m_solver->DropBody(idx); // drop warm-start state for the recycled slot
             m_shape[idx] = Shape{}; // release polygon storage
             m_free.push_back(idx);
         }
@@ -578,7 +597,7 @@ namespace Arcane
                 ctx.subDt        = dt / static_cast<Real>(m_substepCount);
                 ctx.invSubDt     = ctx.subDt > Real(0) ? Real(1) / ctx.subDt : Real(0);
                 ctx.gravity      = Vec2(m_gravityX, m_gravityY);
-                m_solver.Solve(ctx);
+                m_solver->Solve(ctx);
             }
 
             // ---- stage 4: island sleep bookkeeping (P2.4 -- deferred) --------

@@ -1,50 +1,44 @@
 #pragma once
 
-// ISolver: the velocity/position constraint-solver interface (M6, Task P2.1).
+// ISolver: the velocity/position constraint-solver interface (M6, Tasks P2.1-3).
 //
 // PORT + MODERNIZE: the Lua engine routed all dynamics response through a single
 // swappable `solver` seam (PhysicsWorld.lua:181 `solver = SequentialImpulse`,
 // called once per Step at line 389 `self.solver.solve(self, contacts, nC,
-// joints, dt)`). The C++ engine keeps that seam but splits the monolithic
-// `solve(...)` into the Box2D-v3 Soft Step sub-step phases so a TGS soft-
-// constraint solver (P2.2) and a retained Baumgarte PGS oracle (the A/B cross-
-// check) can BOTH implement one interface without the world knowing which is
-// installed. A future XPBD experiment can drop in the same way.
+// joints, dt)`). The C++ engine keeps that single-entry seam: ISolver exposes
+// ONE Solve(SolverContext&) entry that owns the whole per-Step pipeline. Two
+// implementations live behind it (the A/B cross-check, P2.3):
+//   * SoftStep   -- the Box2D-v3 TGS Soft modernization centerpiece (P2.2).
+//   * Baumgarte  -- the retained PGS oracle, a faithful port of the Lua
+//                   SequentialImpulse (P2.3). The world picks one via
+//                   WorldDef::solverKind; running BOTH over the same scenes
+//                   guards against solver-specific bugs.
 //
-// SCAFFOLDING NOTE (P2.1): this header defines the SHAPE of the contract only.
-// It is NOT called by PhysicsWorld::Step in P2.1 -- there is no implementation
-// yet (a dynamic body free-falls ballistically until P2.2 wires a solver into
-// the stage 2-3 seam). The Soft Step algorithm is concrete in P2.2; it is
-// EXPECTED that P2.2 refines these signatures once the per-substep data layout
-// (warm-start impulse storage, soft (hertz, dampingRatio) tuning, the
-// contact/joint constraint SoA) is pinned down. The interface is intentionally
-// minimal + adjustable; treat it as a design anchor, not a frozen ABI.
+// HISTORY (P2.1 -> P2.3): the P2.1 scaffolding split the monolithic solve into
+// six Box2D-v3 sub-step phases (PrepareContacts/PrepareJoints/SolveVelocity/
+// Relax/ApplyRestitution/SolvePosition) as PURE virtuals. P2.2's SoftStep made
+// those its OWN orchestration (it owns the sub-step loop ordering internally),
+// so for the P2.3 A/B seam the six phase methods are DEMOTED to SoftStep-private
+// helpers and ISolver is slimmed to the shared entry below. Each solver owns its
+// whole pipeline (integrate velocities -> solve -> integrate positions); the
+// world no longer drives a phase sequence. A future XPBD experiment drops in the
+// same way -- it just implements Solve.
 //
-// SOFT STEP shape (Box2D v3 -- Solver2D / "Solver 2024"): per Step the dt is
-// split into `substepCount` sub-steps. The world integrates velocities (gravity
-// + damping) before the solver runs (PhysicsWorld::Step stage 1). The solver
-// then, per Step:
-//   1. PrepareContacts / PrepareJoints -- build the constraint SoA from this
-//      step's manifolds + joint list; seed warm-start impulses from the prior
-//      step (TGS warm-starting). dt + invDt(substep) cached here.
-//   2. for substep in [0, substepCount):
-//        SolveVelocity(substep) -- one TGS pass over SOFT contact + joint
-//        velocity constraints (biased toward the soft target), warm-started.
-//        (Position integration between substeps is owned by the world's stage 4
-//        in P2.1's faithful order; P2.2 may pull the per-substep position
-//        integrate inside the loop -- a signature it is free to add.)
-//        Relax(ctx, substep)    -- one TGS pass with NO bias (removes the energy
-//        the biased SolveVelocity injected for this substep; the v3 "relax" stage).
-//   3. ApplyRestitution() -- a final pass applying restitution to contacts whose
-//      approach speed exceeded the threshold (separated from the soft solve so
-//      bounciness is not damped by the soft target).
-//   4. SolvePosition() -- optional position correction / NGS-style cleanup for
-//      residual penetration (the Soft Step soft contacts handle most of it; this
-//      is the safety pass the Baumgarte oracle leans on more heavily).
+// INTEGRATION OWNERSHIP: since P2.2 the world's Step no longer integrates
+// dynamic velocity/position inline (the old stage-1/stage-4 dynamic branches are
+// gone). The installed solver OWNS dynamic integration: SoftStep folds it into
+// its sub-step loop (gravity/damping per sub-step, position per sub-step);
+// Baumgarte does a single full-dt integrate-velocities -> SI solve -> integrate-
+// positions. Both consume the SAME world-generated raw ContactConstraint array
+// (GenerateContacts is solver-AGNOSTIC: it produces geometry only -- normal,
+// per-point {anchorA/B, baseSeparation, id}, friction, restitution, the cached
+// invMass/invInertia of A + B -- NOT solver-specific solved data). Each solver
+// computes its own effective masses / bias in its own prepare pass.
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. namespace Arcane::Physics, Core style.
 
+#include <cstddef>
 #include <cstdint>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -115,11 +109,18 @@ namespace Arcane
             // Representative normal (B -> A) + its tangent (perp, = (-ny, nx)).
             Vec2 normal{ Real(0), Real(0) };
 
-            // Combined material coefficients (Prepare-time).
+            // Combined material coefficients (set by GenerateContacts: friction
+            // = geometric mean sqrt(fricA*fricB); restitution = max). Both
+            // solvers consume these raw values.
             Real friction    = Real(0);
             Real restitution = Real(0);
 
             // Soft coefficients (b2MakeSoft from contact hertz/dampingRatio/h).
+            // SOFTSTEP-ONLY: filled by SoftStep::Prepare; the Baumgarte oracle
+            // ignores them (it derives its own Baumgarte positional bias from
+            // BETA/SLOP). GenerateContacts leaves them at the neutral defaults
+            // (massScale=1, biasRate=impulseScale=0) so they are solver-agnostic
+            // until a solver overwrites them.
             Real biasRate     = Real(0);
             Real massScale    = Real(1);
             Real impulseScale = Real(0);
@@ -182,51 +183,41 @@ namespace Arcane
         };
 
         // ----------------------------------------------------------------
-        // ISolver: the swappable constraint-solver contract.
+        // ISolver: the swappable constraint-solver contract (slimmed in P2.3).
         // ----------------------------------------------------------------
         //
-        // Implemented in P2.2 (Solver/SoftStep.hpp/.cpp -- the modernization
-        // centerpiece) and by a retained Baumgarte PGS oracle (the A/B cross-
-        // check, validated against the same dynamics invariants). PhysicsWorld
-        // holds one ISolver and drives the phase sequence from Step's stage 2-3
-        // seam. Phases are separate (not one solve()) so the world owns the
-        // sub-step loop ordering and so a profiler/oracle can step phase by phase.
+        // ONE entry: Solve(ctx) runs the installed solver's WHOLE per-Step
+        // pipeline (it owns dynamic integration + the constraint solve + warm-
+        // start persistence -- see the INTEGRATION OWNERSHIP note up top). The
+        // world holds a std::unique_ptr<ISolver> chosen by WorldDef::solverKind
+        // and calls Solve once per Step; it does NOT drive a phase sequence (the
+        // six P2.1 phase pure-virtuals were demoted to SoftStep-private helpers
+        // for the P2.3 A/B seam). Two impls: SoftStep (Box2D-v3 TGS Soft) and
+        // Baumgarte (the retained Lua-SequentialImpulse PGS oracle).
         class ISolver
         {
         public:
             virtual ~ISolver() = default;
 
-            // Build the contact-constraint SoA from this step's manifolds and
-            // seed warm-start impulses from the prior step. Caches per-step
-            // scalars (invDt, soft coefficients). Ports the prepare half of the
-            // Lua solve()'s contact loop.
-            virtual void PrepareContacts(SolverContext& ctx) = 0;
+            // Advance the dynamics for one full Step: integrate dynamic
+            // velocities, solve the contact constraints in `ctx`, integrate
+            // dynamic positions, and persist warm-start state. The world owns the
+            // ContactConstraint pool (ctx.contacts); the solver owns its own
+            // effective-mass/bias prepare + its warm-start cache.
+            virtual void Solve(SolverContext& ctx) = 0;
 
-            // Build the joint-constraint SoA + warm-start. Ports the joint prep.
-            virtual void PrepareJoints(SolverContext& ctx) = 0;
+            // Drop a body's warm-start state when its slot is recycled
+            // (RemoveBody) so a reused slot inherits no stale impulses. Default
+            // no-op: a solver whose cache self-evicts by stamp need not act.
+            virtual void DropBody(std::uint32_t slot) { (void)slot; }
 
-            // One Temporal-Gauss-Seidel velocity pass for sub-step `substep`
-            // (contacts + joints), biased toward the SOFT target and warm-
-            // started. Called substepCount times per Step.
-            virtual void SolveVelocity(SolverContext& ctx, int substep) = 0;
-
-            // One velocity pass with NO bias (the v3 "relax" stage): removes the
-            // energy the biased SolveVelocity injected for sub-step `substep` so
-            // soft contacts do not gain energy. `substep` matches the index passed
-            // to the immediately preceding SolveVelocity call, allowing the relax
-            // pass to cancel exactly the bias term that substep introduced.
-            // Called once per sub-step after SolveVelocity.
-            virtual void Relax(SolverContext& ctx, int substep) = 0;
-
-            // Final pass: apply restitution to contacts whose approach speed
-            // exceeded the threshold (kept out of the soft solve so bounce is not
-            // damped by the soft target). Called once per Step.
-            virtual void ApplyRestitution(SolverContext& ctx) = 0;
-
-            // Optional position-correction / NGS cleanup for residual
-            // penetration (soft contacts handle most; this is the safety pass the
-            // Baumgarte oracle relies on). Called once per Step.
-            virtual void SolvePosition(SolverContext& ctx) = 0;
+            // Current warm-start cache entry count (test/inspection hook; the
+            // harness asserts the cache stays bounded). Default 0 for a solver
+            // that keeps no cache.
+            [[nodiscard]] virtual std::size_t WarmStartCacheSize() const noexcept
+            {
+                return 0;
+            }
         };
 
     } // namespace Physics

@@ -64,35 +64,43 @@ namespace Arcane
             SoftStep() = default;
             ~SoftStep() override = default;
 
-            // ---- ISolver phases (driven by PhysicsWorld::Step) -------------
-            void PrepareContacts(SolverContext& ctx) override;
-            void PrepareJoints(SolverContext& ctx) override;   // no-op stub (P2.5)
-            void SolveVelocity(SolverContext& ctx, int substep) override;
-            void Relax(SolverContext& ctx, int substep) override;
-            void ApplyRestitution(SolverContext& ctx) override;
-            void SolvePosition(SolverContext& ctx) override;   // no-op (soft handles it)
-
-            // ---- whole-Step driver -----------------------------------------
+            // ---- ISolver entry (the single per-Step driver) ----------------
             //
-            // The single entry the world calls: runs the full TGS Soft pipeline
-            // (Prepare -> sub-step loop[integrate-vel, warm-start, solve, integrate-
-            // pos, relax] -> restitution -> store impulses -> commit positions).
-            // Keeping the loop here (rather than in the world) lets the solver own
-            // the dynamic velocity + position integration the v3 algorithm folds
-            // into the sub-steps, while the world still owns Step staging.
-            void Solve(SolverContext& ctx);
+            // Runs the full TGS Soft pipeline (Prepare -> sub-step loop[integrate-
+            // vel, warm-start, solve, integrate-pos, relax] -> restitution -> store
+            // impulses -> commit positions). The solver owns the dynamic velocity
+            // + position integration the v3 algorithm folds into the sub-steps; the
+            // world just calls Solve once per Step. Behavior is byte-identical to
+            // the P2.2 implementation (the P2.3 ISolver slimming was a pure
+            // interface refactor -- this method's body did not change).
+            void Solve(SolverContext& ctx) override;
 
             // Drop a body from the warm-start cache + scratch (called on
             // RemoveBody so a recycled slot does not inherit stale impulses).
-            void DropBody(std::uint32_t slot);
+            void DropBody(std::uint32_t slot) override;
 
-            // Test/inspection hook: current warm-start cache entry count.
-            [[nodiscard]] std::size_t WarmStartCacheSize() const noexcept
+            // Current warm-start cache entry count (ISolver inspection hook).
+            [[nodiscard]] std::size_t WarmStartCacheSize() const noexcept override
             {
                 return m_cache.size();
             }
 
         private:
+            // ---- per-Step phase helpers (private since P2.3) ---------------
+            //
+            // These WERE the P2.1 ISolver phase pure-virtuals; Solve() above
+            // sequences them (it interleaves SolveContacts with the velocity +
+            // position integration the v3 algorithm folds into the sub-step loop).
+            // For the P2.3 A/B seam ISolver was slimmed to Solve()+DropBody(), so
+            // they are now SoftStep-private non-virtual helpers (no `override`):
+            // SoftStep owns its own phase ordering internally.
+            void PrepareContacts(SolverContext& ctx);
+            void PrepareJoints(SolverContext& ctx);            // no-op stub (P2.5)
+            void SolveVelocity(SolverContext& ctx, int substep);
+            void Relax(SolverContext& ctx, int substep);
+            void ApplyRestitution(SolverContext& ctx);
+            void SolvePosition(SolverContext& ctx);            // no-op (soft handles it)
+
             // Ensure the per-body sub-step scratch is sized for `n` slots.
             void EnsureScratch(std::uint32_t n);
 
