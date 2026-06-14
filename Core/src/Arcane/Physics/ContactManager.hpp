@@ -159,6 +159,16 @@ namespace Arcane
             void Emit(PhysicsWorld& w, ContactEvent::Type type,
                       std::uint32_t a, std::uint32_t b);
 
+        public:
+            // Visit each pair currently in the begun state (begun == true),
+            // passing the two body SLOT indices (a <= b by canonical order).
+            // Read-only; for debug draw / inspection.  Iteration order is
+            // unordered (unordered_map traversal).
+            void ForEachBegunPair(
+                const std::function<void(std::uint32_t a,
+                                         std::uint32_t b)>& fn) const;
+
+        private:
             // pair key -> pair. Reused across steps (no per-step alloc).
             std::unordered_map<std::uint64_t, Pair> m_pairs;
             Listener                                m_listener;

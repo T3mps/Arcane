@@ -62,6 +62,7 @@
 // namespace Arcane::Physics, Core style.
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -526,6 +527,28 @@ namespace Arcane
                 m_velY[i] = v.y;
             }
             void SetAngVelSlot(std::uint32_t i, Real w) noexcept { m_angVel[i] = w; }
+
+            // ---- pull API for debug draw / inspection (P3.6) ----------------
+            //
+            // These are PRESENTATION-FREE read paths consumed by the Arcane.dll
+            // render-side PhysicsDebugDraw -- presentation code must NOT enter
+            // Core.  Both forward to Core-internal members without exposing raw
+            // vectors to general callers.
+
+            // Visit each contact pair in the begun state (begun == true) from
+            // the LAST Step, passing the two body SLOT indices.  Read-only;
+            // unordered iteration (unordered_map traversal -- acceptable for a
+            // debug overlay).  Forwards to ContactManager::ForEachBegunPair.
+            void ForEachContact(
+                const std::function<void(std::uint32_t a,
+                                         std::uint32_t b)>& fn) const;
+
+            // Island root (id) of slot i from the LAST Step's island pass
+            // (debug/inspection).  Bodies in the same dynamic island share a
+            // root.  Returns i itself when the island pass has not run or i is
+            // not a unioned member (m_uf shorter than m_count at that point).
+            // Reflects the most recently completed Step; stale between Steps.
+            [[nodiscard]] std::uint32_t IslandRootOf(std::uint32_t i) const noexcept;
 
             // ---- internals consumed by the Island sleep module (P2.4 seam) ---
             //

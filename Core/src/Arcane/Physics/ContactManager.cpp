@@ -20,6 +20,18 @@ namespace Arcane
 {
     namespace Physics
     {
+        void ContactManager::ForEachBegunPair(
+            const std::function<void(std::uint32_t, std::uint32_t)>& fn) const
+        {
+            for (const auto& [key, p] : m_pairs)
+            {
+                if (p.begun)
+                {
+                    fn(p.a, p.b);
+                }
+            }
+        }
+
         bool ContactManager::ShapesOverlap(const PhysicsWorld& w,
                                            std::uint32_t a, std::uint32_t b)
         {

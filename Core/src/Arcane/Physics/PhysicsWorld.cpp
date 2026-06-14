@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <functional>
 
 #include <Arcane/Physics/Body.hpp>
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
@@ -1001,6 +1002,23 @@ namespace Arcane
                 // mover (never Static), so the broadphase update always applies.
                 m_moverBroadphase->Update(i, SlotAabb(i));
             }
+        }
+
+        // ---- pull API for debug draw / inspection (P3.6) -------------------
+
+        void PhysicsWorld::ForEachContact(
+            const std::function<void(std::uint32_t, std::uint32_t)>& fn) const
+        {
+            m_contacts.ForEachBegunPair(fn);
+        }
+
+        std::uint32_t PhysicsWorld::IslandRootOf(std::uint32_t i) const noexcept
+        {
+            // m_uf[i] is the union-find parent for slot i from the last Step's
+            // island pass (Island::UpdateSleep writes it via UnionFindScratch()).
+            // If the island pass has not run or i is beyond the filled range,
+            // return i itself (every un-unioned body is its own island root).
+            return (i < m_uf.size()) ? m_uf[i] : i;
         }
 
         int PhysicsWorld::QueryAABB(const Aabb2& box,
