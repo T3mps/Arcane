@@ -157,10 +157,11 @@ TEST_CASE("PhysicsSystem: dynamic body falls under gravity (LocalTransform updat
     const auto* lt = reg.GetComponent<Arcane::LocalTransform>(h.dyn);
     REQUIRE(lt != nullptr);
 
-    // After 10 steps at 60 Hz with gravityY = 400 (+Y down), y must be positive.
-    // We don't pin the exact formula (sub-stepping affects the exact value), but
-    // the body must have moved downward (positive Y).
-    CHECK(lt->position.y > 0.0f);
+    // After 10 steps at 60 Hz with gravityY = 400 (+Y down), y must be well positive.
+    // Forward-Euler lower bound: 0.5 * g * (dt*N)^2 ≈ 0.5*400*(10/60)^2 ≈ 5.6 px.
+    // A bound of 5.0f is safely below the true displacement but well above 0, so
+    // a near-zero or sign-flipped gravity is caught.
+    CHECK(lt->position.y > 5.0f);
 
     // WorldTransform must match: TransformPropagationSystem ran; root is at origin,
     // so the child's world matrix column 2 = its local position.
@@ -187,10 +188,12 @@ TEST_CASE("PhysicsSystem: kinematic body moves by authored velocity", "[physics]
     REQUIRE(lt != nullptr);
 
     // Kinematic body at (50, 0), velocity (kKinSpeed, 0):
-    // expected X ≈ 50 + kKinSpeed * kDt * kSteps.
-    // Approx because kinematic integration uses the physics Step (semi-implicit).
+    // expected X = 50 + kKinSpeed * kDt * kSteps (exact forward-Euler, one Step per
+    // invocation, constant dt).  The margin(0.01f) is an absolute sub-pixel tolerance
+    // that only absorbs float accumulation; it is intentionally tight to catch
+    // off-by-one-step or dt-scale bugs.
     const float expectedX = startX + kKinSpeed * kDt * static_cast<float>(kSteps);
-    CHECK(lt->position.x == Approx(expectedX).epsilon(0.05f));  // within 5%
+    CHECK(lt->position.x == Approx(expectedX).margin(0.01f));
 
     // Y should stay near zero (no gravity on kinematics, no vertical velocity).
     CHECK(std::abs(lt->position.y) < 1.0f);

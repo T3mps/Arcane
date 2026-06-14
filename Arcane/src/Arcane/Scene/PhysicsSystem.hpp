@@ -101,8 +101,8 @@ namespace Arcane
     // PhysicsSystem (M6 P3.3)
     // -------------------------------------------------------------------------
     struct PhysicsSystem
-        : Astra::SystemTraits<Astra::Reads<RigidBody2D, Collider2D>,
-                              Astra::Writes<LocalTransform, PhysicsBodyRef>>
+        : Astra::SystemTraits<Astra::Reads<Collider2D>,
+                              Astra::Writes<LocalTransform, PhysicsBodyRef, RigidBody2D>>
     {
         // fixedDt: the fixed timestep (seconds) forwarded to PhysicsWorld::Step.
         // Determinism contract: callers MUST pass the same constant every tick.
@@ -121,6 +121,12 @@ namespace Arcane
             // ------------------------------------------------------------------
             // PASS 1: DESTROY -- remove body rows for dead or un-physicised entities.
             // Collect stale entries first; erase after to avoid iterator invalidation.
+            //
+            // Implicit assumption: a handle becomes invalid ONLY via entity death or
+            // RigidBody2D removal. This guarantees the map cannot leak: no handle
+            // escapes without an IsValid==false or HasComponent==false trigger that
+            // causes removal here. The CREATE pass self-heals any stale handle by
+            // overwriting the map entry when it calls AddBody for the same entity.
             // ------------------------------------------------------------------
             {
                 std::vector<Astra::Entity> toRemove;
@@ -235,6 +241,8 @@ namespace Arcane
 
                     // Mirror post-step velocity back into RigidBody2D for Dynamic
                     // bodies so authored velocity field stays consistent with physics.
+                    // Kinematic velocity is authored and never written back: the solver
+                    // does not modify it, so rb.velocity retains its authored value.
                     if (rb.type == Physics::BodyType::Dynamic)
                     {
                         const Physics::Vec2 vel = world.Velocity(ref.handle);
