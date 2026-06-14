@@ -70,6 +70,8 @@ namespace
         def.shape         = MakeAabb(hw, hh);
         def.density       = Real(1);
         def.friction      = friction;
+        // fixedRotation: boxes stay axis-aligned (stack stability), isolates the
+        // island-sleep behavior under test.
         def.fixedRotation = true;
         return w.AddBody(def);
     }

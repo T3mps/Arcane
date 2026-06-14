@@ -130,9 +130,15 @@ namespace Arcane
                 // root, scan ALL island members; if any member's sleepT is not
                 // yet past the threshold the island stays awake. If all are past,
                 // sleep this member (awake=0; zero velocities). Ports lines
-                // 435-451 -- order-stable: bodies scanned by index, so once one
-                // member sleeps the others in the same island fall asleep in the
-                // same pass (their per-member all-check still holds).
+                // 435-451 -- order-stable: bodies scanned by index.
+                // Members slept earlier in this same outer pass are skipped as
+                // outer candidates by the AwakeSlot(i) guard above; they need not
+                // reappear in the inner all-check.
+                //
+                // TODO(P3.3): the per-candidate inner scan is O(n) -> O(n^2) for
+                // one large island; if body counts grow, replace with a
+                // root-grouped single pass (sort slots by UF root, one contiguous
+                // scan per island).
                 for (std::uint32_t i = 0; i < count; ++i)
                 {
                     if (!world.Alive(i) ||

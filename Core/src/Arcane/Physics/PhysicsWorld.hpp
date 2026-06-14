@@ -8,10 +8,11 @@
 // raycast). P1.8 ports ONLY:
 //   * Body SoA storage + handle/free-list/generation + AddBody/RemoveBody/
 //     IsValid (ports PhysicsWorld.lua addBody/removeBody/handleValid).
-//   * Step stages 1 + 7 for KINEMATIC bodies only: prevX/Y snapshot +
-//     kinematic velocity integration + mover-broadphase AABB update, then
-//     ContactManager::Step for events. (Lua step() stage 1 kinematic branch +
-//     the trailing contacts:step.)
+//   * Step stages 1 and 5 (P1.8 scope only) for KINEMATIC bodies: prevX/Y
+//     snapshot + kinematic velocity integration + mover-broadphase AABB update
+//     (stage 1), then ContactManager::Step for events (stage 5). (Lua step()
+//     stage 1 kinematic branch + the trailing contacts:step. Stages 2-4 were
+//     added in P2.2/P2.4; see the PORTED IN P2.2 note below.)
 //   * QueryAABB(rect) -> body handles (linear scan; ports queryAABB).
 //   * Static bodies in a staticList (not the mover broadphase) + an optional
 //     TileGrid for tile statics + _StaticCandidates (ports staticList /
@@ -19,18 +20,25 @@
 //
 // PORTED IN P2.1 (extends the P1.8 kinematic subset):
 //   * Dynamic velocity integration (gravity + linear damping) and dynamic
-//     position integration (semi-implicit Euler, stage 4).
+//     position integration (semi-implicit Euler).
 //   * Dynamics SoA (m_invMass, m_invInertia, m_angle, m_angVel, m_rest,
 //     m_fric, m_linDamp, m_sleepTimer, m_awake, m_bullet).
 //   * Body dynamics accessors: ApplyImpulse, Wake, IsAwake, GetAngle/SetAngle.
 //   * BodyDef dynamics params: density, mass override, restitution, friction,
 //     linearDamping, fixedRotation, bullet.
 //
+// PORTED IN P2.2 (SoftStep solver):
+//   * Step stages restructured to 1-5 (see Step() in PhysicsWorld.cpp):
+//       stage 1: prev snapshot + kinematic integrate
+//       stage 2: solver contact generation (GenerateContacts / Part A)
+//       stage 3: Soft Step solve (Part B)
+//       stage 4: island sleep bookkeeping (P2.4)
+//       stage 5: contacts:step (events + gating + deferred flush)
+//
+// PORTED IN P2.4 (island sleep):
+//   * Island::UpdateSleep wired at stage 4; sleep-island logic active.
+//
 // DELIBERATELY NOT PORTED (still deferred -- see PORT BOUNDARY below):
-//   * The solver call (P2.2 -- bodies free-fall ballistically until SoftStep
-//     wires into the stage 2-3 seam).
-//   * Island sleep (P2.4 -- m_sleepTimer + m_awake SoA is present but the
-//     sleep-island logic that clears m_awake is deferred).
 //   * Joints (P2.5).
 //   * Bullet CCD clamp (P3.1 -- m_bullet stored now, clamp deferred).
 //   * raycast / shapeCast / lineOfSight (P1.9).
@@ -515,6 +523,8 @@ namespace Arcane
             // w._uf). Grown to m_count once per Step; reused -> zero steady-state
             // alloc. Exposed so Island::UpdateSleep builds the constraint graph
             // in the world's own buffer instead of allocating its own.
+            // INTERNAL: only for Island::UpdateSleep -- do not call from general
+            // code (it is stomped each Step).
             [[nodiscard]] std::vector<std::uint32_t>& UnionFindScratch() noexcept
             {
                 return m_uf;
