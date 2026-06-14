@@ -11,6 +11,7 @@
 
 #include <limits>
 
+#include <Arcane/Physics/Narrowphase/GeometryKernel.hpp>
 #include <Arcane/Physics/Narrowphase/Sat.hpp>
 
 namespace Arcane
@@ -23,60 +24,9 @@ namespace Arcane
             // Scratch world-vert capacity: AABB = 4, polys up to kMaxPolyVerts.
             constexpr int kMaxWorldVerts = static_cast<int>(kMaxPolyVerts);
 
-            // PORT of Manifold.lua worldPoly: expand a poly/aabb shape into
-            // world-space verts under (translation-only) transform xf. The Lua
-            // polygon branch rotates by `ang`, but this phase is fixedRotation
-            // (ang == 0 => cos=1, sin=0), so we translate only -- byte-identical
-            // to the oracle capture, which passes angle = 0. The AABB branch
-            // emits the four corners in the Lua's order:
-            //   (x-hw,y-hh),(x+hw,y-hh),(x+hw,y+hh),(x-hw,y+hh).
-            int WorldPoly(const Shape& s, const Transform& xf, Vec2* out)
-            {
-                const Real x = xf.position.x;
-                const Real y = xf.position.y;
-
-                if (s.kind == ShapeKind::Aabb)
-                {
-                    const Real hw = s.halfW;
-                    const Real hh = s.halfH;
-                    out[0] = Vec2(x - hw, y - hh);
-                    out[1] = Vec2(x + hw, y - hh);
-                    out[2] = Vec2(x + hw, y + hh);
-                    out[3] = Vec2(x - hw, y + hh);
-                    return 4;
-                }
-
-                // Polygon: translate the baked local verts (rotation identity).
-                const int n = static_cast<int>(s.verts.size());
-                for (int i = 0; i < n; ++i)
-                {
-                    out[i] = Vec2(x + s.verts[i].x, y + s.verts[i].y);
-                }
-                return n;
-            }
-
-            // PORT of Geometry.pointInPoly(px, py, verts): winding-agnostic
-            // convex-ish containment via consistent edge-cross signs. A point on
-            // an edge (cross == 0) does not flip the verdict (matches the Lua).
-            bool PointInPoly(const Vec2& p, const Vec2* verts, int n)
-            {
-                int sign = 0;
-                for (int i = 0; i < n; ++i)
-                {
-                    const int j = (i + 1 < n) ? (i + 1) : 0;
-                    const Real ex = verts[j].x - verts[i].x;
-                    const Real ey = verts[j].y - verts[i].y;
-                    const Real cross =
-                        ex * (p.y - verts[i].y) - ey * (p.x - verts[i].x);
-                    if (cross != Real(0))
-                    {
-                        const int s = (cross > Real(0)) ? 1 : -1;
-                        if (sign == 0) sign = s;
-                        else if (s != sign) return false;
-                    }
-                }
-                return true;
-            }
+            // worldPoly + pointInPoly now live in GeometryKernel.hpp (shared
+            // with Specialized.cpp, P1.3) -- this TU calls Physics::WorldPoly /
+            // Physics::PointInPoly directly so both manifold paths use ONE impl.
 
             // The Lua `consider` shuffle: keep the 2 deepest (depth > 0), with
             // c1 = deepest, c2 = second. Order of calls matters for ties (the
