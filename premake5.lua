@@ -350,6 +350,48 @@ project "PlaygroundGame"
     filter {}
 
 -- ============================================================================
+-- Loom: the thin host (Loom.exe). Engine boot + RunLoop + PluginHost. Hosts
+-- PlaygroundGame.dll (copied beside Loom.exe -- the default watched path).
+-- ============================================================================
+project "Loom"
+    location "Loom"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
+    includedirs {
+        "%{wks.location}/Arcane/src",
+        "%{IncludeDir.Core}",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.imgui}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+    }
+    links { "Arcane" }
+    dependson { "PlaygroundGame" }
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
+        '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data"',
+        '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
+    }
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus" }
+    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
+    filter {}
+
+-- ============================================================================
 -- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links Core
 -- directly -- Core links into exactly ONE module per process.
 -- ============================================================================
