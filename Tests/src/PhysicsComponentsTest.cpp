@@ -153,6 +153,12 @@ TEST_CASE("physics components binary round-trip preserves authored field values"
     // PhysicsBodyRef present on the entity.
     const auto* bref = reg->GetComponent<Arcane::PhysicsBodyRef>(savedEntity);
     REQUIRE(bref != nullptr);
+    // Empirically verify what the binary (trivially-copyable) path does with the
+    // Serializable(false) handle field.  We wrote {7u, 3u} before Save — assert
+    // the actual post-Load values so the comment in PhysicsComponents.hpp matches
+    // reality rather than being an untested claim.
+    CHECK(bref->handle.index      == 7u);
+    CHECK(bref->handle.generation == 3u);
 
     std::filesystem::remove(path);
 }

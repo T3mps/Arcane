@@ -64,10 +64,10 @@ namespace Arcane
     {
         // Shape discriminator + scalar params (three shapes for P3.2).
         Physics::ShapeKind kind      = Physics::ShapeKind::Circle;
-        float              radius    = 0.5f;   // Circle / Capsule radius
-        float              halfLen   = 0.0f;   // Capsule half-length
-        float              halfW     = 0.5f;   // Aabb half-width
-        float              halfH     = 0.5f;   // Aabb half-height
+        float              radius    = 0.5f;   // Circle/Capsule radius (ignored when kind != Circle/Capsule)
+        float              halfLen   = 0.0f;   // Capsule half-length   (ignored when kind != Capsule)
+        float              halfW     = 0.5f;   // Aabb half-width       (ignored when kind != Aabb)
+        float              halfH     = 0.5f;   // Aabb half-height      (ignored when kind != Aabb)
 
         // Material.
         float restitution = 0.0f;
@@ -112,6 +112,9 @@ namespace Arcane::Physics
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Circle)
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Capsule)
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Aabb)
+        // Polygon is part of the Core type's full set but Collider2D carries no
+        // authored vertex array — Polygon colliders are not buildable until a later
+        // task adds a verts field (or a separate PolygonCollider2D component).
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Polygon)
     ASTRA_END_REFLECT_ENUM()
 } // namespace Arcane::Physics
