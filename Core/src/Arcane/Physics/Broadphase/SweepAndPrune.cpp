@@ -84,6 +84,7 @@ namespace Arcane
                 {
                     break; // x0 past the query's x1: nothing further overlaps
                 }
+                // inline overlap (not AabbOverlap) so the x-sorted early break works
                 // Lua: e.x1 >= x0 and e.y0 <= y1 and e.y1 >= y0
                 if (e.box.max.x >= box.min.x && e.box.min.y <= box.max.y &&
                     e.box.max.y >= box.min.y)
@@ -109,6 +110,7 @@ namespace Arcane
                     {
                         break; // x-spans no longer can overlap; sweep done
                     }
+                    // inline overlap (not AabbOverlap) so the x-sorted early break works
                     // y-overlap test (Lua: a.y0 <= b.y1 and b.y0 <= a.y1).
                     if (a.box.min.y <= b.box.max.y && b.box.min.y <= a.box.max.y)
                     {

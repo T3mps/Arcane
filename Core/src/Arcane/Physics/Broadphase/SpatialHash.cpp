@@ -182,7 +182,6 @@ namespace Arcane
                             }
                             // dedup this (a,c) candidate across shared cells via
                             // a per-a generation-stamped seen on the partner id.
-                            // We bump m_gen per `a` start below to namespace it.
                             auto& stamp = m_seen[c];
                             if (stamp == m_gen)
                             {
@@ -197,7 +196,8 @@ namespace Arcane
                         }
                     }
                 }
-                ++m_gen; // fresh generation namespace for the next `a`
+                // bump m_gen after each 'a' so the next 'a' gets a fresh dedup namespace
+                ++m_gen;
             }
 
             std::sort(out.begin(), out.end());

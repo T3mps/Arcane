@@ -65,8 +65,9 @@ namespace Arcane
                 CellRange range{};
             };
 
-            // Bucket key (the Lua bkey: kx*0x40000 + ky). Cells are bounded to
-            // world scale, so this stays collision-free in practice.
+            // Bucket key (the Lua bkey: kx*0x40000 + ky).
+            // Collision-free while |ky| < 0x20000 (131072 cells on Y; at
+            // cellSize=64 that is +/-8.4M world units).
             [[nodiscard]] static std::int64_t BucketKey(std::int32_t kx,
                                                         std::int32_t ky) noexcept
             {
@@ -92,8 +93,9 @@ namespace Arcane
 
             // Generation-stamped dedup scratch (the Lua _seen / _gen). Reused
             // across queries; mutable because QueryAABB/Pairs are const.
-            mutable std::unordered_map<std::int64_t, std::uint32_t> m_seen;
-            mutable std::uint32_t                                   m_gen = 0;
+            // m_seen: id -> generation stamp (body id key, uint64 gen value).
+            mutable std::unordered_map<std::uint32_t, std::uint64_t> m_seen;
+            mutable std::uint64_t                                    m_gen = 0;
             // Reused id list for sorted Pairs() iteration.
             mutable std::vector<std::uint32_t> m_idScratch;
         };

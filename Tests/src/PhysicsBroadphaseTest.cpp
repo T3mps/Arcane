@@ -249,6 +249,7 @@ TEST_CASE("physics: broadphase equivalence under Update + Remove", "[physics]")
         bp->Remove(9999u);
     }
 
+    // no oracle for the post-mutation state; cross-strategy equivalence is the invariant here
     const std::vector<BroadphasePair> treePairs = PairsOf(*impls[0]);
     const std::vector<BroadphasePair> hashPairs = PairsOf(*impls[1]);
     const std::vector<BroadphasePair> sapPairs  = PairsOf(*impls[2]);
