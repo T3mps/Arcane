@@ -569,16 +569,18 @@ namespace Arcane
             ApplyRestitution(ctx);
 
             // 4) Store impulses to the warm-start cache (+ evict stale entries).
+            // insert_or_assign avoids the default-construct+insert on NEW ids that
+            // operator[] performs, eliminating the per-step heap allocation when
+            // contact ids churn (e.g. bodies cycling in/out of sleep in P2.4).
             for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
             {
                 const ContactConstraint& cc = ctx.contacts[c];
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
                     const ContactConstraintPoint& cp = cc.points[p];
-                    CacheEntry& e = m_cache[cp.id];
-                    e.normalImpulse  = cp.normalImpulse;
-                    e.tangentImpulse = cp.tangentImpulse;
-                    e.stamp          = m_stamp;
+                    m_cache.insert_or_assign(cp.id, CacheEntry{ cp.normalImpulse,
+                                                                cp.tangentImpulse,
+                                                                m_stamp });
                 }
             }
             // Bounded cache: drop entries unused for more than kCacheLife stamps.

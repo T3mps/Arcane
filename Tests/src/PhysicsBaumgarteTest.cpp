@@ -217,6 +217,10 @@ TEST_CASE("PhysicsBaumgarte: box stack settles (A/B)", "[physics][solver][baumga
             REQUIRE(w.Position(boxes[i]).x == Approx(Real(0)).margin(Real(0.5)));
             REQUIRE(std::isfinite(w.Position(boxes[i]).y));
         }
+        // Warm-start cache is stamp-evicted and stays bounded: after 600 steps
+        // only the currently-active contacts remain (at most 2 points per pair
+        // for a 5-box stack -> well under 100). Locks the cache-bounded contract.
+        REQUIRE(w.SolverWarmStartCacheSize() < 100u);
     }
 }
 

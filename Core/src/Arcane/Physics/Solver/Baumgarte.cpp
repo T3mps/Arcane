@@ -72,11 +72,9 @@ namespace Arcane
                 const Real d = w.LinDampSlot(i);
                 if (d > Real(0))
                 {
-                    // Lua damping: v *= 1 / (1 + linDamp*dt). Apply to angular too
-                    // (consistent with the linear decay; the Lua applied it to v).
                     const Real f = Real(1) / (Real(1) + d * dt);
                     v  *= f;
-                    wv *= f;
+                    wv *= f; // linDamp decays linear AND angular velocity, matching PhysicsWorld.lua:305-310 (world stage-1, now solver-owned).
                 }
                 w.SetVelSlot(i, v);
                 w.SetAngVelSlot(i, wv);
@@ -333,6 +331,9 @@ namespace Arcane
 
             // 5) Persist warm-start impulses + evict stale entries. Ports
             //    SequentialImpulse.lua:130-139 (CACHE_LIFE = 2). Keyed by id.
+            // insert_or_assign avoids the default-construct+insert on NEW ids that
+            // operator[] performs, eliminating the per-step heap allocation when
+            // contact ids churn (e.g. bodies cycling in/out of sleep in P2.4).
             for (std::uint32_t c = 0; c < n; ++c)
             {
                 const ContactConstraint& cc = ctx.contacts[c];
@@ -340,10 +341,9 @@ namespace Arcane
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
                     const ContactConstraintPoint& cp = cc.points[p];
-                    CacheEntry& en = m_cache[cp.id];
-                    en.normalImpulse  = prep[p].jn;
-                    en.tangentImpulse = prep[p].jt;
-                    en.stamp          = stamp;
+                    m_cache.insert_or_assign(cp.id, CacheEntry{ prep[p].jn,
+                                                                prep[p].jt,
+                                                                stamp });
                 }
             }
             // Bounded cache: drop entries unused for more than kCacheLife stamps.
