@@ -213,6 +213,24 @@ namespace Arcane
             }
         }
 
+        void PhysicsWorld::MovePosition(BodyHandle h, Vec2 p)
+        {
+            if (!IsValid(h))
+            {
+                return;
+            }
+            const std::uint32_t i = h.index;
+            // Step-managed-prev move: write pos + the mover-broadphase AABB but
+            // leave prev untouched (Step owns prev). Ports the Lua slideMove
+            // write-back: w.posX[i] = x; w.posY[i] = y; moverHash:update(...).
+            m_posX[i] = p.x;
+            m_posY[i] = p.y;
+            if (static_cast<BodyType>(m_btype[i]) != BodyType::Static)
+            {
+                m_moverBroadphase->Update(i, SlotAabb(i));
+            }
+        }
+
         Vec2 PhysicsWorld::Velocity(BodyHandle h) const noexcept
         {
             if (!IsValid(h))

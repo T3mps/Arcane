@@ -211,6 +211,20 @@ namespace Arcane
             // for movers.
             void SetPosition(BodyHandle h, Vec2 p);
 
+            // Move WITHOUT snapping prev: updates posX/posY + the mover
+            // broadphase AABB but leaves prevX/prevY untouched, so the render
+            // boundary's prev->pos lerp still spans this tick's motion.
+            //
+            // PORT NOTE: this is the seam CharacterController::SlideMove writes
+            // through (the Lua slideMove sets w.posX[i]/w.posY[i] directly +
+            // moverHash:update, NOT via Body:setPosition, exactly to keep prev
+            // managed by Step -- see the integration contract in
+            // CharacterController.hpp). SetPosition is a TELEPORT (snaps prev);
+            // MovePosition is a step-managed-prev move. Static bodies no-op the
+            // broadphase update (they are not in the mover broadphase) but their
+            // position is still written; the CC only ever drives movers.
+            void MovePosition(BodyHandle h, Vec2 p);
+
             [[nodiscard]] Vec2 Velocity(BodyHandle h) const noexcept;
 
             // Set velocity (Kinematic + Dynamic accept it; Static ignores).
