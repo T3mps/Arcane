@@ -28,9 +28,9 @@
 //           d0 = |COM - (0,0)| = 3.176
 //           d1 = |12 - 3.176| = 8.824
 //           I_total = (I0_c + m0*d0^2) + (I1_c + m1*d1^2)
-//                   = (981.748 + 78.5398*10.087) + (127.234 + 28.2743*77.863)
-//                   = (981.748 + 792.47)  +  (127.234 + 2201.46)
-//                   = 1774.22 + 2328.69 ~ 4102.91
+//                   = (981.748 + 78.5398*10.090) + (127.234 + 28.2743*77.855)
+//                   = (981.748 + 792.46)  +  (127.234 + 2201.29)
+//                   = 1774.21 + 2328.52 ~ 4102.74
 //
 //   (b) Fixture world transform: body at pos(0,0) angle=pi/2, fixture at
 //       localPos (5,0) localAngle=0.  World shape center:
@@ -124,7 +124,7 @@ TEST_CASE("physics: Fixture compound mass/COM/inertia (two offset circles)", "[p
 
     const Vec2 lc = w.GetLocalCenter(bh);
     REQUIRE(static_cast<double>(lc.x) == Approx(comX).epsilon(kMassTol));
-    REQUIRE(static_cast<double>(lc.y) == Approx(comY).epsilon(kMassTol));
+    REQUIRE(static_cast<double>(lc.y) == Approx(0.0).margin(kGeomTol));
 
     // ---- check inertia about COM -------------------------------------------
     //   I0_c = 0.5*mass0*25 (I about centroid of circle0, r=5)

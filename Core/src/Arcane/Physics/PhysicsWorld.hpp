@@ -731,18 +731,40 @@ namespace Arcane
             // invInertia = 0; mirrors the BodyDef flag stored at AddBody).
             std::vector<std::uint8_t> m_fixedRotation;
 
+            // Per-body mass override (mirrors BodyDef::mass; 0 means "no override").
+            // Set by AddBody when def.mass > 0.  RecomputeBodyMass honours it so
+            // a subsequent AddFixture does not silently discard an explicit mass.
+            std::vector<Real> m_massOverride;
+
             // Ensure the fixture SoA and per-body auxiliary arrays have at least
             // n fixture slots.
+            // NOTE: seeds at 4 slots when empty (unlike the body EnsureCapacity
+            // which grows from capacity()*2, yielding 1 slot on first body add).
+            // The different seeds are intentional: fixture slots are allocated in
+            // small batches (AddBody creates 1, AddFixture creates 1) so pre-seeding
+            // 4 avoids a realloc on the very first fixture without disturbing the
+            // body SoA growth timing that existing tests depend on.
             void EnsureFxCapacity(std::uint32_t n);
 
             // Ensure per-body arrays are large enough for body slot index `bodySlot`.
             // Called when a new body slot is activated (alongside EnsureCapacity).
+            // Also seeds at 4 when empty (same rationale as EnsureFxCapacity above).
             void EnsureBodyAuxCapacity(std::uint32_t n);
 
             // Re-aggregate mass / COM / inertia for body slot `bodySlot` from its
             // current fixture list.  Updates m_invMass / m_invInertia / m_bodyMass
             // / m_localCenterX/Y / m_bodyInertia.  Static/Kinematic keep 0/0.
+            // Respects m_massOverride[bodySlot]: if > 0 the density-derived total
+            // mass is replaced by the override and inertia is scaled proportionally,
+            // so a mass override set at AddBody is preserved through AddFixture.
             void RecomputeBodyMass(std::uint32_t bodySlot);
+
+            // Allocate and populate a fixture slot for `bodySlot` from `def`,
+            // link it into m_bodyFixtures, and return the slot index.  Does NOT
+            // call RecomputeBodyMass -- callers do that themselves (AddFixture
+            // always recomputes; the AddBody back-compat path does NOT, keeping
+            // the legacy invMass/invInertia path byte-for-byte unchanged).
+            std::uint32_t AllocFixtureSlot(std::uint32_t bodySlot, const FixtureDef& def);
 
             // ---- SoA (port of the Lua FFI arrays; std::vector here) ---------
             std::vector<Real>          m_posX, m_posY;

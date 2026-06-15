@@ -178,6 +178,7 @@ namespace Arcane
             m_bodyMass.resize(next, Real(0));
             m_bodyInertia.resize(next, Real(0));
             m_fixedRotation.resize(next, std::uint8_t(0));
+            m_massOverride.resize(next, Real(0));
         }
 
         void PhysicsWorld::RecomputeBodyMass(std::uint32_t bodySlot)
@@ -198,14 +199,31 @@ namespace Arcane
 
             // Accumulate mass, density-weighted centroid, and inertia over
             // all fixtures attached to this body slot.
+            //
+            // Fix 2: collect each fixture's MassData ONCE into a local cache so
+            // the two-pass aggregation (centroid + parallel-axis inertia) reads
+            // each ComputeMass result from the cache rather than recomputing it.
+            // This produces identical aggregation values + identical order; only
+            // the per-fixture ComputeMass call is deduplicated.
             const std::vector<std::uint32_t>& fxList = m_bodyFixtures[bodySlot];
+
+            // Cache: parallel arrays of (bodyLocalX, bodyLocalY, massData) for
+            // each contributing fixture.  Stack-allocated vector (setup-time only).
+            struct FxEntry
+            {
+                Real      bx, by;   // centroid in body-local space
+                MassData  md;
+            };
+            std::vector<FxEntry> entries;
+            entries.reserve(fxList.size());
 
             Real totalMass = Real(0);
             // Weighted centroid numerator (body-local space).
             Real cx = Real(0);
             Real cy = Real(0);
 
-            // First pass: sum mass and density-weighted centroid.
+            // Single pass: compute each fixture's MassData once, accumulate mass
+            // and density-weighted centroid, and store for the inertia pass.
             for (const std::uint32_t fi : fxList)
             {
                 if (m_fxGen[fi] == 0u)
@@ -217,8 +235,6 @@ namespace Arcane
                 {
                     continue; // degenerate / zero-density fixture
                 }
-
-                totalMass += md.mass;
 
                 // The fixture's centroid in body-local space:
                 //   bodyLocalCentroid = localPos + R(localAngle) * shapeCentroid
@@ -234,8 +250,11 @@ namespace Arcane
                 const Real bx = m_fxLocalPosX[fi] + lc * scx - ls * scy;
                 const Real by = m_fxLocalPosY[fi] + ls * scx + lc * scy;
 
+                totalMass += md.mass;
                 cx += md.mass * bx;
                 cy += md.mass * by;
+
+                entries.push_back(FxEntry{ bx, by, md });
             }
 
             if (totalMass <= Real(0))
@@ -254,34 +273,33 @@ namespace Arcane
             const Real comX = cx / totalMass;
             const Real comY = cy / totalMass;
 
-            // Second pass: sum inertia about the COM via parallel-axis theorem.
+            // Second pass: sum inertia about the COM via parallel-axis theorem
+            // using the cached MassData (no second ComputeMass call per fixture).
             //   I_total = sum_i (I_i + m_i * |centroid_i - COM|^2)
             Real totalInertia = Real(0);
-            for (const std::uint32_t fi : fxList)
+            for (const FxEntry& e : entries)
             {
-                if (m_fxGen[fi] == 0u)
-                {
-                    continue;
-                }
-                const MassData md = m_fxShape[fi].ComputeMass(m_fxDensity[fi]);
-                if (md.mass <= Real(0))
-                {
-                    continue;
-                }
-
-                // Fixture centroid in body-local space (same as first pass).
-                const Real la  = m_fxLocalAngle[fi];
-                const Real lc  = std::cos(la);
-                const Real ls  = std::sin(la);
-                const Real scx = md.centroid.x;
-                const Real scy = md.centroid.y;
-                const Real bx = m_fxLocalPosX[fi] + lc * scx - ls * scy;
-                const Real by = m_fxLocalPosY[fi] + ls * scx + lc * scy;
-
                 // Parallel-axis shift: distance^2 from fixture centroid to COM.
-                const Real dx = bx - comX;
-                const Real dy = by - comY;
-                totalInertia += md.inertia + md.mass * (dx * dx + dy * dy);
+                const Real dx = e.bx - comX;
+                const Real dy = e.by - comY;
+                totalInertia += e.md.inertia + e.md.mass * (dx * dx + dy * dy);
+            }
+
+            // Fix 1: if the body has a mass override (set at AddBody when
+            // def.mass > 0), apply it now: replace the density-derived totalMass
+            // and scale totalInertia proportionally, exactly mirroring the
+            // AddBody override semantics (scale = override / computedMass).
+            // This preserves the override through subsequent AddFixture calls so
+            // compound bodies with an explicit mass keep the right dynamics.
+            // Static/Kinematic never reach this branch (early return above).
+            const Real massOvr = (bodySlot < m_massOverride.size())
+                                     ? m_massOverride[bodySlot]
+                                     : Real(0);
+            if (massOvr > Real(0) && totalMass > Real(0))
+            {
+                const Real scale = massOvr / totalMass;
+                totalInertia    *= scale;
+                totalMass        = massOvr;
             }
 
             // Store the aggregated body state.
@@ -301,15 +319,10 @@ namespace Arcane
         // Fixture lifecycle: AddFixture / DropFixture / IsValid(FixtureHandle)
         // ----------------------------------------------------------------
 
-        FixtureHandle PhysicsWorld::AddFixture(BodyHandle bh, const FixtureDef& def)
+        std::uint32_t PhysicsWorld::AllocFixtureSlot(std::uint32_t bodySlot,
+                                                          const FixtureDef& def)
         {
-            if (!IsValid(bh))
-            {
-                return kInvalidFixture;
-            }
-            const std::uint32_t bodySlot = bh.index;
-
-            // Ensure per-body auxiliary arrays cover this slot.
+            // Ensure per-body auxiliary arrays cover this body slot.
             EnsureBodyAuxCapacity(bodySlot + 1u);
 
             // Acquire a fixture slot (reuse from free-list or append).
@@ -326,7 +339,7 @@ namespace Arcane
                 ++m_fxCount;
             }
 
-            // Populate the fixture slot.
+            // Populate the fixture slot fields.
             m_fxShape[fi]      = def.shape;
             m_fxLocalPosX[fi]  = def.localPos.x;
             m_fxLocalPosY[fi]  = def.localPos.y;
@@ -340,10 +353,28 @@ namespace Arcane
             m_fxBody[fi]       = bodySlot;
             m_fxGen[fi]       += 1u; // bump generation (dead=0, live starts at 1)
 
-            // Link to the body.
+            // Link the slot to the body.
             m_bodyFixtures[bodySlot].push_back(fi);
 
-            // Re-aggregate the body's mass / COM / inertia.
+            return fi;
+        }
+
+        // AddFixture: compound shapes + mass-override now compose correctly.
+        // After allocating and linking the fixture slot, RecomputeBodyMass
+        // re-aggregates the body mass from all fixtures (respecting any
+        // m_massOverride set at AddBody), so a previously set mass override
+        // is preserved rather than silently discarded.
+        FixtureHandle PhysicsWorld::AddFixture(BodyHandle bh, const FixtureDef& def)
+        {
+            if (!IsValid(bh))
+            {
+                return kInvalidFixture;
+            }
+            const std::uint32_t bodySlot = bh.index;
+
+            const std::uint32_t fi = AllocFixtureSlot(bodySlot, def);
+
+            // Re-aggregate the body's mass / COM / inertia (mass override respected).
             RecomputeBodyMass(bodySlot);
 
             return FixtureHandle{ fi, m_fxGen[fi] };
@@ -592,51 +623,42 @@ namespace Arcane
             // The legacy single-shape contact-gen path (GenerateContacts) reads
             // m_shape[] + m_rest[] + m_fric[] DIRECTLY and is UNCHANGED (Task 5
             // wires fixture-pair contact gen and retires that path).  So we
-            // create the fixture record without letting RecomputeBodyMass
-            // overwrite the already-correct m_invMass/m_invInertia derived above
-            // (which correctly handles the optional mass override).
+            // create the fixture record WITHOUT calling RecomputeBodyMass --
+            // the already-correct m_invMass/m_invInertia derived above (which
+            // correctly handles the optional mass override) must be preserved
+            // byte-for-byte.
             //
-            // EnsureBodyAuxCapacity + store fixedRotation flag (needed by
-            // RecomputeBodyMass if AddFixture is called later).
+            // EnsureBodyAuxCapacity + store fixedRotation + mass-override flags
+            // (needed by RecomputeBodyMass if AddFixture is called later).
             EnsureBodyAuxCapacity(idx + 1u);
             m_bodyFixtures[idx].clear(); // fresh slot (may be recycled)
             m_fixedRotation[idx] = def.fixedRotation ? std::uint8_t(1) : std::uint8_t(0);
+            // Record the mass override so RecomputeBodyMass (called by a later
+            // AddFixture) honours it and does not silently drop it (Fix 1).
+            m_massOverride[idx] = (def.mass > Real(0)) ? def.mass : Real(0);
 
-            // Create the auto fixture record by directly populating a fixture
-            // slot and linking it -- mirrors AddFixture but WITHOUT calling
-            // RecomputeBodyMass (we keep the legacy invMass/invInertia).
+            // Create the auto fixture record via AllocFixtureSlot (shared with
+            // AddFixture -- single field-population site, safe for T5 to extend).
+            // We do NOT call RecomputeBodyMass here; the legacy invMass/invInertia
+            // path above is the one source of truth for the single-shape case.
             {
-                std::uint32_t fi;
-                if (!m_fxFree.empty())
-                {
-                    fi = m_fxFree.back();
-                    m_fxFree.pop_back();
-                }
-                else
-                {
-                    fi = m_fxCount;
-                    EnsureFxCapacity(m_fxCount + 1u);
-                    ++m_fxCount;
-                }
-
-                m_fxShape[fi]       = def.shape;
-                m_fxLocalPosX[fi]   = Real(0);
-                m_fxLocalPosY[fi]   = Real(0);
-                m_fxLocalAngle[fi]  = Real(0);
-                m_fxDensity[fi]     = def.density;
-                m_fxFriction[fi]    = def.friction;
-                m_fxRestitution[fi] = def.restitution;
-                m_fxFilterCat[fi]   = 1u;
-                m_fxFilterMask[fi]  = 0xFFFFFFFFu;
-                m_fxSensor[fi]      = def.isSensor ? std::uint8_t(1) : std::uint8_t(0);
-                m_fxBody[fi]        = idx;
-                m_fxGen[fi]        += 1u;
-
-                m_bodyFixtures[idx].push_back(fi);
+                FixtureDef autoFd;
+                autoFd.shape        = def.shape;
+                autoFd.localPos     = Vec2(Real(0), Real(0));
+                autoFd.localAngle   = Real(0);
+                autoFd.density      = def.density;
+                autoFd.friction     = def.friction;
+                autoFd.restitution  = def.restitution;
+                autoFd.categoryBits = 1u;
+                autoFd.maskBits     = 0xFFFFFFFFu;
+                autoFd.isSensor     = def.isSensor;
+                AllocFixtureSlot(idx, autoFd); // no RecomputeBodyMass
 
                 // Populate the body-mass accessors consistently with the legacy
                 // path.  For Dynamic bodies the correct mass was computed above
                 // (possibly with a mass override); for Static/Kinematic it is 0.
+                // This keeps GetBodyMass/GetBodyInertia/GetLocalCenter correct
+                // for the single-fixture case without going through RecomputeBodyMass.
                 if (def.type == BodyType::Dynamic)
                 {
                     const MassData md = def.shape.ComputeMass(def.density);
