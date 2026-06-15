@@ -384,3 +384,106 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     CHECK(lt->position.x == Approx(100.0f).margin(0.01f));
     CHECK(lt->position.y == Approx(50.0f).margin(0.01f));
 }
+
+// ---------------------------------------------------------------------------
+// TEST 6 -- fixture[0] authored filter + local transform flow through AddBody
+//
+// This is the T6 review regression gate. Before the fix, AddBody's auto-fixture
+// used hardcoded categoryBits=1 / maskBits=0xFFFFFFFF / localPos=(0,0) /
+// localAngle=0, silently discarding authored values on the primary fixture.
+// After the fix, BodyDef carries those fields and AddBody's auto-fixture uses
+// them. The test authors fixture[0] with non-default filter + local offset and
+// asserts the world's primary fixture carries the authored values.
+// ---------------------------------------------------------------------------
+TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through AddBody", "[physics]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::RegisterPhysicsComponents(reg);
+
+    // Physics world (zero gravity; we're testing fixture metadata, not dynamics).
+    Arcane::Physics::WorldDef wd;
+    wd.gravityY = 0.0f;
+    reg.SetResource(Arcane::PhysicsResource{
+        std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
+        {}
+    });
+
+    // Minimal SceneRoot.
+    Astra::Entity root = reg.CreateEntity();
+    {
+        Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        reg.AddComponent<Arcane::LocalTransform>(root, lt);
+        reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    }
+
+    // Authored fixture[0] params: non-default filter + local offset.
+    //   categoryBits = 0x02, maskBits = 0x05, localPos = (3, 0), localAngle = 0.
+    constexpr uint32_t kCat   = 0x02u;
+    constexpr uint32_t kMask  = 0x05u;
+    constexpr float    kLx    = 3.0f;
+    constexpr float    kLy    = 0.0f;
+
+    // Entity at world origin (body angle 0) with a single kinematic circle
+    // so GetFixtureWorldPos(fixture0) == bodyPos + R(0)*localPos == (3,0).
+    Astra::Entity e = reg.CreateEntity();
+    {
+        Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+
+        Arcane::RigidBody2D rb;
+        rb.type = Arcane::Physics::BodyType::Kinematic;
+        reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+
+        Arcane::Collider2D col;
+        {
+            Arcane::Fixture fx;
+            fx.kind         = Arcane::Physics::ShapeKind::Circle;
+            fx.radius       = 1.0f;
+            fx.localPos     = glm::vec2(kLx, kLy);
+            fx.localAngle   = 0.0f;
+            fx.categoryBits = kCat;
+            fx.maskBits     = kMask;
+            col.fixtures.push_back(fx);
+        }
+        reg.AddComponent<Arcane::Collider2D>(e, col);
+        reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
+        reg.SetParent(e, root);
+    }
+
+    // Run one step to trigger the CREATE pass (registers the body).
+    {
+        Arcane::PhysicsSystem physics(kDt);
+        physics(reg);
+    }
+
+    const auto* res = reg.GetResource<Arcane::PhysicsResource>();
+    REQUIRE(res != nullptr);
+    REQUIRE(res->entityToBody.count(e) == 1);
+
+    const Arcane::Physics::BodyHandle bh = res->entityToBody.at(e);
+    REQUIRE(res->world->IsValid(bh));
+
+    // Exactly 1 fixture (single-fixture Collider2D).
+    REQUIRE(res->world->FixtureCount(bh) == 1u);
+
+    // Get the primary fixture handle via index 0.
+    const Arcane::Physics::FixtureHandle fh0 = res->world->GetBodyFixture(bh, 0u);
+    REQUIRE(res->world->IsValid(fh0));
+
+    // Assert the authored filter flowed through.
+    // BEFORE the fix these would observe 1 / 0xFFFFFFFF (the old hardcoded defaults).
+    CHECK(res->world->GetFixtureCategory(fh0) == kCat);
+    CHECK(res->world->GetFixtureMask(fh0)     == kMask);
+
+    // Assert the authored local-xf flowed through:
+    //   body at origin (0,0), angle 0 -> worldPos = (0,0) + R(0)*(3,0) = (3,0).
+    // BEFORE the fix this would return (0,0) because localPos was hardcoded to (0,0).
+    const Arcane::Physics::Vec2 worldPos = res->world->GetFixtureWorldPos(fh0);
+    CHECK(static_cast<double>(worldPos.x) == Approx(static_cast<double>(kLx)).margin(1e-4));
+    CHECK(static_cast<double>(worldPos.y) == Approx(static_cast<double>(kLy)).margin(1e-4));
+}

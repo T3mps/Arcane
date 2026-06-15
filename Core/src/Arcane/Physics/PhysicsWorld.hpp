@@ -141,6 +141,28 @@ namespace Arcane
             Real linearDamping  = Real(0);     // per-step velocity decay
             bool fixedRotation  = false;       // invInertia forced to 0
             bool bullet         = false;       // CCD clamp (P3); stored now
+
+            // ---- primary fixture filter + local transform (T6 fix) ----------
+            //
+            // AddBody's auto-fixture (the back-compat path that creates one
+            // fixture from the BodyDef's shape) was previously created with
+            // hardcoded categoryBits=1 / maskBits=0xFFFFFFFF and localPos=(0,0)
+            // / localAngle=0, silently discarding authored values.
+            //
+            // These fields carry the PRIMARY fixture's filter + local transform
+            // so they flow through to the auto-fixture in AddBody.  They are
+            // consistent with the other primary-fixture scalars already in BodyDef
+            // (shape, density, friction, restitution, isSensor).
+            //
+            // MASS PATH UNCHANGED: adding these fields does NOT change
+            // invMass/invInertia computation.  The legacy mass path reads
+            // def.shape + def.density and ignores localPos/localAngle (correct:
+            // compound-COM for an offset primary fixture is a deferred task).
+            // Existing dynamics tests therefore stay byte-for-byte green.
+            std::uint32_t categoryBits = 1u;           // collision category
+            std::uint32_t maskBits     = 0xFFFFFFFFu;  // collision mask
+            Vec2          localPos     { Real(0), Real(0) }; // body-frame offset
+            Real          localAngle   = Real(0);            // body-frame rotation
         };
 
         // ----------------------------------------------------------------
@@ -331,6 +353,20 @@ namespace Arcane
             // Fixture world-space angle:
             //   bodyAngle + fixture.localAngle
             [[nodiscard]] Real GetFixtureWorldAngle(FixtureHandle fh) const noexcept;
+
+            // Collision filter accessors (read-only; needed by tests and future
+            // filter-query systems). Return the default (1 / 0xFFFFFFFF) for a
+            // stale or out-of-range handle.
+            [[nodiscard]] std::uint32_t GetFixtureCategory(FixtureHandle fh) const noexcept;
+            [[nodiscard]] std::uint32_t GetFixtureMask(FixtureHandle fh) const noexcept;
+
+            // Return the FixtureHandle for the n-th fixture (0-based) attached to
+            // body bh, in insertion order.  Returns kInvalidFixture when bh is
+            // stale, n >= FixtureCount(bh), or the slot has been recycled.
+            // Primary use: tests that need the handle for fixture[0] without
+            // having to call AddFixture explicitly.
+            [[nodiscard]] FixtureHandle GetBodyFixture(BodyHandle bh,
+                                                       std::uint32_t n) const noexcept;
 
             // ---- body mass / COM accessors (tests + solver T5) --------------
 

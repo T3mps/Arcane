@@ -486,6 +486,49 @@ namespace Arcane
             return m_angle[bodySlot] + m_fxLocalAngle[fi];
         }
 
+        std::uint32_t PhysicsWorld::GetFixtureCategory(FixtureHandle fh) const noexcept
+        {
+            if (!IsValid(fh))
+            {
+                return 1u; // default
+            }
+            return m_fxFilterCat[fh.index];
+        }
+
+        std::uint32_t PhysicsWorld::GetFixtureMask(FixtureHandle fh) const noexcept
+        {
+            if (!IsValid(fh))
+            {
+                return 0xFFFFFFFFu; // default
+            }
+            return m_fxFilterMask[fh.index];
+        }
+
+        FixtureHandle PhysicsWorld::GetBodyFixture(BodyHandle bh,
+                                                    std::uint32_t n) const noexcept
+        {
+            if (!IsValid(bh))
+            {
+                return kInvalidFixture;
+            }
+            const std::uint32_t bodySlot = bh.index;
+            if (bodySlot >= m_bodyFixtures.size())
+            {
+                return kInvalidFixture;
+            }
+            const std::vector<std::uint32_t>& list = m_bodyFixtures[bodySlot];
+            if (n >= static_cast<std::uint32_t>(list.size()))
+            {
+                return kInvalidFixture;
+            }
+            const std::uint32_t fi = list[n];
+            if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+            {
+                return kInvalidFixture;
+            }
+            return FixtureHandle{ fi, m_fxGen[fi] };
+        }
+
         Real PhysicsWorld::GetBodyMass(BodyHandle bh) const noexcept
         {
             if (!IsValid(bh))
@@ -713,16 +756,24 @@ namespace Arcane
             // AddFixture -- single field-population site, safe for T5 to extend).
             // We do NOT call RecomputeBodyMass here; the legacy invMass/invInertia
             // path above is the one source of truth for the single-shape case.
+            //
+            // T6 fix: populate the auto-fixture from the new BodyDef filter +
+            // local-transform fields so authored categoryBits / maskBits /
+            // localPos / localAngle on the primary fixture flow through.
+            // The mass/invMass path above is NOT changed: compound-COM for an
+            // offset primary fixture is deferred; legacy dynamics tests stay
+            // byte-for-byte green because invMass/invInertia are derived from
+            // def.shape + def.density only (above), never from localPos/localAngle.
             {
                 FixtureDef autoFd;
                 autoFd.shape        = def.shape;
-                autoFd.localPos     = Vec2(Real(0), Real(0));
-                autoFd.localAngle   = Real(0);
+                autoFd.localPos     = def.localPos;
+                autoFd.localAngle   = def.localAngle;
                 autoFd.density      = def.density;
                 autoFd.friction     = def.friction;
                 autoFd.restitution  = def.restitution;
-                autoFd.categoryBits = 1u;
-                autoFd.maskBits     = 0xFFFFFFFFu;
+                autoFd.categoryBits = def.categoryBits;
+                autoFd.maskBits     = def.maskBits;
                 autoFd.isSensor     = def.isSensor;
                 AllocFixtureSlot(idx, autoFd); // no RecomputeBodyMass
 

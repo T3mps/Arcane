@@ -249,11 +249,19 @@ namespace Arcane
                         break;
                     }
 
-                    // Material + filter from fixture[0].
+                    // Material + filter + local transform from fixture[0].
+                    // T6 fix: categoryBits / maskBits / localPos / localAngle were
+                    // previously silently dropped because AddBody's auto-fixture
+                    // used hardcoded defaults.  BodyDef now carries these fields
+                    // and AddBody's auto-fixture reads them (see PhysicsWorld.cpp).
                     def.isSensor      = fx0.isSensor;
                     def.restitution   = static_cast<Physics::Real>(fx0.restitution);
                     def.friction      = static_cast<Physics::Real>(fx0.friction);
                     def.density       = static_cast<Physics::Real>(fx0.density);
+                    def.categoryBits  = fx0.categoryBits;
+                    def.maskBits      = fx0.maskBits;
+                    def.localPos      = Physics::Vec2(fx0.localPos.x, fx0.localPos.y);
+                    def.localAngle    = static_cast<Physics::Real>(fx0.localAngle);
 
                     // Body-level dynamics from RigidBody2D.
                     def.linearDamping = rb.linearDamping;

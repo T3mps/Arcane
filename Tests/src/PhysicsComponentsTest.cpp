@@ -192,11 +192,15 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
     constexpr uint32_t kF0Cat   = 0x01u;
     constexpr uint32_t kF0Mask  = 0xFFFFFFFFu;
 
-    // Fixture 1: aabb(2,2) @ local(10,0), restitution 0.5, isSensor=true.
-    constexpr float kF1HalfW    = 2.0f;
-    constexpr float kF1HalfH    = 2.0f;
+    // Fixture 1: capsule(halfLen=1.5, r=0.4) @ local(10,0) localAngle=0.5, isSensor=true.
+    // Using Capsule (not Aabb) exercises halfLen + localAngle round-trip, which
+    // was previously un-gated.  The round-trip test now asserts ALL descriptor
+    // fields including halfLen and localAngle on the second fixture.
+    constexpr float kF1HalfLen  = 1.5f;
+    constexpr float kF1Radius   = 0.4f;
     constexpr float kF1LocalX   = 10.0f;
     constexpr float kF1LocalY   = 0.0f;
+    constexpr float kF1LocalAng = 0.5f;
     constexpr float kF1Rest     = 0.5f;
     constexpr uint32_t kF1Cat   = 0x02u;
     constexpr uint32_t kF1Mask  = 0xFFFFFFFEu;
@@ -238,16 +242,16 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
             col.fixtures.push_back(fx);
         }
 
-        // Fixture 1: aabb.
+        // Fixture 1: capsule (halfLen + localAngle round-trip gate).
         {
             Arcane::Fixture fx;
-            fx.kind         = Arcane::Physics::ShapeKind::Aabb;
-            fx.radius       = 0.0f;
-            fx.halfLen      = 0.0f;
-            fx.halfW        = kF1HalfW;
-            fx.halfH        = kF1HalfH;
+            fx.kind         = Arcane::Physics::ShapeKind::Capsule;
+            fx.radius       = kF1Radius;
+            fx.halfLen      = kF1HalfLen;
+            fx.halfW        = 0.0f;
+            fx.halfH        = 0.0f;
             fx.localPos     = glm::vec2(kF1LocalX, kF1LocalY);
-            fx.localAngle   = 0.0f;
+            fx.localAngle   = kF1LocalAng;
             fx.density      = 1.0f;
             fx.friction     = 0.3f;
             fx.restitution  = kF1Rest;
@@ -287,12 +291,15 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
     CHECK(col->fixtures[0].maskBits     == kF0Mask);
     CHECK(col->fixtures[0].isSensor     == false);
 
-    // Assert fixture 1 (aabb, sensor).
-    CHECK(col->fixtures[1].kind         == Arcane::Physics::ShapeKind::Aabb);
-    CHECK(col->fixtures[1].halfW        == Approx(kF1HalfW));
-    CHECK(col->fixtures[1].halfH        == Approx(kF1HalfH));
+    // Assert fixture 1 (capsule, sensor) -- all descriptor fields including
+    // halfLen and localAngle are now gated here (the previous Aabb variant
+    // left both un-exercised).
+    CHECK(col->fixtures[1].kind         == Arcane::Physics::ShapeKind::Capsule);
+    CHECK(col->fixtures[1].halfLen      == Approx(kF1HalfLen));
+    CHECK(col->fixtures[1].radius       == Approx(kF1Radius));
     CHECK(col->fixtures[1].localPos.x   == Approx(kF1LocalX));
     CHECK(col->fixtures[1].localPos.y   == Approx(kF1LocalY));
+    CHECK(col->fixtures[1].localAngle   == Approx(kF1LocalAng));
     CHECK(col->fixtures[1].restitution  == Approx(kF1Rest));
     CHECK(col->fixtures[1].categoryBits == kF1Cat);
     CHECK(col->fixtures[1].maskBits     == kF1Mask);
