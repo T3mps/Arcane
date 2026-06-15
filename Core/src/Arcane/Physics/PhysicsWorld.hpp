@@ -69,6 +69,7 @@
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
+#include <Arcane/Physics/Fixture.hpp>
 #include <Arcane/Physics/Broadphase/Broadphase.hpp>
 #include <Arcane/Physics/Broadphase/Passability.hpp>
 #include <Arcane/Physics/Broadphase/TileGrid.hpp>
@@ -300,6 +301,51 @@ namespace Arcane
             // True iff h refers to a live slot at the same generation (ports
             // handleValid).
             [[nodiscard]] bool IsValid(BodyHandle h) const noexcept;
+
+            // ---- fixture lifecycle (v2 Task 4; additive over the body API) --
+            //
+            // Add a fixture to a live body.  Creates a fixture slot (reuses a
+            // free slot or appends), links it to the body, and re-aggregates the
+            // body's mass / COM / inertia.  Returns a stable FixtureHandle.
+            // AddBody back-compat calls this internally for the first fixture.
+            // Setup-time: may allocate (vector growth); no alloc inside Step.
+            FixtureHandle AddFixture(BodyHandle bh, const FixtureDef& def);
+
+            // Remove a fixture.  Unlinks it from the body, recycles the slot
+            // (bumps the generation), and re-aggregates the body's mass.
+            // No-op for a stale / invalid handle.
+            void DropFixture(FixtureHandle fh);
+
+            // True iff fh refers to a live fixture slot at the same generation.
+            [[nodiscard]] bool IsValid(FixtureHandle fh) const noexcept;
+
+            // Number of fixtures attached to a body (0 if the handle is stale).
+            [[nodiscard]] std::uint32_t FixtureCount(BodyHandle bh) const noexcept;
+
+            // ---- fixture-inspection accessors (tests + T5 wiring) -----------
+
+            // Fixture world-space center position:
+            //   bodyPos + R(bodyAngle) * fixture.localPos
+            [[nodiscard]] Vec2 GetFixtureWorldPos(FixtureHandle fh) const noexcept;
+
+            // Fixture world-space angle:
+            //   bodyAngle + fixture.localAngle
+            [[nodiscard]] Real GetFixtureWorldAngle(FixtureHandle fh) const noexcept;
+
+            // ---- body mass / COM accessors (tests + solver T5) --------------
+
+            // Aggregated body mass (sum of fixture masses).  0 for
+            // Static/Kinematic (they are never integrated).
+            [[nodiscard]] Real GetBodyMass(BodyHandle bh) const noexcept;
+
+            // Body center of mass in the body-local frame (weighted centroid of
+            // all fixtures).  STORED but NOT YET USED by integration/solver --
+            // that wiring is T5.  Returns (0,0) for Static/Kinematic.
+            [[nodiscard]] Vec2 GetLocalCenter(BodyHandle bh) const noexcept;
+
+            // Body rotational inertia about the COM.  0 for Static/Kinematic or
+            // when fixedRotation is true.
+            [[nodiscard]] Real GetBodyInertia(BodyHandle bh) const noexcept;
 
             // ---- handle-based accessors (the canonical surface) -------------
 
@@ -635,6 +681,68 @@ namespace Arcane
             // Raycast's round/poly body tests.
             [[nodiscard]] std::optional<Real>
             RayVsBody(std::uint32_t idx, const Vec2& from, const Vec2& delta) const;
+
+            // ---- Fixture SoA (v2 Task 4; additive) ---------------------------
+            //
+            // Parallel arrays keyed by fixture slot index (free-list discipline
+            // identical to the body SoA).  Each body slot owns a vector of
+            // fixture slot indices (m_bodyFixtures) -- setup-time alloc is
+            // acceptable; Step never touches this path until T5.
+            //
+            // m_fxBody:  owning body's SoA SLOT index (not generation-gated).
+            // m_fxGen:   generation per fixture slot (0 = dead; live starts at 1).
+            // m_fxCount / m_fxFree: high-water mark + recycled slot stack (mirrors
+            //            the body SoA m_count / m_free discipline).
+            std::vector<Shape>          m_fxShape;
+            std::vector<Real>           m_fxLocalPosX, m_fxLocalPosY;
+            std::vector<Real>           m_fxLocalAngle;
+            std::vector<Real>           m_fxDensity;
+            std::vector<Real>           m_fxFriction;
+            std::vector<Real>           m_fxRestitution;
+            std::vector<std::uint32_t>  m_fxFilterCat;
+            std::vector<std::uint32_t>  m_fxFilterMask;
+            std::vector<std::uint8_t>   m_fxSensor;
+            std::vector<std::uint32_t>  m_fxBody;    // owning body slot
+            std::vector<std::uint32_t>  m_fxGen;     // generation per fixture slot
+
+            std::uint32_t              m_fxCount = 0;
+            std::vector<std::uint32_t> m_fxFree;
+
+            // Per-body fixture index list (keyed by body SoA slot index).
+            // A vector of vectors: grows to m_count on first use; each inner
+            // vector holds the fixture slot indices owned by that body slot.
+            // Setup-time alloc only (AddFixture / DropFixture / RemoveBody).
+            std::vector<std::vector<std::uint32_t>> m_bodyFixtures;
+
+            // Per-body localCenter (COM in body-local frame, aggregated over
+            // fixtures).  STORED but not yet consumed by integration/solver (T5).
+            // Default (0,0) for bodies with no fixtures or Static/Kinematic.
+            std::vector<Real> m_localCenterX, m_localCenterY;
+
+            // Per-body total mass (used by GetBodyMass / GetBodyInertia accessors
+            // in the test surface; the solver reads m_invMass directly).
+            std::vector<Real> m_bodyMass;
+
+            // Per-body inertia about the COM (before forcing invInertia=0 for
+            // fixedRotation; stored for the accessor).
+            std::vector<Real> m_bodyInertia;
+
+            // Per-body fixedRotation flag (needed by RecomputeBodyMass to force
+            // invInertia = 0; mirrors the BodyDef flag stored at AddBody).
+            std::vector<std::uint8_t> m_fixedRotation;
+
+            // Ensure the fixture SoA and per-body auxiliary arrays have at least
+            // n fixture slots.
+            void EnsureFxCapacity(std::uint32_t n);
+
+            // Ensure per-body arrays are large enough for body slot index `bodySlot`.
+            // Called when a new body slot is activated (alongside EnsureCapacity).
+            void EnsureBodyAuxCapacity(std::uint32_t n);
+
+            // Re-aggregate mass / COM / inertia for body slot `bodySlot` from its
+            // current fixture list.  Updates m_invMass / m_invInertia / m_bodyMass
+            // / m_localCenterX/Y / m_bodyInertia.  Static/Kinematic keep 0/0.
+            void RecomputeBodyMass(std::uint32_t bodySlot);
 
             // ---- SoA (port of the Lua FFI arrays; std::vector here) ---------
             std::vector<Real>          m_posX, m_posY;

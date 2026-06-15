@@ -132,6 +132,355 @@ namespace Arcane
             m_bullet.resize(next, std::uint8_t(0));
         }
 
+        // ----------------------------------------------------------------
+        // Fixture SoA helpers (v2 Task 4)
+        // ----------------------------------------------------------------
+
+        void PhysicsWorld::EnsureFxCapacity(std::uint32_t n)
+        {
+            if (n <= m_fxShape.size())
+            {
+                return;
+            }
+            // Amortised growth: at least double the current capacity.
+            const std::uint32_t next =
+                std::max(n, static_cast<std::uint32_t>(
+                    m_fxShape.empty() ? 4u : m_fxShape.capacity() * 2u));
+
+            m_fxShape.resize(next);
+            m_fxLocalPosX.resize(next, Real(0));
+            m_fxLocalPosY.resize(next, Real(0));
+            m_fxLocalAngle.resize(next, Real(0));
+            m_fxDensity.resize(next, Real(0));
+            m_fxFriction.resize(next, Real(0));
+            m_fxRestitution.resize(next, Real(0));
+            m_fxFilterCat.resize(next, 1u);
+            m_fxFilterMask.resize(next, 0xFFFFFFFFu);
+            m_fxSensor.resize(next, std::uint8_t(0));
+            m_fxBody.resize(next, 0u);
+            m_fxGen.resize(next, 0u); // 0 = dead; live starts at 1
+        }
+
+        void PhysicsWorld::EnsureBodyAuxCapacity(std::uint32_t n)
+        {
+            if (n <= m_bodyFixtures.size())
+            {
+                return;
+            }
+            // Grow to match body SoA capacity.
+            const std::uint32_t next =
+                std::max(n, static_cast<std::uint32_t>(
+                    m_bodyFixtures.empty() ? 4u : m_bodyFixtures.capacity() * 2u));
+
+            m_bodyFixtures.resize(next);
+            m_localCenterX.resize(next, Real(0));
+            m_localCenterY.resize(next, Real(0));
+            m_bodyMass.resize(next, Real(0));
+            m_bodyInertia.resize(next, Real(0));
+            m_fixedRotation.resize(next, std::uint8_t(0));
+        }
+
+        void PhysicsWorld::RecomputeBodyMass(std::uint32_t bodySlot)
+        {
+            // Static and Kinematic bodies never integrate or solve; keep their
+            // inverse mass/inertia at zero (the existing convention).
+            const BodyType bt = static_cast<BodyType>(m_btype[bodySlot]);
+            if (bt != BodyType::Dynamic)
+            {
+                m_invMass[bodySlot]    = Real(0);
+                m_invInertia[bodySlot] = Real(0);
+                m_bodyMass[bodySlot]   = Real(0);
+                m_bodyInertia[bodySlot]= Real(0);
+                m_localCenterX[bodySlot] = Real(0);
+                m_localCenterY[bodySlot] = Real(0);
+                return;
+            }
+
+            // Accumulate mass, density-weighted centroid, and inertia over
+            // all fixtures attached to this body slot.
+            const std::vector<std::uint32_t>& fxList = m_bodyFixtures[bodySlot];
+
+            Real totalMass = Real(0);
+            // Weighted centroid numerator (body-local space).
+            Real cx = Real(0);
+            Real cy = Real(0);
+
+            // First pass: sum mass and density-weighted centroid.
+            for (const std::uint32_t fi : fxList)
+            {
+                if (m_fxGen[fi] == 0u)
+                {
+                    continue; // dead slot in the list (should not happen; defensive)
+                }
+                const MassData md = m_fxShape[fi].ComputeMass(m_fxDensity[fi]);
+                if (md.mass <= Real(0))
+                {
+                    continue; // degenerate / zero-density fixture
+                }
+
+                totalMass += md.mass;
+
+                // The fixture's centroid in body-local space:
+                //   bodyLocalCentroid = localPos + R(localAngle) * shapeCentroid
+                // For our analytic test cases the shape centroid is (0,0) for
+                // both circle and aabb, so localPos is the body-local centroid.
+                // The general form is computed here for correctness.
+                const Real la  = m_fxLocalAngle[fi];
+                const Real lc  = std::cos(la);
+                const Real ls  = std::sin(la);
+                const Real scx = md.centroid.x;
+                const Real scy = md.centroid.y;
+                // Rotate shape centroid by localAngle, then offset by localPos.
+                const Real bx = m_fxLocalPosX[fi] + lc * scx - ls * scy;
+                const Real by = m_fxLocalPosY[fi] + ls * scx + lc * scy;
+
+                cx += md.mass * bx;
+                cy += md.mass * by;
+            }
+
+            if (totalMass <= Real(0))
+            {
+                // No contributing fixtures (all degenerate).
+                m_invMass[bodySlot]      = Real(0);
+                m_invInertia[bodySlot]   = Real(0);
+                m_bodyMass[bodySlot]     = Real(0);
+                m_bodyInertia[bodySlot]  = Real(0);
+                m_localCenterX[bodySlot] = Real(0);
+                m_localCenterY[bodySlot] = Real(0);
+                return;
+            }
+
+            // Body center of mass in body-local frame.
+            const Real comX = cx / totalMass;
+            const Real comY = cy / totalMass;
+
+            // Second pass: sum inertia about the COM via parallel-axis theorem.
+            //   I_total = sum_i (I_i + m_i * |centroid_i - COM|^2)
+            Real totalInertia = Real(0);
+            for (const std::uint32_t fi : fxList)
+            {
+                if (m_fxGen[fi] == 0u)
+                {
+                    continue;
+                }
+                const MassData md = m_fxShape[fi].ComputeMass(m_fxDensity[fi]);
+                if (md.mass <= Real(0))
+                {
+                    continue;
+                }
+
+                // Fixture centroid in body-local space (same as first pass).
+                const Real la  = m_fxLocalAngle[fi];
+                const Real lc  = std::cos(la);
+                const Real ls  = std::sin(la);
+                const Real scx = md.centroid.x;
+                const Real scy = md.centroid.y;
+                const Real bx = m_fxLocalPosX[fi] + lc * scx - ls * scy;
+                const Real by = m_fxLocalPosY[fi] + ls * scx + lc * scy;
+
+                // Parallel-axis shift: distance^2 from fixture centroid to COM.
+                const Real dx = bx - comX;
+                const Real dy = by - comY;
+                totalInertia += md.inertia + md.mass * (dx * dx + dy * dy);
+            }
+
+            // Store the aggregated body state.
+            m_bodyMass[bodySlot]     = totalMass;
+            m_localCenterX[bodySlot] = comX;
+            m_localCenterY[bodySlot] = comY;
+            m_bodyInertia[bodySlot]  = totalInertia;
+
+            m_invMass[bodySlot]    = Real(1) / totalMass;
+            const bool fixedRot    = m_fixedRotation[bodySlot] != 0u;
+            m_invInertia[bodySlot] = (fixedRot || totalInertia <= Real(0))
+                                         ? Real(0)
+                                         : Real(1) / totalInertia;
+        }
+
+        // ----------------------------------------------------------------
+        // Fixture lifecycle: AddFixture / DropFixture / IsValid(FixtureHandle)
+        // ----------------------------------------------------------------
+
+        FixtureHandle PhysicsWorld::AddFixture(BodyHandle bh, const FixtureDef& def)
+        {
+            if (!IsValid(bh))
+            {
+                return kInvalidFixture;
+            }
+            const std::uint32_t bodySlot = bh.index;
+
+            // Ensure per-body auxiliary arrays cover this slot.
+            EnsureBodyAuxCapacity(bodySlot + 1u);
+
+            // Acquire a fixture slot (reuse from free-list or append).
+            std::uint32_t fi;
+            if (!m_fxFree.empty())
+            {
+                fi = m_fxFree.back();
+                m_fxFree.pop_back();
+            }
+            else
+            {
+                fi = m_fxCount;
+                EnsureFxCapacity(m_fxCount + 1u);
+                ++m_fxCount;
+            }
+
+            // Populate the fixture slot.
+            m_fxShape[fi]      = def.shape;
+            m_fxLocalPosX[fi]  = def.localPos.x;
+            m_fxLocalPosY[fi]  = def.localPos.y;
+            m_fxLocalAngle[fi] = def.localAngle;
+            m_fxDensity[fi]    = def.density;
+            m_fxFriction[fi]   = def.friction;
+            m_fxRestitution[fi]= def.restitution;
+            m_fxFilterCat[fi]  = def.categoryBits;
+            m_fxFilterMask[fi] = def.maskBits;
+            m_fxSensor[fi]     = def.isSensor ? std::uint8_t(1) : std::uint8_t(0);
+            m_fxBody[fi]       = bodySlot;
+            m_fxGen[fi]       += 1u; // bump generation (dead=0, live starts at 1)
+
+            // Link to the body.
+            m_bodyFixtures[bodySlot].push_back(fi);
+
+            // Re-aggregate the body's mass / COM / inertia.
+            RecomputeBodyMass(bodySlot);
+
+            return FixtureHandle{ fi, m_fxGen[fi] };
+        }
+
+        void PhysicsWorld::DropFixture(FixtureHandle fh)
+        {
+            if (!IsValid(fh))
+            {
+                return;
+            }
+            const std::uint32_t fi       = fh.index;
+            const std::uint32_t bodySlot = m_fxBody[fi];
+
+            // Unlink from the body's fixture list (swap-and-pop).
+            std::vector<std::uint32_t>& list = m_bodyFixtures[bodySlot];
+            for (std::size_t k = 0; k < list.size(); ++k)
+            {
+                if (list[k] == fi)
+                {
+                    list[k] = list.back();
+                    list.pop_back();
+                    break;
+                }
+            }
+
+            // Invalidate the slot (bump generation + clear shape storage).
+            m_fxGen[fi] += 1u;
+            m_fxShape[fi] = Shape{}; // release polygon vertex/normal storage
+
+            // Recycle.
+            m_fxFree.push_back(fi);
+
+            // Re-aggregate the body's mass.
+            RecomputeBodyMass(bodySlot);
+        }
+
+        bool PhysicsWorld::IsValid(FixtureHandle fh) const noexcept
+        {
+            if (fh.generation == 0u)
+            {
+                return false;
+            }
+            if (fh.index >= m_fxCount)
+            {
+                return false;
+            }
+            return m_fxGen[fh.index] == fh.generation;
+        }
+
+        std::uint32_t PhysicsWorld::FixtureCount(BodyHandle bh) const noexcept
+        {
+            if (!IsValid(bh))
+            {
+                return 0u;
+            }
+            const std::uint32_t bodySlot = bh.index;
+            if (bodySlot >= m_bodyFixtures.size())
+            {
+                return 0u;
+            }
+            return static_cast<std::uint32_t>(m_bodyFixtures[bodySlot].size());
+        }
+
+        Vec2 PhysicsWorld::GetFixtureWorldPos(FixtureHandle fh) const noexcept
+        {
+            if (!IsValid(fh))
+            {
+                return Vec2(Real(0), Real(0));
+            }
+            const std::uint32_t fi       = fh.index;
+            const std::uint32_t bodySlot = m_fxBody[fi];
+
+            const Real bodyAngle = m_angle[bodySlot];
+            const Real c = std::cos(bodyAngle);
+            const Real s = std::sin(bodyAngle);
+            const Real lx = m_fxLocalPosX[fi];
+            const Real ly = m_fxLocalPosY[fi];
+
+            return Vec2(
+                m_posX[bodySlot] + c * lx - s * ly,
+                m_posY[bodySlot] + s * lx + c * ly);
+        }
+
+        Real PhysicsWorld::GetFixtureWorldAngle(FixtureHandle fh) const noexcept
+        {
+            if (!IsValid(fh))
+            {
+                return Real(0);
+            }
+            const std::uint32_t fi       = fh.index;
+            const std::uint32_t bodySlot = m_fxBody[fi];
+            return m_angle[bodySlot] + m_fxLocalAngle[fi];
+        }
+
+        Real PhysicsWorld::GetBodyMass(BodyHandle bh) const noexcept
+        {
+            if (!IsValid(bh))
+            {
+                return Real(0);
+            }
+            const std::uint32_t bodySlot = bh.index;
+            if (bodySlot >= m_bodyMass.size())
+            {
+                return Real(0);
+            }
+            return m_bodyMass[bodySlot];
+        }
+
+        Vec2 PhysicsWorld::GetLocalCenter(BodyHandle bh) const noexcept
+        {
+            if (!IsValid(bh))
+            {
+                return Vec2(Real(0), Real(0));
+            }
+            const std::uint32_t bodySlot = bh.index;
+            if (bodySlot >= m_localCenterX.size())
+            {
+                return Vec2(Real(0), Real(0));
+            }
+            return Vec2(m_localCenterX[bodySlot], m_localCenterY[bodySlot]);
+        }
+
+        Real PhysicsWorld::GetBodyInertia(BodyHandle bh) const noexcept
+        {
+            if (!IsValid(bh))
+            {
+                return Real(0);
+            }
+            const std::uint32_t bodySlot = bh.index;
+            if (bodySlot >= m_bodyInertia.size())
+            {
+                return Real(0);
+            }
+            return m_bodyInertia[bodySlot];
+        }
+
         Aabb2 PhysicsWorld::SlotAabb(std::uint32_t i) const noexcept
         {
             Transform xf{ Vec2(m_posX[i], m_posY[i]), Real(0) };
@@ -235,6 +584,84 @@ namespace Arcane
                 // response, which arrives in P2.1.
                 m_moverBroadphase->Update(idx, SlotAabb(idx));
             }
+
+            // ---- Back-compat fixture creation (v2 Task 4) -------------------
+            //
+            // AddBody creates exactly ONE fixture from the BodyDef's shape +
+            // material so the fixture data model is always populated.
+            // The legacy single-shape contact-gen path (GenerateContacts) reads
+            // m_shape[] + m_rest[] + m_fric[] DIRECTLY and is UNCHANGED (Task 5
+            // wires fixture-pair contact gen and retires that path).  So we
+            // create the fixture record without letting RecomputeBodyMass
+            // overwrite the already-correct m_invMass/m_invInertia derived above
+            // (which correctly handles the optional mass override).
+            //
+            // EnsureBodyAuxCapacity + store fixedRotation flag (needed by
+            // RecomputeBodyMass if AddFixture is called later).
+            EnsureBodyAuxCapacity(idx + 1u);
+            m_bodyFixtures[idx].clear(); // fresh slot (may be recycled)
+            m_fixedRotation[idx] = def.fixedRotation ? std::uint8_t(1) : std::uint8_t(0);
+
+            // Create the auto fixture record by directly populating a fixture
+            // slot and linking it -- mirrors AddFixture but WITHOUT calling
+            // RecomputeBodyMass (we keep the legacy invMass/invInertia).
+            {
+                std::uint32_t fi;
+                if (!m_fxFree.empty())
+                {
+                    fi = m_fxFree.back();
+                    m_fxFree.pop_back();
+                }
+                else
+                {
+                    fi = m_fxCount;
+                    EnsureFxCapacity(m_fxCount + 1u);
+                    ++m_fxCount;
+                }
+
+                m_fxShape[fi]       = def.shape;
+                m_fxLocalPosX[fi]   = Real(0);
+                m_fxLocalPosY[fi]   = Real(0);
+                m_fxLocalAngle[fi]  = Real(0);
+                m_fxDensity[fi]     = def.density;
+                m_fxFriction[fi]    = def.friction;
+                m_fxRestitution[fi] = def.restitution;
+                m_fxFilterCat[fi]   = 1u;
+                m_fxFilterMask[fi]  = 0xFFFFFFFFu;
+                m_fxSensor[fi]      = def.isSensor ? std::uint8_t(1) : std::uint8_t(0);
+                m_fxBody[fi]        = idx;
+                m_fxGen[fi]        += 1u;
+
+                m_bodyFixtures[idx].push_back(fi);
+
+                // Populate the body-mass accessors consistently with the legacy
+                // path.  For Dynamic bodies the correct mass was computed above
+                // (possibly with a mass override); for Static/Kinematic it is 0.
+                if (def.type == BodyType::Dynamic)
+                {
+                    const MassData md = def.shape.ComputeMass(def.density);
+                    Real totalMass    = md.mass;
+                    Real totalInertia = md.inertia;
+                    if (def.mass > Real(0) && totalMass > Real(0))
+                    {
+                        const Real scale = def.mass / totalMass;
+                        totalInertia    *= scale;
+                        totalMass        = def.mass;
+                    }
+                    m_bodyMass[idx]      = totalMass;
+                    m_bodyInertia[idx]   = totalInertia;
+                    m_localCenterX[idx]  = md.centroid.x;
+                    m_localCenterY[idx]  = md.centroid.y;
+                }
+                else
+                {
+                    m_bodyMass[idx]     = Real(0);
+                    m_bodyInertia[idx]  = Real(0);
+                    m_localCenterX[idx] = Real(0);
+                    m_localCenterY[idx] = Real(0);
+                }
+            }
+
             return BodyHandle{ idx, m_gen[idx] };
         }
 
@@ -288,6 +715,29 @@ namespace Arcane
             }
 
             m_shape[idx] = Shape{}; // release polygon storage
+
+            // ---- Drop all fixtures belonging to this body (v2 Task 4) -------
+            if (idx < m_bodyFixtures.size())
+            {
+                // Recycle each fixture slot (bump generation; clear shape).
+                // We iterate a COPY because DropFixture would modify the list.
+                const std::vector<std::uint32_t> fxCopy = m_bodyFixtures[idx];
+                for (const std::uint32_t fi : fxCopy)
+                {
+                    if (fi < m_fxCount && m_fxGen[fi] != 0u)
+                    {
+                        m_fxGen[fi] += 1u;           // invalidate
+                        m_fxShape[fi] = Shape{};     // release storage
+                        m_fxFree.push_back(fi);
+                    }
+                }
+                m_bodyFixtures[idx].clear();
+                m_bodyMass[idx]     = Real(0);
+                m_bodyInertia[idx]  = Real(0);
+                m_localCenterX[idx] = Real(0);
+                m_localCenterY[idx] = Real(0);
+            }
+
             m_free.push_back(idx);
         }
 
