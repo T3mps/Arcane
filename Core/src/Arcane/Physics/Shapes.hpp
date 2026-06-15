@@ -1,19 +1,30 @@
 #pragma once
 
-// Collider shapes for the Arcane 2D physics engine (M6, Task P1.1).
+// Collider shapes for the Arcane 2D physics engine (v2, Phase A, Task 1).
 //
-// PORT NOTE: the four constructors (Circle/Capsule/AABB/Polygon) and
-// ComputeAABB port Client/src/physics/shapes.lua faithfully -- shapes.lua is
-// the geometry oracle and ComputeAABB MUST bit-match the captured fixture
-// Arcane/Tests/data/physics_oracle/shapes.json (within f32 tolerance). The Lua
-// engine is a fixedRotation world: capsules are horizontal segments
-// (-halfLen,0)-(+halfLen,0), polygons are baked in local space, no rotation.
+// UNIFIED CORE+RADIUS MODEL (v2):
+//   Every Shape carries a populated convex polygon core (verts + normals +
+//   count) plus a scalar radius, for ALL four kinds:
+//     Circle(r)         -> 1 core vert at (0,0),       radius = r
+//     Capsule(hl, r)    -> 2 core verts (-hl,0),(+hl,0), radius = r
+//     Aabb(hw, hh)      -> 4 corner verts (CCW),        radius = 0
+//     Polygon(verts)    -> N verts (CCW, baked),         radius = 0
+//   All collision ultimately reduces to "distance between two convex polygon
+//   cores, inflated by rA + rB" (Box2D v3 model). The ShapeKind tag is
+//   retained as a fast-path HINT for circle/capsule segment-distance paths;
+//   it is NOT the sole dispatch anymore -- callers may use the unified core.
 //
-// NEW (no Lua oracle): ComputeMass(density), centroid, polygon edge-normals,
-// and CCW winding normalization are standard Box2D-style rigid-body
-// computations that the Phase-2 dynamics solver and the P1.2 SAT port need.
-// They are validated in the test against hand-derived analytic values, not
-// against the Lua source (which has none).
+// ROTATION-AWARE (v2):
+//   ComputeAABB(xf) now rotates the core verts by xf.rotation, bounds them,
+//   then expands by radius. The old "fixedRotation world, xf.rotation ignored"
+//   note no longer applies; all shapes compute geometrically-correct
+//   world-space AABBs under arbitrary orientation.
+//
+// ADDITIVE (v2 -> compatible with M6 narrowphase):
+//   The existing kind/halfLen/radius/halfW/halfH/legacy-verts/normals/
+//   polyCentroid fields are unchanged so the old narrowphase keeps compiling
+//   and the full [physics] suite stays green. The new unified core data
+//   lives IN the same verts/normals vectors (now populated for all four kinds).
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features (this module is also
@@ -33,18 +44,18 @@ namespace Arcane
     namespace Physics
     {
         // ----------------------------------------------------------------
-        // Transform: position + (forward-compat) rotation.
+        // Transform: position + rotation (both load-bearing in v2).
         // ----------------------------------------------------------------
         //
-        // The Lua engine is fixedRotation: shapes.aabbOf(s, x, y) takes only a
-        // position. We model that as a Vec2 position now. The rotation field is
-        // present for forward-compat (later phases / non-fixedRotation worlds)
-        // but is identity/unused in P1.1 -- ComputeAABB ignores it so the
-        // result bit-matches the Lua aabbOf.
+        // v2: rotation is now USED by ComputeAABB (rotates the core verts).
+        // Pass the body's actual angle; zero is fine for axis-aligned shapes
+        // or when rotation is locked (fixedRotation=true bodies stay at their
+        // constant angle, which flows through correctly).
         struct Transform
         {
             Vec2 position{ Real(0), Real(0) };
-            // Rotation in radians. Identity (0) in P1.1; reserved for later.
+            // Rotation in radians. Load-bearing in v2: ComputeAABB rotates
+            // the core verts by this angle before bounding.
             Real rotation = Real(0);
         };
 
@@ -105,16 +116,24 @@ namespace Arcane
             Real halfW = Real(0);
             Real halfH = Real(0);
 
-            // Polygon data (only populated for ShapeKind::Polygon). Stored CCW
-            // with one outward unit normal per edge i (edge verts[i]->verts[i+1]).
-            // verts.size() == normals.size() == vertex count (3..kMaxPolyVerts).
+            // Unified convex polygon core. Populated for ALL four kinds (v2):
+            //   Circle  -> 1 vert at (0,0), no normals (radius encodes shape)
+            //   Capsule -> 2 verts at (-halfLen,0) and (+halfLen,0), no normals
+            //   Aabb    -> 4 corner verts CCW, 4 outward edge normals
+            //   Polygon -> N verts CCW, N outward edge normals
+            // verts.size() == the core vertex count; for circle/capsule the
+            // radius field carries the round-inflation. The old narrowphase
+            // reads these fields directly (additive -- still correct).
             std::vector<Vec2> verts;
             std::vector<Vec2> normals;
-            // Polygon area centroid (local space). Baked at construction.
+            // Area centroid of the core (local space). Baked at construction.
+            // For circle/capsule: (0,0) by symmetry. Replaces polyCentroid
+            // (the alias is kept for existing narrowphase callers).
             Vec2 polyCentroid{ Real(0), Real(0) };
 
-            // World AABB of this shape under transform xf. PORTS shapes.aabbOf
-            // faithfully; in P1.1 xf is translation-only (xf.rotation ignored).
+            // World AABB of this shape under transform xf. v2: rotation-aware.
+            // Rotates the unified core verts by xf.rotation, bounds them, then
+            // expands by radius. Works correctly for all four shape kinds.
             Aabb ComputeAABB(const Transform& xf) const;
 
             // Standard Box2D-style mass properties for the given density.

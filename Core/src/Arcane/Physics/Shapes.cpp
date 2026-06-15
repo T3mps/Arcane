@@ -1,11 +1,19 @@
-// Shapes.cpp -- collider geometry + AABB (port) + mass/inertia (new).
+// Shapes.cpp -- collider geometry + rotation-aware AABB + mass/inertia (v2).
 //
-// See Shapes.hpp for the contract. ComputeAABB is a faithful port of
-// shapes.lua aabbOf and bit-matches the captured oracle. ComputeMass and the
-// polygon precompute (CCW normalization, outward normals, centroid) are
-// standard Box2D-style rigid-body math with no Lua oracle -- each derivation
-// is documented inline and validated against hand-derived analytic values in
-// the test.
+// See Shapes.hpp for the v2 unified-core+radius contract. Changes vs M6:
+//
+//   MakeCircle / MakeCapsule / MakeAabb now populate the unified core verts
+//   (and normals for Aabb) so that ComputeAABB can work uniformly over all
+//   four kinds via rotation. MakePolygon is unchanged (already populated).
+//
+//   ComputeAABB is now ROTATION-AWARE (v2 Phase A, Task 1):
+//     - Rotate each core vert by xf.rotation (2D rotation matrix).
+//     - Bound the rotated verts (min/max x and y).
+//     - Expand by radius on all sides.
+//   This replaces the old translation-only per-kind switch.
+//
+//   ComputeMass is UNCHANGED from M6 (closed forms per kind; validated against
+//   hand-derived analytic values). The existing test assertions still pass.
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 
@@ -23,59 +31,54 @@ namespace Arcane
     namespace Physics
     {
         // --------------------------------------------------------------------
-        // ComputeAABB -- faithful port of shapes.lua aabbOf(s, x, y).
-        // P1.1: translation-only (xf.rotation ignored), so the result matches
-        // the Lua aabbOf bit-for-bit within f32 tolerance.
+        // ComputeAABB -- rotation-aware (v2 Phase A, Task 1).
+        //
+        // Algorithm:
+        //   1. Build a 2D rotation matrix from xf.rotation: c = cos(theta),
+        //      s = sin(theta). Then for a local vert (lx, ly):
+        //        world_x = c*lx - s*ly + pos.x
+        //        world_y = s*lx + c*ly + pos.y
+        //   2. Walk the unified core verts (verts[]), rotate each, accumulate
+        //      min/max.
+        //   3. Expand the bounding box by `radius` on all sides.
+        //
+        // For circle (1 vert at origin) the rotation step is a no-op and the
+        // result is [pos - r, pos + r] -- identical to the old formula.
+        // For capsule at rotation 0 the two verts (-hl,0) and (+hl,0) give the
+        // same result as the old `x-hl-r ... x+hl+r` formula.
+        // For aabb at rotation 0 the four corner verts give the same result as
+        // the old `x-hw ... x+hw, y-hh ... y+hh` formula.
+        // So at zero rotation all results are identical to M6; the rotation path
+        // is the new capability.
         // --------------------------------------------------------------------
         Aabb Shape::ComputeAABB(const Transform& xf) const
         {
-            const Real x = xf.position.x;
-            const Real y = xf.position.y;
+            const Real cx = xf.position.x;
+            const Real cy = xf.position.y;
+            const Real c  = std::cos(xf.rotation);
+            const Real s  = std::sin(xf.rotation);
 
-            switch (kind)
+            Real x0 =  std::numeric_limits<Real>::max();
+            Real y0 =  std::numeric_limits<Real>::max();
+            Real x1 = -std::numeric_limits<Real>::max();
+            Real y1 = -std::numeric_limits<Real>::max();
+
+            for (const Vec2& v : verts)
             {
-                case ShapeKind::Circle:
-                    // Lua: x - r, y - r, x + r, y + r
-                    return Aabb{
-                        Vec2(x - radius, y - radius),
-                        Vec2(x + radius, y + radius)
-                    };
-
-                case ShapeKind::Capsule:
-                    // Lua: x - halfLen - r, y - r, x + halfLen + r, y + r
-                    return Aabb{
-                        Vec2(x - halfLen - radius, y - radius),
-                        Vec2(x + halfLen + radius, y + radius)
-                    };
-
-                case ShapeKind::Aabb:
-                    // Lua: x - hw, y - hh, x + hw, y + hh
-                    return Aabb{
-                        Vec2(x - halfW, y - halfH),
-                        Vec2(x + halfW, y + halfH)
-                    };
-
-                case ShapeKind::Polygon:
-                {
-                    // Lua: min/max over (v[i]+x, v[i+1]+y) for each vertex.
-                    Real x0 = std::numeric_limits<Real>::max();
-                    Real y0 = std::numeric_limits<Real>::max();
-                    Real x1 = -std::numeric_limits<Real>::max();
-                    Real y1 = -std::numeric_limits<Real>::max();
-                    for (const Vec2& v : verts)
-                    {
-                        const Real vx = v.x + x;
-                        const Real vy = v.y + y;
-                        if (vx < x0) x0 = vx;
-                        if (vx > x1) x1 = vx;
-                        if (vy < y0) y0 = vy;
-                        if (vy > y1) y1 = vy;
-                    }
-                    return Aabb{ Vec2(x0, y0), Vec2(x1, y1) };
-                }
+                // Rotate the local vert by xf.rotation, then translate.
+                const Real wx = c * v.x - s * v.y + cx;
+                const Real wy = s * v.x + c * v.y + cy;
+                if (wx < x0) x0 = wx;
+                if (wx > x1) x1 = wx;
+                if (wy < y0) y0 = wy;
+                if (wy > y1) y1 = wy;
             }
-            // unreachable: all ShapeKind cases handled
-            return {};
+
+            // Expand by the round-inflation radius.
+            return Aabb{
+                Vec2(x0 - radius, y0 - radius),
+                Vec2(x1 + radius, y1 + radius)
+            };
         }
 
         // --------------------------------------------------------------------
@@ -252,6 +255,12 @@ namespace Arcane
             Shape s;
             s.kind   = ShapeKind::Circle;
             s.radius = r;
+            // Unified core: 1 vertex at the local origin.
+            // ComputeAABB rotates this point (a no-op for the origin) then
+            // expands by radius, giving the correct disc AABB at any rotation.
+            s.verts = { Vec2(Real(0), Real(0)) };
+            // Circles have no edges, so normals stays empty.
+            // polyCentroid is the local origin (default Vec2(0,0) is correct).
             return s;
         }
 
@@ -261,6 +270,17 @@ namespace Arcane
             s.kind    = ShapeKind::Capsule;
             s.halfLen = halfLen;
             s.radius  = r;
+            // Unified core: 2 verts at the segment endpoints (-halfLen,0) and
+            // (+halfLen,0). ComputeAABB rotates both endpoints by xf.rotation
+            // then expands by radius, giving the geometrically-correct capsule
+            // AABB under arbitrary orientation.
+            s.verts = {
+                Vec2(-halfLen, Real(0)),
+                Vec2(+halfLen, Real(0)),
+            };
+            // Capsule has no polygon edges (the shape is the Minkowski sum of
+            // the segment with a disc); normals stays empty.
+            // polyCentroid = midpoint = (0,0) (default is correct).
             return s;
         }
 
@@ -270,6 +290,34 @@ namespace Arcane
             s.kind  = ShapeKind::Aabb;
             s.halfW = hw;
             s.halfH = hh;
+            // Unified core: 4 corner verts in CCW winding (standard for a
+            // y-down coordinate space where positive y is downward and CCW is
+            // the winding that gives a positive shoelace area). The box
+            // corners in local space are:
+            //   v0 = (-hw, -hh)   bottom-left
+            //   v1 = (+hw, -hh)   bottom-right
+            //   v2 = (+hw, +hh)   top-right
+            //   v3 = (-hw, +hh)   top-left
+            // Edge normals (outward, one per edge i -> i+1):
+            //   e0 v0->v1: right edge along +x bottom  -> normal (0,-1)
+            //   e1 v1->v2: right edge along +y         -> normal (+1,0)
+            //   e2 v2->v3: top edge along -x            -> normal (0,+1)
+            //   e3 v3->v0: left edge along -y           -> normal (-1,0)
+            // (These match the outward-normal convention used by MakePolygon:
+            // Perp(b-a) = (dy,-dx) for CCW-in-y-down winding.)
+            s.verts = {
+                Vec2(-hw, -hh),
+                Vec2(+hw, -hh),
+                Vec2(+hw, +hh),
+                Vec2(-hw, +hh),
+            };
+            s.normals = {
+                Vec2(Real(0),  Real(-1)),  // bottom face: outward = -y
+                Vec2(Real(1),  Real(0)),   // right face:  outward = +x
+                Vec2(Real(0),  Real(1)),   // top face:    outward = +y
+                Vec2(Real(-1), Real(0)),   // left face:   outward = -x
+            };
+            // polyCentroid = (0,0) by symmetry (default is correct).
             return s;
         }
 
