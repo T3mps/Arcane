@@ -193,10 +193,12 @@ TEST_CASE("PhysicsSolver: box stack settles", "[physics][solver]")
     }
 
     REQUIRE(maxSpeed < Real(2.0));     // settled, no jitter/explosion
-    REQUIRE(maxPen   < Real(0.22));    // small soft-contact overlap (see header);
-                                       // bumped from 0.2 to 0.22 for v2 Collide
+    REQUIRE(maxPen   < Real(0.21));    // small soft-contact overlap (see header);
+                                       // bumped from 0.2 to 0.21 for v2 Collide
                                        // narrowphase (T3 clip-manifold vs old SAT
-                                       // reports marginally different depths)
+                                       // reports marginally different depths;
+                                       // 0.21 gives ~5% headroom over measured
+                                       // settle of 0.2003)
     // The stack stayed roughly vertical (no sideways drift).
     for (int i = 0; i < N; ++i)
     {

@@ -34,6 +34,21 @@ namespace Arcane
     {
         namespace
         {
+            // Compose a fixture's WORLD transform = body transform ∘ fixture local
+            // transform.  Both SlotAabb and the FixtureWorldXf lambda delegate here
+            // so the five-line rotation formula lives in exactly ONE place.
+            static Transform ComposeFixtureXf(Vec2 bodyPos, Real bodyAngle,
+                                              Vec2 localPos, Real localAngle)
+            {
+                const Real bc = std::cos(bodyAngle);
+                const Real bs = std::sin(bodyAngle);
+                return Transform{
+                    Vec2(bodyPos.x + bc * localPos.x - bs * localPos.y,
+                         bodyPos.y + bs * localPos.x + bc * localPos.y),
+                    bodyAngle + localAngle
+                };
+            }
+
             std::unique_ptr<IBroadphase> MakeBroadphase(const WorldDef& def)
             {
                 // PORT + MODERNIZE: the Lua selected by string, defaulting to
@@ -533,10 +548,7 @@ namespace Arcane
             if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
             {
                 const Real bodyAngle = m_angle[i];
-                const Real bc = std::cos(bodyAngle);
-                const Real bs = std::sin(bodyAngle);
-                const Real bodyX = m_posX[i];
-                const Real bodyY = m_posY[i];
+                const Vec2 bodyPos(m_posX[i], m_posY[i]);
 
                 // Sentinel: empty AABB that we expand on first fixture.
                 Aabb2 unionAabb;
@@ -550,14 +562,11 @@ namespace Arcane
                         continue; // dead slot (defensive)
                     }
 
-                    // Compose body transform + fixture local transform.
-                    const Real lx = m_fxLocalPosX[fi];
-                    const Real ly = m_fxLocalPosY[fi];
-                    const Real worldX = bodyX + bc * lx - bs * ly;
-                    const Real worldY = bodyY + bs * lx + bc * ly;
-                    const Real worldAngle = bodyAngle + m_fxLocalAngle[fi];
-
-                    const Transform xf{ Vec2(worldX, worldY), worldAngle };
+                    // Compose body transform + fixture local transform (shared helper).
+                    const Transform xf = ComposeFixtureXf(
+                        bodyPos, bodyAngle,
+                        Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                        m_fxLocalAngle[fi]);
                     const Aabb2 fxAabb = m_fxShape[fi].ComputeAABB(xf);
 
                     // Expand the union AABB.
@@ -1312,19 +1321,16 @@ namespace Arcane
             // ---- helper: world transform for a body's fixture -----------------
             // Composes (bodyPos, bodyAngle) + (fxLocalPos, fxLocalAngle) into the
             // fixture's world Transform. The body angle is live (m_angle[bodySlot]).
+            // Delegates to ComposeFixtureXf (the single copy of the rotate+offset
+            // formula) so the math is not duplicated here or in SlotAabb.
             auto FixtureWorldXf = [&](std::uint32_t bodySlot,
                                        std::uint32_t fi) -> Transform
             {
-                const Real ba = m_angle[bodySlot];
-                const Real bc = std::cos(ba);
-                const Real bs = std::sin(ba);
-                const Real lx = m_fxLocalPosX[fi];
-                const Real ly = m_fxLocalPosY[fi];
-                return Transform{
-                    Vec2(m_posX[bodySlot] + bc * lx - bs * ly,
-                         m_posY[bodySlot] + bs * lx + bc * ly),
-                    ba + m_fxLocalAngle[fi]
-                };
+                return ComposeFixtureXf(
+                    Vec2(m_posX[bodySlot], m_posY[bodySlot]),
+                    m_angle[bodySlot],
+                    Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                    m_fxLocalAngle[fi]);
             };
 
             // ---- helper: append a manifold as a ContactConstraint -----------
@@ -1414,7 +1420,6 @@ namespace Arcane
 
                 // Collect body A's fixtures (sorted by slot index for determinism).
                 const std::vector<std::uint32_t>* fxListA = nullptr;
-                static const std::vector<std::uint32_t> kEmptyList{};
                 if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
                 {
                     fxListA = &m_bodyFixtures[i];
@@ -1705,8 +1710,10 @@ namespace Arcane
                 }
                 else
                 {
-                    // Legacy fallback: single-shape vs single-shape, both with real
-                    // angle. (T5 rotation fix applied to the fallback path too.)
+                    // Dead path today: AddBody always auto-creates a fixture for
+                    // every live dynamic body (fxListIA is never null for a normal
+                    // body). Kept as a safety net for any future code path that
+                    // creates a body without a fixture. (T5 rotation fix applied.)
                     const Vec2 posA(m_posX[ia], m_posY[ia]);
                     const Transform xfA{ posA, m_angle[ia] };
                     const Transform xfB{ centerB, m_angle[ib] };

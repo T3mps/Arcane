@@ -651,6 +651,17 @@ namespace Arcane
                 return m_solver ? m_solver->WarmStartCacheSize() : std::size_t(0);
             }
 
+            // Count of ContactConstraints generated in the last Step (debug/
+            // inspection hook). The pool persists between Steps (cleared then
+            // refilled by GenerateContacts each Step). Returns the size of the
+            // live pool immediately after Step() returns.
+            // Use: test (d) asserts >= 2 for a compound body (one constraint per
+            // fixture-pair contact against the floor).
+            [[nodiscard]] std::size_t ActiveContactCount() const noexcept
+            {
+                return m_contactConstraints.size();
+            }
+
             // Soft Step config (solver reads it in Prepare / the sub-step loop).
             [[nodiscard]] std::uint32_t SubstepCount() const noexcept { return m_substepCount; }
             [[nodiscard]] Real ContactHertz() const noexcept { return m_contactHertz; }
