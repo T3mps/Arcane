@@ -21,6 +21,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace Arcane
@@ -39,7 +40,9 @@ namespace Arcane
             // support(verts, dx, dy) (GJK.lua:10-17): farthest vert of the
             // f32 world-vert span along (dx,dy), returned widened to f64. The
             // ">" comparison + first-index tie-break match the Lua loop.
-            V2 Support(const Vec2* verts, int n, double dx, double dy)
+            // Returns the index of the support vertex via `outIdx`.
+            V2 Support(const Vec2* verts, int n, double dx, double dy,
+                       int* outIdx = nullptr)
             {
                 int bi = 0;
                 double best = -std::numeric_limits<double>::infinity();
@@ -53,6 +56,7 @@ namespace Arcane
                         bi = i;
                     }
                 }
+                if (outIdx) *outIdx = bi;
                 return V2{ static_cast<double>(verts[bi].x),
                            static_cast<double>(verts[bi].y) };
             }
@@ -62,17 +66,20 @@ namespace Arcane
             // witness points (pa on A, pb on B).
             struct MdSupport
             {
-                V2 md; // support(A,d) - support(B,-d)
-                V2 pa; // witness on A
-                V2 pb; // witness on B
+                V2  md;   // support(A,d) - support(B,-d)
+                V2  pa;   // witness on A
+                V2  pb;   // witness on B
+                int ia;   // index into va[] for pa
+                int ib;   // index into vb[] for pb
             };
 
             MdSupport SupportMd(const Vec2* va, int na, const Vec2* vb, int nb,
                                 double dx, double dy)
             {
-                const V2 pa = Support(va, na, dx, dy);
-                const V2 pb = Support(vb, nb, -dx, -dy);
-                return MdSupport{ V2{ pa.x - pb.x, pa.y - pb.y }, pa, pb };
+                int ia = 0, ib = 0;
+                const V2 pa = Support(va, na,  dx,  dy, &ia);
+                const V2 pb = Support(vb, nb, -dx, -dy, &ib);
+                return MdSupport{ V2{ pa.x - pb.x, pa.y - pb.y }, pa, pb, ia, ib };
             }
         } // namespace
 
@@ -237,6 +244,227 @@ namespace Arcane
                      static_cast<Real>(say[0] * l1 + say[1] * l2)),
                 Vec2(static_cast<Real>(sbx[0] * l1 + sbx[1] * l2),
                      static_cast<Real>(sby[0] * l1 + sby[1] * l2)) };
+        }
+
+        // --------------------------------------------------------------------
+        // GjkDistanceCore -- v2 core-based GJK with closest-feature output.
+        //
+        // Same algorithm as GjkDistance (same f64 double-precision simplex,
+        // same 64-iteration cap, same convergence / overlap tests), extended
+        // to track the INPUT VERTEX INDEX for each simplex vertex on both A
+        // and B -- port of Box2D v3 b2ShapeDistance's indexA/indexB on each
+        // b2SimplexVertex. Feature encoding: see GjkCoreResult::kEdgeMask.
+        // --------------------------------------------------------------------
+        GjkCoreResult GjkDistanceCore(const Vec2* va, int na,
+                                      const Vec2* vb, int nb)
+        {
+            // Guard: degenerate cores.
+            if (na <= 0 || nb <= 0)
+                return GjkCoreResult{};
+
+            // Simplex scratch: MD points (smx/smy), witnesses on A (sax/say)
+            // and B (sbx/sby), plus the input vertex indices (sia/sib) for the
+            // feature output (port of Box2D v3 b2SimplexVertex.indexA/indexB).
+            std::array<double, 3>   smx{}, smy{};
+            std::array<double, 3>   sax{}, say{}, sbx{}, sby{};
+            std::array<int, 3>      sia{}, sib{};
+
+            int n = 1;
+            {
+                const MdSupport s0 = SupportMd(va, na, vb, nb, 1.0, 0.0);
+                smx[0] = s0.md.x; smy[0] = s0.md.y;
+                sax[0] = s0.pa.x; say[0] = s0.pa.y;
+                sbx[0] = s0.pb.x; sby[0] = s0.pb.y;
+                sia[0] = s0.ia;   sib[0] = s0.ib;
+            }
+
+            double px = smx[0], py = smy[0];
+            double l1 = 1.0, l2 = 0.0;
+
+            for (int iter = 0; iter < 64; ++iter)
+            {
+                if (n == 1)
+                {
+                    px = smx[0]; py = smy[0]; l1 = 1.0; l2 = 0.0;
+                }
+                else if (n == 2)
+                {
+                    const double ax_ = smx[0], ay_ = smy[0];
+                    const double bx_ = smx[1], by_ = smy[1];
+                    const double abx = bx_ - ax_, aby = by_ - ay_;
+                    const double dd = abx * abx + aby * aby;
+                    const double t =
+                        (dd > 0.0) ? (-(ax_ * abx + ay_ * aby)) / dd : 0.0;
+                    if (t <= 0.0)
+                    {
+                        n = 1; px = ax_; py = ay_; l1 = 1.0; l2 = 0.0;
+                    }
+                    else if (t >= 1.0)
+                    {
+                        smx[0] = smx[1]; smy[0] = smy[1];
+                        sax[0] = sax[1]; say[0] = say[1];
+                        sbx[0] = sbx[1]; sby[0] = sby[1];
+                        sia[0] = sia[1]; sib[0] = sib[1];
+                        n = 1; px = smx[0]; py = smy[0]; l1 = 1.0; l2 = 0.0;
+                    }
+                    else
+                    {
+                        px = ax_ + abx * t; py = ay_ + aby * t;
+                        l1 = 1.0 - t; l2 = t;
+                    }
+                }
+                else // n == 3: inside test, else reduce to the closest edge.
+                {
+                    const double x1 = smx[0], y1 = smy[0];
+                    const double x2 = smx[1], y2 = smy[1];
+                    const double x3 = smx[2], y3 = smy[2];
+                    const double c1 = (x2 - x1) * (-y1) - (y2 - y1) * (-x1);
+                    const double c2 = (x3 - x2) * (-y2) - (y3 - y2) * (-x2);
+                    const double c3 = (x1 - x3) * (-y3) - (y1 - y3) * (-x3);
+                    const bool hasNeg = (c1 < 0.0) || (c2 < 0.0) || (c3 < 0.0);
+                    const bool hasPos = (c1 > 0.0) || (c2 > 0.0) || (c3 > 0.0);
+                    if (!(hasNeg && hasPos))
+                    {
+                        // Origin inside the simplex -> cores intersect.
+                        return GjkCoreResult{ Real(0), Vec2(Real(0), Real(0)),
+                                              Vec2(Real(0), Real(0)), 0u, 0u };
+                    }
+
+                    // Reduce to closest of the three edges to origin.
+                    double bestD = std::numeric_limits<double>::infinity();
+                    int e1 = 0, e2 = 1;
+                    double bt = 0.0;
+                    auto edge = [&](int i, int j)
+                    {
+                        const double ax_ = smx[i], ay_ = smy[i];
+                        const double bx_ = smx[j], by_ = smy[j];
+                        const double abx = bx_ - ax_, aby = by_ - ay_;
+                        const double dd = abx * abx + aby * aby;
+                        double t =
+                            (dd > 0.0) ? (-(ax_ * abx + ay_ * aby)) / dd : 0.0;
+                        if (t < 0.0) t = 0.0; else if (t > 1.0) t = 1.0;
+                        const double cx_ = ax_ + abx * t;
+                        const double cy_ = ay_ + aby * t;
+                        const double d2 = cx_ * cx_ + cy_ * cy_;
+                        if (d2 < bestD) { bestD = d2; e1 = i; e2 = j; bt = t; }
+                    };
+                    edge(0, 1); edge(1, 2); edge(2, 0);
+
+                    const double t1x = smx[e1], t1y = smy[e1];
+                    const double t1ax = sax[e1], t1ay = say[e1];
+                    const double t1bx = sbx[e1], t1by = sby[e1];
+                    const int    t1ia = sia[e1], t1ib = sib[e1];
+                    const double t2x = smx[e2], t2y = smy[e2];
+                    const double t2ax = sax[e2], t2ay = say[e2];
+                    const double t2bx = sbx[e2], t2by = sby[e2];
+                    const int    t2ia = sia[e2], t2ib = sib[e2];
+
+                    smx[0] = t1x; smy[0] = t1y;
+                    sax[0] = t1ax; say[0] = t1ay; sbx[0] = t1bx; sby[0] = t1by;
+                    sia[0] = t1ia; sib[0] = t1ib;
+                    smx[1] = t2x; smy[1] = t2y;
+                    sax[1] = t2ax; say[1] = t2ay; sbx[1] = t2bx; sby[1] = t2by;
+                    sia[1] = t2ia; sib[1] = t2ib;
+                    n = 2;
+                    px = t1x + (t2x - t1x) * bt;
+                    py = t1y + (t2y - t1y) * bt;
+                    l1 = 1.0 - bt; l2 = bt;
+                    if (bt <= 0.0)
+                    {
+                        n = 1; l1 = 1.0; l2 = 0.0;
+                    }
+                    else if (bt >= 1.0)
+                    {
+                        smx[0] = t2x; smy[0] = t2y;
+                        sax[0] = t2ax; say[0] = t2ay;
+                        sbx[0] = t2bx; sby[0] = t2by;
+                        sia[0] = t2ia; sib[0] = t2ib;
+                        n = 1; l1 = 1.0; l2 = 0.0;
+                    }
+                }
+
+                // Origin reached -> cores intersect.
+                if (px * px + py * py < 1e-18)
+                {
+                    return GjkCoreResult{ Real(0), Vec2(Real(0), Real(0)),
+                                          Vec2(Real(0), Real(0)), 0u, 0u };
+                }
+
+                const double dx_ = -px, dy_ = -py;
+                const MdSupport s = SupportMd(va, na, vb, nb, dx_, dy_);
+                // No closer support -> converged.
+                if ((s.md.x * dx_ + s.md.y * dy_) - (px * dx_ + py * dy_) < 1e-9)
+                {
+                    break;
+                }
+                smx[n] = s.md.x; smy[n] = s.md.y;
+                sax[n] = s.pa.x; say[n] = s.pa.y;
+                sbx[n] = s.pb.x; sby[n] = s.pb.y;
+                sia[n] = s.ia;   sib[n] = s.ib;
+                n = n + 1;
+            }
+
+            const double dist = std::sqrt(px * px + py * py);
+
+            // Build witness points (barycentric interpolation or single vert).
+            Vec2 wA, wB;
+            if (n == 1)
+            {
+                wA = Vec2(static_cast<Real>(sax[0]), static_cast<Real>(say[0]));
+                wB = Vec2(static_cast<Real>(sbx[0]), static_cast<Real>(sby[0]));
+            }
+            else
+            {
+                wA = Vec2(static_cast<Real>(sax[0] * l1 + sax[1] * l2),
+                          static_cast<Real>(say[0] * l1 + say[1] * l2));
+                wB = Vec2(static_cast<Real>(sbx[0] * l1 + sbx[1] * l2),
+                          static_cast<Real>(sby[0] * l1 + sby[1] * l2));
+            }
+
+            // Build feature indices (port of Box2D v3 indexA/indexB logic).
+            //   n==1: closest feature is a single vertex; feature = idx.
+            //   n==2: closest feature is an edge between two input verts;
+            //          feature = kEdgeMask | (idxLo << 16) | idxHi.
+            //          We sort the indices (lo <= hi) for a canonical encoding
+            //          so the same edge produces the same id regardless of the
+            //          order the simplex accumulated the two vertices.
+            uint32_t fA = 0u, fB = 0u;
+            if (n == 1)
+            {
+                fA = static_cast<uint32_t>(sia[0]);
+                fB = static_cast<uint32_t>(sib[0]);
+            }
+            else // n == 2
+            {
+                const int a0 = sia[0], a1 = sia[1];
+                const int b0 = sib[0], b1 = sib[1];
+                const int alo = (a0 <= a1) ? a0 : a1;
+                const int ahi = (a0 <= a1) ? a1 : a0;
+                const int blo = (b0 <= b1) ? b0 : b1;
+                const int bhi = (b0 <= b1) ? b1 : b0;
+                // Edge encoding: kEdgeMask | (lo << 16) | hi.
+                // When both edge endpoints are the SAME index (degenerate edge
+                // after reduction), emit as vertex feature instead.
+                if (alo == ahi)
+                    fA = static_cast<uint32_t>(alo);
+                else
+                    fA = GjkCoreResult::kEdgeMask |
+                         (static_cast<uint32_t>(alo) << 16) |
+                          static_cast<uint32_t>(ahi);
+
+                if (blo == bhi)
+                    fB = static_cast<uint32_t>(blo);
+                else
+                    fB = GjkCoreResult::kEdgeMask |
+                         (static_cast<uint32_t>(blo) << 16) |
+                          static_cast<uint32_t>(bhi);
+            }
+
+            return GjkCoreResult{
+                static_cast<Real>(dist),
+                wA, wB,
+                fA, fB
+            };
         }
 
         // --------------------------------------------------------------------

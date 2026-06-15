@@ -36,6 +36,8 @@
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features (this module is also
 // compiled static-CRT/C++20 in the server flavor). namespace Arcane::Physics.
 
+#include <cstdint>
+
 #include <glm/vec2.hpp>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -59,6 +61,47 @@ namespace Arcane
             Real distance = Real(0);
             Vec2 witnessA{ Real(0), Real(0) };
             Vec2 witnessB{ Real(0), Real(0) };
+        };
+
+        // ----------------------------------------------------------------
+        // GjkCoreResult: v2 core-based GJK return (Task 2, Phase A).
+        // ----------------------------------------------------------------
+        //
+        // distance : Euclidean distance between the two convex CORES (radius
+        //            NOT subtracted -- callers add rA+rB themselves). 0 means
+        //            cores intersect; EPA (Task 4) resolves penetration.
+        // pointA   : closest point on core A (in world space).
+        // pointB   : closest point on core B (in world space).
+        // featureA : witness vertex/edge on A encoded as:
+        //              vertex: plain index into the input va[] array (< kEdgeMask).
+        //              edge  : kEdgeMask | (idxLo << 16) | idxHi
+        //                      where idxLo and idxHi are the two simplex vertex
+        //                      indices (input array) in ascending order.
+        // featureB : same encoding for the B core.
+        //
+        // Feature semantics (port of Box2D v3 b2SimplexVertex.indexA/indexB):
+        //   The simplex produced by GJK has 1 or 2 vertices after convergence
+        //   (a 2D GJK never needs more than 3, but the closest-feature is always
+        //   1 or 2 because a 3-simplex means the origin is INSIDE -- overlap).
+        //   * n==1 simplex: closest feature is a single vertex; feature = idx.
+        //   * n==2 simplex: closest feature is an edge; feature = edge encoding.
+        //   When cores overlap (distance==0) features are 0 (meaningless).
+        //
+        // This is the v2 entry (rotation-aware -- caller rotates core verts into
+        // world space before calling). The M6 GjkDistance / ShapeDistance /
+        // ShapeCast path is RETAINED unchanged; this is an ADDITIVE new entry.
+        struct GjkCoreResult
+        {
+            Real     distance = Real(0);
+            Vec2     pointA{ Real(0), Real(0) };
+            Vec2     pointB{ Real(0), Real(0) };
+            uint32_t featureA = 0u;
+            uint32_t featureB = 0u;
+
+            // Sentinel bit: set in featureA/featureB when the closest feature
+            // is an EDGE (two input indices packed as (idxLo<<16)|idxHi).
+            // Clear when the feature is a single VERTEX (the value IS the index).
+            static constexpr uint32_t kEdgeMask = 0x8000'0000u;
         };
 
         // ----------------------------------------------------------------
@@ -121,6 +164,33 @@ namespace Arcane
         // means the cores intersect (witnesses returned as zeros).
         [[nodiscard]] GjkResult GjkDistance(const Vec2* va, int na,
                                             const Vec2* vb, int nb);
+
+        // ----------------------------------------------------------------
+        // GjkDistanceCore: v2 core-based GJK with closest-feature output.
+        // ----------------------------------------------------------------
+        //
+        // ROTATION-AWARE entry (Phase A, Task 2). Operates on world-space core
+        // vertex spans produced by the caller rotating each shape's local core
+        // verts by their body transform. Radius is NOT applied here -- the
+        // returned `distance` is core-to-core; the caller subtracts rA+rB to
+        // get surface distance. Rotation enters ONLY via the input vertex arrays;
+        // GJK itself is rotation-agnostic.
+        //
+        // va[0..na-1] : world-space core vertices of shape A (1=circle, 2=capsule,
+        //               4=aabb, n=polygon).
+        // vb[0..nb-1] : world-space core vertices of shape B.
+        //
+        // Returns GjkCoreResult with distance + closest points + feature indices.
+        // Feature encoding: see GjkCoreResult::kEdgeMask.
+        //
+        // Precision: carries the same f64 internal simplex as GjkDistance
+        // (preserving the M6 robustness guarantee). Max 64 iterations (same cap).
+        // Deterministic: fixed iteration order + no wall-clock.
+        //
+        // ADDITIVE: the M6 GjkDistance / ShapeDistance / ShapeCast path is
+        // UNCHANGED; this entry exists ALONGSIDE it. Tasks 5/6 migrate callers.
+        [[nodiscard]] GjkCoreResult GjkDistanceCore(const Vec2* va, int na,
+                                                    const Vec2* vb, int nb);
 
         // ----------------------------------------------------------------
         // BuildCore: PORT of GJK.lua:buildCore. Writes the convex core verts of
