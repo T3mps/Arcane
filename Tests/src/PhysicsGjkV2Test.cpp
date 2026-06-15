@@ -161,17 +161,20 @@ TEST_CASE("physics: GjkV2 circle core vs aabb core", "[physics]")
 //   idx 2: (17,  5)
 //   idx 3: (7,   5)  <- left-top
 // The left face of the box is the edge from idx 0 to idx 3.
-// GJK will reduce to a 2-simplex on this edge (the closest feature on B
-// to (0,0) is the edge v0-v3 of the box's world verts); featureB should
-// encode both those endpoint indices (0 and 3).
+// GJK will reduce to a 2-simplex on this edge: the circle core's single
+// vertex at (0,0) projects onto the left face at the interior point (7,0)
+// (face spans y=-5..+5), so the closest feature on B is ALWAYS the edge,
+// never a degenerate collapse to a single endpoint vertex. The vertex
+// branch is unreachable for this geometry; accepting it would mask a
+// regression that breaks stable manifold ids in downstream tasks (T3+).
 //
 // Feature encoding (GjkCoreResult):
-//   When the closest simplex on a shape is a single vert:
-//     feature = that vert's input index.
-//   When the closest simplex is an edge (2 verts):
-//     feature = (lowerIdx << 16) | higherIdx
-//             OR the two indices in the simplex order.
-//   We check that BOTH expected indices appear in featureB.
+//   vertex: feature == plain index (< kEdgeMask).
+//   edge  : feature == kEdgeMask | (idxLo << 16) | idxHi
+//            where idxLo < idxHi are the two simplex vertex indices
+//            in ascending order (matching the Gjk.hpp encode exactly).
+//
+// Expected featureB = kEdgeMask | (0u << 16) | 3u = 0x80000003u.
 // ====================================================================
 TEST_CASE("physics: GjkV2 closest-feature indices circle vs aabb", "[physics]")
 {
@@ -190,29 +193,16 @@ TEST_CASE("physics: GjkV2 closest-feature indices circle vs aabb", "[physics]")
     // The circle has only one vertex; its feature must be index 0.
     CHECK(r.featureA == 0u);
 
-    // The box's closest feature is the left face, edge verts at indices 0 and 3.
-    // GjkCoreResult encodes an edge as (idxLo << 16) | idxHi with the high bit
-    // kGjkFeatureEdge set: 0x80000000 | (lo << 16) | hi. A vertex feature has
-    // the high bit clear and equals the index directly.
-    // We accept both "vertex" (if GJK converges exactly to one endpoint) and
-    // "edge" (if it reduces to the edge between the two) -- we just check that
-    // the expected indices are present.
-    const bool isEdge   = (r.featureB & GjkCoreResult::kEdgeMask) != 0;
-    const bool isVertex = !isEdge;
+    // The circle's vertex projects onto the interior of the box's left face
+    // (y=0 lies strictly between y=-5 and y=+5), so GJK MUST converge to a
+    // 2-simplex -> the box's featureB must be an EDGE, not a vertex.
+    // The left face connects world-vert indices 0 (7,-5) and 3 (7,+5).
+    // Encoding: kEdgeMask | (idxLo << 16) | idxHi  with idxLo=0, idxHi=3.
+    constexpr uint32_t kExpectedFeatureB =
+        GjkCoreResult::kEdgeMask | (0u << 16) | 3u;
 
-    if (isVertex)
-    {
-        // Must be one of the two left-face verts.
-        CHECK(((r.featureB == 0u) || (r.featureB == 3u)));
-    }
-    else
-    {
-        // Edge: decode the two indices.
-        const uint32_t lo = (r.featureB >> 16) & 0x3FFFu;
-        const uint32_t hi =  r.featureB        & 0x3FFFu;
-        // The edge connects indices 0 and 3 (the left face of the box in CCW order).
-        CHECK(((lo == 0u && hi == 3u) || (lo == 3u && hi == 0u)));
-    }
+    CHECK((r.featureB & GjkCoreResult::kEdgeMask) != 0u); // must be an edge
+    CHECK(r.featureB == kExpectedFeatureB);                // specifically {0,3}
 }
 
 // ====================================================================
