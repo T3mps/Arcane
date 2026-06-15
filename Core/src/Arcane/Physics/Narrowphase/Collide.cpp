@@ -13,7 +13,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <vector>
 
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -146,7 +145,6 @@ namespace Arcane
 
                 for (int i = 0; i < nRef; ++i)
                 {
-                    const Vec2& refV = vsRef[i];
                     const Vec2 n = EdgeNormalCCW(vsRef, nRef, i);
 
                     // Support of vsRef along n (max projection from vsRef).
@@ -165,7 +163,6 @@ namespace Arcane
                         best.edgeIdx    = i;
                         best.normal     = n;
                     }
-                    (void)refV; // suppress unused warning
                 }
                 return best;
             }
@@ -199,7 +196,11 @@ namespace Arcane
                     ++count;
                 }
                 // If the segment crosses the plane, emit the crossing point.
-                if ((d0 < Real(0)) != (d1 < Real(0)))
+                // Guard: only emit if count < 2 to prevent a third write when an
+                // endpoint lies exactly ON the plane (d==0): both the keep-branch
+                // and this branch would fire, overrunning the 2-element output
+                // array.  Box2D v3 b2ClipSegments carries the same guard.
+                if (count < 2 && (d0 < Real(0)) != (d1 < Real(0)))
                 {
                     const Real t = d0 / (d0 - d1);
                     outP[count] = Vec2(p0.x + t * (p1.x - p0.x),
@@ -313,7 +314,7 @@ namespace Arcane
                     // Speculative gap: coreDist > totalR but within margin.
                     // separation = totalR - coreDist (negative = gap).
                     m.normal = normal;
-                    m.points[0] = ManifoldPoint{ cp, totalR - g.distance, normal, id };
+                    m.points[0] = ManifoldPoint{ cp, separation, normal, id };
                     m.pointCount = 1;
                 }
                 else
@@ -597,7 +598,11 @@ namespace Arcane
                 // as the "incident vertex" sub-index so the two ids differ:
                 //   point 0: incFeature = incEdge
                 //   point 1: incFeature = incEdge+1  (wraps mod nInc)
-                // This is stable as long as the same incident edge is selected.
+                // incFeature identifies the INCIDENT EDGE VERTEX (start or end of
+                // the incident edge), NOT the clipped-point location.  This is
+                // intentional (Box2D v3 semantics): the same feature pair produces
+                // the same id regardless of how deeply the shapes overlap, so the
+                // solver's warm-start cache finds the right impulse every frame.
                 const uint32_t incFeature = static_cast<uint32_t>(
                     (incEdge + i) % nInc);
                 const uint32_t id = MakeFeatureId(

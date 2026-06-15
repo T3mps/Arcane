@@ -319,3 +319,67 @@ TEST_CASE("physics: ManifoldV2 feature-id stable across sweep", "[physics]")
         }
     }
 }
+
+// ====================================================================
+// (d2) Feature-id stability under small constant rotation: same depth-sweep
+//      as (d) but with B given a fixed 5° CCW rotation throughout.
+//
+// The incident-edge selection must map to the same feature at every step
+// of the rotated sweep — i.e. the ids must be identical WITHIN this sweep
+// (we do NOT require them to match (d)'s ids, since the reference face may
+// differ at 5°; we only require STABILITY within the rotated series).
+//
+// This catches an incident-index-shift bug that the axis-aligned sweep
+// cannot: if a small rotation causes the incident-edge finder to alternate
+// between two adjacent edges across depth steps, the id set will differ
+// between steps and this test fails.
+//
+// Hand derivation:
+//   A spans x=[-10,+10], y=[-10,+10] (axis-aligned, no rotation).
+//   B is MakeAabb(10,10) centred at x=18 (overlap ~2), rotated 5° CCW.
+//   5° = 0.0873 rad.  At this small angle the left face of B is still
+//   approximately perpendicular to the x-axis, so the x-axis SAT axis
+//   is still the reference (or B's nearly-vertical face), and the same
+//   incident vertex pair on B's near-left face is selected every step.
+//   We assert only that the id set is the SAME at each step of this sweep.
+// ====================================================================
+TEST_CASE("physics: ManifoldV2 feature-id stable under fixed rotation sweep", "[physics]")
+{
+    const Shape boxA = MakeAabb(Real(10), Real(10));
+    const Shape boxB = MakeAabb(Real(10), Real(10));
+    const Transform xfA{ Vec2(Real(0), Real(0)), Real(0) };
+
+    // Fixed 5-degree CCW rotation on B throughout the sweep.
+    const Real kRot5deg = Real(5.0 * kPiD64 / 180.0); // 0.0873 rad
+
+    bool firstStep = true;
+    std::set<uint32_t> expectedIds;
+
+    for (int step = 0; step < 10; ++step)
+    {
+        // Same depth-sweep as (d): B centre from x=18 down to x=17 (overlap 2..3).
+        const Real bx = Real(18) - Real(step) * Real(0.1f);
+        const Transform xfB{ Vec2(bx, Real(0)), kRot5deg };
+
+        const Manifold m = Collide(boxA, xfA, boxB, xfB);
+
+        // Must still detect overlap (small rotation doesn't separate the shapes).
+        REQUIRE(m.pointCount >= 1);
+
+        std::set<uint32_t> thisIds;
+        for (int i = 0; i < m.pointCount; ++i)
+            thisIds.insert(m.points[i].id);
+
+        if (firstStep)
+        {
+            expectedIds = thisIds;
+            firstStep   = false;
+        }
+        else
+        {
+            // The id SET must be identical across all steps of THIS rotated sweep.
+            // (Not required to match the axis-aligned (d) sweep's ids.)
+            CHECK(thisIds == expectedIds);
+        }
+    }
+}
