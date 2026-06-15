@@ -169,71 +169,121 @@ feature).
 
 ---
 
-## Task 4 — EPA fallback for deep core overlap
+## Task 4 — Fixture data model (Core SoA + AddFixture + mass aggregation)
+
+> **EPA is DEFERRED** (user decision): SAT is provably complete + exact for convex polygon cores, so
+> EPA is unexercised by the current shape set. A future "narrowphase specialization" workstream
+> implements **EPA + MPR** for curved / high-vertex / per-circumstance routing. Not Phase A.
+
+**Design ref:** `docs/superpowers/specs/2026-06-15-arcane-physics-v2-fixture-model-design.md`.
 
 **Files:**
-- Create: `Arcane/Core/src/Arcane/Physics/Narrowphase/Epa.hpp` / `Epa.cpp`
-- Modify: `Collide.cpp` (route deep-overlap cases that SAT can't resolve to EPA)
-- Test: `Arcane/Tests/src/PhysicsEpaTest.cpp` (new; `[physics]`)
+- Create: `Arcane/Core/src/Arcane/Physics/Fixture.hpp` (`FixtureHandle{index,generation}`, `FixtureDef`).
+- Modify: `Arcane/Core/src/Arcane/Physics/PhysicsWorld.hpp` / `.cpp` (Fixture SoA + `AddFixture`/`DropFixture` + mass aggregation + `AddBody` back-compat); `Shapes.cpp` (rounded-polygon `ComputeMass`).
+- Test: `Arcane/Tests/src/PhysicsFixtureTest.cpp` (new; `[physics]`)
 
-**What:** EPA (Expanding Polytope Algorithm) over the Minkowski difference of two convex cores,
-returning the minimum-translation normal + depth for DEEP overlap where the SAT polygon-axis set is
-insufficient (general convex-convex). Bounded iteration count with explicit termination + a max-
-iteration guard (determinism: fixed iteration order, no wall-clock). For polygon-polygon, SAT
-already gives the answer cheaply; EPA is the general fallback. Reference: standard EPA (Box2D v3
-does not ship EPA, so use the canonical EPA over the GJK simplex — see Gino van den Bergen / the
-common 2D EPA: expand the simplex polygon toward the origin along the closest edge until
-convergence). Circle/capsule never reach EPA (segment-distance fast path).
+**What:** Introduce the Box2D-style fixture layer ADDITIVELY (the old single-shape contact-gen path
+keeps working; T5 switches it over). `FixtureDef = { Shape shape; Vec2 localPos; Real localAngle;
+Real density; Real friction; Real restitution; uint32 categoryBits; uint32 maskBits; bool isSensor; }`.
+A Fixture SoA on the world (`m_fxShape`, `m_fxLocalPos`, `m_fxLocalAngle`, `m_fxDensity`,
+`m_fxFriction`, `m_fxRestitution`, `m_fxFilterCat`, `m_fxFilterMask`, `m_fxSensor`, `m_fxBody`,
+`m_fxGen`) over a free-list; each body slot stores its fixture index list. `AddFixture(BodyHandle,
+FixtureDef) -> FixtureHandle`; `DropFixture(FixtureHandle)`; `IsValid(FixtureHandle)`. The fixture's
+WORLD shape transform = compose(bodyXf, fixtureLocalXf): `worldAngle = bodyAngle + localAngle`,
+`worldPos = bodyPos + R(bodyAngle)*localPos`. **Mass aggregation:** body mass/COM/invInertia summed
+over fixtures (each `Shape::ComputeMass(density)`, density-weighted centroid → body COM, parallel-axis
+inertia about that COM); implement rounded-polygon `ComputeMass` here (the T1 carry-forward).
+`fixedRotation` forces body `invInertia=0`. **Back-compat:** `AddBody(BodyDef{shape,material...})`
+ALSO creates one fixture from that shape+material, while still populating the legacy single-shape
+body fields so the unchanged old `GenerateContacts` keeps working (T5 removes the legacy path). NOT
+yet wired into broadphase/contact-gen.
 
-- [ ] **Step 1: Write the failing analytic test.** Two `MakeAabb(10,10)` cores overlapping deeply
-  (centers (0,0) and (5,0)) → MTV normal (1,0) or (−1,0) (axis of min penetration = x), depth =
-  20 − 5 = 15 within 1e-3; a rotated-polygon deep overlap with a hand-computed MTV; assert EPA
-  terminates within the iteration cap.
+- [ ] **Step 1: Write the failing analytic test.** (a) **Compound mass:** body = `MakeAabb(10,2)` at
+  local (0,0) + `MakeCircle(3)` at local (12,0), density 1 → total mass = box (4·10·2·1·... = area
+  40) + circle (π·9 ≈ 28.274) = 68.274; body COM = mass-weighted centroid; body inertia = each
+  fixture's centroidal inertia parallel-axis'd to the COM, summed — assert mass/COM/inertia within
+  1e-2 (hand-derive). (b) **Fixture world transform:** fixture at localPos (5,0), localAngle 0, on a
+  body at pos (0,0) angle π/2 → world shape center ≈ (0,5) within 1e-4 (R(π/2)·(5,0)=(0,5)). (c)
+  **Back-compat:** `AddBody(BodyDef{ shape=MakeCircle(2), density=1 })` → a body with exactly 1
+  fixture, mass ≈ 12.566; full `[physics]` stays green (old path unchanged). (d) **Stale handle:**
+  `DropFixture` then `IsValid(staleHandle)==false`; the slot recycles with a bumped generation.
 - [ ] **Step 2: Run, verify it fails.**
-- [ ] **Step 3: Implement** EPA + the `Collide` routing for deep overlap.
-- [ ] **Step 4: Build + run** → PASS; full `[physics]` green.
-- [ ] **Step 5: Commit** (`feat(arcane): physics-v2 T4 EPA deep-overlap fallback`).
+- [ ] **Step 3: Implement** the Fixture SoA + AddFixture/DropFixture + mass aggregation + rounded-poly ComputeMass + AddBody back-compat.
+- [ ] **Step 4: Regenerate + build + run** → PASS; full `[physics]~[gpu]` green (old contact-gen unchanged; fixtures not yet wired). (Debug runner may need `~[gpu]`; see gotchas.)
+- [ ] **Step 5: Commit** (`feat(arcane): physics-v2 T4 fixture data model + mass aggregation`).
 
 ---
 
-## Task 5 — Wire the world to Collide + feed real body angle (the integration)
+## Task 5 — Wire fixture-pair, rotation-aware contact generation (the integration)
 
 **Files:**
-- Modify: `Arcane/Core/src/Arcane/Physics/PhysicsWorld.cpp` (`GenerateContacts`, `SlotAabb`,
-  `ComputeAABB` call sites, `BulletSweep`/query transforms) — replace every `Transform{pos, Real(0)}`
-  with `Transform{pos, m_angle[i]}`; route contact generation through `Collide`.
+- Modify: `Arcane/Core/src/Arcane/Physics/PhysicsWorld.cpp` (`GenerateContacts`, `SlotAabb`/AABB call
+  sites, `BulletSweep`/query transforms), `ContactManager.{hpp,cpp}`, the broadphase glue.
 - Test: `Arcane/Tests/src/PhysicsRotationTest.cpp` (new; `[physics]`)
 
-**What:** The headline integration. `GenerateContacts` builds each transform with the body's real
-`m_angle` and calls `Collide`; `SlotAabb`/`ComputeAABB` use real angle (rotation-aware bounds drive
-the broadphase). `fixedRotation` bodies keep `invInertia=0` (solver won't spin them) and their
-constant angle flows through naturally. Queries/`BulletSweep` transforms also pass real angle.
+**What:** The headline integration, fixture-aware. The broadphase now indexes **fixtures** (each
+fixture's proxy AABB = the rotation-aware bound of its WORLD shape transform); `GenerateContacts`
+iterates the broadphase **fixture pairs** (sorted; same-body + filter-rejected pairs skipped), calls
+`Collide(shapeA, worldXfA, shapeB, worldXfB, specMargin)` with the body+fixture composed angle, and
+sources friction/restitution from the two fixtures (friction = sqrt(fA·fB), restitution = max). The
+`ContactConstraint` still references the two BODY slots (solver unchanged); anchors are from the body
+COM. `ContactManager` keys pairs on `(minFixture<<32)|maxFixture`; `DropFixture`/`DropBody` drop the
+right pairs. `SlotAabb`/`ComputeAABB` use real angle. **Remove the legacy single-shape contact-gen
+path** (now superseded). `fixedRotation` bodies keep `invInertia=0`.
 
 - [ ] **Step 1: Write the failing integration tests.** (a) **Box-dropped-at-45° settles flat:** a
-  dynamic `MakeAabb(10,10)` released at angle 0.6 rad above a static floor, gravity on, ~120 steps
-  → final |angle mod (π/2)| ≈ 0 within 0.05 (it rotates to rest on a flat face — IMPOSSIBLE with
-  fixedRotation collision). (b) **Spinning-body manifold normal correct:** a rotated box resting in
-  a corner has the contact normal aligned to the rotated face within 1e-2. (c) **fixedRotation
-  lock:** the same box with `fixedRotation=true` + an off-center impulse → angle stays 0 (within
-  1e-6) while it translates. (d) **warm-start persistence:** a box resting (small rotation drift)
-  keeps the solver warm-start cache matching by feature id (cache size bounded; penetration < slop
-  steady). (e) **determinism:** run (a) twice → identical final pose (exact ==).
-- [ ] **Step 2: Run, verify (a)/(b)/(c) fail** (angle still ignored in contact gen).
-- [ ] **Step 3: Implement** the real-angle wiring + `Collide` routing in the world.
-- [ ] **Step 4: Build + run** the rotation suite → PASS. Run full `[physics]`: the BEHAVIORAL
-  tests (solver stacking, determinism, CCD no-tunnel, island sleep) must stay green; the OLD
+  dynamic `MakeAabb(10,10)` released at angle 0.6 rad above a static floor, gravity on, ~120 steps →
+  final |angle mod (π/2)| ≈ 0 within 0.05 (IMPOSSIBLE with fixedRotation collision). (b) **rotated
+  manifold normal** aligned to the rotated face within 1e-2. (c) **fixedRotation lock:** off-center
+  impulse → angle stays 0 within 1e-6 while it translates. (d) **compound collision:** a body with
+  two fixtures (box + offset circle) resting on a floor reports contacts on BOTH fixtures (two
+  fixture-pair manifolds). (e) **warm-start persistence** (cache bounded; penetration < slop steady).
+  (f) **determinism:** run (a) twice → identical final pose (exact ==).
+- [ ] **Step 2: Run, verify (a)/(b)/(c)/(d) fail.**
+- [ ] **Step 3: Implement** the fixture broadphase proxies + fixture-pair `GenerateContacts` through
+  `Collide` with real angle + ContactManager fixture keys; remove the legacy single-shape path.
+- [ ] **Step 4: Build + run** the rotation+compound suite → PASS. Run full `[physics]~[gpu]`: the
+  BEHAVIORAL tests (solver stacking, determinism, CCD, island sleep) stay green; the OLD
   oracle-bit-match tests (manifold/shapes/gjk/specialized/tilegrid/queries pinned to
-  `physics_oracle/*.json`) will now FAIL where rotation/manifold changed — that is EXPECTED and
-  Task 6 retires them. Note which fail; do not chase oracle parity.
-- [ ] **Step 5: Commit** (`feat(arcane): physics-v2 T5 rotation-aware contact gen + AABB (box settles flat)`).
+  `physics_oracle/*.json`) now FAIL where rotation/manifold/fixtures changed — EXPECTED; Task 7
+  retires them. Note which fail; do not chase oracle parity.
+- [ ] **Step 5: Commit** (`feat(arcane): physics-v2 T5 fixture-pair rotation-aware contact gen (box settles flat)`).
 
 ---
 
-## Task 6 — Strangle the old narrowphase + retire the oracle gate; consolidate invariants
+## Task 6 — Astra scene layer: Collider2D fixture list + PhysicsSystem sync
+
+**Files:**
+- Modify: `Arcane/Arcane/src/Arcane/Scene/PhysicsComponents.hpp` (`Collider2D` → a fixture list;
+  material/filter/isSensor move per-fixture; `RigidBody2D` drops material),
+  `Arcane/Arcane/src/Arcane/Scene/PhysicsSystem.hpp`.
+- Test: extend `Arcane/Tests/src/PhysicsComponentsTest.cpp` + `PhysicsSystemTest.cpp`.
+
+**What:** `Collider2D` carries a small list of fixtures, each `{ ShapeKind kind + scalars; Vec2
+localPos; Real localAngle; float density/friction/restitution; uint32 categoryBits/maskBits; bool
+isSensor }` (still `ASTRA_REFLECT` — reflect the vector-of-struct, or a fixed small array + count if
+Astra can't reflect a `std::vector` field; verify against the Astra reflection API). `RigidBody2D`
+keeps body-type/velocity/`fixedRotation`/`bullet`/`linearDamping` (material removed). `PhysicsSystem`
+create-pass builds the body + each fixture (Core `Shape` from the descriptor via `MakeCircle/Capsule/
+Aabb`, placed by local transform) via `AddBody`+`AddFixture`; destroy drops the body (drops its
+fixtures). `PhysicsBodyRef` keeps the `BodyHandle`.
+
+- [ ] **Step 1: Write the failing test.** Extend the component round-trip: a `Collider2D` with TWO
+  fixtures (box@local0 + circle@offset, different materials) survives an M5 Save/Load with all
+  per-fixture fields. Extend the system test: an entity with a 2-fixture `Collider2D` steps via
+  `PhysicsSystem`; both fixtures exist in the world; `LocalTransform` updates; determinism run-twice.
+- [ ] **Step 2: Run, verify it fails.**
+- [ ] **Step 3: Implement** the `Collider2D` fixture list + `PhysicsSystem` multi-fixture sync.
+- [ ] **Step 4: Regenerate + build + run** `[physics]~[gpu]` → green (component + system tests pass).
+- [ ] **Step 5: Commit** (`feat(arcane): physics-v2 T6 Astra Collider2D fixtures + PhysicsSystem sync`).
+
+---
+
+## Task 7 — Strangle the old narrowphase + retire the oracle gate; consolidate invariants
 
 **Files:**
 - Delete: `Narrowphase/Specialized.{hpp,cpp}`, `Narrowphase/Sat.{hpp,cpp}` and
-  `Narrowphase/Dispatch.{hpp,cpp}` ONLY IF fully subsumed by `Collide`/`Epa` (otherwise fold their
+  `Narrowphase/Dispatch.{hpp,cpp}` ONLY IF fully subsumed by `Collide` (otherwise fold their
   still-needed kernels into `Collide`/`GeometryKernel` and delete the rest). Remove the old
   `Manifold::CollidePolygons` once no caller remains.
 - Delete/repurpose: the oracle-bit-match tests (`PhysicsManifoldTest.cpp`, `PhysicsShapesTest.cpp`,
@@ -249,7 +299,7 @@ constant angle flows through naturally. Queries/`BulletSweep` transforms also pa
   cases here (or tag them `[invariant]`) so the gate is named in one place.
 
 **What:** Remove the now-dead kind-dispatched collision code and the oracle bit-match gate, leaving
-`Collide`/`Epa` as the sole narrowphase and the invariant suite + analytic V2 tests as the gate.
+`Collide` as the sole narrowphase and the invariant suite + analytic V2 tests as the gate.
 
 - [ ] **Step 1:** Grep for callers of the old `Dispatch`/`Specialized`/`Manifold::CollidePolygons`
   and `physics_oracle/` fixtures; confirm `Collide` is the only live collision path
@@ -259,11 +309,11 @@ constant angle flows through naturally. Queries/`BulletSweep` transforms also pa
 - [ ] **Step 3: Regenerate + build + run** full `[physics]` → green (only invariant + V2 analytic +
   behavioral tests remain; no oracle-pinned failures). Run `[gpu][physics]` (debug overlay) → green.
 - [ ] **Step 4:** Verify the dead files are gone and nothing includes them (`grep -r Specialized\\.hpp`).
-- [ ] **Step 5: Commit** (`refactor(arcane): physics-v2 T6 strangle old narrowphase + retire oracle gate`).
+- [ ] **Step 5: Commit** (`refactor(arcane): physics-v2 T7 strangle old narrowphase + retire oracle gate`).
 
 ---
 
-## Task 7 — fp_contract(off) + dual-flavor gate + full-suite green + new goldens
+## Task 8 — fp_contract(off) + dual-flavor gate + full-suite green + new goldens
 
 **Files:**
 - Modify: `Arcane/premake5.lua` (the Core project) and `Server/premake5.lua` (ArcaneCore) — add
@@ -288,7 +338,7 @@ gate the whole phase green.
 - [ ] **Step 4: Server-flavor gate:** `cd Server && ../ThirdParty/premake5/premake5.exe vs2026`
   then msbuild `Aphelyon.slnx -t:ArcaneCore` Debug+Release — 0 errors (the v2 narrowphase compiles
   static-CRT; confirm no presentation/dialect leak).
-- [ ] **Step 5: Commit** (`build(arcane): physics-v2 T7 fp_contract(off) + dual-flavor + full-suite green`),
+- [ ] **Step 5: Commit** (`build(arcane): physics-v2 T8 fp_contract(off) + dual-flavor + full-suite green`),
   then final holistic review (the subagent-driven-development final reviewer), then STOP — defer
   push/merge to the user (CI runs on push).
 
@@ -305,13 +355,16 @@ executed by the subagent-driven-development implementers.
 
 ## Self-review checklist (run before executing)
 - **Spec coverage:** unified shape model (T1), rotation-aware GJK (T2), clip manifold + stable
-  feature ids (T3), EPA (T4), real-angle integration + rotation lock + box-settles-flat (T5),
-  strangle old narrowphase + retire oracle + archive Lua feel traces (T6), fp_contract + dual-flavor
-  + full green + new goldens (T7). All spec architecture items + the re-baseline + the determinism
-  addition covered. TileGrid untouched (only its oracle-pinned TEST assertions re-baselined). ✓
+  feature ids (T3), fixture data model + mass aggregation (T4), fixture-pair rotation-aware contact
+  gen + box-settles-flat + compound collision (T5), Astra Collider2D fixtures + PhysicsSystem (T6),
+  strangle old narrowphase + retire oracle + archive Lua feel traces (T7), fp_contract + dual-flavor
+  + full green + new goldens (T8). All Phase-A spec + fixture-model spec items + the re-baseline +
+  the determinism addition covered. EPA deferred (future EPA+MPR workstream). TileGrid untouched
+  (only its oracle-pinned TEST assertions re-baselined). ✓
 - **Contracts** (presentation-free, SoA+handles, determinism, dual-flavor) restated + carried per
   task. ✓
 - **No oracle bit-match introduced** — every test is analytic/invariant/golden, not
   `physics_oracle/*.json`. ✓
 - **Type consistency:** `Collide(a,xfA,b,xfB,specMargin)->Manifold`, `ManifoldPoint.id` (stable
-  feature key), EPA returns MTV normal+depth — named consistently across T2–T7. ✓
+  feature key), `FixtureHandle{index,generation}`, `FixtureDef`/`AddFixture` — named consistently
+  across T2–T8. ✓
