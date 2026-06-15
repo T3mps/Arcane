@@ -101,6 +101,15 @@ namespace Arcane
             // Sentinel bit: set in featureA/featureB when the closest feature
             // is an EDGE (two input indices packed as (idxLo<<16)|idxHi).
             // Clear when the feature is a single VERTEX (the value IS the index).
+            //
+            // Field layout when kEdgeMask is SET:
+            //   bit  31    = 1 (kEdgeMask sentinel)
+            //   bits [30:16] = idxLo (15 bits); decode: lo = (id >> 16) & 0x7FFFu
+            //   bits [15: 0] = idxHi (16 bits); decode: hi = id & 0xFFFFu
+            //   Invariant: idxLo <= idxHi (canonical ascending order).
+            //
+            // When kEdgeMask is CLEAR the full value IS the vertex index:
+            //   vertex check: !(id & kEdgeMask)  -- id is the simplex vertex index.
             static constexpr uint32_t kEdgeMask = 0x8000'0000u;
         };
 
