@@ -1,4 +1,5 @@
-// M6 P3.3 -- PhysicsSystem + PhysicsResource + transform sync.
+// M6 Physics-v2 T6 -- PhysicsSystem + PhysicsResource + transform sync,
+// updated for fixture-list Collider2D schema.
 //
 // Tests:
 //   1. Dynamic body under gravity: after N fixed steps, LocalTransform.position.y
@@ -9,6 +10,9 @@
 //      entityToBody map on the next PhysicsSystem invocation.
 //   4. Determinism: two identical runs of the same scene yield exactly the same
 //      final LocalTransform positions (binary ==, not Approx).
+//   5. Two-fixture body: an entity with a 2-fixture Collider2D gets both fixtures
+//      attached in the PhysicsWorld (FixtureCount == 2), and LocalTransform still
+//      updates after stepping.
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -45,8 +49,8 @@ namespace
     // ---------------------------------------------------------------------------
     // Build a registry + resource for use by all tests.
     //   - SceneRoot entity (no physics)
-    //   - Dynamic body entity (circle r=0.5, at origin, no initial velocity)
-    //   - Kinematic body entity (circle r=0.5, at (50,0), velocity=(kKinSpeed,0))
+    //   - Dynamic body entity (circle r=0.5 single-fixture, at origin)
+    //   - Kinematic body entity (circle r=0.5 single-fixture, at (50,0), velocity=(kKinSpeed,0))
     // Returns {registry, root, dynEntity, kinEntity}.
     // ---------------------------------------------------------------------------
     struct SceneHandles
@@ -79,7 +83,7 @@ namespace
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
 
-        // Dynamic body entity: free-falls under gravity.
+        // Dynamic body entity: free-falls under gravity (single-fixture circle).
         Astra::Entity dyn = reg.CreateEntity();
         {
             Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
@@ -90,16 +94,21 @@ namespace
             rb.type = Arcane::Physics::BodyType::Dynamic;
             reg.AddComponent<Arcane::RigidBody2D>(dyn, rb);
 
+            // Single-fixture Collider2D (circle r=0.5).
             Arcane::Collider2D col;
-            col.kind   = Arcane::Physics::ShapeKind::Circle;
-            col.radius = 0.5f;
+            {
+                Arcane::Fixture fx;
+                fx.kind   = Arcane::Physics::ShapeKind::Circle;
+                fx.radius = 0.5f;
+                col.fixtures.push_back(fx);
+            }
             reg.AddComponent<Arcane::Collider2D>(dyn, col);
 
             reg.AddComponent<Arcane::PhysicsBodyRef>(dyn, Arcane::PhysicsBodyRef{});
             reg.SetParent(dyn, root);
         }
 
-        // Kinematic body entity: constant velocity in +X.
+        // Kinematic body entity: constant velocity in +X (single-fixture circle).
         Astra::Entity kin = reg.CreateEntity();
         {
             Arcane::LocalTransform lt; lt.position = glm::vec2(50.0f, 0.0f);
@@ -111,9 +120,14 @@ namespace
             rb.velocity = glm::vec2(kKinSpeed, 0.0f);
             reg.AddComponent<Arcane::RigidBody2D>(kin, rb);
 
+            // Single-fixture Collider2D (circle r=0.5).
             Arcane::Collider2D col;
-            col.kind   = Arcane::Physics::ShapeKind::Circle;
-            col.radius = 0.5f;
+            {
+                Arcane::Fixture fx;
+                fx.kind   = Arcane::Physics::ShapeKind::Circle;
+                fx.radius = 0.5f;
+                col.fixtures.push_back(fx);
+            }
             reg.AddComponent<Arcane::Collider2D>(kin, col);
 
             reg.AddComponent<Arcane::PhysicsBodyRef>(kin, Arcane::PhysicsBodyRef{});
@@ -143,7 +157,7 @@ namespace
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
-// TEST 1 — Dynamic body falls under gravity
+// TEST 1 -- Dynamic body falls under gravity
 // ---------------------------------------------------------------------------
 TEST_CASE("PhysicsSystem: dynamic body falls under gravity (LocalTransform updated)", "[physics]")
 {
@@ -158,7 +172,7 @@ TEST_CASE("PhysicsSystem: dynamic body falls under gravity (LocalTransform updat
     REQUIRE(lt != nullptr);
 
     // After 10 steps at 60 Hz with gravityY = 400 (+Y down), y must be well positive.
-    // Forward-Euler lower bound: 0.5 * g * (dt*N)^2 ≈ 0.5*400*(10/60)^2 ≈ 5.6 px.
+    // Forward-Euler lower bound: 0.5 * g * (dt*N)^2 ~= 0.5*400*(10/60)^2 ~= 5.6 px.
     // A bound of 5.0f is safely below the true displacement but well above 0, so
     // a near-zero or sign-flipped gravity is caught.
     CHECK(lt->position.y > 5.0f);
@@ -171,7 +185,7 @@ TEST_CASE("PhysicsSystem: dynamic body falls under gravity (LocalTransform updat
 }
 
 // ---------------------------------------------------------------------------
-// TEST 2 — Kinematic body moves at authored velocity
+// TEST 2 -- Kinematic body moves at authored velocity
 // ---------------------------------------------------------------------------
 TEST_CASE("PhysicsSystem: kinematic body moves by authored velocity", "[physics]")
 {
@@ -200,7 +214,7 @@ TEST_CASE("PhysicsSystem: kinematic body moves by authored velocity", "[physics]
 }
 
 // ---------------------------------------------------------------------------
-// TEST 3 — Body row removed when entity is destroyed
+// TEST 3 -- Body row removed when entity is destroyed
 // ---------------------------------------------------------------------------
 TEST_CASE("PhysicsSystem: body row removed after entity is destroyed", "[physics]")
 {
@@ -240,7 +254,7 @@ TEST_CASE("PhysicsSystem: body row removed after entity is destroyed", "[physics
 }
 
 // ---------------------------------------------------------------------------
-// TEST 4 — Determinism: two identical runs produce exactly the same positions
+// TEST 4 -- Determinism: two identical runs produce exactly the same positions
 // ---------------------------------------------------------------------------
 TEST_CASE("PhysicsSystem: two identical runs yield bit-exact LocalTransform positions", "[physics]")
 {
@@ -273,4 +287,100 @@ TEST_CASE("PhysicsSystem: two identical runs yield bit-exact LocalTransform posi
     CHECK(posA_dyn.y == posB_dyn.y);
     CHECK(posA_kin.x == posB_kin.x);
     CHECK(posA_kin.y == posB_kin.y);
+}
+
+// ---------------------------------------------------------------------------
+// TEST 5 -- Two-fixture body: PhysicsWorld has 2 fixtures + transform updates
+// ---------------------------------------------------------------------------
+TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in PhysicsWorld", "[physics]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::RegisterPhysicsComponents(reg);
+
+    // Physics world (no gravity needed; we only test fixture count + write-back).
+    Arcane::Physics::WorldDef wd;
+    wd.gravityY = 0.0f;
+    reg.SetResource(Arcane::PhysicsResource{
+        std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
+        {}
+    });
+
+    // Minimal SceneRoot.
+    Astra::Entity root = reg.CreateEntity();
+    {
+        Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        reg.AddComponent<Arcane::LocalTransform>(root, lt);
+        reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    }
+
+    // Entity with a 2-fixture Collider2D.
+    // Fixture 0: circle r=5 @ local(0,0).
+    // Fixture 1: aabb(3,3) @ local(20,0), sensor.
+    Astra::Entity e = reg.CreateEntity();
+    {
+        Arcane::LocalTransform lt; lt.position = glm::vec2(100.0f, 50.0f);
+        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+
+        Arcane::RigidBody2D rb;
+        rb.type = Arcane::Physics::BodyType::Kinematic;
+        reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+
+        Arcane::Collider2D col;
+        // fixture 0
+        {
+            Arcane::Fixture fx;
+            fx.kind     = Arcane::Physics::ShapeKind::Circle;
+            fx.radius   = 5.0f;
+            fx.localPos = glm::vec2(0.0f, 0.0f);
+            fx.density  = 1.0f;
+            fx.friction = 0.3f;
+            col.fixtures.push_back(fx);
+        }
+        // fixture 1
+        {
+            Arcane::Fixture fx;
+            fx.kind      = Arcane::Physics::ShapeKind::Aabb;
+            fx.halfW     = 3.0f;
+            fx.halfH     = 3.0f;
+            fx.localPos  = glm::vec2(20.0f, 0.0f);
+            fx.isSensor  = true;
+            fx.density   = 1.0f;
+            fx.friction  = 0.3f;
+            col.fixtures.push_back(fx);
+        }
+        reg.AddComponent<Arcane::Collider2D>(e, col);
+        reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
+        reg.SetParent(e, root);
+    }
+
+    // Run one physics step to trigger the CREATE pass.
+    {
+        Arcane::PhysicsSystem physics(kDt);
+        physics(reg);
+    }
+
+    // The body must be live in the resource.
+    const auto* res = reg.GetResource<Arcane::PhysicsResource>();
+    REQUIRE(res != nullptr);
+    REQUIRE(res->entityToBody.count(e) == 1);
+
+    // Check that exactly 2 fixtures were registered on this body.
+    const Arcane::Physics::BodyHandle bh = res->entityToBody.at(e);
+    REQUIRE(res->world->IsValid(bh));
+    CHECK(res->world->FixtureCount(bh) == 2u);
+
+    // LocalTransform still gets written back after Step.
+    Arcane::TransformPropagationSystem propagate;
+    propagate(reg);
+
+    const auto* lt = reg.GetComponent<Arcane::LocalTransform>(e);
+    REQUIRE(lt != nullptr);
+    // Kinematic body with no velocity, gravity 0 -> position stays at (100, 50).
+    CHECK(lt->position.x == Approx(100.0f).margin(0.01f));
+    CHECK(lt->position.y == Approx(50.0f).margin(0.01f));
 }

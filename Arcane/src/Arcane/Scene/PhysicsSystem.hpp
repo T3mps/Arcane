@@ -1,7 +1,7 @@
 #pragma once
 
-// PhysicsSystem (M6 P3.3): Astra fixed-update system that drives the PhysicsWorld
-// from the ECS and writes results back to LocalTransform components.
+// PhysicsSystem (M6 Physics-v2 T6): Astra fixed-update system that drives the
+// PhysicsWorld from the ECS and writes results back to LocalTransform components.
 //
 // Also defines PhysicsResource: the Registry resource (singleton) holding the
 // PhysicsWorld and the entity<->BodyHandle map. PhysicsResource lives here
@@ -19,8 +19,13 @@
 //
 //   2. CREATE/SYNC PASS -- for each entity with RigidBody2D + Collider2D +
 //      PhysicsBodyRef + LocalTransform whose PhysicsBodyRef.handle == kInvalidBody:
-//      build a BodyDef from the authored components, call world->AddBody(def),
-//      store the handle into PhysicsBodyRef and entityToBody.
+//      - Build a BodyDef from RigidBody2D + fixtures[0] (shape + material).
+//      - Call world->AddBody(def) to create the body with the primary fixture.
+//      - For each subsequent fixture (fixtures[1..N-1]) call world->AddFixture
+//        with a FixtureDef built from the Fixture descriptor (shape, localPos,
+//        localAngle, material, filter, isSensor).
+//      - Store the BodyHandle in PhysicsBodyRef and entityToBody.
+//      Entities with an empty fixtures list are skipped (no body to create).
 //
 //   3. STEP -- world->Step(m_fixedDt). Physics advances one fixed tick.
 //
@@ -42,6 +47,7 @@
 // Header-only: the simulation Registry is owned by the host module; systems
 // that touch it must instantiate in that module (see SystemSchedulers.hpp).
 
+#include <Arcane/Physics/Fixture.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Shapes.hpp>
@@ -98,7 +104,55 @@ namespace Arcane
     };
 
     // -------------------------------------------------------------------------
-    // PhysicsSystem (M6 P3.3)
+    // MakeFixtureDef: build a Core::FixtureDef from a scene-layer Fixture desc.
+    // -------------------------------------------------------------------------
+    // Helper shared by the body-primary and AddFixture paths. Inline to keep
+    // PhysicsSystem.hpp header-only.
+    inline Physics::FixtureDef MakeFixtureDef(const Fixture& f)
+    {
+        Physics::FixtureDef fd;
+
+        // Shape geometry.
+        switch (f.kind)
+        {
+        case Physics::ShapeKind::Circle:
+            fd.shape = Physics::MakeCircle(f.radius);
+            break;
+        case Physics::ShapeKind::Capsule:
+            fd.shape = Physics::MakeCapsule(f.halfLen, f.radius);
+            break;
+        case Physics::ShapeKind::Aabb:
+            fd.shape = Physics::MakeAabb(f.halfW, f.halfH);
+            break;
+        case Physics::ShapeKind::Polygon:
+            // Polygon authored verts are out of scope (Fixture carries no vertex
+            // array). Assert in Debug; fall back to circle so the entity doesn't
+            // silently disappear from the simulation.
+            assert(false && "PhysicsSystem: ShapeKind::Polygon not supported");
+            fd.shape = Physics::MakeCircle(f.radius);
+            break;
+        }
+
+        // Local transform.
+        fd.localPos   = Physics::Vec2(f.localPos.x, f.localPos.y);
+        fd.localAngle = static_cast<Physics::Real>(f.localAngle);
+
+        // Material.
+        fd.density     = static_cast<Physics::Real>(f.density);
+        fd.friction    = static_cast<Physics::Real>(f.friction);
+        fd.restitution = static_cast<Physics::Real>(f.restitution);
+
+        // Collision filter.
+        fd.categoryBits = f.categoryBits;
+        fd.maskBits     = f.maskBits;
+
+        fd.isSensor = f.isSensor;
+
+        return fd;
+    }
+
+    // -------------------------------------------------------------------------
+    // PhysicsSystem (M6 Physics-v2 T6)
     // -------------------------------------------------------------------------
     struct PhysicsSystem
         : Astra::SystemTraits<Astra::Reads<Collider2D>,
@@ -115,8 +169,8 @@ namespace Arcane
             PhysicsResource* res = reg.GetResource<PhysicsResource>();
             if (!res || !res->world) return;
 
-            Physics::PhysicsWorld& world      = *res->world;
-            auto&                  entityToBody = res->entityToBody;
+            Physics::PhysicsWorld& world        = *res->world;
+            auto&                  entityToBody  = res->entityToBody;
 
             // ------------------------------------------------------------------
             // PASS 1: DESTROY -- remove body rows for dead or un-physicised entities.
@@ -151,9 +205,9 @@ namespace Arcane
             // ------------------------------------------------------------------
             {
                 auto view = reg.CreateView<RigidBody2D, Collider2D, PhysicsBodyRef, LocalTransform>();
-                view.ForEach([&](Astra::Entity  entity,
-                                 RigidBody2D&   rb,
-                                 Collider2D&    col,
+                view.ForEach([&](Astra::Entity   entity,
+                                 RigidBody2D&    rb,
+                                 Collider2D&     col,
                                  PhysicsBodyRef& ref,
                                  LocalTransform& lt)
                 {
@@ -165,45 +219,62 @@ namespace Arcane
                         return;
                     }
 
-                    // Build BodyDef from the authored ECS components.
+                    // Skip entities with no fixtures (cannot build a body).
+                    if (col.fixtures.empty())
+                        return;
+
+                    // ---- PRIMARY FIXTURE (fixtures[0]) ----
+                    // Build the BodyDef from RigidBody2D dynamics params + fixture[0].
+                    const Fixture& fx0 = col.fixtures[0];
+
                     Physics::BodyDef def;
                     def.type     = rb.type;
                     def.position = Physics::Vec2(lt.position.x, lt.position.y);
 
-                    // Translate Collider2D shape descriptor -> Core::Shape factory.
-                    switch (col.kind)
+                    // Translate fixture[0] shape descriptor -> Core::Shape.
+                    switch (fx0.kind)
                     {
                     case Physics::ShapeKind::Circle:
-                        def.shape = Physics::MakeCircle(col.radius);
+                        def.shape = Physics::MakeCircle(fx0.radius);
                         break;
                     case Physics::ShapeKind::Capsule:
-                        def.shape = Physics::MakeCapsule(col.halfLen, col.radius);
+                        def.shape = Physics::MakeCapsule(fx0.halfLen, fx0.radius);
                         break;
                     case Physics::ShapeKind::Aabb:
-                        def.shape = Physics::MakeAabb(col.halfW, col.halfH);
+                        def.shape = Physics::MakeAabb(fx0.halfW, fx0.halfH);
                         break;
                     case Physics::ShapeKind::Polygon:
-                        // Polygon authored verts are out of scope for P3.3 (Collider2D
-                        // carries no vertex array). Assert in Debug; fall back to circle
-                        // so the entity doesn't silently disappear from the simulation.
-                        assert(false && "PhysicsSystem: ShapeKind::Polygon not supported in P3.3");
-                        def.shape = Physics::MakeCircle(col.radius);
+                        assert(false && "PhysicsSystem: ShapeKind::Polygon not supported");
+                        def.shape = Physics::MakeCircle(fx0.radius);
                         break;
                     }
 
-                    def.isSensor      = col.isSensor;
-                    def.restitution   = col.restitution;
-                    def.friction      = col.friction;
-                    def.density       = col.density;
+                    // Material + filter from fixture[0].
+                    def.isSensor      = fx0.isSensor;
+                    def.restitution   = static_cast<Physics::Real>(fx0.restitution);
+                    def.friction      = static_cast<Physics::Real>(fx0.friction);
+                    def.density       = static_cast<Physics::Real>(fx0.density);
+
+                    // Body-level dynamics from RigidBody2D.
                     def.linearDamping = rb.linearDamping;
                     def.fixedRotation = rb.fixedRotation;
                     def.bullet        = rb.bullet;
 
-                    // Optional mass override: RigidBody2D.mass > 0 beats density-derived mass.
+                    // Optional mass override: RigidBody2D.mass > 0 beats density-derived.
                     if (rb.mass > 0.0f)
                         def.mass = rb.mass;
 
                     Physics::BodyHandle handle = world.AddBody(def);
+
+                    // ---- ADDITIONAL FIXTURES (fixtures[1..N-1]) ----
+                    // AddBody already installed fixture[0] as the primary shape.
+                    // Call AddFixture for each subsequent fixture so the body has
+                    // one physics fixture per authored Fixture descriptor.
+                    for (std::size_t i = 1; i < col.fixtures.size(); ++i)
+                    {
+                        Physics::FixtureDef fd = MakeFixtureDef(col.fixtures[i]);
+                        world.AddFixture(handle, fd);
+                    }
 
                     // Authored velocity applied after AddBody so we call SetVelocity
                     // on a live handle (also wakes sleeping Dynamic bodies).

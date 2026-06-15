@@ -1,23 +1,36 @@
 #pragma once
 
 // Physics ECS components: reflected authored data for the Arcane 2D physics
-// engine (M6 P3.2). These live in the Arcane.dll scene layer alongside the
-// other scene components — NOT in Core/Physics (Core is Astra-free).
+// engine (M6 Physics-v2 T6: fixture-list Collider2D). These live in the
+// Arcane.dll scene layer alongside the other scene components -- NOT in
+// Core/Physics (Core is Astra-free).
 //
 // Three components:
-//   RigidBody2D   — body type, velocity, mass params, bullet flag. Defaults to
-//                   Kinematic to match the overworld character-controller idiom
-//                   (kinematic bodies are script-driven, not force-driven).
-//   Collider2D    — shape descriptor (primitive scalars, not a Core::Shape) plus
-//                   material and collision filter. Polygon authored verts are out
-//                   of scope for P3.2; the PhysicsSystem (P3.3) builds a
-//                   Core::Shape from this descriptor via MakeCircle/MakeCapsule/
-//                   MakeAabb. Design decision: avoid embedding Core::Shape directly
-//                   (its std::vector<Vec2> is not ASTRA_REFLECT-able; yagni).
-//   PhysicsBodyRef— runtime BodyHandle re-established by PhysicsSystem on load,
-//                   exactly as WorldTransform::matrix is derived. The handle field
-//                   is Serializable(false) so name-keyed JSON skips it; it
-//                   round-trips harmlessly on the trivially-copyable binary path.
+//   RigidBody2D    -- body type, velocity, mass params, bullet flag. Defaults
+//                     to Kinematic to match the overworld character-controller
+//                     idiom (kinematic bodies are script-driven, not force-driven).
+//   Collider2D     -- a fixture LIST. Each Fixture carries its own shape
+//                     descriptor, local transform, material, and collision filter.
+//                     The list is a std::vector<Fixture> (see REFLECTION DECISION
+//                     below). For the create pass, PhysicsSystem calls AddBody
+//                     with fixture[0] as the primary shape then AddFixture for
+//                     fixtures[1..].
+//   PhysicsBodyRef -- runtime BodyHandle re-established by PhysicsSystem on
+//                     load, exactly as WorldTransform::matrix is derived. The
+//                     handle field is Serializable(false) so name-keyed JSON
+//                     skips it; it round-trips harmlessly on the binary path.
+//
+// REFLECTION DECISION -- vector<Fixture> vs fixed array:
+//   Astra DOES support std::vector<T> fields via FieldInfo::isVector, and the
+//   Astra BinaryWriter/BinaryReader have explicit vector<T> operator() overloads.
+//   The Fixture descriptor struct is fully trivially copyable (all POD members),
+//   so the writer takes the fast bulk-memcpy path (WriteBytes(data, N*sizeof(T))).
+//   Collider2D itself is no longer trivially copyable (it now contains a
+//   std::vector), so it provides a Serialize(Archive&) method (the Astra contract
+//   for non-trivial components) that calls ar(fixtures) to delegate to the
+//   archive's vector overload. ASTRA_REFLECT_FIELD reflects the vector field for
+//   the visitFields / editor / JSON-schema path.
+//   CONCLUSION: std::vector<Fixture> is used. No fixed-array fallback needed.
 //
 // Registration: RegisterPhysicsComponents(ComponentRegistry&) and the overload
 // taking Registry& mirror the RegisterSceneComponents pattern in SceneModule.hpp.
@@ -32,6 +45,7 @@
 #include <glm/vec2.hpp>
 
 #include <cstdint>
+#include <vector>
 
 namespace Arcane
 {
@@ -52,33 +66,68 @@ namespace Arcane
     };
 
     // -------------------------------------------------------------------------
-    // Collider2D
+    // Fixture
     // -------------------------------------------------------------------------
-    // Reflectable shape descriptor: kind discriminator + scalar params for the
-    // three primitive shape families (Circle/Capsule/Aabb). Polygon authored
-    // verts are deferred (YAGNI for P3.2 — add later when the PhysicsSystem
-    // needs authored polygon geometry). Material + collision filter live here
-    // as plain floats/uint32s so the whole struct stays trivially copyable and
-    // ASTRA_REFLECT-able without a custom visitor.
-    struct Collider2D
+    // Per-fixture authored descriptor: shape kind + scalars for the three
+    // primitive families (Circle/Capsule/Aabb), local transform in the body
+    // frame, material, and collision filter.
+    //
+    // Deliberately trivially copyable (all POD members). This makes
+    // std::vector<Fixture> use the bulk WriteBytes path in BinaryWriter and the
+    // bulk ReadBytes path in BinaryReader -- no per-element Serialize overhead.
+    //
+    // LOCAL TRANSFORM fields:
+    //   localPos   -- offset from the body's origin to this fixture's center,
+    //                 in the body's local frame. Used by PhysicsWorld::AddFixture.
+    //   localAngle -- rotation of this fixture relative to the body (radians).
+    //
+    // Polygon authored verts remain out of scope (no vertex array in this struct;
+    // ShapeKind::Polygon asserts/skips in PhysicsSystem as in P3.3).
+    struct Fixture
     {
-        // Shape discriminator + scalar params (three shapes for P3.2).
+        // Shape discriminator + scalar params (three shapes, matching P3.2 style).
         Physics::ShapeKind kind      = Physics::ShapeKind::Circle;
-        float              radius    = 0.5f;   // Circle/Capsule radius (ignored when kind != Circle/Capsule)
-        float              halfLen   = 0.0f;   // Capsule half-length   (ignored when kind != Capsule)
-        float              halfW     = 0.5f;   // Aabb half-width       (ignored when kind != Aabb)
-        float              halfH     = 0.5f;   // Aabb half-height      (ignored when kind != Aabb)
+        float              radius    = 0.5f;   // Circle/Capsule radius
+        float              halfLen   = 0.0f;   // Capsule half-length
+        float              halfW     = 0.5f;   // Aabb half-width
+        float              halfH     = 0.5f;   // Aabb half-height
+
+        // Local transform (body frame).
+        glm::vec2          localPos  {0.0f, 0.0f};
+        float              localAngle = 0.0f;
 
         // Material.
-        float restitution = 0.0f;
-        float friction    = 0.3f;
         float density     = 1.0f;
+        float friction    = 0.3f;
+        float restitution = 0.0f;
 
         // Collision filter.
         uint32_t categoryBits = 0x00000001u;
         uint32_t maskBits     = 0xFFFFFFFFu;
 
         bool isSensor = false;
+    };
+
+    // -------------------------------------------------------------------------
+    // Collider2D
+    // -------------------------------------------------------------------------
+    // A fixture list. Each Fixture is a complete shape+material descriptor;
+    // PhysicsSystem iterates fixtures to build the body and attach extra
+    // fixtures via PhysicsWorld::AddFixture.
+    //
+    // SERIALIZATION: Collider2D is no longer trivially copyable (std::vector
+    // member). It provides Serialize(Archive&) which delegates to ar(fixtures)
+    // -- the archive's vector<Fixture> overload does bulk POD memcpy because
+    // Fixture is trivially copyable.
+    struct Collider2D
+    {
+        std::vector<Fixture> fixtures;
+
+        template<typename Archive>
+        void Serialize(Archive& ar)
+        {
+            ar(fixtures);
+        }
     };
 
     // -------------------------------------------------------------------------
@@ -95,7 +144,7 @@ namespace Arcane
 
 } // namespace Arcane
 
-// Enum reflection blocks — at namespace scope (Arcane::Physics), so the
+// Enum reflection blocks -- at namespace scope (Arcane::Physics), so the
 // macro argument is a simple identifier (no :: in the token-paste).
 // BodyType and ShapeKind are reflected here (in the Arcane.dll module that
 // owns physics components) so the visitFields seam can serialize them by name
@@ -112,14 +161,14 @@ namespace Arcane::Physics
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Circle)
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Capsule)
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Aabb)
-        // Polygon is part of the Core type's full set but Collider2D carries no
-        // authored vertex array — Polygon colliders are not buildable until a later
-        // task adds a verts field (or a separate PolygonCollider2D component).
+        // Polygon is part of the Core type's full set but Fixture carries no
+        // authored vertex array -- Polygon colliders are not buildable until a
+        // later task adds a verts field (or a separate PolygonCollider2D component).
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Polygon)
     ASTRA_END_REFLECT_ENUM()
 } // namespace Arcane::Physics
 
-// Component type reflection blocks — at namespace scope (design rule: every
+// Component type reflection blocks -- at namespace scope (design rule: every
 // engine component is ASTRA_REFLECT-annotated from day one).
 namespace Arcane
 {
@@ -132,18 +181,32 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(RigidBody2D, bullet)
     ASTRA_END_REFLECT_TYPE()
 
+    // Fixture: reflected so editors / JSON schema can walk per-fixture fields.
+    // Each Fixture is a standalone reflected struct (no enclosing component);
+    // the visitFields consumer descends into the vector elements by hand.
+    ASTRA_REFLECT_TYPE(Fixture)
+        ASTRA_REFLECT_FIELD(Fixture, kind)
+        ASTRA_REFLECT_FIELD(Fixture, radius)
+        ASTRA_REFLECT_FIELD(Fixture, halfLen)
+        ASTRA_REFLECT_FIELD(Fixture, halfW)
+        ASTRA_REFLECT_FIELD(Fixture, halfH)
+        ASTRA_REFLECT_FIELD(Fixture, localPos)
+        ASTRA_REFLECT_FIELD(Fixture, localAngle)
+        ASTRA_REFLECT_FIELD(Fixture, density)
+        ASTRA_REFLECT_FIELD(Fixture, friction)
+        ASTRA_REFLECT_FIELD(Fixture, restitution)
+        ASTRA_REFLECT_FIELD(Fixture, categoryBits)
+        ASTRA_REFLECT_FIELD(Fixture, maskBits)
+        ASTRA_REFLECT_FIELD(Fixture, isSensor)
+    ASTRA_END_REFLECT_TYPE()
+
+    // Collider2D: reflects the fixture list field.
+    // The vector<Fixture> field has isVector=true in FieldInfo; visitFields
+    // consumers that need per-element access use FieldInfo::GetPtr<std::vector<Fixture>>
+    // and iterate manually (Astra does not recurse into container elements
+    // automatically -- that is the consumer's responsibility).
     ASTRA_REFLECT_TYPE(Collider2D)
-        ASTRA_REFLECT_FIELD(Collider2D, kind)
-        ASTRA_REFLECT_FIELD(Collider2D, radius)
-        ASTRA_REFLECT_FIELD(Collider2D, halfLen)
-        ASTRA_REFLECT_FIELD(Collider2D, halfW)
-        ASTRA_REFLECT_FIELD(Collider2D, halfH)
-        ASTRA_REFLECT_FIELD(Collider2D, restitution)
-        ASTRA_REFLECT_FIELD(Collider2D, friction)
-        ASTRA_REFLECT_FIELD(Collider2D, density)
-        ASTRA_REFLECT_FIELD(Collider2D, categoryBits)
-        ASTRA_REFLECT_FIELD(Collider2D, maskBits)
-        ASTRA_REFLECT_FIELD(Collider2D, isSensor)
+        ASTRA_REFLECT_FIELD(Collider2D, fixtures)
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(PhysicsBodyRef)
@@ -152,7 +215,7 @@ namespace Arcane
     ASTRA_END_REFLECT_TYPE()
 } // namespace Arcane
 
-// Registration functions — header-only, mirroring SceneModule.hpp.
+// Registration functions -- header-only, mirroring SceneModule.hpp.
 namespace Arcane
 {
     inline void RegisterPhysicsComponents(Astra::ComponentRegistry& creg)
@@ -160,6 +223,10 @@ namespace Arcane
         creg.RegisterComponent<RigidBody2D>();
         creg.RegisterComponent<Collider2D>();
         creg.RegisterComponent<PhysicsBodyRef>();
+        // NOTE: Fixture is a data descriptor embedded inside Collider2D::fixtures,
+        // not a standalone ECS component. It is reflected via ASTRA_REFLECT_TYPE
+        // (static-init path) so editors/JSON-schema can walk per-fixture fields,
+        // but it is NOT registered with ComponentRegistry (no entity slot needed).
     }
 
     inline void RegisterPhysicsComponents(Astra::Registry& reg)
