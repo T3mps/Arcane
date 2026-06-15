@@ -108,9 +108,15 @@ fixture-pair key. f32, fixed dt, no wall-clock — unchanged. Mass aggregation i
 
 ## Non-goals (deferred)
 
-- **Automatic convex decomposition** of a concave outline → authors (or a future editor/tool step)
-  supply convex fixtures; runtime does not auto-decompose. (A decomposition tool can land later in
-  Grimoire/LevelEditor.)
+- **Geometry utilities (future workstream)** → the algorithms that *generate* collider/fixture
+  data: **convex hull** (point cloud / sprite-alpha outline → convex polygon, e.g. Andrew's
+  monotone chain), **convex decomposition** (simple concave polygon → convex fixtures, e.g.
+  Bayazit / Hertel–Mehlhorn), plus polygon **simplification** (Douglas–Peucker), **triangulation**,
+  offset/inset (skin), and sprite-outline extraction (alpha → contour). These FEED the Fixture
+  model (decomposition output = the convex fixtures), the editor (author colliders from sprites),
+  and Destruction (Phase E: runtime decomposition of fracture fragments). Authoring/offline-first
+  (a runtime decompose is opt-in). Out of scope for this model; lands as its own utility workstream
+  (likely with Grimoire/LevelEditor). For now, authors supply convex fixtures directly.
 - **EPA / MPR** → future narrowphase-specialization workstream (curved/high-vertex/per-circumstance).
 - **Per-fixture restitution/friction mixing callbacks, surface velocity, one-way platforms** →
   Phase C (gameplay materials).
