@@ -533,6 +533,13 @@ namespace Arcane
             {
                 return Vec2(m_posX[i], m_posY[i]);
             }
+            // Body angle for slot i (T5: ContactManager ShapesOverlap uses it
+            // so the event overlap test is consistent with the rotation-aware
+            // GenerateContacts path).
+            [[nodiscard]] Real AngleSlot(std::uint32_t i) const noexcept
+            {
+                return m_angle[i];
+            }
             // Build the BodyHandle for slot i (index + its current generation).
             // Used by the ContactManager to fill event payloads.
             [[nodiscard]] BodyHandle HandleOf(std::uint32_t i) const noexcept

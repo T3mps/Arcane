@@ -21,7 +21,8 @@
 #include <Arcane/Physics/Broadphase/SpatialHash.hpp>
 #include <Arcane/Physics/Broadphase/SweepAndPrune.hpp>
 #include <Arcane/Physics/Narrowphase/GeometryKernel.hpp> // AabbOverlap (QueryAABB)
-#include <Arcane/Physics/Narrowphase/Dispatch.hpp>       // CollideShapes (contact gen)
+#include <Arcane/Physics/Narrowphase/Dispatch.hpp>       // CollideShapes (ContactManager, BulletSweep queries)
+#include <Arcane/Physics/Narrowphase/Collide.hpp>        // Collide (T5: rotation-aware fixture-pair contact gen)
 #include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl
 #include <Arcane/Physics/Solver/Baumgarte.hpp>           // Baumgarte oracle impl (A/B)
 #include <Arcane/Physics/Island.hpp>                     // island sleep pass (stage 4)
@@ -514,7 +515,69 @@ namespace Arcane
 
         Aabb2 PhysicsWorld::SlotAabb(std::uint32_t i) const noexcept
         {
-            Transform xf{ Vec2(m_posX[i], m_posY[i]), Real(0) };
+            // T5: body AABB = union of its fixtures' rotation-aware world AABBs.
+            // Each fixture's world transform is composed from the body transform +
+            // the fixture's local transform:
+            //   worldAngle = bodyAngle + fxLocalAngle
+            //   worldPos   = bodyPos + R(bodyAngle) * fxLocalPos
+            // (via GetFixtureWorldPos / GetFixtureWorldAngle).
+            //
+            // The broadphase stays BODY-LEVEL (one proxy per body; per-fixture
+            // proxies are a deferred optimization). The body AABB is the union
+            // over all its fixtures; a body with zero live fixtures falls back
+            // to the legacy single-shape AABB (back-compat for any body that
+            // bypasses AddFixture).
+            //
+            // For a body with no fixture list or an empty fixture list, fall
+            // back to the legacy single-shape path (same as pre-T5 behaviour).
+            if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
+            {
+                const Real bodyAngle = m_angle[i];
+                const Real bc = std::cos(bodyAngle);
+                const Real bs = std::sin(bodyAngle);
+                const Real bodyX = m_posX[i];
+                const Real bodyY = m_posY[i];
+
+                // Sentinel: empty AABB that we expand on first fixture.
+                Aabb2 unionAabb;
+                unionAabb.min = Vec2( Real(1e30f),  Real(1e30f));
+                unionAabb.max = Vec2(-Real(1e30f), -Real(1e30f));
+
+                for (const std::uint32_t fi : m_bodyFixtures[i])
+                {
+                    if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                    {
+                        continue; // dead slot (defensive)
+                    }
+
+                    // Compose body transform + fixture local transform.
+                    const Real lx = m_fxLocalPosX[fi];
+                    const Real ly = m_fxLocalPosY[fi];
+                    const Real worldX = bodyX + bc * lx - bs * ly;
+                    const Real worldY = bodyY + bs * lx + bc * ly;
+                    const Real worldAngle = bodyAngle + m_fxLocalAngle[fi];
+
+                    const Transform xf{ Vec2(worldX, worldY), worldAngle };
+                    const Aabb2 fxAabb = m_fxShape[fi].ComputeAABB(xf);
+
+                    // Expand the union AABB.
+                    unionAabb.min.x = std::min(unionAabb.min.x, fxAabb.min.x);
+                    unionAabb.min.y = std::min(unionAabb.min.y, fxAabb.min.y);
+                    unionAabb.max.x = std::max(unionAabb.max.x, fxAabb.max.x);
+                    unionAabb.max.y = std::max(unionAabb.max.y, fxAabb.max.y);
+                }
+
+                // If we actually expanded the sentinel (at least one live fixture),
+                // return the union; otherwise fall through to the legacy path.
+                if (unionAabb.min.x <= unionAabb.max.x)
+                {
+                    return unionAabb;
+                }
+            }
+
+            // Legacy fallback: single-shape AABB with the body's real angle.
+            // (Also correct for bodies that have fixtures but they all died.)
+            const Transform xf{ Vec2(m_posX[i], m_posY[i]), m_angle[i] };
             return m_shape[i].ComputeAABB(xf);
         }
 
@@ -1187,6 +1250,30 @@ namespace Arcane
             // ALWAYS the dynamic body (Lua lines 377-378); B may be dynamic,
             // kinematic, static, or a tile-span virtual fixture (invMass = 0).
             //
+            // T5 (FIXTURE-PAIR ROTATION-AWARE CONTACT GENERATION):
+            //   For each candidate body-pair, iterate every fixture of bodyA against
+            //   every fixture of bodyB (or the span virtual fixture), and call
+            //   Collide(shapeA, worldXfA, shapeB, worldXfB, specMargin) with the
+            //   COMPOSED real angle (bodyAngle + fixtureLocalAngle). This is the
+            //   sole narrowphase path; the legacy CollideShapes/Dispatch path has
+            //   been REMOVED from this function.
+            //
+            //   Material coefficients come from the two FIXTURES:
+            //     friction    = sqrt(fxA.friction * fxB.friction)
+            //     restitution = max(fxA.restitution, fxB.restitution)
+            //   For tile-span virtual fixtures (no fixture slot) we use the body's
+            //   own friction/restitution as both sides (unchanged from M6).
+            //
+            //   The ContactConstraint still references the two BODY slots (solver
+            //   unchanged). Anchors are consistent-origin (body position as today).
+            //   Compound-COM-correct dynamics (rotation about COM) is DEFERRED.
+            //
+            //   BROADPHASE: stays BODY-LEVEL (one proxy per body). SlotAabb now
+            //   returns the union of the body's fixtures' rotation-aware world AABBs.
+            //
+            //   fixedRotation bodies keep invInertia=0 (already enforced by AddBody
+            //   / RecomputeBodyMass; we do not change integration/solver here).
+            //
             // Index-ordered over dynamic bodies, then the broadphase's SORTED
             // mover pairs -> deterministic. The pool only grows (clear preserves
             // capacity) -> zero steady-state allocation.
@@ -1209,10 +1296,10 @@ namespace Arcane
             // (Step stage 6) is the discrete backup for flagged bodies vs statics.
             //
             // Per-body margin: max(kSkin, |v| * dt). The query AABB pad and the
-            // CollideShapes speculativeMargin both use it (the AABB must be
-            // expanded by AT LEAST the margin so the wall candidate is FOUND
-            // before geometric overlap, and CollideShapes must report the
-            // near-touching contact within that distance).
+            // Collide speculativeMargin both use it (the AABB must be expanded by
+            // AT LEAST the margin so the wall candidate is FOUND before geometric
+            // overlap, and Collide must report the near-touching contact within
+            // that distance).
             const Real moveDt = dt > Real(0) ? dt : Real(0);
             // Threshold for the sqrt skip (Fix 3): if speedSq <= threshSq then
             // speed * moveDt <= kSkin, so margin == kSkin (the floor) regardless.
@@ -1221,6 +1308,24 @@ namespace Arcane
             const Real threshSq = (moveDt > Real(0))
                                       ? (kSkin / moveDt) * (kSkin / moveDt)
                                       : Real(0);
+
+            // ---- helper: world transform for a body's fixture -----------------
+            // Composes (bodyPos, bodyAngle) + (fxLocalPos, fxLocalAngle) into the
+            // fixture's world Transform. The body angle is live (m_angle[bodySlot]).
+            auto FixtureWorldXf = [&](std::uint32_t bodySlot,
+                                       std::uint32_t fi) -> Transform
+            {
+                const Real ba = m_angle[bodySlot];
+                const Real bc = std::cos(ba);
+                const Real bs = std::sin(ba);
+                const Real lx = m_fxLocalPosX[fi];
+                const Real ly = m_fxLocalPosY[fi];
+                return Transform{
+                    Vec2(m_posX[bodySlot] + bc * lx - bs * ly,
+                         m_posY[bodySlot] + bs * lx + bc * ly),
+                    ba + m_fxLocalAngle[fi]
+                };
+            };
 
             // ---- helper: append a manifold as a ContactConstraint -----------
             // A is dynamic (aIdx); bIdx is the slot for a real body or
@@ -1233,8 +1338,13 @@ namespace Arcane
             // anchorB wrong-looking for spans -- currently harmless because
             // invInertiaB==0 zeros the lever arm, but would break if spans ever
             // gained DOF.)
+            //
+            // T5: fricA/fricB and restA/restB now come from the two FIXTURE slots
+            // (passed explicitly). For tile-span virtual fixtures the caller passes
+            // the body-level friction/restitution as both sides (unchanged from M6).
             auto emit = [&](std::uint32_t aIdx, std::uint32_t bIdx, bool bIsBody,
-                            const Vec2& centerB, const Manifold& m)
+                            const Vec2& centerB, const Manifold& m,
+                            Real fricA, Real fricB, Real restA, Real restB)
             {
                 if (m.pointCount <= 0)
                 {
@@ -1250,13 +1360,9 @@ namespace Arcane
                 cc.invInertiaB = bIsBody ? m_invInertia[bIdx] : Real(0);
                 cc.normal      = m.normal;
 
-                // Combined material coefficients. Friction is the geometric mean
-                // (the Lua sqrt(fricA*fricB)); restitution is the max (Box2D v3).
-                const Real fricA = m_fric[aIdx];
-                const Real fricB = bIsBody ? m_fric[bIdx] : fricA;
-                cc.friction = std::sqrt(fricA * fricB);
-                const Real restA = m_rest[aIdx];
-                const Real restB = bIsBody ? m_rest[bIdx] : Real(0);
+                // Combined material coefficients (T5: from the two fixture slots).
+                // Friction: geometric mean sqrt(fA*fB). Restitution: max(rA, rB).
+                cc.friction    = std::sqrt(fricA * fricB);
                 cc.restitution = std::max(restA, restB);
 
                 const Vec2 cA(m_posX[aIdx], m_posY[aIdx]);
@@ -1296,28 +1402,66 @@ namespace Arcane
                                             ? std::sqrt(speedSqA) * moveDt
                                             : kSkin;
 
-                const Transform xfA{ Vec2(m_posX[i], m_posY[i]), Real(0) };
                 const Aabb box = SlotAabb(i);
                 // Query pad: at least the legacy +/-2 broadphase skin, expanded to
                 // the speculative margin so a fast mover's wall candidate is FOUND
-                // before geometric overlap (otherwise CollideShapes never sees it).
+                // before geometric overlap (otherwise Collide never sees it).
                 const Real pad = std::max(Real(2), specMargin);
                 Aabb2 query;
                 query.min = Vec2(box.min.x - pad, box.min.y - pad);
                 query.max = Vec2(box.max.x + pad, box.max.y + pad);
                 StaticCandidates(query, m_genSpans, m_genStatics);
 
-                // tile spans (Aabb2 rects) -> collide dynamic shape vs span-AABB.
+                // Collect body A's fixtures (sorted by slot index for determinism).
+                const std::vector<std::uint32_t>* fxListA = nullptr;
+                static const std::vector<std::uint32_t> kEmptyList{};
+                if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
+                {
+                    fxListA = &m_bodyFixtures[i];
+                }
+
+                // tile spans (Aabb2 rects) -> collide each fixture of A vs span-AABB.
                 for (std::size_t s = 0; s < m_genSpans.size(); ++s)
                 {
                     const Aabb2& span = m_genSpans[s];
-                    const Vec2 c = (span.min + span.max) * Real(0.5);
+                    const Vec2 spanCenter = (span.min + span.max) * Real(0.5);
                     const Vec2 he = (span.max - span.min) * Real(0.5);
                     const Shape spanShape = MakeAabb(he.x, he.y);
-                    const Transform xfB{ c, Real(0) };
-                    const Manifold m =
-                        CollideShapes(m_shape[i], xfA, spanShape, xfB, specMargin);
-                    emit(i, kInvalidSlot, /*bIsBody=*/false, /*centerB=*/c, m);
+                    const Transform xfB{ spanCenter, Real(0) };
+
+                    if (fxListA != nullptr)
+                    {
+                        // T5: iterate fixtures of body A vs the span (fixture-pair).
+                        for (const std::uint32_t fi : *fxListA)
+                        {
+                            if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                            {
+                                continue;
+                            }
+                            if (m_fxSensor[fi] != 0u)
+                            {
+                                continue; // sensor fixture: no constraint
+                            }
+                            const Transform xfA = FixtureWorldXf(i, fi);
+                            const Manifold mfld = Collide(m_fxShape[fi], xfA,
+                                                           spanShape, xfB, specMargin);
+                            // Span has no fixture slot; use body A's fixture material
+                            // vs body A itself (tile spans don't carry material).
+                            emit(i, kInvalidSlot, /*bIsBody=*/false, spanCenter, mfld,
+                                 m_fxFriction[fi], m_fxFriction[fi],
+                                 m_fxRestitution[fi], Real(0));
+                        }
+                    }
+                    else
+                    {
+                        // Legacy fallback: single-shape body A vs span. Uses Collide
+                        // with the body's real angle (T5 rotation fix even on fallback).
+                        const Transform xfA{ Vec2(m_posX[i], m_posY[i]), m_angle[i] };
+                        const Manifold mfld = Collide(m_shape[i], xfA,
+                                                       spanShape, xfB, specMargin);
+                        emit(i, kInvalidSlot, /*bIsBody=*/false, spanCenter, mfld,
+                             m_fric[i], m_fric[i], m_rest[i], Real(0));
+                    }
                 }
 
                 // static bodies (non-sensor).
@@ -1328,11 +1472,88 @@ namespace Arcane
                     {
                         continue;
                     }
-                    const Vec2 posB(m_posX[idx], m_posY[idx]);
-                    const Transform xfB{ posB, Real(0) };
-                    const Manifold m =
-                        CollideShapes(m_shape[i], xfA, m_shape[idx], xfB, specMargin);
-                    emit(i, idx, /*bIsBody=*/true, /*centerB=*/posB, m);
+                    const Vec2 centerB(m_posX[idx], m_posY[idx]);
+
+                    // Collect body B's fixtures.
+                    const std::vector<std::uint32_t>* fxListB = nullptr;
+                    if (idx < m_bodyFixtures.size() && !m_bodyFixtures[idx].empty())
+                    {
+                        fxListB = &m_bodyFixtures[idx];
+                    }
+
+                    if (fxListA != nullptr && fxListB != nullptr)
+                    {
+                        // T5: iterate (fixtureA x fixtureB) pairs.
+                        // Stable order: fxListA is iterated outer, fxListB inner
+                        // (both are the m_bodyFixtures[] order -- consistent with
+                        // AddFixture insertion order, deterministic).
+                        for (const std::uint32_t fiA : *fxListA)
+                        {
+                            if (fiA >= m_fxCount || m_fxGen[fiA] == 0u)
+                            {
+                                continue;
+                            }
+                            if (m_fxSensor[fiA] != 0u)
+                            {
+                                continue;
+                            }
+                            const Transform xfA = FixtureWorldXf(i, fiA);
+
+                            for (const std::uint32_t fiB : *fxListB)
+                            {
+                                if (fiB >= m_fxCount || m_fxGen[fiB] == 0u)
+                                {
+                                    continue;
+                                }
+                                if (m_fxSensor[fiB] != 0u)
+                                {
+                                    continue;
+                                }
+                                const Transform xfB = FixtureWorldXf(idx, fiB);
+                                const Manifold mfld = Collide(m_fxShape[fiA], xfA,
+                                                               m_fxShape[fiB], xfB,
+                                                               specMargin);
+                                emit(i, idx, /*bIsBody=*/true, centerB, mfld,
+                                     m_fxFriction[fiA], m_fxFriction[fiB],
+                                     m_fxRestitution[fiA], m_fxRestitution[fiB]);
+                            }
+                        }
+                    }
+                    else if (fxListA != nullptr)
+                    {
+                        // Body A has fixtures; body B uses legacy single-shape.
+                        const Transform xfB{ centerB, m_angle[idx] };
+                        for (const std::uint32_t fiA : *fxListA)
+                        {
+                            if (fiA >= m_fxCount || m_fxGen[fiA] == 0u)
+                            {
+                                continue;
+                            }
+                            if (m_fxSensor[fiA] != 0u)
+                            {
+                                continue;
+                            }
+                            const Transform xfA = FixtureWorldXf(i, fiA);
+                            const Manifold mfld = Collide(m_fxShape[fiA], xfA,
+                                                           m_shape[idx], xfB,
+                                                           specMargin);
+                            emit(i, idx, /*bIsBody=*/true, centerB, mfld,
+                                 m_fxFriction[fiA], m_fric[idx],
+                                 m_fxRestitution[fiA], m_rest[idx]);
+                        }
+                    }
+                    else
+                    {
+                        // Legacy fallback: single-shape A vs single-shape (or fixture) B.
+                        // Use real angle for both (T5 rotation fix).
+                        const Transform xfA{ Vec2(m_posX[i], m_posY[i]), m_angle[i] };
+                        const Transform xfB{ centerB, m_angle[idx] };
+                        const Manifold mfld = Collide(m_shape[i], xfA,
+                                                       m_shape[idx], xfB,
+                                                       specMargin);
+                        emit(i, idx, /*bIsBody=*/true, centerB, mfld,
+                             m_fric[i], m_fric[idx], m_rest[i], m_rest[idx]);
+                    }
                 }
             }
 
@@ -1363,7 +1584,7 @@ namespace Arcane
                 // bounded by their sum, but using the max keeps it cheap and still
                 // catches a fast mover closing on a slow/resting one), floored at
                 // kSkin. Expand the tight-AABB overlap test by it so a fast pair is
-                // not rejected here before CollideShapes can emit the speculative
+                // not rejected here before Collide can emit the speculative
                 // contact (the solver's s > 0 bias then caps the closing velocity).
                 // Exact sqrt skip (Fix 3): use the faster of the pair; only a fast
                 // pair pays the sqrt (slow pairs collapse to the kSkin floor).
@@ -1409,13 +1630,92 @@ namespace Arcane
                 {
                     continue; // A (dynamic) asleep -> no constraint
                 }
-                const Vec2 posA(m_posX[ia], m_posY[ia]);
-                const Vec2 posB(m_posX[ib], m_posY[ib]);
-                const Transform xfA{ posA, Real(0) };
-                const Transform xfB{ posB, Real(0) };
-                const Manifold m =
-                    CollideShapes(m_shape[ia], xfA, m_shape[ib], xfB, pairMargin);
-                emit(ia, ib, /*bIsBody=*/true, /*centerB=*/posB, m);
+
+                // T5: iterate fixture pairs for both bodies in this mover-mover pair.
+                const std::vector<std::uint32_t>* fxListIA = nullptr;
+                const std::vector<std::uint32_t>* fxListIB = nullptr;
+                if (ia < m_bodyFixtures.size() && !m_bodyFixtures[ia].empty())
+                {
+                    fxListIA = &m_bodyFixtures[ia];
+                }
+                if (ib < m_bodyFixtures.size() && !m_bodyFixtures[ib].empty())
+                {
+                    fxListIB = &m_bodyFixtures[ib];
+                }
+
+                const Vec2 centerB(m_posX[ib], m_posY[ib]);
+
+                if (fxListIA != nullptr && fxListIB != nullptr)
+                {
+                    // Fixture-pair iteration: both bodies have fixture lists.
+                    for (const std::uint32_t fiA : *fxListIA)
+                    {
+                        if (fiA >= m_fxCount || m_fxGen[fiA] == 0u)
+                        {
+                            continue;
+                        }
+                        if (m_fxSensor[fiA] != 0u)
+                        {
+                            continue;
+                        }
+                        const Transform xfA = FixtureWorldXf(ia, fiA);
+
+                        for (const std::uint32_t fiB : *fxListIB)
+                        {
+                            if (fiB >= m_fxCount || m_fxGen[fiB] == 0u)
+                            {
+                                continue;
+                            }
+                            if (m_fxSensor[fiB] != 0u)
+                            {
+                                continue;
+                            }
+                            const Transform xfB = FixtureWorldXf(ib, fiB);
+                            const Manifold mfld = Collide(m_fxShape[fiA], xfA,
+                                                           m_fxShape[fiB], xfB,
+                                                           pairMargin);
+                            emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
+                                 m_fxFriction[fiA], m_fxFriction[fiB],
+                                 m_fxRestitution[fiA], m_fxRestitution[fiB]);
+                        }
+                    }
+                }
+                else if (fxListIA != nullptr)
+                {
+                    // Body IA has fixtures; body IB uses legacy single-shape.
+                    const Transform xfB{ centerB, m_angle[ib] };
+                    for (const std::uint32_t fiA : *fxListIA)
+                    {
+                        if (fiA >= m_fxCount || m_fxGen[fiA] == 0u)
+                        {
+                            continue;
+                        }
+                        if (m_fxSensor[fiA] != 0u)
+                        {
+                            continue;
+                        }
+                        const Transform xfA = FixtureWorldXf(ia, fiA);
+                        const Manifold mfld = Collide(m_fxShape[fiA], xfA,
+                                                       m_shape[ib], xfB,
+                                                       pairMargin);
+                        emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
+                             m_fxFriction[fiA], m_fric[ib],
+                             m_fxRestitution[fiA], m_rest[ib]);
+                    }
+                }
+                else
+                {
+                    // Legacy fallback: single-shape vs single-shape, both with real
+                    // angle. (T5 rotation fix applied to the fallback path too.)
+                    const Vec2 posA(m_posX[ia], m_posY[ia]);
+                    const Transform xfA{ posA, m_angle[ia] };
+                    const Transform xfB{ centerB, m_angle[ib] };
+                    const Manifold mfld = Collide(m_shape[ia], xfA,
+                                                   m_shape[ib], xfB,
+                                                   pairMargin);
+                    emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
+                         m_fric[ia], m_fric[ib], m_rest[ia], m_rest[ib]);
+                }
             }
         }
 

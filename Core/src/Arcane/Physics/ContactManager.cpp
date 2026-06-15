@@ -35,12 +35,12 @@ namespace Arcane
         bool ContactManager::ShapesOverlap(const PhysicsWorld& w,
                                            std::uint32_t a, std::uint32_t b)
         {
-            // Reuse the narrowphase: margin 0 = exact overlap; a contact point
-            // is emitted only for real penetration, matching the Lua
-            // shapesOverlap for the tested configs (see header for the
-            // edge-touch subtlety).
-            Transform xfA{ w.PosSlot(a), Real(0) };
-            Transform xfB{ w.PosSlot(b), Real(0) };
+            // Reuse the narrowphase for overlap checking (event gating / rearm).
+            // T5: use the bodies' real angles so the overlap test is consistent
+            // with the rotation-aware contact generation in GenerateContacts.
+            // margin 0 = exact overlap only (no speculative gap).
+            Transform xfA{ w.PosSlot(a), w.AngleSlot(a) };
+            Transform xfB{ w.PosSlot(b), w.AngleSlot(b) };
             const Manifold m = CollideShapes(w.ShapeSlot(a), xfA,
                                              w.ShapeSlot(b), xfB, Real(0));
             return m.pointCount > 0;

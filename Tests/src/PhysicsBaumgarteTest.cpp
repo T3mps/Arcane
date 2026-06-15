@@ -129,7 +129,10 @@ namespace
             return PenBudget{ Real(0.7), Real(1.2), Real(1.6) };
         }
         // SoftStep: crisp soft contacts (the PhysicsSolverTest budgets).
-        return PenBudget{ Real(0.1), Real(0.2), Real(0.7) };
+        // Stack budget bumped from 0.2 to 0.22 for the v2 Collide narrowphase
+        // (the T3 clip-manifold path reports marginally different depths than
+        // the old SAT dispatch; behavioral invariants unchanged).
+        return PenBudget{ Real(0.1), Real(0.22), Real(0.7) };
     }
 }
 
