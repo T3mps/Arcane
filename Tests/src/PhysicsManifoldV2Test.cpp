@@ -113,65 +113,12 @@ TEST_CASE("physics: ManifoldV2 axis-aligned box-box overlap", "[physics]")
 }
 
 // ====================================================================
-// (b) MakeAabb(10,10) at (0,0) [A] vs MakeAabb(10,10) at (18,0) [B],
-//     B rotated 30 degrees CCW.
-//
-// Hand derivation:
-//   B's core verts in local space: (-10,-10),(+10,-10),(+10,+10),(-10,+10) (CCW).
-//   Under 30-deg rotation (c=cos30=sqrt(3)/2~0.866, s=sin30=0.5):
-//     v0=(-10,-10) -> x=-10c+10s=-10*0.866+10*0.5=-8.66+5=-3.66, y=-10s-10c=-5-8.66=-13.66
-//     v1=(+10,-10) -> x= 10c+10s= 8.66+5=13.66,                   y= 10s-10c= 5-8.66=-3.66
-//     v2=(+10,+10) -> x= 10c-10s= 8.66-5=3.66,                    y= 10s+10c= 5+8.66=13.66
-//     v3=(-10,+10) -> x=-10c-10s=-8.66-5=-13.66,                  y=-10s+10c=-5+8.66=3.66
-//   Translated by (18,0):
-//     v0 = (18-3.66, -13.66) = (14.34, -13.66)
-//     v1 = (18+13.66, -3.66) = (31.66, -3.66)
-//     v2 = (18+3.66,  13.66) = (21.66,  13.66)
-//     v3 = (18-13.66, 3.66)  = ( 4.34,  3.66)
-//
-//   Leftmost extent of B (min x over all verts) = 4.34.
-//   A's right extent = +10.
-//   Overlap along x-axis = 10 - 4.34 = 5.66.
-//   B's faces: we need to test all 8 axes (4 from A, 4 from B).
-//
-//   A's axes (outward normals, CCW box): (0,-1),(+1,0),(0,+1),(-1,0).
-//   B's edge 3->0 axis: direction v0-v3 = (14.34-4.34, -13.66-3.66) =
-//       (10, -17.32), outward normal = (perpendicular, outward) ... complex.
-//
-//   We just assert:
-//   - pointCount >= 1 (some contact)
-//   - normal is approximately (-1, 0) to within 0.5 (it might pick a slightly
-//     different axis depending on which SAT axis wins)
-//   - separation > 0 (real penetration)
-//   These are the invariants that don't require exact knowledge of SAT winner.
-//
-//   More precisely: the minimum-overlap SAT axis is EITHER A's +x face or one
-//   of B's tilted faces. With the rotated box intruding 5.66 on x, B's left
-//   face (v3->v0) has a normal close to (-0.5, -0.866) rotated = the outward
-//   right face of B in world space. The penetration along that B-face normal
-//   can be less than 5.66. For a 30-degree rotated box at distance 18 from
-//   center-to-center with half-width 10 each:
-//   B's closest face is its left face (verts v3,v0 or v0,v3). The outward
-//   normal of B's left face (local: the e3 edge from v3->v0 = local left
-//   face) = local normal (-1,0) rotated 30 deg = (-cos30, -sin30)... wait,
-//   outward of B's left face points AWAY from B's center, in the -x direction
-//   of B's local frame. Rotating (-1,0) by 30 deg: (-cos30, -sin30) = (-0.866, -0.5).
-//   This is NOT the B->A direction (which is roughly (-1,0) from B's center to A).
-//
-//   SAT projection of A onto B's left-face normal (-0.866, -0.5):
-//   A's support along (-0.866, -0.5) = the A vertex with max dot product:
-//   max over A verts of (-0.866*x - 0.5*y) with x in {-10,10}, y in {-10,10}:
-//   best = (-0.866)(-10) + (-0.5)(-10) = 8.66 + 5 = 13.66 (vertex (-10,-10)).
-//   B's support along (-0.866, -0.5) (world): the leftmost vert of B in the
-//   normal direction is v3=(4.34,3.66) which projects to -0.866*4.34-0.5*3.66
-//   = -3.76 - 1.83 = -5.59. Actually we need A's min and B's max along the
-//   normal direction to find overlap. This is getting complex.
-//
-//   Since exact SAT depends on implementation details (which axis wins),
-//   we assert only the invariants: contact found, normal roughly left (-x dominant),
-//   penetration positive.
+// (b1) MakeAabb(10,10) at (0,0) [A] vs MakeAabb(10,10) at (18,0) [B],
+//      B rotated 30 degrees CCW — smoke-check that contact is detected
+//      and penetration is positive. (The exact SAT winner is
+//      implementation-defined; see (b2) for the rotation gate.)
 // ====================================================================
-TEST_CASE("physics: ManifoldV2 rotated box-box overlap", "[physics]")
+TEST_CASE("physics: ManifoldV2 rotated box-box smoke", "[physics]")
 {
     const Shape boxA = MakeAabb(Real(10), Real(10));
     const Shape boxB = MakeAabb(Real(10), Real(10));
@@ -181,18 +128,97 @@ TEST_CASE("physics: ManifoldV2 rotated box-box overlap", "[physics]")
 
     const Manifold m = Collide(boxA, xfA, boxB, xfB);
 
-    // Must detect overlap (separation > 0 or at least one point).
+    // Must detect overlap.
     REQUIRE(m.pointCount >= 1);
 
-    // Normal must be dominated by the -x component: A is left of B.
-    // We allow up to 1e-2 tolerance for the signed x-component check.
-    CHECK(static_cast<double>(m.normal.x) < 0.0); // x-component negative (B->A = left)
+    // Normal x-component negative: A is left of B, B->A direction is leftward.
+    CHECK(static_cast<double>(m.normal.x) < 0.0);
 
     // All contact points must have positive separation (real penetration).
     for (int i = 0; i < m.pointCount; ++i)
     {
         CHECK(static_cast<double>(m.points[i].separation) > 0.0);
     }
+}
+
+// ====================================================================
+// (b2) MakeCircle(2) [A] vs MakeAabb(5,5) [B] rotated 45 degrees CCW.
+//      This is the rotation gate: it pins the contact normal to a
+//      non-axis-aligned direction so a non-rotating implementation fails.
+//
+// Hand derivation:
+//   B = MakeAabb(5,5) at origin, rotation = π/4 (45°).
+//   B's local verts are the four corners of the 5×5 half-extent box.
+//   Under 45° rotation the local +x face (outward normal (1,0) in local
+//   space, face at x=+5) maps to:
+//     outward normal n = (cos45, sin45) = (√2/2, √2/2) ≈ (0.70711, 0.70711)
+//     face vertices in world: (7.0711, 0) and (0, 7.0711)
+//                             (the two rotated corners adjacent to that face)
+//
+//   A = MakeCircle(2) centred at n*6 = (6*0.70711, 6*0.70711) ≈ (4.2426, 4.2426).
+//
+//   GJK (round-shape path, circle core = 1 vert):
+//     Circle core point: (4.2426, 4.2426).
+//     Closest point on B's +x face (edge from (7.071,0) to (0,7.071)):
+//       face tangent direction: (0-7.071, 7.071-0) normalised = (-0.70711, 0.70711)
+//       t = dot((4.2426-7.071, 4.2426-0), (-0.70711, 0.70711))
+//         = (-2.8284)*(-0.70711) + 4.2426*(0.70711)
+//         = 2.0 + 3.0 = 5.0
+//       face length = 10.0, so t=5 places us at the midpoint:
+//         (7.071 + 5*(-0.70711), 0 + 5*0.70711) = (3.5355, 3.5355)
+//     GJK distance = |(4.2426-3.5355, 4.2426-3.5355)| = |(0.7071, 0.7071)| = 1.0
+//
+//   totalR = rA + rB = 2 + 0 = 2.
+//   coreDist = 1.0 < totalR = 2.0 → real penetration.
+//   separation = totalR - coreDist = 2 - 1 = 1.0.
+//
+//   Normal (B→A, from GJK witness B-point to A-point):
+//     (4.2426-3.5355, 4.2426-3.5355) / 1.0 = (0.7071, 0.7071)
+//     = n = (cos45, sin45) ≈ (0.70711, 0.70711)
+//   BOTH components ≈ 0.70711 within 1e-2 — a non-rotating B would give (1,0).
+//
+//   Contact point:
+//     surfaceA = ptA - normal*rA = (4.2426,4.2426) - (0.7071,0.7071)*2
+//              = (4.2426-1.4142, 4.2426-1.4142) = (2.8284, 2.8284)
+//     surfaceB = ptB + normal*rB = (3.5355,3.5355) + (0.7071,0.7071)*0
+//              = (3.5355, 3.5355)
+//     cp = midpoint = ((2.8284+3.5355)/2, (2.8284+3.5355)/2)
+//        = (3.1820, 3.1820)
+//   We assert each component is in (2.5, 4.0) — wide enough to be robust,
+//   tight enough to prove rotation is working.
+// ====================================================================
+TEST_CASE("physics: ManifoldV2 circle vs 45-deg-rotated box (rotation gate)", "[physics]")
+{
+    const Shape circle = MakeCircle(Real(2));
+    const Shape box    = MakeAabb(Real(5), Real(5));
+
+    // n = (cos45, sin45)
+    const double kCos45 = std::sqrt(2.0) / 2.0; // ≈ 0.70711
+
+    const Transform xfA{ Vec2(Real(kCos45 * 6.0), Real(kCos45 * 6.0)), Real(0) };
+    const Transform xfB{ Vec2(Real(0),             Real(0)),             Real(kPiD64 / 4.0) }; // 45 deg
+
+    const Manifold m = Collide(circle, xfA, box, xfB);
+
+    // Exactly 1 contact point (circle round path always gives 1).
+    REQUIRE(m.pointCount == 1);
+
+    // Normal must be ≈ (0.70711, 0.70711) — B→A direction along B's rotated
+    // face normal. BOTH components must be ≈ 0.70711 within 1e-2.
+    // (A non-rotating box would yield normal ≈ (1,0), so asserting ny ≈ 0.707
+    // is the rotation gate.)
+    CHECK(static_cast<double>(m.normal.x) == Approx(kCos45).margin(kTolR));
+    CHECK(static_cast<double>(m.normal.y) == Approx(kCos45).margin(kTolR));
+
+    // Separation ≈ 1.0 (penetration depth = totalR − coreDist = 2 − 1).
+    CHECK(static_cast<double>(m.points[0].separation) == Approx(1.0).margin(kTolR));
+
+    // Contact point components both in (2.5, 4.0) — on B's rotated face,
+    // between the box surface witness (3.535, 3.535) and circle surface (2.828, 2.828).
+    CHECK(static_cast<double>(m.points[0].point.x) > 2.5);
+    CHECK(static_cast<double>(m.points[0].point.x) < 4.0);
+    CHECK(static_cast<double>(m.points[0].point.y) > 2.5);
+    CHECK(static_cast<double>(m.points[0].point.y) < 4.0);
 }
 
 // ====================================================================

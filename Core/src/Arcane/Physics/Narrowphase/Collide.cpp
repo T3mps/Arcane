@@ -535,9 +535,32 @@ namespace Arcane
 
             Vec2 clipBuf2[2];
             float clipT2[2]{};
-            int nc2 = ClipSegment(clipBuf1[0],
-                                   (nc1 >= 2) ? clipBuf1[1] : clipBuf1[0],
+            int nc2;
+            if (nc1 >= 2)
+            {
+                // Normal 2-point case: Sutherland-Hodgman clip of the surviving segment.
+                nc2 = ClipSegment(clipBuf1[0], clipBuf1[1],
                                    tangentN, offset2, clipBuf2, clipT2);
+            }
+            else
+            {
+                // nc1 == 1: only a single point survived clip 1.
+                // Do NOT pass (p, p) to ClipSegment — the zero-length segment
+                // would fire the crossing logic and could emit the same point twice.
+                // Instead, just apply a single half-plane keep/drop on the one point.
+                const Real d = clipBuf1[0].x * tangentN.x
+                             + clipBuf1[0].y * tangentN.y - offset2;
+                if (d <= Real(0))
+                {
+                    clipBuf2[0] = clipBuf1[0];
+                    clipT2[0]   = clipT1[0];
+                    nc2 = 1;
+                }
+                else
+                {
+                    nc2 = 0;
+                }
+            }
 
             if (nc2 == 0) return m;
 
