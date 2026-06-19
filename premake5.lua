@@ -88,6 +88,7 @@ project "Core"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
+    floatingpoint "Strict"
 
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")

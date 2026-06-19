@@ -21,6 +21,12 @@
 //       between dynamic bodies. Their constrained trajectories enter the hash.
 //     * Angle in the hash: floor(angle*1000)*13 per body per step. Dynamics +
 //       joints + CCD all rotate bodies; angle is new state worth gating.
+//     * Freely-rotating polygon box (v2, T9): one Dynamic MakePolygon box
+//       (fixedRotation=false) released at a NONZERO angle above the floor.
+//       Gravity + the v2 rotation-aware narrowphase + compound-COM contact
+//       solver rotate it as it settles flat (the T5 "box settles flat" path).
+//       Its position + angle enter the hash, so the determinism gate now also
+//       covers the rotation-aware contact generation, not just joints/CCD.
 //     * Anti-tunnel sub-assert: proves the CCD path is actually exercised (the
 //       bullet body does NOT pass through the thin wall).
 //     * Per-solver self-consistency: SoftStep and Baumgarte each run-twice
@@ -47,7 +53,8 @@
 //
 // HASH FORMULA (extends P2.6):
 //   h = (h * 31 + floor(x*1000) + floor(y*1000)*7 + floor(angle*1000)*13) % 2^48
-// Hashed bodies: d0, d1, d2, kinematic mover, bullet-kinematic, bullet-dynamic.
+// Hashed bodies: d0, d1, d2, kinematic mover, bullet-kinematic, bullet-dynamic,
+//   rotating polygon box (appended last so the index order stays deterministic).
 // Hash range: steps 1..240.
 //
 // ASSERTS:
@@ -94,6 +101,23 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
 
     // Probe radius for bullet bodies.
     constexpr Real kProbeR = Real(2);
+
+    // Rotating polygon box (v2, T9). A Dynamic AABB shape asserts fixedRotation
+    // (PhysicsWorld.cpp:690), so a freely-rotating box MUST be a MakePolygon.
+    // CCW corners (BL, BR, TR, TL) of a half-extent hw x hh box.
+    static Shape BoxPolygon(Real hw, Real hh)
+    {
+        return MakePolygon({
+            Vec2(-hw, -hh),
+            Vec2( hw, -hh),
+            Vec2( hw,  hh),
+            Vec2(-hw,  hh),
+        });
+    }
+
+    // Initial drop angle for the rotating box (radians). NONZERO so gravity +
+    // the rotation-aware contact solver rotate it toward flat as it settles.
+    constexpr Real kBoxInitAngle = Real(0.6);
 
     // -------------------------------------------------------------------------
     // Hash helper (P3.4 extension of the P2.6 formula).
@@ -250,6 +274,29 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
             w.SetVelocity(bulletDyn, Vec2(kBulletSpeed, Real(0)));
         }
 
+        // ---- Rotating polygon box (v2, T9): angled drop onto the floor ------
+        // A Dynamic MakePolygon box (NOT MakeAabb -- a dynamic AABB asserts
+        // fixedRotation) released at kBoxInitAngle above the static floor
+        // (floor centre y=250, half-height 12 -> top surface ~238). Gravity
+        // pulls it down; the v2 rotation-aware narrowphase + compound-COM
+        // contact solver rotate it toward flat as it settles (T5 behavior).
+        // fixedRotation=false so its angle is free to evolve and is hashed.
+        BodyHandle box;
+        {
+            BodyDef bd;
+            bd.type          = BodyType::Dynamic;
+            bd.position      = Vec2(Real(200), Real(180)); // above the floor
+            bd.shape         = BoxPolygon(Real(10), Real(10));
+            bd.density       = Real(1);
+            bd.restitution   = Real(0.1f);
+            bd.friction      = Real(0.4f);
+            bd.fixedRotation = false; // free to spin/settle
+            box = w.AddBody(bd);
+            // Release at a nonzero tilt so settling rotates it (SetAngle writes
+            // the live m_angle the narrowphase transform reads).
+            w.SetAngle(box, kBoxInitAngle);
+        }
+
         // ---- Joint 1: Revolute — d0 as pendulum from revAnchor --------------
         // d0 starts offset from the anchor; gravity swings it down.
         // The body's angle evolves continuously → angle term is non-trivial.
@@ -335,6 +382,16 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
             {
                 const Vec2 p = w.Position(bulletDyn);
                 const Real a = w.GetAngle(bulletDyn);
+                hash = HashStep(hash, p.x, p.y, a);
+            }
+
+            // Rotating polygon box: position + angle (appended LAST so the
+            // index order stays deterministic). Its angle evolves from the
+            // angled drop + rotation-aware contact solve toward flat -- this
+            // is the v2 narrowphase/compound-COM coverage this body adds.
+            {
+                const Vec2 p = w.Position(box);
+                const Real a = w.GetAngle(box);
                 hash = HashStep(hash, p.x, p.y, a);
             }
         }
