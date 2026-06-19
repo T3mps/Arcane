@@ -87,12 +87,14 @@ namespace Arcane
         // pulling a broadphase header into the narrowphase layer.)
         void AabbToCorners(const Aabb& box, Vec2 out[4]) noexcept;
 
-        // PORT of Manifold.lua worldPoly: expand a poly/aabb shape into
-        // world-space verts under the (translation-only) transform xf. The Lua
-        // polygon branch rotates by `ang`, but this phase is fixedRotation
-        // (ang == 0 => cos=1, sin=0), so we translate only -- byte-identical to
-        // the oracle capture, which passes angle = 0. The AABB branch emits the
-        // four corners in the Lua's order:
+        // LEGACY translate-only poly/aabb world-vert expansion (port of
+        // Manifold.lua worldPoly). NOTE: this helper is NO LONGER on the live
+        // narrowphase path -- the unified rotation-aware Collide builds world
+        // cores via RotateInto (Collide.cpp), so WorldPoly is now UNUSED by the
+        // engine and is a candidate for removal; it is retained only for its
+        // canonical AABB corner order (shared with AabbToCorners / the GJK
+        // ShapeCastPoly span order). The AABB branch emits the four corners in
+        // the Lua's order:
         //   (x-hw,y-hh),(x+hw,y-hh),(x+hw,y+hh),(x-hw,y+hh).
         // `out` must have room for at least kMaxPolyVerts vertices. Returns the
         // vertex count written. The shape MUST be a Polygon or Aabb (callers
@@ -145,16 +147,14 @@ namespace Arcane
         // push-out. Normal pushes the capsule out.
         //
         // NOTE: CapsulePoly is the direct port of Geometry.lua:capsulePoly and
-        // produces a SINGLE push-out Hit for the whole capsule. It is kept for
-        // Layer-A oracle coverage (geometry.json's capsulePoly entries) and as a
-        // potential single-contact fast path. It is INTENTIONALLY NOT the live
-        // manifold path: Specialized.cpp's CollideRoundPolygon faithfully matches
-        // Manifold.lua:roundVsPoly instead -- it decomposes the capsule via
-        // roundView (its two endpoint circles) and calls CirclePoly per endpoint,
-        // which can yield TWO contact points with DIFFERENT per-point normals.
-        // So CapsulePoly and the roundView+CirclePoly path are two algorithms for
-        // the same problem; the divergence is deliberate, matching where each
-        // Lua source decides the algorithm.
+        // produces a SINGLE push-out Hit for the whole capsule. It is still LIVE
+        // as a single-contact depenetration helper (CharacterController; the
+        // Phase-B swept controller). It is INTENTIONALLY NOT the contact-manifold
+        // path: solver contact generation routes ALL shapes through the unified
+        // rotation-aware Collide (Collide.cpp), whose round fast-path can yield
+        // TWO contact points with DIFFERENT per-point normals from a capsule.
+        // So CapsulePoly (single Hit) and Collide's round path (full manifold)
+        // are two algorithms for the same problem, used at different sites.
         [[nodiscard]] Hit CapsulePoly(const Vec2& a, const Vec2& b, Real r,
                                       const Vec2* verts, int n);
 

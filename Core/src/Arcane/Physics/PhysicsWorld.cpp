@@ -1328,8 +1328,10 @@ namespace Arcane
             //   own friction/restitution as both sides (unchanged from M6).
             //
             //   The ContactConstraint still references the two BODY slots (solver
-            //   unchanged). Anchors are consistent-origin (body position as today).
-            //   Compound-COM-correct dynamics (rotation about COM) is DEFERRED.
+            //   unchanged). Anchor bases are each body's WORLD COM (compound-COM
+            //   dynamics: bodies rotate about their COM -- see the `emit` lambda's
+            //   WorldCom() anchors below + SoftStep/Baumgarte FinalizePositions).
+            //   Byte-identical to origin-relative anchors for localCenter==0.
             //
             //   BROADPHASE: stays BODY-LEVEL (one proxy per body). SlotAabb now
             //   returns the union of the body's fixtures' rotation-aware world AABBs.
