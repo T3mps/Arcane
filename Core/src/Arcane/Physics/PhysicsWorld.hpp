@@ -375,8 +375,11 @@ namespace Arcane
             [[nodiscard]] Real GetBodyMass(BodyHandle bh) const noexcept;
 
             // Body center of mass in the body-local frame (weighted centroid of
-            // all fixtures).  STORED but NOT YET USED by integration/solver --
-            // that wiring is T5.  Returns (0,0) for Static/Kinematic.
+            // all fixtures).  Consumed by the compound-COM dynamics: the solver
+            // integrates/rotates the body about its world COM (WorldCom(pos,
+            // angle, localCenter)) and GenerateContacts measures contact anchors
+            // from it.  Returns (0,0) for Static/Kinematic and single-fixture
+            // bodies (for which COM == origin, so the COM path is a no-op).
             [[nodiscard]] Vec2 GetLocalCenter(BodyHandle bh) const noexcept;
 
             // Body rotational inertia about the COM.  0 for Static/Kinematic or
@@ -585,6 +588,16 @@ namespace Arcane
             [[nodiscard]] Real AngleSlot(std::uint32_t i) const noexcept
             {
                 return m_angle[i];
+            }
+            // Local-frame center of mass for slot i (compound-COM dynamics).
+            // The COM in the body's LOCAL frame, aggregated from the body's
+            // fixtures (single-fixture bodies and all static/kinematic bodies
+            // have (0,0)). The solver lifts this to world space via
+            // WorldCom(PosSlot(i), AngleSlot(i), LocalCenterSlot(i)) so a
+            // compound body rotates about its COM, not its origin.
+            [[nodiscard]] Vec2 LocalCenterSlot(std::uint32_t i) const noexcept
+            {
+                return Vec2(m_localCenterX[i], m_localCenterY[i]);
             }
             // Rotation + fixture-aware overlap test between two body SLOTS (T7
             // Part A). Iterates every fixture of body a against every fixture of

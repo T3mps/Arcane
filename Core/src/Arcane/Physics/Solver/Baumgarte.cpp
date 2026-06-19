@@ -97,8 +97,20 @@ namespace Arcane
                 {
                     continue;
                 }
-                const Vec2 p = w.PosSlot(i) + w.VelSlot(i) * dt;
-                const Real a = w.GetAngle(w.HandleOf(i)) + w.AngVelSlot(i) * dt;
+                // Compound-COM dynamics (cross-check oracle parity with
+                // SoftStep::FinalizePositions): integrate the CENTER OF MASS by
+                // the (COM) linear velocity, advance the angle, then reconstruct
+                // the ORIGIN from the new COM + new angle. VelSlot is the COM
+                // linear velocity (Box2D body-origin/COM model). For
+                // localCenter == (0,0) this is byte-identical to the old
+                //   p = PosSlot + VelSlot*dt; a = GetAngle + AngVel*dt.
+                const Vec2 p0 = w.PosSlot(i);
+                const Real a0 = w.GetAngle(w.HandleOf(i));
+                const Vec2 lc = w.LocalCenterSlot(i);
+                const Vec2 c0 = p0 + RotateVec(a0, lc);     // start-of-step world COM
+                const Vec2 c  = c0 + w.VelSlot(i) * dt;     // integrate COM by linear vel
+                const Real a  = a0 + w.AngVelSlot(i) * dt;  // integrate angle
+                const Vec2 p  = c - RotateVec(a, lc);       // origin from new COM + angle
                 w.CommitSlotPosition(i, p, a);
             }
         }

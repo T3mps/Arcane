@@ -1425,7 +1425,27 @@ namespace Arcane
                 cc.friction    = std::sqrt(fricA * fricB);
                 cc.restitution = std::max(restA, restB);
 
-                const Vec2 cA(m_posX[aIdx], m_posY[aIdx]);
+                // Compound-COM dynamics: contact anchors are measured from each
+                // body's world CENTER OF MASS, not its origin, so the solver's
+                // lever arms (rA x n etc.) rotate the body about its COM. For a
+                // body with localCenter == (0,0) -- every single-fixture body
+                // and all static/kinematic bodies -- WorldCom() == origin, so
+                // this is byte-identical to the old origin-based anchors.
+                //   A is always a real dynamic body -> use its world COM.
+                //   B real-body  -> use its world COM (recomputed from bIdx;
+                //                    the passed centerB was the body origin).
+                //   B tile-span  -> no COM/inertia; keep the span's geometric
+                //                    center (centerB) UNCHANGED (invInertiaB==0
+                //                    makes its lever arm irrelevant).
+                const Vec2 cA = WorldCom(Vec2(m_posX[aIdx], m_posY[aIdx]),
+                                         m_angle[aIdx],
+                                         Vec2(m_localCenterX[aIdx],
+                                              m_localCenterY[aIdx]));
+                const Vec2 comB = bIsBody
+                    ? WorldCom(Vec2(m_posX[bIdx], m_posY[bIdx]),
+                               m_angle[bIdx],
+                               Vec2(m_localCenterX[bIdx], m_localCenterY[bIdx]))
+                    : centerB;
 
                 cc.pointCount = m.pointCount;
                 for (int p = 0; p < m.pointCount; ++p)
@@ -1433,7 +1453,7 @@ namespace Arcane
                     const ManifoldPoint& mp = m.points[p];
                     ContactConstraintPoint& cp = cc.points[p];
                     cp.anchorA = mp.point - cA;
-                    cp.anchorB = mp.point - centerB;
+                    cp.anchorB = mp.point - comB;
                     // Manifold separation is POSITIVE for penetration; Box2D's
                     // signed separation is negative for penetration -> negate.
                     cp.baseSeparation = -mp.separation;

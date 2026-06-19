@@ -443,8 +443,24 @@ namespace Arcane
                 {
                     continue;
                 }
-                const Vec2 p = w.PosSlot(i) + m_deltaPos[i];
-                const Real a = w.GetAngle(w.HandleOf(i)) + m_deltaRot[i];
+                // Compound-COM dynamics: integrate the body's CENTER OF MASS
+                // along its inertial path (deltaPos = sum of VelSlot*h is the
+                // COM linear displacement), advance the angle, then reconstruct
+                // the ORIGIN from the new COM + new angle. PosSlot/GetAngle here
+                // are the START-OF-STEP origin/angle (p0/a0): deltaPos/deltaRot
+                // were accumulated across the sub-step loop and committed only
+                // here, so the world position is untouched until this point.
+                //
+                // For localCenter == (0,0) this is byte-identical to the old
+                //   p = PosSlot + deltaPos; a = GetAngle + deltaRot
+                // because c0 == p0, c == p0 + deltaPos, and p == c (R*lc == 0).
+                const Vec2 p0 = w.PosSlot(i);
+                const Real a0 = w.GetAngle(w.HandleOf(i));
+                const Vec2 lc = w.LocalCenterSlot(i);
+                const Vec2 c0 = p0 + RotateVec(a0, lc);   // start-of-step world COM
+                const Vec2 c  = c0 + m_deltaPos[i];       // integrate COM by linear vel
+                const Real a  = a0 + m_deltaRot[i];       // integrate angle
+                const Vec2 p  = c - RotateVec(a, lc);     // origin from new COM + angle
                 w.CommitSlotPosition(i, p, a);
             }
         }

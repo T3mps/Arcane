@@ -21,6 +21,7 @@
 // glm exposes both widths through the same call sites, so the math headers
 // and SoA arrays follow automatically.
 
+#include <cmath>
 #include <cstdint>
 
 #include <glm/vec2.hpp>
@@ -39,6 +40,35 @@ namespace Arcane
         // 2D vector. glm::vec2 is glm::tvec2<float>; if Real switches to
         // double, change this to glm::dvec2 in lockstep (the only edit).
         using Vec2 = glm::vec2;
+
+        // ----------------------------------------------------------------
+        // Rotation helpers (single source of truth)
+        // ----------------------------------------------------------------
+        //
+        // Standard 2D rotation R(a)*v = (c*v.x - s*v.y, s*v.x + c*v.y),
+        // c = cos(a), s = sin(a). This is the SAME convention used by
+        // PhysicsWorld::ComposeFixtureXf / Shape::ComputeAABB / the T7
+        // BuildCore -- keep it the only definition so the compound-COM
+        // dynamics (origin <-> COM round-trip in the solver and the contact
+        // anchor bases) cannot drift from the fixture-transform math.
+        [[nodiscard]] inline Vec2 RotateVec(Real angle, const Vec2& v) noexcept
+        {
+            const Real c = std::cos(angle);
+            const Real s = std::sin(angle);
+            return Vec2(c * v.x - s * v.y, s * v.x + c * v.y);
+        }
+
+        // World-space center of mass of a body given its ORIGIN pose
+        // (pos, angle) and its LOCAL-frame center of mass (localCenter):
+        //   com = pos + R(angle) * localCenter.
+        // For localCenter == (0,0) (every single-fixture body and all
+        // static/kinematic bodies) this reduces to `pos`, so any caller that
+        // swaps an origin for WorldCom(...) is byte-identical there.
+        [[nodiscard]] inline Vec2 WorldCom(const Vec2& pos, Real angle,
+                                           const Vec2& localCenter) noexcept
+        {
+            return pos + RotateVec(angle, localCenter);
+        }
 
         // ----------------------------------------------------------------
         // Body classification (ported from PhysicsWorld.lua body "type")
