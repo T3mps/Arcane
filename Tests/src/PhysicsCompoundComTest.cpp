@@ -13,9 +13,10 @@
 //       origin + a HEAVY fixture offset to the +x side, so the aggregated COM is
 //       clearly toward the heavy side) balanced on a narrow floor pivot under the
 //       LIGHT side, released under gravity, tips TOWARD the heavy side. The heavy
-//       fixture's world Y descends and the body angle rotates clockwise (negative,
-//       since +angle is CCW in this R(a) convention). With the OLD origin-rotation
-//       the gravity torque was taken about the wrong point.
+//       fixture's world Y descends and the body angle INCREASES (positive): with
+//       R(a)*(1,0) = (cos a, sin a) and +Y pointing DOWN, rotating the local +x
+//       heavy side toward +y (down) is a positive angle change. With the OLD
+//       origin-rotation the gravity torque was taken about the wrong point.
 //
 //   (b) Free rotation keeps the COM on its inertial path [CORE PROPERTY]: a
 //       compound body with an off-origin COM, no gravity and no contacts, given an
@@ -200,14 +201,16 @@ namespace
 TEST_CASE("physics-v2 compound-COM (a): heavy side tips down about the COM", "[physics]")
 {
     // Sanity: the aggregated local COM is clearly offset toward the heavy (+x)
-    // fixture. offset=20, densities 1:9 -> comX = 20 * 9/10 = 18.
+    // fixture. offset=20, densities 1:9 -> comX = 20 * 9/10 = 18 (bb.expectedComX).
     {
         WorldDef wd;
         PhysicsWorld w(wd);
         Barbell bb = MakeBarbell(w, Vec2(Real(0), Real(0)));
         const Vec2 lc = w.GetLocalCenter(bb.body);
-        INFO("local COM x = " << static_cast<double>(lc.x));
-        CHECK(static_cast<double>(lc.x) == Approx(18.0).epsilon(0.02));
+        INFO("local COM x = " << static_cast<double>(lc.x)
+             << " expected " << static_cast<double>(bb.expectedComX));
+        CHECK(static_cast<double>(lc.x)
+              == Approx(static_cast<double>(bb.expectedComX)).epsilon(0.02));
         CHECK(static_cast<double>(lc.y) == Approx(0.0).margin(1e-3));
         CHECK(lc.x > Real(5)); // unambiguously off-origin toward the heavy side
     }

@@ -46,11 +46,11 @@ namespace Arcane
         // ----------------------------------------------------------------
         //
         // Standard 2D rotation R(a)*v = (c*v.x - s*v.y, s*v.x + c*v.y),
-        // c = cos(a), s = sin(a). This is the SAME convention used by
-        // PhysicsWorld::ComposeFixtureXf / Shape::ComputeAABB / the T7
-        // BuildCore -- keep it the only definition so the compound-COM
-        // dynamics (origin <-> COM round-trip in the solver and the contact
-        // anchor bases) cannot drift from the fixture-transform math.
+        // c = cos(a), s = sin(a). This is the canonical definition for the
+        // compound-COM math (the origin <-> COM round-trip in the solver and the
+        // contact anchor bases) -- the SAME convention as the still-inlined copies
+        // in PhysicsWorld::ComposeFixtureXf / GetFixtureWorldPos / Shape::ComputeAABB
+        // / the T7 BuildCore (a future cleanup may delegate those onto RotateVec).
         [[nodiscard]] inline Vec2 RotateVec(Real angle, const Vec2& v) noexcept
         {
             const Real c = std::cos(angle);

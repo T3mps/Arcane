@@ -84,9 +84,12 @@ namespace Arcane
 
         void Baumgarte::IntegratePositions(SolverContext& ctx)
         {
-            // pos += dt*v; angle += dt*angVel (awake dynamics only), then refresh
-            // the mover broadphase AABB. Full-dt semi-implicit Euler (the solver
-            // already advanced velocities this Step).
+            // Integrate the COM by dt*v + dt*angVel and reconstruct the origin
+            // (compound-COM: bodies rotate about their COM; see the per-body math
+            // below -- byte-identical to the old pos += dt*v / angle += dt*angVel
+            // for localCenter == 0). Awake dynamics only, then refresh the mover
+            // broadphase AABB. Full-dt semi-implicit Euler (the solver already
+            // advanced velocities this Step).
             PhysicsWorld& w = *ctx.world;
             const Real dt = ctx.dt;
 
