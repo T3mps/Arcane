@@ -1,19 +1,19 @@
 // Gjk.cpp -- 2D GJK distance + closest points, surface distance, and a
 // conservative-advancement shape cast (port of GJK.lua + Cast.lua:advance).
 //
-// See Gjk.hpp for the contract. GjkDistance / ShapeDistance bit-match the
-// captured oracle Arcane/Tests/data/physics_oracle/gjk.json (within f32
-// tolerance). The simplex reduction, witness interpolation, the 64-iteration
-// cap, and the 1e-9 / 1e-18 epsilons are carried over VERBATIM from GJK.lua so
-// the branch selection + convergence reproduce the oracle.
+// See Gjk.hpp for the contract. Ported from GJK.lua (the physics_oracle
+// gjk.json bit-match gate was retired in Physics v2 Phase A; the v2 gate is the
+// analytic PhysicsGjkV2Test). The simplex reduction, witness interpolation, the
+// 64-iteration cap, and the 1e-9 / 1e-18 epsilons are carried over VERBATIM from
+// GJK.lua so the branch selection + convergence match the Lua reference.
 //
 // PRECISION: GJK.lua runs the distance core in Lua doubles. The stored shape
 // geometry here is f32 (PhysicsTypes Real), but to track the f64 distance core
-// (so witnesses/distance bit-match within the 1e-4 oracle margin) the simplex
-// arithmetic is carried in `double` internally -- f32 core verts are widened on
-// read; the GjkResult is narrowed back to Real on return. This keeps the
-// convergence test and the closest-point reductions on the same numeric footing
-// as the Lua oracle.
+// (so witnesses/distance match the Lua within ~1e-4) the simplex arithmetic is
+// carried in `double` internally -- f32 core verts are widened on read; the
+// GjkResult is narrowed back to Real on return. This keeps the convergence test
+// and the closest-point reductions on the same numeric footing as the Lua
+// reference.
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 

@@ -1,10 +1,10 @@
 // GeometryKernel.cpp -- shared pure narrowphase kernels (port of Geometry.lua).
 //
 // See GeometryKernel.hpp for the contract. Every function is a faithful port of
-// the corresponding Geometry.lua kernel and bit-matches the captured oracle
-// Arcane/Tests/data/physics_oracle/geometry.json (within f32 tolerance). The
-// epsilons (1e-9, 1e-12) are carried over verbatim from the Lua so the branch
-// selection matches.
+// the corresponding Geometry.lua kernel (the physics_oracle geometry.json
+// bit-match gate was retired in Physics v2 Phase A; the v2 gate is the analytic
+// Physics tests). The epsilons (1e-9, 1e-12) are carried over verbatim from the
+// Lua so the branch selection matches.
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 

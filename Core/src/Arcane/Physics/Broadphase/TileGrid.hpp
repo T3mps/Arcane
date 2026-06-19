@@ -30,8 +30,8 @@
 // CARTESIAN grid: each solid cell is an axis-aligned square, and a per-row run
 // of consecutive solid cells merges into ONE axis-aligned AABB RECTANGLE. The
 // AABB rect is the faithful Cartesian analog of the Lua parallelogram, and it
-// is directly collidable by the narrowphase (CollidePolygons treats an Aabb as
-// a 4-vert box) and the GJK shape-cast (ShapeCastPoly / ShapePolyDistance over
+// is directly collidable by the narrowphase (the unified Collide treats an Aabb
+// as a 4-vert box) and the GJK shape-cast (ShapeCastPoly / ShapePolyDistance over
 // the 4 corners). So the OUTPUT type is Aabb2 (the broadphase box, same min/max
 // type the narrowphase + world consume), NOT a parallelogram vertex tuple.
 //

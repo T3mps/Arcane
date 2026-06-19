@@ -5,11 +5,12 @@
 //
 // PORT NOTE: a faithful port of Client/src/physics/GJK.lua (the distance core,
 // shapeDistance, shapePolyDistance) plus the conservative-advancement `advance`
-// primitive from Client/src/physics/Cast.lua. The Lua module is the behavioral
-// oracle; GjkDistance / ShapeDistance bit-match the captured fixture
-// Arcane/Tests/data/physics_oracle/gjk.json (within f32 tolerance). The
-// standing NO-EPA decision holds: GJK serves DISTANCE (and the CCD/cast
-// primitive); penetration manifolds stay SAT/specials (Sat.hpp / Specialized).
+// primitive from Client/src/physics/Cast.lua. The Lua module was the behavioral
+// reference; the v2 gate is the analytic PhysicsGjkV2Test (the physics_oracle
+// gjk.json bit-match gate was retired in Physics v2 Phase A). GJK serves
+// DISTANCE + closest features (and the CCD/cast primitive); penetration
+// manifolds are now produced by the unified Collide (Narrowphase/Collide.cpp,
+// GJK->SAT ref-face clip), which replaced the retired Sat/Specialized path.
 //
 // CORES: GJK operates on convex CORES with the radius subtracted afterward
 // (a circle is a 1-vert point of radius r; a capsule is a 2-vert segment of

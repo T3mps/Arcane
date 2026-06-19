@@ -501,29 +501,39 @@ TEST_CASE("physics-invariant: warm-start cache stays bounded as contacts persist
         AddBox(w, Vec2(Real(0), floorTop - h - Real(i * 2 * h)), h);
     }
 
-    // Warm up + settle.
-    for (int i = 0; i < 120; ++i)
-    {
-        w.Step(kStep);
-    }
-
     // The persistent contact set is at most a few constraints per box (box-box +
     // box-floor, up to 2 points each). The warm-start cache is keyed by stable
-    // feature id, so once the scene is at rest the cache size is steady. Bound:
+    // feature id, so while the scene is active the cache size is steady. Bound:
     // generously, a few entries per box. A leak (id churn) would grow it every
     // step.
     const std::size_t boundedCap = static_cast<std::size_t>(kBoxes) * 8u + 16u;
 
-    const std::size_t sizeAfterSettle = w.SolverWarmStartCacheSize();
-    CHECK(sizeAfterSettle <= boundedCap);
+    // Warm up + settle, tracking the PEAK cache size while the stack is still
+    // active. We track the peak rather than snapshot post-settle because Island
+    // sleep freezes a fully-rested stack -> a sleeping body skips GenerateContacts
+    // so the cache legitimately drains to 0 once asleep. The invariant is about
+    // the cache WHILE contacts persist: peak > 0 proves warm-starting is actually
+    // live (guards a regression that silently disabled it -- which the upper bound
+    // alone would not catch); peak <= bound proves it does not grow without bound
+    // (no feature-id churn).
+    std::size_t peakSettle = 0;
+    for (int i = 0; i < 120; ++i)
+    {
+        w.Step(kStep);
+        peakSettle = std::max(peakSettle, w.SolverWarmStartCacheSize());
+    }
+    CHECK(peakSettle > 0u);            // warm-start populated (liveness)
+    CHECK(peakSettle <= boundedCap);   // bounded (no id churn)
 
-    // Step a lot more: the cache must NOT keep growing (no unbounded id churn).
+    // Step a lot more: the cache must NOT keep growing (no unbounded id churn),
+    // tracked over the whole window so a body that re-wakes is still gated.
+    std::size_t peakLater = 0;
     for (int i = 0; i < 300; ++i)
     {
         w.Step(kStep);
+        peakLater = std::max(peakLater, w.SolverWarmStartCacheSize());
     }
-    const std::size_t sizeMuchLater = w.SolverWarmStartCacheSize();
-    CHECK(sizeMuchLater <= boundedCap);
+    CHECK(peakLater <= boundedCap);
     // The active-contact pool is likewise bounded (a few per box).
     CHECK(w.ActiveContactCount() <= boundedCap);
 }

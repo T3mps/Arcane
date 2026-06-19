@@ -3,10 +3,11 @@
 // Pure 2D math kernels for the Arcane physics engine (M6).
 //
 // PORT NOTE: ported from Client/src/physics/Geometry.lua (the coordinate-
-// agnostic kernel). The Lua module is the behavioral oracle; the reference
-// outputs captured by Client/src/tests/physics_oracle_capture/ pin these
-// formulas bit-for-bit (within f32 tolerance). Coordinate convention
-// (matching the Lua source): y-down screen space, no rotation.
+// agnostic kernel). The Lua module was the behavioral reference; the v2 gate is
+// the analytic Physics tests (the physics_oracle bit-match gate was retired in
+// Physics v2 Phase A; the capture program now emits Phase-B feel-reference
+// traces). Coordinate convention (matching the Lua source): y-down screen
+// space, no rotation.
 //
 // PRESENTATION-FREE + C++20-clean: glm + std only. Header-only; functions are
 // constexpr/inline where the math allows. Lives in namespace Arcane::Physics.

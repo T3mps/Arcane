@@ -3,9 +3,9 @@
 // Shared pure geometry kernels for the Arcane 2D physics narrowphase (M6).
 //
 // PORT NOTE: a faithful port of the pure, coordinate-agnostic kernels in
-// Client/src/physics/Geometry.lua. The Lua module is the behavioral oracle;
-// the reference outputs captured by Client/src/tests/physics_oracle_capture/
-// (geometry.json) pin these formulas bit-for-bit (within f32 tolerance).
+// Client/src/physics/Geometry.lua. The Lua module was the behavioral reference;
+// the v2 gate is the analytic Physics tests (the physics_oracle geometry.json
+// bit-match gate was retired in Physics v2 Phase A).
 //
 // Convention (matching the Lua source): y-down screen space, no rotation.
 // Normals point FROM the second/static shape TOWARD the first/queried shape --
@@ -14,10 +14,12 @@
 // normals are resolved against the centroid, so the result is winding-agnostic
 // -- it does NOT depend on whether MakePolygon reordered the verts to CCW).
 //
-// DRY: these kernels are the single source of truth shared by BOTH the
-// poly-path manifold (Manifold.cpp, P1.2 -- its file-local PointInPoly now
-// delegates here) and the round-path manifold (Specialized.cpp, P1.3). The
-// SAT poly-poly axis test lives separately in Sat.hpp (Geometry.polyPoly).
+// DRY: these kernels are the single source of truth for the shared geometry
+// utilities (AabbOverlap, AabbToCorners, ClosestOnSegment, Depenetrate, etc.)
+// consumed by PhysicsWorld/Queries/CharacterController. Narrowphase contact
+// generation itself now lives in the unified Collide (Collide.cpp); the M6-era
+// poly/round/SAT split (Manifold.cpp/Specialized.cpp/Sat.hpp) was retired in
+// Physics v2 Phase A.
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features (this module is also

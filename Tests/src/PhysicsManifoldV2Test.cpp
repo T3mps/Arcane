@@ -10,9 +10,9 @@
 //   (c) MakeCircle(4) at (0,0) vs MakeAabb(5,5) at (8,0) -- 1 overlap contact.
 //   (d) Feature-id stability sweep: same feature pair across 10 positions.
 //
-// Collide is the v2 unified narrowphase entry (Task 3, additive -- not yet
-// wired into PhysicsWorld::GenerateContacts). The old CollidePolygons stays
-// active and the full [physics] suite remains green.
+// Collide is the v2 unified narrowphase entry (Task 3). It is now the SOLE
+// narrowphase: T5 wired it into PhysicsWorld::GenerateContacts and T8 deleted
+// the old CollidePolygons/Sat/Specialized path. The full [physics] suite is green.
 
 #include <array>
 #include <cmath>

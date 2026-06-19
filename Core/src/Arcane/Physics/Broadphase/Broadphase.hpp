@@ -17,7 +17,9 @@
 //     returned broad bucket CANDIDATES (the harness narrowed them afterward);
 //     here SpatialHash narrows + dedups internally so ALL THREE strategies
 //     emit the IDENTICAL set. This is the broadphase equivalence invariant
-//     captured in Arcane/Tests/data/physics_oracle/broadphase.json.
+//     gated by PhysicsBroadphaseTest + the broadphase-strategy-invariance case
+//     in PhysicsInvariantsTest (analytic; the physics_oracle bit-match gate was
+//     retired in Physics v2 Phase A).
 //   * Pairs are emitted with a < b and the output is SORTED lexicographically
 //     by (a, b). Strategy-independent + deterministic -- the Phase-2 solver
 //     needs a fixed contact order. We do NOT leak std::unordered_map iteration
