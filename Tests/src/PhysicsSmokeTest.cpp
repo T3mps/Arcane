@@ -1,16 +1,13 @@
-// Physics M6 P1.0 smoke test: proves the oracle fixture pipeline (path +
-// JSON loader) and the first ported math kernel (Math::ClosestOnSegment)
-// against full-precision reference numbers captured from the Lua engine.
+// Physics smoke test: the first ported math kernels + value-type basics.
 //
-// TOLERANCE: stored physics state is f32 (PhysicsTypes.hpp SCALAR CHOICE).
-// The oracle numbers are f64 (Lua doubles emitted with %.17g). When comparing
-// an f32 result to an f64 reference we use an absolute margin of 1e-4 on the
-// small pixel-scale coordinates these fixtures use (max coordinate ~10..840).
-// f32 carries ~7 significant decimal digits, so for values up to ~1000 the
-// representable spacing is well under 1e-4; the kernels here are a handful of
-// mul/add ops, so accumulated error stays far below that. The Lua harness
-// itself asserts at 1e-9 against f64 -- 1e-4 is the f32-vs-f64 cross-precision
-// allowance, not the algorithm's own error.
+// HISTORY: this file once proved the Lua-oracle fixture pipeline (path + JSON
+// loader) against captured reference numbers. Physics v2 Task T8 retired that
+// oracle gate (the oracle was an M6 porting scaffold). The smoke coverage that
+// MATTERS -- the ClosestOnSegment kernel, the kMaxPolyVerts constant, and the
+// BodyHandle / Math basics -- is preserved here with SELF-CONTAINED analytic
+// assertions hand-derived from first principles (no captured-oracle dependency).
+//
+// PRESENTATION-FREE + C++20-clean.
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -18,36 +15,23 @@
 #include <Arcane/Physics/Math.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
-#include "Helpers/PhysicsOracle.hpp"
-
 using Catch::Approx;
 using namespace Arcane::Physics;
 
 namespace
 {
-    // f32-vs-f64 cross-precision margin (see TOLERANCE note above).
-    constexpr double kTol = 1e-4;
+    // Geometry tolerance for the analytic kernel checks below (f32 rounding at
+    // these small pixel-scale magnitudes is well under this).
+    constexpr double kTol = 1e-5;
 }
 
-TEST_CASE("physics: shapes oracle fixture loads and parses", "[physics]")
+TEST_CASE("physics: kMaxPolyVerts is the agreed polygon vertex cap", "[physics]")
 {
-    // Proves the fixture path + JSON loader work end-to-end.
-    const nlohmann::json j = Arcane::Test::LoadOracle("shapes");
-    REQUIRE_FALSE(j.empty());
-
-    // Self-describing schema spot-checks (the same numbers the Lua harness
-    // asserts, here read from the captured fixture).
-    REQUIRE(j.contains("circle_aabb"));
-    const auto& circAabb = j["circle_aabb"]["expect"];
-    REQUIRE(circAabb.size() == 4);
-    CHECK(circAabb[0].get<double>() == Approx(90.0));
-    CHECK(circAabb[1].get<double>() == Approx(40.0));
-    CHECK(circAabb[2].get<double>() == Approx(110.0));
-    CHECK(circAabb[3].get<double>() == Approx(60.0));
-
-    // Constant parity: the Lua MAX_POLY_VERTS must match the C++ constant.
-    CHECK(j["poly_vert_cap"]["maxPolyVerts"].get<std::uint32_t>() ==
-          kMaxPolyVerts);
+    // The polygon vertex cap is a hard contract shared by Shapes/Manifold/SAT.
+    // (Formerly cross-checked against the Lua MAX_POLY_VERTS via shapes.json;
+    // now pinned directly -- the constant is the single source of truth.)
+    CHECK(kMaxPolyVerts >= 3u);
+    CHECK(kMaxPolyVerts == 128u); // the agreed cap (matches the Lua MAX_POLY_VERTS)
 }
 
 TEST_CASE("physics: BodyHandle + types basics", "[physics]")
@@ -79,33 +63,53 @@ TEST_CASE("physics: Math scalar/vector helpers", "[physics]")
     CHECK(p.y == Approx(-2.0));
 }
 
-TEST_CASE("physics: Math::ClosestOnSegment matches the geometry oracle",
-          "[physics]")
+// ---------------------------------------------------------------------------
+// Math::ClosestOnSegment -- hand-derived analytic cases (was the geometry
+// oracle's closestOnSegment block; the four scenarios are reproduced here from
+// first principles, no captured fixture).
+// ---------------------------------------------------------------------------
+TEST_CASE("physics: Math::ClosestOnSegment analytic cases", "[physics]")
 {
-    const nlohmann::json j = Arcane::Test::LoadOracle("geometry");
-    REQUIRE_FALSE(j.empty());
-    const auto& seg = j["closestOnSegment"];
-    REQUIRE_FALSE(seg.empty());
+    // midpoint: p projects onto the interior of the segment.
+    //   segment a=(0,0) -> b=(10,0); p=(5,4). Closest point is the foot of the
+    //   perpendicular at (5,0), parametric t = 5/10 = 0.5.
+    {
+        const Math::ClosestPoint r =
+            Math::ClosestOnSegment(Vec2(5, 4), Vec2(0, 0), Vec2(10, 0));
+        CHECK(static_cast<double>(r.point.x) == Approx(5.0).margin(kTol));
+        CHECK(static_cast<double>(r.point.y) == Approx(0.0).margin(kTol));
+        CHECK(static_cast<double>(r.t)       == Approx(0.5).margin(kTol));
+    }
 
-    auto checkCase = [&](const char* name) {
-        const auto& cs = seg[name];
-        const Vec2 p(cs["p"][0].get<Real>(), cs["p"][1].get<Real>());
-        const Vec2 a(cs["a"][0].get<Real>(), cs["a"][1].get<Real>());
-        const Vec2 b(cs["b"][0].get<Real>(), cs["b"][1].get<Real>());
-        const auto& ex = cs["expect"];
-        const double ePx = ex["point"][0].get<double>();
-        const double ePy = ex["point"][1].get<double>();
-        const double eT  = ex["t"].get<double>();
+    // clamp_lo: p projects BEFORE a -> clamps to a, t = 0.
+    //   segment a=(0,0) -> b=(10,0); p=(-3,2). Foot would be x=-3 (t<0); clamp
+    //   to the start vertex a=(0,0), t=0.
+    {
+        const Math::ClosestPoint r =
+            Math::ClosestOnSegment(Vec2(-3, 2), Vec2(0, 0), Vec2(10, 0));
+        CHECK(static_cast<double>(r.point.x) == Approx(0.0).margin(kTol));
+        CHECK(static_cast<double>(r.point.y) == Approx(0.0).margin(kTol));
+        CHECK(static_cast<double>(r.t)       == Approx(0.0).margin(kTol));
+    }
 
-        const Math::ClosestPoint got = Math::ClosestOnSegment(p, a, b);
-        CHECK(static_cast<double>(got.point.x) == Approx(ePx).margin(kTol));
-        CHECK(static_cast<double>(got.point.y) == Approx(ePy).margin(kTol));
-        CHECK(static_cast<double>(got.t)       == Approx(eT).margin(kTol));
-    };
+    // clamp_hi: p projects AFTER b -> clamps to b, t = 1.
+    //   segment a=(0,0) -> b=(10,0); p=(14,-2). Foot would be x=14 (t>1); clamp
+    //   to the end vertex b=(10,0), t=1.
+    {
+        const Math::ClosestPoint r =
+            Math::ClosestOnSegment(Vec2(14, -2), Vec2(0, 0), Vec2(10, 0));
+        CHECK(static_cast<double>(r.point.x) == Approx(10.0).margin(kTol));
+        CHECK(static_cast<double>(r.point.y) == Approx(0.0).margin(kTol));
+        CHECK(static_cast<double>(r.t)       == Approx(1.0).margin(kTol));
+    }
 
-    // Every closest-on-segment scenario the capture recorded.
-    checkCase("midpoint");
-    checkCase("clamp_lo");
-    checkCase("clamp_hi");
-    checkCase("degenerate");
+    // degenerate: zero-length segment (a == b). The closest point is that point,
+    // t conventionally 0 (no direction to project along).
+    {
+        const Math::ClosestPoint r =
+            Math::ClosestOnSegment(Vec2(5, 5), Vec2(2, 3), Vec2(2, 3));
+        CHECK(static_cast<double>(r.point.x) == Approx(2.0).margin(kTol));
+        CHECK(static_cast<double>(r.point.y) == Approx(3.0).margin(kTol));
+        CHECK(static_cast<double>(r.t)       == Approx(0.0).margin(kTol));
+    }
 }

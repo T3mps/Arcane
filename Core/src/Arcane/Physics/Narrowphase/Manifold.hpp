@@ -1,26 +1,14 @@
 #pragma once
 
-// Contact manifold generation for convex polygons + AABBs (M6, Task P1.2).
+// Contact manifold types: ManifoldPoint + Manifold.
 //
-// PORT NOTE: a faithful port of the polygon path of Manifold.lua's polyVsPoly
-// (Client/src/physics/Manifold.lua lines 73-114) plus worldPoly's aabb branch.
-// The Lua module is the behavioral oracle; the reference outputs captured by
-// Client/src/tests/physics_oracle_capture/ (manifold.json) pin the result
-// bit-for-bit (within f32 tolerance).
-//
-// ALGORITHM (NOT incident-face clipping): the Lua does NOT clip an incident
-// face. It takes the SAT normal from Geometry.polyPoly and finds contact points
-// as the CONTAINED VERTICES -- verts of A inside B (depth = maxB - vA.n) and
-// verts of B inside A (depth = vB.n - minA) -- keeping the 2 DEEPEST with the
-// Lua's exact iteration order (A's verts first, then B's verts; the `consider`
-// shuffle keeps c1=deepest, c2=second). We reproduce that order so the emitted
-// point SET + order match the oracle. (Box2D-style face clipping would NOT
-// bit-match; we follow the Lua where it decides the algorithm.)
-//
-// SCOPE (P1.2): polygon<->polygon and polygon<->AABB ONLY. Round shapes
-// (circle/capsule) are P1.3. An AABB is treated as a 4-vertex polygon via the
-// worldPoly corner expansion: (x-hw,y-hh),(x+hw,y-hh),(x+hw,y+hh),(x-hw,y+hh).
-// Rotation is identity in this phase (Transform.rotation unused, translate-only).
+// HISTORY: this file once also declared CollidePolygons -- the M6-era
+// kind-dispatched poly/AABB narrowphase ported bit-for-bit from Manifold.lua.
+// Physics v2 (Phase A, Task T3) replaced that path with the unified
+// rotation-aware Narrowphase/Collide.cpp, and T8 strangled the now-dead
+// CollidePolygons (+ its Sat/Specialized/Dispatch siblings). What survives here
+// are the contact-manifold STRUCTS, which are the lingua franca of the
+// narrowphase: Collide(...) RETURNS a Manifold and the Solver consumes one.
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features.
@@ -28,7 +16,6 @@
 #include <cstdint>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
 
 namespace Arcane
 {
@@ -86,28 +73,6 @@ namespace Arcane
             int           pointCount = 0;
             ManifoldPoint points[2]{};
         };
-
-        // Generate the contact manifold between two polygon/AABB shapes under
-        // their (translation-only) transforms. PORT of Manifold.lua polyVsPoly
-        // (the poly path of genPair) + worldPoly. AABB shapes are expanded to
-        // their 4 world corners before SAT.
-        //
-        // keyBase is the per-pair base for the warm-start ids (the Lua genPair
-        // arg): emitted points carry id = keyBase + 1 (deepest) and
-        // keyBase + 2 (second). Defaults to 0 (matching the oracle capture,
-        // which passes keyBase = 0).
-        //
-        // speculativeMargin (MODERNIZATION, kSkin):
-        //   - == 0: bit-match Manifold.lua. Only contacts with depth > 0 are
-        //     emitted (real penetration), exactly as the Lua's `consider`.
-        //   - > 0 : ALSO report a near-touching pair (separation in [-margin, 0))
-        //     when the polygons do not overlap but are within the skin -- a
-        //     single speculative contact so the solver sees it pre-penetration.
-        //     The faithful path is unchanged when margin == 0, so parity holds.
-        [[nodiscard]] Manifold CollidePolygons(const Shape& a, const Transform& xfA,
-                                               const Shape& b, const Transform& xfB,
-                                               Real speculativeMargin = Real(0),
-                                               std::uint32_t keyBase   = 0);
 
     } // namespace Physics
 } // namespace Arcane

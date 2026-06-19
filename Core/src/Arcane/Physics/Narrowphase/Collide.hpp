@@ -6,9 +6,10 @@
 //
 // This is the one rotation-aware narrowphase entry that replaces the old
 // kind-dispatched CollidePolygons / CollideRoundPolygon / GJK-speculative
-// split.  The old paths (CollidePolygons, Specialized.hpp) remain active
-// and untouched; this is an ADDITIVE new entry wired into GenerateContacts
-// only at Task 5.
+// split.  It was introduced additively at Task 3, wired into GenerateContacts
+// at Task 5, and became the SOLE narrowphase path once T7 dropped the last
+// CollideShapes caller.  T8 then strangled the dead old paths entirely
+// (Dispatch/Specialized/Sat and Manifold.cpp's CollidePolygons are gone).
 //
 // ALGORITHM (Box2D v3 b2CollidePolygons lineage):
 //   1. Rotate each shape's unified core verts (Shape::verts) into world space

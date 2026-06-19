@@ -454,11 +454,11 @@ project "ArcaneTests"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
-        -- M6 physics oracle fixtures: copy Tests/data's CONTENTS into the test
-        -- output dir's data/ so tests find data/physics_oracle/*.json by
-        -- relative path. {COPYDIR} copies the directory's contents, so this
-        -- yields .../ArcaneTests/data/physics_oracle/*.json (merges with the
-        -- data/fonts dir the lines above create).
+        -- Test data fixtures: copy Tests/data's CONTENTS into the test output
+        -- dir's data/ so tests find their fixtures by relative path. {COPYDIR}
+        -- copies the directory's contents, merging with the data/fonts dir the
+        -- lines above create. (The M6 physics_oracle fixtures were retired in
+        -- v2 T8; physics_feel_reference/ now holds the Phase-B Lua feel traces.)
         '{COPYDIR} "%{wks.location}/Tests/data" "%{cfg.buildtarget.directory}/data"',
     }
 
