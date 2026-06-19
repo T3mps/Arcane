@@ -14,7 +14,11 @@
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/Narrowphase/Dispatch.hpp>
+// T7: the CollideShapes (Dispatch.hpp) include is GONE -- ShapesOverlap now
+// delegates to PhysicsWorld::SlotsOverlap (rotation + fixture aware), so the
+// old narrowphase router is no longer referenced from this TU. AabbOverlap
+// (the kinematic-vs-static AABB pre-filter) comes from Broadphase.hpp, pulled
+// in transitively via PhysicsWorld.hpp.
 
 namespace Arcane
 {
@@ -35,15 +39,15 @@ namespace Arcane
         bool ContactManager::ShapesOverlap(const PhysicsWorld& w,
                                            std::uint32_t a, std::uint32_t b)
         {
-            // Reuse the narrowphase for overlap checking (event gating / rearm).
-            // T5: use the bodies' real angles so the overlap test is consistent
-            // with the rotation-aware contact generation in GenerateContacts.
-            // margin 0 = exact overlap only (no speculative gap).
-            Transform xfA{ w.PosSlot(a), w.AngleSlot(a) };
-            Transform xfB{ w.PosSlot(b), w.AngleSlot(b) };
-            const Manifold m = CollideShapes(w.ShapeSlot(a), xfA,
-                                             w.ShapeSlot(b), xfB, Real(0));
-            return m.pointCount > 0;
+            // T7 Part A: delegate to the world's rotation + fixture-aware overlap.
+            // The fixture SoA is PRIVATE to PhysicsWorld, so the manager (a
+            // separate class/TU) asks the world rather than reaching into the
+            // arrays. SlotsOverlap iterates fixture pairs with composed world
+            // transforms (real body angle) and tests the unified Collide; it does
+            // NOT skip sensor fixtures (event gating must detect sensor overlaps).
+            // This REPLACES the rotation-blind single-shape CollideShapes path
+            // used in T5 -- the last live caller of CollideShapes in the engine.
+            return w.SlotsOverlap(a, b);
         }
 
         void ContactManager::Emit(PhysicsWorld& w, ContactEvent::Type type,

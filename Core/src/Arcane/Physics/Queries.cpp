@@ -22,7 +22,8 @@
 
 #include <Arcane/Physics/Narrowphase/GeometryKernel.hpp>
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
-#include <Arcane/Physics/Narrowphase/Dispatch.hpp>
+#include <Arcane/Physics/Narrowphase/Collide.hpp>   // T7: unified rotation-aware
+                                                     // narrowphase (OverlapShape).
 
 namespace Arcane
 {
@@ -246,15 +247,50 @@ namespace Arcane
         {
             static const Shape ray = MakeCircle(Real(0)); // zero-radius circle
             const Transform start{ from, Real(0) };
-            const Transform bodyXf{ Vec2(m_posX[idx], m_posY[idx]), Real(0) };
-            // Qualified: the free GJK ShapeCast, not PhysicsWorld::ShapeCast.
-            const ShapeCastResult r =
-                ::Arcane::Physics::ShapeCast(ray, start, delta, m_shape[idx], bodyXf);
-            if (!r.hit)
+
+            // T7 Part B (ROTATION + FIXTURE AWARE): cast the ray vs EACH of the
+            // body's fixtures at its composed world transform (real body angle +
+            // fixture local), keeping the NEAREST t. The free GJK ShapeCast is now
+            // rotation-aware (Part 0: BuildCore honors xf.rotation). A body with
+            // no fixtures falls back to its legacy single shape at the real angle.
+            const Real bodyAngle = m_angle[idx];
+            bool   have = false;
+            Real   bestT = Real(0);
+            auto consider = [&](const Shape& s, const Transform& xf)
             {
-                return std::nullopt;
+                // Qualified: the free GJK ShapeCast, not PhysicsWorld::ShapeCast.
+                const ShapeCastResult r =
+                    ::Arcane::Physics::ShapeCast(ray, start, delta, s, xf);
+                if (r.hit && (!have || r.t < bestT))
+                {
+                    bestT = r.t;
+                    have  = true;
+                }
+            };
+
+            if (idx < m_bodyFixtures.size() && !m_bodyFixtures[idx].empty())
+            {
+                const Vec2 bodyPos(m_posX[idx], m_posY[idx]);
+                for (const std::uint32_t fi : m_bodyFixtures[idx])
+                {
+                    if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                    {
+                        continue;
+                    }
+                    const Transform xf = ComposeFixtureXf(
+                        bodyPos, bodyAngle,
+                        Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                        m_fxLocalAngle[fi]);
+                    consider(m_fxShape[fi], xf);
+                }
             }
-            return r.t;
+            else
+            {
+                const Transform bodyXf{ Vec2(m_posX[idx], m_posY[idx]), bodyAngle };
+                consider(m_shape[idx], bodyXf);
+            }
+
+            return have ? std::optional<Real>(bestT) : std::nullopt;
         }
 
         // --------------------------------------------------------------------
@@ -283,7 +319,7 @@ namespace Arcane
         // --------------------------------------------------------------------
         std::optional<ShapeCastHit> PhysicsWorld::ShapeCast(
             const Shape& shape, const Vec2& pos, const Vec2& delta,
-            const ShapeCastOpts& opts) const
+            const ShapeCastOpts& opts, Real movingAngle) const
         {
             const Real len =
                 std::sqrt(delta.x * delta.x + delta.y * delta.y);
@@ -295,8 +331,14 @@ namespace Arcane
             // Swept AABB for candidate collection (+/-2 pad, ports lines 40-43).
             // +/-2 world-unit skin: broadphase margin for float-error at AABB
             // edges + endpoint-cell overlap (Lua used 0.5-tile slack).
-            const Transform xf0{ pos, Real(0) };
-            const Transform xf1{ Vec2(pos.x + delta.x, pos.y + delta.y), Real(0) };
+            //
+            // T7 Part B/C: the moving shape is carried at `movingAngle` (default 0
+            // keeps every existing caller byte-identical). ComputeAABB is
+            // rotation-aware, so the swept-AABB candidate box already covers the
+            // rotated extent; the conservative-advancement (free GJK ShapeCast)
+            // holds movingAngle fixed during the sweep (translational CCD model).
+            const Transform xf0{ pos, movingAngle };
+            const Transform xf1{ Vec2(pos.x + delta.x, pos.y + delta.y), movingAngle };
             const Aabb2 a = shape.ComputeAABB(xf0);
             const Aabb2 b = shape.ComputeAABB(xf1);
             Aabb2 swept;
@@ -331,6 +373,43 @@ namespace Arcane
                 consider(ShapeCastPoly(shape, xf0, delta, poly, 4), kInvalidBody);
             }
 
+            // T7 Part B (ROTATION + FIXTURE AWARE): cast the moving shape vs each
+            // of an obstacle body's fixtures at its composed world transform (real
+            // body angle + fixture local), keeping the nearest hit per body. A
+            // body with no fixtures falls back to its legacy single shape at the
+            // real angle. The free GJK ShapeCast is rotation-aware via Part 0.
+            auto castVsBody = [&](std::uint32_t idx)
+            {
+                const BodyHandle handle{ idx, m_gen[idx] };
+                const Real bodyAngle = m_angle[idx];
+                if (idx < m_bodyFixtures.size() && !m_bodyFixtures[idx].empty())
+                {
+                    const Vec2 bodyPos(m_posX[idx], m_posY[idx]);
+                    for (const std::uint32_t fi : m_bodyFixtures[idx])
+                    {
+                        if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                        {
+                            continue;
+                        }
+                        const Transform xf = ComposeFixtureXf(
+                            bodyPos, bodyAngle,
+                            Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                            m_fxLocalAngle[fi]);
+                        consider(::Arcane::Physics::ShapeCast(shape, xf0, delta,
+                                                              m_fxShape[fi], xf),
+                                 handle);
+                    }
+                }
+                else
+                {
+                    const Transform bodyXf{ Vec2(m_posX[idx], m_posY[idx]),
+                                            bodyAngle };
+                    consider(::Arcane::Physics::ShapeCast(shape, xf0, delta,
+                                                          m_shape[idx], bodyXf),
+                             handle);
+                }
+            };
+
             // Non-sensor static bodies.
             for (std::size_t i = 0; i < m_scratchStatics.size(); ++i)
             {
@@ -339,10 +418,7 @@ namespace Arcane
                 {
                     continue;
                 }
-                const Transform bodyXf{ Vec2(m_posX[idx], m_posY[idx]), Real(0) };
-                consider(::Arcane::Physics::ShapeCast(shape, xf0, delta,
-                                                      m_shape[idx], bodyXf),
-                         BodyHandle{ idx, m_gen[idx] });
+                castVsBody(idx);
             }
 
             // Optional movers (kinematic/dynamic, non-sensor, not excluded).
@@ -362,10 +438,7 @@ namespace Arcane
                     {
                         continue;
                     }
-                    const Transform bodyXf{ Vec2(m_posX[i], m_posY[i]), Real(0) };
-                    consider(::Arcane::Physics::ShapeCast(shape, xf0, delta,
-                                                          m_shape[i], bodyXf),
-                             BodyHandle{ i, m_gen[i] });
+                    castVsBody(i);
                 }
             }
 
@@ -380,8 +453,16 @@ namespace Arcane
 
         // --------------------------------------------------------------------
         // OverlapShape -- NEW (composed; no direct Lua method). Body handles
-        // whose shape overlaps the query shape at xf, narrowed by CollideShapes
-        // (pointCount > 0). Includes statics + movers; index-ordered.
+        // whose shape overlaps the query shape at xf, narrowed by the unified
+        // rotation-aware Collide (pointCount > 0). Includes statics + movers;
+        // index-ordered.
+        //
+        // T7 Part B (ROTATION + FIXTURE AWARE): each candidate body is tested by
+        // iterating EVERY fixture at its composed world transform (real body angle
+        // + fixture local) through Collide; the body is included if ANY fixture
+        // overlaps the query shape. A body with no fixtures falls back to its
+        // legacy single shape at the real angle. Replaces the rotation-blind
+        // single-shape CollideShapes(angle=0) path.
         // --------------------------------------------------------------------
         int PhysicsWorld::OverlapShape(const Shape& shape, const Transform& xf,
                                        std::vector<BodyHandle>& out) const
@@ -404,10 +485,38 @@ namespace Arcane
                 {
                     continue; // broad reject
                 }
-                const Transform bodyXf{ Vec2(m_posX[i], m_posY[i]), Real(0) };
-                const Manifold m =
-                    CollideShapes(shape, xf, m_shape[i], bodyXf, Real(0));
-                if (m.pointCount > 0)
+
+                const Real bodyAngle = m_angle[i];
+                bool overlaps = false;
+                if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
+                {
+                    const Vec2 bodyPos(m_posX[i], m_posY[i]);
+                    for (const std::uint32_t fi : m_bodyFixtures[i])
+                    {
+                        if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                        {
+                            continue;
+                        }
+                        const Transform fxXf = ComposeFixtureXf(
+                            bodyPos, bodyAngle,
+                            Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                            m_fxLocalAngle[fi]);
+                        if (Collide(shape, xf, m_fxShape[fi], fxXf,
+                                    Real(0)).pointCount > 0)
+                        {
+                            overlaps = true;
+                            break; // ANY fixture overlap includes the body
+                        }
+                    }
+                }
+                else
+                {
+                    const Transform bodyXf{ Vec2(m_posX[i], m_posY[i]), bodyAngle };
+                    overlaps = Collide(shape, xf, m_shape[i], bodyXf,
+                                       Real(0)).pointCount > 0;
+                }
+
+                if (overlaps)
                 {
                     out.push_back(BodyHandle{ i, m_gen[i] });
                 }

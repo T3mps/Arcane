@@ -21,8 +21,7 @@
 #include <Arcane/Physics/Broadphase/SpatialHash.hpp>
 #include <Arcane/Physics/Broadphase/SweepAndPrune.hpp>
 #include <Arcane/Physics/Narrowphase/GeometryKernel.hpp> // AabbOverlap (QueryAABB)
-#include <Arcane/Physics/Narrowphase/Dispatch.hpp>       // CollideShapes (ContactManager, BulletSweep queries)
-#include <Arcane/Physics/Narrowphase/Collide.hpp>        // Collide (T5: rotation-aware fixture-pair contact gen)
+#include <Arcane/Physics/Narrowphase/Collide.hpp>        // Collide (rotation-aware fixture-pair narrowphase: contacts T5, events/overlap T7)
 #include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl
 #include <Arcane/Physics/Solver/Baumgarte.hpp>           // Baumgarte oracle impl (A/B)
 #include <Arcane/Physics/Island.hpp>                     // island sleep pass (stage 4)
@@ -32,23 +31,27 @@ namespace Arcane
 {
     namespace Physics
     {
+        // Compose a fixture's WORLD transform = body transform ∘ fixture local
+        // transform.  SlotAabb, GenerateContacts' FixtureWorldXf lambda,
+        // SlotsOverlap, the fixture-aware queries, and BulletSweep all delegate
+        // here so the rotate+offset formula lives in exactly ONE place. Promoted
+        // from a TU-local static to a static member (T7) so Queries.cpp (a
+        // separate TU) can compose fixture world transforms too.
+        Transform PhysicsWorld::ComposeFixtureXf(Vec2 bodyPos, Real bodyAngle,
+                                                 Vec2 localPos,
+                                                 Real localAngle) noexcept
+        {
+            const Real bc = std::cos(bodyAngle);
+            const Real bs = std::sin(bodyAngle);
+            return Transform{
+                Vec2(bodyPos.x + bc * localPos.x - bs * localPos.y,
+                     bodyPos.y + bs * localPos.x + bc * localPos.y),
+                bodyAngle + localAngle
+            };
+        }
+
         namespace
         {
-            // Compose a fixture's WORLD transform = body transform ∘ fixture local
-            // transform.  Both SlotAabb and the FixtureWorldXf lambda delegate here
-            // so the five-line rotation formula lives in exactly ONE place.
-            static Transform ComposeFixtureXf(Vec2 bodyPos, Real bodyAngle,
-                                              Vec2 localPos, Real localAngle)
-            {
-                const Real bc = std::cos(bodyAngle);
-                const Real bs = std::sin(bodyAngle);
-                return Transform{
-                    Vec2(bodyPos.x + bc * localPos.x - bs * localPos.y,
-                         bodyPos.y + bs * localPos.x + bc * localPos.y),
-                    bodyAngle + localAngle
-                };
-            }
-
             std::unique_ptr<IBroadphase> MakeBroadphase(const WorldDef& def)
             {
                 // PORT + MODERNIZE: the Lua selected by string, defaulting to
@@ -1816,15 +1819,72 @@ namespace Arcane
                 // STATICS ONLY: default ShapeCastOpts (movers = false) casts vs
                 // tile spans + non-sensor static bodies. The bullet body is a
                 // mover, so it is never a self-obstacle here (no exclude needed).
-                const std::optional<ShapeCastHit> hit =
-                    ShapeCast(m_shape[i], prev, delta, ShapeCastOpts{});
-                if (!hit || hit->t >= Real(1))
+                //
+                // T7 Part C (ROTATION + FIXTURE AWARE CCD): sweep EACH of the
+                // bullet's fixtures with the body's REAL angle and the fixture's
+                // local transform, keeping the EARLIEST TOI across all fixtures.
+                // The fixture's start-of-step world pos uses `prev` and the body's
+                // current angle (consistent with the existing positional-sweep
+                // approximation -- the conservative-advancement holds the angle
+                // fixed during the sweep; we use m_angle[i] rather than a per-step
+                // angle history, matching the translational CCD model). A bullet
+                // with no fixtures falls back to the legacy single m_shape at the
+                // body's real angle.
+                const Real bodyAngle = m_angle[i];
+                bool haveHit = false;
+                Real bestT = Real(1);
+
+                const std::vector<std::uint32_t>* fxList = nullptr;
+                if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
+                {
+                    fxList = &m_bodyFixtures[i];
+                }
+
+                if (fxList != nullptr)
+                {
+                    for (const std::uint32_t fi : *fxList)
+                    {
+                        if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                        {
+                            continue;
+                        }
+                        // Fixture start-of-step world pos = prev + R(angle)*local;
+                        // world angle = bodyAngle + fixtureLocalAngle.
+                        const Transform fxStart = ComposeFixtureXf(
+                            prev, bodyAngle,
+                            Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                            m_fxLocalAngle[fi]);
+                        const std::optional<ShapeCastHit> fxHit =
+                            ShapeCast(m_fxShape[fi], fxStart.position, delta,
+                                      ShapeCastOpts{}, fxStart.rotation);
+                        if (fxHit && fxHit->t < bestT)
+                        {
+                            bestT   = fxHit->t;
+                            haveHit = true;
+                        }
+                    }
+                }
+                else
+                {
+                    // Legacy fallback: single m_shape at the body's real angle.
+                    const std::optional<ShapeCastHit> hit =
+                        ShapeCast(m_shape[i], prev, delta, ShapeCastOpts{}, bodyAngle);
+                    if (hit && hit->t < bestT)
+                    {
+                        bestT   = hit->t;
+                        haveHit = true;
+                    }
+                }
+
+                if (!haveHit || bestT >= Real(1))
                 {
                     continue; // clear sweep -> the integrated position stands
                 }
 
-                // Clamp to TOI (a hair short, the Lua's hit.t - 0.001).
-                const Real clamp = std::max(Real(0), hit->t - kBulletEpsilon);
+                // Clamp to the EARLIEST TOI (a hair short, the Lua's hit.t-0.001).
+                // The clamp is applied to the BODY position with the body's delta
+                // (the fixture offsets ride along rigidly with the body).
+                const Real clamp = std::max(Real(0), bestT - kBulletEpsilon);
                 const Vec2 clamped = prev + delta * clamp;
                 m_posX[i] = clamped.x;
                 m_posY[i] = clamped.y;
@@ -1832,6 +1892,102 @@ namespace Arcane
                 // mover (never Static), so the broadphase update always applies.
                 m_moverBroadphase->Update(i, SlotAabb(i));
             }
+        }
+
+        bool PhysicsWorld::SlotsOverlap(std::uint32_t a, std::uint32_t b) const
+        {
+            // T7 Part A: rotation + fixture-aware overlap for the ContactManager
+            // (events / re-arm). Iterate every fixture of body a against every
+            // fixture of body b, compose each fixture's world Transform, and run
+            // the unified rotation-aware Collide; true on the FIRST fixture-pair
+            // with a contact point. Mirrors GenerateContacts' fixture-pair flow
+            // but: (1) does NOT skip sensor fixtures (event gating must detect
+            // sensor overlaps; sensor-ness is applied later in Emit), and (2)
+            // uses speculativeMargin 0 (exact overlap only -- no speculative gap),
+            // matching the old CollideShapes(..., 0) event-overlap semantics.
+            //
+            // A body with NO fixtures falls back to its legacy single shape at the
+            // real body angle (mirrors the GenerateContacts single-shape fallback).
+            const Vec2 posA(m_posX[a], m_posY[a]);
+            const Vec2 posB(m_posX[b], m_posY[b]);
+            const Real angA = m_angle[a];
+            const Real angB = m_angle[b];
+
+            const std::vector<std::uint32_t>* fxA =
+                (a < m_bodyFixtures.size() && !m_bodyFixtures[a].empty())
+                    ? &m_bodyFixtures[a] : nullptr;
+            const std::vector<std::uint32_t>* fxB =
+                (b < m_bodyFixtures.size() && !m_bodyFixtures[b].empty())
+                    ? &m_bodyFixtures[b] : nullptr;
+
+            // Compose the world transform of a single fixture slot for body whose
+            // pos/angle are known.
+            auto fxXf = [&](Vec2 bodyPos, Real bodyAngle,
+                            std::uint32_t fi) -> Transform
+            {
+                return ComposeFixtureXf(
+                    bodyPos, bodyAngle,
+                    Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                    m_fxLocalAngle[fi]);
+            };
+
+            // Resolve each body's (shape, xf) test list into a small fixed-size
+            // walk. Rather than build temporaries, branch on the four fallback
+            // combinations (both-fixtured / a-only / b-only / neither).
+            if (fxA != nullptr && fxB != nullptr)
+            {
+                for (const std::uint32_t fa : *fxA)
+                {
+                    if (fa >= m_fxCount || m_fxGen[fa] == 0u) { continue; }
+                    const Transform xfA = fxXf(posA, angA, fa);
+                    for (const std::uint32_t fb : *fxB)
+                    {
+                        if (fb >= m_fxCount || m_fxGen[fb] == 0u) { continue; }
+                        const Transform xfB = fxXf(posB, angB, fb);
+                        if (Collide(m_fxShape[fa], xfA,
+                                    m_fxShape[fb], xfB, Real(0)).pointCount > 0)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+            if (fxA != nullptr)
+            {
+                const Transform xfB{ posB, angB };
+                for (const std::uint32_t fa : *fxA)
+                {
+                    if (fa >= m_fxCount || m_fxGen[fa] == 0u) { continue; }
+                    const Transform xfA = fxXf(posA, angA, fa);
+                    if (Collide(m_fxShape[fa], xfA,
+                                m_shape[b], xfB, Real(0)).pointCount > 0)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            if (fxB != nullptr)
+            {
+                const Transform xfA{ posA, angA };
+                for (const std::uint32_t fb : *fxB)
+                {
+                    if (fb >= m_fxCount || m_fxGen[fb] == 0u) { continue; }
+                    const Transform xfB = fxXf(posB, angB, fb);
+                    if (Collide(m_shape[a], xfA,
+                                m_fxShape[fb], xfB, Real(0)).pointCount > 0)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            // Neither body has fixtures: legacy single-shape vs single-shape at
+            // the real angles.
+            const Transform xfA{ posA, angA };
+            const Transform xfB{ posB, angB };
+            return Collide(m_shape[a], xfA, m_shape[b], xfB, Real(0)).pointCount > 0;
         }
 
         // ---- pull API for debug draw / inspection (P3.6) -------------------

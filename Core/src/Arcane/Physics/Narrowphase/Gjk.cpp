@@ -473,43 +473,42 @@ namespace Arcane
         Real BuildCore(const Shape& s, const Transform& xf, Vec2* out,
                        int& outCount)
         {
-            const Real x = xf.position.x;
-            const Real y = xf.position.y;
-            switch (s.kind)
+            // ROTATION-AWARE (v2 Task 7, Part 0): the unified core (Shape::verts,
+            // populated in LOCAL untransformed space for ALL kinds by T1) is
+            // rotated by xf.rotation and translated by xf.position. This replaces
+            // the old kind-switch that applied ONLY xf.position (rotation-blind),
+            // which made ShapeDistance / ShapeCast / ShapePolyDistance ignore the
+            // body angle their callers passed. The radius is the core round-
+            // inflation (s.radius for circle/capsule; 0 for aabb/polygon).
+            //
+            // BYTE-IDENTITY at angle 0: with xf.rotation == 0 -> c=1, s=0 -> R is
+            // identity, so out = xf.position + v -- bit-identical to the old
+            // translate-only switch (T1 stores the SAME local core verts the old
+            // switch hard-coded). GJK is also vertex-order-agnostic, so even
+            // where T1's vert order differs the distance result is unchanged.
+            //
+            // Unknown/empty core: if s.verts is empty (a future ShapeKind that
+            // forgot to populate the core) outCount = 0; GjkDistance guards
+            // na/nb <= 0 at entry, so this never runs GJK on garbage.
+            const int n = static_cast<int>(s.verts.size());
+            if (n <= 0)
             {
-            case ShapeKind::Circle:
-                out[0] = Vec2(x, y);
-                outCount = 1;
-                return s.radius;
-            case ShapeKind::Capsule:
-                out[0] = Vec2(x - s.halfLen, y);
-                out[1] = Vec2(x + s.halfLen, y);
-                outCount = 2;
-                return s.radius;
-            case ShapeKind::Aabb:
-                out[0] = Vec2(x - s.halfW, y - s.halfH);
-                out[1] = Vec2(x + s.halfW, y - s.halfH);
-                out[2] = Vec2(x + s.halfW, y + s.halfH);
-                out[3] = Vec2(x - s.halfW, y + s.halfH);
-                outCount = 4;
-                return Real(0);
-            case ShapeKind::Polygon:
-            {
-                const int n = static_cast<int>(s.verts.size());
-                for (int i = 0; i < n; ++i)
-                {
-                    out[i] = Vec2(x + s.verts[i].x, y + s.verts[i].y);
-                }
-                outCount = n;
-                return Real(0);
-            }
-            default:
-                // Unknown shape kind -> empty core; GjkDistance guards na/nb <= 0
-                // at entry so a future ShapeKind won't silently run the Polygon
-                // branch with uninitialized verts.
                 outCount = 0;
-                return Real(0);
+                return s.radius;
             }
+            const Real c = std::cos(xf.rotation);
+            const Real sn = std::sin(xf.rotation);
+            const Real px = xf.position.x;
+            const Real py = xf.position.y;
+            for (int i = 0; i < n; ++i)
+            {
+                const Real lx = s.verts[i].x;
+                const Real ly = s.verts[i].y;
+                out[i] = Vec2(px + c * lx - sn * ly,
+                              py + sn * lx + c * ly);
+            }
+            outCount = n;
+            return s.radius;
         }
 
         namespace

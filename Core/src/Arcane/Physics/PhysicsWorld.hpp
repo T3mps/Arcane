@@ -528,16 +528,26 @@ namespace Arcane
             // conservative-advancement primitive). Returns std::nullopt for a
             // miss or a degenerate (zero-length) delta. The hit's `point` is the
             // shape CENTER at TOI.
+            //
+            // T7 Part B/C: `movingAngle` is the orientation the moving `shape` is
+            // carried at during the sweep (the conservative-advancement holds the
+            // angle fixed -- a TRANSLATIONAL sweep, matching the M6 contract). It
+            // defaults to 0 so every existing caller stays byte-identical; the
+            // BulletSweep (CCD) path passes the bullet fixture's real world angle.
+            // Obstacle bodies are also swept with their fixtures' composed real
+            // world transforms (rotation + fixture aware, T7).
             [[nodiscard]] std::optional<ShapeCastHit>
             ShapeCast(const Shape& shape, const Vec2& pos, const Vec2& delta,
-                      const ShapeCastOpts& opts = {}) const;
+                      const ShapeCastOpts& opts = {},
+                      Real movingAngle = Real(0)) const;
 
             // All live bodies whose shape OVERLAPS `shape` at transform `xf`
             // (NEW -- composed, no direct Lua method). Uses a broadphase
-            // candidate pass narrowed by CollideShapes (pointCount > 0). Includes
-            // statics + movers; self-overlap of the query shape against a body at
-            // the same spot counts. `out` is cleared then filled with handles,
-            // index-ordered -> deterministic. Returns out.size().
+            // candidate pass narrowed by the unified rotation + fixture-aware
+            // Collide (pointCount > 0; T7). Includes statics + movers;
+            // self-overlap of the query shape against a body at the same spot
+            // counts. `out` is cleared then filled with handles, index-ordered ->
+            // deterministic. Returns out.size().
             // NOTE: sensor bodies ARE included; callers wanting non-sensor
             // overlaps must filter via IsSensor() (unlike ShapeCast, which skips
             // sensors).
@@ -576,6 +586,20 @@ namespace Arcane
             {
                 return m_angle[i];
             }
+            // Rotation + fixture-aware overlap test between two body SLOTS (T7
+            // Part A). Iterates every fixture of body a against every fixture of
+            // body b, composing each fixture's world Transform (bodyPos/angle ∘
+            // fixtureLocal) and running the unified rotation-aware Collide; true
+            // on the FIRST fixture-pair with a contact point. Falls back to the
+            // legacy single shape (m_shape, real m_angle) for a body with no
+            // fixtures (mirrors GenerateContacts' fallback). Sensor fixtures are
+            // NOT skipped here -- event gating must detect sensor overlaps
+            // (sensor-ness is applied later in ContactManager::Emit). The fixture
+            // SoA is PRIVATE, so ContactManager (a separate TU) calls THIS rather
+            // than reaching into the arrays. Replaces the rotation-blind
+            // single-shape CollideShapes path that ContactManager used in T5.
+            [[nodiscard]] bool SlotsOverlap(std::uint32_t a,
+                                            std::uint32_t b) const;
             // Build the BodyHandle for slot i (index + its current generation).
             // Used by the ContactManager to fill event payloads.
             [[nodiscard]] BodyHandle HandleOf(std::uint32_t i) const noexcept
@@ -735,6 +759,19 @@ namespace Arcane
             // Raycast's round/poly body tests.
             [[nodiscard]] std::optional<Real>
             RayVsBody(std::uint32_t idx, const Vec2& from, const Vec2& delta) const;
+
+            // Compose a fixture's WORLD transform = body transform ∘ fixture
+            // local transform:
+            //   worldPos   = bodyPos + R(bodyAngle) * localPos
+            //   worldAngle = bodyAngle + localAngle
+            // The single copy of the rotate+offset formula, shared by SlotAabb,
+            // GenerateContacts' FixtureWorldXf lambda, SlotsOverlap (events),
+            // the fixture-aware queries (Queries.cpp), and BulletSweep (CCD).
+            // Static so it can be called wherever the SoA values are in hand.
+            [[nodiscard]] static Transform ComposeFixtureXf(Vec2 bodyPos,
+                                                            Real bodyAngle,
+                                                            Vec2 localPos,
+                                                            Real localAngle) noexcept;
 
             // ---- Fixture SoA (v2 Task 4; additive) ---------------------------
             //

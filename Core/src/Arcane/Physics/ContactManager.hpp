@@ -21,16 +21,20 @@
 //   * PairKey is 64-bit: (uint64(min) << 32) | max. The Lua used a 16-bit
 //     a*0x10000+b key (capped at 65535 bodies); widening to 64-bit lifts that
 //     cap with no behavioral change.
-//   * Overlap reuses the narrowphase: CollideShapes(a, xfA, b, xfB, margin=0)
-//     .pointCount > 0. The Lua had a dedicated boolean shapesOverlap; reusing
-//     CollideShapes is DRY and correct for the tested configs. ONE boundary
-//     subtlety: CollideShapes emits a point only for STRICT penetration
-//     (depth > 0), matching the Lua round-shape test (which is a strict
-//     distance < sumR). For AABB/poly pairs the Lua shapesOverlap used an
-//     INCLUSIVE aabbOverlap (<=), so an EXACT edge-touch (zero penetration)
-//     counts as overlap in the Lua but not here. The P1.8 scenes are
-//     non-degenerate (clear overlap / clear gap), so this never bites; if a
-//     later test needs inclusive edge-touch semantics, port shapesOverlap.
+//   * Overlap reuses the narrowphase via PhysicsWorld::SlotsOverlap (T7):
+//     rotation + FIXTURE aware (iterates every fixture pair at the composed
+//     real-angle world transform through the unified Collide, returning true on
+//     the first contact point; margin=0). The fixture SoA is private to the
+//     world, so the manager delegates rather than reaching in. (Before T7 the
+//     manager called the rotation-blind single-shape CollideShapes(...,0).) The
+//     Lua had a dedicated boolean shapesOverlap; delegating is DRY and keeps the
+//     event overlap test consistent with the rotation-aware GenerateContacts.
+//     ONE boundary subtlety carries over: Collide emits a point only for STRICT
+//     penetration (depth > 0); an EXACT edge-touch (zero penetration) is NOT an
+//     overlap here, whereas the Lua shapesOverlap used an INCLUSIVE aabbOverlap
+//     (<=) for AABB/poly pairs. The tested scenes are non-degenerate (clear
+//     overlap / clear gap), so this never bites; port shapesOverlap if a later
+//     test needs inclusive edge-touch semantics.
 //   * DETERMINISM: begin/stay events come from the broadphase's SORTED pairs +
 //     index-ordered statics (already deterministic). The END events iterate the
 //     pairs map (unordered_map -> nondeterministic order), so we COLLECT the
@@ -145,7 +149,10 @@ namespace Arcane
                        static_cast<std::uint64_t>(b);
             }
 
-            // True iff slots a,b overlap NOW (CollideShapes pointCount>0).
+            // True iff slots a,b overlap NOW. Delegates to
+            // PhysicsWorld::SlotsOverlap (T7: rotation + fixture aware,
+            // pointCount>0). Sensor fixtures are NOT skipped (event gating must
+            // see sensor overlaps).
             [[nodiscard]] static bool ShapesOverlap(const PhysicsWorld& w,
                                                     std::uint32_t a,
                                                     std::uint32_t b);
