@@ -1908,6 +1908,16 @@ namespace Arcane
             //
             // A body with NO fixtures falls back to its legacy single shape at the
             // real body angle (mirrors the GenerateContacts single-shape fallback).
+            //
+            // The per-iteration `m_fxGen[fi] == 0u` guard below is DEFENSIVE ONLY:
+            // DropFixture swap-pops dead slots out of m_bodyFixtures, so a
+            // non-empty-but-all-dead fixture list is not normally reachable. The
+            // legacy single-shape fallback here applies only to the genuinely
+            // fixtureless case (fxA/fxB == nullptr). This intentionally diverges
+            // from SlotAabb, which ALSO falls back to the single shape when a
+            // body's fixture list is non-empty but every slot is dead -- harmless
+            // because that state is unreachable in practice (documented so the
+            // divergence reads as intentional, not an oversight).
             const Vec2 posA(m_posX[a], m_posY[a]);
             const Vec2 posB(m_posX[b], m_posY[b]);
             const Real angA = m_angle[a];

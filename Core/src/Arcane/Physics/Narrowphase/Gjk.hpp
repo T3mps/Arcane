@@ -203,8 +203,11 @@ namespace Arcane
 
         // ----------------------------------------------------------------
         // BuildCore: PORT of GJK.lua:buildCore. Writes the convex core verts of
-        // `s` at world transform `xf` (translation-only) into `out` and returns
-        // the core RADIUS (circle/capsule -> s.radius; aabb/polygon -> 0).
+        // `s` at world transform `xf` (ROTATION + translation: each local core
+        // vert is rotated by xf.rotation, then offset by xf.position -- T7 made
+        // this rotation-aware so ShapeDistance/ShapeCast honor body angle) into
+        // `out` and returns the core RADIUS (circle/capsule -> s.radius;
+        // aabb/polygon -> 0).
         // Returns the vertex count via `outCount`. `out` must have room for at
         // least kMaxPolyVerts vertices.
         // ----------------------------------------------------------------

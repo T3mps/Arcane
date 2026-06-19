@@ -316,6 +316,14 @@ namespace Arcane
         // via the P1.4 GJK conservative-advancement primitive (ShapeCastPoly for
         // spans, ShapeCast for body shapes). Keeps the NEAREST t. The hit point
         // is the shape CENTER at TOI.
+        //
+        // T7: rotation + fixture aware. `movingAngle` orients the swept shape;
+        // each obstacle body is cast against EVERY one of its fixtures at the
+        // composed world transform (fixtureless bodies fall back to the single
+        // shape at the real body angle). SENSOR GATING IS BODY-LEVEL ONLY
+        // (m_sensor[idx]); per-fixture m_fxSensor is intentionally NOT consulted
+        // by this query this milestone (consistent with the M6 body-level sensor
+        // model) -- a fixture on a non-sensor body still blocks the cast.
         // --------------------------------------------------------------------
         std::optional<ShapeCastHit> PhysicsWorld::ShapeCast(
             const Shape& shape, const Vec2& pos, const Vec2& delta,
@@ -462,7 +470,9 @@ namespace Arcane
         // + fixture local) through Collide; the body is included if ANY fixture
         // overlaps the query shape. A body with no fixtures falls back to its
         // legacy single shape at the real angle. Replaces the rotation-blind
-        // single-shape CollideShapes(angle=0) path.
+        // single-shape CollideShapes(angle=0) path. Per-fixture m_fxSensor is NOT
+        // consulted here (sensor-ness is a body-level concept for queries this
+        // milestone; callers filter sensor BODIES via IsSensor()).
         // --------------------------------------------------------------------
         int PhysicsWorld::OverlapShape(const Shape& shape, const Transform& xf,
                                        std::vector<BodyHandle>& out) const
