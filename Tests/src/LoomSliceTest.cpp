@@ -61,7 +61,7 @@ namespace
         cl->clearTextureFloat(canvas->Texture(), nvrhi::AllSubresources,
                               nvrhi::Color(0, 0, 0, 1));
         batcher->Begin(cl, canvas->Framebuffer(), canvas->Width(), canvas->Height());
-        rt.SetRenderContext(batcher.get(), glm::vec2(0.0f));
+        rt.SetRenderContext(batcher.get());
         rt.Loop().SubmitRender();   // plugin's RenderSubmissionSystem -> batcher
         batcher->End();
         cl->close();

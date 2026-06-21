@@ -248,7 +248,9 @@ int main(int argc, char** argv)
 
             // Set the render context IN Arcane.dll so TypeID<RenderContext2D> resolves
             // in the correct module; then drive the plugin's RenderSubmissionSystem.
-            runtime.SetRenderContext(batcher.get(), glm::vec2(0.0f, 0.0f));
+            // Loom stays camera-agnostic: SetRenderContext writes the STORED camera the
+            // plugin drives via Runtime::SetCamera (default identity if it never does).
+            runtime.SetRenderContext(batcher.get());
             runtime.Loop().SubmitRender();
 
             batcher->End();

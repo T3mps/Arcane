@@ -53,7 +53,15 @@ namespace Arcane::Sandbox
         // 3. Run the target builder -- it repopulates entities and re-sets SceneRoot.
         scenes[m_sceneIndex].build(reg);
 
-        // 4. Publish the new index for the SceneControl side channel.
+        // 4. Default the camera to the identity transform (offset (0,0), zoom 1). The
+        //    scenes are authored directly in canvas-pixel space (world unit == canvas px,
+        //    floors low on a 1280x720 canvas), so the identity already frames them on
+        //    screen -- the same framing the smoke test relied on pre-camera. Pan/zoom
+        //    INPUT (mouse drag + wheel) is Task 7; this task just makes the camera
+        //    pipeline live + correct so a nonzero camera moves sprites + overlay together.
+        m_camera = Camera{};
+
+        // 5. Publish the new index for the SceneControl side channel.
         PublishControl(reg);
     }
 

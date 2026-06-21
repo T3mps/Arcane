@@ -56,25 +56,29 @@ namespace Arcane
 
         // ---- helpers --------------------------------------------------------
 
-        // Apply camera offset to a world-space position -> canvas position.
+        // Apply the camera to a world-space position -> canvas position.
+        // CANONICAL transform (matches RenderSubmissionSystem +
+        // Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.
         inline glm::vec2 ToScreen(const Physics::Vec2& wpos,
-                                  const glm::vec2& offset)
+                                  const glm::vec2& offset,
+                                  float zoom)
         {
-            return glm::vec2(static_cast<float>(wpos.x) + offset.x,
-                             static_cast<float>(wpos.y) + offset.y);
+            return glm::vec2(static_cast<float>(wpos.x) * zoom + offset.x,
+                             static_cast<float>(wpos.y) * zoom + offset.y);
         }
 
         // Draw an AABB outline using four lines.
         inline void DrawAabbOutline(Batcher2D& b,
                                     const Physics::Aabb& aabb,
                                     const glm::vec2& off,
+                                    float zoom,
                                     float thickness,
                                     const glm::vec4& color)
         {
             const glm::vec2 mn = glm::vec2(static_cast<float>(aabb.min.x),
-                                           static_cast<float>(aabb.min.y)) + off;
+                                           static_cast<float>(aabb.min.y)) * zoom + off;
             const glm::vec2 mx = glm::vec2(static_cast<float>(aabb.max.x),
-                                           static_cast<float>(aabb.max.y)) + off;
+                                           static_cast<float>(aabb.max.y)) * zoom + off;
             const glm::vec2 bl = glm::vec2(mn.x, mx.y);
             const glm::vec2 tr = glm::vec2(mx.x, mn.y);
 
@@ -105,6 +109,7 @@ namespace Arcane
         using namespace Physics;
 
         const glm::vec2& off     = opts.cameraOffset;
+        const float      zoom    = opts.zoom;
         const float      thick   = opts.lineThickness;
         const std::uint32_t n    = world.Count();
 
@@ -119,7 +124,7 @@ namespace Arcane
             const BodyType  btype  = world.TypeSlot(i);
             const bool      sensor = world.SensorSlot(i);
             const bool      awake  = world.AwakeSlot(i);
-            const glm::vec2 spos   = ToScreen(wpos, off);
+            const glm::vec2 spos   = ToScreen(wpos, off, zoom);
 
             // ---- color selection (port of PhysicsDebug.lua lines 29-34) ----
             glm::vec4 col;
@@ -161,7 +166,7 @@ namespace Arcane
                     // Batcher2D::Circle is a filled SDF circle -- acceptable for
                     // debug; the filled disc at low alpha still reads as an
                     // outline at debug scale.
-                    batcher.Circle(spos, static_cast<float>(s.radius), col);
+                    batcher.Circle(spos, static_cast<float>(s.radius) * zoom, col);
                     break;
                 }
 
@@ -170,8 +175,8 @@ namespace Arcane
                     // Lua: two end circles + two side lines.
                     // Capsule: segment (-halfLen,0)-(+halfLen,0) inflated by radius.
                     // Capsule axis is always horizontal (fixedRotation world -- see Shapes.hpp); body angle intentionally not applied.
-                    const float hl = static_cast<float>(s.halfLen);
-                    const float r  = static_cast<float>(s.radius);
+                    const float hl = static_cast<float>(s.halfLen) * zoom;
+                    const float r  = static_cast<float>(s.radius)  * zoom;
                     const glm::vec2 left (spos.x - hl, spos.y);
                     const glm::vec2 right(spos.x + hl, spos.y);
                     batcher.Circle(left,  r, col);
@@ -189,8 +194,8 @@ namespace Arcane
                 {
                     // Lua: lg.rectangle("line", x-hw, y-hh, hw*2, hh*2)
                     // Four lines forming the box outline.
-                    const float hw = static_cast<float>(s.halfW);
-                    const float hh = static_cast<float>(s.halfH);
+                    const float hw = static_cast<float>(s.halfW) * zoom;
+                    const float hh = static_cast<float>(s.halfH) * zoom;
                     const glm::vec2 tl(spos.x - hw, spos.y - hh);
                     const glm::vec2 tr(spos.x + hw, spos.y - hh);
                     const glm::vec2 br(spos.x + hw, spos.y + hh);
@@ -214,12 +219,15 @@ namespace Arcane
                     {
                         const Vec2& va = s.verts[e];
                         const Vec2& vb = s.verts[(e + 1) % vc];
+                        // Rotate the local vert, then scale by zoom (rotation +
+                        // uniform scale commute) so the polygon matches the
+                        // world*zoom+offset transform of spos.
                         const glm::vec2 a = spos + Rotate2D(
                             glm::vec2(static_cast<float>(va.x),
-                                      static_cast<float>(va.y)), angle);
+                                      static_cast<float>(va.y)), angle) * zoom;
                         const glm::vec2 b2 = spos + Rotate2D(
                             glm::vec2(static_cast<float>(vb.x),
-                                      static_cast<float>(vb.y)), angle);
+                                      static_cast<float>(vb.y)), angle) * zoom;
                         batcher.Line(a, b2, thick, col);
                     }
                     break;
@@ -229,7 +237,7 @@ namespace Arcane
             // ---- optional AABB outline (opts.drawAabbs) --------------------
             if (opts.drawAabbs)
             {
-                DrawAabbOutline(batcher, world.SlotAabb(i), off, thick, kColAabb);
+                DrawAabbOutline(batcher, world.SlotAabb(i), off, zoom, thick, kColAabb);
             }
         }
 
@@ -238,8 +246,8 @@ namespace Arcane
         {
             world.ForEachContact([&](std::uint32_t a, std::uint32_t b)
             {
-                const glm::vec2 pa = ToScreen(world.PosSlot(a), off);
-                const glm::vec2 pb = ToScreen(world.PosSlot(b), off);
+                const glm::vec2 pa = ToScreen(world.PosSlot(a), off, zoom);
+                const glm::vec2 pb = ToScreen(world.PosSlot(b), off, zoom);
                 batcher.Line(pa, pb, thick, kColContact);
             });
         }

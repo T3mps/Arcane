@@ -34,10 +34,14 @@ namespace Arcane
     // Options for DrawPhysicsDebug.
     struct PhysicsDebugDrawOptions
     {
-        // World-to-canvas offset (world unit == canvas pixel).  Add this to
-        // every world position before submitting to the batcher (mirrors the
-        // camera offset used by RenderContext2D / the Lua camera:apply()).
-        glm::vec2 cameraOffset{ 0.0f, 0.0f };
+        // Camera transform applied to every emitted point + length: screen =
+        // world * zoom + offset.  This is the CANONICAL form shared with
+        // RenderContext2D / RenderSubmissionSystem / Sandbox::Camera::WorldToScreen,
+        // so the overlay lines up with the sprites under pan + zoom.  Defaults
+        // (offset (0,0), zoom 1) are the identity transform -- every existing
+        // caller that does not set a camera is unchanged.
+        glm::vec2 cameraOffset{ 0.0f, 0.0f };  // screen-space translation (canvas px)
+        float     zoom = 1.0f;                  // world->screen scale (1 == 1:1)
 
         // Thickness (canvas pixels) for Line primitives.
         float lineThickness = 1.0f;

@@ -19,8 +19,13 @@ namespace Arcane
 
     struct RenderContext2D
     {
+        // Camera transform applied by RenderSubmissionSystem AND DrawPhysicsDebug so
+        // sprites + the physics-debug overlay pan/zoom together. CANONICAL form
+        // (matches Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.
+        // Defaults (offset (0,0), zoom 1) are the identity transform.
         class Batcher2D* batcher = nullptr;   // set by the host between Begin/End
-        glm::vec2        cameraOffset{0.0f, 0.0f};  // world->screen; world unit == canvas px
+        glm::vec2        cameraOffset{0.0f, 0.0f};  // screen-space translation (canvas px)
+        float            zoom = 1.0f;               // world->screen scale (1 == 1:1)
     };
 
     struct TextureTable

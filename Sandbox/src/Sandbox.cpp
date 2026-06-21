@@ -138,7 +138,14 @@ extern "C"
 
     GAME_API void GamePlugin_Update(double dt, double alpha)
     {
-        g_app.Update(dt, alpha);   // no-op in Task 4
+        g_app.Update(dt, alpha);
+
+        // Push the plugin-owned camera to the engine BEFORE render: SetRenderContext
+        // (called by the host after this Update phase) writes it into RenderContext2D,
+        // so RenderSubmissionSystem + DrawPhysicsDebug apply the SAME world*zoom+offset
+        // transform (sprites + debug overlay pan/zoom together). Loom stays camera-agnostic.
+        const Arcane::Sandbox::Camera& cam = g_app.Cam();
+        g_ctx->engine->SetCamera(cam.offset, cam.zoom);
     }
 
     // ABI v2: the host calls this between ImGuiLayer BeginFrame and Render. Task 4 draws

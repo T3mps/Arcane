@@ -25,6 +25,8 @@
 // scheduler as RenderSubmissionSystem (registered AFTER it, so the overlay draws on top),
 // which is exactly how the render phase is driven -- no bespoke render path.
 
+#include "Camera.hpp"                       // the sandbox 2D pan + zoom view
+
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>   // PhysicsResource (owns the PhysicsWorld)
 #include <Arcane/Scene/SceneResources.hpp>  // RenderContext2D (holds the live batcher)
@@ -75,7 +77,8 @@ namespace Arcane::Sandbox
             if (!phys || !phys->world) return;
 
             PhysicsDebugDrawOptions opts;
-            opts.cameraOffset = ctx->cameraOffset;
+            opts.cameraOffset = ctx->cameraOffset;   // same camera as the sprites...
+            opts.zoom         = ctx->zoom;            // ...so the overlay lines up under pan + zoom.
             opts.drawContacts = true;
             DrawPhysicsDebug(*phys->world, *ctx->batcher, opts);
         }
@@ -111,6 +114,13 @@ namespace Arcane::Sandbox
 
         std::size_t CurrentScene() const noexcept { return m_sceneIndex; }
 
+        // The sandbox 2D camera (pan + zoom). The plugin pushes it to the engine each
+        // frame via Runtime::SetCamera so RenderSubmissionSystem + DrawPhysicsDebug
+        // apply the SAME transform (sprites + overlay move together). Task 6 sets a
+        // sensible default (center the scene, zoom 1); pan/zoom INPUT is Task 7.
+        const Camera& Cam() const noexcept { return m_camera; }
+        Camera&       Cam()       noexcept { return m_camera; }
+
     private:
         // Tear the registry down to bare resources + mint a fresh PhysicsResource, then run
         // the scene `index` builder. Shared by BuildInitialScene/SetScene/Reset.
@@ -122,5 +132,6 @@ namespace Arcane::Sandbox
 
         std::size_t m_sceneIndex = 0;
         float       m_gravityY   = 0.0f;
+        Camera      m_camera{};      // default identity; configured in RebuildScene
     };
 }

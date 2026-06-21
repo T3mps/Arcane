@@ -23,6 +23,12 @@ namespace Arcane
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
         InputSnapshot                               input{};   // latest host-supplied snapshot; plugins read via Input()
 
+        // 2D camera the plugin drives (SetCamera) and the render bridge reads
+        // (SetRenderContext writes it into RenderContext2D). Defaults to the
+        // identity transform (offset (0,0), zoom 1).
+        glm::vec2                                   cameraOffset{0.0f, 0.0f};
+        float                                       cameraZoom = 1.0f;
+
         // ImGui cross-DLL handoff (v2): the host's context + allocators, forwarded
         // into the plugin's EngineContext by PluginHost. All null until the host
         // calls SetImGui (and in headless hosts that never create an ImGuiLayer).
@@ -74,11 +80,22 @@ namespace Arcane
     void* Runtime::ImGuiFree()     const noexcept { return m_impl->imguiFree; }
     void* Runtime::ImGuiUserData() const noexcept { return m_impl->imguiUserData; }
 
-    void Runtime::SetRenderContext(Batcher2D* batcher, glm::vec2 cameraOffset)
+    void Runtime::SetCamera(glm::vec2 offset, float zoom) noexcept
+    {
+        m_impl->cameraOffset = offset;
+        m_impl->cameraZoom   = zoom;
+    }
+    glm::vec2 Runtime::CameraOffset() const noexcept { return m_impl->cameraOffset; }
+    float     Runtime::CameraZoom()   const noexcept { return m_impl->cameraZoom; }
+
+    void Runtime::SetRenderContext(Batcher2D* batcher)
     {
         // SetResource<RenderContext2D> runs IN Arcane.dll so TypeID<RenderContext2D>
         // resolves here against the shared context; the host never touches a scene TypeID.
-        m_impl->registry->SetResource<RenderContext2D>(RenderContext2D{batcher, cameraOffset});
+        // The camera comes from the STORED plugin camera (SetCamera) -- the host is
+        // camera-agnostic. Defaults (offset (0,0), zoom 1) are the identity transform.
+        m_impl->registry->SetResource<RenderContext2D>(
+            RenderContext2D{batcher, m_impl->cameraOffset, m_impl->cameraZoom});
     }
 
     std::vector<std::byte> Runtime::SnapshotRegistry() const

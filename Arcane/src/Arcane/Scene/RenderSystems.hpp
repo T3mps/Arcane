@@ -39,12 +39,16 @@ namespace Arcane
                 const glm::vec2 worldPos(m[2].x, m[2].y);
                 const glm::vec2 worldScale(glm::length(glm::vec2(m[0])),
                                            glm::length(glm::vec2(m[1])));
-                const glm::vec2 dstSize = sprite.size * worldScale;
-                // Center the sprite on the entity world position (Batcher2D quads
-                // are top-left-origin) so it aligns with the center-anchored
-                // physics body + collider overlay.
-                const glm::vec2 dstPos =
-                    worldPos + ctx->cameraOffset - dstSize * 0.5f;
+                // Apply the camera (screen = world * zoom + offset; matches
+                // Sandbox::Camera::WorldToScreen and DrawPhysicsDebug exactly, so
+                // sprites + the physics-debug overlay pan/zoom together): scale the
+                // quad by zoom and center it on the ZOOM-scaled screen position.
+                const glm::vec2 dstSize = sprite.size * worldScale * ctx->zoom;
+                const glm::vec2 screenPos = worldPos * ctx->zoom + ctx->cameraOffset;
+                // Center the sprite on the screen position (Batcher2D quads are
+                // top-left-origin) so it aligns with the center-anchored physics
+                // body + collider overlay.
+                const glm::vec2 dstPos = screenPos - dstSize * 0.5f;
 
                 ctx->batcher->SetLayer(static_cast<uint16_t>(sprite.sortingLayer),
                                        static_cast<uint16_t>(sprite.orderInLayer));

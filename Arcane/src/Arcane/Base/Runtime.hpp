@@ -48,7 +48,17 @@ namespace Arcane
         std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
 
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
-        void SetRenderContext(Batcher2D* batcher, glm::vec2 cameraOffset);
+        // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
+        // so the PLUGIN owns the camera (via SetCamera) and the host stays camera-agnostic.
+        void SetRenderContext(Batcher2D* batcher);
+
+        // --- camera bridge: the plugin drives the 2D camera; the render bridge reads it ---
+        // CANONICAL transform (matches Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.
+        // Defaults (offset (0,0), zoom 1) are the identity transform. RenderSubmissionSystem +
+        // DrawPhysicsDebug apply the SAME camera so sprites + the debug overlay move together.
+        void      SetCamera(glm::vec2 offset, float zoom) noexcept;
+        glm::vec2 CameraOffset() const noexcept;
+        float     CameraZoom()   const noexcept;
 
         // --- input bridge ---
         // Latest per-frame input snapshot. The host (Loom) stores it each frame
