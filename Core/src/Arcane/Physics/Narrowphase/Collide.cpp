@@ -16,6 +16,7 @@
 
 #include <Arcane/Physics/Narrowphase/Epa.hpp>
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
+#include <Arcane/Physics/Narrowphase/Mpr.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
 
@@ -309,31 +310,37 @@ namespace Arcane
                         return m;
                     }
 
-                    // T4: MPR fallback. EPA failed to converge (rare) -- keep the
-                    // old centroid approximation as the TEMPORARY fallback so the
-                    // deep case never returns an empty manifold mid-series. Task 4
-                    // replaces this marker with an MPR call.
-                    Real cx = Real(0), cy = Real(0);
-                    for (int i = 0; i < na; ++i) { cx += va[i].x; cy += va[i].y; }
-                    cx /= (na > 0 ? Real(na) : Real(1));
-                    cy /= (na > 0 ? Real(na) : Real(1));
-                    Real dx_ = Real(0), dy_ = Real(0);
-                    for (int i = 0; i < nb; ++i) { dx_ += vb[i].x; dy_ += vb[i].y; }
-                    dx_ = cx - dx_ / (nb > 0 ? Real(nb) : Real(1));
-                    dy_ = cy - dy_ / (nb > 0 ? Real(nb) : Real(1));
-                    const Real len2 = dx_ * dx_ + dy_ * dy_;
-                    if (len2 > Real(1e-12f))
+                    // T4: EPA failed to converge (rare, degenerate input).
+                    // Fall back to MPR -- a fast single-point deep-overlap
+                    // solver -- and build the SAME 1-point manifold the EPA path
+                    // builds (surface offsets by rA/rB, separation = depth + rA +
+                    // rB, same id scheme). The old centroid approximation is
+                    // DELETED: it pointed along the line of centres rather than
+                    // toward the nearest face, which is wrong for a round core
+                    // buried in a poly (the very case EPA/MPR exist to fix).
+                    const MprResult mpr = Mpr(va, na, vb, nb);
+                    if (mpr.ok)
                     {
-                        const Real inv = Real(1) / std::sqrt(len2);
-                        normal = Vec2(dx_ * inv, dy_ * inv);
+                        const Vec2 n = mpr.normal;
+                        const Vec2 surfaceA = Vec2(mpr.point.x - n.x * rA,
+                                                   mpr.point.y - n.y * rA);
+                        const Vec2 surfaceB = Vec2(mpr.point.x + n.x * rB,
+                                                   mpr.point.y + n.y * rB);
+                        const Vec2 cp = Vec2((surfaceA.x + surfaceB.x) * Real(0.5f),
+                                             (surfaceA.y + surfaceB.y) * Real(0.5f));
+                        const Real separation = mpr.depth + rA + rB;
+
+                        m.normal = n;
+                        m.points[0] = ManifoldPoint{ cp, separation, n, id };
+                        m.pointCount = 1;
+                        return m;
                     }
-                    // With deep overlap, witnesses from GJK are zero; place them
-                    // at the respective centroids.
-                    ptA = Vec2(cx, cy);
-                    Real bcx = Real(0), bcy = Real(0);
-                    for (int i = 0; i < nb; ++i) { bcx += vb[i].x; bcy += vb[i].y; }
-                    ptB = Vec2(bcx / (nb > 0 ? Real(nb) : Real(1)),
-                               bcy / (nb > 0 ? Real(nb) : Real(1)));
+
+                    // BOTH EPA and MPR failed (extremely rare). A non-converging
+                    // deep overlap is a degenerate input; emitting NO contact for
+                    // one frame is safer than guessing a wrong normal (the old
+                    // centroid stopgap). Return the empty manifold (pointCount=0).
+                    return m;
                 }
 
                 // Surface witnesses: offset the core witnesses outward by their radii.
