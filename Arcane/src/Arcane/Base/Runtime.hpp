@@ -6,6 +6,7 @@
 // the RunLoop, and the JobSystem. ARCANE_API: the plugin and the host both call it.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
 
@@ -48,6 +49,12 @@ namespace Arcane
 
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
         void SetRenderContext(Batcher2D* batcher, glm::vec2 cameraOffset);
+
+        // --- input bridge ---
+        // Latest per-frame input snapshot. The host (Loom) stores it each frame
+        // via SetInputSnapshot; plugins read it via Input() in their update hooks.
+        void                 SetInputSnapshot(const InputSnapshot& snap) noexcept;
+        const InputSnapshot& Input() const noexcept;
 
         // --- hot-reload support (plugin Save/LoadState + the host call these) ---
         std::vector<std::byte> SnapshotRegistry() const;          // Registry::Save() -> bytes

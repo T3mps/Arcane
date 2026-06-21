@@ -21,6 +21,7 @@ namespace Arcane
         std::unique_ptr<SystemSchedulers>           schedulers;
         std::unique_ptr<RunLoop>                    loop;
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
+        InputSnapshot                               input{};   // latest host-supplied snapshot; plugins read via Input()
 
         explicit Impl(Astra::TypeContext* external) : jobs(), sched(jobs.WorkScheduler())
         {
@@ -49,6 +50,9 @@ namespace Arcane
     Astra::TypeContext*    Runtime::TypeContext()   noexcept { return m_impl->context; }
     Astra::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
+
+    void Runtime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_impl->input = snap; }
+    const InputSnapshot& Runtime::Input() const noexcept { return m_impl->input; }
 
     void Runtime::SetRenderContext(Batcher2D* batcher, glm::vec2 cameraOffset)
     {

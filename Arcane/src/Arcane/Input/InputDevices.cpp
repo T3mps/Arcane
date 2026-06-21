@@ -124,7 +124,13 @@ namespace Arcane
 
                 // --- Mouse ---
                 // SDL3: SDL_GetMouseState(float* x, float* y) -> SDL_MouseButtonFlags (Uint32).
-                SDL_MouseButtonFlags flags = SDL_GetMouseState(nullptr, nullptr);
+                // Cursor position is always the real window-space position; we do NOT zero it
+                // under wantCaptureMouse (the button STATE is what suppression keys off, and a
+                // cursor coordinate stays valid/useful even while ImGui owns the click).
+                float mouseX = 0.0f, mouseY = 0.0f;
+                SDL_MouseButtonFlags flags = SDL_GetMouseState(&mouseX, &mouseY);
+                snap.mouseX = mouseX;
+                snap.mouseY = mouseY;
                 // Map SDL button masks to snapshot bit positions (LMB=0, RMB=1, MMB=2, X1=3, X2=4).
                 // SDL masks: LMASK=1<<0, MMASK=1<<1, RMASK=1<<2, X1MASK=1<<3, X2MASK=1<<4.
                 // Snapshot order: leftButton->bit0, rightButton->bit1, middleButton->bit2.

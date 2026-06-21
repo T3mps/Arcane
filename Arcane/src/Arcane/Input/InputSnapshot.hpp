@@ -26,6 +26,10 @@ namespace Arcane
         // Mouse: bit (sdlButton - 1): LMB=bit0, RMB=bit1, MMB=bit2, X1, X2.
         uint8_t mouseButtons = 0;
 
+        // Mouse cursor position in WINDOW pixels (top-left origin, +y down).
+        float mouseX = 0.0f;
+        float mouseY = 0.0f;
+
         // First connected gamepad. Button bits follow the GamepadButton
         // order in InputActions.cpp; axes are lx ly rx ry (-1..1, +y down)
         // then lt rt (0..1).
