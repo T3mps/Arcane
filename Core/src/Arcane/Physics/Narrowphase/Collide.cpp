@@ -220,8 +220,11 @@ namespace Arcane
             // GJK witness pair IS the contact (no face-clip needed).  After
             // computing via GjkDistanceCore:
             //   - If coreDist >= rA+rB  -> separated or speculative.
-            //   - If coreDist == 0      -> deep overlap: use the direction
-            //     from B's centroid to A's centroid as a fallback normal (rare).
+            //   - If coreDist == 0      -> deep overlap: EXACT nearest-face axis
+            //     via EPA, with MPR (independent seed) as the convergence
+            //     fallback, and an empty manifold if both fail (degenerate input;
+            //     no contact this frame beats a wrong normal). This replaced the
+            //     old centroid-to-centroid approximation.
             //   - Otherwise             -> coreDist < rA+rB -> penetration via
             //     the witness pair.
             // Returns a 1-point manifold (for circle-vs-* the cores are both
