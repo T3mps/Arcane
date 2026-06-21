@@ -358,6 +358,64 @@ project "PlaygroundGame"
     filter {}
 
 -- ============================================================================
+-- Sandbox: the physics-sandbox game plugin (Arcane Physics Sandbox, Task 4).
+-- SharedLib, /MD, v2 ABI. Mirrors PlaygroundGame (imgui import) but ALSO links Core:
+-- it is the first plugin to drive PhysicsSystem, whose header-only body calls into
+-- the Core PhysicsWorld implementation (see the links{} note below). Loaded by Loom
+-- (--plugin Sandbox.dll) and the SandboxSmokeTest; the DLL is copied beside BOTH
+-- Loom.exe and ArcaneTests.exe (its own postbuild) so the host and the test can load it.
+-- ============================================================================
+project "Sandbox"
+    location "Sandbox"
+    kind "SharedLib"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
+    includedirs {
+        "%{wks.location}/Arcane/src",
+        "%{IncludeDir.Core}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+        "%{IncludeDir.imgui}",
+    }
+    -- Sandbox is the first plugin to drive physics. PhysicsSystem (header-only) is
+    -- instantiated in THIS module and calls Arcane::Physics::PhysicsWorld directly;
+    -- PhysicsWorld's implementation lives in Core (.cpp, not ARCANE_API-exported from
+    -- Arcane.dll), so the plugin must link Core to resolve those symbols. Core is
+    -- Astra-free and carries no mutable global state, so the duplicate static copy is
+    -- benign: the PhysicsWorld instance is owned entirely within this module (created
+    -- here, stepped by this module's PhysicsSystem); Arcane.dll only ever READS it via
+    -- DrawPhysicsDebug through a const ref, and both modules compile the identical Core
+    -- headers under identical flags (/MD, matching NDEBUG, float-strict) so the layout
+    -- matches -- the same identical-layout contract the scene components already rely on.
+    links { "Arcane", "Core" }
+    -- ABI v2: the plugin imports imgui from Arcane.dll (one GImGui per process), same
+    -- as PlaygroundGame. The import lib arrives via "Arcane" (imgui surface is
+    -- /WHOLEARCHIVE-exported there).
+    defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
+    floatingpoint "Strict"   -- physics determinism: match Core's /fp:strict (no /fp:fast)
+    -- Copy Sandbox.dll beside Loom.exe (host) AND ArcaneTests.exe (smoke test). The
+    -- Arcane/Core include dir is needed because Sandbox.cpp touches PhysicsWorld (Core).
+    postbuildcommands {
+        '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/Loom"',
+        '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/ArcaneTests"',
+        '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/bin/' .. outputdir .. '/Loom/Sandbox.dll"',
+        '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/bin/' .. outputdir .. '/ArcaneTests/Sandbox.dll"',
+    }
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
+    filter {}
+
+-- ============================================================================
 -- Loom: the thin host (Loom.exe). Engine boot + RunLoop + PluginHost. Hosts
 -- PlaygroundGame.dll (copied beside Loom.exe -- the default watched path).
 -- ============================================================================
@@ -382,7 +440,7 @@ project "Loom"
         "%{IncludeDir.enkiTS}",
     }
     links { "Arcane" }
-    dependson { "PlaygroundGame" }
+    dependson { "PlaygroundGame", "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
@@ -446,7 +504,7 @@ project "ArcaneTests"
     -- than carrying a second null context. The import lib comes via "Arcane".
     links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen" }
 
-    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame" }
+    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame", "Sandbox" }
 
     -- The test exe loads Arcane.dll from its own directory.
     postbuildcommands {

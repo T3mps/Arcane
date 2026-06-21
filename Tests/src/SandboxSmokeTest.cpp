@@ -1,0 +1,92 @@
+// [sandbox][gpu] live integration: drive the Sandbox plugin through a real Runtime +
+// Batcher2D into an offscreen HDR canvas. Mirrors LoomSliceTest but loads Sandbox.dll
+// (the physics sandbox plugin) instead of PlaygroundGame.dll: the plugin installs the
+// REAL engine stack (PhysicsSystem + TransformPropagationSystem in fixedUpdate;
+// RenderSubmissionSystem + the physics-debug overlay in render), builds one Playground
+// scene (static floor + 2 walls + ~5 dynamic bodies), then we step ~30 fixed frames and
+// submit a render frame. The gate is: no crash and the NVRHI/VK validation layer stays
+// silent (RenderErrorCount() == 0). Asserts via batcher->Stats() only -> no scene-component
+// TypeID is touched in the test module (the plugin owns the component identities under the
+// shared context).
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Render/Canvas.hpp>
+#include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/ShaderLibrary.hpp>
+
+#include "Helpers/TestTypeContext.hpp"
+
+#include <glm/glm.hpp>
+
+#include <filesystem>
+
+namespace
+{
+    void RunSandboxSmoke(Arcane::GraphicsBackend backend)
+    {
+        Arcane::RenderDeviceDesc desc;
+        desc.backend = backend;
+        auto device = Arcane::RenderDevice::Create(desc);
+        REQUIRE(device != nullptr);
+
+        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
+        auto canvas  = Arcane::CreateCanvas(device->Nvrhi(), 1280, 720);
+        auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
+        REQUIRE(shaders != nullptr);
+        REQUIRE(canvas  != nullptr);
+        REQUIRE(batcher != nullptr);
+
+        // Inject the process-wide shared TypeContext so the test exe, Arcane.dll,
+        // and the plugin all resolve component TypeIDs from the same slot table.
+        Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+        Arcane::PluginHost host(rt, std::filesystem::path("Sandbox.dll"));
+        REQUIRE(host.Load());   // plugin registers physics/scene components + systems + builds scene 0
+
+        const Arcane::PluginVTable* vt = host.Vtable();
+        REQUIRE(vt != nullptr);
+        CHECK(vt->ABIVersion() == Arcane::kGamePluginABIVersion);
+        REQUIRE(vt->DrawUI != nullptr);
+        vt->DrawUI();   // no-op for now; must not crash with a null ImGui context (headless)
+
+        // Step ~30 fixed frames: PhysicsSystem drives the PhysicsWorld each fixed tick,
+        // TransformPropagationSystem derives WorldTransform. Dynamic bodies fall + settle.
+        for (int i = 0; i < 30; ++i)
+            rt.Loop().Advance(1.0 / 60.0,
+                [&](double dt) { host.Vtable()->FixedUpdate(dt); },
+                [&](double dt, double a) { host.Vtable()->Update(dt, a); });
+
+        // Render one frame: sprites via RenderSubmissionSystem + physics-debug overlay.
+        nvrhi::CommandListHandle cl = device->Nvrhi()->createCommandList();
+        cl->open();
+        cl->clearTextureFloat(canvas->Texture(), nvrhi::AllSubresources,
+                              nvrhi::Color(0, 0, 0, 1));
+        batcher->Begin(cl, canvas->Framebuffer(), canvas->Width(), canvas->Height());
+        rt.SetRenderContext(batcher.get(), glm::vec2(0.0f));
+        rt.Loop().SubmitRender();   // plugin's RenderSubmissionSystem + debug overlay -> batcher
+        batcher->End();
+        cl->close();
+        device->Nvrhi()->executeCommandList(cl);
+        device->Nvrhi()->waitForIdle();
+
+        // Floor + 2 walls + 5 dynamic sprites = 8 quads minimum from RenderSubmissionSystem;
+        // the physics-debug overlay adds more. Conservative lower bound proves submission ran.
+        CHECK(batcher->Stats().quads >= 8);
+        CHECK(Arcane::RenderErrorCount() == 0);
+        host.Unload();
+        device->Nvrhi()->runGarbageCollection();
+    }
+}
+
+TEST_CASE("SandboxSmoke d3d12: sandbox plugin scene renders, no validation errors", "[sandbox][gpu][d3d12]")
+{
+    RunSandboxSmoke(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("SandboxSmoke vulkan: sandbox plugin scene renders, no validation errors", "[sandbox][gpu][vulkan]")
+{
+    RunSandboxSmoke(Arcane::GraphicsBackend::Vulkan);
+}
