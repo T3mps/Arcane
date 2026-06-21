@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
@@ -72,6 +73,37 @@ namespace
         host.Unload();
         device->Nvrhi()->runGarbageCollection();
     }
+}
+
+// Headless: the input-store path Loom wires in its frame loop (SetInputSnapshot ->
+// Input()). No device needed -- the plugin reads input through Runtime::Input(), so
+// the host's per-frame store must round-trip the snapshot verbatim. ([sandbox] so it
+// runs alongside the rest of the v2 sandbox wiring under ~[gpu].)
+TEST_CASE("Loom input store: Runtime::Input reflects the last SetInputSnapshot", "[sandbox]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+
+    Arcane::InputSnapshot snap;
+    snap.SetScancode(42);              // arbitrary physical key down
+    snap.AddKeycode(0x61);             // 'a'
+    snap.mouseButtons        = 0x05;   // LMB + MMB
+    snap.mouseX              = 123.5f;
+    snap.mouseY              = 456.25f;
+    snap.gamepadConnected    = true;
+    snap.gamepadAxes[0]      = -0.5f;
+    snap.wantCaptureKeyboard = true;
+
+    rt.SetInputSnapshot(snap);
+
+    const Arcane::InputSnapshot& got = rt.Input();
+    CHECK(got.ScancodeDown(42));
+    CHECK(got.KeycodeDown(0x61));
+    CHECK(got.mouseButtons == 0x05);
+    CHECK(got.mouseX == 123.5f);
+    CHECK(got.mouseY == 456.25f);
+    CHECK(got.gamepadConnected);
+    CHECK(got.gamepadAxes[0] == -0.5f);
+    CHECK(got.wantCaptureKeyboard);
 }
 
 TEST_CASE("d3d12: Loom slice renders the plugin scene, no validation errors", "[gpu][d3d12]")

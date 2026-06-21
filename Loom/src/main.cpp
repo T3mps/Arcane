@@ -9,6 +9,7 @@
 #include <Arcane/ImGui/ImGuiLayer.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputDevices.hpp>
+#include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
@@ -133,6 +134,20 @@ int main(int argc, char** argv)
         // plugin's -- own the MetaRegistry entries.)
         static Astra::TypeContext* const s_typeContext = new Astra::TypeContext();
         Arcane::Runtime runtime(s_typeContext);
+
+        // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
+        // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
+        // at Init time, so the plugin's Init adopts the host's GImGui across the DLL boundary.
+        // The ImGuiLayer (outer scope) has already created + set the current context by here.
+        {
+            ImGuiMemAllocFunc allocFn = nullptr; ImGuiMemFreeFunc freeFn = nullptr; void* ud = nullptr;
+            ImGui::GetAllocatorFunctions(&allocFn, &freeFn, &ud);
+            runtime.SetImGui(ImGui::GetCurrentContext(),
+                             reinterpret_cast<void*>(allocFn),
+                             reinterpret_cast<void*>(freeFn),
+                             ud);
+        }
+
         Arcane::PluginHost plugin(runtime, std::filesystem::path(pluginPath));
         if (!plugin.Load())
         {
@@ -170,7 +185,10 @@ int main(int argc, char** argv)
                 const auto now = std::chrono::steady_clock::now();
                 const double frameDt = std::chrono::duration<double>(now - lastFrameTime).count();
                 lastFrameTime = now;
-                input->Update(frameDt, inputDevices->Sample(imgui->WantCaptureKeyboard(), imgui->WantCaptureMouse()));
+                const Arcane::InputSnapshot snap =
+                    inputDevices->Sample(imgui->WantCaptureKeyboard(), imgui->WantCaptureMouse());
+                runtime.SetInputSnapshot(snap);   // plugins read it via Runtime::Input()
+                input->Update(frameDt, snap);
                 if (input->Pressed("quit"))                break;
                 if (input->Pressed("reload_plugin"))       plugin.ForceReload();
                 if (input->Pressed("reload_plugin_fresh")) plugin.ReloadFresh();
@@ -197,6 +215,11 @@ int main(int argc, char** argv)
                 ImGui::Text("Quads: %u  Draws: %u", s.quads, s.drawCalls);
                 ImGui::End();
             }
+
+            // ABI v2: the plugin draws its own ImGui between BeginFrame and Render.
+            // Null-checked (a v2 plugin may omit DrawUI); PlaygroundGame's is a no-op.
+            const Arcane::PluginVTable* vtUI = plugin.Vtable();
+            if (vtUI && vtUI->DrawUI) vtUI->DrawUI();
 
             nvrhi::ITexture* backbuffer = swapchain->BeginFrame();
             if (!backbuffer)
