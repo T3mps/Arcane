@@ -41,7 +41,7 @@ workspace "Arcane"
     -- imgui lives inside Arcane.dll (ImGuiLayer + first-party imgui_impl_nvrhi).
     -- Export it so GImGui and the sdl3 backend symbols live in ONE module:
     -- the imgui static lib builds with dllexport, the DLL's own TUs match,
-    -- and consumers (ArcaneTests/Playground) import. Without this each module
+    -- and consumers (ArcaneTests/Loom) import. Without this each module
     -- keeps its own null GImGui and ShowDemoWindow() from the test exe asserts.
     THIRDPARTY_IMGUI_API        = "__declspec(dllexport)"
 
@@ -189,7 +189,7 @@ project "Arcane"
     -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
     -- object only produces an export when the linker actually pulls that
     -- object in, and the DLL itself references only a subset of the imgui API.
-    -- /WHOLEARCHIVE exports the full surface for consumers (tests/Playground).
+    -- /WHOLEARCHIVE exports the full surface for consumers (tests/Loom).
     -- NOTE: Linux port needs --whole-archive/-l imgui --no-whole-archive instead.
     filter "system:windows"
         linkoptions { "/WHOLEARCHIVE:imgui" }
@@ -225,81 +225,6 @@ project "Arcane"
         libdirs { VCPKG_INSTALLED_MD .. "/debug/lib" }
     filter { "system:windows", "configurations:Release or configurations:Dist" }
         libdirs { VCPKG_INSTALLED_MD .. "/lib" }
-
-    filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
-        runtime "Debug"
-        symbols "on"
-
-    filter "configurations:Release"
-        -- NDEBUG must match NVRHI's Release build (nvrhi/premake5.lua defines
-        -- NDEBUG in Release). DispatchLoaderDynamic has NDEBUG-gated fields;
-        -- a layout mismatch between Arcane.dll and the statically-linked NVRHI
-        -- causes every Vulkan function-pointer lookup to read the wrong offset.
-        defines { "ARCANE_RELEASE", "NDEBUG" }
-        runtime "Release"
-        optimize "speed"
-        symbols "on"
-
-    filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
-        runtime "Release"
-        optimize "speed"
-        symbols "off"
-
--- ============================================================================
--- Playground: standalone exe, the living integration test (stack spec).
--- M1 scope: window + device + clear + present on both backends. Becomes
--- PlaygroundGame.dll under Loom in M4.
--- ============================================================================
-project "Playground"
-    location "Playground"
-    kind "ConsoleApp"
-    language "C++"
-    cppdialect "C++23"
-    staticruntime "off"
-
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-
-    files {
-        "%{prj.location}/src/**.cpp",
-        "%{prj.location}/src/**.hpp",
-    }
-
-    includedirs {
-        "%{wks.location}/Arcane/src",
-        "%{IncludeDir.Core}",
-        "%{IncludeDir.nlohmann}",
-        "%{IncludeDir.spdlog}",
-        "%{IncludeDir.nvrhi}",
-        "%{IncludeDir.glm}",
-        "%{IncludeDir.imgui}",
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-    }
-
-    links { "Arcane" }
-
-    defines {
-        "_CRT_SECURE_NO_WARNINGS",
-        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
-        -- imgui is exported from Arcane.dll; the demo's stats overlay (Task 8)
-        -- imports it. Matches the DLL's dllexport.
-        "IMGUI_API=__declspec(dllimport)",
-    }
-
-    postbuildcommands {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
-        '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
-        '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
-        '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
-        '{COPYFILE} "%{wks.location}/Playground/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
-    }
-
-    filter "system:windows"
-        systemversion "latest"
-        buildoptions { "/Zc:__cplusplus" }
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
@@ -523,7 +448,7 @@ project "ArcaneTests"
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
-        '{COPYFILE} "%{wks.location}/Playground/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
+        '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',

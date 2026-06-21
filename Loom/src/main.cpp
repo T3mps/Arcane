@@ -1,7 +1,7 @@
 // Loom -- the thin host. Engine boot + render plumbing (the M4 Playground loop, scene
 // content removed) + RunLoop interleaving the plugin's FixedUpdate/Update with the engine
 // schedulers + a PluginHost watching the game DLL. The scene now lives in PlaygroundGame.dll.
-//   --backend dx12|vulkan   --frames N   --no-vsync   --plugin <path>   (default ./PlaygroundGame.dll)
+//   --backend dx12|vulkan   --frames N   --no-vsync   --plugin <path>   (default ./Sandbox.dll)
 
 #include <Arcane/Base/Engine.hpp>
 #include <Arcane/Base/Log.hpp>
@@ -43,7 +43,7 @@ namespace
             "  --backend dx12|vulkan   graphics backend (default dx12)\n"
             "  --frames N              render N frames then exit\n"
             "  --no-vsync              present without vsync\n"
-            "  --plugin <path>         game DLL to host (default ./PlaygroundGame.dll)\n");
+            "  --plugin <path>         game DLL to host (default ./Sandbox.dll)\n");
     }
 }
 
@@ -52,7 +52,7 @@ int main(int argc, char** argv)
     Arcane::GraphicsBackend backend = Arcane::GraphicsBackend::D3D12;
     uint64_t maxFrames = 0;
     bool vsync = true;
-    std::string pluginPath = "PlaygroundGame.dll";
+    std::string pluginPath = "Sandbox.dll";
 
     for (int i = 1; i < argc; ++i)
     {
