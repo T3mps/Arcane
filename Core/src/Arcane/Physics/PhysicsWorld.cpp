@@ -31,6 +31,44 @@ namespace Arcane
 {
     namespace Physics
     {
+        namespace
+        {
+            // Combine the geometric feature id (from Collide) with the FIXTURE-PAIR
+            // identity so two DIFFERENT fixture pairs on the SAME body pair get
+            // DISTINCT, STABLE warm-start keys. The solver's warm-start cache is
+            // keyed by this id; without the fixture mix two fixtures of a compound
+            // body that hit the same feature of the other body produce the SAME id
+            // and ALIAS in the cache (one fixture-pair's accumulated impulse would
+            // seed the other's contact point at a different lever arm -> degraded
+            // warm start / penetration resistance for every compound body). The
+            // mix is a deterministic integer hash (no fp; stable per (base, fixA,
+            // fixB) across steps -- the warm-start invariant only needs the same
+            // physical contact to map to the SAME id each step, never a particular
+            // value, so this is physics-neutral for any non-aliasing contact).
+            //
+            // Legacy single-shape bodies (no fixtures -> both indices kInvalidSlot)
+            // pass the base id through UNCHANGED: there is exactly one geometric
+            // pair per body pair so the base is already unique, and byte-identity
+            // is preserved for the pre-fixture-era paths.
+            [[nodiscard]] inline std::uint32_t MixContactId(std::uint32_t base,
+                                                            std::uint32_t fixA,
+                                                            std::uint32_t fixB) noexcept
+            {
+                if (fixA == kInvalidSlot && fixB == kInvalidSlot)
+                {
+                    return base;
+                }
+                // 64-bit MurmurHash3-style finalizer over (base, fixA, fixB).
+                std::uint64_t h = static_cast<std::uint64_t>(base);
+                h = (h ^ (static_cast<std::uint64_t>(fixA) + 0x9E3779B97F4A7C15ull))
+                    * 0xFF51AFD7ED558CCDull;
+                h = (h ^ (static_cast<std::uint64_t>(fixB) + 0xC2B2AE3D27D4EB4Full))
+                    * 0xFF51AFD7ED558CCDull;
+                h ^= h >> 33;
+                return static_cast<std::uint32_t>(h);
+            }
+        } // namespace
+
         // Compose a fixture's WORLD transform = body transform ∘ fixture local
         // transform.  SlotAabb, GenerateContacts' FixtureWorldXf lambda,
         // SlotsOverlap, the fixture-aware queries, and BulletSweep all delegate
@@ -1037,7 +1075,13 @@ namespace Arcane
             const std::uint32_t i = h.index;
             // Dynamic only; wakes (ports applyImpulse, the px,py branch). Linear
             // part as above, plus an angular term from the lever arm about the
-            // body center: angVel += cross(p - center, i) * invInertia.
+            // body's CENTER OF MASS: angVel += cross(p - com, i) * invInertia.
+            // The lever MUST be measured from the COM, not the origin: invInertia
+            // is the inertia about the COM and the solver integrates rotation
+            // about the COM (FinalizePositions). For a single-fixture / COM==origin
+            // body WorldCom() == origin, so this is byte-identical there; for an
+            // off-COM compound body the origin lever was wrong (it dropped the
+            // origin->COM offset, under-rotating or mis-signing the spin).
             if (static_cast<BodyType>(m_btype[i]) != BodyType::Dynamic)
             {
                 return;
@@ -1046,8 +1090,10 @@ namespace Arcane
             m_sleepTimer[i] = Real(0);
             m_velX[i] += impulse.x * m_invMass[i];
             m_velY[i] += impulse.y * m_invMass[i];
-            const Real rx = worldPoint.x - m_posX[i];
-            const Real ry = worldPoint.y - m_posY[i];
+            const Vec2 com = WorldCom(Vec2(m_posX[i], m_posY[i]), m_angle[i],
+                                      Vec2(m_localCenterX[i], m_localCenterY[i]));
+            const Real rx = worldPoint.x - com.x;
+            const Real ry = worldPoint.y - com.y;
             m_angVel[i] += (rx * impulse.y - ry * impulse.x) * m_invInertia[i];
         }
 
@@ -1406,7 +1452,8 @@ namespace Arcane
             // the body-level friction/restitution as both sides (unchanged from M6).
             auto emit = [&](std::uint32_t aIdx, std::uint32_t bIdx, bool bIsBody,
                             const Vec2& centerB, const Manifold& m,
-                            Real fricA, Real fricB, Real restA, Real restB)
+                            Real fricA, Real fricB, Real restA, Real restB,
+                            std::uint32_t fixA, std::uint32_t fixB)
             {
                 if (m.pointCount <= 0)
                 {
@@ -1459,7 +1506,10 @@ namespace Arcane
                     // Manifold separation is POSITIVE for penetration; Box2D's
                     // signed separation is negative for penetration -> negate.
                     cp.baseSeparation = -mp.separation;
-                    cp.id = mp.id;
+                    // Warm-start key: the geometric feature id mixed with the
+                    // fixture pair so two fixture pairs on the same body pair do
+                    // not alias (see MixContactId).
+                    cp.id = MixContactId(mp.id, fixA, fixB);
                 }
                 m_contactConstraints.push_back(cc);
             };
@@ -1530,7 +1580,8 @@ namespace Arcane
                             // vs body A itself (tile spans don't carry material).
                             emit(i, kInvalidSlot, /*bIsBody=*/false, spanCenter, mfld,
                                  m_fxFriction[fi], m_fxFriction[fi],
-                                 m_fxRestitution[fi], Real(0));
+                                 m_fxRestitution[fi], Real(0),
+                                 /*fixA=*/fi, /*fixB=*/kInvalidSlot);
                         }
                     }
                     else
@@ -1541,7 +1592,8 @@ namespace Arcane
                         const Manifold mfld = Collide(m_shape[i], xfA,
                                                        spanShape, xfB, specMargin);
                         emit(i, kInvalidSlot, /*bIsBody=*/false, spanCenter, mfld,
-                             m_fric[i], m_fric[i], m_rest[i], Real(0));
+                             m_fric[i], m_fric[i], m_rest[i], Real(0),
+                             /*fixA=*/kInvalidSlot, /*fixB=*/kInvalidSlot);
                     }
                 }
 
@@ -1596,7 +1648,8 @@ namespace Arcane
                                                                specMargin);
                                 emit(i, idx, /*bIsBody=*/true, centerB, mfld,
                                      m_fxFriction[fiA], m_fxFriction[fiB],
-                                     m_fxRestitution[fiA], m_fxRestitution[fiB]);
+                                     m_fxRestitution[fiA], m_fxRestitution[fiB],
+                                     /*fixA=*/fiA, /*fixB=*/fiB);
                             }
                         }
                     }
@@ -1620,7 +1673,8 @@ namespace Arcane
                                                            specMargin);
                             emit(i, idx, /*bIsBody=*/true, centerB, mfld,
                                  m_fxFriction[fiA], m_fric[idx],
-                                 m_fxRestitution[fiA], m_rest[idx]);
+                                 m_fxRestitution[fiA], m_rest[idx],
+                                 /*fixA=*/fiA, /*fixB=*/kInvalidSlot);
                         }
                     }
                     else
@@ -1633,7 +1687,8 @@ namespace Arcane
                                                        m_shape[idx], xfB,
                                                        specMargin);
                         emit(i, idx, /*bIsBody=*/true, centerB, mfld,
-                             m_fric[i], m_fric[idx], m_rest[i], m_rest[idx]);
+                             m_fric[i], m_fric[idx], m_rest[i], m_rest[idx],
+                             /*fixA=*/kInvalidSlot, /*fixB=*/kInvalidSlot);
                     }
                 }
             }
@@ -1757,7 +1812,8 @@ namespace Arcane
                                                            pairMargin);
                             emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
                                  m_fxFriction[fiA], m_fxFriction[fiB],
-                                 m_fxRestitution[fiA], m_fxRestitution[fiB]);
+                                 m_fxRestitution[fiA], m_fxRestitution[fiB],
+                                 /*fixA=*/fiA, /*fixB=*/fiB);
                         }
                     }
                 }
@@ -1781,7 +1837,8 @@ namespace Arcane
                                                        pairMargin);
                         emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
                              m_fxFriction[fiA], m_fric[ib],
-                             m_fxRestitution[fiA], m_rest[ib]);
+                             m_fxRestitution[fiA], m_rest[ib],
+                             /*fixA=*/fiA, /*fixB=*/kInvalidSlot);
                     }
                 }
                 else
@@ -1797,7 +1854,8 @@ namespace Arcane
                                                    m_shape[ib], xfB,
                                                    pairMargin);
                     emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
-                         m_fric[ia], m_fric[ib], m_rest[ia], m_rest[ib]);
+                         m_fric[ia], m_fric[ib], m_rest[ia], m_rest[ib],
+                         /*fixA=*/kInvalidSlot, /*fixB=*/kInvalidSlot);
                 }
             }
         }

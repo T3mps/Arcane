@@ -310,6 +310,55 @@ TEST_CASE("physics-v2 compound-COM (b): free spin keeps the COM fixed", "[physic
 }
 
 // ============================================================================
+// (e) APPLY-IMPULSE TORQUES ABOUT THE COM: a linear impulse applied at the body
+//     ORIGIN of an off-COM body produces the correct angular response -- the
+//     lever arm is measured from the CENTER OF MASS, not the origin. With the
+//     origin offset from the COM (r = origin - COM != 0), a downward impulse at
+//     the origin spins the body. The pre-fix code measured the lever from the
+//     origin (r == 0 there) and produced NO rotation -- wrong for compound
+//     bodies whose invInertia is about the COM and which integrate rotation
+//     about the COM.
+//
+// Hand derivation (gravity off, single body, applied at the world origin):
+//   worldCOM = origin + R(0)*localCenter = (lc.x, lc.y).
+//   lever r  = worldPoint - worldCOM = (0,0) - (lc.x, lc.y) = (-lc.x, -lc.y).
+//   torque_z = r.x*impulse.y - r.y*impulse.x = (-lc.x)*J - (-lc.y)*0 = -lc.x*J.
+//   angVel   = torque_z * invInertia_about_COM.
+//   linear   = impulse / mass (COM linear velocity, unchanged by the fix).
+// ============================================================================
+TEST_CASE("physics-v2 compound-COM (e): impulse at a point torques about the COM", "[physics]")
+{
+    WorldDef wd; // gravity 0
+    PhysicsWorld w(wd);
+    Barbell bb = MakeBarbell(w, Vec2(Real(0), Real(0)));
+
+    const Vec2 lc   = w.GetLocalCenter(bb.body); // local COM == world COM at pos 0, ang 0
+    const Real I    = w.GetBodyInertia(bb.body);
+    const Real mass = w.GetBodyMass(bb.body);
+    REQUIRE(I > Real(0));
+    REQUIRE(lc.x > Real(5)); // genuinely off-origin toward the heavy side
+
+    // Apply a downward impulse AT THE BODY ORIGIN (world (0,0)).
+    const Real J = Real(1000);
+    w.ApplyImpulse(bb.body, Vec2(Real(0), J), Vec2(Real(0), Real(0)));
+
+    const Real expectedAngVel = (-lc.x * J) / I;
+    INFO("angVel = " << static_cast<double>(w.AngVelSlot(bb.body.index))
+         << " expected " << static_cast<double>(expectedAngVel)
+         << " (lc.x=" << static_cast<double>(lc.x) << " I=" << static_cast<double>(I) << ")");
+
+    // Torque about the COM -> a nonzero, correctly-signed spin (the pre-fix
+    // origin-based code produced exactly 0 here).
+    CHECK(static_cast<double>(w.AngVelSlot(bb.body.index))
+          == Approx(static_cast<double>(expectedAngVel)).epsilon(1e-4));
+    CHECK(std::abs(static_cast<double>(w.AngVelSlot(bb.body.index))) > 0.01);
+
+    // Linear part is unchanged by the fix: COM velocity = impulse / mass.
+    CHECK(static_cast<double>(w.Velocity(bb.body).y)
+          == Approx(static_cast<double>(J / mass)).epsilon(1e-4));
+}
+
+// ============================================================================
 // (c) DETERMINISM: run the heavy-tip scene twice -> bit-identical final pose.
 // ============================================================================
 TEST_CASE("physics-v2 compound-COM (c): heavy-tip scene is deterministic", "[physics]")
