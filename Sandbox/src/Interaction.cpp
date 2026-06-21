@@ -33,10 +33,10 @@ namespace Arcane::Sandbox
         constexpr std::uint8_t kLMB = 0x1;   // mouseButtons bit0
         constexpr std::uint8_t kRMB = 0x2;   // mouseButtons bit1
 
-        // Default spawn box tint + half-extents (the HUD picks shape/size in Task 8;
-        // Task 7 spawns a single readable dynamic box).
+        // Spawn tint (a readable orange). The HUD (Task 8) picks shape/size/density
+        // via Interaction::SpawnCfg(); the tint stays fixed so spawned bodies read
+        // as "player-spawned" against the authored scene palette.
         constexpr glm::vec4 kSpawnTint{0.95f, 0.55f, 0.25f, 1.0f};
-        constexpr glm::vec2 kSpawnHalf{22.0f, 22.0f};
     }
 
     Phys::BodyHandle Interaction::PickBodyAt(Phys::PhysicsWorld& world,
@@ -101,9 +101,15 @@ namespace Arcane::Sandbox
             }
             else
             {
-                // Empty space -> spawn a dynamic box at the cursor world point.
-                SpawnBox(reg, Astra::Entity{}, cursorWorld, kSpawnHalf,
-                         Phys::BodyType::Dynamic, kSpawnTint);
+                // Empty space -> spawn the HUD-selected shape at the cursor world
+                // point. Box uses the size as a half-extent; Circle as a radius.
+                const float sz = (m_spawn.size > 0.0f) ? m_spawn.size : 1.0f;
+                if (m_spawn.shape == SpawnShape::Circle)
+                    SpawnCircle(reg, Astra::Entity{}, cursorWorld, sz,
+                                Phys::BodyType::Dynamic, kSpawnTint, m_spawn.density);
+                else
+                    SpawnBox(reg, Astra::Entity{}, cursorWorld, glm::vec2(sz, sz),
+                             Phys::BodyType::Dynamic, kSpawnTint, m_spawn.density);
             }
         }
 

@@ -88,7 +88,8 @@ namespace Arcane::Sandbox
         Astra::Entity MakeBox(Astra::Registry& reg, Astra::Entity root,
                               glm::vec2 pos, glm::vec2 halfExtents,
                               Physics::BodyType type, glm::vec4 tint,
-                              float restitution = 0.1f, float friction = 0.4f)
+                              float restitution = 0.1f, float friction = 0.4f,
+                              float density = 1.0f)
         {
             Astra::Entity e = reg.CreateEntity();
 
@@ -107,7 +108,7 @@ namespace Arcane::Sandbox
                 fx.kind        = Physics::ShapeKind::Aabb;
                 fx.halfW       = halfExtents.x;
                 fx.halfH       = halfExtents.y;
-                fx.density     = 1.0f;
+                fx.density     = density;
                 fx.friction    = friction;
                 fx.restitution = restitution;
                 col.fixtures.push_back(fx);
@@ -128,7 +129,7 @@ namespace Arcane::Sandbox
         Astra::Entity MakeCircle(Astra::Registry& reg, Astra::Entity root,
                                  glm::vec2 pos, float radius,
                                  Physics::BodyType type, glm::vec4 tint,
-                                 float restitution = 0.2f)
+                                 float restitution = 0.2f, float density = 1.0f)
         {
             Astra::Entity e = reg.CreateEntity();
 
@@ -145,7 +146,7 @@ namespace Arcane::Sandbox
                 Arcane::Fixture fx;
                 fx.kind        = Physics::ShapeKind::Circle;
                 fx.radius      = radius;
-                fx.density     = 1.0f;
+                fx.density     = density;
                 fx.friction    = 0.4f;
                 fx.restitution = restitution;
                 col.fixtures.push_back(fx);
@@ -642,15 +643,19 @@ namespace Arcane::Sandbox
 
     Astra::Entity SpawnBox(Astra::Registry& reg, Astra::Entity root,
                            glm::vec2 pos, glm::vec2 halfExtents,
-                           Physics::BodyType type, glm::vec4 tint)
+                           Physics::BodyType type, glm::vec4 tint,
+                           float density)
     {
-        return MakeBox(reg, ResolveRoot(reg, root), pos, halfExtents, type, tint);
+        return MakeBox(reg, ResolveRoot(reg, root), pos, halfExtents, type, tint,
+                       /*restitution=*/0.1f, /*friction=*/0.4f, density);
     }
 
     Astra::Entity SpawnCircle(Astra::Registry& reg, Astra::Entity root,
                               glm::vec2 pos, float radius,
-                              Physics::BodyType type, glm::vec4 tint)
+                              Physics::BodyType type, glm::vec4 tint,
+                              float density)
     {
-        return MakeCircle(reg, ResolveRoot(reg, root), pos, radius, type, tint);
+        return MakeCircle(reg, ResolveRoot(reg, root), pos, radius, type, tint,
+                          /*restitution=*/0.2f, density);
     }
 }

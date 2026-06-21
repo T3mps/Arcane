@@ -474,13 +474,16 @@ project "ArcaneTests"
     files {
         "%{prj.location}/src/**.cpp",
         "%{prj.location}/src/**.hpp",
-        -- Task 7: the Sandbox interaction UNIT + its spawn-builder dependency compile
-        -- straight into the test exe so SandboxInteractionTest drives Interaction::Tick
-        -- against a hand-built PhysicsWorld (CPU-only, no plugin load). Only the pure
-        -- helper TUs are pulled in -- NOT Sandbox.cpp (the plugin shell with the
-        -- extern "C" exports + g_app), which the SandboxSmokeTest exercises via DLL load.
+        -- Task 7/8: the Sandbox helper UNITS compile straight into the test exe so the
+        -- CPU tests drive them directly (no plugin load): SandboxInteractionTest drives
+        -- Interaction::Tick against a hand-built PhysicsWorld; SandboxHudTest drives
+        -- SandboxApp + Hud::Draw under a throwaway ImGui context. Only the pure helper
+        -- TUs are pulled in -- NOT Sandbox.cpp (the plugin shell with the extern "C"
+        -- exports + g_app), which the SandboxSmokeTest exercises via DLL load.
         "%{wks.location}/Sandbox/src/Interaction.cpp",
         "%{wks.location}/Sandbox/src/Scenes.cpp",
+        "%{wks.location}/Sandbox/src/SandboxApp.cpp",
+        "%{wks.location}/Sandbox/src/Hud.cpp",
     }
 
     includedirs {

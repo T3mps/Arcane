@@ -4,14 +4,16 @@
 // design notes.
 
 #include "SandboxApp.hpp"
+#include "Hud.hpp"
 #include "Scenes.hpp"
 
 #include <Arcane/Input/InputSnapshot.hpp>       // InputSnapshot (fed to the interaction layer)
 #include <Arcane/Physics/PhysicsWorld.hpp>      // PhysicsWorld + WorldDef (fresh world per scene)
-#include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsResource
+#include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsResource + PhysicsSystem (sandbox-owned step)
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <algorithm>                            // std::clamp
 #include <memory>
 #include <span>
 
@@ -19,6 +21,15 @@ namespace Arcane::Sandbox
 {
     namespace
     {
+        // The sandbox fixed timestep (matches the 60 Hz RunLoop). The sandbox-owned
+        // physics step (Task 8) scales THIS by the HUD time-scale per FixedUpdate.
+        constexpr float kFixedDt = 1.0f / 60.0f;
+
+        // Time-scale clamp: a huge scale in one discrete step would tunnel/explode the
+        // solver; a tiny one is harmless. Keep it readable + stable.
+        constexpr float kMinTimeScale = 0.05f;
+        constexpr float kMaxTimeScale = 4.0f;
+
         // Install a FRESH PhysicsResource (new PhysicsWorld + empty entity<->body map),
         // replacing any existing one. SetResource overwrites the resource slot in place, so
         // the previous world (and all its bodies) is destroyed -- nothing leaks into the new
@@ -32,6 +43,11 @@ namespace Arcane::Sandbox
                 {}
             });
         }
+    }
+
+    void SandboxApp::SetTimeScale(float s) noexcept
+    {
+        m_timeScale = std::clamp(s, kMinTimeScale, kMaxTimeScale);
     }
 
     void SandboxApp::RebuildScene(Astra::Registry& reg, std::size_t index)
@@ -66,8 +82,23 @@ namespace Arcane::Sandbox
         //    handle) is gone -- a held grab must not carry into the fresh world.
         m_interaction.ClearGrab();
 
-        // 6. Publish the new index for the SceneControl side channel.
+        // 6. Publish the new index for the SceneControl side channel + the HUD debug
+        //    flags for the render-phase overlay (both survive Clear() as resources, but
+        //    a fresh build re-establishes them so the very first frame is correct).
         PublishControl(reg);
+        PublishDebug(reg);
+    }
+
+    void SandboxApp::PublishDebug(Astra::Registry& reg) const
+    {
+        SandboxDebugDraw* dbg = reg.GetResource<SandboxDebugDraw>();
+        if (!dbg)
+        {
+            reg.SetResource(SandboxDebugDraw{});
+            dbg = reg.GetResource<SandboxDebugDraw>();
+        }
+        if (!dbg) return;
+        *dbg = m_debug;   // mirror the HUD-owned flags into the render-read resource
     }
 
     void SandboxApp::PublishControl(Astra::Registry& reg) const
@@ -98,13 +129,12 @@ namespace Arcane::Sandbox
         RebuildScene(reg, m_sceneIndex);
     }
 
-    void SandboxApp::FixedUpdate(Astra::Registry& reg, double dt,
+    void SandboxApp::FixedUpdate(Astra::Registry& reg, double /*dt*/,
                                  const Arcane::InputSnapshot& input)
     {
-        // Pump the SceneControl side channel BEFORE the engine fixedUpdate scheduler runs
-        // (RunLoop calls this plugin hook first), so a rebuild lands on a clean registry,
-        // never mid-PhysicsSystem. A reset takes precedence over a switch; both are one-shot
-        // (cleared after consumption).
+        // Pump the SceneControl side channel BEFORE anything else (RunLoop calls this
+        // plugin hook first), so a rebuild lands on a clean registry, never mid-step.
+        // A reset takes precedence over a switch; both are one-shot (cleared on consume).
         if (SceneControl* ctrl = reg.GetResource<SceneControl>())
         {
             if (ctrl->requestReset != 0)
@@ -121,20 +151,59 @@ namespace Arcane::Sandbox
             }
         }
 
-        // Task 7: run the mouse-interaction layer on the (possibly just-rebuilt) scene,
-        // still BEFORE the engine fixedUpdate scheduler (PhysicsSystem). Spawned entities
-        // are materialized by this step's CREATE pass; a grabbed body's drive velocity is
-        // set so it integrates this step; camera pan/zoom is in place before Update pushes
-        // the camera. Guarded by a live PhysicsWorld (always present after a (re)build).
-        if (PhysicsResource* phys = reg.GetResource<PhysicsResource>(); phys && phys->world)
-            m_interaction.Tick(reg, *phys->world, m_camera, input, static_cast<float>(dt));
+        // Keep the render-overlay resource in lockstep with the HUD-owned flags every
+        // step (a HUD checkbox edit between frames reaches PhysicsDebugRenderSystem).
+        PublishDebug(reg);
 
-        // PhysicsSystem (registered in fixedUpdate) then advances the PhysicsWorld and
-        // writes back into LocalTransform; TransformPropagationSystem derives WorldTransform.
+        PhysicsResource* phys = reg.GetResource<PhysicsResource>();
+        if (!phys || !phys->world) return;
+
+        // Task 7: the mouse-interaction layer runs on the (possibly just-rebuilt) scene
+        // BEFORE the physics step -- spawned entities are materialized by the step's CREATE
+        // pass; a grabbed body's drive velocity is set so it integrates this step; camera
+        // pan/zoom is in place before Update pushes the camera. Interaction runs even while
+        // PAUSED (spawn/grab/pan still respond; the step below just won't advance the sim).
+        m_interaction.Tick(reg, *phys->world, m_camera, input, kFixedDt);
+
+        // ---- SANDBOX-OWNED PHYSICS STEP (Task 8 sim-control) -----------------------
+        // PhysicsSystem is no longer in the engine fixedUpdate scheduler; the sandbox
+        // drives it here so pause/single-step/time-scale can gate + scale the dt. RunLoop
+        // runs this plugin hook BEFORE the engine fixedUpdate scheduler (which still holds
+        // TransformPropagationSystem), so physics writes LocalTransform before propagation
+        // derives WorldTransform -- the ordering the engine path guaranteed is preserved.
+        //
+        // PAUSED: skip the step (the scene stays frozen but still renders + propagates).
+        // SINGLE-STEP: while paused, run exactly one tick then re-pause (one-shot flag).
+        // TIME-SCALE: feed the PhysicsSystem a scaled dt (a larger/smaller fixed tick).
+        const bool runThisStep = !m_paused || m_singleStep;
+        if (!runThisStep)
+        {
+            // Frozen: still run the CREATE/SYNC pass so a body spawned while paused
+            // materializes (and is visible), but do NOT advance time. A zero-dt step
+            // mints the body + writes its spawn pose back without integrating it.
+            PhysicsSystem mintOnly(0.0f);
+            mintOnly(reg);
+            return;
+        }
+
+        const bool wasSingleStep = m_singleStep;
+        m_singleStep = false;                       // consume the one-shot request
+
+        const float stepDt = kFixedDt * m_timeScale;
+        PhysicsSystem physics(stepDt);
+        physics(reg);                               // CREATE/SYNC + Step(stepDt) + write-back
+
+        if (wasSingleStep)
+            m_paused = true;                        // re-pause after the single step
     }
 
     void SandboxApp::Update(double /*dt*/, double /*alpha*/)
     {
-        // No variable-rate work yet. Camera + HUD arrive in later tasks.
+        // No variable-rate work yet. The camera is pushed by the plugin after this.
+    }
+
+    void SandboxApp::DrawUI(Astra::Registry& reg)
+    {
+        Hud::Draw(*this, reg);
     }
 }

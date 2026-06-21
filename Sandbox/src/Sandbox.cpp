@@ -37,12 +37,10 @@
 
 namespace
 {
-    // Fixed timestep: the 60 Hz RunLoop ticks PhysicsSystem at this dt every step.
-    // Determinism contract (PhysicsSystem): constant per run.
-    constexpr float kFixedDt = 1.0f / 60.0f;
-
     // Gravity for the sandbox world (+Y down, world unit == canvas px). Tuned higher
     // than the physics-test default so bodies fall at a brisk, readable rate on screen.
+    // (The fixed timestep itself is owned by SandboxApp now -- Task 8's sandbox-owned
+    // physics step scales it by the HUD time-scale; see SandboxApp::FixedUpdate.)
     constexpr float kGravityY = 900.0f;
 
     Arcane::EngineContext*       g_ctx = nullptr;
@@ -105,12 +103,16 @@ extern "C"
         creg->ReRegisterComponent<Arcane::PhysicsBodyRef>();
 
         // 3. Register systems (functors in this module).
-        //    fixedUpdate: PhysicsSystem steps the world BEFORE propagation derives
-        //                 WorldTransform from the updated LocalTransform (the
-        //                 Writes<LocalTransform> trait enforces that order).
+        //    fixedUpdate: ONLY TransformPropagationSystem. The PHYSICS STEP is now
+        //                 SANDBOX-OWNED (Task 8 sim-control): SandboxApp::FixedUpdate
+        //                 drives a PhysicsSystem invocation with a controllable dt
+        //                 (pause/single-step/time-scale). RunLoop runs that plugin hook
+        //                 BEFORE this scheduler, so physics still writes LocalTransform
+        //                 before propagation derives WorldTransform (ordering preserved).
+        //                 Propagation stays in the scheduler so a FROZEN scene still
+        //                 propagates + renders each frame.
         //    render: sprites first, then the physics-debug overlay on top.
         auto& sch = ctx->engine->Schedulers();
-        sch.fixedUpdate.AddSystem<Arcane::PhysicsSystem>(kFixedDt);
         sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
         sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
         sch.render.AddSystem<Arcane::Sandbox::PhysicsDebugRenderSystem>();
@@ -150,9 +152,17 @@ extern "C"
         g_ctx->engine->SetCamera(cam.offset, cam.zoom);
     }
 
-    // ABI v2: the host calls this between ImGuiLayer BeginFrame and Render. Task 4 draws
-    // no UI -- a no-op that proves the entry point is exported and callable. HUD is Task 8.
-    GAME_API void GamePlugin_DrawUI() {}
+    // ABI v2: the host calls this between ImGuiLayer BeginFrame and Render. Task 8 draws
+    // the Sandbox control panel (scene / sim / spawn / debug / stats) via Hud::Draw. The
+    // plugin adopted the host's ImGui context in Init, so these ImGui:: calls land in the
+    // host's single GImGui. Guarded by a current context so a headless host (no ImGuiLayer,
+    // null imguiContext in Init) skips the draw instead of asserting.
+    GAME_API void GamePlugin_DrawUI()
+    {
+        if (!ImGui::GetCurrentContext()) return;   // headless host: no UI surface
+        if (!g_ctx) return;
+        g_app.DrawUI(g_ctx->engine->Registry());
+    }
 
     GAME_API void GamePlugin_SaveState(Astra::BinaryWriter& w)
     {

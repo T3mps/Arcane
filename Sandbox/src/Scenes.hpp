@@ -32,14 +32,18 @@ namespace Arcane::Sandbox
     // -------------------------------------------------------------------------
 
     // Dynamic/static box: an Aabb-fixture body. Returns the created entity.
+    // `density` scales the body mass (HUD spawn knob, Task 8); defaults to 1.
     Astra::Entity SpawnBox(Astra::Registry& reg, Astra::Entity root,
                            glm::vec2 pos, glm::vec2 halfExtents,
-                           Physics::BodyType type, glm::vec4 tint);
+                           Physics::BodyType type, glm::vec4 tint,
+                           float density = 1.0f);
 
     // Dynamic/static circle: a Circle-fixture body. Returns the created entity.
+    // `density` scales the body mass (HUD spawn knob, Task 8); defaults to 1.
     Astra::Entity SpawnCircle(Astra::Registry& reg, Astra::Entity root,
                               glm::vec2 pos, float radius,
-                              Physics::BodyType type, glm::vec4 tint);
+                              Physics::BodyType type, glm::vec4 tint,
+                              float density = 1.0f);
 
     // One scene: a human-readable name + a builder that fills the Registry.
     // The builder creates a SceneRoot entity, parents all scene content under it,

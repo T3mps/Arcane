@@ -47,6 +47,27 @@ namespace Arcane::Physics { class PhysicsWorld; }
 
 namespace Arcane::Sandbox
 {
+    // Which primitive a left-click on empty space spawns. The HUD (Task 8) flips
+    // this; Task 7 always spawned a box (Box is the default here so the Task-7
+    // behavior is preserved when no HUD is present).
+    enum class SpawnShape : std::uint8_t
+    {
+        Box    = 0,
+        Circle = 1,
+    };
+
+    // Spawn knobs the HUD exposes (shape + size + density). `size` is the box
+    // half-extent OR the circle radius (world units == canvas px). `density`
+    // feeds the body mass (passed through the standard spawn builders). Defaults
+    // match the Task-7 hardcoded box (half-extent 22, density 1) so the visual
+    // is unchanged before the HUD touches anything.
+    struct SpawnConfig
+    {
+        SpawnShape shape   = SpawnShape::Box;
+        float      size    = 22.0f;   // box half-extent | circle radius
+        float      density = 1.0f;    // body density (mass scale)
+    };
+
     class Interaction
     {
     public:
@@ -97,6 +118,12 @@ namespace Arcane::Sandbox
             m_havePrevMouse  = false;
         }
 
+        // ---- spawn knobs (HUD, Task 8) ---------------------------------------------
+        // The shape/size/density a left-click on empty space spawns. The HUD writes
+        // through SpawnConfigMut(); Tick reads SpawnConfig() at the press edge.
+        [[nodiscard]] const SpawnConfig& SpawnCfg() const noexcept { return m_spawn; }
+        [[nodiscard]] SpawnConfig&       SpawnCfg()       noexcept { return m_spawn; }
+
         // ---- introspection (test hooks; also handy for a future HUD) ---------------
         [[nodiscard]] bool IsGrabbing() const noexcept
         {
@@ -121,6 +148,9 @@ namespace Arcane::Sandbox
 
         // The grabbed body (kInvalidBody = nothing grabbed).
         Arcane::Physics::BodyHandle m_grabbed = Arcane::Physics::kInvalidBody;
+
+        // HUD-controlled spawn knobs (shape/size/density). Default = the Task-7 box.
+        SpawnConfig m_spawn{};
 
         // Pooled scratch for OverlapShape candidate handles (reused; no per-frame alloc).
         mutable std::vector<Arcane::Physics::BodyHandle> m_overlapScratch;
