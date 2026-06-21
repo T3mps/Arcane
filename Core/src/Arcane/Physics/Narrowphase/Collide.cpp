@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 
+#include <Arcane/Physics/Narrowphase/Epa.hpp>
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
@@ -263,15 +264,55 @@ namespace Arcane
 
                 if (g.distance > Real(1e-6f))
                 {
-                    // Normal from B's witness toward A's witness (B->A convention).
+                    // SHALLOW (separated / speculative): the GJK witness pair IS
+                    // the contact. Normal from B's witness toward A's witness
+                    // (B->A convention). Surface witnesses + separation are
+                    // computed by the shared code below.
                     const Real inv = Real(1) / g.distance;
                     normal = Vec2((g.pointA.x - g.pointB.x) * inv,
                                   (g.pointA.y - g.pointB.y) * inv);
                 }
                 else
                 {
-                    // Cores touching/overlapping: derive from centroid offset.
-                    // Fallback: use +x if cores coincide.
+                    // DEEP (cores overlap, GJK distance ~0): the GJK witness pair
+                    // is meaningless here, so we call EPA on the SAME world cores
+                    // (radii NOT applied) for the EXACT nearest-face penetration.
+                    // This replaces the old centroid-to-centroid approximation,
+                    // which pointed along the line of centres rather than toward
+                    // the nearest face (wrong for a round core buried in a poly).
+                    const EpaResult epa = Epa(va, na, vb, nb);
+
+                    if (epa.ok)
+                    {
+                        // epa.normal is the unit B->A axis; epa.depth is the CORE
+                        // penetration (radii NOT applied). Surface witnesses use
+                        // the SAME offset convention as the shallow branch below:
+                        //   surfaceA = witnessA - normal*rA  (A's surface toward B)
+                        //   surfaceB = witnessB + normal*rB  (B's surface toward A)
+                        const Vec2 n = epa.normal;
+                        const Vec2 surfaceA = Vec2(epa.witnessA.x - n.x * rA,
+                                                   epa.witnessA.y - n.y * rA);
+                        const Vec2 surfaceB = Vec2(epa.witnessB.x + n.x * rB,
+                                                   epa.witnessB.y + n.y * rB);
+                        const Vec2 cp = Vec2((surfaceA.x + surfaceB.x) * Real(0.5f),
+                                             (surfaceA.y + surfaceB.y) * Real(0.5f));
+
+                        // Surface penetration = core depth + both radii
+                        // (positive = penetrating, matching the manifold
+                        // convention and the shallow branch's totalR - coreDist
+                        // with coreDist == 0).
+                        const Real separation = epa.depth + rA + rB;
+
+                        m.normal = n;
+                        m.points[0] = ManifoldPoint{ cp, separation, n, id };
+                        m.pointCount = 1;
+                        return m;
+                    }
+
+                    // T4: MPR fallback. EPA failed to converge (rare) -- keep the
+                    // old centroid approximation as the TEMPORARY fallback so the
+                    // deep case never returns an empty manifold mid-series. Task 4
+                    // replaces this marker with an MPR call.
                     Real cx = Real(0), cy = Real(0);
                     for (int i = 0; i < na; ++i) { cx += va[i].x; cy += va[i].y; }
                     cx /= (na > 0 ? Real(na) : Real(1));
@@ -328,44 +369,27 @@ namespace Arcane
                 return m;
             }
 
-        } // namespace
-
-        // ====================================================================
-        // Collide -- the unified v2 narrowphase entry.
-        // ====================================================================
-        Manifold Collide(const Shape& a, const Transform& xfA,
-                         const Shape& b, const Transform& xfB,
-                         Real speculativeMargin)
-        {
+            // ----------------------------------------------------------------
+            // Poly-cell helper (both cores >= 3 verts: polygon / AABB).
+            //
+            // GJK tests separation / speculative; on deep overlap SAT finds the
+            // minimum-penetration reference face and clips the incident edge ->
+            // up to 2 contact points. This cell is NOT routed to EPA -- the SAT
+            // reference-face MTV is already exact for two convex polygons, and
+            // EPA's single-point output would discard the second clip point the
+            // 2-point poly solver needs. (Round cells use EPA for deep overlap
+            // because the witness pair is a single point anyway.)
+            //
+            // Operates on the world cores `va`/`vb` already rotated by the
+            // dispatcher (radii via rA/rB). Behaviorally identical to the old
+            // inline poly path -- only the function boundary is new.
+            // ----------------------------------------------------------------
+            Manifold CollidePoly(const Vec2* va, int na, Real rA,
+                                 const Vec2* vb, int nb, Real rB,
+                                 Real speculativeMargin)
+            {
             Manifold m{};
 
-            // Stack scratch: kMaxPolyVerts = 128, but the common cases (circle,
-            // capsule, aabb) are 1-4 verts. 128 * sizeof(Vec2) = 1 KB -- fine.
-            Vec2 va[kMaxPolyVerts];
-            Vec2 vb[kMaxPolyVerts];
-
-            const int na = RotateInto(va, a, xfA);
-            const int nb = RotateInto(vb, b, xfB);
-
-            const Real rA = a.radius;
-            const Real rB = b.radius;
-
-            // ----------------------------------------------------------------
-            // Fast path: at least one shape is round (circle or capsule core).
-            // Circle = 1 vert, capsule = 2 verts. When either core is "short"
-            // (<=2 verts) the reference-face clip doesn't apply -- use the
-            // GJK witness pair directly (one contact point per closest feature).
-            // ----------------------------------------------------------------
-            if (na <= 2 || nb <= 2)
-            {
-                return CollideRound(va, na, rA, vb, nb, rB, speculativeMargin);
-            }
-
-            // ----------------------------------------------------------------
-            // Both cores have >= 3 verts (polygon / AABB). Use GJK to test
-            // separation / speculative, then SAT + reference-face clip for
-            // deep overlap.
-            // ----------------------------------------------------------------
             const GjkCoreResult g = GjkDistanceCore(va, na, vb, nb);
             const Real totalR = rA + rB;
 
@@ -619,6 +643,57 @@ namespace Arcane
             }
 
             return m;
+            } // CollidePoly
+
+        } // namespace
+
+        // ====================================================================
+        // Collide -- the unified v2 narrowphase entry (explicit dispatcher).
+        // ====================================================================
+        //
+        // The top of Collide is a small static type-pair dispatcher over named
+        // cells, classified by the two cores' vertex counts:
+        //
+        //   ROUND cell  (na <= 2 || nb <= 2 -- circle = 1 vert, capsule = 2):
+        //     CollideRound. Its GJK-witness branch handles separated / shallow /
+        //     speculative; its DEEP branch (cores overlapping) now calls EPA for
+        //     the EXACT nearest-face penetration (replacing the old centroid
+        //     approximation). Always a 1-point manifold.
+        //
+        //   POLY cell   (na >= 3 && nb >= 3 -- polygon / AABB):
+        //     CollidePoly. GJK for separated / speculative; SAT reference-face
+        //     clip for deep overlap (up to 2 points). This cell is NOT routed to
+        //     EPA -- the convex-poly SAT MTV is already exact and the 2-point
+        //     clip is what the poly solver consumes. UNCHANGED by Task 3.
+        //
+        // The dispatcher rotates each shape's unified core verts into world space
+        // (RotateInto) and forwards the world cores + radii to the chosen cell.
+        // ====================================================================
+        Manifold Collide(const Shape& a, const Transform& xfA,
+                         const Shape& b, const Transform& xfB,
+                         Real speculativeMargin)
+        {
+            // Stack scratch: kMaxPolyVerts = 128, but the common cases (circle,
+            // capsule, aabb) are 1-4 verts. 128 * sizeof(Vec2) = 1 KB -- fine.
+            Vec2 va[kMaxPolyVerts];
+            Vec2 vb[kMaxPolyVerts];
+
+            const int na = RotateInto(va, a, xfA);
+            const int nb = RotateInto(vb, b, xfB);
+
+            const Real rA = a.radius;
+            const Real rB = b.radius;
+
+            // Type-pair dispatch by core vertex count.
+            const bool roundCell = (na <= 2 || nb <= 2);
+            if (roundCell)
+            {
+                // ROUND: circle/capsule core -> GJK witness (shallow) or EPA (deep).
+                return CollideRound(va, na, rA, vb, nb, rB, speculativeMargin);
+            }
+
+            // POLY: both cores >= 3 verts -> GJK speculative or SAT ref-face clip.
+            return CollidePoly(va, na, rA, vb, nb, rB, speculativeMargin);
         }
 
     } // namespace Physics
