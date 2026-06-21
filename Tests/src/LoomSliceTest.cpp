@@ -41,6 +41,15 @@ namespace
         Arcane::PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
         REQUIRE(host.Load());   // plugin registers scene components + systems under the shared ctx
 
+        // ABI v2: the plugin loaded under a v2 EngineContext (imgui fields null here --
+        // headless, no ImGuiLayer). The host resolved the DrawUI hook; calling it is a
+        // no-op for PlaygroundGame, but proves the entry point is live and callable.
+        const Arcane::PluginVTable* vt = host.Vtable();
+        REQUIRE(vt != nullptr);
+        CHECK(vt->ABIVersion() == Arcane::kGamePluginABIVersion);
+        REQUIRE(vt->DrawUI != nullptr);
+        vt->DrawUI();   // no-op; must not crash with a null ImGui context
+
         for (int i = 0; i < 10; ++i)
             rt.Loop().Advance(1.0 / 60.0,
                 [&](double dt) { host.Vtable()->FixedUpdate(dt); },

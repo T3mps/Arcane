@@ -56,6 +56,18 @@ namespace Arcane
         void                 SetInputSnapshot(const InputSnapshot& snap) noexcept;
         const InputSnapshot& Input() const noexcept;
 
+        // --- ImGui handoff (ABI v2) ---
+        // The host installs its ImGui context + allocators here (once, after creating
+        // the ImGuiLayer); PluginHost copies them into the EngineContext so the plugin
+        // can adopt the host's GImGui across the DLL boundary. Stored as void* to keep
+        // this header imgui-include-free (ImGuiContext* / ImGuiMemAllocFunc / ...).
+        // All null in a headless host (no ImGuiLayer) -> plugins skip the install.
+        void  SetImGui(void* context, void* alloc, void* free, void* userData) noexcept;
+        void* ImGuiContext()  const noexcept;
+        void* ImGuiAlloc()    const noexcept;
+        void* ImGuiFree()     const noexcept;
+        void* ImGuiUserData() const noexcept;
+
         // --- hot-reload support (plugin Save/LoadState + the host call these) ---
         std::vector<std::byte> SnapshotRegistry() const;          // Registry::Save() -> bytes
 

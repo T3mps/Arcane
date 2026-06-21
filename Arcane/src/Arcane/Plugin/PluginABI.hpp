@@ -15,7 +15,8 @@ namespace Arcane
     class Runtime;  // defined in Arcane.dll; the plugin holds it opaquely via EngineContext
 
     // Bump on ANY change to EngineContext layout or the entry-point set/signatures.
-    inline constexpr uint32_t kGamePluginABIVersion = 1;
+    // v2 (2026-06-20): added the ImGui cross-DLL handoff fields below + GamePlugin_DrawUI.
+    inline constexpr uint32_t kGamePluginABIVersion = 2;
 
     struct EngineContext
     {
@@ -23,6 +24,17 @@ namespace Arcane
         Astra::TypeContext*    typeContext;    // plugin calls Astra::SetTypeContext(this) FIRST
         Astra::IWorkScheduler* workScheduler;  // the one engine enkiTS adapter (shared instance)
         Arcane::Runtime*       engine;         // registry, schedulers, snapshot/restore, render ctx
+
+        // ImGui cross-DLL handoff (v2). ImGui's globals (GImGui) and heap do not
+        // cross the DLL boundary; a plugin that wants to draw ImGui must adopt the
+        // host's context + allocators via ImGui::SetCurrentContext / SetAllocatorFunctions
+        // in Init. Kept as void* so this ABI header stays imgui-include-free; the
+        // plugin reinterpret_casts them to ImGuiContext* / ImGuiMemAllocFunc /
+        // ImGuiMemFreeFunc. Null in headless hosts (no ImGuiLayer) -> plugin skips.
+        void* imguiContext  = nullptr;   // ImGuiContext*
+        void* imguiAlloc    = nullptr;   // ImGuiMemAllocFunc
+        void* imguiFree     = nullptr;   // ImGuiMemFreeFunc
+        void* imguiUserData = nullptr;
     };
 
     namespace PluginEntry
@@ -34,6 +46,10 @@ namespace Arcane
         inline constexpr const char* kUpdate      = "GamePlugin_Update";
         inline constexpr const char* kSaveState   = "GamePlugin_SaveState";
         inline constexpr const char* kLoadState   = "GamePlugin_LoadState";
+        // v2: the host calls DrawUI between ImGuiLayer::BeginFrame and ::Render --
+        // the only window where ImGui draw calls are valid. The plugin's Update runs
+        // in the sim phase (before BeginFrame), so it is too early for ImGui.
+        inline constexpr const char* kDrawUI      = "GamePlugin_DrawUI";
     }
 
     // Host-side resolved function-pointer table for one loaded plugin image.
@@ -48,5 +64,9 @@ namespace Arcane
         // after the call, mirroring how LoadState signals failure via its bool return.
         void     (*SaveState)(Astra::BinaryWriter&)      = nullptr;
         bool     (*LoadState)(Astra::BinaryReader&)      = nullptr;
+        // v2: host calls this between ImGuiLayer BeginFrame and Render (the only valid
+        // ImGui draw window). Update is sim-phase -- too early. May be null if a plugin
+        // does not export it (resolution is lenient); the host null-checks before calling.
+        void     (*DrawUI)()                             = nullptr;
     };
 }

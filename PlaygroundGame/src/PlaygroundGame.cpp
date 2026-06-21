@@ -18,6 +18,7 @@
 #include <Astra/Serialization/BinaryReader.hpp>
 
 #include <glm/glm.hpp>
+#include <imgui.h>   // ABI v2: adopt the host's ImGui context/allocators (imported from Arcane.dll)
 
 #include <cstddef>
 #include <vector>
@@ -85,6 +86,18 @@ extern "C"
         Astra::SetTypeContext(ctx->typeContext);   // 1. shared context in THIS module
         g_ctx = ctx;
 
+        // ABI v2: adopt the host's ImGui context + allocators so DrawUI (called by the
+        // host between ImGuiLayer BeginFrame/Render) draws into the host's single GImGui.
+        // Null in a headless host (no ImGuiLayer) -> skip; PlaygroundGame's DrawUI is a no-op.
+        if (ctx->imguiContext)
+        {
+            ImGui::SetCurrentContext(static_cast<ImGuiContext*>(ctx->imguiContext));
+            ImGui::SetAllocatorFunctions(
+                reinterpret_cast<ImGuiMemAllocFunc>(ctx->imguiAlloc),
+                reinterpret_cast<ImGuiMemFreeFunc>(ctx->imguiFree),
+                ctx->imguiUserData);
+        }
+
         auto creg = ctx->engine->Components();
         creg->ReRegisterComponent<Arcane::LocalTransform>();   // 2. descriptors -> this module
         creg->ReRegisterComponent<Arcane::WorldTransform>();
@@ -111,6 +124,10 @@ extern "C"
     }
 
     GAME_API void GamePlugin_Update(double, double) {}
+
+    // ABI v2: the host calls this between ImGuiLayer BeginFrame and Render. The orbit
+    // fixture draws no UI -- a no-op that proves the entry point is exported and callable.
+    GAME_API void GamePlugin_DrawUI() {}
 
     GAME_API void GamePlugin_SaveState(Astra::BinaryWriter& w)
     {

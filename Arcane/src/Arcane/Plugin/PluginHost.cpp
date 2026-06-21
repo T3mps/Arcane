@@ -43,6 +43,10 @@ namespace Arcane
             vt.Update      = reinterpret_cast<void(*)(double,double)>(u);
             vt.SaveState   = reinterpret_cast<void(*)(Astra::BinaryWriter&)>(sv);
             vt.LoadState   = reinterpret_cast<bool(*)(Astra::BinaryReader&)>(ld);
+            // v2 DrawUI: lenient -- a v2 plugin that does not draw ImGui may omit it.
+            // The host null-checks vt.DrawUI before every call, so leaving it null is safe.
+            void* du = Detail::DLSym(h, PluginEntry::kDrawUI);
+            vt.DrawUI      = du ? reinterpret_cast<void(*)()>(du) : nullptr;
             return true;
         }
     }
@@ -69,6 +73,21 @@ namespace Arcane
             ctx.typeContext   = runtime.TypeContext();
             ctx.workScheduler = runtime.WorkScheduler();
             ctx.engine        = &runtime;
+            RefreshContext();
+        }
+
+        // Re-copy the per-frame-ish fields from the Runtime into the EngineContext just
+        // before every Init: the host may call Runtime::SetImGui AFTER this PluginHost is
+        // constructed (Loom installs the ImGui handoff once the ImGuiLayer exists), and a
+        // reload must hand the live context to the new image. The substrate fields
+        // (typeContext/workScheduler/engine) are fixed for the Runtime's lifetime.
+        void RefreshContext()
+        {
+            ctx.abiVersion    = kGamePluginABIVersion;
+            ctx.imguiContext  = runtime.ImGuiContext();
+            ctx.imguiAlloc    = runtime.ImGuiAlloc();
+            ctx.imguiFree     = runtime.ImGuiFree();
+            ctx.imguiUserData = runtime.ImGuiUserData();
         }
 
         bool CopyVersioned(uint32_t g, Image& out)
@@ -140,6 +159,7 @@ namespace Arcane
         const bool resolved = img.handle
             && Resolve(img.handle, img.vt)
             && img.vt.ABIVersion() == kGamePluginABIVersion;
+        m_impl->RefreshContext();   // pick up any ImGui handoff the host installed post-construction
         const bool initRan = resolved && img.vt.Init(&m_impl->ctx);
         if (!initRan)
         {
@@ -204,6 +224,7 @@ namespace Arcane
         const bool resolved = next.handle
             && Resolve(next.handle, next.vt)
             && next.vt.ABIVersion() == kGamePluginABIVersion;
+        m_impl->RefreshContext();
         const bool initRan = resolved && next.vt.Init(&m_impl->ctx);
         bool ok = initRan;
         if (ok && restoreState)
@@ -235,6 +256,7 @@ namespace Arcane
         if (!previous.dll.empty())
         {
             previous.handle = Detail::DLOpen(previous.dll);
+            m_impl->RefreshContext();
             if (previous.handle && Resolve(previous.handle, previous.vt) && previous.vt.Init(&m_impl->ctx))
             {
                 if (restoreState && !snapshot.empty())

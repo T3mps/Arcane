@@ -23,6 +23,14 @@ namespace Arcane
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
         InputSnapshot                               input{};   // latest host-supplied snapshot; plugins read via Input()
 
+        // ImGui cross-DLL handoff (v2): the host's context + allocators, forwarded
+        // into the plugin's EngineContext by PluginHost. All null until the host
+        // calls SetImGui (and in headless hosts that never create an ImGuiLayer).
+        void* imguiContext  = nullptr;
+        void* imguiAlloc    = nullptr;
+        void* imguiFree     = nullptr;
+        void* imguiUserData = nullptr;
+
         explicit Impl(Astra::TypeContext* external) : jobs(), sched(jobs.WorkScheduler())
         {
             if (external) { context = external; }
@@ -53,6 +61,18 @@ namespace Arcane
 
     void Runtime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_impl->input = snap; }
     const InputSnapshot& Runtime::Input() const noexcept { return m_impl->input; }
+
+    void Runtime::SetImGui(void* context, void* alloc, void* free, void* userData) noexcept
+    {
+        m_impl->imguiContext  = context;
+        m_impl->imguiAlloc    = alloc;
+        m_impl->imguiFree     = free;
+        m_impl->imguiUserData = userData;
+    }
+    void* Runtime::ImGuiContext()  const noexcept { return m_impl->imguiContext; }
+    void* Runtime::ImGuiAlloc()    const noexcept { return m_impl->imguiAlloc; }
+    void* Runtime::ImGuiFree()     const noexcept { return m_impl->imguiFree; }
+    void* Runtime::ImGuiUserData() const noexcept { return m_impl->imguiUserData; }
 
     void Runtime::SetRenderContext(Batcher2D* batcher, glm::vec2 cameraOffset)
     {

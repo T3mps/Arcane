@@ -342,9 +342,13 @@ project "PlaygroundGame"
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
+        "%{IncludeDir.imgui}",
     }
     links { "Arcane" }
-    defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING" }
+    -- ABI v2: the plugin draws ImGui via the host's exported context. imgui is exported
+    -- from Arcane.dll (IMGUI_API=dllexport there); the plugin imports it -- one GImGui per
+    -- process. The import lib arrives via "Arcane" (imgui surface is /WHOLEARCHIVE-exported).
+    defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
