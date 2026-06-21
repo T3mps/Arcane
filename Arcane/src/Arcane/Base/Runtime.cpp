@@ -62,11 +62,11 @@ namespace Arcane
     void Runtime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_impl->input = snap; }
     const InputSnapshot& Runtime::Input() const noexcept { return m_impl->input; }
 
-    void Runtime::SetImGui(void* context, void* alloc, void* free, void* userData) noexcept
+    void Runtime::SetImGui(void* context, void* alloc, void* freeFn, void* userData) noexcept
     {
         m_impl->imguiContext  = context;
         m_impl->imguiAlloc    = alloc;
-        m_impl->imguiFree     = free;
+        m_impl->imguiFree     = freeFn;
         m_impl->imguiUserData = userData;
     }
     void* Runtime::ImGuiContext()  const noexcept { return m_impl->imguiContext; }

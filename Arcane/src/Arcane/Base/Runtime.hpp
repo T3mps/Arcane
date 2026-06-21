@@ -62,7 +62,7 @@ namespace Arcane
         // can adopt the host's GImGui across the DLL boundary. Stored as void* to keep
         // this header imgui-include-free (ImGuiContext* / ImGuiMemAllocFunc / ...).
         // All null in a headless host (no ImGuiLayer) -> plugins skip the install.
-        void  SetImGui(void* context, void* alloc, void* free, void* userData) noexcept;
+        void  SetImGui(void* context, void* alloc, void* freeFn, void* userData) noexcept;
         void* ImGuiContext()  const noexcept;
         void* ImGuiAlloc()    const noexcept;
         void* ImGuiFree()     const noexcept;

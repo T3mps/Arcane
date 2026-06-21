@@ -69,7 +69,8 @@ namespace Arcane
             : runtime(rt), source(std::move(src))
         {
             tempDir = std::filesystem::temp_directory_path() / "arcane_plugins";
-            ctx.abiVersion    = kGamePluginABIVersion;
+            // Substrate fields are fixed for the Runtime's lifetime; abiVersion + the
+            // imgui handoff are (re)set by RefreshContext before each Init.
             ctx.typeContext   = runtime.TypeContext();
             ctx.workScheduler = runtime.WorkScheduler();
             ctx.engine        = &runtime;
