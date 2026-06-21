@@ -297,6 +297,35 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
             w.SetAngle(box, kBoxInitAngle);
         }
 
+        // ---- Deep-overlap round body (v2 EPA/MPR): spawned OVERLAPPING a
+        // static block so its first contact is a DEEP overlap, exercising
+        // Collide's EPA deep-round cell (MPR fallback) in the full pipeline.
+        // The f64->f32 EPA/MPR paths are deterministic; this body's position +
+        // angle enter the hash LAST (stable index order), so the determinism
+        // gate now also covers the deep-overlap recovery path. (This adds a body
+        // to the scene -> it DELIBERATELY changes the hash value; the gate is
+        // run-twice IDENTITY + != 0, not a pinned constant.)
+        BodyHandle deepBlock; // static block the round body is buried in
+        {
+            BodyDef bd;
+            bd.type     = BodyType::Static;
+            bd.position = Vec2(Real(60), Real(180)); // off to the side, clear of the floor stack
+            bd.shape    = MakeAabb(Real(20), Real(20));
+            deepBlock   = w.AddBody(bd);
+        }
+        (void)deepBlock;
+        BodyHandle deepBall;
+        {
+            BodyDef bd;
+            bd.type        = BodyType::Dynamic;
+            bd.position    = Vec2(Real(60), Real(174)); // 6 above the block centre, DEEP inside
+            bd.shape       = MakeCircle(Real(5));
+            bd.density     = Real(1);
+            bd.restitution = Real(0.1f);
+            bd.friction    = Real(0.4f);
+            deepBall       = w.AddBody(bd);
+        }
+
         // ---- Joint 1: Revolute — d0 as pendulum from revAnchor --------------
         // d0 starts offset from the anchor; gravity swings it down.
         // The body's angle evolves continuously → angle term is non-trivial.
@@ -392,6 +421,19 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
             {
                 const Vec2 p = w.Position(box);
                 const Real a = w.GetAngle(box);
+                hash = HashStep(hash, p.x, p.y, a);
+            }
+
+            // Deep-overlap round body: position + angle (appended AFTER the box
+            // so the index order stays deterministic). Spawned buried in a
+            // static block, its first contact takes the EPA deep-round cell; the
+            // f64->f32 EPA/MPR recovery path is deterministic, so its evolving
+            // position + angle gate that path's determinism. (Adding this body
+            // intentionally re-baselines the hash VALUE; run-twice identity + !=0
+            // is the gate, not a pinned constant.)
+            {
+                const Vec2 p = w.Position(deepBall);
+                const Real a = w.GetAngle(deepBall);
                 hash = HashStep(hash, p.x, p.y, a);
             }
         }
