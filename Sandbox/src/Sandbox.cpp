@@ -134,9 +134,11 @@ extern "C"
     GAME_API void GamePlugin_FixedUpdate(double dt)
     {
         // Pumps the SceneControl side channel (a pending scene switch/reset rebuilds here,
-        // BEFORE the engine fixedUpdate scheduler), then runs the Task-7 mouse-interaction
-        // layer (spawn/drag/throw + pan/zoom) on the per-frame input snapshot; PhysicsSystem
-        // then does the stepping. Input() returns the latest snapshot the host (Loom) stored.
+        // BEFORE the engine fixedUpdate scheduler), runs the Task-7 mouse-interaction layer
+        // (spawn/drag/throw + pan/zoom) on the per-frame input snapshot, then drives the
+        // physics step itself (Task 8: SandboxApp owns the PhysicsSystem step so the HUD can
+        // pause/single-step/time-scale it -- see SandboxApp::FixedUpdate). Input() returns the
+        // latest snapshot the host (Loom) stored.
         g_app.FixedUpdate(g_ctx->engine->Registry(), dt, g_ctx->engine->Input());
     }
 
