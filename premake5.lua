@@ -342,7 +342,8 @@ project "Sandbox"
 
 -- ============================================================================
 -- Loom: the thin host (Loom.exe). Engine boot + RunLoop + PluginHost. Hosts
--- PlaygroundGame.dll (copied beside Loom.exe -- the default watched path).
+-- Sandbox.dll by default (the physics/engine showcase); PlaygroundGame.dll is
+-- also copied beside Loom.exe as the minimal hot-reload fixture / swap target.
 -- ============================================================================
 project "Loom"
     location "Loom"
