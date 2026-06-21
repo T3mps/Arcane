@@ -98,6 +98,14 @@ namespace Arcane::Sandbox
             if (hit != Phys::kInvalidBody)
             {
                 m_grabbed = hit;                  // grab the body under the cursor
+                // Capture the click point in the body's LOCAL frame so the drag
+                // pulls THAT point (off-center grabs rotate the body):
+                //   localAnchor = R(-angle) * (clickWorld - origin).
+                const Phys::Vec2 o = world.Position(hit);
+                const Phys::Real a = world.GetAngle(hit);
+                const Phys::Vec2 la = Phys::RotateVec(
+                    -a, Phys::Vec2(cursorWorld.x - o.x, cursorWorld.y - o.y));
+                m_grabLocalAnchor = glm::vec2(la.x, la.y);
             }
             else
             {
@@ -123,34 +131,79 @@ namespace Arcane::Sandbox
             }
             else
             {
-                const Phys::Vec2 bp = world.Position(m_grabbed);
-                glm::vec2 toCursor = cursorWorld - glm::vec2(bp.x, bp.y);
-                // Target velocity reaches the cursor in ~one step, clamped to a sane
-                // max -- a critically-damped mouse-spring (the position error IS the
-                // target velocity, so it also holds the body against gravity).
-                glm::vec2 desiredVel = (dt > 0.0f) ? (toCursor / dt) : glm::vec2(0.0f);
+                // ---- mouse-spring as a BOUNDED-force POINT pull at the grab anchor.
+                // The drive targets the GRAB POINT (origin + R(angle)*localAnchor),
+                // not the COM, so an off-center grab rotates the body. It is a
+                // capped impulse (never a velocity override) applied BEFORE
+                // world.Step, so the contact solver resolves it the same step -- a
+                // dragged body stops against obstacles and imparts bounded momentum.
+                const std::uint32_t si = m_grabbed.index;
+                const Phys::Vec2 o = world.Position(m_grabbed);   // body origin
+                const Phys::Real a = world.GetAngle(m_grabbed);
+
+                const Phys::Vec2 wa = Phys::Vec2(o.x, o.y) + Phys::RotateVec(
+                    a, Phys::Vec2(m_grabLocalAnchor.x, m_grabLocalAnchor.y));
+                const glm::vec2 worldAnchor(wa.x, wa.y);
+
+                // Lever from the COM to the grab point (the drag torques about COM).
+                const Phys::Vec2 com = Phys::Vec2(o.x, o.y)
+                    + Phys::RotateVec(a, world.GetLocalCenter(m_grabbed));
+                const glm::vec2 r(worldAnchor.x - com.x, worldAnchor.y - com.y);
+
+                // Critically-damped target velocity for the grab point (reach the
+                // cursor in ~one step), clamped to kDragMaxSpeed.
+                glm::vec2 desiredVel = (dt > 0.0f)
+                    ? (cursorWorld - worldAnchor) / dt : glm::vec2(0.0f);
                 const float speed = glm::length(desiredVel);
                 if (speed > kDragMaxSpeed && speed > 0.0f)
                     desiredVel *= (kDragMaxSpeed / speed);
 
-                // Drive via a CAPPED impulse (not a velocity override): the impulse
-                // that would realize desiredVel this step is clamped to
-                // mass*kDragMaxAccel*dt, so the contact solver (uncapped normal
-                // impulses) wins -- a dragged body stops against obstacles instead
-                // of ramming through, and slides across others with bounded momentum.
-                // ApplyImpulse runs BEFORE world.Step, so the solver resolves the
-                // drag-induced velocity against contacts the SAME step. Applied at
-                // the COM (linear) -- predictable, and no grab-anchor state to track.
-                const Phys::Vec2 cv = world.Velocity(m_grabbed);
-                const float mass    = world.GetBodyMass(m_grabbed);
-                glm::vec2 impulse = (desiredVel - glm::vec2(cv.x, cv.y)) * mass;
+                // Grab-point velocity = vCom + omega x r (CrossWR convention).
+                const Phys::Vec2 vc = world.Velocity(m_grabbed);
+                const float omega   = world.AngVelSlot(si);
+                const glm::vec2 anchorVel(vc.x - omega * r.y, vc.y + omega * r.x);
+
+                // Point-constraint effective mass K (Box2D b2MouseJoint form), so
+                // the impulse accounts for the body's rotational inertia (no spin
+                // blow-up on a long-lever / small-inertia grab):
+                //   K = [ invM + invI*r.y^2 ,  -invI*r.x*r.y      ]
+                //       [ -invI*r.x*r.y     ,   invM + invI*r.x^2 ]
+                // invM/invI are the solver's actual inverses -> a fixedRotation
+                // body (invI == 0) reduces to a pure-linear pull.
+                const float invM = world.InvMassSlot(si);
+                const float invI = world.InvInertiaSlot(si);
+                const glm::vec2 cdv = desiredVel - anchorVel;
+                const float k11 = invM + invI * r.y * r.y;
+                const float k12 = -invI * r.x * r.y;
+                const float k22 = invM + invI * r.x * r.x;
+                const float det = k11 * k22 - k12 * k12;
+                glm::vec2 impulse(0.0f, 0.0f);
+                if (det != 0.0f)
+                {
+                    const float invDet = 1.0f / det;
+                    impulse.x = invDet * ( k22 * cdv.x - k12 * cdv.y);
+                    impulse.y = invDet * (-k12 * cdv.x + k11 * cdv.y);
+                }
+
+                // Cap the LINEAR momentum (bounded force the solver can resist)...
+                const float mass = world.GetBodyMass(m_grabbed);
                 const float maxImpulse = mass * kDragMaxAccel * dt;
-                const float impLen = glm::length(impulse);
+                float impLen = glm::length(impulse);
                 if (impLen > maxImpulse && impLen > 0.0f)
+                {
                     impulse *= (maxImpulse / impLen);
+                    impLen = maxImpulse;
+                }
+                // ...and clamp the per-step ANGULAR velocity change so an off-center
+                // grab turns SMOOTHLY (the linear cap alone does not bound omega).
+                const float dOmega = invI * (r.x * impulse.y - r.y * impulse.x);
+                const float adO = std::abs(dOmega);
+                if (adO > kDragMaxAngVel && adO > 0.0f)
+                    impulse *= (kDragMaxAngVel / adO);
 
                 world.Wake(m_grabbed);
-                world.ApplyImpulse(m_grabbed, Phys::Vec2(impulse.x, impulse.y));
+                world.ApplyImpulse(m_grabbed, Phys::Vec2(impulse.x, impulse.y),
+                                   Phys::Vec2(worldAnchor.x, worldAnchor.y));
             }
         }
 

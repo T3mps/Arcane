@@ -103,6 +103,14 @@ namespace Arcane::Sandbox
         // of velocity change per frame vs the old override's instantaneous 4000).
         static constexpr float kDragMaxAccel = 40000.0f;
 
+        // Mouse-spring: max per-step ANGULAR-velocity change (rad/s) the drag may
+        // impart. The grab pull is applied at the (off-center) grab point, so a
+        // long lever / small inertia could snap-spin the body -- the linear accel
+        // cap does NOT bound omega = (r x P) * invInertia. This clamps it so an
+        // off-center grab turns the body SMOOTHLY toward the cursor. Center grabs
+        // (lever 0) and fixedRotation bodies are unaffected (dOmega is already 0).
+        static constexpr float kDragMaxAngVel = 8.0f;
+
         // Pick radius (world units) for the cursor query shape -- a small circle at
         // the cursor; the first dynamic body it overlaps is grabbed.
         static constexpr float kPickRadius = 4.0f;
@@ -160,6 +168,13 @@ namespace Arcane::Sandbox
 
         // The grabbed body (kInvalidBody = nothing grabbed).
         Arcane::Physics::BodyHandle m_grabbed = Arcane::Physics::kInvalidBody;
+
+        // The grab point in the body's LOCAL frame, captured at the press edge:
+        //   localAnchor = R(-angle) * (clickWorld - bodyOrigin).
+        // The mouse-spring pulls THIS point (re-derived to world each frame as
+        // bodyOrigin + R(angle)*localAnchor) toward the cursor, so an off-center
+        // grab rotates the body (grab a corner -> it turns to follow the cursor).
+        glm::vec2 m_grabLocalAnchor{0.0f, 0.0f};
 
         // HUD-controlled spawn knobs (shape/size/density). Default = the Task-7 box.
         SpawnConfig m_spawn{};

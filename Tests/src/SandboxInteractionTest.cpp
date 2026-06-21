@@ -288,6 +288,46 @@ TEST_CASE("Interaction: a grabbed body accelerates under a bounded force", "[san
 }
 
 // ---------------------------------------------------------------------------
+// (g) ANCHOR drag: a body grabbed OFF-CENTER rotates when dragged. The drive is
+//     applied at the GRAB POINT (not the COM), so an off-center pull torques the
+//     body -- grab a corner, the body turns to follow the cursor. A COM-only
+//     drive would translate it with ZERO rotation.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: dragging a body grabbed off-center rotates it", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;                 // identity
+    Sbx::Interaction it;
+
+    // A CIRCLE -- free to rotate (Aabb dynamics are fixedRotation). No floor, so
+    // the only torque source is the off-center drag (gravity acts at the COM).
+    const glm::vec2 bodyPos{300.0f, 300.0f};
+    Sbx::SpawnCircle(w.reg, w.root, bodyPos, 24.0f,
+                     Phys::BodyType::Dynamic, glm::vec4(1.0f), 1.0f);
+    w.Step();                        // materialize the body
+
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);      // baseline
+    // Grab OFF-CENTER: the body's right side (+18 in x from the center).
+    const glm::vec2 grabPt{bodyPos.x + 18.0f, bodyPos.y};
+    it.Tick(w.reg, w.Physics(), cam, Snap(grabPt.x, grabPt.y, kLMB), kDt);
+    REQUIRE(it.IsGrabbing());
+
+    // Pull the grabbed (right-side) point straight DOWN: r=+x, F=+y -> a CCW
+    // torque about the COM. The body must visibly rotate (angle != 0).
+    const glm::vec2 target{grabPt.x, grabPt.y + 80.0f};
+    for (int i = 0; i < 24; ++i)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(target.x, target.y, kLMB), kDt);
+        w.Step();
+    }
+
+    const Phys::BodyHandle b = it.GrabbedHandleForTest();
+    REQUIRE(b != Phys::kInvalidBody);
+    INFO("final angle = " << w.Physics().GetAngle(b));
+    CHECK(std::abs(w.Physics().GetAngle(b)) > 0.1f);   // off-center drag rotated it
+}
+
+// ---------------------------------------------------------------------------
 // (d) Zoom clamp: repeated zoom-out never reaches 0 (ScreenToWorld stays safe).
 // ---------------------------------------------------------------------------
 TEST_CASE("Interaction: zoom-out is clamped to a positive minimum", "[sandbox]")
