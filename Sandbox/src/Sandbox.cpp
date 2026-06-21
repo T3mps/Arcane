@@ -116,8 +116,11 @@ extern "C"
         sch.render.AddSystem<Arcane::Sandbox::PhysicsDebugRenderSystem>();
 
         // 4. Build the scene (fresh boot only; a hot-reload-with-state restores it).
+        //    BuildInitialScene mints its OWN fresh PhysicsResource (via the clean-rebuild
+        //    path it shares with SetScene/Reset), so no pre-EnsurePhysicsResource is needed
+        //    on the build path; the LoadState path below still calls EnsurePhysicsResource.
         Astra::Registry& reg = ctx->engine->Registry();
-        EnsurePhysicsResource(reg);
+        g_app.Configure(kGravityY);   // gravity for every (re)built PhysicsResource world
         if (!reg.GetResource<Arcane::SceneRoot>())
             g_app.BuildInitialScene(reg);
         CacheRoot(reg);
@@ -128,7 +131,9 @@ extern "C"
 
     GAME_API void GamePlugin_FixedUpdate(double dt)
     {
-        g_app.FixedUpdate(dt);   // no-op in Task 4; PhysicsSystem does the stepping
+        // Pumps the SceneControl side channel (a pending scene switch/reset rebuilds here,
+        // BEFORE the engine fixedUpdate scheduler); PhysicsSystem then does the stepping.
+        g_app.FixedUpdate(g_ctx->engine->Registry(), dt);
     }
 
     GAME_API void GamePlugin_Update(double dt, double alpha)
