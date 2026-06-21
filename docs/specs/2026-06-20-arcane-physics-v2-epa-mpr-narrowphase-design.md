@@ -132,6 +132,21 @@ GJK return value and all existing callers are unchanged (additive output field).
 | `Solver/*`, `ContactManager`, `Island`, queries, CCD | **No change** — they consume `Collide()`'s manifold exactly as today. |
 | `Tests/` | New `PhysicsEpaTest.cpp`, `PhysicsMprTest.cpp` (analytic); a deep-penetration-recovery invariant + a deep-overlap scene in the determinism gate. |
 
+## Algorithm choices & alternatives considered
+
+The narrowphase deliberately uses different algorithm families per job; recording the boundaries so
+the next reader does not reach for the wrong tool:
+
+| Job | Chosen | Alternatives NOT used (and why) |
+|---|---|---|
+| Discrete manifold clipping | **Sutherland-Hodgman** (incident edge vs reference-face side planes; `ClipSegment`, Box2D v3 `b2ClipSegments` lineage) | **Greiner-Hormann** — general Boolean/concave polygon clipping; unnecessary for contact gen (we only clip ONE convex edge against ONE face for ≤2 points). Its home is the offline **geometry-utilities** workstream (decomposition, sprite-outline Booleans, Phase E fracture cuts), NOT the runtime narrowphase. S-H is exact here precisely because cores are convex (concave → convex fixtures). |
+| Distance, closest points, CCD | **GJK** + **conservative advancement** (`ShapeCast`/`ShapeCastPoly`) | **Lin-Canny / V-Clip** — incremental closest-feature / Voronoi-region tracking for continuous collision; would add a parallel feature-adjacency subsystem for no benefit since GJK already owns distance, and conservative advancement is fixed-iteration (determinism-friendly). Modern Box2D/Bullet approach. |
+| Deep-overlap penetration axis | **EPA** (exact) + **MPR** (fast single point) | (this workstream adds them) |
+
+**EPA/MPR reuse, not replace, the clip:** EPA/MPR supply only the penetration AXIS that GJK cannot
+(degenerate at distance 0). That axis is handed to the EXISTING Sutherland-Hodgman `ClipSegment` to
+emit the 2-point manifold — this workstream adds **no new clip code**.
+
 ## Determinism
 
 - **f32** per-platform, fixed 60 Hz, stable index iteration, no wall-clock — all retained.
