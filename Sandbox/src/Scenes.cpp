@@ -623,4 +623,34 @@ namespace Arcane::Sandbox
     {
         return std::span<const SceneDef>(kScenes.data(), kScenes.size());
     }
+
+    // -------------------------------------------------------------------------
+    // Public spawn builders (Task 7). Thin forwarders onto the file-local Path-A
+    // MakeBox/MakeCircle so the interaction layer reuses the EXACT body assembly
+    // (no duplication). If `root` is null, resolve the SceneRoot resource entity
+    // so a spawn always lands under the scene subtree.
+    // -------------------------------------------------------------------------
+    namespace
+    {
+        Astra::Entity ResolveRoot(Astra::Registry& reg, Astra::Entity root)
+        {
+            if (root != Astra::Entity{}) return root;
+            if (auto* sr = reg.GetResource<Arcane::SceneRoot>()) return sr->entity;
+            return root;   // null -> MakeBox/MakeCircle SetParent(e, null) is a no-op parent
+        }
+    }
+
+    Astra::Entity SpawnBox(Astra::Registry& reg, Astra::Entity root,
+                           glm::vec2 pos, glm::vec2 halfExtents,
+                           Physics::BodyType type, glm::vec4 tint)
+    {
+        return MakeBox(reg, ResolveRoot(reg, root), pos, halfExtents, type, tint);
+    }
+
+    Astra::Entity SpawnCircle(Astra::Registry& reg, Astra::Entity root,
+                              glm::vec2 pos, float radius,
+                              Physics::BodyType type, glm::vec4 tint)
+    {
+        return MakeCircle(reg, ResolveRoot(reg, root), pos, radius, type, tint);
+    }
 }

@@ -26,6 +26,7 @@
 // which is exactly how the render phase is driven -- no bespoke render path.
 
 #include "Camera.hpp"                       // the sandbox 2D pan + zoom view
+#include "Interaction.hpp"                  // mouse spawn/drag/throw + pan/zoom (Task 7)
 
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>   // PhysicsResource (owns the PhysicsWorld)
@@ -36,6 +37,8 @@
 
 #include <cstddef>
 #include <cstdint>
+
+namespace Arcane { struct InputSnapshot; }
 
 namespace Arcane::Sandbox
 {
@@ -109,7 +112,15 @@ namespace Arcane::Sandbox
         // fixedUpdate; the render systems submit in the render phase). FixedUpdate also
         // pumps the SceneControl side channel: a pending reset/switch is applied here, BEFORE
         // the engine fixedUpdate scheduler runs, so the rebuild is on a clean registry.
-        void FixedUpdate(Astra::Registry& reg, double dt);
+        //
+        // Task 7: FixedUpdate also runs the mouse-interaction layer (spawn/drag/throw +
+        // pan/zoom) on `input` BEFORE the engine fixedUpdate scheduler -- so a grabbed
+        // body's drive velocity is set before PhysicsSystem steps, a spawned entity is
+        // materialized by the same step's CREATE pass, and camera pan/zoom is in place
+        // before Update pushes the camera (Runtime::SetCamera) later this frame. The
+        // interaction runs AFTER the scene-switch pump so a switch's fresh world is the
+        // one the interaction (and its stale-grab guard) sees.
+        void FixedUpdate(Astra::Registry& reg, double dt, const Arcane::InputSnapshot& input);
         void Update(double dt, double alpha);
 
         std::size_t CurrentScene() const noexcept { return m_sceneIndex; }
@@ -133,5 +144,6 @@ namespace Arcane::Sandbox
         std::size_t m_sceneIndex = 0;
         float       m_gravityY   = 0.0f;
         Camera      m_camera{};      // default identity; configured in RebuildScene
+        Interaction m_interaction{}; // mouse spawn/drag/throw + pan/zoom (Task 7)
     };
 }

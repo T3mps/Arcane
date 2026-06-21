@@ -6,6 +6,7 @@
 #include "SandboxApp.hpp"
 #include "Scenes.hpp"
 
+#include <Arcane/Input/InputSnapshot.hpp>       // InputSnapshot (fed to the interaction layer)
 #include <Arcane/Physics/PhysicsWorld.hpp>      // PhysicsWorld + WorldDef (fresh world per scene)
 #include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsResource
 
@@ -61,7 +62,11 @@ namespace Arcane::Sandbox
         //    pipeline live + correct so a nonzero camera moves sprites + overlay together.
         m_camera = Camera{};
 
-        // 5. Publish the new index for the SceneControl side channel.
+        // 5. Drop any active mouse grab: the old PhysicsWorld (and the grabbed body's
+        //    handle) is gone -- a held grab must not carry into the fresh world.
+        m_interaction.ClearGrab();
+
+        // 6. Publish the new index for the SceneControl side channel.
         PublishControl(reg);
     }
 
@@ -93,7 +98,8 @@ namespace Arcane::Sandbox
         RebuildScene(reg, m_sceneIndex);
     }
 
-    void SandboxApp::FixedUpdate(Astra::Registry& reg, double /*dt*/)
+    void SandboxApp::FixedUpdate(Astra::Registry& reg, double dt,
+                                 const Arcane::InputSnapshot& input)
     {
         // Pump the SceneControl side channel BEFORE the engine fixedUpdate scheduler runs
         // (RunLoop calls this plugin hook first), so a rebuild lands on a clean registry,
@@ -114,9 +120,17 @@ namespace Arcane::Sandbox
                 SetScene(reg, idx);
             }
         }
-        // Otherwise no per-frame mutation: PhysicsSystem (registered in fixedUpdate) advances
-        // the PhysicsWorld and writes back into LocalTransform; TransformPropagationSystem
-        // derives WorldTransform.
+
+        // Task 7: run the mouse-interaction layer on the (possibly just-rebuilt) scene,
+        // still BEFORE the engine fixedUpdate scheduler (PhysicsSystem). Spawned entities
+        // are materialized by this step's CREATE pass; a grabbed body's drive velocity is
+        // set so it integrates this step; camera pan/zoom is in place before Update pushes
+        // the camera. Guarded by a live PhysicsWorld (always present after a (re)build).
+        if (PhysicsResource* phys = reg.GetResource<PhysicsResource>(); phys && phys->world)
+            m_interaction.Tick(reg, *phys->world, m_camera, input, static_cast<float>(dt));
+
+        // PhysicsSystem (registered in fixedUpdate) then advances the PhysicsWorld and
+        // writes back into LocalTransform; TransformPropagationSystem derives WorldTransform.
     }
 
     void SandboxApp::Update(double /*dt*/, double /*alpha*/)

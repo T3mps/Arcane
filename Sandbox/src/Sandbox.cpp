@@ -132,8 +132,10 @@ extern "C"
     GAME_API void GamePlugin_FixedUpdate(double dt)
     {
         // Pumps the SceneControl side channel (a pending scene switch/reset rebuilds here,
-        // BEFORE the engine fixedUpdate scheduler); PhysicsSystem then does the stepping.
-        g_app.FixedUpdate(g_ctx->engine->Registry(), dt);
+        // BEFORE the engine fixedUpdate scheduler), then runs the Task-7 mouse-interaction
+        // layer (spawn/drag/throw + pan/zoom) on the per-frame input snapshot; PhysicsSystem
+        // then does the stepping. Input() returns the latest snapshot the host (Loom) stored.
+        g_app.FixedUpdate(g_ctx->engine->Registry(), dt, g_ctx->engine->Input());
     }
 
     GAME_API void GamePlugin_Update(double dt, double alpha)

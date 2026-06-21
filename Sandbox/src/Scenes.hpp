@@ -10,10 +10,37 @@
 
 #include <span>
 
+#include <Arcane/Physics/PhysicsTypes.hpp>   // Physics::BodyType
+
+#include <Astra/Entity/Entity.hpp>           // Astra::Entity (a using-alias -- can't fwd-declare)
+
+#include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
+
 namespace Astra { class Registry; }
 
 namespace Arcane::Sandbox
 {
+    // -------------------------------------------------------------------------
+    // Public spawn builders (Task 7): the SAME Astra-component body authoring the
+    // scene builders use (LocalTransform + WorldTransform + RigidBody2D +
+    // Collider2D + PhysicsBodyRef + SpriteRenderer, parented under SceneRoot), but
+    // callable from outside Scenes.cpp so the interaction layer can spawn at the
+    // cursor without duplicating the body-assembly. PhysicsSystem mints the live
+    // PhysicsWorld body on the next fixedUpdate (component-driven, no world-direct
+    // create). `root` defaults to the SceneRoot resource entity when left null.
+    // -------------------------------------------------------------------------
+
+    // Dynamic/static box: an Aabb-fixture body. Returns the created entity.
+    Astra::Entity SpawnBox(Astra::Registry& reg, Astra::Entity root,
+                           glm::vec2 pos, glm::vec2 halfExtents,
+                           Physics::BodyType type, glm::vec4 tint);
+
+    // Dynamic/static circle: a Circle-fixture body. Returns the created entity.
+    Astra::Entity SpawnCircle(Astra::Registry& reg, Astra::Entity root,
+                              glm::vec2 pos, float radius,
+                              Physics::BodyType type, glm::vec4 tint);
+
     // One scene: a human-readable name + a builder that fills the Registry.
     // The builder creates a SceneRoot entity, parents all scene content under it,
     // and calls reg.SetResource<Arcane::SceneRoot>(...) so the engine systems and
