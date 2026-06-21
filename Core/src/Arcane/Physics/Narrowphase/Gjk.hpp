@@ -203,6 +203,89 @@ namespace Arcane
                                                     const Vec2* vb, int nb);
 
         // ----------------------------------------------------------------
+        // MdSupport: Minkowski-difference support over two world cores (the EPA
+        // / MPR seam, Physics v2 EPA workstream Task 1).
+        // ----------------------------------------------------------------
+        //
+        // The MD boundary point farthest along a search direction `dir`, plus
+        // the support points that produced it on A's core (along +dir) and B's
+        // core (along -dir) and their input vertex indices.
+        //
+        // md == support(A,+dir) - support(B,-dir). pa is the witness on A's
+        // core, pb the witness on B's core (both world space). ia/ib index into
+        // the va[]/vb[] arrays passed to SupportMinkowski.
+        //
+        // NOTE: Gjk.cpp's anonymous namespace carries an f64 internal MdSupport
+        // (the simplex math runs in double, mirroring GJK.lua). This PUBLIC type
+        // is the f32 (Real) narrowing of that internal struct; SupportMinkowski
+        // calls the internal f64 SupportMd and narrows on return.
+        struct MdSupport
+        {
+            Vec2 md{ Real(0), Real(0) };  // support on A minus support on B
+            Vec2 pa{ Real(0), Real(0) };  // support point on A's core (+dir)
+            Vec2 pb{ Real(0), Real(0) };  // support point on B's core (-dir)
+            int  ia = 0;                  // A vertex index
+            int  ib = 0;                  // B vertex index
+        };
+
+        // ----------------------------------------------------------------
+        // SupportMinkowski: the MD support over two world cores along `dir`.
+        // ----------------------------------------------------------------
+        //
+        // Argmax over A along +dir, over B along -dir; md = pa - pb. Same math
+        // as Gjk.cpp's internal SupportMd (carried in f64, narrowed to Real on
+        // return). ADDITIVE: existing GJK entries unchanged.
+        [[nodiscard]] MdSupport SupportMinkowski(const Vec2* va, int na,
+                                                 const Vec2* vb, int nb,
+                                                 Vec2 dir);
+
+        // ----------------------------------------------------------------
+        // GjkSimplexVertex / GjkSimplex: the terminal GJK simplex (EPA seed,
+        // Physics v2 EPA workstream Task 1).
+        // ----------------------------------------------------------------
+        //
+        // GjkSimplexVertex carries one simplex vertex: the MD point plus the A/B
+        // support pair (wa on A, wb on B) and their input vertex indices that
+        // produced it.
+        struct GjkSimplexVertex
+        {
+            Vec2 md{ Real(0), Real(0) };
+            Vec2 wa{ Real(0), Real(0) };
+            Vec2 wb{ Real(0), Real(0) };
+            int  ia = 0;
+            int  ib = 0;
+        };
+
+        // The terminal GJK simplex. enclosesOrigin == true means the cores
+        // OVERLAP and v[0..2] form a triangle containing the origin (EPA's seed,
+        // count == 3). enclosesOrigin == false means the cores are separated --
+        // count (1..3) + v describe the closest simplex.
+        struct GjkSimplex
+        {
+            GjkSimplexVertex v[3];
+            int  count = 0;             // 1..3
+            bool enclosesOrigin = false;
+        };
+
+        // ----------------------------------------------------------------
+        // GjkOriginSimplex: run GJK on two world cores and return the terminal
+        // simplex (EPA seed).
+        // ----------------------------------------------------------------
+        //
+        // Runs the SAME simplex loop as GjkDistanceCore (same f64 internal
+        // simplex, same 64-iteration cap, same convergence / overlap tests). On
+        // OVERLAP the n==3 origin-inside branch returns the 3 terminal MD verts
+        // as a triangle enclosing the origin (enclosesOrigin == true, count ==
+        // 3). On convergence WITHOUT enclosing the origin it returns the closest
+        // simplex (count = 1/2/3 as built, enclosesOrigin == false).
+        //
+        // Carries f64 internally, narrows to Real on return. Deterministic
+        // (fixed cap + iteration order, no heap, no wall-clock). ADDITIVE:
+        // GjkDistanceCore and all existing GJK outputs are UNCHANGED.
+        [[nodiscard]] GjkSimplex GjkOriginSimplex(const Vec2* va, int na,
+                                                  const Vec2* vb, int nb);
+
+        // ----------------------------------------------------------------
         // BuildCore: PORT of GJK.lua:buildCore. Writes the convex core verts of
         // `s` at world transform `xf` (ROTATION + translation: each local core
         // vert is rotated by xf.rotation, then offset by xf.position -- T7 made

@@ -64,7 +64,12 @@ namespace Arcane
             // supportMD (GJK.lua:22-26): Minkowski-difference support =
             // support(A,d) - support(B,-d). Returns the MD point and the two
             // witness points (pa on A, pb on B).
-            struct MdSupport
+            //
+            // f64 INTERNAL type, distinct from the public Arcane::Physics::
+            // MdSupport (Vec2/Real). The two are kept separate so the simplex
+            // math stays in double (GJK.lua parity); SupportMinkowski narrows
+            // this to the public Real struct on return.
+            struct MdSupport_f64
             {
                 V2  md;   // support(A,d) - support(B,-d)
                 V2  pa;   // witness on A
@@ -73,13 +78,91 @@ namespace Arcane
                 int ib;   // index into vb[] for pb
             };
 
-            MdSupport SupportMd(const Vec2* va, int na, const Vec2* vb, int nb,
-                                double dx, double dy)
+            MdSupport_f64 SupportMd(const Vec2* va, int na, const Vec2* vb,
+                                    int nb, double dx, double dy)
             {
                 int ia = 0, ib = 0;
                 const V2 pa = Support(va, na,  dx,  dy, &ia);
                 const V2 pb = Support(vb, nb, -dx, -dy, &ib);
-                return MdSupport{ V2{ pa.x - pb.x, pa.y - pb.y }, pa, pb, ia, ib };
+                return MdSupport_f64{ V2{ pa.x - pb.x, pa.y - pb.y },
+                                      pa, pb, ia, ib };
+            }
+
+            // EncloseOrigin -- expand a degenerate origin-touching simplex (n==1
+            // or n==2) to a NON-degenerate triangle that encloses the origin,
+            // then narrow + return. Used by GjkOriginSimplex when GJK stops
+            // early with the origin exactly on an MD vertex/edge (boxes sharing
+            // a face direction hit this), so EPA always gets a count==3 seed.
+            //
+            // Each appended vertex is a true MD support (a real boundary point
+            // with its A/B witness pair + indices preserved). The search dirs
+            // are deterministic: edge perpendicular for n==2, the +/-X / +/-Y
+            // axes for n==1. If no support adds a new direction (the MD is a
+            // point or segment -- only possible for point/segment cores that
+            // cannot actually enclose the origin in area) we return what we
+            // have; that path is unreachable for the overlapping-polygon case
+            // this seed feeds (a true 2D overlap MD always has area).
+            //
+            // The templated Narrow is the GjkOriginSimplex-local lambda that
+            // packs the f64 scratch slots [0..count) into the public GjkSimplex.
+            template <typename Narrow>
+            GjkSimplex EncloseOrigin(const Vec2* va, int na,
+                                     const Vec2* vb, int nb, int n,
+                                     std::array<double, 3>& smx,
+                                     std::array<double, 3>& smy,
+                                     std::array<double, 3>& sax,
+                                     std::array<double, 3>& say,
+                                     std::array<double, 3>& sbx,
+                                     std::array<double, 3>& sby,
+                                     std::array<int, 3>& sia,
+                                     std::array<int, 3>& sib,
+                                     Narrow&& narrow)
+            {
+                // Append the MD support along (dx,dy) into slot `n` if it is a
+                // genuinely new MD point (not coincident with an existing vert).
+                // Returns true on append (n is then advanced by the caller).
+                auto tryAppend = [&](double dx, double dy) -> bool
+                {
+                    const MdSupport_f64 s = SupportMd(va, na, vb, nb, dx, dy);
+                    for (int i = 0; i < n; ++i)
+                    {
+                        const double ex = s.md.x - smx[i];
+                        const double ey = s.md.y - smy[i];
+                        if (ex * ex + ey * ey < 1e-18)
+                            return false; // coincident with an existing vert
+                    }
+                    smx[n] = s.md.x; smy[n] = s.md.y;
+                    sax[n] = s.pa.x; say[n] = s.pa.y;
+                    sbx[n] = s.pb.x; sby[n] = s.pb.y;
+                    sia[n] = s.ia;   sib[n] = s.ib;
+                    return true;
+                };
+
+                // n==1: grow to a segment first. Try +/-X then +/-Y until a
+                // distinct second MD vertex is found.
+                if (n == 1)
+                {
+                    if (tryAppend(1.0, 0.0))       n = 2;
+                    else if (tryAppend(-1.0, 0.0)) n = 2;
+                    else if (tryAppend(0.0, 1.0))  n = 2;
+                    else if (tryAppend(0.0, -1.0)) n = 2;
+                    else return narrow(1, /*encloses*/ true); // MD is a point
+                }
+
+                // n==2: grow to a triangle off the edge line. The edge is
+                // v0->v1; query the edge perpendicular (both signs) for the
+                // off-line apex. The origin lies ON this edge, so any apex off
+                // the line yields a triangle that contains the origin.
+                {
+                    const double ex = smx[1] - smx[0];
+                    const double ey = smy[1] - smy[0];
+                    // perp = (-ey, ex); try +perp then -perp.
+                    if (tryAppend(-ey, ex))      n = 3;
+                    else if (tryAppend(ey, -ex)) n = 3;
+                    else return narrow(2, /*encloses*/ true); // MD is a segment
+                }
+
+                return narrow(3, /*encloses*/ true);
             }
         } // namespace
 
@@ -102,7 +185,7 @@ namespace Arcane
 
             int n = 1;
             {
-                const MdSupport s0 = SupportMd(va, na, vb, nb, 1.0, 0.0);
+                const MdSupport_f64 s0 = SupportMd(va, na, vb, nb, 1.0, 0.0);
                 smx[0] = s0.md.x; smy[0] = s0.md.y;
                 sax[0] = s0.pa.x; say[0] = s0.pa.y;
                 sbx[0] = s0.pb.x; sby[0] = s0.pb.y;
@@ -217,7 +300,7 @@ namespace Arcane
                 }
 
                 const double dx_ = -px, dy_ = -py;
-                const MdSupport s = SupportMd(va, na, vb, nb, dx_, dy_);
+                const MdSupport_f64 s = SupportMd(va, na, vb, nb, dx_, dy_);
                 // No closer support along the search direction -> converged.
                 if ((s.md.x * dx_ + s.md.y * dy_) - (px * dx_ + py * dy_) < 1e-9)
                 {
@@ -271,7 +354,7 @@ namespace Arcane
 
             int n = 1;
             {
-                const MdSupport s0 = SupportMd(va, na, vb, nb, 1.0, 0.0);
+                const MdSupport_f64 s0 = SupportMd(va, na, vb, nb, 1.0, 0.0);
                 smx[0] = s0.md.x; smy[0] = s0.md.y;
                 sax[0] = s0.pa.x; say[0] = s0.pa.y;
                 sbx[0] = s0.pb.x; sby[0] = s0.pb.y;
@@ -391,7 +474,7 @@ namespace Arcane
                 }
 
                 const double dx_ = -px, dy_ = -py;
-                const MdSupport s = SupportMd(va, na, vb, nb, dx_, dy_);
+                const MdSupport_f64 s = SupportMd(va, na, vb, nb, dx_, dy_);
                 // No closer support -> converged.
                 if ((s.md.x * dx_ + s.md.y * dy_) - (px * dx_ + py * dy_) < 1e-9)
                 {
@@ -465,6 +548,222 @@ namespace Arcane
                 wA, wB,
                 fA, fB
             };
+        }
+
+        // --------------------------------------------------------------------
+        // SupportMinkowski -- public MD support over two world cores (EPA seam).
+        //
+        // ADDITIVE. Reuses the internal f64 SupportMd (argmax over A along +dir,
+        // over B along -dir; md = pa - pb); narrows the f64 result to Real on
+        // return so EPA/MPR consumers get the public Vec2 (Real) struct.
+        // --------------------------------------------------------------------
+        MdSupport SupportMinkowski(const Vec2* va, int na, const Vec2* vb,
+                                   int nb, Vec2 dir)
+        {
+            // Degenerate cores: Support() would read out of a zero-length span.
+            if (na <= 0 || nb <= 0)
+                return MdSupport{};
+
+            const MdSupport_f64 s = SupportMd(va, na, vb, nb,
+                                              static_cast<double>(dir.x),
+                                              static_cast<double>(dir.y));
+            MdSupport out;
+            out.md = Vec2(static_cast<Real>(s.md.x), static_cast<Real>(s.md.y));
+            out.pa = Vec2(static_cast<Real>(s.pa.x), static_cast<Real>(s.pa.y));
+            out.pb = Vec2(static_cast<Real>(s.pb.x), static_cast<Real>(s.pb.y));
+            out.ia = s.ia;
+            out.ib = s.ib;
+            return out;
+        }
+
+        // --------------------------------------------------------------------
+        // GjkOriginSimplex -- terminal GJK simplex (EPA seed).
+        //
+        // Runs the SAME simplex loop as GjkDistanceCore (same f64 internal
+        // simplex, same 64-iteration cap, same convergence / overlap tests).
+        // The ONLY behavioral difference from GjkDistanceCore is at the n==3
+        // origin-inside branch and at convergence: instead of producing a
+        // distance + closest feature, it returns the terminal simplex verts
+        // (MD point + A/B witness pair + indices). On overlap the returned
+        // triangle encloses the origin (enclosesOrigin == true, count == 3).
+        // ADDITIVE: GjkDistanceCore is UNCHANGED.
+        // --------------------------------------------------------------------
+        GjkSimplex GjkOriginSimplex(const Vec2* va, int na, const Vec2* vb,
+                                    int nb)
+        {
+            // Guard: degenerate cores.
+            if (na <= 0 || nb <= 0)
+                return GjkSimplex{};
+
+            // Simplex scratch: MD points (smx/smy), witnesses on A (sax/say)
+            // and B (sbx/sby), plus the input vertex indices (sia/sib) -- the
+            // same layout GjkDistanceCore carries.
+            std::array<double, 3>   smx{}, smy{};
+            std::array<double, 3>   sax{}, say{}, sbx{}, sby{};
+            std::array<int, 3>      sia{}, sib{};
+
+            int n = 1;
+            {
+                const MdSupport_f64 s0 = SupportMd(va, na, vb, nb, 1.0, 0.0);
+                smx[0] = s0.md.x; smy[0] = s0.md.y;
+                sax[0] = s0.pa.x; say[0] = s0.pa.y;
+                sbx[0] = s0.pb.x; sby[0] = s0.pb.y;
+                sia[0] = s0.ia;   sib[0] = s0.ib;
+            }
+
+            // Narrow the f64 simplex slots [0..count) into the public GjkSimplex.
+            auto narrow = [&](int count, bool encloses) -> GjkSimplex
+            {
+                GjkSimplex out;
+                out.count = count;
+                out.enclosesOrigin = encloses;
+                for (int i = 0; i < count; ++i)
+                {
+                    out.v[i].md = Vec2(static_cast<Real>(smx[i]),
+                                       static_cast<Real>(smy[i]));
+                    out.v[i].wa = Vec2(static_cast<Real>(sax[i]),
+                                       static_cast<Real>(say[i]));
+                    out.v[i].wb = Vec2(static_cast<Real>(sbx[i]),
+                                       static_cast<Real>(sby[i]));
+                    out.v[i].ia = sia[i];
+                    out.v[i].ib = sib[i];
+                }
+                return out;
+            };
+
+            double px = smx[0], py = smy[0];
+
+            for (int iter = 0; iter < 64; ++iter)
+            {
+                if (n == 1)
+                {
+                    px = smx[0]; py = smy[0];
+                }
+                else if (n == 2)
+                {
+                    const double ax_ = smx[0], ay_ = smy[0];
+                    const double bx_ = smx[1], by_ = smy[1];
+                    const double abx = bx_ - ax_, aby = by_ - ay_;
+                    const double dd = abx * abx + aby * aby;
+                    const double t =
+                        (dd > 0.0) ? (-(ax_ * abx + ay_ * aby)) / dd : 0.0;
+                    if (t <= 0.0)
+                    {
+                        n = 1; px = ax_; py = ay_;
+                    }
+                    else if (t >= 1.0)
+                    {
+                        smx[0] = smx[1]; smy[0] = smy[1];
+                        sax[0] = sax[1]; say[0] = say[1];
+                        sbx[0] = sbx[1]; sby[0] = sby[1];
+                        sia[0] = sia[1]; sib[0] = sib[1];
+                        n = 1; px = smx[0]; py = smy[0];
+                    }
+                    else
+                    {
+                        px = ax_ + abx * t; py = ay_ + aby * t;
+                    }
+                }
+                else // n == 3: inside test, else reduce to the closest edge.
+                {
+                    const double x1 = smx[0], y1 = smy[0];
+                    const double x2 = smx[1], y2 = smy[1];
+                    const double x3 = smx[2], y3 = smy[2];
+                    const double c1 = (x2 - x1) * (-y1) - (y2 - y1) * (-x1);
+                    const double c2 = (x3 - x2) * (-y2) - (y3 - y2) * (-x2);
+                    const double c3 = (x1 - x3) * (-y3) - (y1 - y3) * (-x3);
+                    const bool hasNeg = (c1 < 0.0) || (c2 < 0.0) || (c3 < 0.0);
+                    const bool hasPos = (c1 > 0.0) || (c2 > 0.0) || (c3 > 0.0);
+                    if (!(hasNeg && hasPos))
+                    {
+                        // Origin inside the simplex -> cores OVERLAP. Return the
+                        // 3 terminal MD verts as the EPA seed triangle (vs
+                        // GjkDistanceCore which returns distance 0 here).
+                        return narrow(3, /*encloses*/ true);
+                    }
+
+                    // Reduce to closest of the three edges to origin.
+                    double bestD = std::numeric_limits<double>::infinity();
+                    int e1 = 0, e2 = 1;
+                    double bt = 0.0;
+                    auto edge = [&](int i, int j)
+                    {
+                        const double ax_ = smx[i], ay_ = smy[i];
+                        const double bx_ = smx[j], by_ = smy[j];
+                        const double abx = bx_ - ax_, aby = by_ - ay_;
+                        const double dd = abx * abx + aby * aby;
+                        double t =
+                            (dd > 0.0) ? (-(ax_ * abx + ay_ * aby)) / dd : 0.0;
+                        if (t < 0.0) t = 0.0; else if (t > 1.0) t = 1.0;
+                        const double cx_ = ax_ + abx * t;
+                        const double cy_ = ay_ + aby * t;
+                        const double d2 = cx_ * cx_ + cy_ * cy_;
+                        if (d2 < bestD) { bestD = d2; e1 = i; e2 = j; bt = t; }
+                    };
+                    edge(0, 1); edge(1, 2); edge(2, 0);
+
+                    const double t1x = smx[e1], t1y = smy[e1];
+                    const double t1ax = sax[e1], t1ay = say[e1];
+                    const double t1bx = sbx[e1], t1by = sby[e1];
+                    const int    t1ia = sia[e1], t1ib = sib[e1];
+                    const double t2x = smx[e2], t2y = smy[e2];
+                    const double t2ax = sax[e2], t2ay = say[e2];
+                    const double t2bx = sbx[e2], t2by = sby[e2];
+                    const int    t2ia = sia[e2], t2ib = sib[e2];
+
+                    smx[0] = t1x; smy[0] = t1y;
+                    sax[0] = t1ax; say[0] = t1ay; sbx[0] = t1bx; sby[0] = t1by;
+                    sia[0] = t1ia; sib[0] = t1ib;
+                    smx[1] = t2x; smy[1] = t2y;
+                    sax[1] = t2ax; say[1] = t2ay; sbx[1] = t2bx; sby[1] = t2by;
+                    sia[1] = t2ia; sib[1] = t2ib;
+                    n = 2;
+                    px = t1x + (t2x - t1x) * bt;
+                    py = t1y + (t2y - t1y) * bt;
+                    if (bt <= 0.0)
+                    {
+                        n = 1;
+                    }
+                    else if (bt >= 1.0)
+                    {
+                        smx[0] = t2x; smy[0] = t2y;
+                        sax[0] = t2ax; say[0] = t2ay;
+                        sbx[0] = t2bx; sby[0] = t2by;
+                        sia[0] = t2ia; sib[0] = t2ib;
+                        n = 1;
+                    }
+                }
+
+                // Origin reached -> cores OVERLAP. The current simplex is the
+                // closest feature touching the origin; GjkDistanceCore returns
+                // distance 0 here. GJK can stop early with n<3 when the origin
+                // lands exactly on an MD vertex (n==1) or edge (n==2) -- common
+                // for boxes that share a face direction. EPA needs a NON-
+                // degenerate triangle that encloses the origin, so expand the
+                // simplex to 3 verts before returning (each added support is a
+                // real MD-boundary vertex with its A/B witness pair preserved).
+                if (px * px + py * py < 1e-18)
+                {
+                    return EncloseOrigin(va, na, vb, nb, n, smx, smy,
+                                         sax, say, sbx, sby, sia, sib, narrow);
+                }
+
+                const double dx_ = -px, dy_ = -py;
+                const MdSupport_f64 s = SupportMd(va, na, vb, nb, dx_, dy_);
+                // No closer support -> converged (separated, closest simplex).
+                if ((s.md.x * dx_ + s.md.y * dy_) - (px * dx_ + py * dy_) < 1e-9)
+                {
+                    break;
+                }
+                smx[n] = s.md.x; smy[n] = s.md.y;
+                sax[n] = s.pa.x; say[n] = s.pa.y;
+                sbx[n] = s.pb.x; sby[n] = s.pb.y;
+                sia[n] = s.ia;   sib[n] = s.ib;
+                n = n + 1;
+            }
+
+            // Converged without enclosing the origin -> cores are SEPARATED.
+            return narrow(n, /*encloses*/ false);
         }
 
         // --------------------------------------------------------------------
