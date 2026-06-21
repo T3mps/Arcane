@@ -91,6 +91,18 @@ namespace Arcane::Sandbox
         // so a far cursor jump does not launch the body at an explosive velocity.
         static constexpr float kDragMaxSpeed = 4000.0f;
 
+        // Mouse-spring: max ACCELERATION (world units/s^2) the drag may impart. The
+        // drive is a CAPPED impulse (mass * kDragMaxAccel * dt), NOT a velocity
+        // override, so the contact solver can resist it: a dragged body stops
+        // against obstacles instead of ramming through, and imparts only bounded
+        // momentum to bodies it slides across (the reported "accelerate / pushed in
+        // too far" came from the old override beating the solver). Mass-proportional
+        // so the feel is consistent across body sizes; large enough to chase the
+        // cursor responsively (reaches kDragMaxSpeed in ~6 frames), but finite so
+        // the drive stays a bounded force the solver resolves each step (~666 u/s
+        // of velocity change per frame vs the old override's instantaneous 4000).
+        static constexpr float kDragMaxAccel = 40000.0f;
+
         // Pick radius (world units) for the cursor query shape -- a small circle at
         // the cursor; the first dynamic body it overlaps is grabbed.
         static constexpr float kPickRadius = 4.0f;

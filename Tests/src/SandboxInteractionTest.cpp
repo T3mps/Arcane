@@ -249,6 +249,45 @@ TEST_CASE("Interaction: LMB release clears the grab and the body retains velocit
 }
 
 // ---------------------------------------------------------------------------
+// (f) BOUNDED-FORCE drag: a grabbed body accelerates under a BOUNDED force, so a
+//     far cursor jump cannot fling it to the drag's max speed in a single frame.
+//
+// The old mouse-spring SET the body velocity to (cursor-bodyPos)/dt (clamped to
+// kDragMaxSpeed) -- an instantaneous override that beat the contact solver, so a
+// dragged body rammed/penetrated whatever it was dragged into and dumped huge
+// momentum into bodies it slid across (the reported "accelerate / pushed in too
+// far"). The fix drives the body with a CAPPED impulse the solver can resist, so
+// one frame can only change the velocity by at most kDragMaxAccel*dt. With the
+// cursor jumped 2000 units in a single tick the old code produced v.x == 4000
+// (the clamp); the bounded-force drag produces a far smaller ramped velocity.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: a grabbed body accelerates under a bounded force", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;                 // identity
+    Sbx::Interaction it;
+
+    const glm::vec2 bodyPos{300.0f, 300.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+                  Phys::BodyType::Dynamic, glm::vec4(1.0f));
+    w.Step();                        // materialize the body
+
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);      // baseline
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);   // grab
+    REQUIRE(it.IsGrabbing());
+
+    // Jump the cursor 2000 units in ONE tick (no physics step in between).
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x + 2000.0f, bodyPos.y, kLMB), kDt);
+
+    // A single frame cannot fling the body to the drag's max speed: the impulse
+    // is capped (kDragMaxAccel*dt), so the velocity ramps rather than snapping to
+    // kDragMaxSpeed (4000). The old SetVelocity override produced exactly 4000.
+    const Phys::Vec2 v = w.Physics().Velocity(it.GrabbedHandleForTest());
+    INFO("one-frame drag velocity x = " << v.x);
+    CHECK(std::abs(v.x) < Sbx::Interaction::kDragMaxSpeed * 0.5f);
+}
+
+// ---------------------------------------------------------------------------
 // (d) Zoom clamp: repeated zoom-out never reaches 0 (ScreenToWorld stays safe).
 // ---------------------------------------------------------------------------
 TEST_CASE("Interaction: zoom-out is clamped to a positive minimum", "[sandbox]")

@@ -125,13 +125,32 @@ namespace Arcane::Sandbox
             {
                 const Phys::Vec2 bp = world.Position(m_grabbed);
                 glm::vec2 toCursor = cursorWorld - glm::vec2(bp.x, bp.y);
-                // Velocity that reaches the cursor in ~one step, clamped to a sane max.
-                glm::vec2 drive = (dt > 0.0f) ? (toCursor / dt) : glm::vec2(0.0f);
-                const float speed = glm::length(drive);
+                // Target velocity reaches the cursor in ~one step, clamped to a sane
+                // max -- a critically-damped mouse-spring (the position error IS the
+                // target velocity, so it also holds the body against gravity).
+                glm::vec2 desiredVel = (dt > 0.0f) ? (toCursor / dt) : glm::vec2(0.0f);
+                const float speed = glm::length(desiredVel);
                 if (speed > kDragMaxSpeed && speed > 0.0f)
-                    drive *= (kDragMaxSpeed / speed);
+                    desiredVel *= (kDragMaxSpeed / speed);
+
+                // Drive via a CAPPED impulse (not a velocity override): the impulse
+                // that would realize desiredVel this step is clamped to
+                // mass*kDragMaxAccel*dt, so the contact solver (uncapped normal
+                // impulses) wins -- a dragged body stops against obstacles instead
+                // of ramming through, and slides across others with bounded momentum.
+                // ApplyImpulse runs BEFORE world.Step, so the solver resolves the
+                // drag-induced velocity against contacts the SAME step. Applied at
+                // the COM (linear) -- predictable, and no grab-anchor state to track.
+                const Phys::Vec2 cv = world.Velocity(m_grabbed);
+                const float mass    = world.GetBodyMass(m_grabbed);
+                glm::vec2 impulse = (desiredVel - glm::vec2(cv.x, cv.y)) * mass;
+                const float maxImpulse = mass * kDragMaxAccel * dt;
+                const float impLen = glm::length(impulse);
+                if (impLen > maxImpulse && impLen > 0.0f)
+                    impulse *= (maxImpulse / impLen);
+
                 world.Wake(m_grabbed);
-                world.SetVelocity(m_grabbed, Phys::Vec2(drive.x, drive.y));
+                world.ApplyImpulse(m_grabbed, Phys::Vec2(impulse.x, impulse.y));
             }
         }
 
