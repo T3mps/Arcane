@@ -41,8 +41,8 @@ namespace
     // Determinism contract (PhysicsSystem): constant per run.
     constexpr float kFixedDt = 1.0f / 60.0f;
 
-    // Gravity for the sandbox world (+Y down, world unit == canvas px). Matches the
-    // dynamics-test convention (gravityY = 400) so the bodies fall at a readable rate.
+    // Gravity for the sandbox world (+Y down, world unit == canvas px). Tuned higher
+    // than the physics-test default so bodies fall at a brisk, readable rate on screen.
     constexpr float kGravityY = 900.0f;
 
     Arcane::EngineContext*       g_ctx = nullptr;

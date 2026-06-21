@@ -5,6 +5,12 @@
 // w.r.t. ECS; the side effect (batcher submission) is external. Runs in the
 // Render phase, single-threaded (Batcher2D is not thread-safe). Quads are axis
 // aligned for the slice (rotation is ignored by Batcher2D::Quad).
+//
+// Sprite anchor = CENTER: a sprite is drawn centered on its entity's world
+// position (dstPos = worldPos - dstSize/2), so it lines up with that entity's
+// physics body / collider, which are also center-anchored (PhysicsDebugDraw
+// draws the collider outline centered on the body position). The Batcher2D
+// Quad/Rect primitives take a TOP-LEFT origin, hence the half-size shift here.
 
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Scene/Components.hpp>
@@ -33,8 +39,12 @@ namespace Arcane
                 const glm::vec2 worldPos(m[2].x, m[2].y);
                 const glm::vec2 worldScale(glm::length(glm::vec2(m[0])),
                                            glm::length(glm::vec2(m[1])));
-                const glm::vec2 dstPos = worldPos + ctx->cameraOffset;
                 const glm::vec2 dstSize = sprite.size * worldScale;
+                // Center the sprite on the entity world position (Batcher2D quads
+                // are top-left-origin) so it aligns with the center-anchored
+                // physics body + collider overlay.
+                const glm::vec2 dstPos =
+                    worldPos + ctx->cameraOffset - dstSize * 0.5f;
 
                 ctx->batcher->SetLayer(static_cast<uint16_t>(sprite.sortingLayer),
                                        static_cast<uint16_t>(sprite.orderInLayer));
