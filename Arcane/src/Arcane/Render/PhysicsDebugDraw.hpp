@@ -48,12 +48,42 @@ namespace Arcane
 
         // Draw a line between the centers of each active contact pair
         // (begun == true in the ContactManager).  Magenta, like COL_CONTACT
-        // in PhysicsDebug.lua.
+        // in PhysicsDebug.lua.  A small disc marks the segment midpoint so the
+        // contact reads clearly even when the two body centers are close.
         bool drawContacts = true;
 
         // Outline each body's world-space AABB (SlotAabb).  Off by default;
         // useful when debugging the broadphase.
         bool drawAabbs = false;
+
+        // ---- rich per-body overlays (Sandbox outline-unify pivot, Item A) ---
+        //
+        // DrawPhysicsDebug is the SINGLE canonical Sandbox renderer now (bodies
+        // are no longer drawn as filled SpriteRenderer quads), so it grew richer
+        // debug geometry.  Each overlay is GENERIC (every shape) and gated by a
+        // flag so the HUD can toggle it; defaults ON for the velocity/COM/
+        // orientation set keep the showcase informative out of the box while a
+        // headless caller that constructs default options still gets them.
+
+        // Velocity vector: a line from each awake DYNAMIC body's world COM along
+        // its linear velocity (scaled by `velocityScale`), tipped with a small
+        // arrow head.  Suppressed for bodies at rest (|v| ~ 0) to avoid clutter.
+        bool  drawVelocities = true;
+        // Seconds of look-ahead for the velocity ray length (world = v * scale,
+        // then * zoom).  0.15 s reads well at the sandbox scale.
+        float velocityScale  = 0.15f;
+
+        // Center-of-mass marker: a small cross (two short lines) at each DYNAMIC
+        // body's world COM.  Makes the off-origin COM of compound bodies visible.
+        bool  drawComMarkers = true;
+        // Half-length (canvas px, pre-zoom) of each COM cross arm.
+        float comMarkerSize  = 5.0f;
+
+        // Orientation tick: a short line from each body's COM along its local +x
+        // axis, so rotation is visible even on a circle (whose outline is
+        // rotation-invariant).  Length is `orientationTickLen` (world units).
+        bool  drawOrientations = true;
+        float orientationTickLen = 18.0f;
     };
 
     // Submit physics debug geometry to `batcher`.
@@ -71,9 +101,14 @@ namespace Arcane
     //                    sleeping dynamics are drawn at 35% brightness.
     //
     // If opts.drawContacts, a magenta line connects the centers of each
-    // currently-begun contact pair (ForEachContact).
+    // currently-begun contact pair (ForEachContact) with a midpoint disc.
     // If opts.drawAabbs, a white outline is drawn for each body's tight AABB
     // (SlotAabb).
+    //
+    // Rich per-body overlays (each gated by its option flag):
+    //   * drawVelocities   -> a velocity ray (COM along linear velocity, arrow).
+    //   * drawComMarkers   -> a small cross at each dynamic body's world COM.
+    //   * drawOrientations -> a short tick along the body's local +x (rotation).
     ARCANE_API void DrawPhysicsDebug(
         const Arcane::Physics::PhysicsWorld& world,
         Batcher2D& batcher,

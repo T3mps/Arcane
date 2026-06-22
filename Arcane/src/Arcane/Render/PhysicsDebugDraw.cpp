@@ -96,6 +96,40 @@ namespace Arcane
             return glm::vec2(v.x * c - v.y * s, v.x * s + v.y * c);
         }
 
+        // ---- rich-overlay colors (Sandbox outline-unify pivot) --------------
+        constexpr glm::vec4 kColVelocity{ 0.20f, 1.00f, 0.55f, 1.0f }; // green ray
+        constexpr glm::vec4 kColCom     { 1.00f, 1.00f, 1.00f, 1.0f }; // white cross
+        constexpr glm::vec4 kColOrient  { 1.00f, 0.55f, 0.15f, 1.0f }; // orange tick
+
+        // World-space center of mass as a glm::vec2: bodyPos + R(angle) *
+        // localCenter. For a single-fixture body localCenter is (0,0), so the
+        // COM is the origin. (Named ComWorldF to avoid colliding with the Core
+        // Physics::WorldCom that `using namespace Physics` pulls in.)
+        inline glm::vec2 ComWorldF(const Physics::Vec2& pos, float angle,
+                                   const Physics::Vec2& localCenter)
+        {
+            const glm::vec2 lc(static_cast<float>(localCenter.x),
+                               static_cast<float>(localCenter.y));
+            return glm::vec2(static_cast<float>(pos.x), static_cast<float>(pos.y))
+                 + Rotate2D(lc, angle);
+        }
+
+        // Draw a short arrow head at `tip`, opening back toward `from`.
+        inline void DrawArrowHead(Batcher2D& b, const glm::vec2& from,
+                                  const glm::vec2& tip, float thickness,
+                                  const glm::vec4& color)
+        {
+            glm::vec2 dir = tip - from;
+            const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+            if (len < 1e-4f) return;
+            dir /= len;
+            const glm::vec2 perp(-dir.y, dir.x);
+            const float head = (len < 12.0f) ? len * 0.5f : 6.0f; // px
+            const glm::vec2 base = tip - dir * head;
+            b.Line(tip, base + perp * (head * 0.6f), thickness, color);
+            b.Line(tip, base - perp * (head * 0.6f), thickness, color);
+        }
+
     } // anonymous namespace
 
     // -------------------------------------------------------------------------
@@ -240,9 +274,60 @@ namespace Arcane
             {
                 DrawAabbOutline(batcher, world.SlotAabb(i), off, zoom, thick, kColAabb);
             }
+
+            // ---- rich per-body overlays (outline-unify pivot, Item A) ------
+            //
+            // All three overlays anchor on the body's WORLD center of mass so a
+            // compound (off-origin COM) body reads correctly. The COM is in the
+            // same world*zoom+offset screen space as the outline above.
+            const float     angle = static_cast<float>(world.GetAngle(world.HandleOf(i)));
+            const glm::vec2 comW  = ComWorldF(wpos, angle, world.LocalCenterSlot(i));
+            const glm::vec2 comS  = comW * zoom + off;
+
+            // Velocity ray: COM -> COM + v * scale (DYNAMIC + awake only; a
+            // resting/zero-velocity body draws nothing so the overlay stays clean).
+            if (opts.drawVelocities && btype == BodyType::Dynamic && awake)
+            {
+                const Vec2  v   = world.VelSlot(i);
+                const float vx  = static_cast<float>(v.x);
+                const float vy  = static_cast<float>(v.y);
+                const float spd = std::sqrt(vx * vx + vy * vy);
+                if (spd > 1.0f)   // world units/s threshold -> suppress jitter
+                {
+                    const glm::vec2 tip =
+                        comS + glm::vec2(vx, vy) * (opts.velocityScale * zoom);
+                    batcher.Line(comS, tip, thick, kColVelocity);
+                    DrawArrowHead(batcher, comS, tip, thick, kColVelocity);
+                }
+            }
+
+            // Orientation tick: COM along local +x (rotated by the body angle),
+            // so rotation is visible even on a rotation-invariant circle outline.
+            if (opts.drawOrientations)
+            {
+                const glm::vec2 dir = Rotate2D(glm::vec2(1.0f, 0.0f), angle);
+                const glm::vec2 tip = comS + dir * (opts.orientationTickLen * zoom);
+                batcher.Line(comS, tip, thick, kColOrient);
+            }
+
+            // COM marker: a small axis-aligned cross at the world COM (dynamic
+            // bodies; statics/kinematics have COM == origin and add no insight).
+            if (opts.drawComMarkers && btype == BodyType::Dynamic)
+            {
+                const float r = opts.comMarkerSize * zoom;
+                batcher.Line(glm::vec2(comS.x - r, comS.y),
+                             glm::vec2(comS.x + r, comS.y), thick, kColCom);
+                batcher.Line(glm::vec2(comS.x, comS.y - r),
+                             glm::vec2(comS.x, comS.y + r), thick, kColCom);
+            }
         }
 
         // ---- contact lines (port of PhysicsDebug.lua lines 75-82) ----------
+        //
+        // A magenta line links each begun pair's centers; a small disc at the
+        // midpoint makes the contact pop even when the two centers are close
+        // (the ForEachContact pull API exposes the pair, not the manifold point,
+        // so the midpoint is the best available "where" marker).
         if (opts.drawContacts)
         {
             world.ForEachContact([&](std::uint32_t a, std::uint32_t b)
@@ -250,6 +335,7 @@ namespace Arcane
                 const glm::vec2 pa = ToScreen(world.PosSlot(a), off, zoom);
                 const glm::vec2 pb = ToScreen(world.PosSlot(b), off, zoom);
                 batcher.Line(pa, pb, thick, kColContact);
+                batcher.Circle((pa + pb) * 0.5f, 3.0f * zoom, kColContact);
             });
         }
     }
