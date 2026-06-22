@@ -8,9 +8,9 @@
 //   6 Compound bodies -- multi-fixture bodies with an off-origin COM that tip.
 //   7 Mixed shapes    -- circles + capsules + polygons interacting in a bowl.
 //   8 Stress test     -- brutal churn: kStressBodyCount mixed-shape dynamics (boxes,
-//                        circles, capsules, n-gons, compounds) continuously stirred by
-//                        kStressSpinnerCount kinematic cross-spinners in a tall walled
-//                        arena. Never settles. Procedural + seeded (reproducible).
+//                        circles, capsules, n-gons, compounds) churned by ONE top-mounted
+//                        kinematic balloon-whisk in a narrow bowl arena. Never settles.
+//                        Procedural + seeded (reproducible).
 //
 // OUTLINE-UNIFY (Item A): the Sandbox draws EVERY body as an OUTLINE through the single
 // canonical DrawPhysicsDebug overlay (collider outline + rich COM/velocity/orientation
@@ -375,6 +375,92 @@ namespace Arcane::Sandbox
             return h;
         }
 
+        // World-direct KINEMATIC balloon-whisk agitator. ONE kinematic body at `center`
+        // built from kLoops teardrop "wire" loops radiating at equal angular increments
+        // (like a real balloon-whisk cage), plus a small central hub circle. Each loop
+        // is approximated by thin segment-box polygons whose verts are expressed in
+        // BODY-LOCAL frame (relative to `center`). The whisk spins at `omega` rad/s.
+        // With radius=320 and omega=1.2 the tip speed is ~384 px/s; at 60 Hz each wire
+        // advances ~6.4 px per step, well below wire diameter 18 px -- no tunnelling.
+        Physics::BodyHandle Whisk(Physics::PhysicsWorld& w, glm::vec2 center,
+                                  float radius, float omega)
+        {
+            constexpr int   kLoops    = 6;
+            constexpr float kWireHalf = 9.0f;   // half-thickness of each wire segment
+
+            const float R    = radius;
+            const float W    = R * 0.30f;       // teardrop loop half-width
+            const float hubR = R * 0.12f;       // central hub radius
+
+            // First fixture is the hub circle (placed at the body origin = center).
+            Physics::BodyDef def;
+            def.type     = Physics::BodyType::Kinematic;
+            def.position = Physics::Vec2(center.x, center.y);
+            def.shape    = Physics::MakeCircle(Physics::Real(hubR));
+            def.friction = Physics::Real(0.3f);
+            Physics::BodyHandle h = w.AddBody(def);
+
+            // Lambda: add one thin-box segment as a fixture (verts already in local frame).
+            auto AddSegment = [&](glm::vec2 P, glm::vec2 Q)
+            {
+                glm::vec2 d = Q - P;
+                const float len = std::sqrt(d.x * d.x + d.y * d.y);
+                if (len < 1.0f) return;   // degenerate -- skip
+                d.x /= len; d.y /= len;
+                const glm::vec2 perp{ -d.y, d.x };
+
+                // Extend ends by kWireHalf so adjacent segments overlap and close gaps.
+                const glm::vec2 P0 = P - d * kWireHalf;
+                const glm::vec2 Q0 = Q + d * kWireHalf;
+
+                const std::vector<Physics::Vec2> verts = {
+                    Physics::Vec2(P0.x + perp.x * kWireHalf, P0.y + perp.y * kWireHalf),
+                    Physics::Vec2(Q0.x + perp.x * kWireHalf, Q0.y + perp.y * kWireHalf),
+                    Physics::Vec2(Q0.x - perp.x * kWireHalf, Q0.y - perp.y * kWireHalf),
+                    Physics::Vec2(P0.x - perp.x * kWireHalf, P0.y - perp.y * kWireHalf),
+                };
+                Physics::FixtureDef fd;
+                fd.shape       = Physics::MakePolygon(verts);
+                fd.friction    = Physics::Real(0.3f);
+                fd.restitution = Physics::Real(0.0f);
+                w.AddFixture(h, fd);
+            };
+
+            const float kTau = 2.0f * static_cast<float>(std::numbers::pi);
+
+            for (int k = 0; k < kLoops; ++k)
+            {
+                const float phi = k * (kTau / static_cast<float>(kLoops));
+                const float cp  = std::cos(phi);
+                const float sp  = std::sin(phi);
+
+                // Rotate a 2D point by phi.
+                auto Rot = [&](float x, float y) -> glm::vec2
+                {
+                    return { x * cp - y * sp, x * sp + y * cp };
+                };
+
+                // Teardrop outline points in the body frame (unrotated, along local +x).
+                // H->T1->T2->TIP->B2->B1->H (6 segments, closing the loop).
+                const glm::vec2 H   = Rot(hubR,         0.0f);
+                const glm::vec2 T1  = Rot(R * 0.45f,  -W);
+                const glm::vec2 T2  = Rot(R * 0.85f,  -W * 0.55f);
+                const glm::vec2 TIP = Rot(R,            0.0f);
+                const glm::vec2 B2  = Rot(R * 0.85f,  +W * 0.55f);
+                const glm::vec2 B1  = Rot(R * 0.45f,  +W);
+
+                AddSegment(H,   T1);
+                AddSegment(T1,  T2);
+                AddSegment(T2,  TIP);
+                AddSegment(TIP, B2);
+                AddSegment(B2,  B1);
+                AddSegment(B1,  H);
+            }
+
+            w.SetAngVelSlot(h.index, Physics::Real(omega));
+            return h;
+        }
+
         // =============================================================================
         // scene 0: "Playground" (the Task-4 sampler)
         // =============================================================================
@@ -702,16 +788,25 @@ namespace Arcane::Sandbox
         // =============================================================================
         // scene 8: "Stress test" -- brutal churn (kStressBodyCount mixed shapes).
         // =============================================================================
-        // A tall walled arena with kStressBodyCount procedurally-generated dynamic
-        // bodies (boxes, circles, capsules, n-gons, compounds), continuously stirred
-        // by kStressSpinnerCount kinematic cross-spinners so the pile NEVER settles.
+        // A NARROW BOWL arena with kStressBodyCount procedurally-generated dynamic
+        // bodies (boxes, circles, capsules, n-gons, compounds), continuously churned
+        // by ONE top-mounted kinematic balloon-whisk so the pile NEVER settles.
         // All world-direct (path B) for the complex shapes; path-A Astra components
         // for the simpler box/circle/capsule bodies. Both paths share the same world
         // and render through the canonical DrawPhysicsDebug outline overlay.
         //
+        // BOWL SHAPE:
+        //   Center x = 640. Inner width ~960 px (left inner ~160, right inner ~1120).
+        //   Two angled bottom-corner fillets (45-deg static boxes) slide bodies toward
+        //   center so the single whisk reaches all contents.
+        //
+        // WHISK: ONE kinematic balloon-whisk body (kStressWhiskCount=1), center at
+        //   (640, 360), radius 320, omega 1.2 rad/s. Tip speed ~384 px/s; at 60 Hz
+        //   each wire advances ~6.4 px per step (< wire diameter 18) -- no tunnelling.
+        //
         // STABILITY DESIGN:
         //   pitch = kMaxBodyHalf*2 + margin  => no deep initial overlap (no explosion)
-        //   spinner tip speed (~120 * 2.0 = 240 px/s) << wall thickness / dt
+        //   whisk tip speed ~384 px/s at 60 Hz => < wire thickness per step
         //   low density (0.05-0.10) + low friction (0.3-0.4) => mass flows, churns
         //   seeded std::mt19937 => identical layout every build (deterministic tests)
         void BuildStressTest(Astra::Registry& reg)
@@ -719,8 +814,11 @@ namespace Arcane::Sandbox
             Astra::Entity root = MakeRoot(reg);
 
             // ---- tuning constants (anon-ns only; knobs exposed via Scenes.hpp) --------
-            constexpr unsigned int kStressSeed    = 0xCAFEBABEu;  // seeded RNG
-            constexpr float kSpinnerOmega         = 2.0f;          // rad/s per spinner
+            constexpr unsigned int kStressSeed  = 0xCAFEBABEu;  // seeded RNG
+            constexpr float kWhiskRadius        = 320.0f;        // balloon-whisk cage radius
+            constexpr float kWhiskOmega         = 1.2f;          // rad/s (CCW)
+            constexpr float kWhiskCenterX       = 640.0f;
+            constexpr float kWhiskCenterY       = 360.0f;        // upper-bowl, hangs into pile
 
             // Body size range (half-extent / radius / etc.)
             constexpr float kMinBodyHalf = 18.0f;
@@ -729,48 +827,77 @@ namespace Arcane::Sandbox
             // Grid pitch: >= max diameter + margin so there is no deep initial overlap.
             constexpr float kPitch = kMaxBodyHalf * 2.0f + 18.0f; // 82 px
 
-            // Arena bounds (world-direct; floor + two tall thick walls).
+            // Bowl arena bounds.
             constexpr float kFloorY     = 880.0f;   // floor top surface y
-            constexpr float kFloorHalfW = 820.0f;
+            constexpr float kFloorHalfW = 520.0f;   // narrowed to match bowl inner half-width
             constexpr float kFloorHalfH = 40.0f;
-            constexpr float kWallHalfW  = 44.0f;
+            constexpr float kWallHalfW  = 50.0f;    // thick walls
             constexpr float kWallHalfH  = 700.0f;
-            constexpr float kArenaLeft  = -80.0f;   // inner left edge
-            constexpr float kArenaRight = 1360.0f;  // inner right edge
-            constexpr float kArenaInnerW = kArenaRight - kArenaLeft;
+            constexpr float kArenaLeft  = 160.0f;   // inner left edge (x)
+            constexpr float kArenaRight = 1120.0f;  // inner right edge (x)
+            constexpr float kArenaInnerW = kArenaRight - kArenaLeft;  // 960 px
+            constexpr float kArenaCenterX = (kArenaLeft + kArenaRight) * 0.5f; // 640
 
-            // Grid spawn parameters.
-            const int   kCols      = std::max(1, static_cast<int>(kArenaInnerW / kPitch));
+            // Grid spawn parameters: cols span the bowl inner width.
+            const int   kCols        = std::max(1, static_cast<int>(kArenaInnerW / kPitch));
             constexpr float kSpawnBottom = kFloorY - kPitch; // first row y (above floor)
-            const float kSpawnLeft  = kArenaLeft;
+            const float kSpawnLeft   = kArenaLeft;
 
-            // ---- arena: floor + 2 tall walls (world-direct statics) ----------------
+            // ---- arena: floor + 2 tall walls + 2 angled corner fillets -------------
             Physics::PhysicsWorld* w = World(reg);
             if (!w) return;
 
-            WorldStaticBox(*w, glm::vec2((kArenaLeft + kArenaRight) * 0.5f,
-                                         kFloorY + kFloorHalfH),
+            // Floor.
+            WorldStaticBox(*w, glm::vec2(kArenaCenterX, kFloorY + kFloorHalfH),
                            glm::vec2(kFloorHalfW, kFloorHalfH));
-            WorldStaticBox(*w, glm::vec2(kArenaLeft - kWallHalfW,
-                                         kFloorY - kWallHalfH),
+
+            // Left and right walls (outer face flush with inner edge of bowl).
+            WorldStaticBox(*w, glm::vec2(kArenaLeft - kWallHalfW, kFloorY - kWallHalfH),
                            glm::vec2(kWallHalfW, kWallHalfH));
-            WorldStaticBox(*w, glm::vec2(kArenaRight + kWallHalfW,
-                                         kFloorY - kWallHalfH),
+            WorldStaticBox(*w, glm::vec2(kArenaRight + kWallHalfW, kFloorY - kWallHalfH),
                            glm::vec2(kWallHalfW, kWallHalfH));
 
-            // ---- spinners: kStressSpinnerCount kinematic cross-spinners -------------
-            // Evenly spaced along the arena just above the floor so bodies land on them.
-            constexpr float kSpinnerY = kFloorY - 28.0f; // just above floor
-            for (int s = 0; s < kStressSpinnerCount; ++s)
+            // Angled bottom-corner fillets (~45 degrees) to funnel bodies toward center.
+            // Each is a static rotated box: half-extents 140 x 22, pivoted 45 deg inward.
+            // Verts are in BODY-LOCAL frame (relative to the body position) per the
+            // MakePolygon convention (same as WorldPolygonBox above).
             {
-                const float t  = (kStressSpinnerCount > 1)
-                                 ? static_cast<float>(s) / static_cast<float>(kStressSpinnerCount - 1)
-                                 : 0.5f;
-                const float sx = kArenaLeft + t * kArenaInnerW;
-                // Alternate sign: CW / CCW for chaotic churn.
-                const float omega = (s % 2 == 0) ? kSpinnerOmega : -kSpinnerOmega;
-                Spinner(*w, glm::vec2(sx, kSpinnerY), omega);
+                constexpr float kFiltHalfL = 140.0f;  // half-length along the slope
+                constexpr float kFiltHalfT = 22.0f;   // half-thickness
+                constexpr float kFiltAngle = static_cast<float>(std::numbers::pi) * 0.25f; // 45 deg
+
+                // Helper: build one fillet body. `cx/cy` = body center (world). `angle` = rotation.
+                auto MakeFillet = [&](float cx, float cy, float angle)
+                {
+                    const float ca = std::cos(angle);
+                    const float sa = std::sin(angle);
+                    // Rotated box corners in LOCAL body frame.
+                    const std::vector<Physics::Vec2> v = {
+                        Physics::Vec2((-kFiltHalfL)*ca - (-kFiltHalfT)*sa,
+                                      (-kFiltHalfL)*sa + (-kFiltHalfT)*ca),
+                        Physics::Vec2(( kFiltHalfL)*ca - (-kFiltHalfT)*sa,
+                                      ( kFiltHalfL)*sa + (-kFiltHalfT)*ca),
+                        Physics::Vec2(( kFiltHalfL)*ca - ( kFiltHalfT)*sa,
+                                      ( kFiltHalfL)*sa + ( kFiltHalfT)*ca),
+                        Physics::Vec2((-kFiltHalfL)*ca - ( kFiltHalfT)*sa,
+                                      (-kFiltHalfL)*sa + ( kFiltHalfT)*ca),
+                    };
+                    Physics::BodyDef fd;
+                    fd.type     = Physics::BodyType::Static;
+                    fd.position = Physics::Vec2(cx, cy);
+                    fd.shape    = Physics::MakePolygon(v);
+                    fd.friction = Physics::Real(0.4f);
+                    w->AddBody(fd);
+                };
+
+                // Bottom-left fillet: tilts up-right (+45 deg). Center ~ (kArenaLeft+80, kFloorY-80).
+                MakeFillet(kArenaLeft  + 80.0f, kFloorY - 80.0f,  kFiltAngle);
+                // Bottom-right fillet: tilts up-left (-45 deg). Center ~ (kArenaRight-80, kFloorY-80).
+                MakeFillet(kArenaRight - 80.0f, kFloorY - 80.0f, -kFiltAngle);
             }
+
+            // ---- whisk: ONE top-mounted kinematic balloon-whisk (kStressWhiskCount=1) --
+            Whisk(*w, glm::vec2(kWhiskCenterX, kWhiskCenterY), kWhiskRadius, kWhiskOmega);
 
             // ---- procedural body generator: one loop, seeded RNG -------------------
             std::mt19937 rng(kStressSeed);

@@ -9,12 +9,12 @@
 // and they assume the Astra TypeContext has been installed in THIS module.
 
 // ---- stress-scene knobs (exported so tests auto-scale with the constant) -----
-// kStressBodyCount  - THE single knob: change this to scale the brutal churn.
-// kStressSpinnerCount - number of kinematic cross-spinners in the stress scene.
+// kStressBodyCount - THE single knob: change this to scale the brutal churn.
+// kStressWhiskCount - number of kinematic balloon-whisk agitators (always 1).
 namespace Arcane::Sandbox
 {
-    inline constexpr int kStressBodyCount   = 320;
-    inline constexpr int kStressSpinnerCount = 3;
+    inline constexpr int kStressBodyCount = 320;
+    inline constexpr int kStressWhiskCount = 1;
 }
 
 #include <span>

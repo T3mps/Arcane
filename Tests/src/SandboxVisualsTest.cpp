@@ -153,9 +153,9 @@ TEST_CASE("Sandbox: compound bodies render as collider outlines (DrawPhysicsDebu
 // old 128-body scene is in place) and PASS after the rewrite.
 //
 // Assertions (spec section 8):
-//   (a) Volume:     world.Count() >= kStressBodyCount    (dynamics+spinners+walls)
+//   (a) Volume:     world.Count() >= kStressBodyCount    (dynamics+whisk+walls)
 //   (b) Stability:  after 30 steps, every body position finite + in-bounds
-//   (c) Agitators:  >= kStressSpinnerCount kinematic bodies (via TypeSlot scan)
+//   (c) Agitators:  >= kStressWhiskCount kinematic bodies (via TypeSlot scan)
 //   (d) Variety:    world.Count() > path-A entity count  (world-direct bodies exist)
 // =============================================================================
 TEST_CASE("Sandbox: stress scene has kStressBodyCount+ bodies and stays bounded after 30 steps",
@@ -246,6 +246,6 @@ TEST_CASE("Sandbox: stress scene has kStressBodyCount+ bodies and stays bounded 
 
     CHECK(allBounded);  // (b) no NaN / runaway position after 30 steps
 
-    // (c) Agitators: at least kStressSpinnerCount kinematic bodies.
-    CHECK(kineticCount >= Sbx::kStressSpinnerCount);
+    // (c) Agitators: at least kStressWhiskCount kinematic bodies (the whisk).
+    CHECK(kineticCount >= Sbx::kStressWhiskCount);
 }
