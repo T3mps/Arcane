@@ -14,6 +14,7 @@
 #include <Arcane/Geometry/detail/JarvisMarch.hpp>
 #include <Arcane/Geometry/detail/QuickHull.hpp>
 #include <Arcane/Geometry/detail/Chan.hpp>
+#include <Arcane/Geometry/detail/KirkpatrickSeidel.hpp>
 
 namespace Arcane::Geometry
 {
@@ -59,6 +60,15 @@ namespace Arcane::Geometry
         static std::vector<Pt<T>> Build(std::span<const Pt<T>> p)
         {
             return detail::ChanBuild<T>(p);
+        }
+    };
+
+    struct KirkpatrickSeidel
+    {
+        template <class T>
+        static std::vector<Pt<T>> Build(std::span<const Pt<T>> p)
+        {
+            return detail::KirkpatrickSeidelBuild<T>(p);
         }
     };
 
