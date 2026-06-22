@@ -271,3 +271,49 @@ TEST_CASE("Hud: spawn knobs select the spawned shape", "[sandbox]")
     }
     CHECK(foundCircle);
 }
+
+// ---------------------------------------------------------------------------
+// (g) Polygon mode end-to-end (ITEM 2): the HUD-bound polygon state on SandboxApp
+//     collects clicked world points through FixedUpdate, and RequestPolygonSpawn
+//     commits a world-direct polygon body on the NEXT fixed step (deferred out of
+//     the render phase). Mirrors how the HUD widgets drive the same SandboxApp API.
+// ---------------------------------------------------------------------------
+TEST_CASE("Hud: polygon mode collects clicks and spawns a polygon body", "[sandbox]")
+{
+    Fixture f;
+    f.Step();   // materialize the scene-0 bodies
+
+    f.app.SetPolygonMode(true);
+    CHECK(f.app.IsPolygonMode());
+
+    // Click three world points (released baseline + press each, away from the scene).
+    const float pts[3][2] = {{120.0f, 200.0f}, {220.0f, 200.0f}, {170.0f, 120.0f}};
+    for (const auto& p : pts)
+    {
+        Arcane::InputSnapshot rel{}; rel.mouseX = p[0]; rel.mouseY = p[1];
+        f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
+        Arcane::InputSnapshot press{}; press.mouseX = p[0]; press.mouseY = p[1];
+        press.mouseButtons = 0x1;   // LMB
+        f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);
+    }
+    CHECK(f.app.PolygonPointCount() == 3);
+
+    // Request the commit (the HUD "Spawn polygon" button) -> next step adds the body.
+    const std::uint32_t before = f.Physics().Count();
+    f.app.RequestPolygonSpawn();
+    Arcane::InputSnapshot idle{};
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+
+    CHECK(f.Physics().Count() == before + 1);   // one world-direct polygon body
+    CHECK(f.app.PolygonPointCount() == 0);       // points cleared after the commit
+
+    // The new body is a polygon.
+    bool foundPolygon = false;
+    for (std::uint32_t i = 0; i < f.Physics().Count(); ++i)
+    {
+        if (!f.Physics().Alive(i)) continue;
+        if (f.Physics().ShapeSlot(i).kind == Phys::ShapeKind::Polygon)
+            foundPolygon = true;
+    }
+    CHECK(foundPolygon);
+}

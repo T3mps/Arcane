@@ -165,6 +165,15 @@ namespace Arcane::Sandbox
         // PAUSED (spawn/grab/pan still respond; the step below just won't advance the sim).
         m_interaction.Tick(reg, *phys->world, m_camera, input, kFixedDt);
 
+        // ITEM 2: commit a HUD-requested polygon on the LIVE world (deferred out of the
+        // render phase). World-direct -> it renders via DrawPhysicsDebug (no entity).
+        // Runs even while paused (authoring geometry shouldn't need a running sim).
+        if (m_requestPolygonSpawn)
+        {
+            m_requestPolygonSpawn = false;
+            m_interaction.SpawnPolygon(*phys->world);
+        }
+
         // ---- SANDBOX-OWNED PHYSICS STEP (Task 8 sim-control) -----------------------
         // PhysicsSystem is no longer in the engine fixedUpdate scheduler; the sandbox
         // drives it here so pause/single-step/time-scale can gate + scale the dt. RunLoop

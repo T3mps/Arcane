@@ -445,3 +445,131 @@ TEST_CASE("Interaction: ImGui mouse capture suppresses pan (no click-through)", 
     CHECK(cam.offset.x == Approx(startOffset.x));   // camera did not pan under the HUD
     CHECK(cam.offset.y == Approx(startOffset.y));
 }
+
+// ===========================================================================
+// POLYGON-CREATION MODE (ITEM 2)
+// ===========================================================================
+// In "polygon mode" a left-click in the WORLD adds a vertex instead of spawning
+// the default shape; a HUD button then spawns the collected points as a single
+// world-direct convex polygon body (Physics::MakePolygon + PhysicsWorld::AddBody).
+
+// ---------------------------------------------------------------------------
+// (k) Polygon mode collects clicked WORLD points (not default-shape spawns).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: polygon mode collects clicked world points", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;                 // identity: screen == world
+    Sbx::Interaction it;
+
+    it.SetPolygonMode(true);
+    CHECK(it.IsPolygonMode());
+    CHECK(it.PolygonPoints().empty());
+
+    const std::size_t bodiesBefore = w.BodyEntityCount();
+
+    // Three separate clicks (release between each so each is a fresh press edge).
+    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);  // released
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);  // press -> add vert
+    }
+
+    // Each click added a vertex at the cursor world point; NOTHING was spawned.
+    REQUIRE(it.PolygonPoints().size() == 3);
+    CHECK(it.PolygonPoints()[0].x == Approx(pts[0].x));
+    CHECK(it.PolygonPoints()[0].y == Approx(pts[0].y));
+    CHECK(it.PolygonPoints()[2].x == Approx(pts[2].x));
+    CHECK(w.BodyEntityCount() == bodiesBefore);   // no default-shape spawn in poly mode
+}
+
+// ---------------------------------------------------------------------------
+// (l) SpawnPolygon with >= 3 points creates a live world body and clears points.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: SpawnPolygon adds a world-direct polygon body", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SetPolygonMode(true);
+    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 3);
+
+    const std::size_t bodiesBefore = w.Physics().Count();
+    const bool spawned = it.SpawnPolygon(w.Physics());
+    CHECK(spawned);
+    CHECK(w.Physics().Count() == bodiesBefore + 1);   // a live world-direct body
+    CHECK(it.PolygonPoints().empty());                // points cleared after spawn
+}
+
+// ---------------------------------------------------------------------------
+// (m) SpawnPolygon with < 3 points is a no-op (the factory needs >= 3 verts).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: SpawnPolygon with fewer than 3 points does nothing", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SetPolygonMode(true);
+    const glm::vec2 pts[2] = {{200.0f, 500.0f}, {400.0f, 500.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 2);
+
+    const std::size_t bodiesBefore = w.Physics().Count();
+    const bool spawned = it.SpawnPolygon(w.Physics());
+    CHECK_FALSE(spawned);                              // not enough points
+    CHECK(w.Physics().Count() == bodiesBefore);        // no body created
+    CHECK(it.PolygonPoints().size() == 2);             // points kept (not cleared on no-op)
+}
+
+// ---------------------------------------------------------------------------
+// (n) ClearPolygonPoints discards the in-progress vertex list.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: ClearPolygonPoints empties the in-progress polygon", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SetPolygonMode(true);
+    it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0),     kDt);
+    it.Tick(w.reg, w.Physics(), cam, Snap(100.0f, 100.0f, kLMB), kDt);
+    REQUIRE(it.PolygonPoints().size() == 1);
+
+    it.ClearPolygonPoints();
+    CHECK(it.PolygonPoints().empty());
+}
+
+// ---------------------------------------------------------------------------
+// (o) Polygon mode does NOT grab existing bodies -- a click is always a vertex.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: polygon mode click on a body adds a vertex, not a grab", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    const glm::vec2 bodyPos{300.0f, 300.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+                  Phys::BodyType::Dynamic, glm::vec4(1.0f));
+    w.Step();
+
+    it.SetPolygonMode(true);
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0),    kDt);
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);
+
+    CHECK_FALSE(it.IsGrabbing());                 // no grab in polygon mode
+    CHECK(it.PolygonPoints().size() == 1);        // the click became a vertex
+}

@@ -105,6 +105,24 @@ namespace Arcane::Sandbox
         if (rmbNow && rmbPrev && m_havePrevMouse)
             camera.offset += (mouseNow - m_prevMouse);
 
+        // ---- POLYGON MODE: an LMB press adds a vertex (no spawn/grab) ---------------
+        // While polygon mode is active a left-click in the world collects a vertex for
+        // the in-progress polygon instead of spawning the default shape or grabbing a
+        // body. The HUD commits the list via SpawnPolygon. Camera nav still works
+        // (keyboard zoom + RMB pan ran above); only the LMB grab/spawn/drive is
+        // replaced by vertex collection. Edge state is recorded so each click is a
+        // discrete press (a held LMB does not auto-repeat vertices).
+        if (m_polygonMode)
+        {
+            if (lmbPress)
+                m_polygonPoints.push_back(cursorWorld);
+
+            m_prevButtons   = buttonsNow;
+            m_prevMouse     = mouseNow;
+            m_havePrevMouse = true;
+            return;   // LMB belongs to the polygon: no grab/spawn/drive this frame
+        }
+
         // ---- GRAB / SPAWN on LMB press --------------------------------------------
         if (lmbPress)
         {
@@ -234,5 +252,41 @@ namespace Arcane::Sandbox
         m_prevButtons    = buttonsNow;
         m_prevMouse      = mouseNow;
         m_havePrevMouse = true;
+    }
+
+    bool Interaction::SpawnPolygon(Phys::PhysicsWorld& world)
+    {
+        // The factory needs 3..kMaxPolyVerts verts (it THROWS outside that range). A
+        // user can hit Spawn early or amass a huge list; guard both bounds so the live
+        // (render-driven) HUD path never throws -- treat an out-of-range list as a
+        // no-op that keeps the in-progress points.
+        if (m_polygonPoints.size() < 3 ||
+            m_polygonPoints.size() > Phys::kMaxPolyVerts)
+            return false;
+
+        // The clicked points are WORLD-space. Author the body at their centroid so it
+        // rotates about its center (mass is computed about the shape centroid), with
+        // the verts expressed RELATIVE to that origin -- mirrors the WorldPolygonBox
+        // pattern in Scenes.cpp (local verts + a separate body position).
+        glm::vec2 centroid{0.0f, 0.0f};
+        for (const glm::vec2 p : m_polygonPoints) centroid += p;
+        centroid /= static_cast<float>(m_polygonPoints.size());
+
+        std::vector<Phys::Vec2> local;
+        local.reserve(m_polygonPoints.size());
+        for (const glm::vec2 p : m_polygonPoints)
+            local.emplace_back(Phys::Real(p.x - centroid.x), Phys::Real(p.y - centroid.y));
+
+        Phys::BodyDef def;
+        def.type        = Phys::BodyType::Dynamic;
+        def.position    = Phys::Vec2(centroid.x, centroid.y);
+        def.shape       = Phys::MakePolygon(local);   // normalizes winding + bakes normals
+        def.density     = Phys::Real(1);
+        def.friction    = Phys::Real(0.5);
+        def.restitution = Phys::Real(0.05);
+        world.AddBody(def);
+
+        m_polygonPoints.clear();   // committed -> start a fresh polygon on the next click
+        return true;
     }
 }

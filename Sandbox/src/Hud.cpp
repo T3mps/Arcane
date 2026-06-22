@@ -137,6 +137,35 @@ namespace Arcane::Sandbox
             ImGui::TextDisabled("Left-click empty space to spawn");
         }
 
+        // ---- Polygon (ITEM 2) -----------------------------------------------------
+        // A polygon-authoring mode: while ON, left-clicks in the WORLD collect vertices
+        // (instead of spawning the default shape); Spawn commits them as one world-direct
+        // convex polygon body (>= 3 points; the actual AddBody is deferred to FixedUpdate
+        // via RequestPolygonSpawn so it never races the render-phase debug draw).
+        if (ImGui::CollapsingHeader("Polygon", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            bool polyMode = app.IsPolygonMode();
+            if (ImGui::Checkbox("Polygon mode", &polyMode))
+                app.SetPolygonMode(polyMode);
+
+            const std::size_t pts = app.PolygonPointCount();
+            ImGui::Text("Points: %zu", pts);
+            if (polyMode)
+                ImGui::TextDisabled("Left-click the world to add a vertex");
+
+            const bool canSpawn = (pts >= 3);
+            ImGui::BeginDisabled(pts == 0);
+            if (ImGui::Button("Clear"))
+                app.ClearPolygonPoints();
+            ImGui::EndDisabled();
+
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!canSpawn);   // need >= 3 verts (the factory's lower bound)
+            if (ImGui::Button("Spawn polygon"))
+                app.RequestPolygonSpawn();
+            ImGui::EndDisabled();
+        }
+
         // ---- Debug draw -----------------------------------------------------------
         if (ImGui::CollapsingHeader("Debug draw", ImGuiTreeNodeFlags_DefaultOpen))
         {

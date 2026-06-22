@@ -144,6 +144,37 @@ namespace Arcane::Sandbox
         [[nodiscard]] const SpawnConfig& SpawnCfg() const noexcept { return m_spawn; }
         [[nodiscard]] SpawnConfig&       SpawnCfg()       noexcept { return m_spawn; }
 
+        // ---- POLYGON-CREATION MODE (HUD) -------------------------------------------
+        // When polygon mode is ON, a left-click in the WORLD adds a vertex to an
+        // in-progress point list instead of spawning the default shape (or grabbing a
+        // body). The HUD shows the running point count + Clear/Spawn buttons and calls
+        // SpawnPolygon when the user commits. SpawnPolygon builds ONE world-direct
+        // convex polygon body (Physics::MakePolygon + PhysicsWorld::AddBody) from the
+        // collected points -- a world-direct body renders automatically through
+        // DrawPhysicsDebug (the overlay walks every world body), so no entity/sprite is
+        // authored. Requires >= 3 points (the factory normalizes winding); a spawn with
+        // fewer points is a no-op. On a successful spawn the point list is cleared so
+        // the next click starts a fresh polygon.
+        void SetPolygonMode(bool on) noexcept { m_polygonMode = on; }
+        [[nodiscard]] bool IsPolygonMode() const noexcept { return m_polygonMode; }
+
+        // The in-progress clicked WORLD points (read by the HUD for the count, and by
+        // the test). Empty until the first polygon-mode click.
+        [[nodiscard]] const std::vector<glm::vec2>& PolygonPoints() const noexcept
+        {
+            return m_polygonPoints;
+        }
+
+        // Discard the in-progress vertex list (the HUD "Clear" button).
+        void ClearPolygonPoints() noexcept { m_polygonPoints.clear(); }
+
+        // Commit the collected points as ONE world-direct dynamic convex polygon body.
+        // Returns false (and leaves the points intact) when there are < 3 points -- the
+        // factory needs >= 3 verts. On success creates the body in `world`, clears the
+        // point list, and returns true. The body is positioned at the points' centroid
+        // (so it rotates about its center) with the verts authored relative to it.
+        bool SpawnPolygon(Arcane::Physics::PhysicsWorld& world);
+
         // ---- introspection (test hooks; also handy for a future HUD) ---------------
         [[nodiscard]] bool IsGrabbing() const noexcept
         {
@@ -178,6 +209,12 @@ namespace Arcane::Sandbox
 
         // HUD-controlled spawn knobs (shape/size/density). Default = the Task-7 box.
         SpawnConfig m_spawn{};
+
+        // ---- polygon-creation mode (HUD) -------------------------------------------
+        // When ON, a left-click adds a vertex to m_polygonPoints (WORLD space) instead
+        // of spawning the default shape / grabbing. SpawnPolygon commits the list.
+        bool                   m_polygonMode = false;
+        std::vector<glm::vec2> m_polygonPoints;
 
         // Pooled scratch for OverlapShape candidate handles (reused; no per-frame alloc).
         mutable std::vector<Arcane::Physics::BodyHandle> m_overlapScratch;
