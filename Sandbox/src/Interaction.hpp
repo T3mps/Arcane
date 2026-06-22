@@ -47,24 +47,26 @@ namespace Arcane::Physics { class PhysicsWorld; }
 
 namespace Arcane::Sandbox
 {
-    // Which primitive a left-click on empty space spawns. The HUD (Task 8) flips
-    // this; Task 7 always spawned a box (Box is the default here so the Task-7
-    // behavior is preserved when no HUD is present).
+    // Which primitive a left-click on empty space spawns. The HUD (Task 8) picks
+    // one of the four; Polygon mode is derived from shape == Polygon (no separate
+    // m_polygonMode bool). Box is the default so the Task-7 behavior is preserved.
     enum class SpawnShape : std::uint8_t
     {
-        Box    = 0,
-        Circle = 1,
+        Box     = 0,
+        Circle  = 1,
+        Capsule = 2,
+        Polygon = 3,
     };
 
-    // Spawn knobs the HUD exposes (shape + size + density). `size` is the box
-    // half-extent OR the circle radius (world units == canvas px). `density`
-    // feeds the body mass (passed through the standard spawn builders). Defaults
-    // match the Task-7 hardcoded box (half-extent 22, density 1) so the visual
-    // is unchanged before the HUD touches anything.
+    // Spawn knobs the HUD exposes (shape + size + density).
+    //   `size`  = box half-extent | circle radius | capsule radius
+    //             (ignored for Polygon -- geometry comes from the clicked points).
+    //   `density` feeds the body mass (applies to every shape including the polygon hull).
+    // Defaults match the Task-7 hardcoded box (half-extent 22, density 1).
     struct SpawnConfig
     {
         SpawnShape shape   = SpawnShape::Box;
-        float      size    = 22.0f;   // box half-extent | circle radius
+        float      size    = 22.0f;   // box half-extent | circle/capsule radius
         float      density = 1.0f;    // body density (mass scale)
     };
 
@@ -93,6 +95,14 @@ namespace Arcane::Sandbox
         // values to keep this header SDL-include-free.
         static constexpr std::uint32_t kZoomInKeycode  = 0x3Du;   // SDLK_EQUALS '='
         static constexpr std::uint32_t kZoomOutKeycode = 0x2Du;   // SDLK_MINUS  '-'
+
+        // SDL3 keycodes for the polygon-mode in-world keyboard shortcuts.
+        // Edge-detected (one action per press, NOT per held frame), consulted ONLY
+        // when shape == Polygon. Values match SDL3's SDLK_ constants.
+        static constexpr std::uint32_t kEnterKeycode     = 0x0000000Du;  // SDLK_RETURN  '\r'
+        static constexpr std::uint32_t kKpEnterKeycode   = 0x40000058u;  // SDLK_KP_ENTER
+        static constexpr std::uint32_t kBackspaceKeycode = 0x00000008u;  // SDLK_BACKSPACE '\b'
+        static constexpr std::uint32_t kEscKeycode       = 0x0000001Bu;  // SDLK_ESCAPE '\x1B'
 
         // Mouse-spring: max speed (world units/s) the drag drives a grabbed body at,
         // so a far cursor jump does not launch the body at an explosive velocity.
@@ -151,19 +161,24 @@ namespace Arcane::Sandbox
         [[nodiscard]] const SpawnConfig& SpawnCfg() const noexcept { return m_spawn; }
         [[nodiscard]] SpawnConfig&       SpawnCfg()       noexcept { return m_spawn; }
 
-        // ---- POLYGON-CREATION MODE (HUD) -------------------------------------------
-        // When polygon mode is ON, a left-click in the WORLD adds a vertex to an
-        // in-progress point list instead of spawning the default shape (or grabbing a
-        // body). The HUD shows the running point count + Clear/Spawn buttons and calls
-        // SpawnPolygon when the user commits. SpawnPolygon builds ONE world-direct
-        // convex polygon body (Physics::MakePolygon + PhysicsWorld::AddBody) from the
-        // collected points -- a world-direct body renders automatically through
-        // DrawPhysicsDebug (the overlay walks every world body), so no entity/sprite is
-        // authored. Requires >= 3 points (the factory normalizes winding); a spawn with
-        // fewer points is a no-op. On a successful spawn the point list is cleared so
-        // the next click starts a fresh polygon.
-        void SetPolygonMode(bool on) noexcept { m_polygonMode = on; }
-        [[nodiscard]] bool IsPolygonMode() const noexcept { return m_polygonMode; }
+        // ---- POLYGON-CREATION MODE (shape == Polygon) ------------------------------
+        // Polygon mode is derived: shape == Polygon. When active, LMB clicks collect
+        // vertices; Enter/KP_Enter spawns; Backspace pops the last point; Esc clears.
+        // SpawnPolygon commits a world-direct convex polygon body (Physics::MakePolygon
+        // + PhysicsWorld::AddBody). Requires >= 3 points; a spawn with fewer is a
+        // no-op. On success the point list is cleared for the next polygon.
+        //
+        // Shim (backward compat / test convenience): SetPolygonMode(true) sets
+        // shape = Polygon; SetPolygonMode(false) sets shape = Box. Prefer direct
+        // shape get/set (SpawnCfg().shape = SpawnShape::Polygon) for new code.
+        void SetPolygonMode(bool on) noexcept
+        {
+            m_spawn.shape = on ? SpawnShape::Polygon : SpawnShape::Box;
+        }
+        [[nodiscard]] bool IsPolygonMode() const noexcept
+        {
+            return m_spawn.shape == SpawnShape::Polygon;
+        }
 
         // The in-progress clicked WORLD points (read by the HUD for the count, and by
         // the test). Empty until the first polygon-mode click.
@@ -217,11 +232,19 @@ namespace Arcane::Sandbox
         // HUD-controlled spawn knobs (shape/size/density). Default = the Task-7 box.
         SpawnConfig m_spawn{};
 
-        // ---- polygon-creation mode (HUD) -------------------------------------------
-        // When ON, a left-click adds a vertex to m_polygonPoints (WORLD space) instead
-        // of spawning the default shape / grabbing. SpawnPolygon commits the list.
-        bool                   m_polygonMode = false;
+        // ---- polygon-creation mode (shape == Polygon) ------------------------------
+        // m_polygonMode is removed; polygon mode == m_spawn.shape == Polygon.
+        // In-progress vertex list (WORLD space). Retained across shape switches so
+        // switching away and back to Polygon resumes where the user left off.
+        // Cleared only by Esc / ClearPolygonPoints() / a successful SpawnPolygon.
         std::vector<glm::vec2> m_polygonPoints;
+
+        // Per-shortcut-key previous-down state for edge detection (mirrors m_prevButtons
+        // for the mouse). Recorded at the end of each Tick like the button state.
+        // ONLY consulted/updated when shape == Polygon (no-op otherwise).
+        bool m_prevEnter     = false;   // SDLK_RETURN or KP_ENTER was down last frame
+        bool m_prevBackspace = false;   // SDLK_BACKSPACE was down last frame
+        bool m_prevEsc       = false;   // SDLK_ESCAPE was down last frame
 
         // Pooled scratch for OverlapShape candidate handles (reused; no per-frame alloc).
         mutable std::vector<Arcane::Physics::BodyHandle> m_overlapScratch;
