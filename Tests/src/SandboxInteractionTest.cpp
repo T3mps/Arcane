@@ -122,6 +122,17 @@ namespace
         s.mouseButtons  = buttons;
         return s;
     }
+
+    // Same, but with the ImGui "wants the mouse" capture flag set -- the host sets
+    // this when the cursor is over an ImGui widget. The interaction layer must treat
+    // mouse-sourced edits (spawn/grab/pan/drag/wheel-zoom) as released while it is set,
+    // so a click on the HUD does not reach the world behind it (the click-through bug).
+    Arcane::InputSnapshot SnapCaptured(float sx, float sy, std::uint8_t buttons)
+    {
+        Arcane::InputSnapshot s = Snap(sx, sy, buttons);
+        s.wantCaptureMouse = true;
+        return s;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -370,4 +381,67 @@ TEST_CASE("Interaction: RMB drag pans the camera by the screen delta", "[sandbox
     it.Tick(w.reg, w.Physics(), cam, Snap(530.0f, 385.0f, kRMB), kDt);
     CHECK(cam.offset.x == Approx(startOffset.x + 30.0f));
     CHECK(cam.offset.y == Approx(startOffset.y - 15.0f));
+}
+
+// ---------------------------------------------------------------------------
+// (h) CLICK-THROUGH GUARD: when ImGui owns the mouse (wantCaptureMouse), an LMB
+//     press over EMPTY SPACE must NOT spawn a body -- the click belongs to the HUD
+//     widget under the cursor, not the world behind it. Root cause: Interaction read
+//     input.mouseButtons without consulting input.wantCaptureMouse (the host already
+//     fills the flag from ImGui::GetIO().WantCaptureMouse).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: ImGui mouse capture suppresses spawn (no click-through)", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);   // released baseline
+    const std::size_t before = w.BodyEntityCount();
+
+    // LMB press over empty space, but ImGui WANTS the mouse -> the press is the HUD's.
+    it.Tick(w.reg, w.Physics(), cam, SnapCaptured(400.0f, 120.0f, kLMB), kDt);
+
+    CHECK(w.BodyEntityCount() == before);   // nothing spawned in the world behind the UI
+}
+
+// ---------------------------------------------------------------------------
+// (i) CLICK-THROUGH GUARD: when ImGui owns the mouse, an LMB press over a BODY must
+//     NOT grab it -- the click belongs to the HUD, not the world.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: ImGui mouse capture suppresses grab (no click-through)", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    const glm::vec2 bodyPos{300.0f, 300.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+                  Phys::BodyType::Dynamic, glm::vec4(1.0f));
+    w.Step();
+
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);   // baseline
+
+    // LMB press ON the body, but ImGui WANTS the mouse -> no grab.
+    it.Tick(w.reg, w.Physics(), cam, SnapCaptured(bodyPos.x, bodyPos.y, kLMB), kDt);
+    CHECK_FALSE(it.IsGrabbing());
+}
+
+// ---------------------------------------------------------------------------
+// (j) CLICK-THROUGH GUARD: ImGui mouse capture suppresses RMB PAN -- dragging over a
+//     HUD widget must not pan the world camera.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: ImGui mouse capture suppresses pan (no click-through)", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+    const glm::vec2 startOffset = cam.offset;
+
+    // RMB held across two captured frames: with capture, the pan delta must be ignored.
+    it.Tick(w.reg, w.Physics(), cam, SnapCaptured(500.0f, 400.0f, kRMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapCaptured(560.0f, 360.0f, kRMB), kDt);
+
+    CHECK(cam.offset.x == Approx(startOffset.x));   // camera did not pan under the HUD
+    CHECK(cam.offset.y == Approx(startOffset.y));
 }

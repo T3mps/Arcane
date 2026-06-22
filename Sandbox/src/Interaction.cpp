@@ -68,10 +68,24 @@ namespace Arcane::Sandbox
         const glm::vec2 mouseNow{input.mouseX, input.mouseY};
         const glm::vec2 cursorWorld = camera.ScreenToWorld(mouseNow);
 
-        const bool lmbNow  = (input.mouseButtons & kLMB) != 0;
-        const bool lmbPrev = (m_prevButtons      & kLMB) != 0;
-        const bool rmbNow  = (input.mouseButtons & kRMB) != 0;
-        const bool rmbPrev = (m_prevButtons      & kRMB) != 0;
+        // ---- ImGui MOUSE CAPTURE GUARD (click-through fix) -------------------------
+        // When ImGui owns the mouse (the cursor is over a HUD widget), the host sets
+        // input.wantCaptureMouse. A mouse-sourced world edit (spawn/grab/pan/drag/
+        // wheel-zoom) must NOT fire then -- the click belongs to the UI, not the world
+        // behind it. We model "captured" as "the mouse buttons read as released": no
+        // press edge fires, so no spawn/grab/pan starts; an in-progress grab releases
+        // (lmbNow goes false -> lmbRelease -> clears the grab), which is the safe
+        // behavior if the cursor is dragged onto the HUD mid-drag. Edge state is still
+        // recorded at the end so the next un-captured frame starts clean. (The keyboard
+        // zoom below stays live -- it is keyboard-sourced, not mouse-captured.)
+        const bool mouseCaptured = input.wantCaptureMouse;
+        const std::uint8_t buttonsNow = mouseCaptured ? std::uint8_t{0}
+                                                       : input.mouseButtons;
+
+        const bool lmbNow  = (buttonsNow  & kLMB) != 0;
+        const bool lmbPrev = (m_prevButtons & kLMB) != 0;
+        const bool rmbNow  = (buttonsNow  & kRMB) != 0;
+        const bool rmbPrev = (m_prevButtons & kRMB) != 0;
 
         const bool lmbPress   = lmbNow && !lmbPrev;
         const bool lmbRelease = !lmbNow && lmbPrev;
@@ -214,7 +228,10 @@ namespace Arcane::Sandbox
             m_grabbed = Phys::kInvalidBody;
 
         // ---- record edge-detection state for next frame ----------------------------
-        m_prevButtons    = input.mouseButtons;
+        // Store the CAPTURE-MASKED buttons (released while ImGui owns the mouse), so the
+        // first un-captured frame after the cursor leaves the HUD sees a clean released->
+        // pressed edge rather than a spurious "already held" state.
+        m_prevButtons    = buttonsNow;
         m_prevMouse      = mouseNow;
         m_havePrevMouse = true;
     }
