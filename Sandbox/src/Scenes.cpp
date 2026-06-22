@@ -733,4 +733,45 @@ namespace Arcane::Sandbox
         return MakeCircle(reg, ResolveRoot(reg, root), pos, radius, type, tint,
                           /*restitution=*/0.2f, density);
     }
+
+    Astra::Entity SpawnCapsule(Astra::Registry& reg, Astra::Entity root,
+                               glm::vec2 pos, float radius,
+                               Physics::BodyType type, glm::vec4 tint,
+                               float density)
+    {
+        // Upright pill: radius = end-cap radius, halfLen = radius (VERTICAL segment).
+        // total height = 2*halfLen + 2*radius = 4*radius (clean 2:1 pill).
+        // MakeCapsule takes a HORIZONTAL segment (-halfLen,0)-(+halfLen,0), so an
+        // upright pill is authored with the segment along Y; the fixture convention
+        // here matches MakeCapsule's (halfLen, radius) signature.
+        // OUTLINE-UNIFY: no SpriteRenderer -- drawn by DrawPhysicsDebug.
+        (void)tint;
+
+        Astra::Entity e = reg.CreateEntity();
+
+        Arcane::LocalTransform lt; lt.position = pos;
+        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+
+        Arcane::RigidBody2D rb;
+        rb.type = type;
+        reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+
+        Arcane::Collider2D col;
+        {
+            Arcane::Fixture fx;
+            fx.kind        = Physics::ShapeKind::Capsule;
+            fx.halfLen     = radius;   // upright pill: segment half-length == end-cap radius
+            fx.radius      = radius;
+            fx.density     = density;
+            fx.friction    = 0.4f;
+            fx.restitution = 0.1f;
+            col.fixtures.push_back(fx);
+        }
+        reg.AddComponent<Arcane::Collider2D>(e, col);
+        reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
+
+        reg.SetParent(e, ResolveRoot(reg, root));
+        return e;
+    }
 }

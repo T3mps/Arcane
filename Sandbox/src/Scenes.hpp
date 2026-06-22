@@ -45,6 +45,14 @@ namespace Arcane::Sandbox
                               Physics::BodyType type, glm::vec4 tint,
                               float density = 1.0f);
 
+    // Dynamic/static capsule: an upright pill body. `radius` is both the end-cap
+    // radius AND the segment half-length (total height = 4*radius, a clean 2:1 pill).
+    // Mirrors SpawnBox/SpawnCircle; uses Physics::MakeCapsule via a Capsule fixture.
+    Astra::Entity SpawnCapsule(Astra::Registry& reg, Astra::Entity root,
+                               glm::vec2 pos, float radius,
+                               Physics::BodyType type, glm::vec4 tint,
+                               float density = 1.0f);
+
     // One scene: a human-readable name + a builder that fills the Registry.
     // The builder creates a SceneRoot entity, parents all scene content under it,
     // and calls reg.SetResource<Arcane::SceneRoot>(...) so the engine systems and
