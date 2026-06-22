@@ -1,0 +1,70 @@
+// The physics-debug overlay must draw a CAPSULE's outline (end circles + side
+// lines) ROTATED by the body angle -- capsules rotate freely in v2, so the old
+// "capsule axis is always horizontal" assumption in DrawPhysicsDebug is wrong.
+//
+// CPU-only (tag [render], no graphics device): DrawPhysicsDebug takes the
+// Batcher2D interface, so a recording mock captures the emitted Line endpoints.
+
+#include <cmath>
+#include <vector>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <Arcane/Physics/PhysicsWorld.hpp>
+#include <Arcane/Physics/Shapes.hpp>
+#include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Render/PhysicsDebugDraw.hpp>
+
+#include <glm/glm.hpp>
+
+using namespace Arcane::Physics;
+
+namespace
+{
+    struct LineMock final : Arcane::Batcher2D
+    {
+        std::vector<std::pair<glm::vec2, glm::vec2>> lines;
+
+        void Begin(nvrhi::ICommandList*, nvrhi::IFramebuffer*, uint32_t, uint32_t) override {}
+        void SetLayer(uint16_t, uint16_t) override {}
+        void Quad(glm::vec2, glm::vec2, nvrhi::ITexture*, glm::vec2, glm::vec2,
+                  glm::vec4, float) override {}
+        void Glyph(glm::vec2, glm::vec2, nvrhi::ITexture*, glm::vec2, glm::vec2,
+                   glm::vec4) override {}
+        void Rect(glm::vec2, glm::vec2, glm::vec4, float) override {}
+        void Line(glm::vec2 a, glm::vec2 b, float, glm::vec4) override
+        {
+            lines.emplace_back(a, b);
+        }
+        void Circle(glm::vec2, float, glm::vec4) override {}
+        void End() override {}
+        Arcane::Batch2DStats Stats() const override { return {}; }
+    };
+}
+
+TEST_CASE("PhysicsDebug: capsule outline rotates with the body", "[render]")
+{
+    WorldDef wd; // gravity 0, no floor -> no contacts, only the capsule outline
+    PhysicsWorld w(wd);
+
+    BodyDef bd;
+    bd.type          = BodyType::Dynamic;
+    bd.position      = Vec2(Real(100), Real(100));
+    bd.shape         = MakeCapsule(Real(30), Real(10)); // halfLen 30, radius 10
+    bd.density       = Real(1);
+    bd.fixedRotation = false;
+    const BodyHandle h = w.AddBody(bd);
+    w.SetAngle(h, Real(0.7853981633974483)); // 45 deg -> a horizontal capsule would be flat
+
+    LineMock mock;
+    Arcane::DrawPhysicsDebug(w, mock); // identity camera (zoom 1, offset 0)
+
+    // The two side lines of the capsule outline. At 45 deg they must be TILTED
+    // (their endpoints differ in BOTH x and y); the pre-fix code drew them
+    // axis-aligned horizontal (a.y == b.y) regardless of the body angle.
+    REQUIRE(mock.lines.size() >= 2);
+    bool anyTilted = false;
+    for (const auto& l : mock.lines)
+        if (std::abs(l.first.y - l.second.y) > 1.0f) anyTilted = true;
+    CHECK(anyTilted);
+}

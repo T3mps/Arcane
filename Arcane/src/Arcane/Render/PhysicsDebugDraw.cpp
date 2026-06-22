@@ -172,21 +172,22 @@ namespace Arcane
 
                 case ShapeKind::Capsule:
                 {
-                    // Lua: two end circles + two side lines.
-                    // Capsule: segment (-halfLen,0)-(+halfLen,0) inflated by radius.
-                    // Capsule axis is always horizontal (fixedRotation world -- see Shapes.hpp); body angle intentionally not applied.
-                    const float hl = static_cast<float>(s.halfLen) * zoom;
-                    const float r  = static_cast<float>(s.radius)  * zoom;
-                    const glm::vec2 left (spos.x - hl, spos.y);
-                    const glm::vec2 right(spos.x + hl, spos.y);
-                    batcher.Circle(left,  r, col);
-                    batcher.Circle(right, r, col);
-                    batcher.Line(glm::vec2(spos.x - hl, spos.y - r),
-                                 glm::vec2(spos.x + hl, spos.y - r),
-                                 thick, col);
-                    batcher.Line(glm::vec2(spos.x - hl, spos.y + r),
-                                 glm::vec2(spos.x + hl, spos.y + r),
-                                 thick, col);
+                    // Two end circles + two side lines. Capsule: segment
+                    // (-halfLen,0)-(+halfLen,0) inflated by radius. Capsules rotate
+                    // freely in v2, so rotate the local geometry by the body angle
+                    // (mirrors the Polygon case): rotate the local point, then scale
+                    // by zoom (rotation + uniform scale commute) and offset by spos.
+                    const float angle = static_cast<float>(world.GetAngle(world.HandleOf(i)));
+                    const float hl = static_cast<float>(s.halfLen); // local units
+                    const float rl = static_cast<float>(s.radius);  // local units
+                    const float r  = rl * zoom;                     // screen radius
+                    const auto P = [&](float lx, float ly) {
+                        return spos + Rotate2D(glm::vec2(lx, ly), angle) * zoom;
+                    };
+                    batcher.Circle(P(-hl, 0.0f), r, col);  // end caps at the rotated
+                    batcher.Circle(P( hl, 0.0f), r, col);  // segment endpoints
+                    batcher.Line(P(-hl, -rl), P(hl, -rl), thick, col); // side lines at
+                    batcher.Line(P(-hl,  rl), P(hl,  rl), thick, col); // +/- radius, rotated
                     break;
                 }
 
