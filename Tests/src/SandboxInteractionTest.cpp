@@ -31,10 +31,12 @@
 
 #include "../../Sandbox/src/Interaction.hpp"
 #include "../../Sandbox/src/Scenes.hpp"
+#include "../../Sandbox/src/SandboxApp.hpp"   // PolygonDraftResource + PolygonDraftRenderSystem
 
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
+#include <Arcane/Render/Batcher2D.hpp>        // Arcane::Batcher2D virtual interface
 
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -46,6 +48,7 @@
 
 #include <cmath>
 #include <memory>
+#include <vector>
 
 using Catch::Approx;
 
@@ -740,4 +743,120 @@ TEST_CASE("SpawnPolygon rejects a collinear click set (keeps points)", "[sandbox
     CHECK_FALSE(spawned);                               // degenerate hull -> no-op
     CHECK(w.Physics().Count() == bodiesBefore);         // no body created
     CHECK(it.PolygonPoints().size() == 3);              // points kept, not cleared
+}
+
+// ===========================================================================
+// POLYGON DRAFT RENDER SYSTEM (Task 9)
+// ===========================================================================
+// PolygonDraftRenderSystem reads PolygonDraftResource from the registry and
+// draws a small fixed-pixel circle at each world point projected to screen as
+// world*zoom + cameraOffset. CPU-only mock (no GPU device needed).
+
+namespace
+{
+    // Recording mock Batcher2D: captures Circle() submissions (center + radius)
+    // for CPU-only render-system tests. Mirrors the style of RecMock in
+    // PhysicsDebugRichTest.cpp but lives here for the sandbox draft-render case.
+    struct DraftBatcherMock final : Arcane::Batcher2D
+    {
+        struct CircleCall { glm::vec2 center; float radius; };
+        std::vector<CircleCall> circles;
+
+        void Begin(nvrhi::ICommandList*, nvrhi::IFramebuffer*,
+                   uint32_t, uint32_t) override {}
+        void SetLayer(uint16_t, uint16_t) override {}
+        void Quad(glm::vec2, glm::vec2, nvrhi::ITexture*,
+                  glm::vec2, glm::vec2, glm::vec4, float) override {}
+        void Glyph(glm::vec2, glm::vec2, nvrhi::ITexture*,
+                   glm::vec2, glm::vec2, glm::vec4) override {}
+        void Rect(glm::vec2, glm::vec2, glm::vec4, float) override {}
+        void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
+        void Circle(glm::vec2 c, float r, glm::vec4) override
+        {
+            circles.push_back({c, r});
+        }
+        void End() override {}
+        Arcane::Batch2DStats Stats() const override { return {}; }
+    };
+}
+
+// ---------------------------------------------------------------------------
+// (r) PolygonDraftRenderSystem draws one marker per draft point at the correct
+//     projected screen position (world*zoom + cameraOffset).
+// ---------------------------------------------------------------------------
+TEST_CASE("PolygonDraftRenderSystem draws one marker per draft point", "[sandbox]")
+{
+    DraftBatcherMock batcher;
+
+    // Minimal registry with just the two resources the system reads.
+    Astra::Registry reg;
+
+    Arcane::RenderContext2D ctx;
+    ctx.batcher      = &batcher;
+    ctx.zoom         = 2.0f;
+    ctx.cameraOffset = glm::vec2(10.0f, 20.0f);
+    reg.SetResource(std::move(ctx));
+
+    Arcane::Sandbox::PolygonDraftResource draft;
+    draft.worldPoints = { {0.0f, 0.0f}, {5.0f, 0.0f}, {5.0f, 5.0f} };
+    reg.SetResource(std::move(draft));
+
+    Arcane::Sandbox::PolygonDraftRenderSystem{}(reg);
+
+    // One Circle call per world point.
+    REQUIRE(batcher.circles.size() == 3);
+
+    // First point (0,0) -> screen = (0,0)*2 + (10,20) = (10,20).
+    CHECK(batcher.circles[0].center.x == Approx(10.0f));
+    CHECK(batcher.circles[0].center.y == Approx(20.0f));
+
+    // Second point (5,0) -> screen = (5,0)*2 + (10,20) = (20,20).
+    CHECK(batcher.circles[1].center.x == Approx(20.0f));
+    CHECK(batcher.circles[1].center.y == Approx(20.0f));
+
+    // Third point (5,5) -> screen = (5,5)*2 + (10,20) = (20,30).
+    CHECK(batcher.circles[2].center.x == Approx(20.0f));
+    CHECK(batcher.circles[2].center.y == Approx(30.0f));
+}
+
+// ---------------------------------------------------------------------------
+// (s) PolygonDraftRenderSystem draws nothing when the resource is absent.
+// ---------------------------------------------------------------------------
+TEST_CASE("PolygonDraftRenderSystem draws nothing without a resource", "[sandbox]")
+{
+    DraftBatcherMock batcher;
+
+    Astra::Registry reg;
+    Arcane::RenderContext2D ctx;
+    ctx.batcher      = &batcher;
+    ctx.zoom         = 1.0f;
+    ctx.cameraOffset = glm::vec2(0.0f, 0.0f);
+    reg.SetResource(std::move(ctx));
+    // NO PolygonDraftResource set -> the system must draw nothing.
+
+    Arcane::Sandbox::PolygonDraftRenderSystem{}(reg);
+
+    CHECK(batcher.circles.empty());
+}
+
+// ---------------------------------------------------------------------------
+// (t) PolygonDraftRenderSystem draws nothing when the world-point list is empty.
+// ---------------------------------------------------------------------------
+TEST_CASE("PolygonDraftRenderSystem draws nothing when draft is empty", "[sandbox]")
+{
+    DraftBatcherMock batcher;
+
+    Astra::Registry reg;
+    Arcane::RenderContext2D ctx;
+    ctx.batcher      = &batcher;
+    ctx.zoom         = 1.0f;
+    ctx.cameraOffset = glm::vec2(0.0f, 0.0f);
+    reg.SetResource(std::move(ctx));
+
+    Arcane::Sandbox::PolygonDraftResource draft;   // empty worldPoints
+    reg.SetResource(std::move(draft));
+
+    Arcane::Sandbox::PolygonDraftRenderSystem{}(reg);
+
+    CHECK(batcher.circles.empty());
 }

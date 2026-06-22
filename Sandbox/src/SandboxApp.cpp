@@ -165,6 +165,13 @@ namespace Arcane::Sandbox
         // PAUSED (spawn/grab/pan still respond; the step below just won't advance the sim).
         m_interaction.Tick(reg, *phys->world, m_camera, input, kFixedDt);
 
+        // Mirror the in-progress polygon draft into the render-read resource so
+        // PolygonDraftRenderSystem can draw the clicked vertices (empty when not
+        // in polygon mode).
+        if (!reg.GetResource<PolygonDraftResource>())
+            reg.SetResource(PolygonDraftResource{});
+        reg.GetResource<PolygonDraftResource>()->worldPoints = m_interaction.PolygonPoints();
+
         // ITEM 2: commit a HUD-requested polygon on the LIVE world (deferred out of the
         // render phase). World-direct -> it renders via DrawPhysicsDebug (no entity).
         // Runs even while paused (authoring geometry shouldn't need a running sim).

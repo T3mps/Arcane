@@ -28,6 +28,7 @@
 #include "Camera.hpp"                       // the sandbox 2D pan + zoom view
 #include "Interaction.hpp"                  // mouse spawn/drag/throw + pan/zoom (Task 7)
 
+#include <Arcane/Render/Batcher2D.hpp>        // Batcher2D virtual interface (Circle call)
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>   // PhysicsResource (owns the PhysicsWorld)
 #include <Arcane/Scene/SceneResources.hpp>  // RenderContext2D (holds the live batcher)
@@ -37,6 +38,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
+
+#include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
 
 namespace Arcane { struct InputSnapshot; }
 
@@ -133,6 +138,46 @@ namespace Arcane::Sandbox
                 opts.drawContacts = true;
             }
             DrawPhysicsDebug(*phys->world, *ctx->batcher, opts);
+        }
+    };
+
+    // Published each FixedUpdate from Interaction::PolygonPoints(); read in the
+    // render phase to draw the in-progress polygon vertices. Empty when not in
+    // polygon mode (no markers). Survives reg.Clear() as a resource.
+    //
+    // No-op serialization: this is a transient per-frame scratch resource
+    // (re-published from Interaction::PolygonPoints every FixedUpdate). The
+    // member Serialize satisfies Astra's HasSerializeMethod concept so the
+    // compiler does not attempt trivially-copyable serialization on the vector
+    // (mirrors the PhysicsResource pattern). Registry::Save excludes resources.
+    struct PolygonDraftResource
+    {
+        std::vector<glm::vec2> worldPoints;   // WORLD space
+
+        template<typename Archive>
+        void Serialize(Archive& /*ar*/) {}    // no-op: transient per-frame scratch
+    };
+
+    // Render-phase system: draws a small fixed-pixel circle at each draft point,
+    // projected with the SAME world*zoom+offset transform as the sprites + debug
+    // overlay. Single-threaded (Batcher2D is not thread-safe), reads-only w.r.t.
+    // ECS, exactly like PhysicsDebugRenderSystem. Absent resource -> draws nothing.
+    struct PolygonDraftRenderSystem
+    {
+        void operator()(Astra::Registry& reg)
+        {
+            RenderContext2D* ctx = reg.GetResource<RenderContext2D>();
+            if (!ctx || !ctx->batcher) return;
+            const PolygonDraftResource* draft = reg.GetResource<PolygonDraftResource>();
+            if (!draft || draft->worldPoints.empty()) return;
+
+            constexpr float kMarkerPx = 4.0f;
+            const glm::vec4 kMarkerColor{1.0f, 0.85f, 0.2f, 1.0f};   // amber
+            for (const glm::vec2 wp : draft->worldPoints)
+            {
+                const glm::vec2 screen = wp * ctx->zoom + ctx->cameraOffset;
+                ctx->batcher->Circle(screen, kMarkerPx, kMarkerColor);
+            }
         }
     };
 

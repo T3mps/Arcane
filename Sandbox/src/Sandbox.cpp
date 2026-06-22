@@ -116,6 +116,7 @@ extern "C"
         sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
         sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
         sch.render.AddSystem<Arcane::Sandbox::PhysicsDebugRenderSystem>();
+        sch.render.AddSystem<Arcane::Sandbox::PolygonDraftRenderSystem>();
 
         // 4. Build the scene (fresh boot only; a hot-reload-with-state restores it).
         //    BuildInitialScene mints its OWN fresh PhysicsResource (via the clean-rebuild
