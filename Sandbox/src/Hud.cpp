@@ -171,7 +171,10 @@ namespace Arcane::Sandbox
 
                 ImGui::SameLine();
                 ImGui::BeginDisabled(pts < 3);   // need >= 3 verts
-                if (ImGui::Button("Spawn"))
+                // "##polygon" gives a unique ID: the visible label is still "Spawn",
+                // but the bare "Spawn" string collides with the "Spawn" CollapsingHeader
+                // (a header opens no ID scope for its contents), which ImGui flags.
+                if (ImGui::Button("Spawn##polygon"))
                     app.RequestPolygonSpawn();
                 ImGui::EndDisabled();
 
