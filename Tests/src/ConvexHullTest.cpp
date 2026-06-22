@@ -107,3 +107,8 @@ TEST_CASE("QuickHull agrees with MonotoneChain", "[geometry]")
 {
     AgreesWithMonotone<Arcane::Geometry::QuickHull>("quickhull");
 }
+
+TEST_CASE("Chan agrees with MonotoneChain", "[geometry]")
+{
+    AgreesWithMonotone<Arcane::Geometry::Chan>("chan");
+}
