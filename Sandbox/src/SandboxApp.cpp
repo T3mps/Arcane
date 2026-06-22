@@ -166,11 +166,15 @@ namespace Arcane::Sandbox
         m_interaction.Tick(reg, *phys->world, m_camera, input, kFixedDt);
 
         // Mirror the in-progress polygon draft into the render-read resource so
-        // PolygonDraftRenderSystem can draw the clicked vertices (empty when not
-        // in polygon mode).
+        // PolygonDraftRenderSystem can draw the clicked vertices. Published ONLY when
+        // shape == Polygon -- switching to Box/Circle/Capsule hides stray markers while
+        // the in-progress points are retained internally for when Polygon is resumed.
         if (!reg.GetResource<PolygonDraftResource>())
             reg.SetResource(PolygonDraftResource{});
-        reg.GetResource<PolygonDraftResource>()->worldPoints = m_interaction.PolygonPoints();
+        if (m_interaction.IsPolygonMode())
+            reg.GetResource<PolygonDraftResource>()->worldPoints = m_interaction.PolygonPoints();
+        else
+            reg.GetResource<PolygonDraftResource>()->worldPoints.clear();
 
         // ITEM 2: commit a HUD-requested polygon on the LIVE world (deferred out of the
         // render phase). World-direct -> it renders via DrawPhysicsDebug (no entity).

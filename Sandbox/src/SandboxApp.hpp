@@ -250,12 +250,11 @@ namespace Arcane::Sandbox
         [[nodiscard]] const SpawnConfig& SpawnConfig()    const noexcept { return m_interaction.SpawnCfg(); }
         [[nodiscard]] Sandbox::SpawnConfig& SpawnConfigMut()    noexcept { return m_interaction.SpawnCfg(); }
 
-        // ---- POLYGON-CREATION MODE (HUD, ITEM 2) -----------------------------------
-        // The HUD toggles polygon mode + reads the in-progress point count off the
-        // Interaction, and requests a commit (the actual SpawnPolygon runs in
-        // FixedUpdate on the live world, NOT mid-render -- same defer-out-of-render
-        // discipline as the scene rebuild). RequestPolygonSpawn is a one-shot flag the
-        // next FixedUpdate consumes.
+        // ---- POLYGON-CREATION MODE (shape == Polygon) ------------------------------
+        // Polygon mode is derived from SpawnConfig.shape == Polygon (no separate bool).
+        // The HUD reads PolygonPointCount and requests commits via RequestPolygonSpawn.
+        // SetPolygonMode is a shim: true -> shape=Polygon, false -> shape=Box. Prefer
+        // SpawnConfigMut().shape = SpawnShape::Polygon for direct control.
         void SetPolygonMode(bool on) noexcept { m_interaction.SetPolygonMode(on); }
         [[nodiscard]] bool IsPolygonMode() const noexcept { return m_interaction.IsPolygonMode(); }
         [[nodiscard]] std::size_t PolygonPointCount() const noexcept
