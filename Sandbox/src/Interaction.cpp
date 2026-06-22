@@ -13,6 +13,7 @@
 #include "Interaction.hpp"
 #include "Scenes.hpp"
 
+#include <Arcane/Geometry/ConvexHull.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Shapes.hpp>
@@ -279,25 +280,31 @@ namespace Arcane::Sandbox
 
     bool Interaction::SpawnPolygon(Phys::PhysicsWorld& world)
     {
-        // The factory needs 3..kMaxPolyVerts verts (it THROWS outside that range). A
-        // user can hit Spawn early or amass a huge list; guard both bounds so the live
-        // (render-driven) HUD path never throws -- treat an out-of-range list as a
-        // no-op that keeps the in-progress points.
-        if (m_polygonPoints.size() < 3 ||
-            m_polygonPoints.size() > Phys::kMaxPolyVerts)
+        // Take the CONVEX HULL of the clicked points (Monotone Chain: robust O(n log n))
+        // so any click order -- even non-convex / self-crossing -- yields a valid convex
+        // collider. Geometry::Pt<float> IS glm::vec2 (glm::vec<2,float>), so the span is
+        // a zero-copy view of m_polygonPoints with no conversion overhead.
+        namespace Geo = Arcane::Geometry;
+        const std::vector<Geo::Pt<float>> hull =
+            Geo::ConvexHull<Geo::MonotoneChain, float>(
+                std::span<const Geo::Pt<float>>(
+                    reinterpret_cast<const Geo::Pt<float>*>(m_polygonPoints.data()),
+                    m_polygonPoints.size()));
+
+        // A degenerate hull (< 3 verts: collinear / fewer than 3 unique points) or an
+        // oversized one is a no-op that keeps the in-progress points intact.
+        if (hull.size() < 3 || hull.size() > Phys::kMaxPolyVerts)
             return false;
 
-        // The clicked points are WORLD-space. Author the body at their centroid so it
-        // rotates about its center (mass is computed about the shape centroid), with
-        // the verts expressed RELATIVE to that origin -- mirrors the WorldPolygonBox
-        // pattern in Scenes.cpp (local verts + a separate body position).
+        // Author the body at the hull centroid (rotates about its centre), verts
+        // RELATIVE to it -- mirrors the WorldPolygonBox pattern in Scenes.cpp.
         glm::vec2 centroid{0.0f, 0.0f};
-        for (const glm::vec2 p : m_polygonPoints) centroid += p;
-        centroid /= static_cast<float>(m_polygonPoints.size());
+        for (const auto& p : hull) centroid += glm::vec2(p.x, p.y);
+        centroid /= static_cast<float>(hull.size());
 
         std::vector<Phys::Vec2> local;
-        local.reserve(m_polygonPoints.size());
-        for (const glm::vec2 p : m_polygonPoints)
+        local.reserve(hull.size());
+        for (const auto& p : hull)
             local.emplace_back(Phys::Real(p.x - centroid.x), Phys::Real(p.y - centroid.y));
 
         Phys::BodyDef def;
@@ -309,7 +316,7 @@ namespace Arcane::Sandbox
         def.restitution = Phys::Real(0.05);
         world.AddBody(def);
 
-        m_polygonPoints.clear();   // committed -> start a fresh polygon on the next click
+        m_polygonPoints.clear();   // committed -> fresh polygon on the next click
         return true;
     }
 }

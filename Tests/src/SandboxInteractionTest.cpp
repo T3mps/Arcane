@@ -665,3 +665,79 @@ TEST_CASE("Interaction: polygon mode click on a body adds a vertex, not a grab",
     CHECK_FALSE(it.IsGrabbing());                 // no grab in polygon mode
     CHECK(it.PolygonPoints().size() == 1);        // the click became a vertex
 }
+
+// ===========================================================================
+// CONVEX HULL ON POLYGON SPAWN (Task 8)
+// ===========================================================================
+// SpawnPolygon must hull the clicked points before passing them to MakePolygon,
+// so any click order (even non-convex / self-crossing) yields a valid convex
+// collider. A degenerate hull (collinear points -> < 3 hull verts) stays a
+// no-op that keeps the in-progress points intact.
+
+// ---------------------------------------------------------------------------
+// (p) Non-convex click order -> ONE convex body.
+// ---------------------------------------------------------------------------
+TEST_CASE("SpawnPolygon hulls a non-convex click order into one convex body", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SetPolygonMode(true);
+
+    // A square outline with an interior point added mid-list (non-convex click
+    // order). The five raw points are NOT a convex polygon; before the hull step
+    // MakePolygon would receive a self-intersecting / disordered vertex list.
+    // The hull of these five points is the 4-vertex square (interior dropped).
+    const glm::vec2 pts[5] = {
+        {  0.0f,   0.0f },   // corner
+        {400.0f,   0.0f },   // corner
+        {200.0f, 200.0f },   // interior point
+        {400.0f, 400.0f },   // corner
+        {  0.0f, 400.0f },   // corner
+    };
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);   // released
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);   // press -> vertex
+    }
+    REQUIRE(it.PolygonPoints().size() == 5);
+
+    const std::size_t bodiesBefore = w.Physics().Count();
+    const bool spawned = it.SpawnPolygon(w.Physics());
+    CHECK(spawned);                                    // hull >= 3 verts -> spawned
+    CHECK(w.Physics().Count() == bodiesBefore + 1);   // exactly one new body
+    CHECK(it.PolygonPoints().empty());                 // committed -> cleared
+}
+
+// ---------------------------------------------------------------------------
+// (q) Collinear click set -> no-op (< 3 hull verts), points kept.
+// ---------------------------------------------------------------------------
+TEST_CASE("SpawnPolygon rejects a collinear click set (keeps points)", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SetPolygonMode(true);
+
+    // Three collinear points -> hull has only 2 (the two extreme endpoints).
+    // SpawnPolygon must treat this as a no-op and leave the point list intact.
+    const glm::vec2 pts[3] = {
+        {  0.0f,   0.0f },
+        {200.0f, 200.0f },
+        {400.0f, 400.0f },
+    };
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 3);
+
+    const std::size_t bodiesBefore = w.Physics().Count();
+    const bool spawned = it.SpawnPolygon(w.Physics());
+    CHECK_FALSE(spawned);                               // degenerate hull -> no-op
+    CHECK(w.Physics().Count() == bodiesBefore);         // no body created
+    CHECK(it.PolygonPoints().size() == 3);              // points kept, not cleared
+}
