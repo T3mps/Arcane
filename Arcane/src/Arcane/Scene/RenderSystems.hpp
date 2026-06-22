@@ -3,8 +3,9 @@
 // RenderSubmissionSystem: reads WorldTransform + SpriteRenderer, submits one quad
 // per sprite to the Batcher2D held in the RenderContext2D resource. Read-only
 // w.r.t. ECS; the side effect (batcher submission) is external. Runs in the
-// Render phase, single-threaded (Batcher2D is not thread-safe). Quads are axis
-// aligned for the slice (rotation is ignored by Batcher2D::Quad).
+// Render phase, single-threaded (Batcher2D is not thread-safe). The quad is
+// rotated by the entity's WorldTransform rotation (passed to Batcher2D::Quad/
+// Rect), so a sprite turns in lockstep with its rotating physics body.
 //
 // Sprite anchor = CENTER: a sprite is drawn centered on its entity's world
 // position (dstPos = worldPos - dstSize/2), so it lines up with that entity's
@@ -20,6 +21,8 @@
 #include <Astra/System/System.hpp>
 
 #include <glm/glm.hpp>
+
+#include <cmath>
 
 namespace Arcane
 {
@@ -39,6 +42,11 @@ namespace Arcane
                 const glm::vec2 worldPos(m[2].x, m[2].y);
                 const glm::vec2 worldScale(glm::length(glm::vec2(m[0])),
                                            glm::length(glm::vec2(m[1])));
+                // World rotation from the first basis column (matches
+                // LocalTransform::ToMatrix: m[0] = (c*scale.x, s*scale.x)). The
+                // camera applies a uniform zoom (no rotation), so the screen-space
+                // sprite rotates by the same angle as its physics body.
+                const float worldRot = std::atan2(m[0].y, m[0].x);
                 // Apply the camera (screen = world * zoom + offset; matches
                 // Sandbox::Camera::WorldToScreen and DrawPhysicsDebug exactly, so
                 // sprites + the physics-debug overlay pan/zoom together): scale the
@@ -56,9 +64,10 @@ namespace Arcane
                 nvrhi::ITexture* tex = textures ? textures->Resolve(sprite.textureId) : nullptr;
                 if (tex)
                     ctx->batcher->Quad(dstPos, dstSize, tex,
-                                       glm::vec2(0, 0), glm::vec2(1, 1), sprite.tint);
+                                       glm::vec2(0, 0), glm::vec2(1, 1), sprite.tint,
+                                       worldRot);
                 else
-                    ctx->batcher->Rect(dstPos, dstSize, sprite.tint);
+                    ctx->batcher->Rect(dstPos, dstSize, sprite.tint, worldRot);
             });
         }
     };

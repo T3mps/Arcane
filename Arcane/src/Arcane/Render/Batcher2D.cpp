@@ -155,10 +155,10 @@ namespace Arcane
 
             void Quad(glm::vec2 dstPos, glm::vec2 dstSize,
                       nvrhi::ITexture* texture, glm::vec2 uvMin, glm::vec2 uvMax,
-                      glm::vec4 color) override
+                      glm::vec4 color, float rotation) override
             {
                 PushQuad(BatchKind::Sprite, texture ? texture : m_whiteTexture.Get(),
-                         dstPos, dstSize, uvMin, uvMax, color);
+                         dstPos, dstSize, uvMin, uvMax, color, rotation);
             }
 
             void Glyph(glm::vec2 dstPos, glm::vec2 dstSize,
@@ -169,10 +169,11 @@ namespace Arcane
                          dstPos, dstSize, uvMin, uvMax, color);
             }
 
-            void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 color) override
+            void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 color,
+                      float rotation) override
             {
                 PushQuad(BatchKind::Sprite, m_whiteTexture.Get(),
-                         pos, size, glm::vec2(0), glm::vec2(1), color);
+                         pos, size, glm::vec2(0), glm::vec2(1), color, rotation);
             }
 
             void Line(glm::vec2 a, glm::vec2 b, float thickness,
@@ -307,13 +308,17 @@ namespace Arcane
 
             void PushQuad(BatchKind kind, nvrhi::ITexture* texture,
                           glm::vec2 pos, glm::vec2 size,
-                          glm::vec2 uvMin, glm::vec2 uvMax, glm::vec4 color)
+                          glm::vec2 uvMin, glm::vec2 uvMax, glm::vec4 color,
+                          float rotation = 0.0f)
             {
+                // Corners in TL,TR,BR,BL order; rotation 0 is the axis-aligned
+                // (byte-identical) path. UVs map to the corner order unchanged.
+                const std::array<glm::vec2, 4> p = QuadCorners(pos, size, rotation);
                 PushQuadVertices(kind, texture,
-                    { pos, uvMin, color },
-                    { { pos.x + size.x, pos.y }, { uvMax.x, uvMin.y }, color },
-                    { pos + size, uvMax, color },
-                    { { pos.x, pos.y + size.y }, { uvMin.x, uvMax.y }, color });
+                    { p[0], uvMin, color },
+                    { p[1], { uvMax.x, uvMin.y }, color },
+                    { p[2], uvMax, color },
+                    { p[3], { uvMin.x, uvMax.y }, color });
             }
 
             void EnsureBuffers()

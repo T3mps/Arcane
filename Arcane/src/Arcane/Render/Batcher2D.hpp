@@ -16,12 +16,44 @@
 
 #include <glm/glm.hpp>
 
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 
 namespace Arcane
 {
     class ShaderLibrary;
+
+    // The 4 corners of a quad, in the order Batcher2D emits them: TL, TR, BR, BL.
+    // Given a top-left `pos` + `size`, rotated by `rotation` radians about the
+    // quad's CENTER. rotation 0 returns EXACTLY the axis-aligned corners (the
+    // byte-identical legacy path). The rotation matches the engine convention
+    // R(a)*v = (c*vx - s*vy, s*vx + c*vy) (LocalTransform::ToMatrix /
+    // Physics::RotateVec), so a sprite turns in lockstep with its physics body.
+    [[nodiscard]] inline std::array<glm::vec2, 4>
+    QuadCorners(glm::vec2 pos, glm::vec2 size, float rotation) noexcept
+    {
+        const glm::vec2 half(size.x * 0.5f, size.y * 0.5f);
+        const glm::vec2 center = pos + half;
+        if (rotation == 0.0f)
+        {
+            return { center - half,
+                     glm::vec2(center.x + half.x, center.y - half.y),
+                     center + half,
+                     glm::vec2(center.x - half.x, center.y + half.y) };
+        }
+        const float c = std::cos(rotation);
+        const float s = std::sin(rotation);
+        const auto rot = [&](float ox, float oy) {
+            return glm::vec2(center.x + c * ox - s * oy,
+                             center.y + s * ox + c * oy);
+        };
+        return { rot(-half.x, -half.y),   // TL
+                 rot( half.x, -half.y),   // TR
+                 rot( half.x,  half.y),   // BR
+                 rot(-half.x,  half.y) }; // BL
+    }
 
     struct Batch2DStats
     {
@@ -57,10 +89,13 @@ namespace Arcane
         virtual void SetLayer(uint16_t layer, uint16_t orderInLayer) = 0;
 
         // Textured quad: dstPos/dstSize in pixels, uvMin/uvMax in [0,1].
+        // `rotation` (radians) spins the quad about its CENTER (default 0 ==
+        // axis-aligned, the legacy path); used by RenderSubmissionSystem to turn
+        // sprites with their entity's WorldTransform rotation.
         virtual void Quad(glm::vec2 dstPos, glm::vec2 dstSize,
                           nvrhi::ITexture* texture,
                           glm::vec2 uvMin, glm::vec2 uvMax,
-                          glm::vec4 color) = 0;
+                          glm::vec4 color, float rotation = 0.0f) = 0;
 
         // MSDF glyph quad: same geometry as Quad but rendered through the
         // msdf pipeline (median-of-3 distance + screen-space AA). Text
@@ -71,7 +106,9 @@ namespace Arcane
                            glm::vec4 color) = 0;
 
         // Untextured primitives (white-texture quads / SDF circle quads).
-        virtual void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 color) = 0;
+        // `rotation` (radians) spins the rect about its CENTER (default 0).
+        virtual void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 color,
+                          float rotation = 0.0f) = 0;
         virtual void Line(glm::vec2 a, glm::vec2 b, float thickness,
                           glm::vec4 color) = 0;
         virtual void Circle(glm::vec2 center, float radius, glm::vec4 color) = 0;
