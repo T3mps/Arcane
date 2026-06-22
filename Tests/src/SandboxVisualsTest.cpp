@@ -16,6 +16,7 @@
 // recording mock Batcher2D (no graphics device needed).
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -142,4 +143,109 @@ TEST_CASE("Sandbox: compound bodies render as collider outlines (DrawPhysicsDebu
 
     CHECK(mock.circles >= 2);  // 2 compound bodies' primary circle outlines
     CHECK(mock.lines   >= 4);  // the floor rectangle (4 lines)
+}
+
+// =============================================================================
+// Stress scene (BuildStressTest / scene 8): CPU-only stability + volume gate.
+// =============================================================================
+// This test is the TDD gate for the "brutal churn" rewrite. It is written to
+// FAIL against the OLD box/circle scene (Count() << kStressBodyCount when the
+// old 128-body scene is in place) and PASS after the rewrite.
+//
+// Assertions (spec section 8):
+//   (a) Volume:     world.Count() >= kStressBodyCount    (dynamics+spinners+walls)
+//   (b) Stability:  after 30 steps, every body position finite + in-bounds
+//   (c) Agitators:  >= kStressSpinnerCount kinematic bodies (via TypeSlot scan)
+//   (d) Variety:    world.Count() > path-A entity count  (world-direct bodies exist)
+// =============================================================================
+TEST_CASE("Sandbox: stress scene has kStressBodyCount+ bodies and stays bounded after 30 steps",
+          "[sandbox]")
+{
+    namespace Phys = Arcane::Physics;
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::RegisterPhysicsComponents(reg);
+
+    Arcane::PhysicsResource physRes;
+    Phys::WorldDef wd;
+    wd.gravityY = Phys::Real(900);
+    physRes.world = std::make_unique<Phys::PhysicsWorld>(wd);
+    reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
+
+    const int idx = SceneIndexByName("Stress test");
+    REQUIRE(idx >= 0);
+    Sbx::SceneRegistry()[idx].build(reg);
+
+    // One PhysicsSystem fixedUpdate mints the path-A bodies on the world.
+    Arcane::PhysicsSystem phys(1.0f / 60.0f);
+    phys(reg);
+
+    Arcane::PhysicsResource* res = reg.GetResource<Arcane::PhysicsResource>();
+    REQUIRE(res != nullptr);
+    REQUIRE(res->world != nullptr);
+    Phys::PhysicsWorld& world = *res->world;
+
+    // (d) Variety: count path-A entities (those with PhysicsBodyRef -- minted via
+    //     PhysicsSystem). The world should have MORE bodies than that because the
+    //     scene also spawns world-direct polygons, compounds, spinners, and walls.
+    int pathACount = 0;
+    {
+        auto view = reg.CreateView<Arcane::PhysicsBodyRef>();
+        view.ForEach([&](Astra::Entity, Arcane::PhysicsBodyRef&) { ++pathACount; });
+    }
+
+    // (a) Volume: the world must have at least kStressBodyCount bodies (the
+    //     procedural dynamics alone); walls and spinners push Count() even higher.
+    const std::uint32_t totalCount = world.Count();
+    CHECK(static_cast<int>(totalCount) >= Sbx::kStressBodyCount);
+
+    // (d) Variety: some bodies must be world-direct (not path-A entities).
+    CHECK(static_cast<int>(totalCount) > pathACount);
+
+    // Step 30 fixed frames (the sim must survive without explosion).
+    constexpr int   kSteps = 30;
+    constexpr float kDt    = 1.0f / 60.0f;
+    for (int s = 0; s < kSteps; ++s)
+        world.Step(Phys::Real(kDt));
+
+    // (b) Stability: iterate every live slot; all positions must be finite and
+    //     within a generous arena bound.  Arena inner X ~ [-300, 1660]; with the
+    //     walls at -80-44 = -124 to 1360+44 = 1404.  Allow +/- 500 px slop.
+    constexpr float kXMin = -600.0f;
+    constexpr float kXMax = 1900.0f;
+    constexpr float kYMin = -5000.0f;  // bodies start above the floor, generous head room
+    constexpr float kYMax = 1500.0f;
+
+    int kineticCount = 0; // (c) agitator count
+
+    bool allBounded = true;
+    for (std::uint32_t i = 0; i < world.Count(); ++i)
+    {
+        if (!world.Alive(i)) continue;
+
+        const Phys::Vec2 pos = world.PosSlot(i);
+
+        // Count kinematic bodies for assertion (c).
+        if (world.TypeSlot(i) == Phys::BodyType::Kinematic)
+            ++kineticCount;
+
+        // Check finite.
+        const bool finiteX = std::isfinite(static_cast<float>(pos.x));
+        const bool finiteY = std::isfinite(static_cast<float>(pos.y));
+        if (!finiteX || !finiteY) { allBounded = false; continue; }
+
+        // Check in generous arena bound.
+        if (static_cast<float>(pos.x) < kXMin || static_cast<float>(pos.x) > kXMax ||
+            static_cast<float>(pos.y) < kYMin || static_cast<float>(pos.y) > kYMax)
+        {
+            allBounded = false;
+        }
+    }
+
+    CHECK(allBounded);  // (b) no NaN / runaway position after 30 steps
+
+    // (c) Agitators: at least kStressSpinnerCount kinematic bodies.
+    CHECK(kineticCount >= Sbx::kStressSpinnerCount);
 }

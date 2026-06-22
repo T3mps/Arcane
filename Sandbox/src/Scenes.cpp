@@ -7,7 +7,10 @@
 //   5 CCD bullet      -- a fast bullet body fired at a thin wall (no tunnelling).
 //   6 Compound bodies -- multi-fixture bodies with an off-origin COM that tip.
 //   7 Mixed shapes    -- circles + capsules + polygons interacting in a bowl.
-//   8 Stress test     -- a ~120-body mixed avalanche (solver + broadphase volume).
+//   8 Stress test     -- brutal churn: kStressBodyCount mixed-shape dynamics (boxes,
+//                        circles, capsules, n-gons, compounds) continuously stirred by
+//                        kStressSpinnerCount kinematic cross-spinners in a tall walled
+//                        arena. Never settles. Procedural + seeded (reproducible).
 //
 // OUTLINE-UNIFY (Item A): the Sandbox draws EVERY body as an OUTLINE through the single
 // canonical DrawPhysicsDebug overlay (collider outline + rich COM/velocity/orientation
@@ -58,6 +61,8 @@
 
 #include <array>
 #include <cmath>
+#include <numbers>
+#include <random>
 #include <vector>
 
 namespace Arcane::Sandbox
@@ -299,6 +304,75 @@ namespace Arcane::Sandbox
             def.friction = Physics::Real(0.4);
             def.restitution = Physics::Real(0.15);
             return w.AddBody(def);
+        }
+
+        // World-direct DYNAMIC regular convex n-gon (path B). `sides` in [3..8]; verts
+        // placed on a circle of `radius` starting at `angle` radians. Density + friction
+        // tuned for the stress scene (flowing, light mass). Sibling of WorldTriangle.
+        Physics::BodyHandle WorldNgon(Physics::PhysicsWorld& w, glm::vec2 pos,
+                                      float radius, int sides, float angle,
+                                      float density = 0.08f)
+        {
+            sides = (sides < 3) ? 3 : (sides > 8 ? 8 : sides);
+            std::vector<Physics::Vec2> verts;
+            verts.reserve(static_cast<std::size_t>(sides));
+            const float step = 2.0f * static_cast<float>(std::numbers::pi) / static_cast<float>(sides);
+            for (int k = 0; k < sides; ++k)
+            {
+                const float a = angle + k * step;
+                verts.push_back(Physics::Vec2(radius * std::cos(a), radius * std::sin(a)));
+            }
+            Physics::BodyDef def;
+            def.type        = Physics::BodyType::Dynamic;
+            def.position    = Physics::Vec2(pos.x, pos.y);
+            def.shape       = Physics::MakePolygon(verts);
+            def.density     = Physics::Real(density);
+            def.friction    = Physics::Real(0.35f);
+            def.restitution = Physics::Real(0.05f);
+            return w.AddBody(def);
+        }
+
+        // World-direct KINEMATIC cross-spinner (path B). Two elongated polygon blades at 90
+        // degrees form a plus/cross. The cross is a single body; the perpendicular blade is an
+        // AddFixture (not a second AddBody) so both share one rigid body that spins as a unit.
+        // `omega` is the angular velocity (rad/s); sign gives CW vs CCW direction.
+        Physics::BodyHandle Spinner(Physics::PhysicsWorld& w, glm::vec2 pos, float omega)
+        {
+            // Blade geometry: a flat elongated box expressed as a 4-vert polygon so it
+            // can be rotated freely. Half-length 120, half-width 14.
+            constexpr float kBL = 120.0f;  // blade half-length
+            constexpr float kBW = 14.0f;   // blade half-width
+
+            // Primary blade (horizontal in body frame).
+            const std::vector<Physics::Vec2> blade0 = {
+                Physics::Vec2(-kBL, -kBW), Physics::Vec2( kBL, -kBW),
+                Physics::Vec2( kBL,  kBW), Physics::Vec2(-kBL,  kBW),
+            };
+            // Perpendicular blade (vertical in body frame) -- offset 90 degrees.
+            const std::vector<Physics::Vec2> blade1 = {
+                Physics::Vec2(-kBW, -kBL), Physics::Vec2( kBW, -kBL),
+                Physics::Vec2( kBW,  kBL), Physics::Vec2(-kBW,  kBL),
+            };
+
+            Physics::BodyDef def;
+            def.type     = Physics::BodyType::Kinematic;
+            def.position = Physics::Vec2(pos.x, pos.y);
+            def.shape    = Physics::MakePolygon(blade0);
+            def.friction = Physics::Real(0.3f);
+            // Kinematic: invMass/invInertia are 0 regardless of density; value is moot.
+            Physics::BodyHandle h = w.AddBody(def);
+
+            // Second blade as an additional fixture on the SAME kinematic body.
+            Physics::FixtureDef fd;
+            fd.shape       = Physics::MakePolygon(blade1);
+            fd.friction    = Physics::Real(0.3f);
+            fd.restitution = Physics::Real(0.0f);
+            w.AddFixture(h, fd);
+
+            // Spin forever at the given angular velocity (kinematic -> never pushed/damped).
+            w.SetAngVelSlot(h.index, Physics::Real(omega));
+
+            return h;
         }
 
         // =============================================================================
@@ -626,56 +700,165 @@ namespace Arcane::Sandbox
         }
 
         // =============================================================================
-        // scene 8: "Stress test" -- a large mixed-shape avalanche (solver + broadphase).
+        // scene 8: "Stress test" -- brutal churn (kStressBodyCount mixed shapes).
         // =============================================================================
-        // A wide walled pen with ~120 dynamic bodies (boxes + circles, alternating)
-        // dropped as a staggered grid that collapses into a settling pile. The point
-        // is VOLUME: dozens-to-100+ awake bodies hammering the contact solver, the
-        // dynamic-tree broadphase, and the island/sleep pass all at once. Everything
-        // is path-A (Astra components -> PhysicsSystem mints the world bodies) so it
-        // shares the same body-authoring + outline-rendering path as the other scenes.
+        // A tall walled arena with kStressBodyCount procedurally-generated dynamic
+        // bodies (boxes, circles, capsules, n-gons, compounds), continuously stirred
+        // by kStressSpinnerCount kinematic cross-spinners so the pile NEVER settles.
+        // All world-direct (path B) for the complex shapes; path-A Astra components
+        // for the simpler box/circle/capsule bodies. Both paths share the same world
+        // and render through the canonical DrawPhysicsDebug outline overlay.
+        //
+        // STABILITY DESIGN:
+        //   pitch = kMaxBodyHalf*2 + margin  => no deep initial overlap (no explosion)
+        //   spinner tip speed (~120 * 2.0 = 240 px/s) << wall thickness / dt
+        //   low density (0.05-0.10) + low friction (0.3-0.4) => mass flows, churns
+        //   seeded std::mt19937 => identical layout every build (deterministic tests)
         void BuildStressTest(Astra::Registry& reg)
         {
             Astra::Entity root = MakeRoot(reg);
 
-            // A wide, low pen: floor + two tall walls hold the pile in frame.
-            MakeBox(reg, root, glm::vec2(640.0f, 860.0f), glm::vec2(820.0f, 40.0f),
-                    Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(-220.0f, 560.0f), glm::vec2(40.0f, 360.0f),
-                    Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(1500.0f, 560.0f), glm::vec2(40.0f, 360.0f),
-                    Physics::BodyType::Static, kStatic);
+            // ---- tuning constants (anon-ns only; knobs exposed via Scenes.hpp) --------
+            constexpr unsigned int kStressSeed    = 0xCAFEBABEu;  // seeded RNG
+            constexpr float kSpinnerOmega         = 2.0f;          // rad/s per spinner
 
-            // Drop grid: kCols x kRows mixed bodies. 16 x 8 = 128 dynamics.
-            // Half-extent/radius ~30 with a 78px pitch keeps them clear of each
-            // other at spawn (no initial deep-overlap explosion) -- they settle as
-            // they fall. A small per-row x-stagger breaks symmetry so the pile
-            // tumbles instead of forming perfect columns.
-            constexpr int   kCols  = 16;
-            constexpr int   kRows  = 8;
-            constexpr float kPitch = 78.0f;
-            constexpr float kHalf  = 30.0f;
-            constexpr float kStartX = 640.0f - (kCols - 1) * 0.5f * kPitch;
-            constexpr float kStartY = 120.0f;
+            // Body size range (half-extent / radius / etc.)
+            constexpr float kMinBodyHalf = 18.0f;
+            constexpr float kMaxBodyHalf = 32.0f;
 
-            const glm::vec4 palette[4] = { kOrange, kBlue, kGreen, kGold };
+            // Grid pitch: >= max diameter + margin so there is no deep initial overlap.
+            constexpr float kPitch = kMaxBodyHalf * 2.0f + 18.0f; // 82 px
 
-            int n = 0;
-            for (int r = 0; r < kRows; ++r)
+            // Arena bounds (world-direct; floor + two tall thick walls).
+            constexpr float kFloorY     = 880.0f;   // floor top surface y
+            constexpr float kFloorHalfW = 820.0f;
+            constexpr float kFloorHalfH = 40.0f;
+            constexpr float kWallHalfW  = 44.0f;
+            constexpr float kWallHalfH  = 700.0f;
+            constexpr float kArenaLeft  = -80.0f;   // inner left edge
+            constexpr float kArenaRight = 1360.0f;  // inner right edge
+            constexpr float kArenaInnerW = kArenaRight - kArenaLeft;
+
+            // Grid spawn parameters.
+            const int   kCols      = std::max(1, static_cast<int>(kArenaInnerW / kPitch));
+            constexpr float kSpawnBottom = kFloorY - kPitch; // first row y (above floor)
+            const float kSpawnLeft  = kArenaLeft;
+
+            // ---- arena: floor + 2 tall walls (world-direct statics) ----------------
+            Physics::PhysicsWorld* w = World(reg);
+            if (!w) return;
+
+            WorldStaticBox(*w, glm::vec2((kArenaLeft + kArenaRight) * 0.5f,
+                                         kFloorY + kFloorHalfH),
+                           glm::vec2(kFloorHalfW, kFloorHalfH));
+            WorldStaticBox(*w, glm::vec2(kArenaLeft - kWallHalfW,
+                                         kFloorY - kWallHalfH),
+                           glm::vec2(kWallHalfW, kWallHalfH));
+            WorldStaticBox(*w, glm::vec2(kArenaRight + kWallHalfW,
+                                         kFloorY - kWallHalfH),
+                           glm::vec2(kWallHalfW, kWallHalfH));
+
+            // ---- spinners: kStressSpinnerCount kinematic cross-spinners -------------
+            // Evenly spaced along the arena just above the floor so bodies land on them.
+            constexpr float kSpinnerY = kFloorY - 28.0f; // just above floor
+            for (int s = 0; s < kStressSpinnerCount; ++s)
             {
-                const float stagger = (r % 2 == 0) ? 0.0f : kPitch * 0.5f;
-                const float y = kStartY + r * kPitch;
-                for (int c = 0; c < kCols; ++c)
+                const float t  = (kStressSpinnerCount > 1)
+                                 ? static_cast<float>(s) / static_cast<float>(kStressSpinnerCount - 1)
+                                 : 0.5f;
+                const float sx = kArenaLeft + t * kArenaInnerW;
+                // Alternate sign: CW / CCW for chaotic churn.
+                const float omega = (s % 2 == 0) ? kSpinnerOmega : -kSpinnerOmega;
+                Spinner(*w, glm::vec2(sx, kSpinnerY), omega);
+            }
+
+            // ---- procedural body generator: one loop, seeded RNG -------------------
+            std::mt19937 rng(kStressSeed);
+
+            // Distributions.
+            std::uniform_real_distribution<float> distJitter(-kPitch * 0.25f, kPitch * 0.25f);
+            std::uniform_real_distribution<float> distSize(kMinBodyHalf, kMaxBodyHalf);
+            std::uniform_real_distribution<float> distAngle(0.0f, 6.2832f);
+            std::uniform_int_distribution<int>    distTint(0, 5);
+            std::uniform_int_distribution<int>    distWeight(0, 99);
+            std::uniform_int_distribution<int>    distNSides(0, 2); // {3,5,6}
+
+            const glm::vec4 palette[6] = { kOrange, kBlue, kGreen, kGold, kMagenta, kTeal };
+            const int kNGonSides[3]   = { 3, 5, 6 };
+
+            for (int i = 0; i < kStressBodyCount; ++i)
+            {
+                // 1. Grid position + jitter.
+                const int   row = i / kCols;
+                const int   col = i % kCols;
+                const float jx  = distJitter(rng);
+                const float jy  = distJitter(rng);
+                const float px  = kSpawnLeft + (col + 0.5f) * kPitch + jx;
+                const float py  = kSpawnBottom - row * kPitch + jy;
+
+                // 2. Random properties.
+                const float       sz    = distSize(rng);
+                const glm::vec4   tint  = palette[distTint(rng)];
+                const float       angle = distAngle(rng);
+
+                // 3. Weighted shape pick: Box 25, Circle 20, Capsule 20, Polygon 25, Compound 10.
+                const int w_val = distWeight(rng);
+                const glm::vec2 pos(px, py);
+
+                if (w_val < 25)
                 {
-                    const float x = kStartX + c * kPitch + stagger;
-                    const glm::vec4 tint = palette[n % 4];
-                    if ((r + c) % 2 == 0)
-                        MakeBox(reg, root, glm::vec2(x, y), glm::vec2(kHalf, kHalf),
-                                Physics::BodyType::Dynamic, tint, 0.05f, 0.5f);
-                    else
-                        MakeCircle(reg, root, glm::vec2(x, y), kHalf,
-                                   Physics::BodyType::Dynamic, tint, 0.1f);
-                    ++n;
+                    // Box (path-A Aabb). MakeBox takes halfExtents.
+                    // Mix some long/thin and some square-ish boxes.
+                    const float hw = sz;
+                    const float hh = sz * (0.5f + 0.5f * (static_cast<float>(i % 3) / 2.0f));
+                    MakeBox(reg, root, pos, glm::vec2(hw, hh),
+                            Physics::BodyType::Dynamic, tint,
+                            /*restitution=*/0.05f, /*friction=*/0.35f, /*density=*/0.07f);
+                }
+                else if (w_val < 45)
+                {
+                    // Circle (path-A).
+                    MakeCircle(reg, root, pos, sz,
+                               Physics::BodyType::Dynamic, tint,
+                               /*restitution=*/0.1f, /*density=*/0.07f);
+                }
+                else if (w_val < 65)
+                {
+                    // Capsule (path-A). halfLen ~ sz*0.6, radius ~ sz*0.4.
+                    const float halfLen = sz * 0.6f;
+                    const float radius  = sz * 0.4f;
+                    MakeCapsule(reg, root, pos, halfLen, radius,
+                                Physics::BodyType::Dynamic, tint);
+                }
+                else if (w_val < 90)
+                {
+                    // N-gon (world-direct polygon, path B).
+                    const int sides = kNGonSides[distNSides(rng)];
+                    WorldNgon(*w, pos, sz, sides, angle, /*density=*/0.08f);
+                }
+                else
+                {
+                    // Compound (world-direct 2-fixture body: a circle + offset lobe).
+                    // The off-origin lobe shifts the COM so the body tips and tumbles.
+                    Physics::BodyDef cdef;
+                    cdef.type        = Physics::BodyType::Dynamic;
+                    cdef.position    = Physics::Vec2(pos.x, pos.y);
+                    cdef.shape       = Physics::MakeCircle(Physics::Real(sz * 0.55f));
+                    cdef.density     = Physics::Real(0.07f);
+                    cdef.friction    = Physics::Real(0.35f);
+                    cdef.restitution = Physics::Real(0.05f);
+                    Physics::BodyHandle ch = w->AddBody(cdef);
+
+                    // Offset lobe: smaller circle at (+sz*0.8, 0) in body frame.
+                    Physics::FixtureDef lfd;
+                    lfd.shape       = Physics::MakeCircle(Physics::Real(sz * 0.35f));
+                    lfd.localPos    = Physics::Vec2(sz * 0.8f, 0.0f);
+                    lfd.density     = Physics::Real(0.07f);
+                    lfd.friction    = Physics::Real(0.35f);
+                    lfd.restitution = Physics::Real(0.05f);
+                    w->AddFixture(ch, lfd);
+
+                    (void)tint; // outline-only; tint unused
                 }
             }
         }
