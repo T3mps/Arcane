@@ -30,6 +30,12 @@ namespace Arcane
         float mouseX = 0.0f;
         float mouseY = 0.0f;
 
+        // Mouse wheel: ACCUMULATED vertical scroll delta for THIS frame (SDL emits
+        // wheel as discrete events, not a state, so the sampler sums event->wheel.y
+        // since the last Sample and resets each frame). +y = scroll up (zoom in),
+        // -y = scroll down (zoom out); 0 when the wheel did not move this frame.
+        float wheelY = 0.0f;
+
         // First connected gamepad. Button bits follow the GamepadButton
         // order in InputActions.cpp; axes are lx ly rx ry (-1..1, +y down)
         // then lt rt (0..1).

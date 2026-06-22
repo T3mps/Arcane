@@ -2,6 +2,7 @@
 
 #include <Arcane/Base/Log.hpp>
 
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_keyboard.h>
@@ -39,6 +40,14 @@
 //
 // Mouse bit mapping: SDL_BUTTON_LMASK(1<<0)/RMASK(1<<2)/MMASK(1<<1) are NOT
 //   in LMB=0/RMB=1/MMB=2 snapshot order, so each mask is checked explicitly.
+//
+// Mouse WHEEL: SDL emits it as an EVENT (SDL_EVENT_MOUSE_WHEEL), not a queryable
+//   state like cursor position -- there is no SDL_GetMouseWheel. We accumulate
+//   event->wheel.y via an SDL_AddEventWatch callback (invoked for every event as
+//   it is queued, e.g. during the host's PumpEvents) into a per-instance sum, then
+//   drain + reset that sum into the snapshot each Sample. The watch only READS the
+//   event (its return value is ignored for watches), so it does not interfere with
+//   the host's own event handling.
 
 namespace Arcane
 {
@@ -79,10 +88,15 @@ namespace Arcane
                 m_gamepadSubsystemOk = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
                 if (!m_gamepadSubsystemOk)
                     ARC_WARN("InputDevices: SDL_INIT_GAMEPAD failed: {}", SDL_GetError());
+
+                // Wheel accumulator: watch every queued event for SDL_EVENT_MOUSE_WHEEL
+                // and sum its vertical delta (drained each Sample). Paired removal in dtor.
+                SDL_AddEventWatch(&WheelWatch, this);
             }
 
             ~InputDevicesImpl() override
             {
+                SDL_RemoveEventWatch(&WheelWatch, this);
                 if (m_gamepad)
                 {
                     SDL_CloseGamepad(m_gamepad);
@@ -90,6 +104,18 @@ namespace Arcane
                 }
                 if (m_gamepadSubsystemOk)
                     SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+            }
+
+            // SDL event watch: accumulate vertical wheel deltas as they are queued.
+            // Watches must NOT consume the event (return value ignored); we only read.
+            static bool SDLCALL WheelWatch(void* userdata, SDL_Event* event)
+            {
+                if (event && event->type == SDL_EVENT_MOUSE_WHEEL)
+                {
+                    auto* self = static_cast<InputDevicesImpl*>(userdata);
+                    self->m_wheelAccumY += event->wheel.y;
+                }
+                return true;   // ignored for watches; keep the event in the queue
             }
 
             InputSnapshot Sample(bool captureKeyboard, bool captureMouse) override
@@ -142,6 +168,13 @@ namespace Arcane
                 if (flags & SDL_BUTTON_X1MASK) mouseButtons |= (1u << 3);  // X1          = bit 3
                 if (flags & SDL_BUTTON_X2MASK) mouseButtons |= (1u << 4);  // X2          = bit 4
                 snap.mouseButtons = mouseButtons;
+
+                // Wheel: drain the event-accumulated vertical delta for this frame and
+                // reset it (so the next frame starts at 0). Not zeroed under capture --
+                // the consumer suppresses wheel-driven actions off wantCaptureMouse, the
+                // same contract the button state uses.
+                snap.wheelY = m_wheelAccumY;
+                m_wheelAccumY = 0.0f;
 
                 // --- Gamepad (lazy, first connected device) ---
                 // If cached handle is no longer connected, close it.
@@ -210,6 +243,9 @@ namespace Arcane
         private:
             SDL_Gamepad* m_gamepad          = nullptr;
             bool         m_gamepadSubsystemOk = false;
+            // Accumulated vertical wheel delta since the last Sample (summed by the
+            // SDL_AddEventWatch callback, drained + reset each Sample).
+            float        m_wheelAccumY        = 0.0f;
         };
 
     }  // anonymous namespace

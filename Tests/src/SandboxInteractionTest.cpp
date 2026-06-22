@@ -363,6 +363,98 @@ TEST_CASE("Interaction: zoom-out is clamped to a positive minimum", "[sandbox]")
 }
 
 // ---------------------------------------------------------------------------
+// (p) WHEEL ZOOM (ITEM 3): a positive wheel delta zooms the camera IN, a negative
+//     delta zooms OUT. The wheel is consumed from input.wheelY each frame.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: mouse wheel zooms the camera in and out", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    const float z0 = cam.zoom;
+
+    // Scroll UP (+wheel) -> zoom IN (zoom increases).
+    Arcane::InputSnapshot up{};
+    up.mouseX = 640.0f; up.mouseY = 360.0f; up.wheelY = 2.0f;
+    it.Tick(w.reg, w.Physics(), cam, up, kDt);
+    CHECK(cam.zoom > z0);
+
+    // Scroll DOWN (-wheel) -> zoom OUT (zoom decreases back).
+    const float z1 = cam.zoom;
+    Arcane::InputSnapshot down{};
+    down.mouseX = 640.0f; down.mouseY = 360.0f; down.wheelY = -2.0f;
+    it.Tick(w.reg, w.Physics(), cam, down, kDt);
+    CHECK(cam.zoom < z1);
+}
+
+// ---------------------------------------------------------------------------
+// (q) WHEEL ZOOM clamp: a huge accumulated wheel delta never drives zoom out of
+//     [kMinZoom, kMaxZoom] (ScreenToWorld divides by zoom, so it must stay > 0).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: wheel zoom is clamped to the zoom range", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    Arcane::InputSnapshot blastIn{};
+    blastIn.mouseX = 640.0f; blastIn.mouseY = 360.0f; blastIn.wheelY = 1000.0f;
+    it.Tick(w.reg, w.Physics(), cam, blastIn, kDt);
+    CHECK(cam.zoom <= Sbx::Interaction::kMaxZoom);
+
+    Arcane::InputSnapshot blastOut{};
+    blastOut.mouseX = 640.0f; blastOut.mouseY = 360.0f; blastOut.wheelY = -1000.0f;
+    it.Tick(w.reg, w.Physics(), cam, blastOut, kDt);
+    CHECK(cam.zoom >= Sbx::Interaction::kMinZoom);
+    CHECK(cam.zoom > 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// (r) WHEEL ZOOM toward cursor: the WORLD point under the cursor stays fixed
+//     across a wheel-zoom step (zoom-to-cursor, like every map/editor). The
+//     camera offset is adjusted so screen->world of the cursor is invariant.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: wheel zoom keeps the world point under the cursor fixed", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    cam.offset = glm::vec2(50.0f, -30.0f);   // a non-identity camera so the math bites
+    cam.zoom   = 1.5f;
+    Sbx::Interaction it;
+
+    const glm::vec2 cursor{700.0f, 300.0f};
+    const glm::vec2 worldBefore = cam.ScreenToWorld(cursor);
+
+    Arcane::InputSnapshot up{};
+    up.mouseX = cursor.x; up.mouseY = cursor.y; up.wheelY = 3.0f;
+    it.Tick(w.reg, w.Physics(), cam, up, kDt);
+
+    const glm::vec2 worldAfter = cam.ScreenToWorld(cursor);
+    CHECK(cam.zoom > 1.5f);                       // it actually zoomed
+    CHECK(worldAfter.x == Approx(worldBefore.x).margin(0.01f));
+    CHECK(worldAfter.y == Approx(worldBefore.y).margin(0.01f));
+}
+
+// ---------------------------------------------------------------------------
+// (s) WHEEL ZOOM suppressed under ImGui capture: scrolling over a HUD widget must
+//     not zoom the world (the click-through guard covers the wheel too).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: ImGui mouse capture suppresses wheel zoom", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+    const float z0 = cam.zoom;
+
+    Arcane::InputSnapshot s{};
+    s.mouseX = 640.0f; s.mouseY = 360.0f; s.wheelY = 4.0f;
+    s.wantCaptureMouse = true;                    // ImGui owns the mouse
+    it.Tick(w.reg, w.Physics(), cam, s, kDt);
+    CHECK(cam.zoom == Approx(z0));                // no world zoom under the HUD
+}
+
+// ---------------------------------------------------------------------------
 // (e) Pan: RMB-drag translates camera.offset by the screen-space mouse delta.
 // ---------------------------------------------------------------------------
 TEST_CASE("Interaction: RMB drag pans the camera by the screen delta", "[sandbox]")

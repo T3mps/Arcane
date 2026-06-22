@@ -81,6 +81,13 @@ namespace Arcane::Sandbox
         // Per-press multiplicative zoom step ('=' multiplies, '-' divides).
         static constexpr float kZoomStep = 1.04f;
 
+        // Per-wheel-notch multiplicative zoom factor (mouse wheel). One notch
+        // (wheelY == 1) multiplies/divides zoom by this; the snapshot's wheelY is a
+        // float so it scales smoothly with high-resolution / fractional wheels. Larger
+        // than kZoomStep because a wheel notch is a coarser, deliberate input than a
+        // held key-repeat frame.
+        static constexpr float kZoomWheelStep = 1.12f;
+
         // SDL3 keycodes (ASCII codepoints) for the zoom keys. '=' is the unshifted
         // '+' key (no modifier needed); '-' is unshifted minus. Stored as raw
         // values to keep this header SDL-include-free.

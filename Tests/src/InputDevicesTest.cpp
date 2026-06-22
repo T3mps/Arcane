@@ -2,6 +2,7 @@
 // Sample returns a sane snapshot. Headless-safe: asserts shape, not
 // hardware state beyond "nothing is pressed in an unfocused hidden window".
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Input/InputDevices.hpp>
@@ -23,6 +24,7 @@ TEST_CASE("input devices: sample from a hidden window", "[input][platform]")
     const auto snap = devices->Sample(false, false);
     CHECK(snap.keycodeCount == 0);  // headless hidden window: no keys should be down
     CHECK_FALSE(snap.wantCaptureKeyboard);
+    CHECK(snap.wheelY == Catch::Approx(0.0f));  // no wheel motion -> 0
 
     const auto captured = devices->Sample(true, true);
     CHECK(captured.wantCaptureKeyboard);
