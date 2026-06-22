@@ -61,13 +61,48 @@ namespace Arcane
                 ctx->batcher->SetLayer(static_cast<uint16_t>(sprite.sortingLayer),
                                        static_cast<uint16_t>(sprite.orderInLayer));
 
-                nvrhi::ITexture* tex = textures ? textures->Resolve(sprite.textureId) : nullptr;
-                if (tex)
-                    ctx->batcher->Quad(dstPos, dstSize, tex,
-                                       glm::vec2(0, 0), glm::vec2(1, 1), sprite.tint,
-                                       worldRot);
-                else
-                    ctx->batcher->Rect(dstPos, dstSize, sprite.tint, worldRot);
+                // Draw the sprite's PRIMITIVE shape so it can match its collider.
+                // Circle/Capsule go through the batcher's filled SDF primitives
+                // (texture ignored); Rect keeps the textured/tinted rotated quad.
+                switch (sprite.shape)
+                {
+                case SpriteShape::Circle:
+                    // Filled disc, rotation-invariant. Diameter == dstSize.x.
+                    ctx->batcher->Circle(screenPos, dstSize.x * 0.5f, sprite.tint);
+                    break;
+                case SpriteShape::Capsule:
+                {
+                    // Horizontal capsule (size.x >= size.y): a central band of
+                    // length (size.x - size.y) and height size.y, plus two end
+                    // discs of radius size.y/2 at the segment endpoints, all turned
+                    // by worldRot about the center.
+                    const float r = dstSize.y * 0.5f;
+                    const glm::vec2 bandSize(dstSize.x - dstSize.y, dstSize.y);
+                    ctx->batcher->Rect(screenPos - bandSize * 0.5f, bandSize,
+                                       sprite.tint, worldRot);
+                    const float halfLen = bandSize.x * 0.5f;
+                    const float c = std::cos(worldRot), s = std::sin(worldRot);
+                    ctx->batcher->Circle(glm::vec2(screenPos.x + c * halfLen,
+                                                   screenPos.y + s * halfLen),
+                                         r, sprite.tint);
+                    ctx->batcher->Circle(glm::vec2(screenPos.x - c * halfLen,
+                                                   screenPos.y - s * halfLen),
+                                         r, sprite.tint);
+                    break;
+                }
+                case SpriteShape::Rect:
+                default:
+                {
+                    nvrhi::ITexture* tex = textures ? textures->Resolve(sprite.textureId) : nullptr;
+                    if (tex)
+                        ctx->batcher->Quad(dstPos, dstSize, tex,
+                                           glm::vec2(0, 0), glm::vec2(1, 1),
+                                           sprite.tint, worldRot);
+                    else
+                        ctx->batcher->Rect(dstPos, dstSize, sprite.tint, worldRot);
+                    break;
+                }
+                }
             });
         }
     };

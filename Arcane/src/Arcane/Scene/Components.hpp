@@ -39,13 +39,26 @@ namespace Arcane
         glm::mat3 matrix{1.0f};             // computed by TransformPropagationSystem; never authored
     };
 
+    // The primitive a SpriteRenderer draws. Lets the ONE canonical 2D submission
+    // path (RenderSubmissionSystem) render filled circles + capsules, not just
+    // rectangles -- so a body's sprite can MATCH its collider shape (a circle
+    // fixture -> a disc), and a multi-fixture body can be drawn as one child
+    // sprite per fixture of the right shape. Rect is the default (unchanged).
+    enum class SpriteShape : uint8_t
+    {
+        Rect    = 0,   // axis quad, rotated by the WorldTransform; the default
+        Circle  = 1,   // filled disc; diameter == size.x, rotation-invariant
+        Capsule = 2,   // horizontal capsule (central rect + two end discs)
+    };
+
     struct SpriteRenderer
     {
-        uint32_t  textureId = 0;            // 0 => untextured tinted quad; resolved via TextureTable
-        glm::vec2 size{32.0f, 32.0f};       // base pixel size before world scale
-        glm::vec4 tint{1.0f, 1.0f, 1.0f, 1.0f};
-        int32_t   sortingLayer = 0;
-        int32_t   orderInLayer = 0;
+        uint32_t    textureId = 0;          // 0 => untextured tinted quad; resolved via TextureTable
+        glm::vec2   size{32.0f, 32.0f};      // base pixel size before world scale
+        glm::vec4   tint{1.0f, 1.0f, 1.0f, 1.0f};
+        int32_t     sortingLayer = 0;
+        int32_t     orderInLayer = 0;
+        SpriteShape shape = SpriteShape::Rect; // primitive drawn (Rect/Circle/Capsule)
     };
 }
 
@@ -66,11 +79,18 @@ namespace Arcane
             ASTRA_REFLECT_ATTR(Serializable, false)
     ASTRA_END_REFLECT_TYPE()
 
+    ASTRA_REFLECT_ENUM(SpriteShape)
+        ASTRA_REFLECT_ENUM_VALUE(SpriteShape, Rect)
+        ASTRA_REFLECT_ENUM_VALUE(SpriteShape, Circle)
+        ASTRA_REFLECT_ENUM_VALUE(SpriteShape, Capsule)
+    ASTRA_END_REFLECT_ENUM()
+
     ASTRA_REFLECT_TYPE(SpriteRenderer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, textureId)
         ASTRA_REFLECT_FIELD(SpriteRenderer, size)
         ASTRA_REFLECT_FIELD(SpriteRenderer, tint)
         ASTRA_REFLECT_FIELD(SpriteRenderer, sortingLayer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, orderInLayer)
+        ASTRA_REFLECT_FIELD(SpriteRenderer, shape)
     ASTRA_END_REFLECT_TYPE()
 }

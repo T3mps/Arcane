@@ -82,6 +82,52 @@ namespace Arcane::Sandbox
             return root;
         }
 
+        // GENERIC per-fixture visuals -- the reusable way to give ANY body sprites
+        // that MATCH its physics. Creates one CHILD sprite per collider fixture,
+        // shaped + sized + placed to that fixture (circle -> disc, capsule ->
+        // capsule, aabb -> rect), parented to the body so transform propagation
+        // tracks each fixture's world pose and the (rotation-aware)
+        // RenderSubmissionSystem turns it with the body. Add a fixture and its
+        // sprite appears -- this is how multi-fixture / compound showpieces stay
+        // visually correct. Polygon fixtures (no authored verts on the Astra
+        // Fixture) are world-direct + debug-drawn, so they get no sprite here.
+        void AttachFixtureVisuals(Astra::Registry& reg, Astra::Entity body,
+                                  const std::vector<Arcane::Fixture>& fixtures,
+                                  glm::vec4 tint)
+        {
+            for (const Arcane::Fixture& fx : fixtures)
+            {
+                Arcane::SpriteRenderer sp;
+                sp.tint = tint;
+                switch (fx.kind)
+                {
+                case Physics::ShapeKind::Circle:
+                    sp.shape = Arcane::SpriteShape::Circle;
+                    sp.size  = glm::vec2(fx.radius * 2.0f);
+                    break;
+                case Physics::ShapeKind::Capsule:
+                    sp.shape = Arcane::SpriteShape::Capsule;
+                    sp.size  = glm::vec2((fx.halfLen + fx.radius) * 2.0f, fx.radius * 2.0f);
+                    break;
+                case Physics::ShapeKind::Aabb:
+                    sp.shape = Arcane::SpriteShape::Rect;
+                    sp.size  = glm::vec2(fx.halfW * 2.0f, fx.halfH * 2.0f);
+                    break;
+                default:
+                    continue;   // Polygon: world-direct + debug-drawn, no sprite
+                }
+
+                Astra::Entity child = reg.CreateEntity();
+                Arcane::LocalTransform lt;
+                lt.position = fx.localPos;
+                lt.rotation = fx.localAngle;
+                reg.AddComponent<Arcane::LocalTransform>(child, lt);
+                reg.AddComponent<Arcane::WorldTransform>(child, Arcane::WorldTransform{});
+                reg.AddComponent<Arcane::SpriteRenderer>(child, sp);
+                reg.SetParent(child, body);
+            }
+        }
+
         // Path-A box (Aabb fixture). Aabb shapes are axis-aligned, so a dynamic Aabb body
         // MUST be fixedRotation (the engine asserts otherwise); static bodies never rotate.
         // The sprite size tracks the half-extents so the quad matches the collider.
@@ -155,6 +201,7 @@ namespace Arcane::Sandbox
             reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
 
             Arcane::SpriteRenderer sp;
+            sp.shape = Arcane::SpriteShape::Circle;   // render the disc, not a square
             sp.size = glm::vec2(radius * 2.0f);
             sp.tint = tint;
             reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
@@ -194,6 +241,7 @@ namespace Arcane::Sandbox
             reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
 
             Arcane::SpriteRenderer sp;
+            sp.shape = Arcane::SpriteShape::Capsule;  // rounded capsule, not a bar
             sp.size = glm::vec2((halfLen + radius) * 2.0f, radius * 2.0f);
             sp.tint = tint;
             reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
@@ -559,11 +607,12 @@ namespace Arcane::Sandbox
                 }
                 reg.AddComponent<Arcane::Collider2D>(e, col);
                 reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
-
-                // Sprite spans the whole compound footprint so the quad covers both lobes.
-                Arcane::SpriteRenderer sp; sp.size = glm::vec2(124.0f, 44.0f); sp.tint = tint;
-                reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
                 reg.SetParent(e, root);
+
+                // Per-fixture visuals: a disc for the light core + a disc for the
+                // heavy lobe, each tracking its fixture (replaces the single flat
+                // 124x44 rectangle that did not match the two-circle physics).
+                AttachFixtureVisuals(reg, e, col.fixtures, tint);
             };
 
             makeLopsided(glm::vec2(520.0f, 200.0f),  1.0f, kOrange);  // tips right

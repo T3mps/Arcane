@@ -63,16 +63,19 @@ TEST_CASE("QuadCorners: 90 degrees rotates the edges about the center", "[render
 // ============================================================================
 namespace
 {
-    // Recording mock: captures the rotation of the last Rect/Quad submitted.
+    // Recording mock: captures the Rect/Quad rotation + the Circle submissions.
     struct MockBatcher final : Arcane::Batcher2D
     {
-        int   rectCalls = 0;
-        float lastRotation = 0.0f;
+        int       rectCalls = 0;
+        int       circleCalls = 0;
+        float     lastRotation = 0.0f;
+        float     lastCircleRadius = 0.0f;
+        glm::vec2 lastCircleCenter{0.0f, 0.0f};
 
         void Begin(nvrhi::ICommandList*, nvrhi::IFramebuffer*, uint32_t, uint32_t) override {}
         void SetLayer(uint16_t, uint16_t) override {}
         void Quad(glm::vec2, glm::vec2, nvrhi::ITexture*, glm::vec2, glm::vec2,
-                  glm::vec4, float rotation) override { lastRotation = rotation; }
+                  glm::vec4, float rotation) override { ++rectCalls; lastRotation = rotation; }
         void Glyph(glm::vec2, glm::vec2, nvrhi::ITexture*, glm::vec2, glm::vec2,
                    glm::vec4) override {}
         void Rect(glm::vec2, glm::vec2, glm::vec4, float rotation) override
@@ -81,10 +84,60 @@ namespace
             lastRotation = rotation;
         }
         void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
-        void Circle(glm::vec2, float, glm::vec4) override {}
+        void Circle(glm::vec2 center, float radius, glm::vec4) override
+        {
+            ++circleCalls;
+            lastCircleCenter = center;
+            lastCircleRadius = radius;
+        }
         void End() override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
     };
+
+    // Spawn a single sprite of `shape`/`size` at an identity world transform and
+    // run RenderSubmissionSystem against `mock`.
+    void SubmitSprite(MockBatcher& mock, Arcane::SpriteShape shape, glm::vec2 size)
+    {
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg{components};
+        Arcane::RegisterSceneComponents(reg);
+
+        Astra::Entity e = reg.CreateEntity();
+        Arcane::LocalTransform lt; lt.position = glm::vec2(200.0f, 150.0f);
+        Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
+        reg.AddComponent<Arcane::WorldTransform>(e, wt);
+        Arcane::SpriteRenderer sp; sp.size = size; sp.shape = shape;
+        reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
+
+        reg.SetResource<Arcane::RenderContext2D>(
+            Arcane::RenderContext2D{ &mock, glm::vec2(0.0f, 0.0f), 1.0f });
+        Arcane::RenderSubmissionSystem sys;
+        sys(reg);
+    }
+}
+
+TEST_CASE("RenderSubmissionSystem draws a Circle-shape sprite as a disc", "[render]")
+{
+    MockBatcher mock;
+    SubmitSprite(mock, Arcane::SpriteShape::Circle, glm::vec2(40.0f, 40.0f));
+
+    CHECK(mock.circleCalls == 1);                              // one disc...
+    CHECK(mock.rectCalls   == 0);                              // ...not a rect
+    CHECK(mock.lastCircleRadius == Approx(20.0f));             // radius = size.x / 2
+    CHECK(mock.lastCircleCenter.x == Approx(200.0f));          // centered on the entity
+    CHECK(mock.lastCircleCenter.y == Approx(150.0f));
+}
+
+TEST_CASE("RenderSubmissionSystem draws a Capsule-shape sprite as a rect + 2 discs",
+          "[render]")
+{
+    MockBatcher mock;
+    // size = (2*halfLen + 2r, 2r) = (60, 20) -> r=10, halfLen=20.
+    SubmitSprite(mock, Arcane::SpriteShape::Capsule, glm::vec2(60.0f, 20.0f));
+
+    CHECK(mock.rectCalls   == 1);                 // central band
+    CHECK(mock.circleCalls == 2);                 // two end discs
+    CHECK(mock.lastCircleRadius == Approx(10.0f)); // r = size.y / 2
 }
 
 TEST_CASE("RenderSubmissionSystem rotates the sprite quad by the WorldTransform",
