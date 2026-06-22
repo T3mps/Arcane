@@ -1390,6 +1390,57 @@ namespace Arcane
             // capacity) -> zero steady-state allocation.
             m_contactConstraints.clear();
 
+            // ---- per-fixture world-AABB cache (cheap pre-narrowphase reject) --
+            //
+            // Rebuild m_genFxAabb from the CURRENT (pre-solve) transforms: one
+            // tight world AABB per live fixture. The fixture-pair loops below
+            // reject provably-disjoint pairs against this cache before paying the
+            // full Collide(), so a multi-fixture body (whisk/compound) no longer
+            // drives GJK/SAT on every fixture pair. O(total fixtures) once vs.
+            // O(pairs x fixtures^2) Collide calls. See the member's doc comment.
+            if (m_genFxAabb.size() < m_fxShape.size())
+            {
+                m_genFxAabb.resize(m_fxShape.size());
+            }
+            for (std::uint32_t fi = 0; fi < m_fxCount; ++fi)
+            {
+                if (m_fxGen[fi] == 0u)
+                {
+                    continue;
+                }
+                const std::uint32_t bs = m_fxBody[fi];
+                if (bs >= m_count || m_alive[bs] == 0)
+                {
+                    continue;
+                }
+                const Transform xf = ComposeFixtureXf(
+                    Vec2(m_posX[bs], m_posY[bs]), m_angle[bs],
+                    Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]), m_fxLocalAngle[fi]);
+                m_genFxAabb[fi] = m_fxShape[fi].ComputeAABB(xf);
+            }
+            // Per-body union AABB (byte-identical to SlotAabb, computed once here
+            // instead of re-derived per broadphase pair below).
+            if (m_genBodyAabb.size() < m_count)
+            {
+                m_genBodyAabb.resize(m_count);
+            }
+            for (std::uint32_t bi = 0; bi < m_count; ++bi)
+            {
+                if (m_alive[bi] != 0)
+                {
+                    m_genBodyAabb[bi] = SlotAabb(bi);
+                }
+            }
+            // True iff fixtures fa,fb are separated by more than `margin` on some
+            // axis (so Collide(specMargin<=margin) is guaranteed to find no point).
+            auto fxDisjoint = [&](std::uint32_t fa, std::uint32_t fb, Real margin)
+            {
+                const Aabb2& A = m_genFxAabb[fa];
+                const Aabb2& B = m_genFxAabb[fb];
+                return (A.max.x + margin < B.min.x) || (B.max.x + margin < A.min.x)
+                    || (A.max.y + margin < B.min.y) || (B.max.y + margin < A.min.y);
+            };
+
             // ---- P3.1 speculative-contact CCD (the PRIMARY fast-mover CCD) ---
             //
             // MODERNIZE: the speculative margin (the kSkin skin from P1.2) is
@@ -1534,7 +1585,7 @@ namespace Arcane
                                             ? std::sqrt(speedSqA) * moveDt
                                             : kSkin;
 
-                const Aabb box = SlotAabb(i);
+                const Aabb box = m_genBodyAabb[i]; // cached SlotAabb(i)
                 // Query pad: at least the legacy +/-2 broadphase skin, expanded to
                 // the speculative margin so a fast mover's wall candidate is FOUND
                 // before geometric overlap (otherwise Collide never sees it).
@@ -1642,6 +1693,10 @@ namespace Arcane
                                 {
                                     continue;
                                 }
+                                if (fxDisjoint(fiA, fiB, specMargin))
+                                {
+                                    continue; // fixture AABBs separated -> no contact
+                                }
                                 const Transform xfB = FixtureWorldXf(idx, fiB);
                                 const Manifold mfld = Collide(m_fxShape[fiA], xfA,
                                                                m_fxShape[fiB], xfB,
@@ -1730,8 +1785,8 @@ namespace Arcane
                 const Real pairMargin = (maxSpeedSq > threshSq)
                                             ? std::sqrt(maxSpeedSq) * moveDt
                                             : kSkin;
-                Aabb2 boxA = SlotAabb(a);
-                Aabb2 boxB = SlotAabb(b);
+                Aabb2 boxA = m_genBodyAabb[a]; // cached SlotAabb(a)
+                Aabb2 boxB = m_genBodyAabb[b]; // cached SlotAabb(b)
                 boxA.min -= Vec2(pairMargin, pairMargin);
                 boxA.max += Vec2(pairMargin, pairMargin);
                 if (!AabbOverlap(boxA, boxB))
@@ -1805,6 +1860,10 @@ namespace Arcane
                             if (m_fxSensor[fiB] != 0u)
                             {
                                 continue;
+                            }
+                            if (fxDisjoint(fiA, fiB, pairMargin))
+                            {
+                                continue; // fixture AABBs separated -> no contact
                             }
                             const Transform xfB = FixtureWorldXf(ib, fiB);
                             const Manifold mfld = Collide(m_fxShape[fiA], xfA,

@@ -9,6 +9,7 @@
 
 #include <Arcane/Physics/Narrowphase/Collide.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -911,6 +912,46 @@ namespace Arcane
 
             const Real rA = a.radius;
             const Real rB = b.radius;
+
+            // ---- early world-AABB reject (cheap broadphase-grade cull) --------
+            //
+            // The unified narrowphase is called once per FIXTURE PAIR by the
+            // contact-gen + event-overlap loops, which iterate every fixture of
+            // body A against every fixture of body B with only a BODY-level
+            // broadphase pre-filter.  A multi-fixture body (e.g. a 37-wire whisk
+            // agitator, or a compound) therefore drives the full GJK/SAT/EPA on
+            // many fixture pairs that are nowhere near each other -- profiling a
+            // 1000-body churn measured ~89% of Collide() calls on PROVABLY
+            // DISJOINT pairs (45k calls/step to find ~2k real contacts).
+            //
+            // A rounded shape's EXACT world AABB is its core-vert AABB inflated
+            // by its radius (circle: point +/- r; capsule: segment +/- r;
+            // polygon: r == 0).  If A's and B's AABBs, with the gap further
+            // inflated by speculativeMargin, do not overlap then the shapes are
+            // strictly more than the speculative margin apart, so the dispatch
+            // below would return an EMPTY manifold regardless.  Rejecting here is
+            // therefore conservative + exact: identical manifolds, minus the
+            // wasted support-mapping iterations.  Index-order / determinism are
+            // unaffected (the decision is a pure function of the two transforms).
+            if (na >= 1 && nb >= 1)
+            {
+                Real aMinX = va[0].x, aMaxX = va[0].x, aMinY = va[0].y, aMaxY = va[0].y;
+                for (int i = 1; i < na; ++i) {
+                    aMinX = std::min(aMinX, va[i].x); aMaxX = std::max(aMaxX, va[i].x);
+                    aMinY = std::min(aMinY, va[i].y); aMaxY = std::max(aMaxY, va[i].y);
+                }
+                Real bMinX = vb[0].x, bMaxX = vb[0].x, bMinY = vb[0].y, bMaxY = vb[0].y;
+                for (int i = 1; i < nb; ++i) {
+                    bMinX = std::min(bMinX, vb[i].x); bMaxX = std::max(bMaxX, vb[i].x);
+                    bMinY = std::min(bMinY, vb[i].y); bMaxY = std::max(bMaxY, vb[i].y);
+                }
+                const Real m = rA + rB + speculativeMargin;
+                if ((aMaxX + m < bMinX) || (bMaxX + m < aMinX) ||
+                    (aMaxY + m < bMinY) || (bMaxY + m < aMinY))
+                {
+                    return Manifold{}; // provably separated -> no contact points
+                }
+            }
 
             // Type-pair dispatch by core vertex count.
             const bool roundCell = (na <= 2 || nb <= 2);

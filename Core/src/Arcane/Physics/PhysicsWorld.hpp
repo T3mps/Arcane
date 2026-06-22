@@ -1006,6 +1006,29 @@ namespace Arcane
             std::vector<std::uint32_t>  m_genStatics;
             std::vector<BroadphasePair> m_genPairs;
 
+            // Per-fixture WORLD AABB cache (one entry per fixture slot), rebuilt
+            // once at the top of GenerateContacts from the current (pre-solve)
+            // transforms. The body-level broadphase only pre-filters at BODY
+            // granularity, so a multi-fixture body (e.g. a 37-wire whisk agitator
+            // or a compound) otherwise drives the full GJK/SAT narrowphase on
+            // every fixture pair -- including the ~90% that are nowhere near each
+            // other. The fixture-pair loops AABB-reject against this cache before
+            // calling Collide (the per-shape-proxy effect Box2D gets for free from
+            // its broadphase), turning a per-pair GJK into 4 float compares. The
+            // cache is Step-local (recomputed each GenerateContacts), so it never
+            // goes stale across steps; the reject is conservative (disjoint AABBs
+            // => Collide returns empty), so manifolds are byte-identical.
+            std::vector<Aabb2>          m_genFxAabb;
+
+            // Per-BODY world AABB cache (one entry per body slot), filled once at
+            // the top of GenerateContacts via SlotAabb(bs) for every alive body.
+            // The broadphase-overlap pre-checks (static-candidate query AABB +
+            // the mover-pair tight-AABB reject) read this instead of recomputing
+            // SlotAabb per pair -- a 37-fixture whisk paired with ~400 bodies
+            // otherwise recomputes its 37-fixture union AABB ~400x/Step. Filled
+            // from the identical SlotAabb(), so the candidate set is byte-identical.
+            std::vector<Aabb2>          m_genBodyAabb;
+
             // ---- island sleep scratch (P2.4; Step-only; zero steady-state) ---
             //
             // Union-find parent array for the per-Step constraint graph (bodies =
