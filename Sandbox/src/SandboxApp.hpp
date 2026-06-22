@@ -171,8 +171,8 @@ namespace Arcane::Sandbox
             const PolygonDraftResource* draft = reg.GetResource<PolygonDraftResource>();
             if (!draft || draft->worldPoints.empty()) return;
 
-            constexpr float kMarkerPx = 4.0f;
-            const glm::vec4 kMarkerColor{1.0f, 0.85f, 0.2f, 1.0f};   // amber
+            constexpr float    kMarkerPx = 4.0f;
+            constexpr glm::vec4 kMarkerColor{1.0f, 0.85f, 0.2f, 1.0f};   // amber
             for (const glm::vec2 wp : draft->worldPoints)
             {
                 const glm::vec2 screen = wp * ctx->zoom + ctx->cameraOffset;

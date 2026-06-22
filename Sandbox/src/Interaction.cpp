@@ -24,6 +24,8 @@
 
 #include <algorithm>           // std::clamp
 #include <cmath>
+#include <span>                // std::span (hull view passed to ConvexHull)
+#include <vector>              // std::vector (hull-relative local verts)
 
 namespace Arcane::Sandbox
 {
