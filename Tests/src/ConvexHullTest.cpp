@@ -117,3 +117,73 @@ TEST_CASE("KirkpatrickSeidel agrees with MonotoneChain", "[geometry]")
 {
     AgreesWithMonotone<Arcane::Geometry::KirkpatrickSeidel>("kps");
 }
+
+#include <random>
+#include <catch2/catch_test_macros.hpp>
+#include <Arcane/Geometry/detail/Predicates.hpp>
+
+namespace
+{
+    template <class T>
+    std::vector<Arcane::Geometry::Pt<T>> RandomCloud(std::mt19937& rng, int n)
+    {
+        std::uniform_int_distribution<int> d(-500, 500);   // integer-valued: exact in float
+        std::vector<Arcane::Geometry::Pt<T>> v;
+        v.reserve(n);
+        for (int i = 0; i < n; ++i)
+            v.push_back(Arcane::Geometry::Pt<T>(T(d(rng)), T(d(rng))));
+        return v;
+    }
+
+    template <class T>
+    void AllSixAgree(const std::vector<Arcane::Geometry::Pt<T>>& cloud)
+    {
+        using namespace Arcane::Geometry;
+        std::span<const Arcane::Geometry::Pt<T>> s(cloud);   // fully-qualified: the
+        // file-scope `using Pt = Pt<float>` alias otherwise makes `Pt<T>` ambiguous.
+        const auto ref = ConvexHull<MonotoneChain, T>(s);
+        REQUIRE(ConvexHull<GrahamScan, T>(s)        == ref);
+        REQUIRE(ConvexHull<JarvisMarch, T>(s)       == ref);
+        REQUIRE(ConvexHull<QuickHull, T>(s)         == ref);
+        REQUIRE(ConvexHull<Chan, T>(s)              == ref);
+        REQUIRE(ConvexHull<KirkpatrickSeidel, T>(s) == ref);
+    }
+}
+
+TEST_CASE("All six convex-hull algorithms agree on random clouds", "[geometry]")
+{
+    std::mt19937 rng(0xC0FFEEu);
+    for (int trial = 0; trial < 300; ++trial)
+    {
+        const int n = 3 + (trial % 60);
+        AllSixAgree<float>(RandomCloud<float>(rng, n));
+        AllSixAgree<double>(RandomCloud<double>(rng, n));
+    }
+}
+
+TEST_CASE("ConvexHull output obeys the canonical contract", "[geometry]")
+{
+    using namespace Arcane::Geometry;
+    std::mt19937 rng(0x1234u);
+    for (int trial = 0; trial < 200; ++trial)
+    {
+        const auto cloud = RandomCloud<float>(rng, 3 + (trial % 50));
+        std::span<const Arcane::Geometry::Pt<float>> s(cloud);   // fully-qualified (see above)
+        const auto h = ConvexHull<MonotoneChain, float>(s);
+        if (h.size() < 3) continue;   // degenerate (all-collinear draw)
+
+        // CCW (positive signed area).
+        REQUIRE(detail::SignedArea2<float>(h) > 0.0f);
+        // Starts at the lexicographically smallest hull vertex.
+        for (std::size_t i = 1; i < h.size(); ++i)
+            REQUIRE_FALSE(detail::Less<float>(h[i], h[0]));
+        // No three consecutive collinear.
+        for (std::size_t i = 0; i < h.size(); ++i)
+            REQUIRE(detail::Cross<float>(h[(i + h.size() - 1) % h.size()],
+                                         h[i], h[(i + 1) % h.size()]) != 0.0f);
+        // Every input point is inside-or-on the hull (left of / on every CCW edge).
+        for (const auto& p : cloud)
+            for (std::size_t i = 0; i < h.size(); ++i)
+                REQUIRE(detail::Cross<float>(h[i], h[(i + 1) % h.size()], p) >= 0.0f);
+    }
+}
