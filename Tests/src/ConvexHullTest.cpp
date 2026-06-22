@@ -118,9 +118,7 @@ TEST_CASE("KirkpatrickSeidel agrees with MonotoneChain", "[geometry]")
     AgreesWithMonotone<Arcane::Geometry::KirkpatrickSeidel>("kps");
 }
 
-#include <random>
-#include <catch2/catch_test_macros.hpp>
-#include <Arcane/Geometry/detail/Predicates.hpp>
+#include <random>   // (catch2 + Predicates already included at the top of this file)
 
 namespace
 {

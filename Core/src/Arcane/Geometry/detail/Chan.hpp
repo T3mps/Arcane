@@ -24,6 +24,9 @@ namespace Arcane::Geometry::detail
     {
         const int n = static_cast<int>(hull.size());
         int l = 0, r = n;
+        // lPrev/lNext cache the turn signs at the current left boundary l. They are
+        // only refreshed in the branch that advances l; the r = c branch leaves l (and
+        // hence these) unchanged -- intentionally, not a stale-read bug.
         int lPrev = Turn<T>(p, hull[0], hull[(0 + n - 1) % n]);
         int lNext = Turn<T>(p, hull[0], hull[(0 + 1) % n]);
         while (l < r)
