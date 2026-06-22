@@ -12,6 +12,7 @@
 #include <Arcane/Geometry/detail/MonotoneChain.hpp>
 #include <Arcane/Geometry/detail/GrahamScan.hpp>
 #include <Arcane/Geometry/detail/JarvisMarch.hpp>
+#include <Arcane/Geometry/detail/QuickHull.hpp>
 
 namespace Arcane::Geometry
 {
@@ -39,6 +40,15 @@ namespace Arcane::Geometry
         static std::vector<Pt<T>> Build(std::span<const Pt<T>> p)
         {
             return detail::JarvisMarchBuild<T>(p);
+        }
+    };
+
+    struct QuickHull
+    {
+        template <class T>
+        static std::vector<Pt<T>> Build(std::span<const Pt<T>> p)
+        {
+            return detail::QuickHullBuild<T>(p);
         }
     };
 
