@@ -97,3 +97,8 @@ TEST_CASE("GrahamScan agrees with MonotoneChain", "[geometry]")
 {
     AgreesWithMonotone<Arcane::Geometry::GrahamScan>("graham");
 }
+
+TEST_CASE("JarvisMarch agrees with MonotoneChain", "[geometry]")
+{
+    AgreesWithMonotone<Arcane::Geometry::JarvisMarch>("jarvis");
+}
