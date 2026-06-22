@@ -10,6 +10,7 @@
 
 #include <Arcane/Geometry/detail/Predicates.hpp>
 #include <Arcane/Geometry/detail/MonotoneChain.hpp>
+#include <Arcane/Geometry/detail/GrahamScan.hpp>
 
 namespace Arcane::Geometry
 {
@@ -19,6 +20,15 @@ namespace Arcane::Geometry
         static std::vector<Pt<T>> Build(std::span<const Pt<T>> p)
         {
             return detail::MonotoneChainBuild<T>(p);
+        }
+    };
+
+    struct GrahamScan
+    {
+        template <class T>
+        static std::vector<Pt<T>> Build(std::span<const Pt<T>> p)
+        {
+            return detail::GrahamScanBuild<T>(p);
         }
     };
 
