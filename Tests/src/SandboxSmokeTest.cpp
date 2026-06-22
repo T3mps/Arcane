@@ -118,11 +118,15 @@ namespace
         Astra::Registry& reg = rt.Registry();
         SceneControl* ctrl = reg.GetResource<SceneControl>();
         REQUIRE(ctrl != nullptr);
-        CHECK(ctrl->sceneCount   == 8);   // 8-scene roster (Task 5)
+        CHECK(ctrl->sceneCount   == 9);   // 9-scene roster (8 demos + Item-B stress test)
         CHECK(ctrl->currentScene == 0);   // fresh boot builds scene 0
 
-        // Scene 0 ("Playground"): floor + 2 walls + 5 dynamic sprites = 8 quads minimum
-        // from RenderSubmissionSystem; the physics-debug overlay adds more. Step + render.
+        // Scene 0 ("Playground"): the outline-unify pivot (Item A) means bodies are
+        // NO LONGER filled SpriteRenderer quads -- they are drawn by the canonical
+        // DrawPhysicsDebug overlay. Floor + 2 walls (Aabb statics, 4 lines = 4 quads
+        // each) + 5 dynamics (outlines + velocity/COM/orientation overlays) emit well
+        // over 8 quads. Step + render; the gate is no-crash + clean GPU + non-trivial
+        // geometry submitted.
         const std::uint32_t scene0Quads = StepAndRender(rt, host, *device, *canvas, *batcher, 30);
         CHECK(scene0Quads >= 8);
         CHECK(Arcane::RenderErrorCount() == 0);

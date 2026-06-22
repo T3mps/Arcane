@@ -1,6 +1,5 @@
-// Sandbox scene builders. Task 5 fills out the roster to EIGHT scenes, each showcasing one
-// Physics v2 capability:
-//   0 Playground      -- floor + 2 walls + mixed dynamics (the Task-4 sampler).
+// Sandbox scene builders. NINE scenes, each showcasing one Physics v2 capability:
+//   0 Playground      -- floor + 2 walls + mixed dynamics (the original sampler).
 //   1 Box stack       -- a tall stack of boxes settling stably.
 //   2 Pyramid         -- a triangular pile (friction / stress).
 //   3 Joint chain     -- revolute + weld + distance + prismatic links.
@@ -8,14 +7,21 @@
 //   5 CCD bullet      -- a fast bullet body fired at a thin wall (no tunnelling).
 //   6 Compound bodies -- multi-fixture bodies with an off-origin COM that tip.
 //   7 Mixed shapes    -- circles + capsules + polygons interacting in a bowl.
+//   8 Stress test     -- a ~120-body mixed avalanche (solver + broadphase volume).
+//
+// OUTLINE-UNIFY (Item A): the Sandbox draws EVERY body as an OUTLINE through the single
+// canonical DrawPhysicsDebug overlay (collider outline + rich COM/velocity/orientation
+// overlays). The builders therefore attach NO SpriteRenderer to physics bodies -- the
+// filled-quad RenderSubmissionSystem path is unused by the sandbox now (it stays in the
+// engine for other consumers). LARGER SCALE (Item C): geometry is sized up ~1.8x and the
+// arenas spread past the 1280x720 canvas; the camera (interaction layer) zooms to fit.
 //
 // TWO BODY-AUTHORING PATHS (both feed the SAME PhysicsWorld owned by PhysicsResource):
 //
 //   (A) ASTRA COMPONENTS -- the default. An entity carries LocalTransform + WorldTransform +
-//       RigidBody2D + Collider2D (a Fixture list) + PhysicsBodyRef + SpriteRenderer.
-//       PhysicsSystem creates the body on the first fixedUpdate and writes the post-step
-//       pose back into LocalTransform; RenderSubmissionSystem draws the sprite. Used by
-//       scenes 0,1,2,5,6 and the circle/capsule bodies of 7.
+//       RigidBody2D + Collider2D (a Fixture list) + PhysicsBodyRef. PhysicsSystem creates
+//       the body on the first fixedUpdate and writes the post-step pose back into
+//       LocalTransform. Used by scenes 0,1,2,5,6,8 and the circle/capsule bodies of 7.
 //
 //   (B) WORLD-DIRECT -- create the body straight on the PhysicsWorld in the builder. Needed
 //       when the Astra Fixture descriptor cannot express the body:
@@ -26,12 +32,12 @@
 //         * JOINTS: PhysicsWorld::AddJoint needs the two BodyHandles, which only exist after
 //           a body is created. World-direct bodies hand us the handle immediately, so the
 //           joint scene (3) builds its chain + joints right here.
-//       World-direct bodies have NO entity, so RenderSubmissionSystem does not draw them; the
-//       physics-debug overlay (PhysicsDebugRenderSystem -> DrawPhysicsDebug) draws EVERY world
-//       body's outline (rotation-aware), which is exactly the capability scenes 3/4/7 show off.
+//       Both paths render identically: the physics-debug overlay (PhysicsDebugRenderSystem ->
+//       DrawPhysicsDebug) draws EVERY world body's outline (rotation-aware), regardless of how
+//       the body was authored -- which is exactly the capability scenes 3/4/7/8 show off.
 //
 // Coordinate convention (matches the physics tests): +Y is DOWN, world unit == canvas pixel.
-// The canvas is 1280x720; floors sit low on screen and bodies drop onto them.
+// Floors sit low on screen and bodies drop onto them.
 
 #include "Scenes.hpp"
 
@@ -82,52 +88,6 @@ namespace Arcane::Sandbox
             return root;
         }
 
-        // GENERIC per-fixture visuals -- the reusable way to give ANY body sprites
-        // that MATCH its physics. Creates one CHILD sprite per collider fixture,
-        // shaped + sized + placed to that fixture (circle -> disc, capsule ->
-        // capsule, aabb -> rect), parented to the body so transform propagation
-        // tracks each fixture's world pose and the (rotation-aware)
-        // RenderSubmissionSystem turns it with the body. Add a fixture and its
-        // sprite appears -- this is how multi-fixture / compound showpieces stay
-        // visually correct. Polygon fixtures (no authored verts on the Astra
-        // Fixture) are world-direct + debug-drawn, so they get no sprite here.
-        void AttachFixtureVisuals(Astra::Registry& reg, Astra::Entity body,
-                                  const std::vector<Arcane::Fixture>& fixtures,
-                                  glm::vec4 tint)
-        {
-            for (const Arcane::Fixture& fx : fixtures)
-            {
-                Arcane::SpriteRenderer sp;
-                sp.tint = tint;
-                switch (fx.kind)
-                {
-                case Physics::ShapeKind::Circle:
-                    sp.shape = Arcane::SpriteShape::Circle;
-                    sp.size  = glm::vec2(fx.radius * 2.0f);
-                    break;
-                case Physics::ShapeKind::Capsule:
-                    sp.shape = Arcane::SpriteShape::Capsule;
-                    sp.size  = glm::vec2((fx.halfLen + fx.radius) * 2.0f, fx.radius * 2.0f);
-                    break;
-                case Physics::ShapeKind::Aabb:
-                    sp.shape = Arcane::SpriteShape::Rect;
-                    sp.size  = glm::vec2(fx.halfW * 2.0f, fx.halfH * 2.0f);
-                    break;
-                default:
-                    continue;   // Polygon: world-direct + debug-drawn, no sprite
-                }
-
-                Astra::Entity child = reg.CreateEntity();
-                Arcane::LocalTransform lt;
-                lt.position = fx.localPos;
-                lt.rotation = fx.localAngle;
-                reg.AddComponent<Arcane::LocalTransform>(child, lt);
-                reg.AddComponent<Arcane::WorldTransform>(child, Arcane::WorldTransform{});
-                reg.AddComponent<Arcane::SpriteRenderer>(child, sp);
-                reg.SetParent(child, body);
-            }
-        }
-
         // Path-A box (Aabb fixture). Aabb shapes are axis-aligned, so a dynamic Aabb body
         // MUST be fixedRotation (the engine asserts otherwise); static bodies never rotate.
         // The sprite size tracks the half-extents so the quad matches the collider.
@@ -162,10 +122,13 @@ namespace Arcane::Sandbox
             reg.AddComponent<Arcane::Collider2D>(e, col);
             reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
 
-            Arcane::SpriteRenderer sp;
-            sp.size = halfExtents * 2.0f;   // full extent
-            sp.tint = tint;
-            reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
+            // OUTLINE-UNIFY (Item A): no SpriteRenderer. Every sandbox body is
+            // drawn by the canonical DrawPhysicsDebug outline overlay (collider
+            // outline + rich COM/velocity/orientation overlays), not a filled
+            // quad -- so the showcase reads consistently. `tint` is retained in
+            // the signature for call-site compatibility but no longer authors a
+            // sprite (the overlay colors by body type / island).
+            (void)tint;
 
             reg.SetParent(e, root);
             return e;
@@ -200,11 +163,8 @@ namespace Arcane::Sandbox
             reg.AddComponent<Arcane::Collider2D>(e, col);
             reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
 
-            Arcane::SpriteRenderer sp;
-            sp.shape = Arcane::SpriteShape::Circle;   // render the disc, not a square
-            sp.size = glm::vec2(radius * 2.0f);
-            sp.tint = tint;
-            reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
+            // OUTLINE-UNIFY (Item A): no SpriteRenderer -- drawn by DrawPhysicsDebug.
+            (void)tint;
 
             reg.SetParent(e, root);
             return e;
@@ -240,21 +200,20 @@ namespace Arcane::Sandbox
             reg.AddComponent<Arcane::Collider2D>(e, col);
             reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
 
-            Arcane::SpriteRenderer sp;
-            sp.shape = Arcane::SpriteShape::Capsule;  // rounded capsule, not a bar
-            sp.size = glm::vec2((halfLen + radius) * 2.0f, radius * 2.0f);
-            sp.tint = tint;
-            reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
+            // OUTLINE-UNIFY (Item A): no SpriteRenderer -- drawn by DrawPhysicsDebug.
+            (void)tint;
 
             reg.SetParent(e, root);
             return e;
         }
 
-        // Path-A static floor that fills the bottom of the canvas (a wide thin box). Returns
-        // the floor entity. `topY` is the y of the floor's TOP surface (bodies rest there).
+        // Path-A static floor (a wide thin box). Returns the floor entity. `topY`
+        // is the y of the floor's TOP surface (bodies rest there).
+        // LARGER SCALE (Item C): the default floor is wider + lower so the bigger
+        // scenes have room to spread; the camera (next agent) zooms to fit.
         Astra::Entity MakeFloor(Astra::Registry& reg, Astra::Entity root,
-                                float centerX = 640.0f, float topY = 620.0f,
-                                float halfW = 560.0f, float halfH = 20.0f)
+                                float centerX = 640.0f, float topY = 800.0f,
+                                float halfW = 880.0f, float halfH = 36.0f)
         {
             return MakeBox(reg, root, glm::vec2(centerX, topY + halfH),
                            glm::vec2(halfW, halfH), Physics::BodyType::Static, kStatic);
@@ -349,24 +308,27 @@ namespace Arcane::Sandbox
         {
             Astra::Entity root = MakeRoot(reg);
 
-            // Floor + 2 walls framing a drop zone.
-            MakeBox(reg, root, glm::vec2(640.0f, 640.0f), glm::vec2(420.0f, 20.0f),
+            // LARGER SCALE (Item C): a wide deep drop-zone framed by tall walls.
+            // The next agent adds zoom, so the world geometry can spread well
+            // past the 1280x720 canvas -- bigger reads better at zoom-to-fit.
+            // Floor + 2 walls framing the arena.
+            MakeBox(reg, root, glm::vec2(640.0f, 820.0f), glm::vec2(760.0f, 36.0f),
                     Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(240.0f, 480.0f), glm::vec2(20.0f, 160.0f),
+            MakeBox(reg, root, glm::vec2(-80.0f, 560.0f), glm::vec2(36.0f, 300.0f),
                     Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(1040.0f, 480.0f), glm::vec2(20.0f, 160.0f),
+            MakeBox(reg, root, glm::vec2(1360.0f, 560.0f), glm::vec2(36.0f, 300.0f),
                     Physics::BodyType::Static, kStatic);
 
-            // 5 dynamics: 3 boxes + 2 circles.
-            MakeBox(reg, root, glm::vec2(520.0f, 120.0f), glm::vec2(28.0f, 28.0f),
+            // 5 dynamics: 3 boxes + 2 circles (roughly 1.9x the old extents).
+            MakeBox(reg, root, glm::vec2(440.0f, 120.0f), glm::vec2(54.0f, 54.0f),
                     Physics::BodyType::Dynamic, kOrange);
-            MakeBox(reg, root, glm::vec2(640.0f, 60.0f),  glm::vec2(34.0f, 22.0f),
+            MakeBox(reg, root, glm::vec2(640.0f, 40.0f),  glm::vec2(66.0f, 42.0f),
                     Physics::BodyType::Dynamic, kBlue);
-            MakeBox(reg, root, glm::vec2(760.0f, 100.0f), glm::vec2(24.0f, 24.0f),
+            MakeBox(reg, root, glm::vec2(860.0f, 90.0f),  glm::vec2(46.0f, 46.0f),
                     Physics::BodyType::Dynamic, kGreen);
-            MakeCircle(reg, root, glm::vec2(580.0f, 200.0f), 26.0f,
+            MakeCircle(reg, root, glm::vec2(540.0f, 260.0f), 50.0f,
                        Physics::BodyType::Dynamic, kGold);
-            MakeCircle(reg, root, glm::vec2(700.0f, 160.0f), 30.0f,
+            MakeCircle(reg, root, glm::vec2(760.0f, 200.0f), 58.0f,
                        Physics::BodyType::Dynamic, kMagenta);
         }
 
@@ -378,10 +340,11 @@ namespace Arcane::Sandbox
             Astra::Entity root = MakeRoot(reg);
             MakeFloor(reg, root);
 
-            constexpr int   kCount   = 6;
-            constexpr float kHalf    = 30.0f;   // box half-extent
-            constexpr float kGap     = 2.0f;    // small seating gap between boxes
-            constexpr float kTopSurf = 620.0f;  // floor top
+            // LARGER SCALE (Item C): a taller stack of bigger boxes.
+            constexpr int   kCount   = 8;
+            constexpr float kHalf    = 52.0f;   // box half-extent
+            constexpr float kGap     = 3.0f;    // small seating gap between boxes
+            constexpr float kTopSurf = 800.0f;  // floor top (matches MakeFloor)
             constexpr float kCenterX = 640.0f;
 
             // Stack from the floor up; box i center sits (2*half + gap) above the one below.
@@ -402,17 +365,18 @@ namespace Arcane::Sandbox
             Astra::Entity root = MakeRoot(reg);
             MakeFloor(reg, root);
 
-            constexpr int   kRows    = 5;
-            constexpr float kHalf    = 26.0f;
-            constexpr float kSpacing = 2.0f * kHalf + 2.0f;  // column pitch
-            constexpr float kTopSurf = 620.0f;
+            // LARGER SCALE (Item C): a taller, wider pyramid of bigger boxes.
+            constexpr int   kRows    = 6;
+            constexpr float kHalf    = 46.0f;
+            constexpr float kSpacing = 2.0f * kHalf + 3.0f;  // column pitch
+            constexpr float kTopSurf = 800.0f;
             constexpr float kCenterX = 640.0f;
 
             // Row r (0 = bottom) has (kRows - r) boxes, centered, stacked upward.
             for (int r = 0; r < kRows; ++r)
             {
                 const int   count = kRows - r;
-                const float rowY  = kTopSurf - kHalf - r * (2.0f * kHalf + 1.0f);
+                const float rowY  = kTopSurf - kHalf - r * (2.0f * kHalf + 2.0f);
                 const float startX = kCenterX - (count - 1) * 0.5f * kSpacing;
                 for (int c = 0; c < count; ++c)
                 {
@@ -433,55 +397,56 @@ namespace Arcane::Sandbox
         void BuildJointChain(Astra::Registry& reg)
         {
             Astra::Entity root = MakeRoot(reg);
-            // A decorative static "ceiling" sprite so RenderSubmissionSystem has something to
-            // draw too (the moving jointed bodies render through the debug overlay).
-            MakeBox(reg, root, glm::vec2(640.0f, 80.0f), glm::vec2(360.0f, 10.0f),
+            // A static "ceiling" anchor body (drawn as an outline by the overlay,
+            // like every other body now). LARGER SCALE (Item C): wider + thicker.
+            MakeBox(reg, root, glm::vec2(640.0f, 90.0f), glm::vec2(560.0f, 18.0f),
                     Physics::BodyType::Static, kStatic);
 
             Physics::PhysicsWorld* w = World(reg);
             if (!w) return;
 
-            constexpr float kBobR = 16.0f;
+            // LARGER SCALE (Item C): bigger bobs + longer drops + wider spacing.
+            constexpr float kBobR = 28.0f;
 
             // --- REVOLUTE pendulum: a static hub + a bob pinned at the hub, swinging. ------
-            const Physics::BodyHandle hub = WorldStaticBox(*w, glm::vec2(360.0f, 110.0f),
-                                                           glm::vec2(8.0f, 8.0f));
-            const Physics::BodyHandle bob = WorldCircle(*w, glm::vec2(360.0f, 230.0f), kBobR);
+            const Physics::BodyHandle hub = WorldStaticBox(*w, glm::vec2(360.0f, 130.0f),
+                                                           glm::vec2(14.0f, 14.0f));
+            const Physics::BodyHandle bob = WorldCircle(*w, glm::vec2(360.0f, 360.0f), kBobR);
             {
                 Physics::JointDef jd;
                 jd.kind   = Physics::JointKind::Revolute;
                 jd.a      = hub;
                 jd.b      = bob;
-                jd.anchor = Physics::Vec2(360.0f, 110.0f);
+                jd.anchor = Physics::Vec2(360.0f, 130.0f);
                 w->AddJoint(jd);
             }
 
             // --- DISTANCE link: a second bob hangs from the same hub at a fixed length. -----
-            const Physics::BodyHandle distBob = WorldCircle(*w, glm::vec2(440.0f, 220.0f), kBobR);
+            const Physics::BodyHandle distBob = WorldCircle(*w, glm::vec2(520.0f, 340.0f), kBobR);
             {
                 Physics::JointDef jd;
                 jd.kind   = Physics::JointKind::Distance;
                 jd.a      = hub;
                 jd.b      = distBob;
-                jd.length = Physics::Real(130);
+                jd.length = Physics::Real(230);
                 w->AddJoint(jd);
             }
 
             // --- WELD pair: a static post + a body rigidly welded to it (stays put). --------
-            const Physics::BodyHandle post   = WorldStaticBox(*w, glm::vec2(760.0f, 110.0f),
-                                                              glm::vec2(8.0f, 8.0f));
-            const Physics::BodyHandle welded = WorldCircle(*w, glm::vec2(800.0f, 110.0f), kBobR);
+            const Physics::BodyHandle post   = WorldStaticBox(*w, glm::vec2(820.0f, 130.0f),
+                                                              glm::vec2(14.0f, 14.0f));
+            const Physics::BodyHandle welded = WorldCircle(*w, glm::vec2(890.0f, 130.0f), kBobR);
             {
                 Physics::JointDef jd;
                 jd.kind   = Physics::JointKind::Weld;
                 jd.a      = post;
                 jd.b      = welded;
-                jd.anchor = Physics::Vec2(800.0f, 110.0f);
+                jd.anchor = Physics::Vec2(890.0f, 130.0f);
                 w->AddJoint(jd);
             }
 
             // --- PRISMATIC slider: a body constrained to a horizontal axis off the post. ----
-            const Physics::BodyHandle slider = WorldCircle(*w, glm::vec2(880.0f, 110.0f), kBobR);
+            const Physics::BodyHandle slider = WorldCircle(*w, glm::vec2(1000.0f, 130.0f), kBobR);
             {
                 Physics::JointDef jd;
                 jd.kind = Physics::JointKind::Prismatic;
@@ -491,7 +456,7 @@ namespace Arcane::Sandbox
                 w->AddJoint(jd);
             }
             // Nudge the slider along its axis so it visibly slides (no perp drift under gravity).
-            w->ApplyImpulse(slider, Physics::Vec2(2500.0f, 0.0f));
+            w->ApplyImpulse(slider, Physics::Vec2(8000.0f, 0.0f));
         }
 
         // =============================================================================
@@ -504,21 +469,21 @@ namespace Arcane::Sandbox
         void BuildRotationDrop(Astra::Registry& reg)
         {
             Astra::Entity root = MakeRoot(reg);
-            // Decorative floor sprite (the falling polygons render via the debug overlay).
-            MakeBox(reg, root, glm::vec2(640.0f, 640.0f), glm::vec2(480.0f, 20.0f),
-                    Physics::BodyType::Static, kStatic);
 
             Physics::PhysicsWorld* w = World(reg);
             if (!w) return;
 
-            // World-direct static floor (the real collision surface) at the same place.
-            WorldStaticBox(*w, glm::vec2(640.0f, 640.0f), glm::vec2(480.0f, 20.0f));
+            // World-direct static floor (the real collision surface). LARGER SCALE
+            // (Item C): a wide low floor the tilted polygons settle flat on. The
+            // overlay draws it (and every body) as an outline.
+            WorldStaticBox(*w, glm::vec2(640.0f, 820.0f), glm::vec2(820.0f, 36.0f));
 
-            // A few tilted polygon boxes at staggered heights + release angles.
-            WorldPolygonBox(*w, glm::vec2(480.0f, 140.0f), glm::vec2(34.0f, 34.0f), 0.6f);
-            WorldPolygonBox(*w, glm::vec2(620.0f, 90.0f),  glm::vec2(40.0f, 24.0f), -0.9f);
-            WorldPolygonBox(*w, glm::vec2(760.0f, 160.0f), glm::vec2(30.0f, 30.0f), 1.2f);
-            WorldPolygonBox(*w, glm::vec2(640.0f, 220.0f), glm::vec2(46.0f, 20.0f), -0.4f);
+            // A few tilted polygon boxes at staggered heights + release angles
+            // (bigger boxes + dropped from higher so the tumble reads at scale).
+            WorldPolygonBox(*w, glm::vec2(420.0f, 160.0f), glm::vec2(58.0f, 58.0f), 0.6f);
+            WorldPolygonBox(*w, glm::vec2(620.0f, 80.0f),  glm::vec2(70.0f, 42.0f), -0.9f);
+            WorldPolygonBox(*w, glm::vec2(820.0f, 200.0f), glm::vec2(52.0f, 52.0f), 1.2f);
+            WorldPolygonBox(*w, glm::vec2(640.0f, 320.0f), glm::vec2(80.0f, 34.0f), -0.4f);
         }
 
         // =============================================================================
@@ -532,14 +497,15 @@ namespace Arcane::Sandbox
             Astra::Entity root = MakeRoot(reg);
             MakeFloor(reg, root);
 
-            // A THIN tall static wall on the right -- the thing the bullet must not tunnel.
-            MakeBox(reg, root, glm::vec2(960.0f, 540.0f), glm::vec2(6.0f, 90.0f),
+            // A THIN tall static wall on the right -- the thing the bullet must not
+            // tunnel. LARGER SCALE (Item C): taller wall, further away, still thin.
+            MakeBox(reg, root, glm::vec2(1120.0f, 660.0f), glm::vec2(9.0f, 150.0f),
                     Physics::BodyType::Static, kStatic);
 
-            // The bullet: a small fast box fired right at the wall. fixedRotation (Aabb) +
+            // The bullet: a fast box fired right at the wall. fixedRotation (Aabb) +
             // bullet=true (enables the GJK-TOI CCD clamp) + a high +X authored velocity.
             Astra::Entity e = reg.CreateEntity();
-            Arcane::LocalTransform lt; lt.position = glm::vec2(220.0f, 540.0f);
+            Arcane::LocalTransform lt; lt.position = glm::vec2(120.0f, 660.0f);
             reg.AddComponent<Arcane::LocalTransform>(e, lt);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
@@ -547,15 +513,15 @@ namespace Arcane::Sandbox
             rb.type          = Physics::BodyType::Dynamic;
             rb.fixedRotation = true;
             rb.bullet        = true;                       // CCD: speculative + sweep clamp
-            rb.velocity      = glm::vec2(6000.0f, 0.0f);   // fast enough to tunnel without CCD
+            rb.velocity      = glm::vec2(7000.0f, 0.0f);   // fast enough to tunnel without CCD
             reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
             Arcane::Collider2D col;
             {
                 Arcane::Fixture fx;
                 fx.kind        = Physics::ShapeKind::Aabb;
-                fx.halfW       = 10.0f;
-                fx.halfH       = 10.0f;
+                fx.halfW       = 18.0f;
+                fx.halfH       = 18.0f;
                 fx.density     = 4.0f;     // heavy: keeps momentum into the wall
                 fx.friction    = 0.3f;
                 fx.restitution = 0.0f;
@@ -564,8 +530,8 @@ namespace Arcane::Sandbox
             reg.AddComponent<Arcane::Collider2D>(e, col);
             reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
 
-            Arcane::SpriteRenderer sp; sp.size = glm::vec2(20.0f); sp.tint = kGold;
-            reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
+            // OUTLINE-UNIFY (Item A): no SpriteRenderer -- the bullet is drawn by
+            // DrawPhysicsDebug (its velocity ray makes the fast shot read clearly).
             reg.SetParent(e, root);
         }
 
@@ -594,29 +560,31 @@ namespace Arcane::Sandbox
 
                 Arcane::Collider2D col;
                 {
+                    // LARGER SCALE (Item C): bigger lobes + a bigger COM offset.
                     Arcane::Fixture core;            // light central lobe at the origin
                     core.kind = Physics::ShapeKind::Circle;
-                    core.radius = 18.0f; core.density = 0.5f; core.friction = 0.5f;
+                    core.radius = 34.0f; core.density = 0.5f; core.friction = 0.5f;
                     col.fixtures.push_back(core);
 
                     Arcane::Fixture heavy;           // heavy lobe offset to one side
                     heavy.kind = Physics::ShapeKind::Circle;
-                    heavy.radius = 22.0f; heavy.density = 4.0f; heavy.friction = 0.5f;
-                    heavy.localPos = glm::vec2(heavySign * 40.0f, 0.0f);   // off-COM mass
+                    heavy.radius = 42.0f; heavy.density = 4.0f; heavy.friction = 0.5f;
+                    heavy.localPos = glm::vec2(heavySign * 74.0f, 0.0f);   // off-COM mass
                     col.fixtures.push_back(heavy);
                 }
                 reg.AddComponent<Arcane::Collider2D>(e, col);
                 reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
                 reg.SetParent(e, root);
 
-                // Per-fixture visuals: a disc for the light core + a disc for the
-                // heavy lobe, each tracking its fixture (replaces the single flat
-                // 124x44 rectangle that did not match the two-circle physics).
-                AttachFixtureVisuals(reg, e, col.fixtures, tint);
+                // OUTLINE-UNIFY (Item A): no per-fixture sprites. DrawPhysicsDebug
+                // draws the body's collider outline + a COM marker (which makes
+                // the off-origin compound COM visible -- the whole point of this
+                // scene), so the body reads correctly without filled discs.
+                (void)tint;
             };
 
-            makeLopsided(glm::vec2(520.0f, 200.0f),  1.0f, kOrange);  // tips right
-            makeLopsided(glm::vec2(780.0f, 160.0f), -1.0f, kMagenta); // tips left
+            makeLopsided(glm::vec2(460.0f, 240.0f),  1.0f, kOrange);  // tips right
+            makeLopsided(glm::vec2(840.0f, 180.0f), -1.0f, kMagenta); // tips left
         }
 
         // =============================================================================
@@ -629,35 +597,92 @@ namespace Arcane::Sandbox
         {
             Astra::Entity root = MakeRoot(reg);
 
-            // Bowl floor + two short angled-ish side walls (Aabb statics).
-            MakeBox(reg, root, glm::vec2(640.0f, 640.0f), glm::vec2(360.0f, 20.0f),
+            // Bowl floor + two tall side walls (Aabb statics). LARGER SCALE (Item C):
+            // a wide deep bowl so the mixed pile has room to interact.
+            MakeBox(reg, root, glm::vec2(640.0f, 820.0f), glm::vec2(560.0f, 36.0f),
                     Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(300.0f, 560.0f), glm::vec2(20.0f, 100.0f),
+            MakeBox(reg, root, glm::vec2(120.0f, 680.0f), glm::vec2(36.0f, 180.0f),
                     Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(980.0f, 560.0f), glm::vec2(20.0f, 100.0f),
+            MakeBox(reg, root, glm::vec2(1160.0f, 680.0f), glm::vec2(36.0f, 180.0f),
                     Physics::BodyType::Static, kStatic);
 
-            // Path-A round bodies.
-            MakeCircle(reg, root, glm::vec2(560.0f, 120.0f), 24.0f,
+            // Path-A round bodies (bigger circles + capsules).
+            MakeCircle(reg, root, glm::vec2(520.0f, 140.0f), 44.0f,
                        Physics::BodyType::Dynamic, kGold);
-            MakeCircle(reg, root, glm::vec2(700.0f, 90.0f),  20.0f,
+            MakeCircle(reg, root, glm::vec2(760.0f, 90.0f),  36.0f,
                        Physics::BodyType::Dynamic, kBlue);
-            MakeCapsule(reg, root, glm::vec2(620.0f, 200.0f), 30.0f, 16.0f,
+            MakeCapsule(reg, root, glm::vec2(600.0f, 260.0f), 56.0f, 28.0f,
                         Physics::BodyType::Dynamic, kTeal);
-            MakeCapsule(reg, root, glm::vec2(760.0f, 240.0f), 24.0f, 14.0f,
+            MakeCapsule(reg, root, glm::vec2(820.0f, 320.0f), 44.0f, 24.0f,
                         Physics::BodyType::Dynamic, kGreen);
 
             // Path-B polygons (a tilted box + a triangle) sharing the same world.
             if (Physics::PhysicsWorld* w = World(reg))
             {
-                WorldStaticBox(*w, glm::vec2(640.0f, 640.0f), glm::vec2(360.0f, 20.0f));
-                WorldPolygonBox(*w, glm::vec2(600.0f, 300.0f), glm::vec2(30.0f, 22.0f), 0.5f);
-                WorldTriangle(*w, glm::vec2(700.0f, 340.0f), 30.0f);
+                WorldStaticBox(*w, glm::vec2(640.0f, 820.0f), glm::vec2(560.0f, 36.0f));
+                WorldPolygonBox(*w, glm::vec2(580.0f, 400.0f), glm::vec2(54.0f, 40.0f), 0.5f);
+                WorldTriangle(*w, glm::vec2(720.0f, 460.0f), 54.0f);
             }
         }
 
-        // The static scene table -- the process-wide roster (8 scenes, Task 5).
-        constexpr std::array<SceneDef, 8> kScenes = {{
+        // =============================================================================
+        // scene 8: "Stress test" -- a large mixed-shape avalanche (solver + broadphase).
+        // =============================================================================
+        // A wide walled pen with ~120 dynamic bodies (boxes + circles, alternating)
+        // dropped as a staggered grid that collapses into a settling pile. The point
+        // is VOLUME: dozens-to-100+ awake bodies hammering the contact solver, the
+        // dynamic-tree broadphase, and the island/sleep pass all at once. Everything
+        // is path-A (Astra components -> PhysicsSystem mints the world bodies) so it
+        // shares the same body-authoring + outline-rendering path as the other scenes.
+        void BuildStressTest(Astra::Registry& reg)
+        {
+            Astra::Entity root = MakeRoot(reg);
+
+            // A wide, low pen: floor + two tall walls hold the pile in frame.
+            MakeBox(reg, root, glm::vec2(640.0f, 860.0f), glm::vec2(820.0f, 40.0f),
+                    Physics::BodyType::Static, kStatic);
+            MakeBox(reg, root, glm::vec2(-220.0f, 560.0f), glm::vec2(40.0f, 360.0f),
+                    Physics::BodyType::Static, kStatic);
+            MakeBox(reg, root, glm::vec2(1500.0f, 560.0f), glm::vec2(40.0f, 360.0f),
+                    Physics::BodyType::Static, kStatic);
+
+            // Drop grid: kCols x kRows mixed bodies. 16 x 8 = 128 dynamics.
+            // Half-extent/radius ~30 with a 78px pitch keeps them clear of each
+            // other at spawn (no initial deep-overlap explosion) -- they settle as
+            // they fall. A small per-row x-stagger breaks symmetry so the pile
+            // tumbles instead of forming perfect columns.
+            constexpr int   kCols  = 16;
+            constexpr int   kRows  = 8;
+            constexpr float kPitch = 78.0f;
+            constexpr float kHalf  = 30.0f;
+            constexpr float kStartX = 640.0f - (kCols - 1) * 0.5f * kPitch;
+            constexpr float kStartY = 120.0f;
+
+            const glm::vec4 palette[4] = { kOrange, kBlue, kGreen, kGold };
+
+            int n = 0;
+            for (int r = 0; r < kRows; ++r)
+            {
+                const float stagger = (r % 2 == 0) ? 0.0f : kPitch * 0.5f;
+                const float y = kStartY + r * kPitch;
+                for (int c = 0; c < kCols; ++c)
+                {
+                    const float x = kStartX + c * kPitch + stagger;
+                    const glm::vec4 tint = palette[n % 4];
+                    if ((r + c) % 2 == 0)
+                        MakeBox(reg, root, glm::vec2(x, y), glm::vec2(kHalf, kHalf),
+                                Physics::BodyType::Dynamic, tint, 0.05f, 0.5f);
+                    else
+                        MakeCircle(reg, root, glm::vec2(x, y), kHalf,
+                                   Physics::BodyType::Dynamic, tint, 0.1f);
+                    ++n;
+                }
+            }
+        }
+
+        // The static scene table -- the process-wide roster (9 scenes; the 9th is
+        // the Item-B stress test).
+        constexpr std::array<SceneDef, 9> kScenes = {{
             SceneDef{ "Playground",      &BuildPlayground   },
             SceneDef{ "Box stack",       &BuildBoxStack     },
             SceneDef{ "Pyramid",         &BuildPyramid      },
@@ -666,6 +691,7 @@ namespace Arcane::Sandbox
             SceneDef{ "CCD bullet",      &BuildCcdBullet    },
             SceneDef{ "Compound bodies", &BuildCompound     },
             SceneDef{ "Mixed shapes",    &BuildMixedShapes  },
+            SceneDef{ "Stress test",     &BuildStressTest   },
         }};
     }
 
