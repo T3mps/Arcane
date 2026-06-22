@@ -211,10 +211,10 @@ TEST_CASE("Sandbox: stress scene has kStressBodyCount+ bodies and stays bounded 
         world.Step(Phys::Real(kDt));
 
     // (b) Stability: iterate every live slot; all positions must be finite and
-    //     within a generous arena bound.  Arena inner X ~ [-300, 1660]; with the
-    //     walls at -80-44 = -124 to 1360+44 = 1404.  Allow +/- 500 px slop.
-    constexpr float kXMin = -600.0f;
-    constexpr float kXMax = 1900.0f;
+    //     within a generous arena bound.  Arena inner X = [-220, 1500]; walls at
+    //     -220-50 = -270 to 1500+50 = 1550.  Allow +/- 500 px slop.
+    constexpr float kXMin = -800.0f;
+    constexpr float kXMax = 2100.0f;
     constexpr float kYMin = -5000.0f;  // bodies start above the floor, generous head room
     constexpr float kYMax = 1500.0f;
 

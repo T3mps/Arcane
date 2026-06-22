@@ -380,14 +380,15 @@ namespace Arcane::Sandbox
         // (like a real balloon-whisk cage), plus a small central hub circle. Each loop
         // is approximated by thin segment-box polygons whose verts are expressed in
         // BODY-LOCAL frame (relative to `center`). The whisk spins at `omega` rad/s.
-        // With radius=320 and omega=1.2 the tip speed is ~384 px/s; at 60 Hz each wire
-        // advances ~6.4 px per step, well below wire diameter 18 px -- no tunnelling.
+        // With radius=560 and omega=1.9 the tip speed is ~1064 px/s; at 60 Hz each
+        // wire advances ~17.7 px per step, below wire diameter 30 px -- no tunnelling.
         Physics::BodyHandle Whisk(Physics::PhysicsWorld& w, glm::vec2 center,
                                   float radius, float omega)
         {
             constexpr int   kLoops    = 6;
-            constexpr float kWireHalf = 11.0f;  // half-thickness of each wire segment
+            constexpr float kWireHalf = 15.0f;  // half-thickness of each wire segment
                                                 // (thicker -> pushes harder + tunnel-safe at high omega)
+                                                // tip speed 1064 px/s -> 17.7 px/step < diameter 30 px
 
             const float R    = radius;
             const float W    = R * 0.30f;       // teardrop loop half-width
@@ -789,25 +790,26 @@ namespace Arcane::Sandbox
         // =============================================================================
         // scene 8: "Stress test" -- brutal churn (kStressBodyCount mixed shapes).
         // =============================================================================
-        // A NARROW BOWL arena with kStressBodyCount procedurally-generated dynamic
+        // A WIDE BOWL arena with kStressBodyCount procedurally-generated dynamic
         // bodies (boxes, circles, capsules, n-gons, compounds), continuously churned
         // by ONE top-mounted kinematic balloon-whisk so the pile NEVER settles.
         // All world-direct (path B) for the complex shapes; path-A Astra components
         // for the simpler box/circle/capsule bodies. Both paths share the same world
         // and render through the canonical DrawPhysicsDebug outline overlay.
         //
-        // BOWL SHAPE:
-        //   Center x = 640. Inner width ~960 px (left inner ~160, right inner ~1120).
+        // BOWL SHAPE (scaled ~1.8x from the original 320-body arena):
+        //   Center x = 640. Inner width ~1720 px (left inner x=-220, right inner x=1500).
         //   Two angled bottom-corner fillets (45-deg static boxes) slide bodies toward
         //   center so the single whisk reaches all contents.
         //
         // WHISK: ONE kinematic balloon-whisk body (kStressWhiskCount=1), center at
-        //   (640, 360), radius 320, omega 1.2 rad/s. Tip speed ~384 px/s; at 60 Hz
-        //   each wire advances ~6.4 px per step (< wire diameter 18) -- no tunnelling.
+        //   (640, 360), radius 560, omega 1.9 rad/s.
+        //   Tip speed = 1.9 * 560 = 1064 px/s; per step at 60 Hz = 1064/60 ~ 17.7 px.
+        //   Wire half-thickness kWireHalf=15 -> diameter 30 px > 17.7 px -- no tunnelling.
         //
         // STABILITY DESIGN:
         //   pitch = kMaxBodyHalf*2 + margin  => no deep initial overlap (no explosion)
-        //   whisk tip speed ~384 px/s at 60 Hz => < wire thickness per step
+        //   whisk tip speed ~1064 px/s at 60 Hz => < wire diameter 30 px per step
         //   low density (0.05-0.10) + low friction (0.3-0.4) => mass flows, churns
         //   seeded std::mt19937 => identical layout every build (deterministic tests)
         void BuildStressTest(Astra::Registry& reg)
@@ -816,29 +818,29 @@ namespace Arcane::Sandbox
 
             // ---- tuning constants (anon-ns only; knobs exposed via Scenes.hpp) --------
             constexpr unsigned int kStressSeed  = 0xCAFEBABEu;  // seeded RNG
-            constexpr float kWhiskRadius        = 320.0f;        // balloon-whisk cage radius
-            constexpr float kWhiskOmega         = 3.0f;          // rad/s (CCW) -- hard churn
-            // ^ tip speed = omega*radius = 3.0*320 = 960 px/s (~16 px/60Hz step), under
-            //   the wire diameter (2*kWireHalf=22) so the cage still cannot tunnel.
+            constexpr float kWhiskRadius        = 560.0f;        // balloon-whisk cage radius (~1.8x)
+            constexpr float kWhiskOmega         = 1.9f;          // rad/s (CCW) -- hard churn
+            // ^ tip speed = omega*radius = 1.9*560 = 1064 px/s (~17.7 px/60Hz step), under
+            //   the wire diameter (2*kWireHalf=30) so the cage still cannot tunnel.
             constexpr float kWhiskCenterX       = 640.0f;
             constexpr float kWhiskCenterY       = 360.0f;        // upper-bowl, hangs into pile
 
-            // Body size range (half-extent / radius / etc.)
+            // Body size range (half-extent / radius / etc.) -- UNCHANGED (bodies stay same size)
             constexpr float kMinBodyHalf = 18.0f;
             constexpr float kMaxBodyHalf = 32.0f;
 
             // Grid pitch: >= max diameter + margin so there is no deep initial overlap.
             constexpr float kPitch = kMaxBodyHalf * 2.0f + 18.0f; // 82 px
 
-            // Bowl arena bounds.
-            constexpr float kFloorY     = 880.0f;   // floor top surface y
-            constexpr float kFloorHalfW = 520.0f;   // narrowed to match bowl inner half-width
+            // Bowl arena bounds (~1.8x wider/taller than the original 960-px arena).
+            constexpr float kFloorY     = 880.0f;    // floor top surface y
+            constexpr float kFloorHalfW = 880.0f;    // covers inner half-width + wall overlap
             constexpr float kFloorHalfH = 40.0f;
-            constexpr float kWallHalfW  = 50.0f;    // thick walls
-            constexpr float kWallHalfH  = 700.0f;
-            constexpr float kArenaLeft  = 160.0f;   // inner left edge (x)
-            constexpr float kArenaRight = 1120.0f;  // inner right edge (x)
-            constexpr float kArenaInnerW = kArenaRight - kArenaLeft;  // 960 px
+            constexpr float kWallHalfW  = 50.0f;     // thick walls
+            constexpr float kWallHalfH  = 1000.0f;   // tall enough to hold 1000-body pile
+            constexpr float kArenaLeft  = -220.0f;   // inner left edge (x)  ~1.8x wider
+            constexpr float kArenaRight = 1500.0f;   // inner right edge (x)
+            constexpr float kArenaInnerW = kArenaRight - kArenaLeft;  // 1720 px
             constexpr float kArenaCenterX = (kArenaLeft + kArenaRight) * 0.5f; // 640
 
             // Grid spawn parameters: cols span the bowl inner width.
@@ -861,12 +863,13 @@ namespace Arcane::Sandbox
                            glm::vec2(kWallHalfW, kWallHalfH));
 
             // Angled bottom-corner fillets (~45 degrees) to funnel bodies toward center.
-            // Each is a static rotated box: half-extents 140 x 22, pivoted 45 deg inward.
+            // Each is a static rotated box: half-extents 250 x 36, pivoted 45 deg inward.
+            // Scaled ~1.8x from the original (140 x 22) to span the wider bowl corners.
             // Verts are in BODY-LOCAL frame (relative to the body position) per the
             // MakePolygon convention (same as WorldPolygonBox above).
             {
-                constexpr float kFiltHalfL = 140.0f;  // half-length along the slope
-                constexpr float kFiltHalfT = 22.0f;   // half-thickness
+                constexpr float kFiltHalfL = 250.0f;  // half-length along the slope (~1.8x)
+                constexpr float kFiltHalfT = 36.0f;   // half-thickness (~1.8x)
                 constexpr float kFiltAngle = static_cast<float>(std::numbers::pi) * 0.25f; // 45 deg
 
                 // Helper: build one fillet body. `cx/cy` = body center (world). `angle` = rotation.
@@ -893,10 +896,10 @@ namespace Arcane::Sandbox
                     w->AddBody(fd);
                 };
 
-                // Bottom-left fillet: tilts up-right (+45 deg). Center ~ (kArenaLeft+80, kFloorY-80).
-                MakeFillet(kArenaLeft  + 80.0f, kFloorY - 80.0f,  kFiltAngle);
-                // Bottom-right fillet: tilts up-left (-45 deg). Center ~ (kArenaRight-80, kFloorY-80).
-                MakeFillet(kArenaRight - 80.0f, kFloorY - 80.0f, -kFiltAngle);
+                // Bottom-left fillet: tilts up-right (+45 deg). Center ~ (kArenaLeft+144, kFloorY-144).
+                MakeFillet(kArenaLeft  + 144.0f, kFloorY - 144.0f,  kFiltAngle);
+                // Bottom-right fillet: tilts up-left (-45 deg). Center ~ (kArenaRight-144, kFloorY-144).
+                MakeFillet(kArenaRight - 144.0f, kFloorY - 144.0f, -kFiltAngle);
             }
 
             // ---- whisk: ONE top-mounted kinematic balloon-whisk (kStressWhiskCount=1) --
