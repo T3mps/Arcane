@@ -214,6 +214,202 @@ namespace Arcane
             }
 
             // ----------------------------------------------------------------
+            // Segment(capsule)-vs-polygon TWO-POINT face clip.
+            //
+            // The round path's GJK-witness branch emits a SINGLE contact point.
+            // That is correct for a circle (1-vert core) but WRONG for a capsule
+            // (2-vert SEGMENT core) lying roughly PARALLEL to a polygon face: a
+            // capsule resting flat on a floor is an edge-edge contact that needs
+            // TWO points (one near each segment end) to be rotationally stable.
+            // With one point the contact location jumps end-to-end as the body
+            // tips, the lone point torques the body the other way, and it ROCKS
+            // in a never-damped limit cycle -- it never settles and never sleeps
+            // (the bug this function fixes).
+            //
+            // Box2D v3 treats a capsule as a 2-vertex rounded polygon and clips
+            // it against the reference face (b2CollidePolygons / b2CollideSegment-
+            // AndPolygon). We do the same for the one common, important case:
+            // exactly one core is a 2-vert segment, the other is a >=3-vert
+            // polygon, AND the segment is roughly parallel to the contacting
+            // face (the edge-edge case). Otherwise we return pointCount==0 and
+            // the caller keeps its single-point witness path (circle-vs-poly,
+            // capsule-vs-capsule, capsule-vs-circle, or an end-cap contact where
+            // a single point is correct).
+            //
+            // `n` is the contact normal (B->A, unit). The reference face is on
+            // the POLYGON; the SEGMENT is the incident feature we clip. Each
+            // surviving clipped point's separation is measured along `n` and the
+            // surface point is offset inward by the radii. The returned manifold
+            // matches the surface convention of the witness path (separation > 0
+            // = penetration; midpoint of the two surface witnesses per point).
+            //
+            // Returns a manifold with pointCount 2 on success, else pointCount 0.
+            // ----------------------------------------------------------------
+            Manifold CollideSegmentPolyTwoPoint(const Vec2* va, int na, Real rA,
+                                                const Vec2* vb, int nb, Real rB,
+                                                const Vec2& n, uint32_t baseId)
+            {
+                Manifold m{};
+
+                // Exactly one core must be a 2-vert segment, the other a polygon.
+                const bool aSeg = (na == 2 && nb >= 3);
+                const bool bSeg = (nb == 2 && na >= 3);
+                if (!aSeg && !bSeg)
+                {
+                    return m; // not the capsule-vs-polygon case
+                }
+
+                // Identify segment (seg/rSeg) and polygon (poly/rPoly). The
+                // returned normal stays B->A regardless of which is the segment.
+                const Vec2* seg  = aSeg ? va : vb;
+                const Real  rSeg = aSeg ? rA : rB;
+                const Vec2* poly = aSeg ? vb : va;
+                const int   nPoly = aSeg ? nb : na;
+                const Real  rPoly = aSeg ? rB : rA;
+
+                // Axis from the POLYGON toward the SEGMENT (so the reference face
+                // is the polygon edge facing the segment). With n = B->A:
+                //   - A is the segment (aSeg): segment is on the +n side -> axis = n.
+                //   - B is the segment (bSeg): segment is on the -n side -> axis = -n.
+                const Vec2 axis = aSeg ? n : Vec2(-n.x, -n.y);
+
+                // Reference face: the polygon edge whose outward normal is most
+                // aligned with `axis`. Require near-parallel (dot close to 1) so
+                // we only take the edge-edge case; an end-cap / corner contact
+                // (segment endpoint vs polygon vertex) is left to the 1-point
+                // path where a single witness is correct.
+                int   refEdge = -1;
+                Real  bestDot = Real(-1e30);
+                Vec2  refNormal{ Real(0), Real(0) };
+                for (int i = 0; i < nPoly; ++i)
+                {
+                    const Vec2 en = EdgeNormalCCW(poly, nPoly, i);
+                    const Real d = en.x * axis.x + en.y * axis.y;
+                    if (d > bestDot)
+                    {
+                        bestDot   = d;
+                        refEdge   = i;
+                        refNormal = en;
+                    }
+                }
+                // Parallel gate part 1: the reference FACE normal must be roughly
+                // parallel to the contact axis (the face actually faces the
+                // segment). cos 0.94 ~ 20 deg of tip tolerance.
+                if (refEdge < 0 || bestDot < Real(0.94))
+                {
+                    return m;
+                }
+
+                const Vec2 refV0 = poly[refEdge];
+                const Vec2 refV1 = poly[(refEdge + 1) % nPoly];
+
+                // Parallel gate part 2: the SEGMENT itself must lie roughly ALONG
+                // the reference face (segment direction nearly perpendicular to
+                // the face normal). A capsule TILTED into a face/corner (e.g. a
+                // 30 deg jam) is NOT an edge-edge rest -- its two endpoints sit at
+                // very different depths and it pivots on the deeper one, which the
+                // single EPA/witness point models correctly. Only the near-parallel
+                // resting capsule (the rocking-bug case) needs two points.
+                // |dot(segDir, refNormal)| <= sin(20 deg) ~ 0.342 keeps the same
+                // ~20 deg tolerance as part 1.
+                Vec2 segDir(seg[1].x - seg[0].x, seg[1].y - seg[0].y);
+                const Real segLen = std::sqrt(segDir.x * segDir.x +
+                                              segDir.y * segDir.y);
+                if (segLen < Real(1e-9f))
+                {
+                    return m; // degenerate segment (acts like a circle) -> 1 point
+                }
+                segDir = Vec2(segDir.x / segLen, segDir.y / segLen);
+                const Real segDotN = std::abs(segDir.x * refNormal.x +
+                                              segDir.y * refNormal.y);
+                if (segDotN > Real(0.342))
+                {
+                    return m; // segment tilted off the face -> 1-point path
+                }
+
+                // Clip the segment against the reference face's two side planes
+                // (the face tangent bounds). This keeps the part of the segment
+                // that overlaps the face span -> up to 2 points.
+                Vec2 tangent = Vec2(refV1.x - refV0.x, refV1.y - refV0.y);
+                const Real tlen = std::sqrt(tangent.x * tangent.x +
+                                            tangent.y * tangent.y);
+                if (tlen < Real(1e-9f))
+                {
+                    return m; // degenerate face
+                }
+                tangent = Vec2(tangent.x / tlen, tangent.y / tlen);
+
+                // Side plane 1: keep dot(p, -tangent) <= dot(refV0, -tangent).
+                const Vec2 negT(-tangent.x, -tangent.y);
+                const Real off1 = refV0.x * negT.x + refV0.y * negT.y;
+                Vec2  clip1[2];
+                float t1[2]{};
+                const int nc1 = ClipSegment(seg[0], seg[1], negT, off1, clip1, t1);
+                if (nc1 < 2)
+                {
+                    return m; // segment does not span the face -> 1-point path
+                }
+                // Side plane 2: keep dot(p, tangent) <= dot(refV1, tangent).
+                const Real off2 = refV1.x * tangent.x + refV1.y * tangent.y;
+                Vec2  clip2[2];
+                float t2[2]{};
+                const int nc2 = ClipSegment(clip1[0], clip1[1], tangent, off2,
+                                            clip2, t2);
+                if (nc2 < 2)
+                {
+                    return m; // less than two survivors -> 1-point path
+                }
+
+                // Reference face plane offset along its outward normal.
+                const Real refOff = refV0.x * refNormal.x + refV0.y * refNormal.y;
+                const Real totalR = rSeg + rPoly;
+
+                // Build the two contact points. For each clipped SEGMENT point:
+                //   coreGap = dot(clipPoint, refNormal) - refOff   (>=0 outside)
+                //   separation = totalR - coreGap                  (>0 = penetrate)
+                // The contact point sits on the mid-surface: push the clipped
+                // segment point toward the face by (rSeg - 0.5*(coreGap + ... )).
+                // We keep it simple and correct: surfaceSeg = clip - axis*rSeg
+                // (segment surface toward the poly), surfacePoly = projection of
+                // clip onto the face plane + refNormal*rPoly (poly surface toward
+                // the segment); contact = midpoint.
+                m.normal = n;
+                m.pointCount = 0;
+                for (int i = 0; i < 2; ++i)
+                {
+                    const Vec2 cpt = clip2[i];
+                    const Real coreGap =
+                        (cpt.x * refNormal.x + cpt.y * refNormal.y) - refOff;
+                    const Real separation = totalR - coreGap;
+
+                    // Surface witnesses (axis = polygon->segment outward dir):
+                    //   segment surface = clipPoint - axis*rSeg
+                    //   poly    surface = clipPoint - axis*coreGap + axis*rPoly
+                    // (project clip onto the face along -axis by coreGap, then
+                    // push out by rPoly). midpoint is the manifold point.
+                    const Vec2 segSurf(cpt.x - axis.x * rSeg,
+                                       cpt.y - axis.y * rSeg);
+                    const Vec2 polySurf(cpt.x - axis.x * (coreGap - rPoly),
+                                        cpt.y - axis.y * (coreGap - rPoly));
+                    const Vec2 contact((segSurf.x + polySurf.x) * Real(0.5f),
+                                       (segSurf.y + polySurf.y) * Real(0.5f));
+
+                    // Stable per-point id: mix the base round id with the segment
+                    // endpoint index (0/1) so the two points get DISTINCT, stable
+                    // warm-start keys that do not alias the 1-point round id.
+                    const uint32_t pid = baseId ^ (0x9E3779B9u * (static_cast<uint32_t>(i) + 1u));
+
+                    ManifoldPoint mp{};
+                    mp.point      = contact;
+                    mp.separation = separation;
+                    mp.normal     = n;
+                    mp.id         = pid;
+                    m.points[m.pointCount++] = mp;
+                }
+                return m;
+            }
+
+            // ----------------------------------------------------------------
             // Round-shape fast path (circle / capsule).
             //
             // When at least one core is 1 or 2 verts (circle or capsule), the
@@ -275,6 +471,17 @@ namespace Arcane
                     const Real inv = Real(1) / g.distance;
                     normal = Vec2((g.pointA.x - g.pointB.x) * inv,
                                   (g.pointA.y - g.pointB.y) * inv);
+
+                    // Capsule(segment)-vs-polygon edge-edge: emit TWO points so a
+                    // capsule resting parallel to a face is rotationally stable
+                    // (a single witness point lets it rock forever). Falls back to
+                    // the 1-point witness path below when not the parallel case.
+                    const Manifold two = CollideSegmentPolyTwoPoint(
+                        va, na, rA, vb, nb, rB, normal, id);
+                    if (two.pointCount == 2)
+                    {
+                        return two;
+                    }
                 }
                 else
                 {
@@ -288,6 +495,17 @@ namespace Arcane
 
                     if (epa.ok)
                     {
+                        // Capsule(segment)-vs-polygon edge-edge, deep: emit TWO
+                        // points (same rationale as the shallow branch) using the
+                        // EPA normal as the contact axis. Falls back to the
+                        // single EPA point below when not the parallel case.
+                        const Manifold two = CollideSegmentPolyTwoPoint(
+                            va, na, rA, vb, nb, rB, epa.normal, id);
+                        if (two.pointCount == 2)
+                        {
+                            return two;
+                        }
+
                         // epa.normal is the unit B->A axis; epa.depth is the CORE
                         // penetration (radii NOT applied). Surface witnesses use
                         // the SAME offset convention as the shallow branch below:
