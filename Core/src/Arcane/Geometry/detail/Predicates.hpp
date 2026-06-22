@@ -106,8 +106,8 @@ namespace Arcane::Geometry
 
         // Deterministic median-of-medians (groups of 5) selection: returns the k-th
         // (0-based) smallest element of `a` under `less`. O(n) worst case. By value.
-        template <class U, class Less>
-        U DeterministicSelect(std::vector<U> a, std::size_t k, Less less)
+        template <class U, class Cmp>
+        U DeterministicSelect(std::vector<U> a, std::size_t k, Cmp less)
         {
             for (;;)
             {

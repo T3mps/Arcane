@@ -1,4 +1,7 @@
 #pragma once
+#include <algorithm>
+#include <utility>
+
 #include <Arcane/Geometry/detail/Predicates.hpp>
 
 namespace Arcane::Geometry::detail

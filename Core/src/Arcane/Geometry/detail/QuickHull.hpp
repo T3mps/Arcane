@@ -3,9 +3,10 @@
 
 namespace Arcane::Geometry::detail
 {
+    // Internal recursion helper (internal linkage: a detail-only header function).
     template <class T>
-    void QuickHullRec(std::span<const Pt<T>> pts, std::size_t a, std::size_t b,
-                      const std::vector<std::size_t>& set, std::vector<Pt<T>>& out)
+    static void QuickHullRec(std::span<const Pt<T>> pts, std::size_t a, std::size_t b,
+                             const std::vector<std::size_t>& set, std::vector<Pt<T>>& out)
     {
         // Farthest point strictly left of a->b.
         T best = T(0);
