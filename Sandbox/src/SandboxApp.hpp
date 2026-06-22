@@ -213,7 +213,7 @@ namespace Arcane::Sandbox
         // WorldTransform -- the ordering the engine path guaranteed is preserved). The
         // render systems run every frame so a frozen scene still draws + propagates.
         void FixedUpdate(Astra::Registry& reg, double dt, const Arcane::InputSnapshot& input);
-        void Update(double dt, double alpha);
+        void Update(double dt, double alpha, const Arcane::InputSnapshot& input);
 
         // Draw the ImGui control panel (Task 8). Called by GamePlugin_DrawUI (the host
         // calls it between ImGuiLayer BeginFrame/Render). Forwards to Hud::Draw. Defined

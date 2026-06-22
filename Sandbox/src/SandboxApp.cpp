@@ -217,9 +217,17 @@ namespace Arcane::Sandbox
             m_paused = true;                        // re-pause after the single step
     }
 
-    void SandboxApp::Update(double /*dt*/, double /*alpha*/)
+    void SandboxApp::Update(double /*dt*/, double /*alpha*/,
+                            const Arcane::InputSnapshot& input)
     {
-        // No variable-rate work yet. The camera is pushed by the plugin after this.
+        // Variable-rate (once-per-host-frame) work. Mouse-wheel zoom is consumed HERE
+        // -- not in FixedUpdate's Tick -- because the wheel delta is a per-frame
+        // accumulated impulse: the fixed-step Tick runs 0..N times per host frame, so
+        // consuming it there drops notches (no fixed step that frame) or doubles them
+        // (several). Update runs exactly once per host frame, matching the wheel's
+        // sampling cadence, so the zoom is smooth. The camera is pushed to the engine
+        // by the plugin immediately after this.
+        m_interaction.ApplyWheelZoom(m_camera, input);
     }
 
     void SandboxApp::DrawUI(Astra::Registry& reg)

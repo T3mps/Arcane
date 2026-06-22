@@ -143,6 +143,13 @@ namespace Arcane::Sandbox
         void Tick(Astra::Registry& reg, Arcane::Physics::PhysicsWorld& world,
                   Camera& camera, const Arcane::InputSnapshot& input, float dt);
 
+        // Mouse-wheel zoom-to-cursor. Called ONCE PER FRAME from SandboxApp::Update
+        // (render cadence) -- NOT from Tick (fixed-step). The wheel is a per-host-frame
+        // accumulated impulse; consuming it once per frame is what keeps zoom smooth
+        // (the fixed-step Tick runs 0..N times/frame, which would drop or double it).
+        void ApplyWheelZoom(Camera& camera,
+                            const Arcane::InputSnapshot& input) noexcept;
+
         // Drop any active grab + reset edge state. Called by SandboxApp on a scene
         // switch/reset: the old PhysicsWorld is destroyed and a fresh one minted, so a
         // held grab handle from the old world must not be reused against the new one

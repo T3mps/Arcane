@@ -101,28 +101,16 @@ namespace Arcane::Sandbox
         if (input.KeycodeDown(kZoomOutKeycode))
             camera.zoom = std::clamp(camera.zoom / kZoomStep, kMinZoom, kMaxZoom);
 
-        // ---- ZOOM (mouse wheel, toward the cursor) ---------------------------------
-        // input.wheelY is this frame's accumulated vertical scroll (+up = zoom in).
-        // Apply a multiplicative factor kZoomWheelStep^wheelY (so it scales smoothly
-        // with fractional / high-res wheels and a multi-notch frame), clamped to the
-        // same range. Suppressed under ImGui mouse capture (scrolling over a HUD widget
-        // must not zoom the world). ZOOM-TO-CURSOR: keep the WORLD point under the
-        // cursor fixed by re-deriving offset from screen = world*zoom + offset:
-        //   worldUnderCursor = (cursor - offset)/zoomOld  (invariant)
-        //   offset' = cursor - worldUnderCursor * zoomNew
-        if (!mouseCaptured && input.wheelY != 0.0f)
-        {
-            const float zoomOld = camera.zoom;
-            const float zoomNew = std::clamp(
-                zoomOld * std::pow(kZoomWheelStep, input.wheelY), kMinZoom, kMaxZoom);
-            if (zoomNew != zoomOld)
-            {
-                // World point currently under the cursor (uses the OLD zoom/offset).
-                const glm::vec2 worldUnderCursor = camera.ScreenToWorld(mouseNow);
-                camera.zoom   = zoomNew;
-                camera.offset = mouseNow - worldUnderCursor * zoomNew;  // keep it fixed
-            }
-        }
+        // ---- ZOOM (mouse wheel) is handled ONCE PER FRAME in ApplyWheelZoom --------
+        // NOT here. Tick runs in the FIXED-timestep phase (RunLoop fires it 0..N times
+        // per host frame), but the wheel delta is a per-host-frame accumulated impulse
+        // (drained from the SDL event queue once per Sample). Consuming that impulse in
+        // the fixed phase DROPS notches on frames with no fixed step (render > 60 Hz)
+        // and DOUBLE-APPLIES them on slow frames -- the "wheel zoom is not smooth"
+        // bug. The plugin instead calls ApplyWheelZoom() from its once-per-frame
+        // Update, matching the wheel's once-per-frame sampling cadence exactly.
+        // (Keyboard '='/'-' zoom and RMB pan stay above: they are level/position
+        // inputs that tolerate the fixed-step cadence -- never dropped or doubled.)
 
         // ---- PAN (RMB drag) -- offset += screen-space cursor delta -----------------
         // Only when RMB was held across BOTH frames (so we have a valid prev cursor and
@@ -306,6 +294,33 @@ namespace Arcane::Sandbox
         m_prevButtons    = buttonsNow;
         m_prevMouse      = mouseNow;
         m_havePrevMouse = true;
+    }
+
+    // Mouse-wheel zoom -- run ONCE PER FRAME from SandboxApp::Update (the render
+    // cadence), never from the fixed-step Tick. The wheel is a per-host-frame
+    // accumulated impulse, so consuming it exactly once per frame is what makes the
+    // zoom smooth (no dropped notches when a frame runs no fixed step; no doubled
+    // notches when a frame runs several). Multiplicative kZoomWheelStep^wheelY scales
+    // cleanly with fractional / multi-notch deltas; clamped to [kMinZoom,kMaxZoom].
+    // ZOOM-TO-CURSOR: re-derive offset from screen = world*zoom + offset so the WORLD
+    // point under the cursor is invariant across the step. Suppressed under ImGui
+    // mouse capture (scrolling over a HUD widget must not zoom the world).
+    void Interaction::ApplyWheelZoom(Camera& camera,
+                                     const Arcane::InputSnapshot& input) noexcept
+    {
+        if (input.wantCaptureMouse || input.wheelY == 0.0f)
+            return;
+
+        const float zoomOld = camera.zoom;
+        const float zoomNew = std::clamp(
+            zoomOld * std::pow(kZoomWheelStep, input.wheelY), kMinZoom, kMaxZoom);
+        if (zoomNew == zoomOld)
+            return;
+
+        const glm::vec2 cursor(input.mouseX, input.mouseY);
+        const glm::vec2 worldUnderCursor = camera.ScreenToWorld(cursor);  // OLD zoom/offset
+        camera.zoom   = zoomNew;
+        camera.offset = cursor - worldUnderCursor * zoomNew;              // keep it fixed
     }
 
     bool Interaction::SpawnPolygon(Phys::PhysicsWorld& world)

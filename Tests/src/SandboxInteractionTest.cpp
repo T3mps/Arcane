@@ -380,14 +380,14 @@ TEST_CASE("Interaction: mouse wheel zooms the camera in and out", "[sandbox]")
     // Scroll UP (+wheel) -> zoom IN (zoom increases).
     Arcane::InputSnapshot up{};
     up.mouseX = 640.0f; up.mouseY = 360.0f; up.wheelY = 2.0f;
-    it.Tick(w.reg, w.Physics(), cam, up, kDt);
+    it.ApplyWheelZoom(cam, up);
     CHECK(cam.zoom > z0);
 
     // Scroll DOWN (-wheel) -> zoom OUT (zoom decreases back).
     const float z1 = cam.zoom;
     Arcane::InputSnapshot down{};
     down.mouseX = 640.0f; down.mouseY = 360.0f; down.wheelY = -2.0f;
-    it.Tick(w.reg, w.Physics(), cam, down, kDt);
+    it.ApplyWheelZoom(cam, down);
     CHECK(cam.zoom < z1);
 }
 
@@ -403,12 +403,12 @@ TEST_CASE("Interaction: wheel zoom is clamped to the zoom range", "[sandbox]")
 
     Arcane::InputSnapshot blastIn{};
     blastIn.mouseX = 640.0f; blastIn.mouseY = 360.0f; blastIn.wheelY = 1000.0f;
-    it.Tick(w.reg, w.Physics(), cam, blastIn, kDt);
+    it.ApplyWheelZoom(cam, blastIn);
     CHECK(cam.zoom <= Sbx::Interaction::kMaxZoom);
 
     Arcane::InputSnapshot blastOut{};
     blastOut.mouseX = 640.0f; blastOut.mouseY = 360.0f; blastOut.wheelY = -1000.0f;
-    it.Tick(w.reg, w.Physics(), cam, blastOut, kDt);
+    it.ApplyWheelZoom(cam, blastOut);
     CHECK(cam.zoom >= Sbx::Interaction::kMinZoom);
     CHECK(cam.zoom > 0.0f);
 }
@@ -431,7 +431,7 @@ TEST_CASE("Interaction: wheel zoom keeps the world point under the cursor fixed"
 
     Arcane::InputSnapshot up{};
     up.mouseX = cursor.x; up.mouseY = cursor.y; up.wheelY = 3.0f;
-    it.Tick(w.reg, w.Physics(), cam, up, kDt);
+    it.ApplyWheelZoom(cam, up);
 
     const glm::vec2 worldAfter = cam.ScreenToWorld(cursor);
     CHECK(cam.zoom > 1.5f);                       // it actually zoomed
@@ -453,8 +453,33 @@ TEST_CASE("Interaction: ImGui mouse capture suppresses wheel zoom", "[sandbox]")
     Arcane::InputSnapshot s{};
     s.mouseX = 640.0f; s.mouseY = 360.0f; s.wheelY = 4.0f;
     s.wantCaptureMouse = true;                    // ImGui owns the mouse
-    it.Tick(w.reg, w.Physics(), cam, s, kDt);
+    it.ApplyWheelZoom(cam, s);
     CHECK(cam.zoom == Approx(z0));                // no world zoom under the HUD
+}
+
+// ---------------------------------------------------------------------------
+// (s2) The wheel is consumed ONCE PER FRAME (ApplyWheelZoom), NOT in the fixed-step
+//      Tick. RunLoop fires Tick 0..N times per host frame, so consuming the per-frame
+//      wheel impulse there would drop notches (no fixed step that frame) or double
+//      them (several) -- the "wheel zoom not smooth" bug. Guard the contract.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: the fixed-step Tick ignores the wheel; ApplyWheelZoom consumes it", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+    const float z0 = cam.zoom;
+
+    Arcane::InputSnapshot s{};
+    s.mouseX = 640.0f; s.mouseY = 360.0f; s.wheelY = 3.0f;
+
+    // Fixed-step Tick must NOT zoom on the wheel.
+    it.Tick(w.reg, w.Physics(), cam, s, kDt);
+    CHECK(cam.zoom == Approx(z0));
+
+    // The once-per-frame path DOES apply it (exactly once per call).
+    it.ApplyWheelZoom(cam, s);
+    CHECK(cam.zoom > z0);
 }
 
 // ---------------------------------------------------------------------------

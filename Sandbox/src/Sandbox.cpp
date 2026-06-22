@@ -145,7 +145,10 @@ extern "C"
 
     GAME_API void GamePlugin_Update(double dt, double alpha)
     {
-        g_app.Update(dt, alpha);
+        // Input() is the per-host-frame snapshot (sampled once per frame, same source
+        // FixedUpdate reads). Update consumes the mouse wheel here -- once per frame --
+        // so wheel-zoom is smooth (see SandboxApp::Update / Interaction::ApplyWheelZoom).
+        g_app.Update(dt, alpha, g_ctx->engine->Input());
 
         // Push the plugin-owned camera to the engine BEFORE render: SetRenderContext
         // (called by the host after this Update phase) writes it into RenderContext2D,
