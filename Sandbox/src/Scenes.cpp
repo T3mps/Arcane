@@ -386,7 +386,8 @@ namespace Arcane::Sandbox
                                   float radius, float omega)
         {
             constexpr int   kLoops    = 6;
-            constexpr float kWireHalf = 9.0f;   // half-thickness of each wire segment
+            constexpr float kWireHalf = 11.0f;  // half-thickness of each wire segment
+                                                // (thicker -> pushes harder + tunnel-safe at high omega)
 
             const float R    = radius;
             const float W    = R * 0.30f;       // teardrop loop half-width
@@ -816,7 +817,9 @@ namespace Arcane::Sandbox
             // ---- tuning constants (anon-ns only; knobs exposed via Scenes.hpp) --------
             constexpr unsigned int kStressSeed  = 0xCAFEBABEu;  // seeded RNG
             constexpr float kWhiskRadius        = 320.0f;        // balloon-whisk cage radius
-            constexpr float kWhiskOmega         = 1.2f;          // rad/s (CCW)
+            constexpr float kWhiskOmega         = 3.0f;          // rad/s (CCW) -- hard churn
+            // ^ tip speed = omega*radius = 3.0*320 = 960 px/s (~16 px/60Hz step), under
+            //   the wire diameter (2*kWireHalf=22) so the cage still cannot tunnel.
             constexpr float kWhiskCenterX       = 640.0f;
             constexpr float kWhiskCenterY       = 360.0f;        // upper-bowl, hangs into pile
 
