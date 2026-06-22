@@ -648,9 +648,11 @@ TEST_CASE("Interaction: ClearPolygonPoints empties the in-progress polygon", "[s
 }
 
 // ---------------------------------------------------------------------------
-// (o) Polygon mode does NOT grab existing bodies -- a click is always a vertex.
+// (o) Polygon mode, NO points yet: the first click PREFERS interacting with a
+//     body under the cursor (grab) over dropping a vertex -- so you can still
+//     rearrange the scene before you start authoring a polygon.
 // ---------------------------------------------------------------------------
-TEST_CASE("Interaction: polygon mode click on a body adds a vertex, not a grab", "[sandbox]")
+TEST_CASE("Interaction: in Polygon mode the first click on a body grabs it (no vertex)", "[sandbox]")
 {
     World w;
     Sbx::Camera cam;
@@ -661,12 +663,67 @@ TEST_CASE("Interaction: polygon mode click on a body adds a vertex, not a grab",
                   Phys::BodyType::Dynamic, glm::vec4(1.0f));
     w.Step();
 
-    it.SetPolygonMode(true);
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0),    kDt);
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);   // released
+    REQUIRE(it.PolygonPoints().empty());
 
-    CHECK_FALSE(it.IsGrabbing());                 // no grab in polygon mode
-    CHECK(it.PolygonPoints().size() == 1);        // the click became a vertex
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);
+    CHECK(it.IsGrabbing());                         // grabbed the body...
+    CHECK(it.PolygonPoints().empty());              // ...and dropped NO vertex
+}
+
+// ---------------------------------------------------------------------------
+// (o2) Polygon mode, NO points yet: a click on EMPTY space starts the polygon
+//      (first vertex; no grab).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: in Polygon mode the first click on empty space places a vertex", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    // A body far from the click point, so the cursor is over empty space.
+    Sbx::SpawnBox(w.reg, w.root, glm::vec2(300.0f, 300.0f), glm::vec2(20.0f, 20.0f),
+                  Phys::BodyType::Dynamic, glm::vec4(1.0f));
+    w.Step();
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+    const glm::vec2 empty{40.0f, 40.0f};
+    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, 0),    kDt);
+    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, kLMB), kDt);
+
+    CHECK_FALSE(it.IsGrabbing());
+    CHECK(it.PolygonPoints().size() == 1);
+}
+
+// ---------------------------------------------------------------------------
+// (o3) Once a polygon is IN PROGRESS (>= 1 point), a click on a body adds a
+//      vertex -- interaction no longer takes priority (you committed to authoring).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: with a polygon in progress, a click on a body adds a vertex", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    const glm::vec2 bodyPos{300.0f, 300.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+                  Phys::BodyType::Dynamic, glm::vec4(1.0f));
+    w.Step();
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+
+    // Start the polygon on empty space (first vertex).
+    const glm::vec2 empty{40.0f, 40.0f};
+    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, 0),    kDt);
+    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, kLMB), kDt);
+    REQUIRE(it.PolygonPoints().size() == 1);
+
+    // Release, then click ON the body: a point already exists -> it is a vertex.
+    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, 0),        kDt);
+    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);
+    CHECK_FALSE(it.IsGrabbing());
+    CHECK(it.PolygonPoints().size() == 2);
 }
 
 // ===========================================================================

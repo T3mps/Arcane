@@ -131,53 +131,42 @@ namespace Arcane::Sandbox
         if (rmbNow && rmbPrev && m_havePrevMouse)
             camera.offset += (mouseNow - m_prevMouse);
 
-        // ---- SHAPE BRANCH: Polygon vs Box/Circle/Capsule ----------------------------
+        // ---- POLYGON keyboard shortcuts (act only in Polygon mode) ------------------
+        // Computed EVERY frame (regardless of shape) so the prev-state recorded in the
+        // tail is always accurate -- toggling shapes with a key held cannot inject a
+        // phantom edge. Edge-detected: one action per press, not per held frame.
+        const bool enterNow     = input.KeycodeDown(kEnterKeycode)
+                               || input.KeycodeDown(kKpEnterKeycode);
+        const bool backspaceNow = input.KeycodeDown(kBackspaceKeycode);
+        const bool escNow       = input.KeycodeDown(kEscKeycode);
         if (m_spawn.shape == SpawnShape::Polygon)
         {
-            // POLYGON MODE: LMB press adds a vertex; keyboard shortcuts commit/undo.
-            // Camera nav (zoom + RMB pan) already ran above. LMB belongs to the
-            // polygon (no grab/spawn/drive). Edge state is recorded below so each
-            // click / key press fires exactly once per press.
-
-            if (lmbPress)
-                m_polygonPoints.push_back(cursorWorld);
-
-            // Edge-detected keyboard shortcuts (one action per press, NOT per held
-            // frame). Compare this frame's keycode-down state against the previous
-            // frame to detect the rising edge.
-            const bool enterNow = input.KeycodeDown(kEnterKeycode)
-                               || input.KeycodeDown(kKpEnterKeycode);
-            const bool backspaceNow = input.KeycodeDown(kBackspaceKeycode);
-            const bool escNow       = input.KeycodeDown(kEscKeycode);
-
-            const bool enterPress     = enterNow     && !m_prevEnter;
-            const bool backspacePress = backspaceNow && !m_prevBackspace;
-            const bool escPress       = escNow       && !m_prevEsc;
-
-            if (enterPress)
-                SpawnPolygon(world);   // no-op if < 3 pts (returns false, pts kept)
-
-            if (backspacePress && !m_polygonPoints.empty())
+            if (enterNow && !m_prevEnter)
+                SpawnPolygon(world);                 // no-op if < 3 pts (pts kept)
+            if (backspaceNow && !m_prevBackspace && !m_polygonPoints.empty())
                 m_polygonPoints.pop_back();
-
-            if (escPress)
+            if (escNow && !m_prevEsc)
                 m_polygonPoints.clear();
-
-            // Record edge state (keys + mouse) for next frame.
-            m_prevEnter     = enterNow;
-            m_prevBackspace = backspaceNow;
-            m_prevEsc       = escNow;
-            m_prevButtons   = buttonsNow;
-            m_prevMouse     = mouseNow;
-            m_havePrevMouse = true;
-            return;   // LMB belongs to the polygon: no grab/spawn/drive this frame
         }
 
-        // ---- GRAB / SPAWN on LMB press (Box, Circle, Capsule) --------------------
+        // ---- LMB press: polygon vertex / grab / spawn ------------------------------
+        // ONE body pick drives a three-way decision. In Polygon mode a press is a
+        // VERTEX when a polygon is already in progress (>= 1 point) OR the click lands
+        // on empty space -- so the FIRST click of a fresh polygon that lands ON A BODY
+        // instead GRABS it (you can still rearrange the scene); only after a point
+        // exists do clicks become vertices. Otherwise: grab a body under the cursor,
+        // or (non-Polygon shapes only) spawn the selected primitive on empty space.
         if (lmbPress)
         {
             const Phys::BodyHandle hit = PickBodyAt(world, cursorWorld);
-            if (hit != Phys::kInvalidBody)
+            const bool polygonShape    = (m_spawn.shape == SpawnShape::Polygon);
+
+            if (polygonShape &&
+                (!m_polygonPoints.empty() || hit == Phys::kInvalidBody))
+            {
+                m_polygonPoints.push_back(cursorWorld);   // continue, or start on empty
+            }
+            else if (hit != Phys::kInvalidBody)
             {
                 m_grabbed = hit;                  // grab the body under the cursor
                 // Capture the click point in the body's LOCAL frame so the drag
@@ -189,7 +178,7 @@ namespace Arcane::Sandbox
                     -a, Phys::Vec2(cursorWorld.x - o.x, cursorWorld.y - o.y));
                 m_grabLocalAnchor = glm::vec2(la.x, la.y);
             }
-            else
+            else if (!polygonShape)
             {
                 // Empty space -> spawn the HUD-selected shape at the cursor world
                 // point. Size is the box half-extent, circle radius, or capsule radius.
@@ -307,12 +296,13 @@ namespace Arcane::Sandbox
         // ---- record edge-detection state for next frame ----------------------------
         // Store the CAPTURE-MASKED buttons (released while ImGui owns the mouse), so the
         // first un-captured frame after the cursor leaves the HUD sees a clean released->
-        // pressed edge rather than a spurious "already held" state.
-        // Reset shortcut key prev-state while in non-Polygon mode so that switching
-        // BACK to Polygon starts from a clean edge baseline (no phantom press).
-        m_prevEnter     = false;
-        m_prevBackspace = false;
-        m_prevEsc       = false;
+        // pressed edge rather than a spurious "already held" state. The polygon shortcut
+        // keys are recorded with their REAL state every frame (computed above, acted on
+        // only in Polygon mode), so an edge is never missed or faked across a shape
+        // toggle -- even if a key is held while clicking a HUD shape button.
+        m_prevEnter     = enterNow;
+        m_prevBackspace = backspaceNow;
+        m_prevEsc       = escNow;
         m_prevButtons    = buttonsNow;
         m_prevMouse      = mouseNow;
         m_havePrevMouse = true;
