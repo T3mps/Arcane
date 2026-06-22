@@ -173,6 +173,25 @@ namespace Arcane::Sandbox
             ImGui::Checkbox("Contacts", &dbg.drawContacts);
             ImGui::Checkbox("AABBs", &dbg.drawAabbs);
             ImGui::SliderFloat("Line thickness", &dbg.lineThickness, 1.0f, 4.0f, "%.1f");
+
+            ImGui::Separator();
+
+            // Rich per-body overlays (each with its scalar; disabled when its
+            // flag is off so the slider only edits a live overlay).
+            ImGui::Checkbox("Velocities", &dbg.drawVelocities);
+            ImGui::BeginDisabled(!dbg.drawVelocities);
+            ImGui::SliderFloat("Vel scale", &dbg.velocityScale, 0.02f, 0.5f, "%.2fs");
+            ImGui::EndDisabled();
+
+            ImGui::Checkbox("COM markers", &dbg.drawComMarkers);
+            ImGui::BeginDisabled(!dbg.drawComMarkers);
+            ImGui::SliderFloat("COM size", &dbg.comMarkerSize, 2.0f, 16.0f, "%.0f");
+            ImGui::EndDisabled();
+
+            ImGui::Checkbox("Orientation ticks", &dbg.drawOrientations);
+            ImGui::BeginDisabled(!dbg.drawOrientations);
+            ImGui::SliderFloat("Tick length", &dbg.orientationTickLen, 4.0f, 48.0f, "%.0f");
+            ImGui::EndDisabled();
         }
 
         // ---- Stats ----------------------------------------------------------------

@@ -78,6 +78,16 @@ namespace Arcane::Sandbox
         bool  drawContacts  = true;
         bool  drawAabbs     = false;
         float lineThickness = 1.0f;
+
+        // Rich per-body overlays (mirror PhysicsDebugDrawOptions; defaults match it so
+        // the showcase is informative out of the box). The HUD toggles these; the
+        // render system copies them into the options each frame.
+        bool  drawVelocities     = true;
+        float velocityScale      = 0.15f;
+        bool  drawComMarkers     = true;
+        float comMarkerSize      = 5.0f;
+        bool  drawOrientations   = true;
+        float orientationTickLen = 18.0f;
     };
 
     // Render-phase overlay: collider outlines + contacts on top of the sprites.
@@ -108,9 +118,15 @@ namespace Arcane::Sandbox
             // HUD-controlled flags (default to the Task-7 overlay if no resource).
             if (const SandboxDebugDraw* dbg = reg.GetResource<SandboxDebugDraw>())
             {
-                opts.drawContacts  = dbg->drawContacts;
-                opts.drawAabbs     = dbg->drawAabbs;
-                opts.lineThickness = dbg->lineThickness;
+                opts.drawContacts      = dbg->drawContacts;
+                opts.drawAabbs         = dbg->drawAabbs;
+                opts.lineThickness     = dbg->lineThickness;
+                opts.drawVelocities    = dbg->drawVelocities;
+                opts.velocityScale     = dbg->velocityScale;
+                opts.drawComMarkers    = dbg->drawComMarkers;
+                opts.comMarkerSize     = dbg->comMarkerSize;
+                opts.drawOrientations  = dbg->drawOrientations;
+                opts.orientationTickLen = dbg->orientationTickLen;
             }
             else
             {

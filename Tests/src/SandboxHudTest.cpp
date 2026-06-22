@@ -233,6 +233,45 @@ TEST_CASE("Hud: debug-draw flags drive the render options", "[sandbox]")
 }
 
 // ---------------------------------------------------------------------------
+// (e2) Rich-overlay debug flags (nice-to-have): the velocity / COM / orientation
+//      overlays the HUD exposes round-trip through SandboxApp's debug options
+//      (defaults ON, matching PhysicsDebugDrawOptions) and the HUD can toggle them.
+// ---------------------------------------------------------------------------
+TEST_CASE("Hud: rich-overlay debug flags round-trip through the options", "[sandbox]")
+{
+    Fixture f;
+
+    // Defaults: the rich overlays are ON out of the box (informative showcase).
+    CHECK(f.app.DebugOptions().drawVelocities);
+    CHECK(f.app.DebugOptions().drawComMarkers);
+    CHECK(f.app.DebugOptions().drawOrientations);
+
+    // The HUD toggles + scalars write through DebugOptionsMut().
+    f.app.DebugOptionsMut().drawVelocities    = false;
+    f.app.DebugOptionsMut().drawComMarkers    = false;
+    f.app.DebugOptionsMut().drawOrientations  = false;
+    f.app.DebugOptionsMut().velocityScale     = 0.30f;
+    f.app.DebugOptionsMut().comMarkerSize     = 9.0f;
+    f.app.DebugOptionsMut().orientationTickLen = 24.0f;
+
+    CHECK_FALSE(f.app.DebugOptions().drawVelocities);
+    CHECK_FALSE(f.app.DebugOptions().drawComMarkers);
+    CHECK_FALSE(f.app.DebugOptions().drawOrientations);
+    CHECK(f.app.DebugOptions().velocityScale == Approx(0.30f));
+    CHECK(f.app.DebugOptions().comMarkerSize == Approx(9.0f));
+    CHECK(f.app.DebugOptions().orientationTickLen == Approx(24.0f));
+
+    // Run a render-driven publish (FixedUpdate mirrors the flags into the resource);
+    // the gate is "no crash + the resource carries the HUD's choices".
+    Arcane::InputSnapshot idle{};
+    REQUIRE_NOTHROW(f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle));
+    const auto* res = f.reg.GetResource<Sbx::SandboxDebugDraw>();
+    REQUIRE(res != nullptr);
+    CHECK_FALSE(res->drawVelocities);
+    CHECK(res->velocityScale == Approx(0.30f));
+}
+
+// ---------------------------------------------------------------------------
 // (f) Spawn knobs reach the Interaction: the HUD's shape/size/density selection
 //     on SandboxApp flows into the body the next empty-space LMB-press spawns.
 // ---------------------------------------------------------------------------
