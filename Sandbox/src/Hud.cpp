@@ -123,47 +123,66 @@ namespace Arcane::Sandbox
         }
 
         // ---- Spawn ----------------------------------------------------------------
+        // Unified spawn section: one segmented shape-button row selects the active shape
+        // (Box / Circle / Capsule / Polygon). Box/Circle/Capsule spawn on LMB-press over
+        // empty space; Polygon enters vertex-collection mode (click to add, Enter/KP_Enter
+        // to commit, Backspace to undo last, Esc to clear). The old separate Polygon
+        // header is removed -- shape is the single knob.
         if (ImGui::CollapsingHeader("Spawn", ImGuiTreeNodeFlags_DefaultOpen))
         {
             Sandbox::SpawnConfig& cfg = app.SpawnConfigMut();
 
-            int shape = static_cast<int>(cfg.shape);
-            const char* kShapes[] = { "Box", "Circle" };
-            if (ImGui::Combo("Shape", &shape, kShapes, IM_ARRAYSIZE(kShapes)))
-                cfg.shape = static_cast<SpawnShape>(shape);
+            // Segmented shape buttons: highlight the active shape with an accent color.
+            static const char* kShapeNames[] = { "Box", "Circle", "Capsule", "Polygon" };
+            static constexpr int kShapeCount = 4;
+            const ImVec4 kAccent{0.95f, 0.55f, 0.25f, 1.0f};   // orange accent
 
-            ImGui::SliderFloat("Size", &cfg.size, 4.0f, 80.0f, "%.0f");
+            for (int i = 0; i < kShapeCount; ++i)
+            {
+                const bool active = (static_cast<int>(cfg.shape) == i);
+                if (active)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Button,        kAccent);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{1.0f, 0.70f, 0.45f, 1.0f});
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4{0.80f, 0.40f, 0.15f, 1.0f});
+                }
+                if (ImGui::Button(kShapeNames[i]))
+                    cfg.shape = static_cast<SpawnShape>(i);
+                if (active)
+                    ImGui::PopStyleColor(3);
+
+                if (i < kShapeCount - 1)
+                    ImGui::SameLine();
+            }
+
+            // Density applies to every shape.
             ImGui::SliderFloat("Density", &cfg.density, 0.1f, 10.0f, "%.1f");
-            ImGui::TextDisabled("Left-click empty space to spawn");
-        }
 
-        // ---- Polygon (ITEM 2) -----------------------------------------------------
-        // A polygon-authoring mode: while ON, left-clicks in the WORLD collect vertices
-        // (instead of spawning the default shape); Spawn commits them as one world-direct
-        // convex polygon body (>= 3 points; the actual AddBody is deferred to FixedUpdate
-        // via RequestPolygonSpawn so it never races the render-phase debug draw).
-        if (ImGui::CollapsingHeader("Polygon", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            bool polyMode = app.IsPolygonMode();
-            if (ImGui::Checkbox("Polygon mode", &polyMode))
-                app.SetPolygonMode(polyMode);
+            // Adaptive per-shape controls.
+            if (cfg.shape == SpawnShape::Polygon)
+            {
+                const std::size_t pts = app.PolygonPointCount();
+                ImGui::Text("Points: %zu", pts);
 
-            const std::size_t pts = app.PolygonPointCount();
-            ImGui::Text("Points: %zu", pts);
-            if (polyMode)
-                ImGui::TextDisabled("Left-click the world to add a vertex");
+                ImGui::BeginDisabled(pts == 0);
+                if (ImGui::Button("Clear"))
+                    app.ClearPolygonPoints();
+                ImGui::EndDisabled();
 
-            const bool canSpawn = (pts >= 3);
-            ImGui::BeginDisabled(pts == 0);
-            if (ImGui::Button("Clear"))
-                app.ClearPolygonPoints();
-            ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(pts < 3);   // need >= 3 verts
+                if (ImGui::Button("Spawn"))
+                    app.RequestPolygonSpawn();
+                ImGui::EndDisabled();
 
-            ImGui::SameLine();
-            ImGui::BeginDisabled(!canSpawn);   // need >= 3 verts (the factory's lower bound)
-            if (ImGui::Button("Spawn polygon"))
-                app.RequestPolygonSpawn();
-            ImGui::EndDisabled();
+                ImGui::TextDisabled(
+                    "Click to add a vertex - Enter spawn / Backspace undo / Esc clear");
+            }
+            else
+            {
+                ImGui::SliderFloat("Size", &cfg.size, 4.0f, 80.0f, "%.0f");
+                ImGui::TextDisabled("Left-click empty space to spawn");
+            }
         }
 
         // ---- Debug draw -----------------------------------------------------------
