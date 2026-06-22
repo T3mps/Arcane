@@ -860,3 +860,351 @@ TEST_CASE("PolygonDraftRenderSystem draws nothing when draft is empty", "[sandbo
 
     CHECK(batcher.circles.empty());
 }
+
+// ===========================================================================
+// UNIFIED SPAWN SELECTOR (2026-06-22 spec)
+// ===========================================================================
+// SpawnShape now has four values: Box, Circle, Capsule, Polygon.
+// m_polygonMode is removed; polygon mode is derived from shape == Polygon.
+// New Capsule instant-spawn, keyboard shortcuts for polygon, draft gating.
+
+// ---------------------------------------------------------------------------
+// (u) Capsule instant-spawn: LMB on empty space with shape == Capsule spawns
+//     exactly one body entity (just like Box and Circle).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: LMB press with Capsule shape spawns a capsule body", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Capsule;
+    it.SpawnCfg().size  = 20.0f;
+
+    it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);   // baseline
+    const std::size_t before = w.BodyEntityCount();
+
+    it.Tick(w.reg, w.Physics(), cam, Snap(400.0f, 200.0f, kLMB), kDt);
+    CHECK(w.BodyEntityCount() == before + 1);
+
+    // It materializes on the next step.
+    w.Step();
+    CHECK(w.Physics().Count() > 0);
+}
+
+// ---------------------------------------------------------------------------
+// (v) Box instant-spawn still works after the enum extension (regression).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: LMB press with Box shape still spawns a box body", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Box;
+
+    it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);
+    const std::size_t before = w.BodyEntityCount();
+    it.Tick(w.reg, w.Physics(), cam, Snap(400.0f, 200.0f, kLMB), kDt);
+    CHECK(w.BodyEntityCount() == before + 1);
+}
+
+// ---------------------------------------------------------------------------
+// (w) Circle instant-spawn still works after the enum extension (regression).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: LMB press with Circle shape still spawns a circle body", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Circle;
+
+    it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);
+    const std::size_t before = w.BodyEntityCount();
+    it.Tick(w.reg, w.Physics(), cam, Snap(400.0f, 200.0f, kLMB), kDt);
+    CHECK(w.BodyEntityCount() == before + 1);
+}
+
+// ---------------------------------------------------------------------------
+// (x) Shape == Polygon still collects vertices (deriving polygon mode from shape).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: shape Polygon collects clicked vertices", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+    CHECK(it.IsPolygonMode());
+
+    const std::size_t before = w.BodyEntityCount();
+    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+
+    CHECK(it.PolygonPoints().size() == 3);
+    CHECK(w.BodyEntityCount() == before);   // no entity spawned
+}
+
+// ---------------------------------------------------------------------------
+// (y) Enter key (>= 3 points) -> polygon spawns + points cleared (edge, once).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: Enter key with >= 3 polygon points spawns and clears", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+
+    // Collect 3 points.
+    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 3);
+
+    const std::size_t bodiesBefore = w.Physics().Count();
+
+    // Press Enter (edge: prev not down, now down).
+    Arcane::InputSnapshot enterSnap{};
+    enterSnap.AddKeycode(Sbx::Interaction::kEnterKeycode);
+    it.Tick(w.reg, w.Physics(), cam, enterSnap, kDt);
+
+    CHECK(w.Physics().Count() == bodiesBefore + 1);   // polygon was spawned
+    CHECK(it.PolygonPoints().empty());                 // points cleared
+}
+
+// ---------------------------------------------------------------------------
+// (z) Enter key with < 3 points is a no-op (not enough verts).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: Enter key with < 3 polygon points is a no-op", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+
+    // Collect only 2 points.
+    const glm::vec2 pts[2] = {{200.0f, 500.0f}, {400.0f, 500.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 2);
+
+    const std::size_t bodiesBefore = w.Physics().Count();
+
+    Arcane::InputSnapshot enterSnap{};
+    enterSnap.AddKeycode(Sbx::Interaction::kEnterKeycode);
+    it.Tick(w.reg, w.Physics(), cam, enterSnap, kDt);
+
+    CHECK(w.Physics().Count() == bodiesBefore);         // no body spawned
+    CHECK(it.PolygonPoints().size() == 2);              // points kept
+}
+
+// ---------------------------------------------------------------------------
+// (aa) Backspace key pops the last collected point.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: Backspace key pops the last polygon point", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+
+    // Collect 3 points.
+    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 3);
+
+    Arcane::InputSnapshot bsSnap{};
+    bsSnap.AddKeycode(Sbx::Interaction::kBackspaceKeycode);
+    it.Tick(w.reg, w.Physics(), cam, bsSnap, kDt);
+
+    CHECK(it.PolygonPoints().size() == 2);   // one popped
+}
+
+// ---------------------------------------------------------------------------
+// (ab) Backspace on empty list is a no-op (no crash).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: Backspace on empty polygon points is a no-op", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+    REQUIRE(it.PolygonPoints().empty());
+
+    Arcane::InputSnapshot bsSnap{};
+    bsSnap.AddKeycode(Sbx::Interaction::kBackspaceKeycode);
+    REQUIRE_NOTHROW(it.Tick(w.reg, w.Physics(), cam, bsSnap, kDt));
+    CHECK(it.PolygonPoints().empty());
+}
+
+// ---------------------------------------------------------------------------
+// (ac) Esc key clears all polygon points.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: Esc key clears all polygon points", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+
+    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 3);
+
+    Arcane::InputSnapshot escSnap{};
+    escSnap.AddKeycode(Sbx::Interaction::kEscKeycode);
+    it.Tick(w.reg, w.Physics(), cam, escSnap, kDt);
+
+    CHECK(it.PolygonPoints().empty());
+}
+
+// ---------------------------------------------------------------------------
+// (ad) HELD key fires the shortcut ONCE (edge detection), not every frame.
+//
+// A key held down across many consecutive frames must only fire on the FIRST
+// frame (rising edge), not on every subsequent held frame (NOT level-triggered).
+// After the press fires and clears all points, the subsequent held-key frames
+// must not keep firing even though the list is now empty (it simply stays empty).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: held Esc key fires once (edge detection, not level)", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+
+    // Add 3 points via separate click events (Esc key not held yet).
+    const glm::vec2 pts[3] = {{100.0f, 300.0f}, {300.0f, 300.0f}, {200.0f, 100.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 3);
+
+    Arcane::InputSnapshot escSnap{};
+    escSnap.AddKeycode(Sbx::Interaction::kEscKeycode);
+
+    // Frame 1: Esc key DOWN (prev=false -> rising edge -> fires -> clears points).
+    it.Tick(w.reg, w.Physics(), cam, escSnap, kDt);
+    CHECK(it.PolygonPoints().empty());   // action fired on the rising edge
+
+    // Frames 2+: Esc key STILL DOWN (prev=true -> NO rising edge -> must NOT fire again).
+    // We cannot add new points here because LMB also belongs to the polygon branch;
+    // but we can verify the empty list stays empty (not a double-clear crash, and the
+    // "fired" count == 1 for the whole hold sequence).
+    it.Tick(w.reg, w.Physics(), cam, escSnap, kDt);   // HELD frame 2
+    it.Tick(w.reg, w.Physics(), cam, escSnap, kDt);   // HELD frame 3
+    it.Tick(w.reg, w.Physics(), cam, escSnap, kDt);   // HELD frame 4
+
+    // Still empty: only the first press triggered the clear.
+    CHECK(it.PolygonPoints().empty());
+
+    // Verify the Backspace held-key case too: add a point, hold Backspace for 3 frames,
+    // only the first frame should pop the point.
+    it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0),    kDt);   // Esc released (baseline)
+    it.Tick(w.reg, w.Physics(), cam, Snap(200.0f, 400.0f, kLMB), kDt);  // add 1 point
+    it.Tick(w.reg, w.Physics(), cam, Snap(300.0f, 400.0f, 0),    kDt);
+    it.Tick(w.reg, w.Physics(), cam, Snap(300.0f, 400.0f, kLMB), kDt);  // add 2nd point
+    REQUIRE(it.PolygonPoints().size() == 2);
+
+    Arcane::InputSnapshot bsSnap{};
+    bsSnap.AddKeycode(Sbx::Interaction::kBackspaceKeycode);
+
+    // Frame 1 of Backspace hold: fires once (pops 1 point).
+    it.Tick(w.reg, w.Physics(), cam, bsSnap, kDt);
+    CHECK(it.PolygonPoints().size() == 1);
+
+    // Frames 2-3 held: must NOT pop again.
+    it.Tick(w.reg, w.Physics(), cam, bsSnap, kDt);
+    it.Tick(w.reg, w.Physics(), cam, bsSnap, kDt);
+    CHECK(it.PolygonPoints().size() == 1);   // still 1, not 0 or below
+}
+
+// ---------------------------------------------------------------------------
+// (ae) Draft markers empty when shape != Polygon (even if points are retained).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: draft markers empty when shape is not Polygon", "[sandbox]")
+{
+    // We simulate the gating logic: SandboxApp publishes PolygonPoints()
+    // into PolygonDraftResource ONLY when shape == Polygon. Test here verifies
+    // that when shape != Polygon, the Interaction still RETAINS the points
+    // (they don't get wiped by switching shape) so switching back resumes them.
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    // Collect some points in Polygon mode.
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+    const glm::vec2 pts[3] = {{100.0f, 200.0f}, {300.0f, 200.0f}, {200.0f, 100.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 3);
+
+    // Switch to Box: points are RETAINED in the Interaction.
+    it.SpawnCfg().shape = Sbx::SpawnShape::Box;
+    CHECK_FALSE(it.IsPolygonMode());
+    CHECK(it.PolygonPoints().size() == 3);   // retained (not cleared by switch)
+
+    // Switch back to Polygon: same points visible again.
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+    CHECK(it.IsPolygonMode());
+    CHECK(it.PolygonPoints().size() == 3);   // points survived the round-trip
+}
+
+// ---------------------------------------------------------------------------
+// (af) KP_Enter also triggers polygon spawn (alternate Enter key).
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: KP_Enter also spawns polygon when >= 3 points", "[sandbox]")
+{
+    World w;
+    Sbx::Camera cam;
+    Sbx::Interaction it;
+
+    it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
+
+    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    for (const glm::vec2 p : pts)
+    {
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
+        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+    }
+    REQUIRE(it.PolygonPoints().size() == 3);
+
+    const std::size_t bodiesBefore = w.Physics().Count();
+
+    Arcane::InputSnapshot kpEnterSnap{};
+    kpEnterSnap.AddKeycode(Sbx::Interaction::kKpEnterKeycode);
+    it.Tick(w.reg, w.Physics(), cam, kpEnterSnap, kDt);
+
+    CHECK(w.Physics().Count() == bodiesBefore + 1);
+    CHECK(it.PolygonPoints().empty());
+}

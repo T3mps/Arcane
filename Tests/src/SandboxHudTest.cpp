@@ -312,17 +312,16 @@ TEST_CASE("Hud: spawn knobs select the spawned shape", "[sandbox]")
 }
 
 // ---------------------------------------------------------------------------
-// (g) Polygon mode end-to-end (ITEM 2): the HUD-bound polygon state on SandboxApp
-//     collects clicked world points through FixedUpdate, and RequestPolygonSpawn
-//     commits a world-direct polygon body on the NEXT fixed step (deferred out of
-//     the render phase). Mirrors how the HUD widgets drive the same SandboxApp API.
+// (g) Polygon mode end-to-end: now driven via shape == Polygon (unified selector).
+//     SetPolygonMode(true) is a shim that sets shape = Polygon.
 // ---------------------------------------------------------------------------
 TEST_CASE("Hud: polygon mode collects clicks and spawns a polygon body", "[sandbox]")
 {
     Fixture f;
     f.Step();   // materialize the scene-0 bodies
 
-    f.app.SetPolygonMode(true);
+    // Drive via shape directly (canonical path).
+    f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Polygon;
     CHECK(f.app.IsPolygonMode());
 
     // Click three world points (released baseline + press each, away from the scene).
@@ -355,4 +354,72 @@ TEST_CASE("Hud: polygon mode collects clicks and spawns a polygon body", "[sandb
             foundPolygon = true;
     }
     CHECK(foundPolygon);
+}
+
+// ---------------------------------------------------------------------------
+// (h) Unified spawn: selecting Capsule shape via SpawnConfigMut sets shape,
+//     and the capsule LMB-spawn works end-to-end through SandboxApp.
+// ---------------------------------------------------------------------------
+TEST_CASE("Hud: selecting Capsule shape sets cfg.shape to Capsule", "[sandbox]")
+{
+    Fixture f;
+
+    f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Capsule;
+    CHECK(f.app.SpawnConfig().shape == Sbx::SpawnShape::Capsule);
+    // Polygon mode is NOT on when Capsule is selected.
+    CHECK_FALSE(f.app.IsPolygonMode());
+}
+
+// ---------------------------------------------------------------------------
+// (i) SetPolygonMode(true) shim sets shape to Polygon; false sets shape to Box.
+// ---------------------------------------------------------------------------
+TEST_CASE("Hud: SetPolygonMode shim sets shape to Polygon / Box", "[sandbox]")
+{
+    Fixture f;
+
+    f.app.SetPolygonMode(true);
+    CHECK(f.app.SpawnConfig().shape == Sbx::SpawnShape::Polygon);
+    CHECK(f.app.IsPolygonMode());
+
+    f.app.SetPolygonMode(false);
+    CHECK(f.app.SpawnConfig().shape == Sbx::SpawnShape::Box);
+    CHECK_FALSE(f.app.IsPolygonMode());
+}
+
+// ---------------------------------------------------------------------------
+// (j) Draft markers are empty when shape != Polygon (gating in FixedUpdate).
+// ---------------------------------------------------------------------------
+TEST_CASE("Hud: draft markers suppressed when shape is not Polygon", "[sandbox]")
+{
+    Fixture f;
+    f.Step();
+
+    // Collect some polygon points while in Polygon mode.
+    f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Polygon;
+    const float pts[3][2] = {{120.0f, 200.0f}, {220.0f, 200.0f}, {170.0f, 120.0f}};
+    for (const auto& p : pts)
+    {
+        Arcane::InputSnapshot rel{}; rel.mouseX = p[0]; rel.mouseY = p[1];
+        f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
+        Arcane::InputSnapshot press{}; press.mouseX = p[0]; press.mouseY = p[1];
+        press.mouseButtons = 0x1;
+        f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);
+    }
+    CHECK(f.app.PolygonPointCount() == 3);
+
+    // Switch to Box: draft resource should publish empty list.
+    f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Box;
+    Arcane::InputSnapshot idle{};
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+
+    const auto* draft = f.reg.GetResource<Arcane::Sandbox::PolygonDraftResource>();
+    REQUIRE(draft != nullptr);
+    CHECK(draft->worldPoints.empty());   // suppressed: shape != Polygon
+
+    // Points are RETAINED internally; switching back to Polygon re-publishes them.
+    f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Polygon;
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    draft = f.reg.GetResource<Arcane::Sandbox::PolygonDraftResource>();
+    REQUIRE(draft != nullptr);
+    CHECK(draft->worldPoints.size() == 3);   // retained + re-published
 }
