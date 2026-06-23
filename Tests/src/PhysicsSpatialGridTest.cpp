@@ -156,3 +156,84 @@ TEST_CASE("Residency tracks a body across a per-step position commit", "[physics
     w.Residents(dest, residents);
     REQUIRE(std::find(residents.begin(), residents.end(), a.index) != residents.end());
 }
+
+// G1: RemoveBody must evict a static from the grid (StaticCandidates stops
+// returning it). Guards the m_staticGrid.Remove lockstep in RemoveBody.
+TEST_CASE("StaticCandidates drops a static after RemoveBody", "[physics][grid]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.type = BodyType::Static; d.position = Vec2(0, 0);
+    d.shape = MakeAabb(Real(50), Real(10));
+    BodyHandle s = w.AddBody(d);
+
+    Aabb2 q; q.min = Vec2(-60, -20); q.max = Vec2(60, 20);
+    std::vector<Aabb2> spans; std::vector<std::uint32_t> statics;
+    w.StaticCandidates(q, spans, statics);
+    REQUIRE(statics.size() == 1);          // present before removal
+
+    w.RemoveBody(s);
+    statics.clear(); spans.clear();
+    w.StaticCandidates(q, spans, statics);
+    REQUIRE(statics.empty());              // gone after removal
+}
+
+// G2: AddFixture to a static grows its grid AABB so it becomes findable at the
+// new (wider) region. Guards the AddFixture static-grid Move.
+TEST_CASE("AddFixture grows a static's grid AABB", "[physics][grid]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.type = BodyType::Static; d.position = Vec2(0, 0);
+    d.shape = MakeAabb(Real(10), Real(10));   // small primary fixture near origin
+    BodyHandle s = w.AddBody(d);
+
+    // A region far to the +x side, NOT covered by the small primary fixture.
+    Aabb2 farRegion; farRegion.min = Vec2(180, -10); farRegion.max = Vec2(220, 10);
+    std::vector<Aabb2> spans; std::vector<std::uint32_t> statics;
+    w.StaticCandidates(farRegion, spans, statics);
+    REQUIRE(statics.empty());              // not reachable yet
+
+    // Add a second fixture offset far to +x so the body's union AABB now covers farRegion.
+    FixtureDef fd; fd.shape = MakeAabb(Real(10), Real(10));
+    fd.localPos = Vec2(200, 0);
+    w.AddFixture(s, fd);
+
+    statics.clear(); spans.clear();
+    w.StaticCandidates(farRegion, spans, statics);
+    REQUIRE(statics.size() == 1);          // now findable at the grown AABB
+}
+
+// G4: a DYNAMIC body's residency is refreshed via the solver commit path
+// (CommitSlotPosition), not just the kinematic integrate. Drive it with velocity.
+// WorldDef defaults: gravity=(0,0), linearDamping=0 -- the body moves freely.
+// With v=600 and 30 steps of dt=1/60: displacement ~ 600*(30/60) = 300 units.
+// Starting at x=10, final x ~ 310, which is well outside the (0..64) origin tile.
+TEST_CASE("Residency tracks a dynamic body via the solver commit", "[physics][grid][residency]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.type = BodyType::Dynamic; d.shape = MakeCircle(Real(8));
+    d.fixedRotation = true; d.position = Vec2(10, 10);
+    BodyHandle a = w.AddBody(d);
+    w.SetVelocity(a, Vec2(600, 0));        // dynamics integrate + commit via the solver
+
+    for (int i = 0; i < 30; ++i) w.Step(Real(1)/Real(60)); // ~ +300 x over 0.5s (no damping/gravity)
+
+    Aabb2 origin; origin.min = Vec2(0, 0); origin.max = Vec2(64, 64);
+    std::vector<std::uint32_t> residents;
+    w.Residents(origin, residents);
+    // It should have left the origin tile region (residency followed the solver commit).
+    REQUIRE(std::find(residents.begin(), residents.end(), a.index) == residents.end());
+}
+
+// G5: Residents on an unoccupied region returns empty.
+TEST_CASE("Residents empty region returns no bodies", "[physics][grid][residency]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.type = BodyType::Dynamic; d.shape = MakeCircle(Real(8));
+    d.position = Vec2(10, 10); w.AddBody(d);
+
+    Aabb2 empty; empty.min = Vec2(5000, 5000); empty.max = Vec2(5100, 5100);
+    std::vector<std::uint32_t> residents;
+    const int n = w.Residents(empty, residents);
+    REQUIRE(n == 0);
+    REQUIRE(residents.empty());
+}

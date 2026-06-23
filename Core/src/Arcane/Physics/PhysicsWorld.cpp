@@ -1163,7 +1163,13 @@ namespace Arcane
             {
                 return;
             }
-            m_angle[h.index] = angle;
+            const std::uint32_t i = h.index;
+            m_angle[i] = angle;
+            // A static's world AABB is rotation-aware; statics never re-register
+            // via Step (unlike movers, which self-correct on the next commit), so
+            // refresh the static grid here to keep StaticCandidates correct.
+            if (static_cast<BodyType>(m_btype[i]) == BodyType::Static)
+                m_staticGrid.Move(i, SlotAabb(i));
         }
 
         Vec2 PhysicsWorld::DrawPosition(BodyHandle h, Real alpha) const noexcept
