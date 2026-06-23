@@ -261,3 +261,56 @@ TEST_CASE("DynamicTree incremental pairs == full == brute-force", "[physics][fxb
         REQUIRE(full == bf);
     }
 }
+
+// ----------------------------------------------------------------
+// Fix 1 regression: SetAngle immediately refreshes mover proxies
+// ----------------------------------------------------------------
+// A KINEMATIC body carries a long thin box (half-extents 40 x 4) at the
+// origin.  At angle 0 it spans x in [-40,40], y in [-4,4].  A second
+// kinematic neighbor box sits at (0, 30) with half-extents 8x8
+// (spans y in [22,38]) -- clearly disjoint from the thin box at angle 0.
+//
+// After one Step both proxies are registered.  We assert NO pair exists
+// at angle 0, then call SetAngle(thin, pi/2) WITHOUT a Step.  Rotated
+// 90 deg, the thin box's AABB becomes x in [-4,4], y in [-40,40]
+// (swapped extents), which DOES overlap the neighbor at y=30.  Fix 1
+// ensures SetAngle refreshes the proxy immediately; the pair must appear
+// in FixtureBroadphase().Pairs() before any Step.
+TEST_CASE("SetAngle immediately refreshes mover fixture proxies (no Step)", "[physics][fxbroadphase]")
+{
+    PhysicsWorld w;
+
+    // Thin long box: half-extents 40 x 4, kinematic so it can rotate.
+    BodyDef defThin;
+    defThin.type     = BodyType::Kinematic;
+    defThin.position = Vec2(Real(0), Real(0));
+    defThin.shape    = MakeAabb(Real(40), Real(4)); // half-extents 40 x 4
+    BodyHandle thin = w.AddBody(defThin);
+
+    // Neighbor box at (0, 30): half-extents 8 x 8, kinematic (must be a
+    // mover for its fixture to live in the per-fixture broadphase tree).
+    BodyDef defNeigh;
+    defNeigh.type     = BodyType::Kinematic;
+    defNeigh.position = Vec2(Real(0), Real(30));
+    defNeigh.shape    = MakeAabb(Real(8), Real(8)); // spans y in [22, 38]
+    w.AddBody(defNeigh);
+
+    // One Step registers both proxies in the fixture broadphase.
+    w.Step(Real(1) / Real(60));
+
+    // At angle 0: thin spans y in [-4,4]; neighbor spans y in [22,38].
+    // They must NOT overlap -- no pair.
+    const auto pairsBefore = FxBpPairs(w);
+    REQUIRE(pairsBefore.empty());
+
+    // Rotate the thin box 90 degrees WITHOUT stepping.
+    // Its AABB becomes y in [-40, 40], which covers the neighbor's y in [22,38].
+    w.SetAngle(thin, kPi / Real(2));
+
+    // The fixture broadphase must immediately reflect the rotated AABB.
+    const auto pairsAfter = FxBpPairs(w);
+    REQUIRE_FALSE(pairsAfter.empty()); // at least one pair must now exist
+
+    // Also verify the brute-force oracle agrees (broadphase == brute, post-rotation).
+    REQUIRE(pairsAfter == BruteFixturePairs(w));
+}

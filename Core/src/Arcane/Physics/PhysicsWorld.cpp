@@ -642,11 +642,11 @@ namespace Arcane
             //   worldPos   = bodyPos + R(bodyAngle) * fxLocalPos
             // (via GetFixtureWorldPos / GetFixtureWorldAngle).
             //
-            // The broadphase stays BODY-LEVEL (one proxy per body; per-fixture
-            // proxies are a deferred optimization). The body AABB is the union
-            // over all its fixtures; a body with zero live fixtures falls back
-            // to the legacy single-shape AABB (back-compat for any body that
-            // bypasses AddFixture).
+            // The mover broadphase is PER-FIXTURE (m_fixtureBroadphase; one proxy
+            // per live fixture of a Dynamic/Kinematic body). SlotAabb returns the
+            // union over all fixtures and is used for the static grid + residency
+            // grid only. A body with zero live fixtures falls back to the legacy
+            // single-shape AABB (back-compat for any body that bypasses AddFixture).
             //
             // For a body with no fixture list or an empty fixture list, fall
             // back to the legacy single-shape path (same as pre-T5 behaviour).
@@ -1246,11 +1246,13 @@ namespace Arcane
             }
             const std::uint32_t i = h.index;
             m_angle[i] = angle;
-            // A static's world AABB is rotation-aware; statics never re-register
-            // via Step (unlike movers, which self-correct on the next commit), so
-            // refresh the static grid here to keep StaticCandidates correct.
+            // A non-circle body's world AABB is rotation-aware. Statics never
+            // re-register via Step, so refresh the static grid; movers refresh
+            // their per-fixture proxies + residency immediately (mirrors SetPosition).
             if (static_cast<BodyType>(m_btype[i]) == BodyType::Static)
                 m_staticGrid.Move(i, SlotAabb(i));
+            else
+                UpdateMoverProxies(i);
         }
 
         Vec2 PhysicsWorld::DrawPosition(BodyHandle h, Real alpha) const noexcept
@@ -1493,8 +1495,9 @@ namespace Arcane
             //   WorldCom() anchors below + SoftStep/Baumgarte FinalizePositions).
             //   Byte-identical to origin-relative anchors for localCenter==0.
             //
-            //   BROADPHASE: stays BODY-LEVEL (one proxy per body). SlotAabb now
-            //   returns the union of the body's fixtures' rotation-aware world AABBs.
+            //   BROADPHASE: per-fixture (m_fixtureBroadphase; one proxy per live
+            //   fixture of a Dynamic/Kinematic body). The mover-mover section below
+            //   walks the fixture-pair set directly; no separate body-level cull needed.
             //
             //   fixedRotation bodies keep invInertia=0 (already enforced by AddBody
             //   / RecomputeBodyMass; we do not change integration/solver here).
