@@ -1636,6 +1636,9 @@ namespace Arcane
                 cc.invMassB    = bIsBody ? m_invMass[bIdx] : Real(0);
                 cc.invInertiaB = bIsBody ? m_invInertia[bIdx] : Real(0);
                 cc.normal      = m.normal;
+                // DISPLAY-ONLY narrowphase tag (debug-viz Slice A): carried from
+                // the producing manifold. The solver never reads it.
+                cc.kind        = m.kind;
 
                 // Combined material coefficients (T5: from the two fixture slots).
                 // Friction: geometric mean sqrt(fA*fB). Restitution: max(rA, rB).

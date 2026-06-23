@@ -15,6 +15,7 @@
 
 #include <cstdint>
 
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
 namespace Arcane
@@ -67,11 +68,17 @@ namespace Arcane
         //              fidelity (round endpoints touching different faces) that
         //              the future solver needs.
         // pointCount : 0, 1, or 2.
+        // kind       : DISPLAY-ONLY tag of the narrowphase path that produced
+        //              this manifold (debug-viz Slice A). Default Separated (no
+        //              contact). Set by Collide() at each resolving branch and
+        //              copied to the ContactConstraint by GenerateContacts. The
+        //              Step path never reads it -- determinism is unaffected.
         struct Manifold
         {
-            Vec2          normal{ Real(0), Real(0) };
-            int           pointCount = 0;
-            ManifoldPoint points[2]{};
+            Vec2            normal{ Real(0), Real(0) };
+            int             pointCount = 0;
+            ManifoldPoint   points[2]{};
+            NarrowphaseKind kind = NarrowphaseKind::Separated;
         };
 
     } // namespace Physics

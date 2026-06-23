@@ -71,6 +71,7 @@
 #include <Arcane/Physics/Shapes.hpp>
 #include <Arcane/Physics/Fixture.hpp>
 #include <Arcane/Physics/Broadphase/Broadphase.hpp>
+#include <Arcane/Physics/Broadphase/DynamicTree.hpp> // FixtureBroadphaseTree() debug accessor
 #include <Arcane/Physics/Broadphase/Passability.hpp>
 #include <Arcane/Physics/Broadphase/TileGrid.hpp>
 #include <Arcane/Physics/Broadphase/SpatialGrid.hpp>
@@ -639,6 +640,50 @@ namespace Arcane
             [[nodiscard]] IBroadphase& FixtureBroadphase() noexcept
             {
                 return *m_fixtureBroadphase;
+            }
+
+            // ---- read-only debug-visualization accessors (Slice A) ----------
+            //
+            // These are PRESENTATION-FREE read paths consumed by the render-side
+            // physics debug overlay -- presentation code must NOT enter Core. All
+            // are read-only; iteration order is for DISPLAY only and no sim path
+            // depends on it.
+
+            // The concrete mover-broadphase DynamicTree, for ForEachLeaf
+            // enumeration -- or nullptr when the world was built with a non-Tree
+            // mover broadphase (Hash / Sap), which lack the tree's fat/tight leaf
+            // structure. POINTER form (not a reference) precisely because the
+            // broadphase is selectable: the caller (and the test) null-checks
+            // before dereferencing. The default WorldDef builds a DynamicTree, so
+            // the default world always returns non-null.
+            [[nodiscard]] const DynamicTree* FixtureBroadphaseTree() const noexcept
+            {
+                return dynamic_cast<const DynamicTree*>(m_fixtureBroadphase.get());
+            }
+
+            // The per-shape static-body index (one proxy per static body slot).
+            [[nodiscard]] const SpatialGrid& StaticGrid() const noexcept
+            {
+                return m_staticGrid;
+            }
+
+            // The dynamic/kinematic body tile-residency index.
+            [[nodiscard]] const SpatialGrid& ResidencyGrid() const noexcept
+            {
+                return m_residencyGrid;
+            }
+
+            // Visit each ContactConstraint generated in the LAST Step (the
+            // world-owned pool, valid until the next Step). Read-only; in pool
+            // order. ForEachContactConstraint's visit count equals
+            // ActiveContactCount().
+            void ForEachContactConstraint(
+                const std::function<void(const ContactConstraint&)>& fn) const
+            {
+                for (const ContactConstraint& cc : m_contactConstraints)
+                {
+                    fn(cc);
+                }
             }
 
             // Map a fixture slot to its owning body slot (Phase 2, Task 2).

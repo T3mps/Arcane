@@ -41,6 +41,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
 namespace Arcane
@@ -127,6 +128,11 @@ namespace Arcane
 
             int pointCount = 0;
             ContactConstraintPoint points[2]{};
+
+            // DISPLAY-ONLY narrowphase tag (debug-viz Slice A): copied from the
+            // producing Manifold by GenerateContacts' emit. The solver NEVER
+            // reads it -- it is a pure inspection field (determinism unaffected).
+            NarrowphaseKind kind = NarrowphaseKind::Separated;
         };
 
         // ----------------------------------------------------------------

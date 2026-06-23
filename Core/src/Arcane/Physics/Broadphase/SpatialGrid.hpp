@@ -7,6 +7,7 @@
 // DETERMINISM: cells visited row-major; output sorted+unique; no fp in the cell
 // index math beyond the floor. PRESENTATION-FREE + C++20 (glm+std+Physics only).
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -35,6 +36,18 @@ public:
 
     // Integer cell coord of a world point (floor). Public for tests / residency.
     void CellCoord(Vec2 p, int& cx, int& cy) const;
+
+    // ---- read-only debug-visualization accessor (Slice A) ----------------
+    //
+    // Visit each OCCUPIED cell, passing its integer (cx, cy) coord and the ids
+    // resident in it. The key is unpacked with the EXACT inverse of the private
+    // Key() pack (uint32 round-trip preserves the signed coord). Read-only;
+    // unordered_map traversal -> iteration order is for DISPLAY only (no sim
+    // path may depend on it). The ids vector is never empty for a live cell
+    // (Remove drops a cell once it empties).
+    void ForEachCell(
+        const std::function<void(int cx, int cy,
+                                 const std::vector<std::uint32_t>& ids)>& fn) const;
 
 private:
     static std::uint64_t Key(int cx, int cy)

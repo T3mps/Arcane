@@ -457,5 +457,30 @@ namespace Arcane
             return static_cast<int>(out.size());
         }
 
+        // ----------------------------------------------------------------
+        // ForEachLeaf: read-only debug-viz enumeration of the live proxies.
+        // Walks m_leafOfId (id -> leaf slot), skipping kNull holes, and yields
+        // each leaf node's (id, tight, fat). The map index is the proxy id, but
+        // we read node.id so the callback gets the value the tree actually
+        // stored. Pure read path -- no mutation, display-order only.
+        // ----------------------------------------------------------------
+        void DynamicTree::ForEachLeaf(
+            const std::function<void(std::uint32_t,
+                                     const Aabb2&,
+                                     const Aabb2&)>& fn) const
+        {
+            for (std::uint32_t id = 0;
+                 id < static_cast<std::uint32_t>(m_leafOfId.size()); ++id)
+            {
+                const std::uint32_t leaf = m_leafOfId[id];
+                if (leaf == kNull)
+                {
+                    continue; // no proxy for this id
+                }
+                const Node& node = m_nodes[leaf];
+                fn(node.id, node.tight, node.fat);
+            }
+        }
+
     } // namespace Physics
 } // namespace Arcane

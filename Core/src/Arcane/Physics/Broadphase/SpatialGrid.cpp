@@ -57,6 +57,23 @@ void SpatialGrid::Move(std::uint32_t id, const Aabb2& box)
     Insert(id, box);
 }
 
+void SpatialGrid::ForEachCell(
+    const std::function<void(int, int, const std::vector<std::uint32_t>&)>& fn) const
+{
+    // Unpack each occupied cell key with the EXACT inverse of Key():
+    //   Key(cx,cy) = (uint32_t(cx) << 32) | uint32_t(cy)
+    // so cx = int(uint32_t(k >> 32)), cy = int(uint32_t(k & 0xFFFFFFFF)).
+    // Casting the uint32_t bit pattern back to int recovers the original signed
+    // coord (two's-complement round-trip). Iteration order is unordered_map
+    // order -- display only; no sim path depends on it.
+    for (const auto& [k, ids] : m_cells)
+    {
+        const int cx = static_cast<int>(static_cast<std::uint32_t>(k >> 32));
+        const int cy = static_cast<int>(static_cast<std::uint32_t>(k & 0xFFFFFFFFu));
+        fn(cx, cy, ids);
+    }
+}
+
 int SpatialGrid::QueryAABB(const Aabb2& box, std::vector<std::uint32_t>& out) const
 {
     out.clear();

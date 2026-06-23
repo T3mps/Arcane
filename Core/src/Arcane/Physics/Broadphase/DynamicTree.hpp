@@ -44,6 +44,7 @@
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 
 #include <cstdint>
+#include <functional>
 #include <unordered_set>
 #include <vector>
 
@@ -73,6 +74,19 @@ namespace Arcane
             // Maintains m_pairSet in sync with each Update/Remove, then emits
             // sorted. Oracle-verified == Pairs() after every mutation.
             int  UpdatePairs(std::vector<BroadphasePair>& out) override;
+
+            // ---- read-only debug-visualization accessor (Slice A) ------------
+            //
+            // Visit each LIVE leaf, passing (body/fixture id, tight box, fat box).
+            // Iterates m_leafOfId (the id->leaf map), skipping kNull entries, so
+            // only ACTUALLY-INDEXED proxies are yielded (not stale pool slots).
+            // Read-only; iteration order is for DISPLAY only -- no sim path may
+            // depend on it. The fat box always contains the tight box (the
+            // MARGIN-grown invariant) -- the overlay draws both.
+            void ForEachLeaf(
+                const std::function<void(std::uint32_t id,
+                                         const Aabb2& tight,
+                                         const Aabb2& fat)>& fn) const;
 
         private:
             // Sentinel for "no node" (the Lua used nil parents/children).

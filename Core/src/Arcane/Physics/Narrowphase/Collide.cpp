@@ -18,6 +18,7 @@
 #include <Arcane/Physics/Narrowphase/Epa.hpp>
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
 #include <Arcane/Physics/Narrowphase/Mpr.hpp>
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
 
@@ -69,6 +70,23 @@ namespace Arcane
                 return (refIsA  ? 0x8000'0000u : 0u)
                      | ((refEdge   & 0x7FFFu) << 16)
                      |  (incFeature & 0xFFFFu);
+            }
+
+            // ----------------------------------------------------------------
+            // Classify a SHALLOW round-path contact for the debug-viz tag.
+            //
+            // The round cell handles circle (1 core vert) and capsule (2 core
+            // verts) pairs (against each other or a polygon). DISPLAY-ONLY:
+            //   * either core a 2-vert segment -> Capsule
+            //   * both cores single points     -> CircleCircle
+            //   * otherwise (one circle core vs a >=3-vert polygon) -> CircleVsPolygon
+            // The deep branches override this with Epa / Mpr at their own return.
+            // ----------------------------------------------------------------
+            constexpr NarrowphaseKind RoundKind(int na, int nb) noexcept
+            {
+                if (na == 2 || nb == 2) return NarrowphaseKind::Capsule;
+                if (na == 1 && nb == 1) return NarrowphaseKind::CircleCircle;
+                return NarrowphaseKind::CircleVsPolygon;
             }
 
             // ----------------------------------------------------------------
@@ -376,6 +394,7 @@ namespace Arcane
                 // the segment); contact = midpoint.
                 m.normal = n;
                 m.pointCount = 0;
+                m.kind = NarrowphaseKind::Capsule; // segment(capsule)-vs-polygon
                 for (int i = 0; i < 2; ++i)
                 {
                     const Vec2 cpt = clip2[i];
@@ -529,6 +548,7 @@ namespace Arcane
                         m.normal = n;
                         m.points[0] = ManifoldPoint{ cp, separation, n, id };
                         m.pointCount = 1;
+                        m.kind = NarrowphaseKind::Epa; // deep round via EPA
                         return m;
                     }
 
@@ -555,6 +575,7 @@ namespace Arcane
                         m.normal = n;
                         m.points[0] = ManifoldPoint{ cp, separation, n, id };
                         m.pointCount = 1;
+                        m.kind = NarrowphaseKind::Mpr; // deep round via MPR fallback
                         return m;
                     }
 
@@ -578,6 +599,12 @@ namespace Arcane
                                      (surfaceA.y + surfaceB.y) * Real(0.5f));
 
                 const Real separation = totalR - g.distance; // positive = penetration
+
+                // DISPLAY-ONLY tag for the shallow round path (circle/capsule
+                // witness contact). The capsule TWO-point paths returned earlier
+                // already tagged Capsule; this 1-point tail covers circle-circle,
+                // circle-vs-poly, and the capsule end-cap / tilted cases.
+                m.kind = RoundKind(na, nb);
 
                 if (g.distance > totalR)
                 {
@@ -651,6 +678,7 @@ namespace Arcane
                 m.normal = normal;
                 m.points[0] = ManifoldPoint{ cp, totalR - dist, normal, id };
                 m.pointCount = 1;
+                m.kind = NarrowphaseKind::SatPolygon; // poly-poly speculative gap
                 return m;
             }
 
@@ -834,6 +862,7 @@ namespace Arcane
 
             m.normal = contactNormal;
             m.pointCount = 0;
+            m.kind = NarrowphaseKind::SatPolygon; // poly-poly SAT ref-face clip
 
             for (int i = 0; i < nc2 && m.pointCount < 2; ++i)
             {
