@@ -624,15 +624,9 @@ namespace Arcane
             {
                 return m_staticList;
             }
-            [[nodiscard]] const IBroadphase& MoverBroadphase() const noexcept
-            {
-                return *m_moverBroadphase;
-            }
-
             // Per-FIXTURE mover broadphase accessor (collision-rebuild Phase 2,
             // Task 1). One proxy per live fixture of a Dynamic/Kinematic body,
-            // keyed by fixture slot. Built alongside m_moverBroadphase during the
-            // transition; replaces it in Task 3.
+            // keyed by fixture slot. Sole mover broadphase as of Task 3.
             [[nodiscard]] const IBroadphase& FixtureBroadphase() const noexcept
             {
                 return *m_fixtureBroadphase;
@@ -732,9 +726,9 @@ namespace Arcane
                 m_posX[i]  = p.x;
                 m_posY[i]  = p.y;
                 m_angle[i] = angle;
-                // UpdateMoverProxies refreshes the body-level broadphase,
-                // the residency grid, AND all per-fixture proxies in one call
-                // (Phase 2, Task 1: replaces the inline triple).
+                // UpdateMoverProxies refreshes all per-fixture mover-broadphase
+                // proxies and the body's residency grid in one call
+                // (Phase 2, Task 3: replaces the inline triple).
                 UpdateMoverProxies(i);
             }
             // Global gravity (solver reads it for the per-sub-step integrate).
@@ -796,13 +790,10 @@ namespace Arcane
         private:
             // ---- per-fixture broadphase helpers (Phase 2, Task 1) -------------
             //
-            // UpdateMoverProxies(b): refreshes BOTH the body-level mover broadphase
-            // (body proxy keyed by b) AND all fixture proxies in m_fixtureBroadphase
-            // for every live fixture owned by body b. Replaces the inline triple
-            //   { const Aabb2 moverBox = SlotAabb(b); m_moverBroadphase->Update...;
-            //     m_residencyGrid.Move...; }
-            // at every position-commit site so the fixture broadphase stays in
-            // lockstep with the body broadphase automatically.
+            // UpdateMoverProxies(b): refreshes residency and all fixture proxies in
+            // m_fixtureBroadphase for every live fixture owned by body b. Called at
+            // every position-commit site so the fixture broadphase stays in lockstep
+            // with residency automatically.
             void UpdateMoverProxies(std::uint32_t b);
 
             // Add / remove a single fixture proxy in m_fixtureBroadphase.
@@ -952,12 +943,9 @@ namespace Arcane
             std::vector<std::uint32_t> m_free;      // recycled slot stack
 
             // ---- broadphase + statics --------------------------------------
-            std::unique_ptr<IBroadphase> m_moverBroadphase;
-
             // Per-FIXTURE mover broadphase (collision-rebuild Phase 2, Task 1):
             // one proxy per live fixture of a Dynamic/Kinematic body, keyed by
-            // fixture slot. Built alongside m_moverBroadphase during the
-            // transition; replaces it (Task 3). Same WorldDef::broadphase strategy.
+            // fixture slot. Sole mover broadphase as of Task 3.
             std::unique_ptr<IBroadphase> m_fixtureBroadphase;
             std::vector<std::uint32_t>   m_staticList; // slot indices of statics
             std::unique_ptr<TileGrid>    m_tileGrid;   // optional tile statics
@@ -977,7 +965,7 @@ namespace Arcane
             // Dynamic + kinematic body tile-residency index (Phase 1, Task 5).
             // Tracks live cell-occupancy for movers as they move -- the gameplay
             // region-query index (combat-sphere seam). Kept in LOCKSTEP with
-            // m_moverBroadphase: Insert on AddBody, Move on every broadphase Update
+            // m_fixtureBroadphase: Insert on AddBody, Move on every broadphase Update
             // (SetPosition/MovePosition/kinematic-integrate/BulletSweep/CommitSlotPosition),
             // Remove on RemoveBody. Tile size matches m_staticGrid for consistency.
             SpatialGrid m_residencyGrid{ Real(64) }; // TODO(Phase 2): wire to the map's real tile size
@@ -1087,16 +1075,17 @@ namespace Arcane
 
             // Per-fixture WORLD AABB cache (one entry per fixture slot), rebuilt
             // once at the top of GenerateContacts from the current (pre-solve)
-            // transforms. The body-level broadphase only pre-filters at BODY
-            // granularity, so a multi-fixture body (e.g. a 37-wire whisk agitator
-            // or a compound) otherwise drives the full GJK/SAT narrowphase on
-            // every fixture pair -- including the ~90% that are nowhere near each
-            // other. The fixture-pair loops AABB-reject against this cache before
-            // calling Collide (the per-shape-proxy effect Box2D gets for free from
-            // its broadphase), turning a per-pair GJK into 4 float compares. The
-            // cache is Step-local (recomputed each GenerateContacts), so it never
-            // goes stale across steps; the reject is conservative (disjoint AABBs
-            // => Collide returns empty), so manifolds are byte-identical.
+            // transforms. The per-fixture mover-broadphase proxies cull at fixture
+            // granularity, but pairs still reach GenerateContacts as (bodyA, bodyB)
+            // tuples; a multi-fixture body (e.g. a 37-wire whisk agitator or a
+            // compound) would otherwise drive the full GJK/SAT narrowphase on every
+            // fixture pair -- including the ~90% that are nowhere near each other.
+            // The fixture-pair loops AABB-reject against this cache before calling
+            // Collide (the per-shape-proxy effect Box2D gets for free from its
+            // broadphase), turning a per-pair GJK into 4 float compares. The cache
+            // is Step-local (recomputed each GenerateContacts), so it never goes
+            // stale across steps; the reject is conservative (disjoint AABBs =>
+            // Collide returns empty), so manifolds are byte-identical.
             std::vector<Aabb2>          m_genFxAabb;
 
             // Per-BODY world AABB cache (one entry per body slot), filled once at

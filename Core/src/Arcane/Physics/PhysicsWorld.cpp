@@ -123,8 +123,7 @@ namespace Arcane
         } // namespace
 
         PhysicsWorld::PhysicsWorld(const WorldDef& def)
-            : m_moverBroadphase(MakeBroadphase(def))
-            , m_fixtureBroadphase(MakeBroadphase(def))
+            : m_fixtureBroadphase(MakeBroadphase(def))
             , m_gravityX(def.gravityX)
             , m_gravityY(def.gravityY)
             , m_substepCount(def.substepCount > 0u ? def.substepCount : 1u)
@@ -726,9 +725,8 @@ namespace Arcane
 
         void PhysicsWorld::UpdateMoverProxies(std::uint32_t b)
         {
-            // Body-level broadphase + residency (transition: removed in Task 3).
+            // Residency index (combat-sphere seam): keep body-union AABB in sync.
             const Aabb2 bodyBox = SlotAabb(b);
-            m_moverBroadphase->Update(b, bodyBox);
             m_residencyGrid.Move(b, bodyBox);
 
             // Per-fixture proxies: refresh every live fixture of this body.
@@ -863,16 +861,11 @@ namespace Arcane
             }
             else
             {
-                // Kinematic + Dynamic register in the mover broadphase.
-                // Kinematic movers get begin/stay/end events via the broadphase
-                // Pairs() stream AND via the kinematic-vs-static-body loop in
-                // ContactManager::Step.  Dynamic movers get mover-mover events
-                // via broadphase Pairs() only -- dynamic-vs-static-BODY events
-                // are intentionally KINEMATIC-ONLY (faithful to
-                // ContactManager.lua:150); the solver owns dynamic-vs-static
-                // response, which arrives in P2.1.
+                // Kinematic + Dynamic: register body-union AABB in residency index
+                // (combat-sphere seam). Fixture proxies are added via AddFixtureProxy
+                // below; the per-fixture broadphase (m_fixtureBroadphase) is the sole
+                // mover broadphase as of Phase 2, Task 3.
                 const Aabb2 moverBox = SlotAabb(idx);
-                m_moverBroadphase->Update(idx, moverBox);
                 m_residencyGrid.Insert(idx, moverBox);
             }
 
@@ -923,11 +916,8 @@ namespace Arcane
                 const std::uint32_t autoFi = AllocFixtureSlot(idx, autoFd); // no RecomputeBodyMass
 
                 // Register the auto-fixture in the per-fixture mover broadphase
-                // (Phase 2, Task 1). AddFixtureProxy skips Static bodies -- the
-                // body-broadphase path above (m_moverBroadphase->Update) already
-                // registered the body-level proxy for movers; fixture proxies are
-                // independent. Static fixtures are not registered here (they are
-                // covered by m_staticGrid).
+                // (Phase 2, Task 1). AddFixtureProxy skips Static bodies.
+                // Static fixtures are not registered here (covered by m_staticGrid).
                 AddFixtureProxy(autoFi);
 
                 // Populate the body-mass accessors consistently with the legacy
@@ -991,7 +981,6 @@ namespace Arcane
             }
             else
             {
-                m_moverBroadphase->Remove(idx);
                 m_residencyGrid.Remove(idx);
             }
 
@@ -1399,8 +1388,8 @@ namespace Arcane
                 {
                     m_posX[i] += m_velX[i] * dt;
                     m_posY[i] += m_velY[i] * dt;
-                    // UpdateMoverProxies refreshes the body broadphase, residency
-                    // grid, AND all per-fixture proxies (Phase 2, Task 1).
+                    // UpdateMoverProxies refreshes all per-fixture mover-broadphase
+                    // proxies and the body's residency grid (Phase 2, Task 3).
                     UpdateMoverProxies(i);
                 }
             }
@@ -2101,8 +2090,8 @@ namespace Arcane
                 m_posY[i] = clamped.y;
                 // Unconditional: the assert above guarantees this is always a
                 // mover (never Static), so the broadphase update always applies.
-                // UpdateMoverProxies keeps the body broadphase, residency grid,
-                // AND per-fixture proxies in sync (Phase 2, Task 1).
+                // UpdateMoverProxies keeps all per-fixture mover-broadphase proxies
+                // and the body's residency grid in sync (Phase 2, Task 3).
                 UpdateMoverProxies(i);
             }
         }
