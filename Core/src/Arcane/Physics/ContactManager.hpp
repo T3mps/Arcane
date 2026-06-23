@@ -190,9 +190,14 @@ namespace Arcane
             // Named neutrally because both code paths reuse the same member to
             // avoid per-call allocation (no dedicated per-purpose scratch).
             std::vector<Pair> m_workPairs;
-            // Scratch for the broadphase mover-mover pairs (reused each Step --
+            // Scratch for the broadphase fixture-pairs (reused each Step --
             // Pairs() does clear()+push_back, so capacity is preserved).
             std::vector<BroadphasePair> m_pairScratch;
+            // Scratch for the deduped body-pairs derived from m_pairScratch
+            // (Phase 2, Task 2: fixture broadphase emits fixture ids; events
+            // need body ids, and a compound body produces N^2 fixture-pairs for
+            // the same body-pair -- dedup before calling Touch).
+            std::vector<BroadphasePair> m_bodyPairScratch;
         };
 
     } // namespace Physics

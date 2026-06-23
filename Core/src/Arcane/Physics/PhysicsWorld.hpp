@@ -638,6 +638,14 @@ namespace Arcane
                 return *m_fixtureBroadphase;
             }
 
+            // Map a fixture slot to its owning body slot (Phase 2, Task 2).
+            // Used by ContactManager::Step to map fixture-pairs -> body-pairs
+            // before the Touch/event loop.
+            [[nodiscard]] std::uint32_t BodyOfFixture(std::uint32_t fi) const noexcept
+            {
+                return m_fxBody[fi];
+            }
+
             // Test/oracle helper: parallel arrays of (live mover fixture slot,
             // world AABB) -- the exact set m_fixtureBroadphase indexes.
             void LiveFixtureAabbs(std::vector<std::uint32_t>& fxOut,

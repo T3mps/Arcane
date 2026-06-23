@@ -116,13 +116,37 @@ namespace Arcane
             const std::uint32_t stamp = m_stamp;
             m_queue.clear();
 
-            // Candidates: mover-mover (the broadphase Pairs() -- ALREADY SORTED
-            // by (a,b) per P1.6, so NO re-sort needed here, unlike the Lua which
-            // sorted the hash's bucket-order list) + each KINEMATIC body vs each
+            // Candidates: mover-mover (Phase 2 Task 2: fixture broadphase pairs
+            // mapped to body-pairs + deduped) + each KINEMATIC body vs each
             // staticList body (index-ordered). Both candidate streams are
             // deterministic.
-            w.MoverBroadphase().Pairs(m_pairScratch);
-            for (const BroadphasePair& bp : m_pairScratch)
+            //
+            // The per-fixture broadphase emits FIXTURE ids; Touch() and
+            // SlotsOverlap() operate on BODY ids.  Map each fixture-pair to its
+            // owning body-pair, skip same-body pairs, canonicalise (a<b), then
+            // sort+unique before calling Touch so a compound body's N^2 fixture-
+            // pairs for the same body-pair produce exactly ONE Touch call.
+            w.FixtureBroadphase().Pairs(m_pairScratch);
+            m_bodyPairScratch.clear();
+            for (const BroadphasePair& fp : m_pairScratch)
+            {
+                std::uint32_t a = w.BodyOfFixture(fp.a);
+                std::uint32_t b = w.BodyOfFixture(fp.b);
+                if (a == b)
+                {
+                    continue; // two fixtures of the same body
+                }
+                if (a > b)
+                {
+                    std::swap(a, b);
+                }
+                m_bodyPairScratch.push_back(BroadphasePair{ a, b });
+            }
+            std::sort(m_bodyPairScratch.begin(), m_bodyPairScratch.end());
+            m_bodyPairScratch.erase(
+                std::unique(m_bodyPairScratch.begin(), m_bodyPairScratch.end()),
+                m_bodyPairScratch.end());
+            for (const BroadphasePair& bp : m_bodyPairScratch)
             {
                 Touch(w, bp.a, bp.b, stamp);
             }

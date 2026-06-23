@@ -1873,21 +1873,43 @@ namespace Arcane
                 }
             }
 
-            // ---- mover-mover pairs involving a dynamic ----------------------
-            // The broadphase emits SORTED pairs (a < b). For each pair where at
-            // least one body is dynamic, narrow to true AABB overlap, orient A =
-            // dynamic, and generate. Sleeping dynamics are woken by an awake
-            // mover touch (ports lines 369-381).
-            m_moverBroadphase->Pairs(m_genPairs);
+            // ---- mover-mover pairs involving a dynamic (Phase 2 Task 2) ------
+            // The per-fixture broadphase emits SORTED fixture-pairs (fa < fb).
+            // Each pair carries exactly one fixture from each body; the broadphase
+            // already culled provably-disjoint fixture AABBs, so we skip the
+            // body-level AABB cull and per-pair nested fixture loop.
+            //
+            // ORIENTATION RULE (warm-start stability):
+            //   A must be dynamic; if both dynamic the LOWER BODY SLOT is A.
+            //   Bodies AND fixtures are swapped together so MixContactId receives
+            //   (fixA, fixB) in a stable, deterministic order across steps.
+            m_fixtureBroadphase->Pairs(m_genPairs);
             for (std::size_t k = 0; k < m_genPairs.size(); ++k)
             {
-                std::uint32_t a = m_genPairs[k].a;
-                std::uint32_t b = m_genPairs[k].b;
-                if (m_alive[a] == 0 || m_alive[b] == 0 ||
-                    m_sensor[a] != 0 || m_sensor[b] != 0)
+                // fa,fb are FIXTURE slots (broadphase-sorted fa < fb).
+                const std::uint32_t fa0 = m_genPairs[k].a;
+                const std::uint32_t fb0 = m_genPairs[k].b;
+
+                // Derive owning body slots.
+                std::uint32_t a = m_fxBody[fa0];
+                std::uint32_t b = m_fxBody[fb0];
+
+                // Same body -> two fixtures of one body never collide.
+                if (a == b)
                 {
                     continue;
                 }
+                if (m_alive[a] == 0 || m_alive[b] == 0)
+                {
+                    continue;
+                }
+                // Body-level sensor: skip if either BODY is a sensor body
+                // (preserves the old body-pair `m_sensor[a] || m_sensor[b]` gate).
+                if (m_sensor[a] != 0 || m_sensor[b] != 0)
+                {
+                    continue;
+                }
+
                 const bool da = static_cast<BodyType>(m_btype[a]) == BodyType::Dynamic;
                 const bool db = static_cast<BodyType>(m_btype[b]) == BodyType::Dynamic;
                 if (!da && !db)
@@ -1895,34 +1917,18 @@ namespace Arcane
                     continue; // kinematic-kinematic: no dynamic response
                 }
 
-                // Per-pair speculative margin (P3.1): the larger of the two
-                // bodies' velocity-scaled margins (the relative approach speed is
-                // bounded by their sum, but using the max keeps it cheap and still
-                // catches a fast mover closing on a slow/resting one), floored at
-                // kSkin. Expand the tight-AABB overlap test by it so a fast pair is
-                // not rejected here before Collide can emit the speculative
-                // contact (the solver's s > 0 bias then caps the closing velocity).
-                // Exact sqrt skip (Fix 3): use the faster of the pair; only a fast
-                // pair pays the sqrt (slow pairs collapse to the kSkin floor).
+                // Per-pair speculative margin (P3.1): max(kSkin, sqrt(max
+                // speedSq) * dt). Same formula as the old body-pair loop.
                 const Real speedSqAm = m_velX[a] * m_velX[a] + m_velY[a] * m_velY[a];
                 const Real speedSqBm = m_velX[b] * m_velX[b] + m_velY[b] * m_velY[b];
                 const Real maxSpeedSq = std::max(speedSqAm, speedSqBm);
                 const Real pairMargin = (maxSpeedSq > threshSq)
                                             ? std::sqrt(maxSpeedSq) * moveDt
                                             : kSkin;
-                Aabb2 boxA = m_genBodyAabb[a]; // cached SlotAabb(a)
-                Aabb2 boxB = m_genBodyAabb[b]; // cached SlotAabb(b)
-                boxA.min -= Vec2(pairMargin, pairMargin);
-                boxA.max += Vec2(pairMargin, pairMargin);
-                if (!AabbOverlap(boxA, boxB))
-                {
-                    continue; // broadphase candidate that is not a true overlap
-                }
 
-                // Wake a sleeping dynamic touched by an awake mover (ports the
-                // Lua wake rules, PhysicsWorld.lua:369-382). P2.4's island pass
-                // now sleeps idle dynamics, so this wake path is live: a sleeping
-                // dynamic that an awake mover moves into must rejoin the solve.
+                // Wake a sleeping dynamic touched by an awake mover (preserves
+                // the exact Lua wake rules, PhysicsWorld.lua:369-382). Uses the
+                // pre-orientation a,b so the logic is identical to the old loop.
                 if (da && m_awake[a] == 0 && (!db || m_awake[b] != 0))
                 {
                     m_awake[a] = 1;
@@ -1934,113 +1940,54 @@ namespace Arcane
                     m_sleepTimer[b] = Real(0);
                 }
 
-                // Orient A = dynamic (lines 377-378). If both dynamic, keep the
-                // sorted (a,b) order so A is the lower index (deterministic).
-                std::uint32_t ia = a, ib = b;
-                if (!da)
+                // ORIENT: A must be dynamic. If both dynamic, lower BODY SLOT is A
+                // (deterministic for both warm-start and symmetric contacts).
+                // CRITICAL: swap BODY index and its FIXTURE index together so
+                // emit(ia, ib, ..., fa, fb) always gets the A-side fixture as fixA.
+                std::uint32_t ia = a,   ib = b;
+                std::uint32_t fa = fa0, fb = fb0;
+                if (!da || (da && db && ib < ia))
                 {
-                    ia = b;
-                    ib = a;
+                    std::swap(ia, ib);
+                    std::swap(fa, fb);
                 }
                 if (m_awake[ia] == 0)
                 {
                     continue; // A (dynamic) asleep -> no constraint
                 }
 
-                // T5: iterate fixture pairs for both bodies in this mover-mover pair.
-                const std::vector<std::uint32_t>* fxListIA = nullptr;
-                const std::vector<std::uint32_t>* fxListIB = nullptr;
-                if (ia < m_bodyFixtures.size() && !m_bodyFixtures[ia].empty())
+                // Fixture-level sensor: skip constraint (but keep event path if
+                // needed). The per-fixture broadphase only tracks non-sensor bodies,
+                // but defensive check matches old nested-loop behavior.
+                if (m_fxSensor[fa] != 0u || m_fxSensor[fb] != 0u)
                 {
-                    fxListIA = &m_bodyFixtures[ia];
-                }
-                if (ib < m_bodyFixtures.size() && !m_bodyFixtures[ib].empty())
-                {
-                    fxListIB = &m_bodyFixtures[ib];
+                    continue;
                 }
 
-                const Vec2 centerB(m_posX[ib], m_posY[ib]);
+                // No body-level AABB cull and no per-fixture fxDisjoint reject here:
+                // the per-fixture broadphase already returns only overlapping fixture
+                // pairs (tight current-frame shape AABBs). The speculative margin is
+                // applied inside Collide (its speculativeMargin arg), NOT as a broadphase
+                // expansion -- so a very fast pair not yet in tight-AABB overlap can miss
+                // a speculative contact. This is a known limitation shared with the old
+                // body-pair path; discrete CCD for flagged bodies is BulletSweep's job.
 
-                if (fxListIA != nullptr && fxListIB != nullptr)
-                {
-                    // Fixture-pair iteration: both bodies have fixture lists.
-                    for (const std::uint32_t fiA : *fxListIA)
-                    {
-                        if (fiA >= m_fxCount || m_fxGen[fiA] == 0u)
-                        {
-                            continue;
-                        }
-                        if (m_fxSensor[fiA] != 0u)
-                        {
-                            continue;
-                        }
-                        const Transform xfA = FixtureWorldXf(ia, fiA);
+                // TODO(filter): category/mask collision filtering (m_fxFilterCat/Mask,
+                // documented in Fixture.hpp) is NOT enforced here yet -- pre-existing gap
+                // (the old body-pair path didn't enforce it either). A pair set with
+                // non-default category/mask currently still collides. Enforce per
+                // fixture-pair here when filtering is wired up.
 
-                        for (const std::uint32_t fiB : *fxListIB)
-                        {
-                            if (fiB >= m_fxCount || m_fxGen[fiB] == 0u)
-                            {
-                                continue;
-                            }
-                            if (m_fxSensor[fiB] != 0u)
-                            {
-                                continue;
-                            }
-                            if (fxDisjoint(fiA, fiB, pairMargin))
-                            {
-                                continue; // fixture AABBs separated -> no contact
-                            }
-                            const Transform xfB = FixtureWorldXf(ib, fiB);
-                            const Manifold mfld = Collide(m_fxShape[fiA], xfA,
-                                                           m_fxShape[fiB], xfB,
-                                                           pairMargin);
-                            emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
-                                 m_fxFriction[fiA], m_fxFriction[fiB],
-                                 m_fxRestitution[fiA], m_fxRestitution[fiB],
-                                 /*fixA=*/fiA, /*fixB=*/fiB);
-                        }
-                    }
-                }
-                else if (fxListIA != nullptr)
-                {
-                    // Body IA has fixtures; body IB uses legacy single-shape.
-                    const Transform xfB{ centerB, m_angle[ib] };
-                    for (const std::uint32_t fiA : *fxListIA)
-                    {
-                        if (fiA >= m_fxCount || m_fxGen[fiA] == 0u)
-                        {
-                            continue;
-                        }
-                        if (m_fxSensor[fiA] != 0u)
-                        {
-                            continue;
-                        }
-                        const Transform xfA = FixtureWorldXf(ia, fiA);
-                        const Manifold mfld = Collide(m_fxShape[fiA], xfA,
-                                                       m_shape[ib], xfB,
-                                                       pairMargin);
-                        emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
-                             m_fxFriction[fiA], m_fric[ib],
-                             m_fxRestitution[fiA], m_rest[ib],
-                             /*fixA=*/fiA, /*fixB=*/kInvalidSlot);
-                    }
-                }
-                else
-                {
-                    // Dead path today: AddBody always auto-creates a fixture for
-                    // every live dynamic body (fxListIA is never null for a normal
-                    // body). Kept as a safety net for any future code path that
-                    // creates a body without a fixture. (T5 rotation fix applied.)
-                    const Vec2 posA(m_posX[ia], m_posY[ia]);
-                    const Transform xfA{ posA, m_angle[ia] };
-                    const Transform xfB{ centerB, m_angle[ib] };
-                    const Manifold mfld = Collide(m_shape[ia], xfA,
-                                                   m_shape[ib], xfB,
-                                                   pairMargin);
-                    emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
-                         m_fric[ia], m_fric[ib], m_rest[ia], m_rest[ib],
-                         /*fixA=*/kInvalidSlot, /*fixB=*/kInvalidSlot);
-                }
+                const Vec2    centerB(m_posX[ib], m_posY[ib]);
+                const Transform xfA = FixtureWorldXf(ia, fa);
+                const Transform xfB = FixtureWorldXf(ib, fb);
+                const Manifold mfld = Collide(m_fxShape[fa], xfA,
+                                               m_fxShape[fb], xfB,
+                                               pairMargin);
+                emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
+                     m_fxFriction[fa], m_fxFriction[fb],
+                     m_fxRestitution[fa], m_fxRestitution[fb],
+                     /*fixA=*/fa, /*fixB=*/fb);
             }
         }
 
