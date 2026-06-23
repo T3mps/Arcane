@@ -198,10 +198,10 @@ namespace Arcane::Sandbox
         const bool runThisStep = !m_paused || m_singleStep;
         if (!runThisStep)
         {
-            // Frozen: still run the CREATE/SYNC pass so a body spawned while paused
-            // materializes (and is visible), but do NOT advance time. A zero-dt step
-            // mints the body + writes its spawn pose back without integrating it.
-            PhysicsSystem mintOnly(0.0f);
+            // Frozen: mint a paused-spawned body + write back its pose, but DO
+            // NOT step (skip the narrowphase + solve entirely -> pausing the dense
+            // stress scene instantly recovers FPS).
+            PhysicsSystem mintOnly(kFixedDt, /*stepWorld=*/false);
             mintOnly(reg);
             return;
         }

@@ -161,8 +161,11 @@ namespace Arcane
         // fixedDt: the fixed timestep (seconds) forwarded to PhysicsWorld::Step.
         // Determinism contract: callers MUST pass the same constant every tick.
         // The 60 Hz RunLoop uses 1.0/60.0; tests use kDt = 1.0f/60.0f.
-        explicit PhysicsSystem(float fixedDt) noexcept
-            : m_fixedDt(fixedDt) {}
+        // stepWorld: when false, run the DESTROY/CREATE/WRITE-BACK passes but
+        // SKIP world.Step -- a paused frame mints spawned bodies + reflects poses
+        // without paying the (dt-independent) narrowphase + solve. Default true.
+        explicit PhysicsSystem(float fixedDt, bool stepWorld = true) noexcept
+            : m_fixedDt(fixedDt), m_stepWorld(stepWorld) {}
 
         void operator()(Astra::Registry& reg)
         {
@@ -296,8 +299,10 @@ namespace Arcane
 
             // ------------------------------------------------------------------
             // PASS 3: STEP -- advance the world by one fixed timestep.
+            // Skipped when paused (stepWorld=false): no narrowphase, no solve.
             // ------------------------------------------------------------------
-            world.Step(m_fixedDt);
+            if (m_stepWorld)
+                world.Step(m_fixedDt);
 
             // ------------------------------------------------------------------
             // PASS 4: WRITE-BACK -- propagate post-step poses to LocalTransform.
@@ -332,7 +337,8 @@ namespace Arcane
         }
 
     private:
-        float m_fixedDt;   // fixed 60 Hz timestep; determinism contract: constant per run
+        float m_fixedDt;    // fixed 60 Hz timestep; determinism contract: constant per run
+        bool  m_stepWorld;  // false on paused frames -> skip the solve
     };
 
 } // namespace Arcane
