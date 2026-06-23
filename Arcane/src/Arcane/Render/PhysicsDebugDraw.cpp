@@ -20,9 +20,17 @@
 #include <glm/glm.hpp>
 #include <glm/trigonometric.hpp>
 
+#include <unordered_map>
+#include <vector>
+
+#include <Arcane/Physics/Broadphase/Broadphase.hpp>       // BroadphasePair, Aabb2
+#include <Arcane/Physics/Broadphase/DynamicTree.hpp>      // FixtureBroadphaseTree / ForEachLeaf
+#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>      // StaticGrid / ResidencyGrid / ForEachCell
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseKind
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Shapes.hpp>
+#include <Arcane/Physics/Solver/Solver.hpp>               // ContactConstraint
 #include <Arcane/Render/Batcher2D.hpp>
 
 namespace Arcane
@@ -100,6 +108,43 @@ namespace Arcane
         constexpr glm::vec4 kColVelocity{ 0.20f, 1.00f, 0.55f, 1.0f }; // green ray
         constexpr glm::vec4 kColCom     { 1.00f, 1.00f, 1.00f, 1.0f }; // white cross
         constexpr glm::vec4 kColOrient  { 1.00f, 0.55f, 0.15f, 1.0f }; // orange tick
+
+        // ---- Slice A broadphase + manifold colors ---------------------------
+        //
+        // Distinct hues so the three broadphase overlays read apart from each
+        // other and from the per-body outlines: the DynamicTree leaves are cyan
+        // (tight bright, fat dim/translucent), broadphase candidate-pair links are
+        // a brighter cyan, the static grid is a cool blue, the residency grid is a
+        // warm amber (static vs residency read differently at a glance).
+        constexpr glm::vec4 kColTreeTight{ 0.30f, 0.90f, 1.00f, 0.85f }; // cyan, bright
+        constexpr glm::vec4 kColTreeFat  { 0.30f, 0.90f, 1.00f, 0.25f }; // cyan, dim (fat)
+        constexpr glm::vec4 kColTreePair { 0.20f, 1.00f, 0.90f, 0.80f }; // teal pair link
+        constexpr glm::vec4 kColStaticGrid   { 0.35f, 0.55f, 1.00f, 0.35f }; // cool blue
+        constexpr glm::vec4 kColResidencyGrid{ 1.00f, 0.70f, 0.20f, 0.35f }; // warm amber
+
+        // Manifold normal-arrow length (world units, pre-zoom) + contact-point
+        // disc radius (canvas px, post-zoom-independent for visibility).
+        constexpr float kManifoldNormalLen = 20.0f; // world units
+        constexpr float kManifoldPointPx   = 3.0f;   // canvas px
+
+        // Fixed debug palette keyed by NarrowphaseKind, so a contact's manifold is
+        // colored by the narrowphase path that produced it (a glance tells you
+        // which collide branch fired). Separated never draws (no points), but it
+        // gets a neutral grey so the lookup is total.
+        inline glm::vec4 ManifoldColor(Physics::NarrowphaseKind kind)
+        {
+            switch (kind)
+            {
+                case Physics::NarrowphaseKind::CircleCircle:    return { 1.00f, 0.30f, 0.30f, 1.0f }; // red
+                case Physics::NarrowphaseKind::CircleVsPolygon: return { 1.00f, 0.65f, 0.15f, 1.0f }; // orange
+                case Physics::NarrowphaseKind::Capsule:         return { 1.00f, 1.00f, 0.25f, 1.0f }; // yellow
+                case Physics::NarrowphaseKind::SatPolygon:      return { 0.30f, 1.00f, 0.45f, 1.0f }; // green
+                case Physics::NarrowphaseKind::Epa:             return { 0.40f, 0.70f, 1.00f, 1.0f }; // blue
+                case Physics::NarrowphaseKind::Mpr:             return { 0.80f, 0.45f, 1.00f, 1.0f }; // violet
+                case Physics::NarrowphaseKind::Separated:
+                default:                                        return { 0.70f, 0.70f, 0.70f, 1.0f }; // grey
+            }
+        }
 
         // World-space center of mass as a glm::vec2: bodyPos + R(angle) *
         // localCenter. For a single-fixture body localCenter is (0,0), so the
@@ -337,6 +382,134 @@ namespace Arcane
                 batcher.Line(pa, pb, thick, kColContact);
                 batcher.Circle((pa + pb) * 0.5f, 3.0f * zoom, kColContact);
             });
+        }
+
+        // ---- Slice A: mover-broadphase DynamicTree (leaves + candidate pairs) -
+        //
+        // Each live leaf draws its TIGHT box (bright) inside its FAT box (dim) so
+        // the MARGIN-grown coherent-motion envelope is visible. The leaf id is a
+        // FIXTURE slot; we build an id->tight-center map while iterating so the
+        // candidate-pair links can connect the two fixtures' AABB centers without
+        // a second lookup pass. FixtureBroadphaseTree() is null for a non-Tree
+        // mover broadphase -- guarded.
+        if (opts.drawFixtureTree)
+        {
+            if (const Physics::DynamicTree* tree = world.FixtureBroadphaseTree())
+            {
+                // id -> tight AABB center (world space), filled during the leaf walk.
+                std::unordered_map<std::uint32_t, glm::vec2> centers;
+                tree->ForEachLeaf(
+                    [&](std::uint32_t id, const Aabb2& tight, const Aabb2& fat)
+                    {
+                        DrawAabbOutline(batcher, fat,   off, zoom, thick, kColTreeFat);
+                        DrawAabbOutline(batcher, tight, off, zoom, thick, kColTreeTight);
+                        const glm::vec2 c(
+                            (static_cast<float>(tight.min.x) + static_cast<float>(tight.max.x)) * 0.5f,
+                            (static_cast<float>(tight.min.y) + static_cast<float>(tight.max.y)) * 0.5f);
+                        centers.emplace(id, c);
+                    });
+
+                // Candidate-pair links: a teal line between the two fixtures' AABB
+                // centers. Pairs() keys are FIXTURE slots (same id space as the
+                // leaves), so the id->center map resolves both ends.
+                std::vector<Physics::BroadphasePair> pairs;
+                world.FixtureBroadphase().Pairs(pairs);
+                for (const Physics::BroadphasePair& p : pairs)
+                {
+                    const auto ia = centers.find(p.a);
+                    if (ia == centers.end()) continue;
+                    const auto ib = centers.find(p.b);
+                    if (ib == centers.end()) continue;
+                    const glm::vec2 sa = ia->second * zoom + off;
+                    const glm::vec2 sb = ib->second * zoom + off;
+                    batcher.Line(sa, sb, thick, kColTreePair);
+                }
+            }
+        }
+
+        // ---- Slice A: static-body SpatialGrid (occupied cells) ---------------
+        //
+        // Outline each occupied cell. Cell world AABB:
+        //   min = Origin + (cx, cy) * TileSize,  max = min + (TileSize, TileSize).
+        if (opts.drawStaticGrid)
+        {
+            const Physics::SpatialGrid& grid = world.StaticGrid();
+            const float ts = static_cast<float>(grid.TileSize());
+            const Physics::Vec2 gorg = grid.Origin();
+            grid.ForEachCell(
+                [&](int cx, int cy, const std::vector<std::uint32_t>&)
+                {
+                    Aabb2 cell;
+                    cell.min = Physics::Vec2(gorg.x + static_cast<float>(cx) * ts,
+                                             gorg.y + static_cast<float>(cy) * ts);
+                    cell.max = Physics::Vec2(cell.min.x + ts, cell.min.y + ts);
+                    DrawAabbOutline(batcher, cell, off, zoom, thick, kColStaticGrid);
+                });
+        }
+
+        // ---- Slice A: residency SpatialGrid (occupied cells) -----------------
+        //
+        // Same as the static grid in a distinct warm tint, so static (cool blue)
+        // vs residency (warm amber) read differently when both are on.
+        if (opts.drawResidencyGrid)
+        {
+            const Physics::SpatialGrid& grid = world.ResidencyGrid();
+            const float ts = static_cast<float>(grid.TileSize());
+            const Physics::Vec2 gorg = grid.Origin();
+            grid.ForEachCell(
+                [&](int cx, int cy, const std::vector<std::uint32_t>&)
+                {
+                    Aabb2 cell;
+                    cell.min = Physics::Vec2(gorg.x + static_cast<float>(cx) * ts,
+                                             gorg.y + static_cast<float>(cy) * ts);
+                    cell.max = Physics::Vec2(cell.min.x + ts, cell.min.y + ts);
+                    DrawAabbOutline(batcher, cell, off, zoom, thick, kColResidencyGrid);
+                });
+        }
+
+        // ---- Slice A: contact manifolds (per-point disc + normal arrow) -------
+        //
+        // For each ContactConstraint point, the WORLD contact point is the body's
+        // world COM + the point's anchor (anchors are body-center-relative; see
+        // ContactConstraintPoint). bodyA is ALWAYS a real dynamic slot; bodyB may
+        // be kInvalidSlot (a tile-span virtual fixture), so anchorA is the
+        // reliable end -- we anchor the marker on body A. The normal points B->A;
+        // we draw the arrow from the contact point along it. Colored by the
+        // narrowphase kind that produced the manifold. ADDITIVE to drawContacts.
+        if (opts.drawManifolds)
+        {
+            world.ForEachContactConstraint(
+                [&](const Physics::ContactConstraint& cc)
+                {
+                    if (cc.bodyA == Physics::kInvalidSlot)
+                        return; // defensive: A is always a real dynamic slot
+
+                    const Physics::Vec2 posA   = world.PosSlot(cc.bodyA);
+                    const float         angA    = static_cast<float>(
+                        world.GetAngle(world.HandleOf(cc.bodyA)));
+                    const glm::vec2 comA = ComWorldF(
+                        posA, angA, world.LocalCenterSlot(cc.bodyA));
+
+                    const glm::vec4 col = ManifoldColor(cc.kind);
+                    const glm::vec2 nrm(static_cast<float>(cc.normal.x),
+                                        static_cast<float>(cc.normal.y));
+
+                    for (int pi = 0; pi < cc.pointCount; ++pi)
+                    {
+                        const auto& cp = cc.points[pi];
+                        // World contact point: bodyA COM + anchorA.
+                        const glm::vec2 wpt = comA
+                            + glm::vec2(static_cast<float>(cp.anchorA.x),
+                                        static_cast<float>(cp.anchorA.y));
+                        const glm::vec2 spt = wpt * zoom + off;
+                        batcher.Circle(spt, kManifoldPointPx, col);
+                        // Normal arrow: contact point -> point + normal * len.
+                        const glm::vec2 tip =
+                            (wpt + nrm * kManifoldNormalLen) * zoom + off;
+                        batcher.Line(spt, tip, thick, col);
+                        DrawArrowHead(batcher, spt, tip, thick, col);
+                    }
+                });
         }
     }
 

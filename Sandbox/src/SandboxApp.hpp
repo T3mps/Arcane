@@ -93,6 +93,15 @@ namespace Arcane::Sandbox
         float comMarkerSize      = 5.0f;
         bool  drawOrientations   = true;
         float orientationTickLen = 18.0f;
+
+        // ---- Slice A broadphase + manifold overlays (default OFF) -----------
+        // Visualize the physics broadphases + contact manifolds. All four default
+        // off so a fresh build looks exactly as before; the HUD toggles them and
+        // the render system copies them into PhysicsDebugDrawOptions each frame.
+        bool  drawFixtureTree    = false;  // mover DynamicTree leaves + pairs
+        bool  drawStaticGrid     = false;  // static-body SpatialGrid cells
+        bool  drawResidencyGrid  = false;  // dynamic/kinematic residency cells
+        bool  drawManifolds      = false;  // per-point contact manifolds + normals
     };
 
     // Render-phase overlay: collider outlines + contacts on top of the sprites.
@@ -132,6 +141,10 @@ namespace Arcane::Sandbox
                 opts.comMarkerSize     = dbg->comMarkerSize;
                 opts.drawOrientations  = dbg->drawOrientations;
                 opts.orientationTickLen = dbg->orientationTickLen;
+                opts.drawFixtureTree   = dbg->drawFixtureTree;
+                opts.drawStaticGrid    = dbg->drawStaticGrid;
+                opts.drawResidencyGrid = dbg->drawResidencyGrid;
+                opts.drawManifolds     = dbg->drawManifolds;
             }
             else
             {

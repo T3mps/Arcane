@@ -84,6 +84,31 @@ namespace Arcane
         // rotation-invariant).  Length is `orientationTickLen` (world units).
         bool  drawOrientations = true;
         float orientationTickLen = 18.0f;
+
+        // ---- Slice A broadphase + manifold overlays (default OFF) -----------
+        //
+        // These consume the read-only debug-visualization accessors on
+        // PhysicsWorld (FixtureBroadphaseTree / StaticGrid / ResidencyGrid /
+        // ForEachContactConstraint).  All default off, so behavior is unchanged
+        // until a caller (the Sandbox HUD) opts in.
+
+        // Mover-broadphase DynamicTree: each live leaf's tight + fat AABB plus a
+        // line between the AABB centers of every broadphase candidate pair. No-op
+        // when the world's mover broadphase is not a DynamicTree (null tree).
+        bool drawFixtureTree = false;
+
+        // Static-body SpatialGrid: a tinted outline of every occupied cell.
+        bool drawStaticGrid = false;
+
+        // Dynamic/kinematic residency SpatialGrid: occupied cells in a distinct
+        // tint so static vs residency read differently.
+        bool drawResidencyGrid = false;
+
+        // Contact manifolds: for each ContactConstraint point, a disc at the
+        // world contact point + a normal arrow, colored by NarrowphaseKind. This
+        // is ADDITIVE to the legacy center-to-center `drawContacts` line; both can
+        // be on at once.
+        bool drawManifolds = false;
     };
 
     // Submit physics debug geometry to `batcher`.

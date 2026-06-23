@@ -214,6 +214,16 @@ namespace Arcane::Sandbox
             ImGui::BeginDisabled(!dbg.drawOrientations);
             ImGui::SliderFloat("Tick length", &dbg.orientationTickLen, 4.0f, 48.0f, "%.0f");
             ImGui::EndDisabled();
+
+            ImGui::Separator();
+
+            // Slice A broadphase + manifold overlays (default off). "Contact
+            // manifolds" is ADDED ALONGSIDE the legacy "Contacts" center-to-center
+            // line above -- both can be on at once.
+            ImGui::Checkbox("Fixture tree", &dbg.drawFixtureTree);
+            ImGui::Checkbox("Static grid", &dbg.drawStaticGrid);
+            ImGui::Checkbox("Residency grid", &dbg.drawResidencyGrid);
+            ImGui::Checkbox("Contact manifolds", &dbg.drawManifolds);
         }
 
         // ---- Stats ----------------------------------------------------------------
