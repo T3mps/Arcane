@@ -769,6 +769,50 @@ namespace Arcane
             }
         }
 
+        // --------------------------------------------------------------------
+        // DebugCollide -- re-run the REAL narrowphase on two fixtures + record a
+        // NarrowphaseTrace (debug-viz Slice B inspector seam, Task 3).
+        //
+        // PURE: reads the SoA + fixture arrays, writes only `out`. Composes each
+        // fixture's world transform with the SAME ComposeFixtureXf the Step
+        // path's GenerateContacts/FixtureWorldXf uses (so the reproduced
+        // manifold matches the Step's manifold exactly), Clears the trace, then
+        // calls the unified Collide with a non-null recorder. Hard-contact (no
+        // speculative margin), matching how the inspector re-runs a settled
+        // contact. Stale/invalid handles -> empty manifold + Cleared trace.
+        // --------------------------------------------------------------------
+        Manifold PhysicsWorld::DebugCollide(FixtureHandle a, FixtureHandle b,
+                                            NarrowphaseTrace& out) const
+        {
+            out.Clear();
+
+            if (!IsValid(a) || !IsValid(b))
+            {
+                return Manifold{};
+            }
+
+            const std::uint32_t fa = a.index;
+            const std::uint32_t fb = b.index;
+            const std::uint32_t ba = m_fxBody[fa];
+            const std::uint32_t bb = m_fxBody[fb];
+
+            // Compose each fixture's world transform exactly as the Step path
+            // does (ComposeFixtureXf == the one copy of the rotate+offset form).
+            const Transform xfA = ComposeFixtureXf(
+                Vec2(m_posX[ba], m_posY[ba]), m_angle[ba],
+                Vec2(m_fxLocalPosX[fa], m_fxLocalPosY[fa]), m_fxLocalAngle[fa]);
+            const Transform xfB = ComposeFixtureXf(
+                Vec2(m_posX[bb], m_posY[bb]), m_angle[bb],
+                Vec2(m_fxLocalPosX[fb], m_fxLocalPosY[fb]), m_fxLocalAngle[fb]);
+
+            // Re-run the real narrowphase with the recorder attached. The Step
+            // path passes NO trace to this same Collide (so it stays
+            // byte-identical); here the &out recorder captures the intermediate
+            // geometry while the returned manifold reproduces the Step's.
+            return Collide(m_fxShape[fa], xfA, m_fxShape[fb], xfB,
+                           /*speculativeMargin*/ Real(0), &out);
+        }
+
         BodyHandle PhysicsWorld::AddBody(const BodyDef& def)
         {
             // Reuse a free slot or append (ports addBody's free-list pop).

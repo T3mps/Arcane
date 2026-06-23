@@ -694,6 +694,25 @@ namespace Arcane
                 return m_fxBody[fi];
             }
 
+            // Re-run the REAL narrowphase on two fixtures and record an opt-in
+            // NarrowphaseTrace (debug-viz Slice B inspector seam, Task 3).
+            //
+            // Composes each fixture's world transform with the SAME
+            // ComposeFixtureXf the Step path's GenerateContacts uses, calls
+            // out.Clear(), then invokes Collide(shapeA, xfA, shapeB, xfB,
+            // /*specMargin*/0, &out) so the returned manifold reproduces the
+            // Step's manifold for these two fixtures EXACTLY (hard-contact, no
+            // speculative margin), while `out` captures the intermediate
+            // narrowphase geometry (SAT axes / GJK / EPA / MPR snapshots).
+            //
+            // PURE: reads world state, writes only `out`; mutates no simulation
+            // state. Returns an empty manifold (and a Cleared trace) for a stale
+            // / invalid handle. Intended ONLY for the editor's physics inspector;
+            // the Step path never calls this (it passes no trace to Collide, so
+            // the simulation narrowphase stays byte-identical).
+            [[nodiscard]] Manifold DebugCollide(FixtureHandle a, FixtureHandle b,
+                                                NarrowphaseTrace& out) const;
+
             // Test/oracle helper: parallel arrays of (live mover fixture slot,
             // world AABB) -- the exact set m_fixtureBroadphase indexes.
             void LiveFixtureAabbs(std::vector<std::uint32_t>& fxOut,

@@ -37,6 +37,11 @@
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
+// Only the NarrowphaseTrace* parameter type is named here (an incomplete type
+// suffices for a pointer); the full definition is needed only in Epa.cpp, which
+// includes NarrowphaseTrace.hpp directly to push_back snapshots.
+namespace Arcane { namespace Physics { struct NarrowphaseTrace; } }
+
 namespace Arcane
 {
     namespace Physics
@@ -80,8 +85,15 @@ namespace Arcane
         //
         // Deterministic: fixed max iterations + max polytope size + fixed
         // epsilon; no wall-clock; no heap.
+        //
+        // trace (debug-viz, OPT-IN): when NON-null, each expansion iteration
+        // appends the current polytope + the chosen closest edge as a
+        // PolytopeSnapshot to trace->epaSnapshots. When null (the Step-path
+        // default) NOTHING is recorded and the computation is byte-identical --
+        // the recorder only reads already-computed values behind `if (trace)`.
         [[nodiscard]] EpaResult Epa(const Vec2* va, int na,
-                                    const Vec2* vb, int nb);
+                                    const Vec2* vb, int nb,
+                                    NarrowphaseTrace* trace = nullptr);
 
     } // namespace Physics
 } // namespace Arcane

@@ -38,6 +38,7 @@
 #include <limits>
 
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
 
 namespace Arcane
 {
@@ -98,7 +99,8 @@ namespace Arcane
         // --------------------------------------------------------------------
         // Mpr -- the 2D portal-refinement loop over the Minkowski difference.
         // --------------------------------------------------------------------
-        MprResult Mpr(const Vec2* va, int na, const Vec2* vb, int nb)
+        MprResult Mpr(const Vec2* va, int na, const Vec2* vb, int nb,
+                      NarrowphaseTrace* trace)
         {
             MprResult out;
 
@@ -231,6 +233,25 @@ namespace Arcane
                         bestNx = nx;
                         bestNy = ny;
                     }
+                }
+
+                // Debug-viz recording (OPT-IN; nullptr on the Step path).
+                // Snapshot the interior seed (poly[0]) + the chosen closest
+                // edge endpoints + the support ray direction for this
+                // iteration. Reads already-computed values only.
+                if (trace)
+                {
+                    const int j = (bestEdge + 1) % count;
+                    MprSnapshot snap;
+                    snap.v0 = Vec2(static_cast<Real>(poly[0].mx),
+                                   static_cast<Real>(poly[0].my));
+                    snap.v1 = Vec2(static_cast<Real>(poly[bestEdge].mx),
+                                   static_cast<Real>(poly[bestEdge].my));
+                    snap.v2 = Vec2(static_cast<Real>(poly[j].mx),
+                                   static_cast<Real>(poly[j].my));
+                    snap.rayDir = Vec2(static_cast<Real>(bestNx),
+                                       static_cast<Real>(bestNy));
+                    trace->mprSnapshots.push_back(snap);
                 }
 
                 // Support along the closest edge's outward normal.

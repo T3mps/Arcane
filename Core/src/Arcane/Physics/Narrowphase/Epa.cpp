@@ -35,6 +35,7 @@
 #include <limits>
 
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
 
 namespace Arcane
 {
@@ -71,7 +72,8 @@ namespace Arcane
         // --------------------------------------------------------------------
         // Epa -- the expanding-polytope loop over the Minkowski difference.
         // --------------------------------------------------------------------
-        EpaResult Epa(const Vec2* va, int na, const Vec2* vb, int nb)
+        EpaResult Epa(const Vec2* va, int na, const Vec2* vb, int nb,
+                      NarrowphaseTrace* trace)
         {
             EpaResult out;
 
@@ -152,6 +154,27 @@ namespace Arcane
                         bestNx = nx;
                         bestNy = ny;
                     }
+                }
+
+                // Debug-viz recording (OPT-IN; nullptr on the Step path).
+                // Snapshot the CURRENT polytope + the chosen closest edge for
+                // this iteration. Reads already-computed values only -- no
+                // effect on the math below.
+                if (trace)
+                {
+                    PolytopeSnapshot snap;
+                    snap.verts.reserve(static_cast<std::size_t>(count));
+                    for (int i = 0; i < count; ++i)
+                    {
+                        snap.verts.emplace_back(static_cast<Real>(poly[i].mx),
+                                                static_cast<Real>(poly[i].my));
+                    }
+                    snap.edgeA      = bestEdge;
+                    snap.edgeB      = (bestEdge + 1) % count;
+                    snap.edgeNormal = Vec2(static_cast<Real>(bestNx),
+                                           static_cast<Real>(bestNy));
+                    snap.edgeDist   = static_cast<Real>(bestDist);
+                    trace->epaSnapshots.push_back(std::move(snap));
                 }
 
                 // Support along the closest edge's outward normal.

@@ -15,7 +15,7 @@
 
 #include <cstdint>
 
-#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
+#include <Arcane/Physics/Narrowphase/NarrowphaseKind.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
 namespace Arcane

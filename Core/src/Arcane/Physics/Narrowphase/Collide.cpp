@@ -157,8 +157,17 @@ namespace Arcane
             // by testing all CCW edge normals of `vsRef` against `vsInc`.
             // Returns the edge index and separation (negative = penetration).
             // If separation >= 0 the shapes are separated along this polygon.
+            //
+            // `trace` (debug-viz, OPT-IN): when trace is NON-null, each
+            // candidate axis is appended to trace->satAxes with its
+            // reference/incident projection intervals (minRef/maxRef = this
+            // call's REFERENCE shape `vsRef`, minInc/maxInc = the INCIDENT shape
+            // `vsInc`). Recording reads already-computed support projections only
+            // -- the selection math (`best`) is unchanged whether trace is null
+            // or not, so the returned axis is byte-identical on the Step path.
             SatAxis FindReferenceAxis(const Vec2* vsRef, int nRef,
-                                      const Vec2* vsInc, int nInc)
+                                      const Vec2* vsInc, int nInc,
+                                      NarrowphaseTrace* trace = nullptr)
             {
                 SatAxis best{};
                 best.separation = -std::numeric_limits<Real>::infinity();
@@ -175,6 +184,28 @@ namespace Arcane
                     // Separation = minInc - maxRef.
                     // > 0 : separated.   < 0 : penetrating.
                     const Real sep = minInc - maxRef;
+
+                    // Debug-viz recording (OPT-IN; nullptr on the Step path).
+                    // Append this candidate axis with both shapes' projection
+                    // intervals along n. minRef/maxRef bound the reference
+                    // shape; minInc bounds the incident shape -- compute its
+                    // maxInc too purely for display (no effect on selection).
+                    if (trace)
+                    {
+                        const Real minRef = MinSupport(vsRef, nRef, n);
+                        const Real maxInc = MaxSupport(vsInc, nInc, n);
+                        // NOTE: the trace's ::Arcane::Physics::SatAxis differs
+                        // from this TU's anonymous-namespace SatAxis (which the
+                        // unqualified name resolves to); qualify it explicitly.
+                        ::Arcane::Physics::SatAxis ax;
+                        ax.dir = n;
+                        ax.minRef = minRef;
+                        ax.maxRef = maxRef;
+                        ax.minInc = minInc;
+                        ax.maxInc = maxInc;
+                        ax.chosen = false; // marked after the search resolves
+                        trace->satAxes.push_back(ax);
+                    }
 
                     // Keep the axis with the LEAST penetration (highest sep).
                     // Tie-break: lower edge index wins (deterministic, per spec).
@@ -455,7 +486,8 @@ namespace Arcane
             // ----------------------------------------------------------------
             Manifold CollideRound(const Vec2* va, int na, Real rA,
                                   const Vec2* vb, int nb, Real rB,
-                                  Real speculativeMargin)
+                                  Real speculativeMargin,
+                                  NarrowphaseTrace* trace = nullptr)
             {
                 Manifold m{};
                 const GjkCoreResult g = GjkDistanceCore(va, na, vb, nb);
@@ -505,13 +537,37 @@ namespace Arcane
                 }
                 else
                 {
+                    // Debug-viz: record the TERMINAL GJK origin-enclosing
+                    // simplex (EPA's seed) as one GJK snapshot in Minkowski
+                    // space. This is the same GjkOriginSimplex EPA itself seeds
+                    // from; recording it here is an OPT-IN read (the extra call
+                    // runs ONLY when trace is non-null, i.e. never on the Step
+                    // path) so the computed manifold is unchanged. Per-iteration
+                    // GJK simplices are not recorded -- the GJK loops live in a
+                    // separate TU and instrumenting them risks the byte-identical
+                    // Step path; the terminal simplex is the inspector-relevant
+                    // one for the deep round path.
+                    if (trace)
+                    {
+                        const GjkSimplex seed = GjkOriginSimplex(va, na, vb, nb);
+                        SimplexSnapshot snap;
+                        snap.count = seed.count;
+                        for (int i = 0; i < seed.count && i < 3; ++i)
+                        {
+                            snap.verts[i] = seed.v[i].md;
+                        }
+                        snap.searchDir      = Vec2(Real(0), Real(0));
+                        snap.containsOrigin = seed.enclosesOrigin;
+                        trace->gjkSnapshots.push_back(snap);
+                    }
+
                     // DEEP (cores overlap, GJK distance ~0): the GJK witness pair
                     // is meaningless here, so we call EPA on the SAME world cores
                     // (radii NOT applied) for the EXACT nearest-face penetration.
                     // This replaces the old centroid-to-centroid approximation,
                     // which pointed along the line of centres rather than toward
                     // the nearest face (wrong for a round core buried in a poly).
-                    const EpaResult epa = Epa(va, na, vb, nb);
+                    const EpaResult epa = Epa(va, na, vb, nb, trace);
 
                     if (epa.ok)
                     {
@@ -560,7 +616,7 @@ namespace Arcane
                     // DELETED: it pointed along the line of centres rather than
                     // toward the nearest face, which is wrong for a round core
                     // buried in a poly (the very case EPA/MPR exist to fix).
-                    const MprResult mpr = Mpr(va, na, vb, nb);
+                    const MprResult mpr = Mpr(va, na, vb, nb, trace);
                     if (mpr.ok)
                     {
                         const Vec2 n = mpr.normal;
@@ -642,7 +698,8 @@ namespace Arcane
             // ----------------------------------------------------------------
             Manifold CollidePoly(const Vec2* va, int na, Real rA,
                                  const Vec2* vb, int nb, Real rB,
-                                 Real speculativeMargin)
+                                 Real speculativeMargin,
+                                 NarrowphaseTrace* trace = nullptr)
             {
             Manifold m{};
 
@@ -691,10 +748,17 @@ namespace Arcane
             // produces the LEAST penetration (Box2D v3 style).
             // ----------------------------------------------------------------
 
+            // Debug-viz: the satAxes vector accumulates A's axes first then
+            // B's axes (the two FindReferenceAxis calls below append in that
+            // order). Remember the count before each call so we can mark the
+            // chosen axis (by reference-shape edge index) once the SAT search
+            // resolves. Reads/writes only the trace -- no effect on selection.
+            const std::size_t satBaseA = trace ? trace->satAxes.size() : 0;
             // Test A's edge normals as reference axes against B.
-            const SatAxis axisA = FindReferenceAxis(va, na, vb, nb);
+            const SatAxis axisA = FindReferenceAxis(va, na, vb, nb, trace);
+            const std::size_t satBaseB = trace ? trace->satAxes.size() : 0;
             // Test B's edge normals as reference axes against A.
-            const SatAxis axisB = FindReferenceAxis(vb, nb, va, na);
+            const SatAxis axisB = FindReferenceAxis(vb, nb, va, na, trace);
 
             // Pick the less-penetrating (higher separation) axis.
             // Tie-break: if equal, prefer A as reference (refIsA=true).
@@ -710,6 +774,21 @@ namespace Arcane
             {
                 refIsA  = false;
                 refAxis = axisB;
+            }
+
+            // Debug-viz: mark the chosen candidate axis (the min-penetration
+            // reference axis the SAT search selected). The A-block axes occupy
+            // satAxes[satBaseA .. satBaseB), the B-block axes [satBaseB .. end);
+            // index within each block is the reference-shape edge index.
+            if (trace)
+            {
+                const std::size_t pick = refIsA
+                    ? satBaseA + static_cast<std::size_t>(refAxis.edgeIdx)
+                    : satBaseB + static_cast<std::size_t>(refAxis.edgeIdx);
+                if (pick < trace->satAxes.size())
+                {
+                    trace->satAxes[pick].chosen = true;
+                }
             }
 
             // Reference face: vertices of the reference polygon.
@@ -929,8 +1008,22 @@ namespace Arcane
         // ====================================================================
         Manifold Collide(const Shape& a, const Transform& xfA,
                          const Shape& b, const Transform& xfB,
-                         Real speculativeMargin)
+                         Real speculativeMargin,
+                         NarrowphaseTrace* trace)
         {
+            // Debug-viz (OPT-IN; nullptr on every Step-path call -> no-op):
+            // record the two world shapes + transforms up front so the inspector
+            // can draw the colliding shapes even when the early AABB reject
+            // returns an empty manifold below. The per-path snapshots + the
+            // final manifold are filled at the natural points / on return.
+            if (trace)
+            {
+                trace->shapeA = a;
+                trace->shapeB = b;
+                trace->xfA    = xfA;
+                trace->xfB    = xfB;
+            }
+
             // Stack scratch: kMaxPolyVerts = 128, but the common cases (circle,
             // capsule, aabb) are 1-4 verts. 128 * sizeof(Vec2) = 1 KB -- fine.
             Vec2 va[kMaxPolyVerts];
@@ -978,20 +1071,30 @@ namespace Arcane
                 if ((aMaxX + m < bMinX) || (bMaxX + m < aMinX) ||
                     (aMaxY + m < bMinY) || (bMaxY + m < aMinY))
                 {
-                    return Manifold{}; // provably separated -> no contact points
+                    // Provably separated -> no contact points. The trace keeps
+                    // its default (Separated kind + empty manifold), already set
+                    // by Clear() on the DebugCollide path.
+                    return Manifold{};
                 }
             }
 
             // Type-pair dispatch by core vertex count.
             const bool roundCell = (na <= 2 || nb <= 2);
-            if (roundCell)
-            {
+            const Manifold result = roundCell
                 // ROUND: circle/capsule core -> GJK witness (shallow) or EPA (deep).
-                return CollideRound(va, na, rA, vb, nb, rB, speculativeMargin);
-            }
+                ? CollideRound(va, na, rA, vb, nb, rB, speculativeMargin, trace)
+                // POLY: both cores >= 3 verts -> GJK speculative or SAT clip.
+                : CollidePoly(va, na, rA, vb, nb, rB, speculativeMargin, trace);
 
-            // POLY: both cores >= 3 verts -> GJK speculative or SAT ref-face clip.
-            return CollidePoly(va, na, rA, vb, nb, rB, speculativeMargin);
+            // Debug-viz: copy the final kind + manifold into the trace. The
+            // per-path snapshot vectors were already filled at the natural
+            // points inside the cells above. NO-op on the Step path (trace null).
+            if (trace)
+            {
+                trace->kind     = result.kind;
+                trace->manifold = result;
+            }
+            return result;
         }
 
     } // namespace Physics

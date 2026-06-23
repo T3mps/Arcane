@@ -76,3 +76,41 @@ TEST_CASE("Debug accessors enumerate broadphase + contacts", "[physics][debugviz
     REQUIRE(n == w.ActiveContactCount());
     if (n > 0) REQUIRE(kindSet);
 }
+
+// Slice B Core (Task 3): PhysicsWorld::DebugCollide re-runs the REAL
+// narrowphase on two fixtures and records a NarrowphaseTrace. The Step path
+// passes no trace to Collide (byte-identical), so the recorder is observable
+// only here. Two overlapping AABBs route through CollidePoly -> SAT, so the
+// trace tags SatPolygon and records >= 1 candidate axis.
+TEST_CASE("DebugCollide reproduces the manifold + records a trace", "[physics][debugviz]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.type=BodyType::Dynamic; d.fixedRotation=true; d.shape=MakeAabb(Real(10),Real(10));
+    d.position=Vec2(0,0);  BodyHandle a = w.AddBody(d);
+    d.position=Vec2(15,0); BodyHandle b = w.AddBody(d); // overlapping boxes -> SAT/EPA
+    w.Step(Real(1)/Real(60));
+
+    // The primary (back-compat) fixture slot of each body (fixture[0]).
+    FixtureHandle fa = w.GetBodyFixture(a, 0);
+    FixtureHandle fb = w.GetBodyFixture(b, 0);
+    REQUIRE(w.IsValid(fa));
+    REQUIRE(w.IsValid(fb));
+
+    NarrowphaseTrace trace;
+    Manifold m = w.DebugCollide(fa, fb, trace);
+    REQUIRE(m.pointCount >= 1);                 // they overlap
+    REQUIRE(trace.kind == m.kind);              // trace tags the algorithm
+    REQUIRE(trace.kind != NarrowphaseKind::Separated);
+    // The trace also copied the final manifold + the two world shapes.
+    REQUIRE(trace.manifold.pointCount == m.pointCount);
+    // For a poly-poly overlap, SAT recorded >=1 candidate axis OR EPA >=1
+    // polytope snapshot.
+    REQUIRE((trace.satAxes.size() >= 1 || trace.epaSnapshots.size() >= 1));
+    // Exactly one SAT candidate axis is the chosen min-penetration reference.
+    if (!trace.satAxes.empty())
+    {
+        std::size_t chosen = 0;
+        for (const auto& ax : trace.satAxes) if (ax.chosen) ++chosen;
+        REQUIRE(chosen == 1);
+    }
+}

@@ -45,6 +45,11 @@
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
+// Only the NarrowphaseTrace* parameter type is named here (an incomplete type
+// suffices for a pointer); the full definition is needed only in Mpr.cpp, which
+// includes NarrowphaseTrace.hpp directly to push_back snapshots.
+namespace Arcane { namespace Physics { struct NarrowphaseTrace; } }
+
 namespace Arcane
 {
     namespace Physics
@@ -81,8 +86,16 @@ namespace Arcane
         //
         // Deterministic: fixed max refinement iterations + fixed epsilon; f64
         // internal; no wall-clock; no heap.
+        //
+        // trace (debug-viz, OPT-IN): when NON-null, each refinement iteration
+        // appends the current portal (v0 interior seed + the closest edge
+        // endpoints v1/v2 + the support ray direction) as an MprSnapshot to
+        // trace->mprSnapshots. When null (the Step-path default) NOTHING is
+        // recorded and the computation is byte-identical -- the recorder only
+        // reads already-computed values behind `if (trace)`.
         [[nodiscard]] MprResult Mpr(const Vec2* va, int na,
-                                    const Vec2* vb, int nb);
+                                    const Vec2* vb, int nb,
+                                    NarrowphaseTrace* trace = nullptr);
 
     } // namespace Physics
 } // namespace Arcane

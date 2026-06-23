@@ -61,6 +61,7 @@
 //   static-CRT (ArcaneCore server flavor). C++20-clean.
 
 #include <Arcane/Physics/Narrowphase/Manifold.hpp>
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
 
@@ -74,9 +75,21 @@ namespace Arcane
         // speculativeMargin: a gap in [0, speculativeMargin) produces a
         //   speculative contact with negative separation (pre-impact warning).
         //   Pass Real(0) for hard-contact-only behaviour.
+        //
+        // trace (debug-viz Slice B, OPT-IN): when NON-null, Collide records the
+        //   intermediate narrowphase geometry (SAT axes, GJK/EPA/MPR snapshots,
+        //   the final manifold + the two world shapes/transforms) into *trace at
+        //   the natural points the algorithm already computes them. When null
+        //   (the DEFAULT, taken by every Step-path call) NOTHING is recorded and
+        //   the computation is byte-identical to a trace-free build -- the
+        //   recorder only reads already-computed values behind `if (trace)`
+        //   guards; it never alters the math or control flow. Only
+        //   PhysicsWorld::DebugCollide (a side-effect-free re-run) passes a
+        //   non-null pointer.
         [[nodiscard]] Manifold Collide(const Shape& a, const Transform& xfA,
                                        const Shape& b, const Transform& xfB,
-                                       Real speculativeMargin = Real(0));
+                                       Real speculativeMargin = Real(0),
+                                       NarrowphaseTrace* trace = nullptr);
 
     } // namespace Physics
 } // namespace Arcane
