@@ -631,6 +631,15 @@ namespace Arcane
             {
                 return *m_fixtureBroadphase;
             }
+            // Non-const overload: required by consumers that call UpdatePairs
+            // (Task 5 -- the incremental move-buffer drain). UpdatePairs is
+            // NON-CONST (it mutates m_pairSet/m_moved/m_removed); callers with
+            // a non-const PhysicsWorld& (e.g. ContactManager::Step) use this
+            // overload so the non-const method resolves without a cast.
+            [[nodiscard]] IBroadphase& FixtureBroadphase() noexcept
+            {
+                return *m_fixtureBroadphase;
+            }
 
             // Map a fixture slot to its owning body slot (Phase 2, Task 2).
             // Used by ContactManager::Step to map fixture-pairs -> body-pairs

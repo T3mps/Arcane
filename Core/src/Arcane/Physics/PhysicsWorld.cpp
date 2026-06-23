@@ -1872,7 +1872,11 @@ namespace Arcane
             //   A must be dynamic; if both dynamic the LOWER BODY SLOT is A.
             //   Bodies AND fixtures are swapped together so MixContactId receives
             //   (fixA, fixB) in a stable, deterministic order across steps.
-            m_fixtureBroadphase->Pairs(m_genPairs);
+            // Incremental pair set (move buffer): drains proxy moves since the
+            // last UpdatePairs call (stage-1 kinematic integrate + CREATE pass)
+            // and returns the current set. == Pairs() but O(moved log n) when
+            // most bodies rest (oracle-proven in the [movebuffer] suite).
+            m_fixtureBroadphase->UpdatePairs(m_genPairs);
             for (std::size_t k = 0; k < m_genPairs.size(); ++k)
             {
                 // fa,fb are FIXTURE slots (broadphase-sorted fa < fb).

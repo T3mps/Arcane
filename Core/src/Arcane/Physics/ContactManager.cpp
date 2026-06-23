@@ -126,7 +126,11 @@ namespace Arcane
             // owning body-pair, skip same-body pairs, canonicalise (a<b), then
             // sort+unique before calling Touch so a compound body's N^2 fixture-
             // pairs for the same body-pair produce exactly ONE Touch call.
-            w.FixtureBroadphase().Pairs(m_pairScratch);
+            // Drains any proxy moves since GenerateContacts (solver commit +
+            // CCD BulletSweep) and returns the current set. == Pairs() but
+            // O(moved log n) when most bodies rest. Non-const overload of
+            // FixtureBroadphase() resolves because w is non-const PhysicsWorld&.
+            w.FixtureBroadphase().UpdatePairs(m_pairScratch);
             m_bodyPairScratch.clear();
             for (const BroadphasePair& fp : m_pairScratch)
             {
