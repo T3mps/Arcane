@@ -124,6 +124,7 @@ namespace Arcane
 
         PhysicsWorld::PhysicsWorld(const WorldDef& def)
             : m_moverBroadphase(MakeBroadphase(def))
+            , m_fixtureBroadphase(MakeBroadphase(def))
             , m_gravityX(def.gravityX)
             , m_gravityY(def.gravityY)
             , m_substepCount(def.substepCount > 0u ? def.substepCount : 1u)
@@ -440,6 +441,10 @@ namespace Arcane
             if (static_cast<BodyType>(m_btype[bodySlot]) == BodyType::Static)
                 m_staticGrid.Move(bodySlot, SlotAabb(bodySlot));
 
+            // Register the new fixture in the per-fixture mover broadphase
+            // (Phase 2, Task 1). AddFixtureProxy skips Static bodies.
+            AddFixtureProxy(fi);
+
             return FixtureHandle{ fi, m_fxGen[fi] };
         }
 
@@ -463,6 +468,11 @@ namespace Arcane
                     break;
                 }
             }
+
+            // Remove the fixture proxy from the per-fixture mover broadphase
+            // BEFORE bumping the generation (Phase 2, Task 1). The Remove call
+            // only needs the slot id -- it does not read gen or body fields.
+            RemoveFixtureProxy(fi);
 
             // Invalidate the slot (bump generation + clear shape storage).
             m_fxGen[fi] += 1u;
@@ -686,6 +696,81 @@ namespace Arcane
             return m_shape[i].ComputeAABB(xf);
         }
 
+        // ----------------------------------------------------------------
+        // Per-fixture broadphase helpers (Phase 2, Task 1)
+        // ----------------------------------------------------------------
+
+        Aabb2 PhysicsWorld::FixtureAabb(std::uint32_t fi) const noexcept
+        {
+            const std::uint32_t b = m_fxBody[fi];
+            const Transform xf = ComposeFixtureXf(
+                Vec2(m_posX[b], m_posY[b]), m_angle[b],
+                Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]), m_fxLocalAngle[fi]);
+            return m_fxShape[fi].ComputeAABB(xf);
+        }
+
+        void PhysicsWorld::AddFixtureProxy(std::uint32_t fi)
+        {
+            const std::uint32_t b = m_fxBody[fi];
+            if (static_cast<BodyType>(m_btype[b]) == BodyType::Static)
+            {
+                return; // statics are not in the mover fixture broadphase
+            }
+            m_fixtureBroadphase->Update(fi, FixtureAabb(fi));
+        }
+
+        void PhysicsWorld::RemoveFixtureProxy(std::uint32_t fi)
+        {
+            m_fixtureBroadphase->Remove(fi);
+        }
+
+        void PhysicsWorld::UpdateMoverProxies(std::uint32_t b)
+        {
+            // Body-level broadphase + residency (transition: removed in Task 3).
+            const Aabb2 bodyBox = SlotAabb(b);
+            m_moverBroadphase->Update(b, bodyBox);
+            m_residencyGrid.Move(b, bodyBox);
+
+            // Per-fixture proxies: refresh every live fixture of this body.
+            const Vec2 pos(m_posX[b], m_posY[b]);
+            const Real ang = m_angle[b];
+            if (b < m_bodyFixtures.size())
+            {
+                for (const std::uint32_t fi : m_bodyFixtures[b])
+                {
+                    if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                    {
+                        continue; // dead slot (defensive)
+                    }
+                    const Transform xf = ComposeFixtureXf(
+                        pos, ang,
+                        Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                        m_fxLocalAngle[fi]);
+                    m_fixtureBroadphase->Update(fi, m_fxShape[fi].ComputeAABB(xf));
+                }
+            }
+        }
+
+        void PhysicsWorld::LiveFixtureAabbs(std::vector<std::uint32_t>& fxOut,
+                                            std::vector<Aabb2>& boxOut) const
+        {
+            fxOut.clear(); boxOut.clear();
+            // Enumerate the AUTHORITATIVE live mover-fixture set: each live
+            // Dynamic/Kinematic body's m_bodyFixtures list (exactly what the
+            // fixture broadphase indexes; dropped fixtures are unlinked from it).
+            for (std::uint32_t b = 0; b < m_count; ++b)
+            {
+                if (m_alive[b] == 0u) continue;
+                if (static_cast<BodyType>(m_btype[b]) == BodyType::Static) continue;
+                for (const std::uint32_t fi : m_bodyFixtures[b])
+                {
+                    if (fi >= m_fxCount || m_fxGen[fi] == 0u) continue; // defensive
+                    fxOut.push_back(fi);
+                    boxOut.push_back(FixtureAabb(fi));
+                }
+            }
+        }
+
         BodyHandle PhysicsWorld::AddBody(const BodyDef& def)
         {
             // Reuse a free slot or append (ports addBody's free-list pop).
@@ -835,7 +920,15 @@ namespace Arcane
                 autoFd.categoryBits = def.categoryBits;
                 autoFd.maskBits     = def.maskBits;
                 autoFd.isSensor     = def.isSensor;
-                AllocFixtureSlot(idx, autoFd); // no RecomputeBodyMass
+                const std::uint32_t autoFi = AllocFixtureSlot(idx, autoFd); // no RecomputeBodyMass
+
+                // Register the auto-fixture in the per-fixture mover broadphase
+                // (Phase 2, Task 1). AddFixtureProxy skips Static bodies -- the
+                // body-broadphase path above (m_moverBroadphase->Update) already
+                // registered the body-level proxy for movers; fixture proxies are
+                // independent. Static fixtures are not registered here (they are
+                // covered by m_staticGrid).
+                AddFixtureProxy(autoFi);
 
                 // Populate the body-mass accessors consistently with the legacy
                 // path.  For Dynamic bodies the correct mass was computed above
@@ -933,6 +1026,9 @@ namespace Arcane
                 {
                     if (fi < m_fxCount && m_fxGen[fi] != 0u)
                     {
+                        // Remove the fixture proxy BEFORE bumping gen (Phase 2,
+                        // Task 1). Remove only needs the slot id.
+                        RemoveFixtureProxy(fi);
                         m_fxGen[fi] += 1u;           // invalidate
                         m_fxShape[fi] = Shape{};     // release storage
                         m_fxFree.push_back(fi);
@@ -1015,9 +1111,7 @@ namespace Arcane
             m_prevY[i] = p.y;
             if (static_cast<BodyType>(m_btype[i]) != BodyType::Static)
             {
-                const Aabb2 moverBox = SlotAabb(i);
-                m_moverBroadphase->Update(i, moverBox);
-                m_residencyGrid.Move(i, moverBox);
+                UpdateMoverProxies(i);
             }
         }
 
@@ -1035,9 +1129,7 @@ namespace Arcane
             m_posY[i] = p.y;
             if (static_cast<BodyType>(m_btype[i]) != BodyType::Static)
             {
-                const Aabb2 moverBox = SlotAabb(i);
-                m_moverBroadphase->Update(i, moverBox);
-                m_residencyGrid.Move(i, moverBox);
+                UpdateMoverProxies(i);
             }
         }
 
@@ -1307,13 +1399,9 @@ namespace Arcane
                 {
                     m_posX[i] += m_velX[i] * dt;
                     m_posY[i] += m_velY[i] * dt;
-                    // compute the body AABB once for both the broadphase + residency update
-                    const Aabb2 moverBox = SlotAabb(i);
-                    m_moverBroadphase->Update(i, moverBox);
-                    // Residency mirrors the mover broadphase: refreshed on the same
-                    // position-commit path so Residents() never drifts from where
-                    // bodies actually are.
-                    m_residencyGrid.Move(i, moverBox);
+                    // UpdateMoverProxies refreshes the body broadphase, residency
+                    // grid, AND all per-fixture proxies (Phase 2, Task 1).
+                    UpdateMoverProxies(i);
                 }
             }
 
@@ -2066,9 +2154,9 @@ namespace Arcane
                 m_posY[i] = clamped.y;
                 // Unconditional: the assert above guarantees this is always a
                 // mover (never Static), so the broadphase update always applies.
-                const Aabb2 moverBox = SlotAabb(i);
-                m_moverBroadphase->Update(i, moverBox);
-                m_residencyGrid.Move(i, moverBox);
+                // UpdateMoverProxies keeps the body broadphase, residency grid,
+                // AND per-fixture proxies in sync (Phase 2, Task 1).
+                UpdateMoverProxies(i);
             }
         }
 

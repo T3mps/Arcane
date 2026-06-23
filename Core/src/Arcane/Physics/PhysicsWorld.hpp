@@ -629,6 +629,20 @@ namespace Arcane
                 return *m_moverBroadphase;
             }
 
+            // Per-FIXTURE mover broadphase accessor (collision-rebuild Phase 2,
+            // Task 1). One proxy per live fixture of a Dynamic/Kinematic body,
+            // keyed by fixture slot. Built alongside m_moverBroadphase during the
+            // transition; replaces it in Task 3.
+            [[nodiscard]] const IBroadphase& FixtureBroadphase() const noexcept
+            {
+                return *m_fixtureBroadphase;
+            }
+
+            // Test/oracle helper: parallel arrays of (live mover fixture slot,
+            // world AABB) -- the exact set m_fixtureBroadphase indexes.
+            void LiveFixtureAabbs(std::vector<std::uint32_t>& fxOut,
+                                  std::vector<Aabb2>& boxOut) const;
+
             // ---- internals consumed by the Soft Step solver (P2.2 seam) -----
             //
             // The solver reads/writes the dynamics SoA through these slot
@@ -710,9 +724,10 @@ namespace Arcane
                 m_posX[i]  = p.x;
                 m_posY[i]  = p.y;
                 m_angle[i] = angle;
-                const Aabb2 moverBox = SlotAabb(i);
-                m_moverBroadphase->Update(i, moverBox);
-                m_residencyGrid.Move(i, moverBox);
+                // UpdateMoverProxies refreshes the body-level broadphase,
+                // the residency grid, AND all per-fixture proxies in one call
+                // (Phase 2, Task 1: replaces the inline triple).
+                UpdateMoverProxies(i);
             }
             // Global gravity (solver reads it for the per-sub-step integrate).
             [[nodiscard]] Vec2 Gravity() const noexcept
@@ -771,6 +786,26 @@ namespace Arcane
             { return m_residencyGrid.QueryAABB(region, out); }
 
         private:
+            // ---- per-fixture broadphase helpers (Phase 2, Task 1) -------------
+            //
+            // UpdateMoverProxies(b): refreshes BOTH the body-level mover broadphase
+            // (body proxy keyed by b) AND all fixture proxies in m_fixtureBroadphase
+            // for every live fixture owned by body b. Replaces the inline triple
+            //   { const Aabb2 moverBox = SlotAabb(b); m_moverBroadphase->Update...;
+            //     m_residencyGrid.Move...; }
+            // at every position-commit site so the fixture broadphase stays in
+            // lockstep with the body broadphase automatically.
+            void UpdateMoverProxies(std::uint32_t b);
+
+            // Add / remove a single fixture proxy in m_fixtureBroadphase.
+            // AddFixtureProxy skips Static bodies (they are not mover proxies).
+            void AddFixtureProxy(std::uint32_t fi);
+            void RemoveFixtureProxy(std::uint32_t fi);
+
+            // World-space AABB for a single fixture slot fi (body transform ∘
+            // fixture local transform → Shape::ComputeAABB).
+            [[nodiscard]] Aabb2 FixtureAabb(std::uint32_t fi) const noexcept;
+
             // Grow all SoA arrays to hold at least `n` slots.
             void EnsureCapacity(std::uint32_t n);
 
@@ -910,6 +945,12 @@ namespace Arcane
 
             // ---- broadphase + statics --------------------------------------
             std::unique_ptr<IBroadphase> m_moverBroadphase;
+
+            // Per-FIXTURE mover broadphase (collision-rebuild Phase 2, Task 1):
+            // one proxy per live fixture of a Dynamic/Kinematic body, keyed by
+            // fixture slot. Built alongside m_moverBroadphase during the
+            // transition; replaces it (Task 3). Same WorldDef::broadphase strategy.
+            std::unique_ptr<IBroadphase> m_fixtureBroadphase;
             std::vector<std::uint32_t>   m_staticList; // slot indices of statics
             std::unique_ptr<TileGrid>    m_tileGrid;   // optional tile statics
 
