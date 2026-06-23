@@ -786,7 +786,9 @@ namespace Arcane
                 // are intentionally KINEMATIC-ONLY (faithful to
                 // ContactManager.lua:150); the solver owns dynamic-vs-static
                 // response, which arrives in P2.1.
-                m_moverBroadphase->Update(idx, SlotAabb(idx));
+                const Aabb2 moverBox = SlotAabb(idx);
+                m_moverBroadphase->Update(idx, moverBox);
+                m_residencyGrid.Insert(idx, moverBox);
             }
 
             // ---- Back-compat fixture creation (v2 Task 4) -------------------
@@ -897,6 +899,7 @@ namespace Arcane
             else
             {
                 m_moverBroadphase->Remove(idx);
+                m_residencyGrid.Remove(idx);
             }
 
             m_contacts.DropBody(idx);
@@ -1012,7 +1015,9 @@ namespace Arcane
             m_prevY[i] = p.y;
             if (static_cast<BodyType>(m_btype[i]) != BodyType::Static)
             {
-                m_moverBroadphase->Update(i, SlotAabb(i));
+                const Aabb2 moverBox = SlotAabb(i);
+                m_moverBroadphase->Update(i, moverBox);
+                m_residencyGrid.Move(i, moverBox);
             }
         }
 
@@ -1030,7 +1035,9 @@ namespace Arcane
             m_posY[i] = p.y;
             if (static_cast<BodyType>(m_btype[i]) != BodyType::Static)
             {
-                m_moverBroadphase->Update(i, SlotAabb(i));
+                const Aabb2 moverBox = SlotAabb(i);
+                m_moverBroadphase->Update(i, moverBox);
+                m_residencyGrid.Move(i, moverBox);
             }
         }
 
@@ -1294,7 +1301,13 @@ namespace Arcane
                 {
                     m_posX[i] += m_velX[i] * dt;
                     m_posY[i] += m_velY[i] * dt;
-                    m_moverBroadphase->Update(i, SlotAabb(i));
+                    // compute the body AABB once for both the broadphase + residency update
+                    const Aabb2 moverBox = SlotAabb(i);
+                    m_moverBroadphase->Update(i, moverBox);
+                    // Residency mirrors the mover broadphase: refreshed on the same
+                    // position-commit path so Residents() never drifts from where
+                    // bodies actually are.
+                    m_residencyGrid.Move(i, moverBox);
                 }
             }
 
@@ -2047,7 +2060,9 @@ namespace Arcane
                 m_posY[i] = clamped.y;
                 // Unconditional: the assert above guarantees this is always a
                 // mover (never Static), so the broadphase update always applies.
-                m_moverBroadphase->Update(i, SlotAabb(i));
+                const Aabb2 moverBox = SlotAabb(i);
+                m_moverBroadphase->Update(i, moverBox);
+                m_residencyGrid.Move(i, moverBox);
             }
         }
 

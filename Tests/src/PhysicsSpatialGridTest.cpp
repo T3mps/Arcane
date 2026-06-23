@@ -117,3 +117,42 @@ TEST_CASE("StaticCandidates static-body set unchanged by grid reroute", "[physic
     // Only the first static (centered at 0,0, half 50x10) overlaps q.
     REQUIRE(statics.size() == 1);
 }
+
+TEST_CASE("Residents(region) returns bodies in a tile region", "[physics][grid][residency]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.type = BodyType::Dynamic; d.shape = MakeCircle(Real(8));
+    d.position = Vec2(10, 10);   BodyHandle a = w.AddBody(d);
+    d.position = Vec2(300, 300); BodyHandle b = w.AddBody(d);
+    w.Step(Real(1)/Real(60));    // commit positions -> residency updated
+
+    // Region covering ~(0,0)..(64,64) in world space should contain `a`, not `b`.
+    Aabb2 region; region.min = Vec2(0, 0); region.max = Vec2(64, 64);
+    std::vector<std::uint32_t> residents;
+    w.Residents(region, residents);
+    REQUIRE(std::find(residents.begin(), residents.end(), a.index) != residents.end());
+    REQUIRE(std::find(residents.begin(), residents.end(), b.index) == residents.end());
+}
+
+TEST_CASE("Residency tracks a body across a per-step position commit", "[physics][grid][residency]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.type = BodyType::Kinematic; d.shape = MakeCircle(Real(8));
+    d.position = Vec2(10, 10);
+    BodyHandle a = w.AddBody(d);
+    w.SetVelocity(a, Vec2(1000, 0));   // moves +x deterministically
+
+    w.Step(Real(1));                   // kinematic integrate: a -> ~(1010, 10)
+
+    // It must have LEFT the origin region (proves Move-on-commit ran -- an
+    // Insert-only residency would wrongly still report it here).
+    Aabb2 origin; origin.min = Vec2(0, 0);   origin.max = Vec2(64, 64);
+    std::vector<std::uint32_t> residents;
+    w.Residents(origin, residents);
+    REQUIRE(std::find(residents.begin(), residents.end(), a.index) == residents.end());
+
+    // ...and ENTERED the destination region.
+    Aabb2 dest; dest.min = Vec2(950, 0); dest.max = Vec2(1100, 64);
+    w.Residents(dest, residents);
+    REQUIRE(std::find(residents.begin(), residents.end(), a.index) != residents.end());
+}

@@ -710,7 +710,9 @@ namespace Arcane
                 m_posX[i]  = p.x;
                 m_posY[i]  = p.y;
                 m_angle[i] = angle;
-                m_moverBroadphase->Update(i, SlotAabb(i));
+                const Aabb2 moverBox = SlotAabb(i);
+                m_moverBroadphase->Update(i, moverBox);
+                m_residencyGrid.Move(i, moverBox);
             }
             // Global gravity (solver reads it for the per-sub-step integrate).
             [[nodiscard]] Vec2 Gravity() const noexcept
@@ -760,6 +762,13 @@ namespace Arcane
             // tests use plain bodies and need no tile spans.)
             void StaticCandidates(const Aabb2& box, std::vector<Aabb2>& spansOut,
                                   std::vector<std::uint32_t>& staticsOut) const;
+
+            // First-class tile residency: dynamic/kinematic body slots register
+            // their world AABB cell-occupancy, refreshed when their position
+            // commits (same lifecycle path as the mover broadphase). Region/tile
+            // queries serve gameplay (combat-sphere extraction).
+            int Residents(const Aabb2& region, std::vector<std::uint32_t>& out) const
+            { return m_residencyGrid.QueryAABB(region, out); }
 
         private:
             // Grow all SoA arrays to hold at least `n` slots.
@@ -915,6 +924,14 @@ namespace Arcane
             // StaticCandidates(..., m_scratchStatics) as the OUTPUT, so reusing it
             // for the grid query would alias and corrupt the result.
             mutable std::vector<std::uint32_t> m_staticGridScratch;
+
+            // Dynamic + kinematic body tile-residency index (Phase 1, Task 5).
+            // Tracks live cell-occupancy for movers as they move -- the gameplay
+            // region-query index (combat-sphere seam). Kept in LOCKSTEP with
+            // m_moverBroadphase: Insert on AddBody, Move on every broadphase Update
+            // (SetPosition/MovePosition/kinematic-integrate/BulletSweep/CommitSlotPosition),
+            // Remove on RemoveBody. Tile size matches m_staticGrid for consistency.
+            SpatialGrid m_residencyGrid{ Real(64) }; // TODO(Phase 2): wire to the map's real tile size
 
             bool m_eventsEnabled = true;
 
