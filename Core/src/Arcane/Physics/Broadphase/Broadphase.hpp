@@ -119,6 +119,10 @@ namespace Arcane
             // (a, b). out is cleared then filled. Returns out.size(). All three
             // strategies return the IDENTICAL set for the same scene.
             virtual int Pairs(std::vector<BroadphasePair>& out) const = 0;
+
+            // Incremental pair maintenance. Default: full recompute (== Pairs). DynamicTree
+            // overrides with a move-buffer + persistent pair set.
+            virtual int UpdatePairs(std::vector<BroadphasePair>& out) { return Pairs(out); }
         };
 
     } // namespace Physics

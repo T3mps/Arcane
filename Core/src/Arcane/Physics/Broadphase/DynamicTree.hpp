@@ -28,9 +28,23 @@
 // Query scratch (an explicit descent stack) and the pairs/query dedup buffers
 // are pooled members reused across calls.
 //
+// Phase 2 Task 4 — INCREMENTAL PAIR SET (move-buffer):
+//   UpdatePairs() maintains a persistent tight-overlap pair set (m_pairSet)
+//   incrementally.  Every Update() call marks the proxy in m_moved (including
+//   within-fat-box moves, where only the tight box changes).  Every Remove()
+//   call moves the id to m_removed.  UpdatePairs() then:
+//     1. Drops all cached pairs that touch any moved/removed proxy.
+//     2. Re-queries the tree for each live moved proxy (FAT-box descent,
+//        tight-box filter) and inserts fresh pairs into m_pairSet.
+//     3. Emits the full m_pairSet sorted.
+//   The incremental output is byte-identical to Pairs() (oracle-gated).
+//   NOT yet consumed by the solver -- the existing Pairs() call site is
+//   unchanged.  This is a pure add.
+//
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 
 #include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 #include <Arcane/Physics/Broadphase/Broadphase.hpp>
@@ -54,6 +68,11 @@ namespace Arcane
             int  QueryAABB(const Aabb2& box,
                            std::vector<std::uint32_t>& out) const override;
             int  Pairs(std::vector<BroadphasePair>& out) const override;
+
+            // Incremental pair maintenance: move-buffer path (Phase 2, Task 4).
+            // Maintains m_pairSet in sync with each Update/Remove, then emits
+            // sorted. Oracle-verified == Pairs() after every mutation.
+            int  UpdatePairs(std::vector<BroadphasePair>& out) override;
 
         private:
             // Sentinel for "no node" (the Lua used nil parents/children).
@@ -98,10 +117,26 @@ namespace Arcane
             // entry kNull means "no such body".
             std::vector<std::uint32_t> m_leafOfId;
 
-            // Reused scratch (no per-call heap). m_stack: descent stack for
-            // queries. Mutable because QueryAABB / Pairs are const-by-contract
-            // but reuse the scratch buffer.
+            // Reused scratch (no per-call heap).
+            // m_stack: descent scratch (mutable: reused by const Pairs/QueryAABB
+            // and by UpdatePairs).
             mutable std::vector<std::uint32_t> m_stack;
+
+            // Move-buffer state (Phase 2, Task 4 -- incremental pair set).
+            //
+            // m_moved:   ids that were Update()'d since the last UpdatePairs().
+            //            Marked on EVERY Update call (including within-fat-box
+            //            moves where only tight box changes -- those still affect
+            //            tight-overlap membership).
+            // m_removed: ids that were Remove()'d since the last UpdatePairs().
+            //            Pairs touching removed ids must be evicted.
+            // m_pairSet: canonical persistent tight-overlap pair set.
+            //            Key = (lo << 32) | hi, lo = min(a,b), hi = max(a,b).
+            //            UpdatePairs() keeps this in sync and emits it sorted.
+            std::unordered_set<std::uint32_t> m_moved;
+            std::unordered_set<std::uint32_t> m_removed;
+            std::unordered_set<std::uint64_t> m_pairSet;
+            std::vector<std::uint64_t>        m_toErase; // UpdatePairs step-1 evict scratch (pooled; capacity preserved)
 
             // Map an id to its leaf slot (kNull if absent).
             [[nodiscard]] std::uint32_t LeafOf(std::uint32_t id) const noexcept;

@@ -10,6 +10,7 @@
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
 
 #include <algorithm>
+#include <vector>
 
 namespace Arcane
 {
@@ -194,6 +195,11 @@ namespace Arcane
         // --------------------------------------------------------------------
         // update (upsert): fat-box-contains fast path, else remove + reinsert
         // with a fresh fat box (Lua AABBTree:update).
+        //
+        // Move-buffer: mark id in m_moved on EVERY Update, even the within-fat-
+        // box fast path.  Within-fat-box moves still change tight-overlap pairs
+        // (a body that nudges slightly may gain or lose tight overlap with its
+        // neighbours), so "moved" must mean "any Update call", not just reinserts.
         // --------------------------------------------------------------------
         void DynamicTree::Update(std::uint32_t id, const Aabb2& box)
         {
@@ -206,6 +212,9 @@ namespace Arcane
                     box.max.x <= fat.max.x && box.max.y <= fat.max.y)
                 {
                     m_nodes[leaf].tight = box;
+                    // ALWAYS mark moved (tight box changed -- may affect overlap).
+                    m_moved.insert(id);
+                    m_removed.erase(id);
                     return;
                 }
                 RemoveLeaf(leaf);
@@ -223,6 +232,10 @@ namespace Arcane
             m_nodes[leaf].fat.min = Vec2(box.min.x - kMargin, box.min.y - kMargin);
             m_nodes[leaf].fat.max = Vec2(box.max.x + kMargin, box.max.y + kMargin);
             InsertLeaf(leaf);
+
+            // Mark moved (reinsert or fresh insert -- pairs must be recomputed).
+            m_moved.insert(id);
+            m_removed.erase(id);
         }
 
         void DynamicTree::Remove(std::uint32_t id)
@@ -235,6 +248,10 @@ namespace Arcane
             RemoveLeaf(leaf);
             FreeNode(leaf);
             SetLeafOf(id, kNull);
+
+            // Move-buffer: track removed id so UpdatePairs evicts its pairs.
+            m_removed.insert(id);
+            m_moved.erase(id);
         }
 
         // --------------------------------------------------------------------
@@ -327,6 +344,115 @@ namespace Arcane
                 }
             }
 
+            std::sort(out.begin(), out.end());
+            return static_cast<int>(out.size());
+        }
+
+        // --------------------------------------------------------------------
+        // UpdatePairs: incremental pair-set maintenance (Phase 2, Task 4).
+        //
+        // Three-step algorithm:
+        //   1. Evict: remove from m_pairSet every cached pair that touches a
+        //      moved or removed proxy (stale -- tight boxes may have changed).
+        //   2. Re-query: for each LIVE moved proxy, descend the tree on its FAT
+        //      box (to find candidates), then filter by tight-box overlap and
+        //      insert canonical (lo<<32|hi) keys into m_pairSet.
+        //   3. Emit: build sorted BroadphasePair vector from m_pairSet.
+        //
+        // Correctness invariant (oracle-gated):
+        //   UpdatePairs() == Pairs() == brute-force after every mutation.
+        // --------------------------------------------------------------------
+        int DynamicTree::UpdatePairs(std::vector<BroadphasePair>& out)
+        {
+            // ----------------------------------------------------------------
+            // STEP 1: evict all cached pairs touching any moved or removed proxy.
+            // Cannot erase while iterating unordered_set -- collect keys first.
+            // ----------------------------------------------------------------
+            if (!m_moved.empty() || !m_removed.empty())
+            {
+                m_toErase.clear();
+                for (const std::uint64_t key : m_pairSet)
+                {
+                    const std::uint32_t lo = static_cast<std::uint32_t>(key >> 32);
+                    const std::uint32_t hi = static_cast<std::uint32_t>(key & 0xFFFFFFFFu);
+                    if (m_moved.count(lo) || m_moved.count(hi) ||
+                        m_removed.count(lo) || m_removed.count(hi))
+                    {
+                        m_toErase.push_back(key);
+                    }
+                }
+                for (const std::uint64_t key : m_toErase)
+                {
+                    m_pairSet.erase(key);
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // STEP 2: re-add current tight pairs for each LIVE moved proxy.
+            // Descend the tree on the proxy's FAT box (broad candidate set),
+            // then filter by tight-box overlap (exact membership).
+            // ----------------------------------------------------------------
+            for (const std::uint32_t a : m_moved)
+            {
+                const std::uint32_t leafA = LeafOf(a);
+                if (leafA == kNull)
+                {
+                    continue; // was removed between mark and flush (shouldn't
+                               // happen with correct move/remove bookkeeping, but
+                               // be safe).
+                }
+
+                const Aabb2 fatA   = m_nodes[leafA].fat;
+                const Aabb2 tightA = m_nodes[leafA].tight;
+
+                if (m_root == kNull)
+                {
+                    continue;
+                }
+
+                m_stack.clear();
+                m_stack.push_back(m_root);
+                while (!m_stack.empty())
+                {
+                    const std::uint32_t ni = m_stack.back();
+                    m_stack.pop_back();
+                    const Node& n = m_nodes[ni];
+
+                    if (!FatOverlap(n.fat, fatA))
+                    {
+                        continue;
+                    }
+                    if (!n.IsLeaf())
+                    {
+                        m_stack.push_back(n.left);
+                        m_stack.push_back(n.right);
+                    }
+                    else if (n.id != a && AabbOverlap(n.tight, tightA))
+                    {
+                        const std::uint32_t lo = (a < n.id) ? a : n.id;
+                        const std::uint32_t hi = (a < n.id) ? n.id : a;
+                        const std::uint64_t key =
+                            (static_cast<std::uint64_t>(lo) << 32) |
+                            static_cast<std::uint64_t>(hi);
+                        m_pairSet.insert(key);
+                    }
+                }
+            }
+
+            m_moved.clear();
+            m_removed.clear();
+
+            // ----------------------------------------------------------------
+            // STEP 3: emit sorted.
+            // ----------------------------------------------------------------
+            out.clear();
+            out.reserve(m_pairSet.size());
+            for (const std::uint64_t key : m_pairSet)
+            {
+                const std::uint32_t lo = static_cast<std::uint32_t>(key >> 32);
+                const std::uint32_t hi = static_cast<std::uint32_t>(key & 0xFFFFFFFFu);
+                out.push_back(BroadphasePair{ lo, hi });
+            }
             std::sort(out.begin(), out.end());
             return static_cast<int>(out.size());
         }

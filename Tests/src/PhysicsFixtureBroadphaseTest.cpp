@@ -206,3 +206,58 @@ TEST_CASE("Fixture broadphase pair removed after bodies separate (move)", "[phys
     REQUIRE(FxBpPairs(w) == BruteFixturePairs(w));
     REQUIRE(FxBpPairs(w).empty());
 }
+
+#include <random>
+#include <Arcane/Physics/Broadphase/DynamicTree.hpp>
+
+// The incrementally-maintained pair set (move buffer) must equal a full Pairs()
+// recompute AND the brute-force O(n^2) set, after EVERY mutation, across a long
+// randomized sequence of inserts / moves / removes. Includes SMALL (within-fat-box)
+// moves -- the riskiest case for tight-membership maintenance.
+TEST_CASE("DynamicTree incremental pairs == full == brute-force", "[physics][fxbroadphase][movebuffer]")
+{
+    std::mt19937 rng(0xBADC0DE);
+    std::uniform_real_distribution<float> pos(-300.f, 300.f), ext(4.f, 40.f);
+    std::uniform_real_distribution<float> nudge(-3.f, 3.f); // within fat margin (kMargin=8)
+    DynamicTree tree;
+    std::vector<std::pair<std::uint32_t, Aabb2>> live;
+
+    auto boxAt = [&](float x, float y, float w, float h) {
+        Aabb2 a; a.min = Vec2(x, y); a.max = Vec2(x + w, y + h); return a; };
+    auto brute = [&]() {
+        std::vector<BroadphasePair> out;
+        for (std::size_t i = 0; i < live.size(); ++i)
+            for (std::size_t j = i + 1; j < live.size(); ++j)
+                if (AabbOverlap(live[i].second, live[j].second)) {
+                    std::uint32_t a = live[i].first, b = live[j].first;
+                    out.push_back(a < b ? BroadphasePair{a,b} : BroadphasePair{b,a}); }
+        std::sort(out.begin(), out.end()); return out; };
+
+    std::uint32_t nextId = 0;
+    for (int iter = 0; iter < 600; ++iter)
+    {
+        const int op = rng() % 4;
+        if (op == 0 || live.size() < 4) {                 // insert
+            Aabb2 b = boxAt(pos(rng), pos(rng), ext(rng), ext(rng));
+            std::uint32_t id = nextId++; tree.Update(id, b); live.push_back({id, b});
+        } else if (op == 1) {                              // big move
+            auto& e = live[rng() % live.size()];
+            e.second = boxAt(pos(rng), pos(rng), ext(rng), ext(rng)); tree.Update(e.first, e.second);
+        } else if (op == 2) {                              // SMALL move (within fat box)
+            auto& e = live[rng() % live.size()];
+            const float dx = nudge(rng), dy = nudge(rng);
+            e.second.min = Vec2(e.second.min.x + dx, e.second.min.y + dy);
+            e.second.max = Vec2(e.second.max.x + dx, e.second.max.y + dy);
+            tree.Update(e.first, e.second);
+        } else {                                           // remove
+            std::size_t k = rng() % live.size();
+            tree.Remove(live[k].first); live.erase(live.begin() + static_cast<std::ptrdiff_t>(k));
+        }
+        std::vector<BroadphasePair> incr; tree.UpdatePairs(incr);
+        std::vector<BroadphasePair> full; tree.Pairs(full);
+        std::sort(incr.begin(), incr.end()); std::sort(full.begin(), full.end());
+        const std::vector<BroadphasePair> bf = brute();
+        REQUIRE(incr == bf);
+        REQUIRE(full == bf);
+    }
+}
