@@ -43,7 +43,8 @@ namespace
             "  --backend dx12|vulkan   graphics backend (default dx12)\n"
             "  --frames N              render N frames then exit\n"
             "  --no-vsync              present without vsync\n"
-            "  --plugin <path>         game DLL to host (default ./Sandbox.dll)\n");
+            "  --plugin <path>         game DLL to host (default ./Sandbox.dll)\n"
+            "  --perf                  log per-phase ms every 60 frames\n");
     }
 }
 
@@ -52,6 +53,7 @@ int main(int argc, char** argv)
     Arcane::GraphicsBackend backend = Arcane::GraphicsBackend::D3D12;
     uint64_t maxFrames = 0;
     bool vsync = true;
+    bool perf = false;
     std::string pluginPath = "Sandbox.dll";
 
     for (int i = 1; i < argc; ++i)
@@ -66,6 +68,7 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) { maxFrames = std::strtoull(argv[++i], nullptr, 10); }
         else if (std::strcmp(argv[i], "--no-vsync") == 0)               { vsync = false; }
         else if (std::strcmp(argv[i], "--plugin") == 0 && i + 1 < argc) { pluginPath = argv[++i]; }
+        else if (std::strcmp(argv[i], "--perf") == 0)                   { perf = true; }
         else { PrintUsage(); return 2; }
     }
 
@@ -163,6 +166,12 @@ int main(int argc, char** argv)
         auto lastShaderPoll = simPrev;
         bool running = true;
 
+        using PClock = std::chrono::steady_clock;
+        auto perfT = [](PClock::time_point a, PClock::time_point b) {
+            return std::chrono::duration<double, std::milli>(b - a).count(); };
+        double accFrame=0, accSim=0, accRec=0, accEnd=0, accTone=0, accImgui=0, accPresent=0, accPoll=0;
+        uint64_t perfFrames = 0;
+
         while (running)
         {
             auto events = window.PumpEvents();
@@ -178,6 +187,9 @@ int main(int argc, char** argv)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
+
+            PClock::time_point perfFrameStart{};
+            if (perf) perfFrameStart = PClock::now();
 
             // Input: sample SDL state, evaluate actions. Must precede ImGui BeginFrame
             // so capture flags are set before the evaluator reads them.
@@ -201,9 +213,12 @@ int main(int argc, char** argv)
                 simPrev = now;
                 if (simDt > 0.25) simDt = 0.25;
                 const Arcane::PluginVTable* vt = plugin.Vtable();
+                PClock::time_point t0{};
+                if (perf) t0 = PClock::now();
                 runtime.Loop().Advance(simDt,
                     [&](double dt)          { if (vt) vt->FixedUpdate(dt); },
                     [&](double dt, double a){ if (vt) vt->Update(dt, a); });
+                if (perf) accSim += perfT(t0, PClock::now());
             }
 
             imgui->BeginFrame();
@@ -250,24 +265,67 @@ int main(int argc, char** argv)
             // in the correct module; then drive the plugin's RenderSubmissionSystem.
             // Loom stays camera-agnostic: SetRenderContext writes the STORED camera the
             // plugin drives via Runtime::SetCamera (default identity if it never does).
-            runtime.SetRenderContext(batcher.get());
-            runtime.Loop().SubmitRender();
+            {
+                PClock::time_point t0{};
+                if (perf) t0 = PClock::now();
+                runtime.SetRenderContext(batcher.get());
+                runtime.Loop().SubmitRender();
+                if (perf) accRec += perfT(t0, PClock::now());
+            }
 
-            batcher->End();
+            {
+                PClock::time_point t0{};
+                if (perf) t0 = PClock::now();
+                batcher->End();
+                if (perf) accEnd += perfT(t0, PClock::now());
+            }
 
             nvrhi::FramebufferHandle& fb = backbufferFramebuffers[backbuffer];
             if (!fb)
                 fb = device->Nvrhi()->createFramebuffer(
                     nvrhi::FramebufferDesc().addColorAttachment(backbuffer));
-            tonemap->Run(commandList, canvas->Texture(), fb);
-            imgui->Render(commandList, fb);
+            {
+                PClock::time_point t0{};
+                if (perf) t0 = PClock::now();
+                tonemap->Run(commandList, canvas->Texture(), fb);
+                if (perf) accTone += perfT(t0, PClock::now());
+            }
+            {
+                PClock::time_point t0{};
+                if (perf) t0 = PClock::now();
+                imgui->Render(commandList, fb);
+                if (perf) accImgui += perfT(t0, PClock::now());
+            }
 
             commandList->close();
-            device->Nvrhi()->executeCommandList(commandList);
-            swapchain->Present();
+            {
+                PClock::time_point t0{};
+                if (perf) t0 = PClock::now();
+                device->Nvrhi()->executeCommandList(commandList);
+                swapchain->Present();
+                if (perf) accPresent += perfT(t0, PClock::now());
+            }
 
             // Debounced watcher: rebuild PlaygroundGame -> auto hot reload.
-            plugin.Poll();
+            {
+                PClock::time_point t0{};
+                if (perf) t0 = PClock::now();
+                plugin.Poll();
+                if (perf) accPoll += perfT(t0, PClock::now());
+            }
+
+            if (perf) accFrame += perfT(perfFrameStart, PClock::now());
+
+            if (perf && ++perfFrames >= 60)
+            {
+                const Arcane::Batch2DStats bs = batcher->Stats();
+                ARC_INFO("[PERF] {:.2f} ms ({:.1f} FPS) | sim {:.2f} rec {:.2f} end {:.2f} "
+                         "tone {:.2f} imgui {:.2f} present {:.2f} poll {:.2f} | quads {} draws {}",
+                         accFrame/perfFrames, 1000.0*perfFrames/accFrame, accSim/perfFrames,
+                         accRec/perfFrames, accEnd/perfFrames, accTone/perfFrames, accImgui/perfFrames,
+                         accPresent/perfFrames, accPoll/perfFrames, bs.quads, bs.drawCalls);
+                accFrame=accSim=accRec=accEnd=accTone=accImgui=accPresent=accPoll=0; perfFrames=0;
+            }
 
             ++frameCount;
             if (maxFrames != 0 && frameCount >= maxFrames)

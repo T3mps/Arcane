@@ -14,6 +14,7 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <algorithm>                            // std::clamp
+#include <cstdlib>                              // std::getenv, std::strtol
 #include <memory>
 #include <span>
 
@@ -116,6 +117,13 @@ namespace Arcane::Sandbox
 
     void SandboxApp::BuildInitialScene(Astra::Registry& reg)
     {
+        // ARCANE_SANDBOX_SCENE selects the initial scene headlessly (default 0).
+        m_sceneIndex = 0;
+        if (const char* s = std::getenv("ARCANE_SANDBOX_SCENE"))
+        {
+            const long v = std::strtol(s, nullptr, 10);
+            if (v >= 0) m_sceneIndex = static_cast<std::size_t>(v);
+        }
         RebuildScene(reg, m_sceneIndex);
     }
 
