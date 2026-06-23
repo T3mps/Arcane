@@ -538,23 +538,21 @@ namespace Arcane
                                             std::vector<Aabb2>& spansOut,
                                             std::vector<std::uint32_t>& staticsOut) const
         {
-            // Merged tile spans (TileGrid) + overlapping static-body slots
-            // (staticList, index-ordered). Ports _staticCandidates. With no
-            // TileGrid spansOut is empty.
+            // Merged tile spans (TileGrid) + overlapping static-body slots.
+            // Static-body lookup now goes through m_staticGrid (sorted slot-id
+            // order, ascending) instead of the O(dynamics*statics) m_staticList
+            // scan that recomputed each static AABB per query. Ports _staticCandidates.
+            // With no TileGrid spansOut is empty.
             spansOut.clear();
             if (m_tileGrid)
             {
                 m_tileGrid->Query(box, spansOut);
             }
             staticsOut.clear();
-            for (std::uint32_t i = 0; i < m_staticList.size(); ++i)
-            {
-                const std::uint32_t idx = m_staticList[i];
-                if (AabbOverlap(box, SlotAabb(idx)))
-                {
+            m_staticGrid.QueryAABB(box, m_staticGridScratch);
+            for (std::uint32_t idx : m_staticGridScratch)
+                if (m_alive[idx] && AabbOverlap(box, SlotAabb(idx)))
                     staticsOut.push_back(idx);
-                }
-            }
         }
 
     } // namespace Physics

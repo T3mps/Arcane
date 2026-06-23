@@ -73,6 +73,7 @@
 #include <Arcane/Physics/Broadphase/Broadphase.hpp>
 #include <Arcane/Physics/Broadphase/Passability.hpp>
 #include <Arcane/Physics/Broadphase/TileGrid.hpp>
+#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>
 #include <Arcane/Physics/ContactManager.hpp>
 #include <Arcane/Physics/Solver/Solver.hpp>      // ISolver + ContactConstraint pool type
 #include <Arcane/Physics/Joints/Joint.hpp>       // Joint base + JointDef (P2.5)
@@ -902,6 +903,18 @@ namespace Arcane
             std::unique_ptr<IBroadphase> m_moverBroadphase;
             std::vector<std::uint32_t>   m_staticList; // slot indices of statics
             std::unique_ptr<TileGrid>    m_tileGrid;   // optional tile statics
+
+            // Per-shape static index (collision-rebuild Phase 1). Static BODIES
+            // register their slot id here (keyed by body slot; statics are single
+            // proxies today -- per-fixture proxies arrive in Phase 2). StaticCandidates
+            // queries this instead of the O(dynamics*statics) m_staticList scan.
+            // Tile size = a coarse default until the map's tile size is wired in.
+            SpatialGrid m_staticGrid{ Real(64) }; // TODO(Phase 2): wire to the map's real tile size
+            // Dedicated query scratch for the grid lookup inside StaticCandidates.
+            // MUST NOT reuse m_scratchStatics: ShapeCast calls
+            // StaticCandidates(..., m_scratchStatics) as the OUTPUT, so reusing it
+            // for the grid query would alias and corrupt the result.
+            mutable std::vector<std::uint32_t> m_staticGridScratch;
 
             bool m_eventsEnabled = true;
 

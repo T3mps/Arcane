@@ -95,3 +95,25 @@ TEST_CASE("SpatialGrid query == brute-force after tight filter", "[physics][grid
         REQUIRE(std::find(cand.begin(), cand.end(), 7u) != cand.end());
     }
 }
+
+#include <Arcane/Physics/PhysicsWorld.hpp>
+#include <Arcane/Physics/Shapes.hpp>
+
+TEST_CASE("StaticCandidates static-body set unchanged by grid reroute", "[physics][grid]")
+{
+    PhysicsWorld w;
+    auto addStatic = [&](Real cx, Real cy, Real hw, Real hh) {
+        BodyDef d; d.type = BodyType::Static; d.position = Vec2(cx, cy);
+        d.shape = MakeAabb(hw, hh); return w.AddBody(d);
+    };
+    addStatic(0,   0,   50, 10);
+    addStatic(120, 0,   50, 10);
+    addStatic(0,   200, 10, 80);
+
+    // Reference: brute-force overlap of the query box against every static slot.
+    Aabb2 q; q.min = Vec2(-60, -20); q.max = Vec2(60, 20);
+    std::vector<Aabb2> spans; std::vector<std::uint32_t> statics;
+    w.StaticCandidates(q, spans, statics);
+    // Only the first static (centered at 0,0, half 50x10) overlaps q.
+    REQUIRE(statics.size() == 1);
+}

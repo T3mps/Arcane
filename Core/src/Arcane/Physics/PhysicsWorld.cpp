@@ -434,6 +434,12 @@ namespace Arcane
             // Re-aggregate the body's mass / COM / inertia (mass override respected).
             RecomputeBodyMass(bodySlot);
 
+            // A fixture added to a STATIC body grows its union AABB; movers
+            // self-correct via the per-step broadphase Update, but statics never
+            // re-register, so refresh the static grid here.
+            if (static_cast<BodyType>(m_btype[bodySlot]) == BodyType::Static)
+                m_staticGrid.Move(bodySlot, SlotAabb(bodySlot));
+
             return FixtureHandle{ fi, m_fxGen[fi] };
         }
 
@@ -467,6 +473,12 @@ namespace Arcane
 
             // Re-aggregate the body's mass.
             RecomputeBodyMass(bodySlot);
+
+            // Symmetric with AddFixture: dropping a fixture from a STATIC shrinks
+            // its union AABB. Statics never re-register via Step, so refresh the
+            // static grid here to keep its AABB tight (movers self-correct each step).
+            if (static_cast<BodyType>(m_btype[bodySlot]) == BodyType::Static)
+                m_staticGrid.Move(bodySlot, SlotAabb(bodySlot));
         }
 
         bool PhysicsWorld::IsValid(FixtureHandle fh) const noexcept
@@ -758,6 +770,11 @@ namespace Arcane
             if (def.type == BodyType::Static)
             {
                 m_staticList.push_back(idx);
+                // SlotAabb uses the single-shape fallback here: m_bodyFixtures[idx]
+                // is empty at this point (a fresh slot, or cleared by RemoveBody on
+                // recycle), and the back-compat fixture created later in AddBody has
+                // the SAME shape, so the registered AABB stays consistent.
+                m_staticGrid.Insert(idx, SlotAabb(idx));
             }
             else
             {
@@ -875,6 +892,7 @@ namespace Arcane
                         break;
                     }
                 }
+                m_staticGrid.Remove(idx);
             }
             else
             {
