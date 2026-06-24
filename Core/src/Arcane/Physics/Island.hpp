@@ -31,7 +31,7 @@
 // per Step and reused.
 //
 // WAKE paths live ELSEWHERE (this module only puts islands to SLEEP):
-//   * wake-on-contact -- PhysicsWorld::GenerateContacts (a sleeping dynamic
+//   * wake-on-contact -- PhysicsWorld::WakeMoverPair (a sleeping dynamic
 //     touched by an awake mover wakes; ports lines 369-382).
 //   * wake-on-force   -- PhysicsWorld::ApplyImpulse / SetVelocity / Wake (P2.1).
 //

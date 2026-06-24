@@ -1441,14 +1441,19 @@ namespace Arcane
             }
 
             // ---- stage 2: solver contact generation (Part A) -----------------
-            // Persistent-contact pool update (collision-rebuild Phase 3, Task 2):
-            // populate m_contactPool this Step BEFORE GenerateContacts. The pool
-            // is NOT yet consumed (GenerateContacts still feeds the solver), so
-            // behavior is unchanged; UpdateContacts is a side pool whose lifecycle
-            // (create/persist/destroy) Task 3+ will assert against GenerateContacts.
-            // Side-effect-free on the sim: writes only m_contactPool + m_cpPairs.
+            // Collision-rebuild Phase 3, Task 4 -- THE SWAP. The persistent-contact
+            // path is now the SOLE solver feed; GenerateContacts' per-step rebuild
+            // is RETIRED. UpdateContacts does ALL the narrowphase this Step:
+            //   * fixture<->fixture (mover<->mover + mover<->static-body) into the
+            //     PERSISTENT m_contactPool (created/updated/destroyed across steps),
+            //   * tile spans into the TRANSIENT m_spanContacts scratch (virtual
+            //     fixtures, refilled each Step).
+            // EmitContactConstraints then walks BOTH into m_contactConstraints in
+            // the canonical (bodyA, bodyB, fixtureA, fixtureB) order; the ids are
+            // stable (MixContactId) so the solver's warm-start cache matches.
             UpdateContacts(dt);
-            GenerateContacts(dt);
+            m_contactConstraints.clear();
+            EmitContactConstraints(m_contactConstraints);
 
             // ---- stage 3: Soft Step solve (Part B) ---------------------------
             // The solver integrates dynamic velocity + position across sub-steps,
@@ -1503,8 +1508,8 @@ namespace Arcane
             // contacts = edges), advance per-body sleep timers, and sleep any
             // island whose every member is idle past the threshold. Runs AFTER
             // the solve using this step's contacts; sleeping bodies are then
-            // skipped by the next Step's GenerateContacts + solver (the awake
-            // gate), freezing their positions. Ports PhysicsWorld.lua:403-452.
+            // skipped by the next Step's contact feed + solver (the awake gate in
+            // EmitContactConstraints), freezing their positions. Ports PhysicsWorld.lua:403-452.
             Island::UpdateSleep(
                 *this,
                 m_contactConstraints.empty() ? nullptr : m_contactConstraints.data(),
@@ -1515,530 +1520,6 @@ namespace Arcane
 
             // ---- stage 6: events + gating + deferred flush -------------------
             m_contacts.Step(*this);
-        }
-
-        void PhysicsWorld::GenerateContacts(Real dt)
-        {
-            // Part A: build the dynamics ContactConstraint array (the Lua step()
-            // stage 2 "solver contact generation"). For each awake non-sensor
-            // DYNAMIC body, generate manifolds vs static candidates (tile spans +
-            // static bodies) and vs mover-mover pairs involving a dynamic. A is
-            // ALWAYS the dynamic body (Lua lines 377-378); B may be dynamic,
-            // kinematic, static, or a tile-span virtual fixture (invMass = 0).
-            //
-            // T5 (FIXTURE-PAIR ROTATION-AWARE CONTACT GENERATION):
-            //   For each candidate body-pair, iterate every fixture of bodyA against
-            //   every fixture of bodyB (or the span virtual fixture), and call
-            //   Collide(shapeA, worldXfA, shapeB, worldXfB, specMargin) with the
-            //   COMPOSED real angle (bodyAngle + fixtureLocalAngle). This is the
-            //   sole narrowphase path; the legacy CollideShapes/Dispatch path has
-            //   been REMOVED from this function.
-            //
-            //   Material coefficients come from the two FIXTURES:
-            //     friction    = sqrt(fxA.friction * fxB.friction)
-            //     restitution = max(fxA.restitution, fxB.restitution)
-            //   For tile-span virtual fixtures (no fixture slot) we use the body's
-            //   own friction/restitution as both sides (unchanged from M6).
-            //
-            //   The ContactConstraint still references the two BODY slots (solver
-            //   unchanged). Anchor bases are each body's WORLD COM (compound-COM
-            //   dynamics: bodies rotate about their COM -- see the `emit` lambda's
-            //   WorldCom() anchors below + SoftStep/Baumgarte FinalizePositions).
-            //   Byte-identical to origin-relative anchors for localCenter==0.
-            //
-            //   BROADPHASE: per-fixture (m_fixtureBroadphase; one proxy per live
-            //   fixture of a Dynamic/Kinematic body). The mover-mover section below
-            //   walks the fixture-pair set directly; no separate body-level cull needed.
-            //
-            //   fixedRotation bodies keep invInertia=0 (already enforced by AddBody
-            //   / RecomputeBodyMass; we do not change integration/solver here).
-            //
-            // Index-ordered over dynamic bodies, then the broadphase's SORTED
-            // mover pairs -> deterministic. The pool only grows (clear preserves
-            // capacity) -> zero steady-state allocation.
-            m_contactConstraints.clear();
-
-            // ---- per-fixture world-AABB cache (cheap pre-narrowphase reject) --
-            //
-            // Rebuild m_genFxAabb from the CURRENT (pre-solve) transforms: one
-            // tight world AABB per live fixture. The fixture-pair loops below
-            // reject provably-disjoint pairs against this cache before paying the
-            // full Collide(), so a multi-fixture body (whisk/compound) no longer
-            // drives GJK/SAT on every fixture pair. O(total fixtures) once vs.
-            // O(pairs x fixtures^2) Collide calls. See the member's doc comment.
-            if (m_genFxAabb.size() < m_fxShape.size())
-            {
-                m_genFxAabb.resize(m_fxShape.size());
-            }
-            for (std::uint32_t fi = 0; fi < m_fxCount; ++fi)
-            {
-                if (m_fxGen[fi] == 0u)
-                {
-                    continue;
-                }
-                const std::uint32_t bs = m_fxBody[fi];
-                if (bs >= m_count || m_alive[bs] == 0)
-                {
-                    continue;
-                }
-                const Transform xf = ComposeFixtureXf(
-                    Vec2(m_posX[bs], m_posY[bs]), m_angle[bs],
-                    Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]), m_fxLocalAngle[fi]);
-                m_genFxAabb[fi] = m_fxShape[fi].ComputeAABB(xf);
-            }
-            // Per-body union AABB (byte-identical to SlotAabb, computed once here
-            // instead of re-derived per broadphase pair below).
-            if (m_genBodyAabb.size() < m_count)
-            {
-                m_genBodyAabb.resize(m_count);
-            }
-            for (std::uint32_t bi = 0; bi < m_count; ++bi)
-            {
-                if (m_alive[bi] != 0)
-                {
-                    m_genBodyAabb[bi] = SlotAabb(bi);
-                }
-            }
-            // True iff fixtures fa,fb are separated by more than `margin` on some
-            // axis (so Collide(specMargin<=margin) is guaranteed to find no point).
-            auto fxDisjoint = [&](std::uint32_t fa, std::uint32_t fb, Real margin)
-            {
-                const Aabb2& A = m_genFxAabb[fa];
-                const Aabb2& B = m_genFxAabb[fb];
-                return (A.max.x + margin < B.min.x) || (B.max.x + margin < A.min.x)
-                    || (A.max.y + margin < B.min.y) || (B.max.y + margin < A.min.y);
-            };
-
-            // ---- P3.1 speculative-contact CCD (the PRIMARY fast-mover CCD) ---
-            //
-            // MODERNIZE: the speculative margin (the kSkin skin from P1.2) is
-            // VELOCITY-SCALED for fast movers so the solver sees an impending wall
-            // BEFORE the body reaches it. The margin is the distance the body
-            // would travel this Step (|v| * dt), floored at kSkin: a SLOW body's
-            // margin is just kSkin (resting/settling behavior UNCHANGED), while a
-            // FAST body's margin grows to cover its full sweep so a contact is
-            // generated while it is still on the near side of the wall. The Soft
-            // Step solver's speculative bias (the s > 0 case: bias = s * invSubDt,
-            // which caps the closing velocity to exactly close the gap in ONE
-            // sub-step) then prevents the body from advancing more than the gap
-            // per sub-step -- stopping tunneling WITHOUT a discrete clamp. This is
-            // the modern speculative-contact CCD; the bullet GJK-TOI clamp
-            // (Step stage 6) is the discrete backup for flagged bodies vs statics.
-            //
-            // Per-body margin: max(kSkin, |v| * dt). The query AABB pad and the
-            // Collide speculativeMargin both use it (the AABB must be expanded by
-            // AT LEAST the margin so the wall candidate is FOUND before geometric
-            // overlap, and Collide must report the near-touching contact within
-            // that distance).
-            const Real moveDt = dt > Real(0) ? dt : Real(0);
-            // Threshold for the sqrt skip (Fix 3): if speedSq <= threshSq then
-            // speed * moveDt <= kSkin, so margin == kSkin (the floor) regardless.
-            // Hoisted once out of both loops; guard moveDt==0 -> threshold 0 so
-            // the sqrt is always taken (but moveDt==0 means dt==0 -> no motion).
-            const Real threshSq = (moveDt > Real(0))
-                                      ? (kSkin / moveDt) * (kSkin / moveDt)
-                                      : Real(0);
-
-            // ---- helper: world transform for a body's fixture -----------------
-            // Composes (bodyPos, bodyAngle) + (fxLocalPos, fxLocalAngle) into the
-            // fixture's world Transform. The body angle is live (m_angle[bodySlot]).
-            // Delegates to ComposeFixtureXf (the single copy of the rotate+offset
-            // formula) so the math is not duplicated here or in SlotAabb.
-            auto FixtureWorldXf = [&](std::uint32_t bodySlot,
-                                       std::uint32_t fi) -> Transform
-            {
-                return ComposeFixtureXf(
-                    Vec2(m_posX[bodySlot], m_posY[bodySlot]),
-                    m_angle[bodySlot],
-                    Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
-                    m_fxLocalAngle[fi]);
-            };
-
-            // ---- helper: append a manifold as a ContactConstraint -----------
-            // A is dynamic (aIdx); bIdx is the slot for a real body or
-            // kInvalidSlot for a span. invMassB/invInertiaB come from the slot
-            // (0 for static/kinematic/span -> push, not pushed).
-            // centerB: for a real body this is the body's world position; for a
-            // tile-span virtual fixture it is the span's geometric center
-            // (span.min+span.max)*0.5. anchorB = mp.point - centerB in both cases.
-            // (Passing it explicitly avoids the old Vec2(0,0) fallback that made
-            // anchorB wrong-looking for spans -- currently harmless because
-            // invInertiaB==0 zeros the lever arm, but would break if spans ever
-            // gained DOF.)
-            //
-            // T5: fricA/fricB and restA/restB now come from the two FIXTURE slots
-            // (passed explicitly). For tile-span virtual fixtures the caller passes
-            // the body-level friction/restitution as both sides (unchanged from M6).
-            auto emit = [&](std::uint32_t aIdx, std::uint32_t bIdx, bool bIsBody,
-                            const Vec2& centerB, const Manifold& m,
-                            Real fricA, Real fricB, Real restA, Real restB,
-                            std::uint32_t fixA, std::uint32_t fixB)
-            {
-                if (m.pointCount <= 0)
-                {
-                    return;
-                }
-                ContactConstraint cc;
-                cc.bodyA       = aIdx;
-                cc.bodyB       = bIsBody ? bIdx : kInvalidSlot;
-                cc.bodyBIsBody = bIsBody;
-                cc.invMassA    = m_invMass[aIdx];
-                cc.invInertiaA = m_invInertia[aIdx];
-                cc.invMassB    = bIsBody ? m_invMass[bIdx] : Real(0);
-                cc.invInertiaB = bIsBody ? m_invInertia[bIdx] : Real(0);
-                cc.normal      = m.normal;
-                // DISPLAY-ONLY narrowphase tag (debug-viz Slice A): carried from
-                // the producing manifold. The solver never reads it.
-                cc.kind        = m.kind;
-
-                // Combined material coefficients (T5: from the two fixture slots).
-                // Friction: geometric mean sqrt(fA*fB). Restitution: max(rA, rB).
-                cc.friction    = std::sqrt(fricA * fricB);
-                cc.restitution = std::max(restA, restB);
-
-                // Compound-COM dynamics: contact anchors are measured from each
-                // body's world CENTER OF MASS, not its origin, so the solver's
-                // lever arms (rA x n etc.) rotate the body about its COM. For a
-                // body with localCenter == (0,0) -- every single-fixture body
-                // and all static/kinematic bodies -- WorldCom() == origin, so
-                // this is byte-identical to the old origin-based anchors.
-                //   A is always a real dynamic body -> use its world COM.
-                //   B real-body  -> use its world COM (recomputed from bIdx;
-                //                    the passed centerB was the body origin).
-                //   B tile-span  -> no COM/inertia; keep the span's geometric
-                //                    center (centerB) UNCHANGED (invInertiaB==0
-                //                    makes its lever arm irrelevant).
-                const Vec2 cA = WorldCom(Vec2(m_posX[aIdx], m_posY[aIdx]),
-                                         m_angle[aIdx],
-                                         Vec2(m_localCenterX[aIdx],
-                                              m_localCenterY[aIdx]));
-                const Vec2 comB = bIsBody
-                    ? WorldCom(Vec2(m_posX[bIdx], m_posY[bIdx]),
-                               m_angle[bIdx],
-                               Vec2(m_localCenterX[bIdx], m_localCenterY[bIdx]))
-                    : centerB;
-
-                cc.pointCount = m.pointCount;
-                for (int p = 0; p < m.pointCount; ++p)
-                {
-                    const ManifoldPoint& mp = m.points[p];
-                    ContactConstraintPoint& cp = cc.points[p];
-                    cp.anchorA = mp.point - cA;
-                    cp.anchorB = mp.point - comB;
-                    // Manifold separation is POSITIVE for penetration; Box2D's
-                    // signed separation is negative for penetration -> negate.
-                    cp.baseSeparation = -mp.separation;
-                    // Warm-start key: the geometric feature id mixed with the
-                    // fixture pair so two fixture pairs on the same body pair do
-                    // not alias (see MixContactId).
-                    cp.id = MixContactId(mp.id, fixA, fixB);
-                }
-                m_contactConstraints.push_back(cc);
-            };
-
-            // ---- per dynamic body: vs spans + static bodies -----------------
-            for (std::uint32_t i = 0; i < m_count; ++i)
-            {
-                if (m_alive[i] == 0 ||
-                    static_cast<BodyType>(m_btype[i]) != BodyType::Dynamic ||
-                    m_awake[i] == 0 || m_sensor[i] != 0)
-                {
-                    continue;
-                }
-
-                // Per-body speculative margin (P3.1): max(kSkin, |v| * dt). For a
-                // slow body this is kSkin (resting unchanged); for a fast body it
-                // grows to cover this Step's sweep so the wall is seen pre-overlap.
-                // Exact sqrt skip (Fix 3): if speedSq <= threshSq the margin is
-                // just kSkin, so a slow/resting body never pays the sqrt.
-                const Real speedSqA = m_velX[i] * m_velX[i] + m_velY[i] * m_velY[i];
-                const Real specMargin = (speedSqA > threshSq)
-                                            ? std::sqrt(speedSqA) * moveDt
-                                            : kSkin;
-
-                const Aabb box = m_genBodyAabb[i]; // cached SlotAabb(i)
-                // Query pad: at least the legacy +/-2 broadphase skin, expanded to
-                // the speculative margin so a fast mover's wall candidate is FOUND
-                // before geometric overlap (otherwise Collide never sees it).
-                const Real pad = std::max(Real(2), specMargin);
-                Aabb2 query;
-                query.min = Vec2(box.min.x - pad, box.min.y - pad);
-                query.max = Vec2(box.max.x + pad, box.max.y + pad);
-                StaticCandidates(query, m_genSpans, m_genStatics);
-
-                // Collect body A's fixtures (sorted by slot index for determinism).
-                const std::vector<std::uint32_t>* fxListA = nullptr;
-                if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
-                {
-                    fxListA = &m_bodyFixtures[i];
-                }
-
-                // tile spans (Aabb2 rects) -> collide each fixture of A vs span-AABB.
-                for (std::size_t s = 0; s < m_genSpans.size(); ++s)
-                {
-                    const Aabb2& span = m_genSpans[s];
-                    const Vec2 spanCenter = (span.min + span.max) * Real(0.5);
-                    const Vec2 he = (span.max - span.min) * Real(0.5);
-                    const Shape spanShape = MakeAabb(he.x, he.y);
-                    const Transform xfB{ spanCenter, Real(0) };
-
-                    if (fxListA != nullptr)
-                    {
-                        // T5: iterate fixtures of body A vs the span (fixture-pair).
-                        for (const std::uint32_t fi : *fxListA)
-                        {
-                            if (fi >= m_fxCount || m_fxGen[fi] == 0u)
-                            {
-                                continue;
-                            }
-                            if (m_fxSensor[fi] != 0u)
-                            {
-                                continue; // sensor fixture: no constraint
-                            }
-                            const Transform xfA = FixtureWorldXf(i, fi);
-                            const Manifold mfld = Collide(m_fxShape[fi], xfA,
-                                                           spanShape, xfB, specMargin);
-                            // Span has no fixture slot; use body A's fixture material
-                            // vs body A itself (tile spans don't carry material).
-                            emit(i, kInvalidSlot, /*bIsBody=*/false, spanCenter, mfld,
-                                 m_fxFriction[fi], m_fxFriction[fi],
-                                 m_fxRestitution[fi], Real(0),
-                                 /*fixA=*/fi, /*fixB=*/kInvalidSlot);
-                        }
-                    }
-                    else
-                    {
-                        // Legacy fallback: single-shape body A vs span. Uses Collide
-                        // with the body's real angle (T5 rotation fix even on fallback).
-                        const Transform xfA{ Vec2(m_posX[i], m_posY[i]), m_angle[i] };
-                        const Manifold mfld = Collide(m_shape[i], xfA,
-                                                       spanShape, xfB, specMargin);
-                        emit(i, kInvalidSlot, /*bIsBody=*/false, spanCenter, mfld,
-                             m_fric[i], m_fric[i], m_rest[i], Real(0),
-                             /*fixA=*/kInvalidSlot, /*fixB=*/kInvalidSlot);
-                    }
-                }
-
-                // static bodies (non-sensor).
-                for (std::size_t s = 0; s < m_genStatics.size(); ++s)
-                {
-                    const std::uint32_t idx = m_genStatics[s];
-                    if (m_sensor[idx] != 0)
-                    {
-                        continue;
-                    }
-                    const Vec2 centerB(m_posX[idx], m_posY[idx]);
-
-                    // Collect body B's fixtures.
-                    const std::vector<std::uint32_t>* fxListB = nullptr;
-                    if (idx < m_bodyFixtures.size() && !m_bodyFixtures[idx].empty())
-                    {
-                        fxListB = &m_bodyFixtures[idx];
-                    }
-
-                    if (fxListA != nullptr && fxListB != nullptr)
-                    {
-                        // T5: iterate (fixtureA x fixtureB) pairs.
-                        // Stable order: fxListA is iterated outer, fxListB inner
-                        // (both are the m_bodyFixtures[] order -- consistent with
-                        // AddFixture insertion order, deterministic).
-                        for (const std::uint32_t fiA : *fxListA)
-                        {
-                            if (fiA >= m_fxCount || m_fxGen[fiA] == 0u)
-                            {
-                                continue;
-                            }
-                            if (m_fxSensor[fiA] != 0u)
-                            {
-                                continue;
-                            }
-                            const Transform xfA = FixtureWorldXf(i, fiA);
-
-                            for (const std::uint32_t fiB : *fxListB)
-                            {
-                                if (fiB >= m_fxCount || m_fxGen[fiB] == 0u)
-                                {
-                                    continue;
-                                }
-                                if (m_fxSensor[fiB] != 0u)
-                                {
-                                    continue;
-                                }
-                                if (fxDisjoint(fiA, fiB, specMargin))
-                                {
-                                    continue; // fixture AABBs separated -> no contact
-                                }
-                                const Transform xfB = FixtureWorldXf(idx, fiB);
-                                const Manifold mfld = Collide(m_fxShape[fiA], xfA,
-                                                               m_fxShape[fiB], xfB,
-                                                               specMargin);
-                                emit(i, idx, /*bIsBody=*/true, centerB, mfld,
-                                     m_fxFriction[fiA], m_fxFriction[fiB],
-                                     m_fxRestitution[fiA], m_fxRestitution[fiB],
-                                     /*fixA=*/fiA, /*fixB=*/fiB);
-                            }
-                        }
-                    }
-                    else if (fxListA != nullptr)
-                    {
-                        // Body A has fixtures; body B uses legacy single-shape.
-                        const Transform xfB{ centerB, m_angle[idx] };
-                        for (const std::uint32_t fiA : *fxListA)
-                        {
-                            if (fiA >= m_fxCount || m_fxGen[fiA] == 0u)
-                            {
-                                continue;
-                            }
-                            if (m_fxSensor[fiA] != 0u)
-                            {
-                                continue;
-                            }
-                            const Transform xfA = FixtureWorldXf(i, fiA);
-                            const Manifold mfld = Collide(m_fxShape[fiA], xfA,
-                                                           m_shape[idx], xfB,
-                                                           specMargin);
-                            emit(i, idx, /*bIsBody=*/true, centerB, mfld,
-                                 m_fxFriction[fiA], m_fric[idx],
-                                 m_fxRestitution[fiA], m_rest[idx],
-                                 /*fixA=*/fiA, /*fixB=*/kInvalidSlot);
-                        }
-                    }
-                    else
-                    {
-                        // Legacy fallback: single-shape A vs single-shape (or fixture) B.
-                        // Use real angle for both (T5 rotation fix).
-                        const Transform xfA{ Vec2(m_posX[i], m_posY[i]), m_angle[i] };
-                        const Transform xfB{ centerB, m_angle[idx] };
-                        const Manifold mfld = Collide(m_shape[i], xfA,
-                                                       m_shape[idx], xfB,
-                                                       specMargin);
-                        emit(i, idx, /*bIsBody=*/true, centerB, mfld,
-                             m_fric[i], m_fric[idx], m_rest[i], m_rest[idx],
-                             /*fixA=*/kInvalidSlot, /*fixB=*/kInvalidSlot);
-                    }
-                }
-            }
-
-            // ---- mover-mover pairs involving a dynamic (Phase 2 Task 2) ------
-            // The per-fixture broadphase emits SORTED fixture-pairs (fa < fb).
-            // Each pair carries exactly one fixture from each body; the broadphase
-            // already culled provably-disjoint fixture AABBs, so we skip the
-            // body-level AABB cull and per-pair nested fixture loop.
-            //
-            // ORIENTATION RULE (warm-start stability):
-            //   A must be dynamic; if both dynamic the LOWER BODY SLOT is A.
-            //   Bodies AND fixtures are swapped together so MixContactId receives
-            //   (fixA, fixB) in a stable, deterministic order across steps.
-            // Incremental pair set (move buffer): drains proxy moves since the
-            // last UpdatePairs call (stage-1 kinematic integrate + CREATE pass)
-            // and returns the current set. == Pairs() but O(moved log n) when
-            // most bodies rest (oracle-proven in the [movebuffer] suite).
-            m_fixtureBroadphase->UpdatePairs(m_genPairs);
-            for (std::size_t k = 0; k < m_genPairs.size(); ++k)
-            {
-                // fa,fb are FIXTURE slots (broadphase-sorted fa < fb).
-                const std::uint32_t fa0 = m_genPairs[k].a;
-                const std::uint32_t fb0 = m_genPairs[k].b;
-
-                // Derive owning body slots.
-                std::uint32_t a = m_fxBody[fa0];
-                std::uint32_t b = m_fxBody[fb0];
-
-                // Same body -> two fixtures of one body never collide.
-                if (a == b)
-                {
-                    continue;
-                }
-                if (m_alive[a] == 0 || m_alive[b] == 0)
-                {
-                    continue;
-                }
-                // Body-level sensor: skip if either BODY is a sensor body
-                // (preserves the old body-pair `m_sensor[a] || m_sensor[b]` gate).
-                if (m_sensor[a] != 0 || m_sensor[b] != 0)
-                {
-                    continue;
-                }
-
-                const bool da = static_cast<BodyType>(m_btype[a]) == BodyType::Dynamic;
-                const bool db = static_cast<BodyType>(m_btype[b]) == BodyType::Dynamic;
-                if (!da && !db)
-                {
-                    continue; // kinematic-kinematic: no dynamic response
-                }
-
-                // Per-pair speculative margin (P3.1): max(kSkin, sqrt(max
-                // speedSq) * dt). Same formula as the old body-pair loop.
-                const Real speedSqAm = m_velX[a] * m_velX[a] + m_velY[a] * m_velY[a];
-                const Real speedSqBm = m_velX[b] * m_velX[b] + m_velY[b] * m_velY[b];
-                const Real maxSpeedSq = std::max(speedSqAm, speedSqBm);
-                const Real pairMargin = (maxSpeedSq > threshSq)
-                                            ? std::sqrt(maxSpeedSq) * moveDt
-                                            : kSkin;
-
-                // Wake a sleeping dynamic touched by an awake mover (preserves
-                // the exact Lua wake rules, PhysicsWorld.lua:369-382). Uses the
-                // pre-orientation a,b so the logic is identical to the old loop.
-                if (da && m_awake[a] == 0 && (!db || m_awake[b] != 0))
-                {
-                    m_awake[a] = 1;
-                    m_sleepTimer[a] = Real(0);
-                }
-                if (db && m_awake[b] == 0 && (!da || m_awake[a] != 0))
-                {
-                    m_awake[b] = 1;
-                    m_sleepTimer[b] = Real(0);
-                }
-
-                // ORIENT: A must be dynamic. If both dynamic, lower BODY SLOT is A
-                // (deterministic for both warm-start and symmetric contacts).
-                // CRITICAL: swap BODY index and its FIXTURE index together so
-                // emit(ia, ib, ..., fa, fb) always gets the A-side fixture as fixA.
-                std::uint32_t ia = a,   ib = b;
-                std::uint32_t fa = fa0, fb = fb0;
-                if (!da || (da && db && ib < ia))
-                {
-                    std::swap(ia, ib);
-                    std::swap(fa, fb);
-                }
-                if (m_awake[ia] == 0)
-                {
-                    continue; // A (dynamic) asleep -> no constraint
-                }
-
-                // Fixture-level sensor: skip constraint (but keep event path if
-                // needed). The per-fixture broadphase only tracks non-sensor bodies,
-                // but defensive check matches old nested-loop behavior.
-                if (m_fxSensor[fa] != 0u || m_fxSensor[fb] != 0u)
-                {
-                    continue;
-                }
-
-                // No body-level AABB cull and no per-fixture fxDisjoint reject here:
-                // the per-fixture broadphase already returns only overlapping fixture
-                // pairs (tight current-frame shape AABBs). The speculative margin is
-                // applied inside Collide (its speculativeMargin arg), NOT as a broadphase
-                // expansion -- so a very fast pair not yet in tight-AABB overlap can miss
-                // a speculative contact. This is a known limitation shared with the old
-                // body-pair path; discrete CCD for flagged bodies is BulletSweep's job.
-
-                // TODO(filter): category/mask collision filtering (m_fxFilterCat/Mask,
-                // documented in Fixture.hpp) is NOT enforced here yet -- pre-existing gap
-                // (the old body-pair path didn't enforce it either). A pair set with
-                // non-default category/mask currently still collides. Enforce per
-                // fixture-pair here when filtering is wired up.
-
-                const Vec2    centerB(m_posX[ib], m_posY[ib]);
-                const Transform xfA = FixtureWorldXf(ia, fa);
-                const Transform xfB = FixtureWorldXf(ib, fb);
-                const Manifold mfld = Collide(m_fxShape[fa], xfA,
-                                               m_fxShape[fb], xfB,
-                                               pairMargin);
-                emit(ia, ib, /*bIsBody=*/true, centerB, mfld,
-                     m_fxFriction[fa], m_fxFriction[fb],
-                     m_fxRestitution[fa], m_fxRestitution[fb],
-                     /*fixA=*/fa, /*fixB=*/fb);
-            }
         }
 
         // ----------------------------------------------------------------
@@ -2074,7 +1555,8 @@ namespace Arcane
             return !aAwake && !bAwake;
         }
 
-        bool PhysicsWorld::FatBoxesOverlap(const Contact& c) const noexcept
+        bool PhysicsWorld::FatBoxesOverlap(const Contact& c,
+                                           Real extraMargin) const noexcept
         {
             // Fat box of a fixture slot: a MOVER fixture's fat box lives in the
             // DynamicTree (margin-grown, the broadphase invariant); a STATIC
@@ -2108,14 +1590,77 @@ namespace Arcane
                 return Aabb2{ Vec2(tight.min.x - m, tight.min.y - m),
                               Vec2(tight.max.x + m, tight.max.y + m) };
             };
-            const Aabb2 fatA = fatOf(c.a.index, c.bodyA);
-            const Aabb2 fatB = fatOf(c.b.index, c.bodyB);
+            Aabb2 fatA = fatOf(c.a.index, c.bodyA);
+            Aabb2 fatB = fatOf(c.b.index, c.bodyB);
+            // Speculative widening: grow BOTH boxes by half the extra margin so the
+            // overlap test admits a pair whose CLOSING distance this Step is up to
+            // `extraMargin` (a fast mover approaching a wall). Zero by default keeps
+            // the plain fat-box gate (the resting / settled persistence behavior).
+            if (extraMargin > Real(0))
+            {
+                const Real h = extraMargin * Real(0.5);
+                fatA.min.x -= h; fatA.min.y -= h; fatA.max.x += h; fatA.max.y += h;
+                fatB.min.x -= h; fatB.min.y -= h; fatB.max.x += h; fatB.max.y += h;
+            }
             return AabbOverlap(fatA, fatB);
+        }
+
+        void PhysicsWorld::WakeMoverPair(std::uint32_t fa, std::uint32_t fb)
+        {
+            // Wake-on-contact (Task 4): ports the rule the retired GenerateContacts
+            // ran in its mover-mover loop (PhysicsWorld.lua:369-382). A sleeping
+            // dynamic touched by an awake mover wakes so the island re-forms; the
+            // [physics][island] "new contact wakes a sleeping body" test gates this.
+            //
+            // Apply the gates the old GenerateContacts mover-mover loop ran BEFORE
+            // its wake block (same body, alive, BODY sensor, da/db) on the
+            // PRE-ORIENTATION (a, b). The fixture-sensor gate is INTENTIONALLY NOT
+            // applied here: in the old path the wake ran first and the fixture-sensor
+            // `continue` came AFTER it (skipping only the CONTACT/constraint, not the
+            // wake). TryCreateContact still applies the fixture-sensor gate, so a
+            // pair overlapping only via a sensor fixture wakes but creates no contact
+            // -- byte-identical to the old ordering.
+            const std::uint32_t a = m_fxBody[fa];
+            const std::uint32_t b = m_fxBody[fb];
+            if (a == b)
+            {
+                return;
+            }
+            if (a >= m_count || b >= m_count || m_alive[a] == 0 || m_alive[b] == 0)
+            {
+                return;
+            }
+            if (m_sensor[a] != 0 || m_sensor[b] != 0)
+            {
+                return;
+            }
+            const bool da = static_cast<BodyType>(m_btype[a]) == BodyType::Dynamic;
+            const bool db = static_cast<BodyType>(m_btype[b]) == BodyType::Dynamic;
+            if (!da && !db)
+            {
+                return; // kinematic-kinematic: no dynamic response, nothing to wake
+            }
+            // Wake a sleeping dynamic touched by an awake mover (a static/kinematic
+            // counterpart reports awake; a dynamic counterpart must itself be awake).
+            // The wake GATING here matches the old GenerateContacts pre-orientation
+            // wake byte-for-byte -- including fixture-sensor pairs, which the old
+            // path woke before reaching its fixture-sensor `continue` (that skip
+            // gated the constraint, not the wake).
+            if (da && m_awake[a] == 0 && (!db || m_awake[b] != 0))
+            {
+                m_awake[a] = 1;
+                m_sleepTimer[a] = Real(0);
+            }
+            if (db && m_awake[b] == 0 && (!da || m_awake[a] != 0))
+            {
+                m_awake[b] = 1;
+                m_sleepTimer[b] = Real(0);
+            }
         }
 
         void PhysicsWorld::TryCreateContact(std::uint32_t fa, std::uint32_t fb)
         {
-            // Resolve owning body slots (MIRROR GenerateContacts' mover-mover loop).
+            // Resolve owning body slots (mover-mover orientation rule).
             std::uint32_t a = m_fxBody[fa];
             std::uint32_t b = m_fxBody[fb];
 
@@ -2181,22 +1726,34 @@ namespace Arcane
             // ---- 1. CREATE: a contact for every solver-relevant fixture-pair ----
             //
             // (a) mover<->mover: the Phase-2 incremental fixture-pair set (sorted
-            //     fa < fb). UpdatePairs ALWAYS emits the full current pair set, so
-            //     draining the move buffer here does NOT change what GenerateContacts
-            //     sees next (it re-emits the same full set from an empty buffer) --
-            //     this is why m_cpPairs is a SEPARATE scratch from m_genPairs.
+            //     fa < fb). UpdatePairs ALWAYS emits the full current pair set. Each
+            //     pair both wakes any sleeping dynamic touched by an awake mover
+            //     (WakeMoverPair -- the rule the retired GenerateContacts ran) and
+            //     ensures a persistent contact (TryCreateContact). The wake MUST
+            //     precede the manifold update pass so a freshly woken body's contact
+            //     is recomputed + emitted this Step (mirrors the old ordering, where
+            //     GenerateContacts woke + emitted in one pass).
             m_fixtureBroadphase->UpdatePairs(m_cpPairs);
             for (const BroadphasePair& p : m_cpPairs)
             {
+                WakeMoverPair(p.a, p.b);
                 TryCreateContact(p.a, p.b);
             }
 
-            // (b) mover<->static-BODY: per awake non-sensor DYNAMIC body, the
-            //     StaticCandidates static-body list. MIRRORS GenerateContacts'
-            //     static path (the query pad + the genStatics loop), but SKIPS the
-            //     tile-SPAN path (spans are Task 3, transient virtual fixtures).
-            //     A static body's fixture is a real fixture slot, so we pair each
-            //     (dynamic fixture, static fixture) the same way TryCreateContact does.
+            // (b) mover<->static-BODY + tile SPANS: per awake non-sensor DYNAMIC
+            //     body, the StaticCandidates lists. MIRRORS the legacy
+            //     GenerateContacts static path (the query pad + the genStatics loop)
+            //     AND its tile-SPAN path (Task 4). A static body's fixture is a real
+            //     fixture slot, so we pair each (dynamic fixture, static fixture)
+            //     into the PERSISTENT pool the same way TryCreateContact does. Tile
+            //     spans are virtual fixtures (no slot), so they go into the TRANSIENT
+            //     m_spanContacts scratch (cleared here, refilled each Step).
+            //
+            // Clear the transient span scratch -- it is rebuilt from scratch this
+            // Step (spans are not pooled; they are virtual/transient fixtures).
+            m_spanContacts.clear();
+            m_spanCenters.clear();
+
             const Real moveDt = dt > Real(0) ? dt : Real(0);
             const Real threshSq = (moveDt > Real(0))
                                       ? (kSkin / moveDt) * (kSkin / moveDt)
@@ -2209,8 +1766,9 @@ namespace Arcane
                 {
                     continue;
                 }
-                // Same query pad as GenerateContacts: max(2, specMargin), where
-                // specMargin = max(kSkin, |v|*dt) so the candidate set is identical.
+                // Same query pad as the legacy GenerateContacts: max(2, specMargin),
+                // where specMargin = max(kSkin, |v|*dt) so the candidate set is
+                // identical (the velocity-scaled speculative margin, P3.1).
                 const Real speedSqA   = m_velX[i] * m_velX[i] + m_velY[i] * m_velY[i];
                 const Real specMargin = (speedSqA > threshSq)
                                             ? std::sqrt(speedSqA) * moveDt
@@ -2220,9 +1778,8 @@ namespace Arcane
                 Aabb2 query;
                 query.min = Vec2(box.min.x - pad, box.min.y - pad);
                 query.max = Vec2(box.max.x + pad, box.max.y + pad);
-                // genSpans is intentionally IGNORED (tile spans deferred to Task 3);
-                // reuse the Step-only m_genSpans/m_genStatics scratch -- safe because
-                // UpdateContacts runs immediately before GenerateContacts refills them.
+                // Fills BOTH m_genSpans (tile spans, processed transiently below) and
+                // m_genStatics (static bodies, pooled). Step-only scratch.
                 StaticCandidates(query, m_genSpans, m_genStatics);
 
                 const std::vector<std::uint32_t>* fxListA = nullptr;
@@ -2230,6 +1787,82 @@ namespace Arcane
                 {
                     fxListA = &m_bodyFixtures[i];
                 }
+
+                // ---- tile spans (transient virtual fixtures) -- Task 4 ----------
+                // Mirror the legacy GenerateContacts span loop EXACTLY: build the
+                // span shape (half-extents from the merged rect) + its transform at
+                // the span center, collide each non-sensor dynamic fixture of A vs
+                // the span, and stash a transient Contact carrying the manifold +
+                // bIsBody=false + bodyB=kInvalidSlot + fixA = the dynamic fixture
+                // slot (fixB = kInvalidSlot). The span geometric center is stashed
+                // in the parallel m_spanCenters so EmitContactConstraints reproduces
+                // the same anchorB the legacy emit lambda used for spans.
+                for (std::size_t s = 0; s < m_genSpans.size(); ++s)
+                {
+                    const Aabb2& span = m_genSpans[s];
+                    const Vec2 spanCenter = (span.min + span.max) * Real(0.5);
+                    const Vec2 he = (span.max - span.min) * Real(0.5);
+                    const Shape spanShape = MakeAabb(he.x, he.y);
+                    const Transform xfB{ spanCenter, Real(0) };
+
+                    if (fxListA != nullptr)
+                    {
+                        for (const std::uint32_t fi : *fxListA)
+                        {
+                            if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                            {
+                                continue;
+                            }
+                            if (m_fxSensor[fi] != 0u)
+                            {
+                                continue; // sensor fixture: no constraint
+                            }
+                            const Transform xfA = ComposeFixtureXf(
+                                Vec2(m_posX[i], m_posY[i]), m_angle[i],
+                                Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                                m_fxLocalAngle[fi]);
+                            const Manifold mfld = Collide(m_fxShape[fi], xfA,
+                                                          spanShape, xfB, specMargin);
+                            if (mfld.pointCount <= 0)
+                            {
+                                continue; // not touching -> no transient contact
+                            }
+                            Contact c;
+                            c.a        = FixtureHandle{ fi, m_fxGen[fi] };
+                            c.b        = FixtureHandle{}; // span has no fixture slot
+                            c.bodyA    = i;
+                            c.bodyB    = kInvalidSlot;
+                            c.bIsBody  = false;
+                            c.manifold = mfld;
+                            c.touching = true;
+                            m_spanContacts.push_back(c);
+                            m_spanCenters.push_back(spanCenter);
+                        }
+                    }
+                    else
+                    {
+                        // Legacy single-shape fallback (a dynamic body with no live
+                        // fixtures -- AddBody always makes one, so this is defensive).
+                        const Transform xfA{ Vec2(m_posX[i], m_posY[i]), m_angle[i] };
+                        const Manifold mfld = Collide(m_shape[i], xfA,
+                                                      spanShape, xfB, specMargin);
+                        if (mfld.pointCount <= 0)
+                        {
+                            continue;
+                        }
+                        Contact c;
+                        c.a        = FixtureHandle{}; // no fixture slot
+                        c.b        = FixtureHandle{};
+                        c.bodyA    = i;
+                        c.bodyB    = kInvalidSlot;
+                        c.bIsBody  = false;
+                        c.manifold = mfld;
+                        c.touching = true;
+                        m_spanContacts.push_back(c);
+                        m_spanCenters.push_back(spanCenter);
+                    }
+                }
+
                 if (fxListA == nullptr)
                 {
                     continue; // no fixtures -> no fixture-pair contact to persist
@@ -2286,35 +1919,11 @@ namespace Arcane
                     m_contactPool.Destroy(id);
                     return;
                 }
-                // Fat-box separation: the contact owns its destruction.
-                if (!FatBoxesOverlap(c))
-                {
-                    m_contactPool.Destroy(id);
-                    return;
-                }
-                // Both asleep -> reuse the cached manifold (no recompute).
-                // A body moved while still asleep (e.g. SetPosition, which moves
-                // the proxy but does NOT set m_awake) keeps a stale cached manifold,
-                // but it is never consumed while asleep (GenerateContacts + the
-                // solver feed produce no constraint for an asleep dynamic body) and
-                // is recomputed on wake -- benign.
-                if (BothAsleep(c))
-                {
-                    return;
-                }
-                // Recompute the manifold ONCE this step. MIRRORS GenerateContacts'
-                // transform composition (FixtureWorldXf == ComposeFixtureXf) and the
-                // velocity-scaled speculative margin so the manifold matches Task 4.
-                const Transform xfA = ComposeFixtureXf(
-                    Vec2(m_posX[c.bodyA], m_posY[c.bodyA]), m_angle[c.bodyA],
-                    Vec2(m_fxLocalPosX[c.a.index], m_fxLocalPosY[c.a.index]),
-                    m_fxLocalAngle[c.a.index]);
-                const Transform xfB = ComposeFixtureXf(
-                    Vec2(m_posX[c.bodyB], m_posY[c.bodyB]), m_angle[c.bodyB],
-                    Vec2(m_fxLocalPosX[c.b.index], m_fxLocalPosY[c.b.index]),
-                    m_fxLocalAngle[c.b.index]);
                 // Per-pair speculative margin: max(kSkin, sqrt(maxSpeedSq)*dt) over
-                // the two bodies -- the exact GenerateContacts mover-pair formula.
+                // the two bodies -- the exact velocity-scaled CCD margin the retired
+                // GenerateContacts fed to Collide. Computed HERE (before the fat-box
+                // gate) so the destroy test can widen by it: a fast mover closing on
+                // a wall is up to `margin` away yet must keep its contact this Step.
                 const Real speedSqA = m_velX[c.bodyA] * m_velX[c.bodyA] +
                                       m_velY[c.bodyA] * m_velY[c.bodyA];
                 const Real speedSqB = m_velX[c.bodyB] * m_velX[c.bodyB] +
@@ -2323,6 +1932,41 @@ namespace Arcane
                 const Real margin = (maxSpeedSq > threshSq)
                                         ? std::sqrt(maxSpeedSq) * moveDt
                                         : kSkin;
+
+                // Fat-box separation: the contact owns its destruction. Widen the
+                // gate by the speculative margin (minus the fixed tree skin already
+                // baked into each fat box) so a fast approaching mover is not reaped
+                // before Collide can report its speculative manifold. A slow/resting
+                // pair has margin == kSkin << kMargin, so extra == 0 and the gate is
+                // the plain fat-box test (settled-persistence behavior UNCHANGED).
+                const Real extra = std::max(Real(0),
+                                            margin - DynamicTree::kMargin);
+                if (!FatBoxesOverlap(c, extra))
+                {
+                    m_contactPool.Destroy(id);
+                    return;
+                }
+                // Both asleep -> reuse the cached manifold (no recompute).
+                // A body moved while still asleep (e.g. SetPosition, which moves
+                // the proxy but does NOT set m_awake) keeps a stale cached manifold,
+                // but it is never consumed while asleep (the awake-gate in
+                // EmitContactConstraints produces no constraint for an asleep
+                // dynamic body) and is recomputed on wake -- benign.
+                if (BothAsleep(c))
+                {
+                    return;
+                }
+                // Recompute the manifold ONCE this step, mirroring the retired
+                // GenerateContacts transform composition (ComposeFixtureXf) + the
+                // velocity-scaled speculative margin computed above.
+                const Transform xfA = ComposeFixtureXf(
+                    Vec2(m_posX[c.bodyA], m_posY[c.bodyA]), m_angle[c.bodyA],
+                    Vec2(m_fxLocalPosX[c.a.index], m_fxLocalPosY[c.a.index]),
+                    m_fxLocalAngle[c.a.index]);
+                const Transform xfB = ComposeFixtureXf(
+                    Vec2(m_posX[c.bodyB], m_posY[c.bodyB]), m_angle[c.bodyB],
+                    Vec2(m_fxLocalPosX[c.b.index], m_fxLocalPosY[c.b.index]),
+                    m_fxLocalAngle[c.b.index]);
                 c.manifold = Collide(m_fxShape[c.a.index], xfA,
                                      m_fxShape[c.b.index], xfB, margin);
                 c.touching = (c.manifold.pointCount > 0);
@@ -2332,48 +1976,58 @@ namespace Arcane
         void PhysicsWorld::EmitContactConstraints(
             std::vector<ContactConstraint>& out) const
         {
-            // Oracle-gate (Phase 3, Task 3): the persistent solver feed. Walk the
-            // pool (const ForEach, ascending id) and emit the ContactConstraint set
-            // GenerateContacts WOULD build for these (body<->body) contacts. Each
-            // constraint mirrors GenerateContacts' `emit` lambda field-for-field so
-            // the two sets are provably equivalent BEFORE Task 4 swaps the feed.
-            // READ-ONLY: writes ONLY `out`, mutates NO sim state. Tile SPANS are
-            // deferred to Task 4 (the body-only oracle scene has none).
+            // The persistent solver feed (Phase 3, Task 4). Walk BOTH the persistent
+            // m_contactPool (fixture<->fixture, ascending id) AND the transient
+            // m_spanContacts (dynamic-fixture<->tile-span), emit a ContactConstraint
+            // per touching+awake contact (mirroring the retired GenerateContacts
+            // `emit` lambda field-for-field), then sort into the canonical
+            // (bodyA, bodyB, fixtureA, fixtureB) order so the live feed is
+            // run-twice-identical regardless of pool/broadphase emission order.
+            // READ-ONLY w.r.t. SIM STATE: writes ONLY `out` + the persistent emit
+            // scratch members (m_emitKeys/m_emitOrder/m_emitSorted -- `mutable`, so
+            // this method stays `const`). The span scratch was filled by
+            // UpdateContacts; this method mutates no body/contact sim state.
             out.clear();
 
-            m_contactPool.ForEach([&](std::uint32_t /*id*/, const Contact& c)
+            // Parallel sort key per emitted constraint: (bodyA, bodyB, fixA, fixB).
+            // Carried from each source Contact during emit so the canonical sort
+            // has the fixture slots available (ContactConstraint does not store
+            // fixture slots -- only body slots). Sorted together with `out`.
+            // Persistent scratch: clear() keeps capacity (no realloc after warmup).
+            std::vector<EmitSortKey>& keys = m_emitKeys;
+            keys.clear();
+
+            // Emit one ContactConstraint for a single Contact. Returns true if a
+            // constraint was emitted (touching + awake A). `spanCenter` is the
+            // span's geometric center (used as comB for a tile span); unused when
+            // c.bIsBody. Mirrors the retired GenerateContacts `emit` lambda.
+            auto emitContact = [&](const Contact& c, const Vec2& spanCenter) -> bool
             {
-                // Not touching (no manifold points) -> GenerateContacts' emit
-                // early-returns on pointCount <= 0; mirror that here.
+                // Not touching -> the legacy emit early-returns on pointCount <= 0.
                 if (!c.touching || c.manifold.pointCount <= 0)
                 {
-                    return;
+                    return false;
                 }
-                // Awake-gate (MIRRORS GenerateContacts): it only ever emits for an
-                // AWAKE dynamic A (`if (... m_awake[i] == 0 ...) continue;` in the
-                // static loop / `if (m_awake[ia] == 0) continue;` in the mover loop).
-                // The pool keeps contacts for sleeping mover-pairs too, so without
-                // this gate the emitted set would be a SUPERSET of GenerateContacts'.
-                // (No-op while sleeping is disabled in the oracle, but required for
-                // Task 4's live correctness so an asleep pair never feeds the solver.)
+                // Awake-gate: GenerateContacts only ever emitted for an AWAKE dynamic
+                // A. The pool keeps contacts for sleeping mover-pairs too, so without
+                // this gate an asleep pair would (wrongly) feed the solver.
                 const std::uint32_t aIdx = c.bodyA;
                 if (aIdx >= m_count || m_alive[aIdx] == 0 || m_awake[aIdx] == 0)
                 {
-                    return;
+                    return false;
                 }
 
-                // NOTE: pool contacts are always bIsBody==true; the non-body
-                // ('false') arms below mirror the emit lambda for Task-4 parity only
-                // and never execute here (UpdateContacts persists body-body fixture
-                // pairs only).
                 const bool          bIsBody = c.bIsBody;
                 const std::uint32_t bIdx    = c.bodyB;
-                const std::uint32_t fixA    = c.a.index;
+                // fixA: the dynamic fixture slot for a fixture-path contact; for the
+                // legacy single-shape span fallback c.a is an invalid handle (gen 0)
+                // and fixA is kInvalidSlot (matching GenerateContacts' fallback id).
+                const bool          aHasFix = (c.a.generation != 0u);
+                const std::uint32_t fixA    = aHasFix ? c.a.index : kInvalidSlot;
                 const std::uint32_t fixB    = bIsBody ? c.b.index : kInvalidSlot;
 
                 const Manifold& m = c.manifold;
 
-                // ---- mirror the GenerateContacts `emit` lambda EXACTLY -------
                 ContactConstraint cc;
                 cc.bodyA       = aIdx;
                 cc.bodyB       = bIsBody ? bIdx : kInvalidSlot;
@@ -2385,21 +2039,34 @@ namespace Arcane
                 cc.normal      = m.normal;
                 cc.kind        = m.kind;
 
-                // Combined material: friction = sqrt(fA*fB), restitution = max.
-                // Read per-fixture friction/restitution (the persistent pool is
-                // fixture<->fixture only, so both sides have a real fixture slot;
-                // the legacy single-shape fallbacks in GenerateContacts never apply
-                // here -- UpdateContacts only persists fixture-pair contacts).
-                const Real fricA = m_fxFriction[fixA];
-                const Real fricB = bIsBody ? m_fxFriction[fixB] : m_fxFriction[fixA];
-                const Real restA = m_fxRestitution[fixA];
-                const Real restB = bIsBody ? m_fxRestitution[fixB] : Real(0);
+                // Combined material: friction = sqrt(fA*fB), restitution = max(rA,rB).
+                //   * fixture-path (aHasFix): per-fixture material (both sides for a
+                //     fixture<->fixture; for a span, body A's fixture material as both
+                //     sides + restB = 0 -- exactly GenerateContacts' span emit args).
+                //   * single-shape fallback (!aHasFix): body-level m_fric/m_rest as
+                //     both sides + restB = 0 (the legacy fallback span emit).
+                Real fricA, fricB, restA, restB;
+                if (aHasFix)
+                {
+                    fricA = m_fxFriction[fixA];
+                    fricB = bIsBody ? m_fxFriction[fixB] : m_fxFriction[fixA];
+                    restA = m_fxRestitution[fixA];
+                    restB = bIsBody ? m_fxRestitution[fixB] : Real(0);
+                }
+                else
+                {
+                    // Single-shape body A (no fixture) vs span: body-level material.
+                    fricA = m_fric[aIdx];
+                    fricB = m_fric[aIdx];
+                    restA = m_rest[aIdx];
+                    restB = Real(0);
+                }
                 cc.friction    = std::sqrt(fricA * fricB);
                 cc.restitution = std::max(restA, restB);
 
                 // Compound-COM anchors: from each body's world CENTER OF MASS
-                // (WorldCom == origin for localCenter==0). A is always dynamic;
-                // B (a real body here) uses its world COM.
+                // (WorldCom == origin for localCenter==0). A is always dynamic; B is
+                // either a real body's world COM or the span's geometric center.
                 const Vec2 cA = WorldCom(Vec2(m_posX[aIdx], m_posY[aIdx]),
                                          m_angle[aIdx],
                                          Vec2(m_localCenterX[aIdx],
@@ -2408,7 +2075,7 @@ namespace Arcane
                     ? WorldCom(Vec2(m_posX[bIdx], m_posY[bIdx]),
                                m_angle[bIdx],
                                Vec2(m_localCenterX[bIdx], m_localCenterY[bIdx]))
-                    : Vec2(Real(0), Real(0));
+                    : spanCenter; // tile span: invInertiaB==0 zeros the lever arm
 
                 cc.pointCount = m.pointCount;
                 for (int p = 0; p < m.pointCount; ++p)
@@ -2421,18 +2088,56 @@ namespace Arcane
                     cp.id             = MixContactId(mp.id, fixA, fixB);
                 }
                 out.push_back(cc);
+                keys.push_back(EmitSortKey{ aIdx, cc.bodyB, fixA, fixB });
+                return true;
+            };
+
+            // (a) fixture<->fixture: the persistent pool (ascending id).
+            m_contactPool.ForEach([&](std::uint32_t /*id*/, const Contact& c)
+            {
+                emitContact(c, Vec2(Real(0), Real(0)));
             });
 
-            // Deterministic canonical order: sort by (bodyA, bodyB, points[0].id).
-            // This is the same key the oracle compares on, so order independence is
-            // intentional (Task 4 handles the live-feed ordering / determinism).
-            std::sort(out.begin(), out.end(),
-                      [](const ContactConstraint& x, const ContactConstraint& y)
+            // (b) tile spans: the transient scratch UpdateContacts filled this Step.
+            for (std::size_t s = 0; s < m_spanContacts.size(); ++s)
             {
+                emitContact(m_spanContacts[s], m_spanCenters[s]);
+            }
+
+            // ---- canonical sort (design Sec 7): (bodyA, bodyB, fixtureA, fixtureB).
+            // Sort `out` and `keys` together via an index permutation so the live
+            // solver feed is deterministic / run-twice-identical. The key is unique
+            // per emitted constraint (a fixture-pair contributes exactly one
+            // constraint per body-pair; two fixture-pairs differ in fixA/fixB).
+            const std::size_t n = out.size();
+            std::vector<std::size_t>& order = m_emitOrder; // persistent scratch
+            order.clear();
+            order.resize(n);
+            for (std::size_t k = 0; k < n; ++k)
+            {
+                order[k] = k;
+            }
+            std::sort(order.begin(), order.end(),
+                      [&](std::size_t lhs, std::size_t rhs)
+            {
+                const EmitSortKey& x = keys[lhs];
+                const EmitSortKey& y = keys[rhs];
                 if (x.bodyA != y.bodyA) { return x.bodyA < y.bodyA; }
                 if (x.bodyB != y.bodyB) { return x.bodyB < y.bodyB; }
-                return x.points[0].id < y.points[0].id;
+                if (x.fixA  != y.fixA)  { return x.fixA  < y.fixA;  }
+                return x.fixB < y.fixB;
             });
+            // Apply the permutation into the persistent staging vector (n is small
+            // per Step). clear() keeps capacity; swap hands the sorted buffer to
+            // `out` and parks `out`'s old buffer in m_emitSorted for next Step.
+            std::vector<ContactConstraint>& sorted = m_emitSorted;
+            sorted.clear();
+            sorted.reserve(n);
+            for (std::size_t k = 0; k < n; ++k)
+            {
+                sorted.push_back(out[order[k]]);
+            }
+            out.swap(sorted);
         }
 
         void PhysicsWorld::BulletSweep()

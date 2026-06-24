@@ -1,13 +1,15 @@
 // Persistent contacts: survive across steps, recompute the manifold at most once/step,
-// destroy on fat-box separation + on body removal. (Pool populated each Step; not yet
-// feeding the solver -- that is Task 4.)
+// destroy on fat-box separation + on body removal. (Pool populated each Step; feeds the
+// solver as of Task 4 -- EmitContactConstraints walks the pool + transient tile spans.)
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp> // Catch::Approx (span-feed rest tolerance)
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Body.hpp>
+#include <Arcane/Physics/Broadphase/Passability.hpp> // GridPassability (span feed test)
 #include <Arcane/Physics/Solver/Solver.hpp> // ContactConstraint
 
 using namespace Arcane::Physics;
@@ -212,8 +214,91 @@ TEST_CASE("Persistent contact walk == GenerateContacts constraint set", "[physic
     std::vector<ContactConstraint> fromPool;
     w.DebugEmitPoolConstraints(fromPool);                // EmitContactConstraints into 'out'
     std::vector<ContactConstraint> fromGen;
-    w.DebugCopyActiveConstraints(fromGen);               // copy of m_contactConstraints (GenerateContacts)
+    w.DebugCopyActiveConstraints(fromGen);               // copy of m_contactConstraints (the live feed)
 
     REQUIRE(!fromGen.empty());                            // the scene actually has contacts
     REQUIRE(SameConstraintSet(fromPool, fromGen));       // sorted set-equality on key fields
+}
+
+// ---- Task 4: tile-SPAN solver feed --------------------------------------------
+//
+// THE SPAN GATE. A dynamic box falls under gravity onto a TILE span (a merged run
+// of solid cells -- a virtual/transient fixture, NOT a real body) and must REST on
+// the span's top face: it does NOT tunnel through. This exercises the transient
+// span path EmitContactConstraints now feeds the solver (UpdateContacts builds the
+// span manifolds into m_spanContacts; the swap walks them into m_contactConstraints).
+// Before Task 4 the spans came from GenerateContacts; this pins that the reproduced
+// span feed keeps tile collision working through the persistent-contacts swap.
+//
+// Convention (matches the oracle scene + PhysicsWorld.lua): +y is DOWN, gravity
+// pulls toward +y. A solid tile row cy has its top face at world y = cy*cellSize;
+// a box ABOVE it (smaller y) falls down and lands on the span top.
+TEST_CASE("Tile-span solver feed: a dynamic body rests on a merged span (no tunnel)",
+          "[physics]")
+{
+    constexpr int  kGridW    = 16;
+    constexpr int  kGridH    = 16;
+    constexpr Real kCellSize = Real(20);
+
+    // A solid bottom-ish row at cy = 10 -> the span occupies world y in
+    // [200, 220]; its TOP face is at y = 200. (cols 4..8 -> a multi-cell merged
+    // run, exercising the merged-span path, not a single cell.)
+    GridPassability grid(kGridW, kGridH);
+    for (int cx = 4; cx <= 8; ++cx)
+    {
+        grid.SetSolid(cx, 10, true);
+    }
+
+    WorldDef wd;
+    wd.gravityY      = Real(400);             // downward (+y)
+    wd.passability   = &grid;
+    wd.tileCellSize  = kCellSize;
+    wd.tileOrigin    = Vec2(Real(0), Real(0));
+    PhysicsWorld w(wd);
+
+    // A dynamic box (half-extent 5 -> 10x10) starting ABOVE the span, centered over
+    // the merged run (col 6 center x = 6*20+10 = 130), well clear at y = 150.
+    const Real boxHalf = Real(5);
+    BodyDef box;
+    box.type          = BodyType::Dynamic;
+    box.shape         = MakeAabb(boxHalf, boxHalf);
+    box.density       = Real(1);
+    box.friction      = Real(0.4);
+    box.fixedRotation = true;
+    box.position      = Vec2(Real(130), Real(150)); // above the span top (200)
+    BodyHandle b = w.AddBody(box);
+
+    const Real spanTopY = Real(10) * kCellSize; // 200
+
+    // Settle under gravity. The box falls, the span feed catches it, the solver
+    // rests it on the span top. 200 steps is ample at dt = 1/60.
+    bool sawSpanConstraint = false;
+    for (int i = 0; i < 200; ++i)
+    {
+        w.Step(Real(1) / Real(60));
+        if (w.ActiveContactCount() >= 1)
+        {
+            sawSpanConstraint = true; // the span path fed the solver at least once
+        }
+    }
+
+    const Vec2 p = w.Position(b);
+
+    // (1) The span actually fed the solver (the transient span path produced a
+    //     ContactConstraint while the box was in contact).
+    REQUIRE(sawSpanConstraint);
+
+    // (2) NO TUNNEL: the box bottom (center + boxHalf) stays at/above the span top.
+    //     It must rest ~ON the surface (center ~ spanTopY - boxHalf = 195), and
+    //     crucially the center never ends up below the span top (would mean it sank
+    //     into / through the span).
+    REQUIRE(p.y < spanTopY);                          // center above the span top
+    REQUIRE(p.y == Catch::Approx(spanTopY - boxHalf).margin(Real(0.5))); // resting on it
+    // It did not drift horizontally (the span is flat; no lateral force).
+    REQUIRE(p.x == Catch::Approx(Real(130)).margin(Real(0.5)));
+
+    // (3) Tile spans are TRANSIENT (virtual fixtures), so they are NOT in the
+    //     persistent pool: the box rests on a span yet DebugContactCount (the pool)
+    //     is 0 -- proving the span feed is the transient path, not a pooled contact.
+    REQUIRE(w.DebugContactCount() == 0u);
 }

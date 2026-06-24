@@ -30,7 +30,7 @@
 // PORTED IN P2.2 (SoftStep solver):
 //   * Step stages restructured to 1-5 (see Step() in PhysicsWorld.cpp):
 //       stage 1: prev snapshot + kinematic integrate
-//       stage 2: solver contact generation (GenerateContacts / Part A)
+//       stage 2: solver contact generation (UpdateContacts + EmitContactConstraints / Part A)
 //       stage 3: Soft Step solve (Part B)
 //       stage 4: island sleep bookkeeping (P2.4)
 //       stage 5: contacts:step (events + gating + deferred flush)
@@ -818,10 +818,11 @@ namespace Arcane
                 return m_solver ? m_solver->WarmStartCacheSize() : std::size_t(0);
             }
 
-            // Count of ContactConstraints generated in the last Step (debug/
-            // inspection hook). The pool persists between Steps (cleared then
-            // refilled by GenerateContacts each Step). Returns the size of the
-            // live pool immediately after Step() returns.
+            // Count of ContactConstraints fed to the solver in the last Step
+            // (debug/inspection hook). As of Phase 3 Task 4 m_contactConstraints is
+            // produced by EmitContactConstraints (walking the persistent pool + the
+            // transient span scratch) each Step. Returns its size immediately after
+            // Step() returns.
             // Use: test (d) asserts >= 2 for a compound body (one constraint per
             // fixture-pair contact against the floor).
             [[nodiscard]] std::size_t ActiveContactCount() const noexcept
@@ -831,9 +832,10 @@ namespace Arcane
 
             // Test/inspection hook (collision-rebuild Phase 3, Task 2): the live
             // count of the PERSISTENT contact pool, populated each Step by
-            // UpdateContacts. NOT yet consumed by the solver (GenerateContacts
-            // still feeds it) -- so this only reflects the side pool's lifecycle
-            // (survive across steps, destroy on fat-box separation / body removal).
+            // UpdateContacts. As of Task 4 this pool IS the solver feed (walked by
+            // EmitContactConstraints). Reflects the pool's lifecycle (survive across
+            // steps, destroy on fat-box separation / body removal). Note: it counts
+            // fixture<->fixture contacts only -- tile spans are transient (not pooled).
             [[nodiscard]] std::size_t DebugContactCount() const noexcept
             {
                 return m_contactPool.Count();
@@ -841,12 +843,13 @@ namespace Arcane
 
             // Oracle-gate hooks (collision-rebuild Phase 3, Task 3). Read-only.
             //
-            // DebugEmitPoolConstraints: walk the PERSISTENT contact pool and emit
-            // the solver-feed ContactConstraint set it WOULD produce (Task 4's feed),
-            // sorted into a deterministic canonical order. Does NOT touch sim state.
-            // DebugCopyActiveConstraints: a copy of the constraints GenerateContacts
-            // built this Step (m_contactConstraints) -- the legacy oracle. The two
-            // sets must be EQUAL on a body-only scene (the pre-swap equivalence gate).
+            // DebugEmitPoolConstraints: walk the persistent contact pool + transient
+            // spans and emit the solver-feed ContactConstraint set (the live feed),
+            // sorted into the deterministic canonical order. Does NOT touch sim state.
+            // DebugCopyActiveConstraints: a copy of m_contactConstraints (which, as
+            // of Task 4, is itself the EmitContactConstraints output). The two sets
+            // are equal on a body-only scene (the Task-3 equivalence gate, now a feed
+            // self-consistency check post-swap).
             void DebugEmitPoolConstraints(std::vector<ContactConstraint>& out) const
             {
                 EmitContactConstraints(out);
@@ -1114,76 +1117,88 @@ namespace Arcane
             std::vector<std::unique_ptr<Joint>> m_joints;
             std::vector<JointConstraint>        m_jointConstraints;
 
-            // Build the dynamics ContactConstraint array for this Step (Part A):
-            // for each awake dynamic body, manifolds vs tile spans + static
-            // bodies (StaticCandidates) and vs mover-mover pairs involving a
-            // dynamic (broadphase Pairs, narrowed). Orients A = dynamic.
-            //
-            // P3.1 speculative-contact CCD: the per-body speculative margin fed
-            // to CollideShapes is VELOCITY-SCALED -- max(kSkin, |v| * dt) -- so a
-            // fast mover's wall is seen pre-overlap and the SoftStep solver's
-            // speculative bias (s > 0 -> bias = s * invSubDt) caps the per-sub-step
-            // advance to the gap, stopping tunneling without a discrete clamp.
-            // A slow/resting body's margin is just kSkin (resting UNCHANGED).
-            void GenerateContacts(Real dt);
-
             // ---- persistent contact update (collision-rebuild Phase 3, Task 2) -
             //
             // UpdateContacts(dt): the ONE-PASS persistent-contact update, called
-            // from Step immediately BEFORE GenerateContacts each Step so the pool
-            // is populated -- but its output is NOT yet consumed (GenerateContacts
-            // still feeds the solver; Task 4 retires GenerateContacts and feeds the
-            // pool to the solver). Two phases:
+            // from Step each Step. As of Phase 3 Task 4 it is the SOLE narrowphase
+            // for the solver feed (GenerateContacts is retired); EmitContactConstraints
+            // then walks its output into m_contactConstraints. Three phases:
             //   1. CREATE: ensure a Contact for every solver-relevant fixture-pair
             //      (mover<->mover from the incremental fixture-pair set; mover<->
-            //      static-BODY from StaticCandidates). MIRRORS GenerateContacts'
-            //      filters + orientation EXACTLY so Task 3's oracle matches.
-            //      DEFERS tile spans to Task 3 (they are transient virtual fixtures).
+            //      static-BODY from StaticCandidates).
             //   2. UPDATE + DESTROY: one deterministic pass over the pool (ascending
             //      id) -- destroy on stale handle / fat-box separation, recompute the
             //      cached manifold otherwise (skipping both-asleep pairs).
+            //   3. TILE SPANS (Task 4): rebuild the per-Step transient m_spanContacts
+            //      scratch -- per awake dynamic body, StaticCandidates -> Collide each
+            //      dynamic fixture vs each merged span. Spans are virtual fixtures, so
+            //      they are NOT pooled; this scratch is cleared + refilled each Step.
+            //      Mirrors the legacy GenerateContacts span path EXACTLY (the span
+            //      shape/transform/margin + the (fixA, fixB=kInvalidSlot) ids) so the
+            //      manifold + MixContactId + COM are identical (PhysicsTileGridTest).
             //
-            // SIDE-EFFECT-FREE on the simulation: reads body/fixture state + the
-            // broadphase, writes ONLY m_contactPool + m_cpPairs. It does NOT mutate
-            // m_awake / positions / velocities / m_contactConstraints (the wake
-            // mutation stays in GenerateContacts; here m_awake is read-only).
+            // The fixture<->fixture create/update phases are SIDE-EFFECT-FREE on the
+            // simulation (read body/fixture state + the broadphase, write ONLY
+            // m_contactPool + m_cpPairs). The span phase additionally writes only
+            // m_spanContacts/m_spanCenters (Step-local scratch) and mirrors
+            // GenerateContacts' wake-of-asleep-dynamic rule for span candidates.
             void UpdateContacts(Real dt);
 
             // CREATE-pass helper: ensure a Contact for the fixture-pair (fa, fb),
-            // applying GenerateContacts' EXACT filters + orientation rule (A's body
-            // dynamic; both-dynamic -> lower body slot is A; bodies + fixtures swap
-            // together). Fills the body slots ONLY on a fresh create.
+            // applying the EXACT filters + orientation rule (A's body dynamic;
+            // both-dynamic -> lower body slot is A; bodies + fixtures swap together).
+            // Fills the body slots ONLY on a fresh create.
             void TryCreateContact(std::uint32_t fa, std::uint32_t fb);
+
+            // CREATE-pass helper (Task 4): wake-on-contact for a mover<->mover
+            // fixture-pair. Reproduces the wake rule the retired GenerateContacts
+            // ran in its mover-mover loop (PhysicsWorld.lua:369-382): a sleeping
+            // dynamic touched by an awake mover wakes (so the island re-forms). Uses
+            // the pre-orientation body slots and the SAME alive/sensor/da-db gates
+            // TryCreateContact applies, so exactly the pairs that produce a
+            // constraint can wake. Mutates m_awake / m_sleepTimer only (no other sim
+            // state). MUST run before the manifold update pass so a woken body's
+            // contact is recomputed + emitted this Step.
+            void WakeMoverPair(std::uint32_t fa, std::uint32_t fb);
 
             // True iff fixture handle h still refers to its original live slot.
             [[nodiscard]] bool FixtureSlotLive(FixtureHandle h) const noexcept;
 
-            // True iff the two fixtures' FAT broadphase boxes still overlap (a
-            // mover fixture's fat box comes from the DynamicTree leaf; a static
-            // fixture's from its tight AABB grown by the tree margin). The contact
-            // owns its destruction when this is false.
-            [[nodiscard]] bool FatBoxesOverlap(const Contact& c) const noexcept;
+            // True iff the two fixtures' FAT broadphase boxes (optionally grown by
+            // an extra speculative margin) still overlap (a mover fixture's fat box
+            // comes from the DynamicTree leaf; a static fixture's from its tight AABB
+            // grown by the tree margin). The contact owns its destruction when this
+            // is false. `extraMargin` widens the overlap test so a fast mover's
+            // velocity-scaled speculative contact (whose closing distance this Step
+            // exceeds the fixed tree margin) is NOT reaped before it can produce a
+            // speculative manifold -- mirroring the retired GenerateContacts, which
+            // had no fat-box gate at all and collided every velocity-padded candidate.
+            [[nodiscard]] bool FatBoxesOverlap(const Contact& c,
+                                               Real extraMargin = Real(0)) const noexcept;
 
             // True iff both bodies are asleep (a static/kinematic body counts as
             // asleep -- it never wakes a recompute on its own). Mirrors the awake
             // gate GenerateContacts uses to skip work.
             [[nodiscard]] bool BothAsleep(const Contact& c) const noexcept;
 
-            // ---- oracle-gate: the persistent solver feed (Phase 3, Task 3) ---
+            // ---- the persistent solver feed (Phase 3, Task 4) ----------------
             //
             // Walk the persistent contact pool (the const ForEach, ascending id)
-            // and build the ContactConstraint set the solver WOULD be fed once
-            // GenerateContacts retires (Task 4). Read-only: it writes ONLY `out`
-            // and touches NO sim state (not m_contactConstraints). Each emitted
-            // constraint mirrors GenerateContacts' `emit` lambda field-for-field
-            // (body slots, inv mass/inertia, normal/kind, friction = sqrt(fA*fB),
-            // restitution = max(rA,rB), per-point COM-relative anchors,
-            // baseSeparation = -separation, id = MixContactId). Skips a contact
-            // that is not touching and applies the SAME awake-gate GenerateContacts
-            // uses (skip when the dynamic A is asleep) so the emitted set matches.
-            // The walk is sorted into (bodyA, bodyB, points[0].id) order afterward
-            // (the deterministic canonical order the oracle compares on). TILE
-            // SPANS are DEFERRED to Task 4 -- the body-only oracle scene has none.
+            // AND the transient tile-span scratch (m_spanContacts, filled by
+            // UpdateContacts) and build the ContactConstraint set fed to the solver.
+            // Read-only: it writes ONLY `out` and touches NO sim state (not the
+            // pool, not m_spanContacts). Each emitted constraint mirrors the legacy
+            // GenerateContacts `emit` lambda field-for-field (body slots, inv
+            // mass/inertia, normal/kind, friction = sqrt(fA*fB), restitution =
+            // max(rA,rB), per-point COM-relative anchors, baseSeparation =
+            // -separation, id = MixContactId). Skips a contact that is not touching
+            // and applies the SAME awake-gate (skip when the dynamic A is asleep).
+            //
+            // CANONICAL ORDER (design Sec 7): after collecting all constraints the
+            // walk is sorted by (bodyA, bodyB, fixtureA_slot, fixtureB_slot) -- the
+            // deterministic order that makes the live solver feed run-twice-identical
+            // regardless of pool/broadphase emission order. (The Task-3 oracle still
+            // compares as a SET, so this ordering does not affect that gate.)
             void EmitContactConstraints(std::vector<ContactConstraint>& out) const;
 
             // ---- P3.1 CCD: bullet GJK-TOI clamp (Step stage 6) ---------------
@@ -1225,49 +1240,67 @@ namespace Arcane
 
             // ---- contact-gen scratch (Step-only; zero steady-state alloc) ---
             //
-            // Reused by GenerateContacts each Step: the dynamic body's near-AABB
-            // span/static candidate lists + the broadphase mover-pair buffer.
-            // Distinct from the query scratch above (GenerateContacts runs inside
-            // Step's solver stage, not from a query/callback site).
+            // Reused by UpdateContacts each Step: the dynamic body's near-AABB
+            // span/static candidate lists (StaticCandidates output, consumed by the
+            // span pass + the mover<->static-body create pass). Distinct from the
+            // query scratch above (UpdateContacts runs inside Step's solver stage,
+            // not from a query/callback site).
             std::vector<Aabb2>          m_genSpans;
             std::vector<std::uint32_t>  m_genStatics;
-            std::vector<BroadphasePair> m_genPairs;
 
-            // Per-fixture WORLD AABB cache (one entry per fixture slot), rebuilt
-            // once at the top of GenerateContacts from the current (pre-solve)
-            // transforms. The per-fixture mover-broadphase proxies cull at fixture
-            // granularity, but pairs still reach GenerateContacts as (bodyA, bodyB)
-            // tuples; a multi-fixture body (e.g. a 37-wire whisk agitator or a
-            // compound) would otherwise drive the full GJK/SAT narrowphase on every
-            // fixture pair -- including the ~90% that are nowhere near each other.
-            // The fixture-pair loops AABB-reject against this cache before calling
-            // Collide (the per-shape-proxy effect Box2D gets for free from its
-            // broadphase), turning a per-pair GJK into 4 float compares. The cache
-            // is Step-local (recomputed each GenerateContacts), so it never goes
-            // stale across steps; the reject is conservative (disjoint AABBs =>
-            // Collide returns empty), so manifolds are byte-identical.
-            std::vector<Aabb2>          m_genFxAabb;
-
-            // Per-BODY world AABB cache (one entry per body slot), filled once at
-            // the top of GenerateContacts via SlotAabb(bs) for every alive body.
-            // The broadphase-overlap pre-checks (static-candidate query AABB +
-            // the mover-pair tight-AABB reject) read this instead of recomputing
-            // SlotAabb per pair -- a 37-fixture whisk paired with ~400 bodies
-            // otherwise recomputes its 37-fixture union AABB ~400x/Step. Filled
-            // from the identical SlotAabb(), so the candidate set is byte-identical.
-            std::vector<Aabb2>          m_genBodyAabb;
-
-            // ---- persistent contact pool (collision-rebuild Phase 3, Task 2) --
+            // ---- persistent contact pool (collision-rebuild Phase 3, Task 2/4) --
             //
             // The durable fixture-pair contact pool, POPULATED each Step by
-            // UpdateContacts (called just before GenerateContacts) but NOT yet
-            // consumed by the solver. Survives across steps; the create pass
-            // dedups, the update pass recomputes manifolds + destroys dead pairs.
-            // m_cpPairs is the move-buffer scratch for the mover<->mover create
-            // pass (parallel to GenerateContacts' m_genPairs -- a SEPARATE buffer
-            // so UpdateContacts' UpdatePairs drain never disturbs GenerateContacts').
+            // UpdateContacts and CONSUMED by EmitContactConstraints (Task 4 -- the
+            // solver feed; GenerateContacts is retired). Survives across steps; the
+            // create pass dedups, the update pass recomputes manifolds + destroys
+            // dead pairs. m_cpPairs is the move-buffer scratch for the mover<->mover
+            // create pass.
             ContactPool                 m_contactPool;
             std::vector<BroadphasePair> m_cpPairs;
+
+            // Transient TILE-SPAN contacts (collision-rebuild Phase 3, Task 4).
+            //
+            // Tile spans are VIRTUAL/transient fixtures (a merged run of solid
+            // cells, no fixture slot), so they are NOT pooled like fixture<->fixture
+            // contacts. Instead UpdateContacts refills this per-Step scratch (cleared
+            // at the top, rebuilt) by mirroring the legacy GenerateContacts span path
+            // EXACTLY: per awake dynamic body, StaticCandidates -> for each span,
+            // build the span shape + transform and Collide(dynFixture, span). Each
+            // resulting Contact carries bIsBody=false, bodyB=kInvalidSlot, the
+            // span's geometric center in spanCenter, and fixA = the dynamic fixture
+            // slot / fixB = kInvalidSlot so MixContactId + the COM-relative anchors
+            // match what GenerateContacts produced. EmitContactConstraints walks
+            // BOTH m_contactPool (fixture<->fixture) AND this scratch (spans) into
+            // the solver feed, then applies the canonical sort.
+            //
+            // Contact::a holds {fi, gen} for the dynamic fixture; Contact::b is the
+            // default (invalid) handle. Contact::bodyA is the dynamic body slot;
+            // bodyB is kInvalidSlot. The span's geometric center is stashed in a
+            // PARALLEL vector (m_spanCenters) at the same index (Contact has no
+            // span-center field). Step-only; zero steady-state alloc after warmup.
+            std::vector<Contact> m_spanContacts;
+            std::vector<Vec2>    m_spanCenters; // span geometric center, parallel to m_spanContacts
+
+            // ---- EmitContactConstraints sort scratch (Phase 3, Task 4) -------
+            //
+            // The canonical-sort scratch consumed by EmitContactConstraints every
+            // Step (parallel sort key per emitted constraint + the index
+            // permutation + the permuted output staging). Promoted from per-Step
+            // locals to persistent members so the hot solver-feed path holds the
+            // module's zero-steady-state-alloc-after-warmup discipline: each is
+            // .clear()-and-reused at the top of EmitContactConstraints (clear
+            // preserves capacity -> no realloc once the scene's contact count
+            // stabilizes). `mutable` because EmitContactConstraints stays `const`
+            // (the oracle DebugEmitPoolConstraints hook is const) -- mutable cache
+            // scratch behind a const read-only API is idiomatic.
+            struct EmitSortKey
+            {
+                std::uint32_t bodyA, bodyB, fixA, fixB;
+            };
+            mutable std::vector<EmitSortKey>       m_emitKeys;
+            mutable std::vector<std::size_t>       m_emitOrder;
+            mutable std::vector<ContactConstraint> m_emitSorted;
 
             // ---- island sleep scratch (P2.4; Step-only; zero steady-state) ---
             //
