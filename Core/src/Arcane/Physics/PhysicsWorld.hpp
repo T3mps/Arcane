@@ -636,8 +636,8 @@ namespace Arcane
             // Non-const overload: required by consumers that call UpdatePairs
             // (Task 5 -- the incremental move-buffer drain). UpdatePairs is
             // NON-CONST (it mutates m_pairSet/m_moved/m_removed); callers with
-            // a non-const PhysicsWorld& (e.g. ContactManager::Step) use this
-            // overload so the non-const method resolves without a cast.
+            // a non-const PhysicsWorld& (e.g. UpdateContacts) use this overload
+            // so the non-const method resolves without a cast.
             [[nodiscard]] IBroadphase& FixtureBroadphase() noexcept
             {
                 return *m_fixtureBroadphase;
@@ -688,8 +688,11 @@ namespace Arcane
             }
 
             // Map a fixture slot to its owning body slot (Phase 2, Task 2).
-            // Used by ContactManager::Step to map fixture-pairs -> body-pairs
-            // before the Touch/event loop.
+            // Its sole caller -- ContactManager::Step's fixture-pair -> body-pair
+            // dedup -- was deleted in Phase 4 (events now derive from the pool's
+            // already-body-keyed touch-state), so this is currently UNUSED. Kept
+            // as a public fixture->body map; a candidate for Phase-5 dead-code
+            // removal.
             [[nodiscard]] std::uint32_t BodyOfFixture(std::uint32_t fi) const noexcept
             {
                 return m_fxBody[fi];
@@ -1305,6 +1308,21 @@ namespace Arcane
             // create pass.
             ContactPool                 m_contactPool;
             std::vector<BroadphasePair> m_cpPairs;
+
+            // ---- per-step touched EVENT body-pairs (collision-rebuild Phase 4) --
+            //
+            // The deduped, sorted set of body-pairs that are EVENT-RELEVANT AND
+            // TOUCHING this Step, derived from the persistent pool by UpdateContacts'
+            // caller (Step stage 6) and consumed by ContactManager::Step to derive
+            // Begin/Stay events. This REPLACES ContactManager's old second
+            // broadphase walk + kinematic-static SlotsOverlap pass: the pool already
+            // computed `touching` once this Step, so the events pass is a byproduct.
+            // Built by walking the pool ascending-id (deterministic), pushing
+            // {min(bodyA,bodyB), max(...)} for each eventRelevant+touching contact,
+            // then sort + unique (a compound body's N^2 fixture-pairs dedup to ONE
+            // body-pair, matching the old sorted-body-pair emission order). clear()
+            // keeps capacity -> zero steady-state alloc.
+            std::vector<BroadphasePair> m_touchedEventPairs;
 
             // Transient TILE-SPAN contacts (collision-rebuild Phase 3, Task 4).
             //

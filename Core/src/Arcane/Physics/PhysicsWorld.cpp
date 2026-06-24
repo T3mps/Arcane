@@ -1532,7 +1532,56 @@ namespace Arcane
                 dt);
 
             // ---- stage 6: events + gating + deferred flush -------------------
-            m_contacts.Step(*this);
+            // Events-as-byproduct (collision-rebuild Phase 4): derive the touched
+            // EVENT body-pairs from the persistent pool (UpdateContacts already
+            // computed each pair's manifold ONCE this Step), then hand them to the
+            // ContactManager -- it no longer runs its own second broadphase +
+            // kinematic-static overlap pass. Walk the pool ascending-id
+            // (deterministic), collect {min,max} body-pairs for every event-relevant
+            // EXACTLY-OVERLAPPING contact, then sort + unique so a compound body's
+            // N^2 fixture-pairs collapse to ONE body-pair and the Begin/Stay order
+            // matches the old sorted-body-pair emission order. clear() keeps capacity.
+            //
+            // EXACT-OVERLAP, NOT speculative `touching`: the old ContactManager
+            // tested overlap via SlotsOverlap with margin 0, which reports a contact
+            // ONLY on STRICT penetration (depth > 0); a speculative gap (the manifold
+            // point a velocity-scaled margin emits at NEGATIVE separation) is NOT an
+            // event overlap. The pool's c.touching is pointCount>0 INCLUDING those
+            // speculative gaps (correct for the SOLVER feed), so event derivation
+            // must instead require a manifold point with separation > 0 -- byte-
+            // identical to the old margin-0 SlotsOverlap (a genuinely penetrating
+            // point reports the SAME positive separation regardless of the margin
+            // used to compute the manifold, and an exact edge-touch at separation==0
+            // is excluded by both, matching the old semantics).
+            auto exactlyOverlapping = [](const Contact& c) noexcept -> bool
+            {
+                for (int p = 0; p < c.manifold.pointCount; ++p)
+                {
+                    if (c.manifold.points[p].separation > Real(0))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            m_touchedEventPairs.clear();
+            m_contactPool.ForEach(
+                [&](std::uint32_t /*id*/, const Contact& c)
+                {
+                    if (!c.eventRelevant || !exactlyOverlapping(c))
+                    {
+                        return;
+                    }
+                    const std::uint32_t a = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
+                    const std::uint32_t b = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
+                    m_touchedEventPairs.push_back(BroadphasePair{ a, b });
+                });
+            std::sort(m_touchedEventPairs.begin(), m_touchedEventPairs.end());
+            m_touchedEventPairs.erase(
+                std::unique(m_touchedEventPairs.begin(),
+                            m_touchedEventPairs.end()),
+                m_touchedEventPairs.end());
+            m_contacts.Step(*this, m_touchedEventPairs);
         }
 
         // ----------------------------------------------------------------
@@ -1740,7 +1789,7 @@ namespace Arcane
             std::uint32_t ia = a,  ib = b;
             std::uint32_t fia = fa, fib = fb;
             const bool swap = da ? (db && ib < ia)   // both dynamic: lower slot is A
-                                 : (db || b < a);    // B dynamic, or neither -> lower slot is A
+                                 : (db || ib < ia);  // B dynamic, or neither -> lower slot is A
             if (swap)
             {
                 std::swap(ia, ib);
@@ -1756,6 +1805,26 @@ namespace Arcane
             const bool sensorB = (m_sensor[ib] != 0) || (m_fxSensor[fib] != 0u);
             const bool solverRelevant = (da || db) && !sensorA && !sensorB;
 
+            // EVENT RELEVANCE (Phase 4, Task 2): events fire for every pooled
+            // body-pair EXCEPT dynamic-vs-static-body (the design's explicit
+            // exclusion -- the solver owns dynamic-vs-static response; events are
+            // gameplay triggers). A static body is `TypeSlot == Static`; the only
+            // created pairs are mover-mover, dynamic-static, kinematic-static (tiles
+            // never reach the pool), so this filter leaves mover-mover (sensors +
+            // kinematic-kinematic included) + kinematic-static event-relevant and
+            // excludes ONLY dynamic-static. Uses the ORIENTED (ia, ib) types so it
+            // reads symmetrically; a/b vs ia/ib is identical (orientation only swaps
+            // the two slots, not their type set).
+            const bool aStatic =
+                static_cast<BodyType>(m_btype[ia]) == BodyType::Static;
+            const bool bStatic =
+                static_cast<BodyType>(m_btype[ib]) == BodyType::Static;
+            const bool aDyn =
+                static_cast<BodyType>(m_btype[ia]) == BodyType::Dynamic;
+            const bool bDyn =
+                static_cast<BodyType>(m_btype[ib]) == BodyType::Dynamic;
+            const bool eventRelevant = !((aDyn && bStatic) || (aStatic && bDyn));
+
             const FixtureHandle hA{ fia, m_fxGen[fia] };
             const FixtureHandle hB{ fib, m_fxGen[fib] };
             const ContactPool::EnsureResult r = m_contactPool.EnsurePair(hA, hB);
@@ -1763,13 +1832,14 @@ namespace Arcane
             {
                 // EnsurePair already stored c.a = hA / c.b = hB on the fresh slot
                 // (and Destroy re-keys from them, so we must NOT overwrite them).
-                // We only fill the body slots + bIsBody + solverRelevant, which the
-                // pool defaults until the caller sets them (created == true).
+                // We only fill the body slots + bIsBody + solver/event relevance,
+                // which the pool defaults until the caller sets them (created == true).
                 Contact& c = m_contactPool.Get(r.id);
                 c.bodyA          = ia;
                 c.bodyB          = ib;
                 c.bIsBody        = true;
                 c.solverRelevant = solverRelevant;
+                c.eventRelevant  = eventRelevant;
             }
             // On a non-created HIT we leave the existing contact untouched (its
             // body slots + manifold persist) -- mirrors EnsurePair's contract.
@@ -1777,7 +1847,9 @@ namespace Arcane
 
         void PhysicsWorld::UpdateContacts(Real dt)
         {
-            // ---- 1. CREATE: a contact for every solver-relevant fixture-pair ----
+            // ---- 1. CREATE: a contact for every fixture-pair in the EVENT UNION --
+            // (solver-relevant pairs + the event-only tail: sensors,
+            //  kinematic-kinematic, kinematic-vs-static-body; tiles stay out).
             //
             // (a) mover<->mover: the Phase-2 incremental fixture-pair set (sorted
             //     fa < fb). UpdatePairs ALWAYS emits the full current pair set. Each
@@ -2081,7 +2153,25 @@ namespace Arcane
                 // but it is never consumed while asleep (the awake-gate in
                 // EmitContactConstraints produces no constraint for an asleep
                 // dynamic body) and is recomputed on wake -- benign.
-                if (BothAsleep(c))
+                //
+                // EVENT EXCEPTION (Phase 4, Task 2): BothAsleep treats a
+                // static/kinematic body as "asleep" (it never integrates), so a
+                // kinematic-static / kinematic-kinematic contact would NEVER refresh
+                // `touching` and a moving kinematic's events would be missed. Un-skip
+                // the recompute for an EVENT-ONLY contact (event-relevant but NOT
+                // solver-relevant). That set is exactly the pairs the event machine
+                // needs fresh touch-state for that the solver does not feed:
+                // kinematic-static, kinematic-kinematic, and dynamic-sensor pairs
+                // (all have solverRelevant == false). Recomputing them is
+                // SOLVER-NEUTRAL: EmitContactConstraints emits nothing for a
+                // !solverRelevant contact, and the recompute writes only the cached
+                // manifold/touching -- no sim state. Crucially the skip behavior of
+                // every SOLVER-relevant contact (which governs the byte-identical
+                // solver feed) is UNCHANGED. The dynamic-kinematic SOLVER case is
+                // unaffected -- WakeMoverPair wakes its sleeping dynamic, so
+                // BothAsleep is already false for it.
+                const bool eventOnly = c.eventRelevant && !c.solverRelevant;
+                if (BothAsleep(c) && !eventOnly)
                 {
                     return;
                 }

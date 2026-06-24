@@ -58,8 +58,24 @@ namespace Arcane
             // !sensorB, i.e. dynamic-dynamic / dynamic-kinematic / dynamic-static,
             // non-sensor. EmitContactConstraints emits a ContactConstraint ONLY for
             // solverRelevant contacts, so the solver feed stays byte-identical to
-            // Phase 3 even though the pool is now a superset. Set at create time.
+            // Phase 3 even though the pool is now a superset. LIFETIME-INVARIANT:
+            // set once at create time, NEVER updated on a HIT/recompute (the
+            // body-type/sensor classification of a contact's pair is fixed for its
+            // lifetime).
             bool          solverRelevant = false;
+            // EVENT relevance (collision-rebuild Phase 4, Task 2). The body-pair
+            // event machine (ContactManager) derives Begin/Stay/End ONLY from
+            // event-relevant touching contacts. True iff the contact's body-pair is
+            // NOT dynamic-vs-static-body: dynamic-vs-static is a SOLVER concern, not
+            // a gameplay trigger (the design's explicit exclusion). The only pooled
+            // pairs are mover-mover (dynamic/kinematic, sensors included),
+            // dynamic-static, and kinematic-static; tile spans live in the
+            // transient m_spanContacts scratch, never in m_contactPool, so they
+            // never reach event derivation. So eventRelevant is true for
+            // mover-mover + kinematic-static, false ONLY for dynamic-static.
+            // LIFETIME-INVARIANT like solverRelevant: set once at create, never
+            // updated on a HIT.
+            bool          eventRelevant = false;
         };
 
         // ----------------------------------------------------------------

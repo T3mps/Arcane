@@ -16,9 +16,11 @@
 #include <Arcane/Physics/Shapes.hpp>
 // T7: the CollideShapes (Dispatch.hpp) include is GONE -- ShapesOverlap now
 // delegates to PhysicsWorld::SlotsOverlap (rotation + fixture aware), so the
-// old narrowphase router is no longer referenced from this TU. AabbOverlap
-// (the kinematic-vs-static AABB pre-filter) comes from Broadphase.hpp, pulled
-// in transitively via PhysicsWorld.hpp.
+// old narrowphase router is no longer referenced from this TU. Phase 4: the
+// kinematic-vs-static AABB pre-filter (AabbOverlap) is GONE too -- Step no
+// longer runs its own candidate pass; it consumes the touched body-pairs the
+// PhysicsWorld derives from the persistent pool. ShapesOverlap survives for
+// RearmImpl (an out-of-step op with no per-Step touch-state available).
 
 namespace Arcane
 {
@@ -71,13 +73,14 @@ namespace Arcane
         void ContactManager::Touch(PhysicsWorld& w, std::uint32_t a,
                                    std::uint32_t b, std::uint32_t stamp)
         {
-            // Ports touch(a,b): guard alive, narrow to true overlap, then
-            // get/create the pair, stamp it, gate, and queue begin/stay.
+            // Ports touch(a,b) for an ALREADY-TOUCHING pair (Phase 4): the caller
+            // (Step) only ever hands us touching event-relevant body-pairs that the
+            // persistent pool already narrowed, so the redundant per-pair overlap
+            // re-test (the old ShapesOverlap call -- the second narrowphase Phase 4
+            // deletes) is GONE. The alive guard is kept (cheap + defensive: a pooled
+            // touching pair is alive, but Step's touched set is built one stage
+            // earlier so this costs nothing and documents the invariant).
             if (!w.Alive(a) || !w.Alive(b))
-            {
-                return;
-            }
-            if (!ShapesOverlap(w, a, b))
             {
                 return;
             }
@@ -110,79 +113,34 @@ namespace Arcane
             }
         }
 
-        void ContactManager::Step(PhysicsWorld& w)
+        void ContactManager::Step(PhysicsWorld& w,
+                                  const std::vector<BroadphasePair>& touchedPairs)
         {
             ++m_stamp;
             const std::uint32_t stamp = m_stamp;
             m_queue.clear();
 
-            // Candidates: mover-mover (Phase 2 Task 2: fixture broadphase pairs
-            // mapped to body-pairs + deduped) + each KINEMATIC body vs each
-            // staticList body (index-ordered). Both candidate streams are
-            // deterministic.
+            // Candidates (Phase 4 -- events-as-byproduct): the pre-built TOUCHED
+            // event body-pairs the PhysicsWorld derived from the persistent
+            // ContactPool this Step. This REPLACES the manager's OWN second pass:
+            //   * the mover-mover broadphase UpdatePairs -> fixture-pairs -> body-
+            //     pairs dedup is GONE (the pool's create pass already covers the
+            //     mover-mover event union), and
+            //   * the kinematic-vs-staticBody StaticList + SlotsOverlap loop is GONE
+            //     (the pool's kinematic-static create path + per-step `touching`
+            //     already covers it).
+            // The pool computed each pair's `touching` ONCE in UpdateContacts, so
+            // re-running the narrowphase here would be the redundant second pass.
             //
-            // The per-fixture broadphase emits FIXTURE ids; Touch() and
-            // SlotsOverlap() operate on BODY ids.  Map each fixture-pair to its
-            // owning body-pair, skip same-body pairs, canonicalise (a<b), then
-            // sort+unique before calling Touch so a compound body's N^2 fixture-
-            // pairs for the same body-pair produce exactly ONE Touch call.
-            // Drains any proxy moves since GenerateContacts (solver commit +
-            // CCD BulletSweep) and returns the current set. == Pairs() but
-            // O(moved log n) when most bodies rest. Non-const overload of
-            // FixtureBroadphase() resolves because w is non-const PhysicsWorld&.
-            w.FixtureBroadphase().UpdatePairs(m_pairScratch);
-            m_bodyPairScratch.clear();
-            for (const BroadphasePair& fp : m_pairScratch)
-            {
-                std::uint32_t a = w.BodyOfFixture(fp.a);
-                std::uint32_t b = w.BodyOfFixture(fp.b);
-                if (a == b)
-                {
-                    continue; // two fixtures of the same body
-                }
-                if (a > b)
-                {
-                    std::swap(a, b);
-                }
-                m_bodyPairScratch.push_back(BroadphasePair{ a, b });
-            }
-            std::sort(m_bodyPairScratch.begin(), m_bodyPairScratch.end());
-            m_bodyPairScratch.erase(
-                std::unique(m_bodyPairScratch.begin(), m_bodyPairScratch.end()),
-                m_bodyPairScratch.end());
-            for (const BroadphasePair& bp : m_bodyPairScratch)
+            // `touchedPairs` is ALREADY ascending-sorted + deduped + canonical
+            // (min,max) -- so Begin/Stay emit in the same deterministic body-pair
+            // order the old sorted broadphase produced, and a compound body's N^2
+            // fixture-pairs collapse to ONE body-pair (the dedup the old code did
+            // before Touch). It excludes dynamic-vs-static-body (the event design's
+            // exclusion) and tiles (never pooled). Touch no longer re-tests overlap.
+            for (const BroadphasePair& bp : touchedPairs)
             {
                 Touch(w, bp.a, bp.b, stamp);
-            }
-
-            // Kinematic-vs-staticBody: static bodies are NOT in the mover
-            // broadphase, so we iterate them explicitly.  The guard is
-            // `== BodyType::Kinematic` -- FAITHFUL to ContactManager.lua:150
-            // which also guards `== KINEMATIC`.  Dynamic-vs-static-BODY events
-            // deliberately do NOT emit here: the solver owns dynamic-vs-static
-            // response (arriving in P2.1); events are for gameplay triggers on
-            // kinematic movers.  Dynamic movers get mover-mover events via the
-            // broadphase Pairs() loop above.
-            const std::vector<std::uint32_t>& statics = w.StaticList();
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
-            {
-                if (w.Alive(i) && w.TypeSlot(i) == BodyType::Kinematic)
-                {
-                    for (std::uint32_t s = 0; s < statics.size(); ++s)
-                    {
-                        // Cheap AABB reject before the GJK/SAT overlap test
-                        // (statics are not in the mover broadphase, so we
-                        // pre-filter here to avoid calling CollideShapes on
-                        // clearly-disjoint pairs).  Behavior-preserving:
-                        // non-overlapping pairs never had contact points.
-                        if (!AabbOverlap(w.SlotAabb(i), w.SlotAabb(statics[s])))
-                        {
-                            continue;
-                        }
-                        Touch(w, i, statics[s], stamp);
-                    }
-                }
             }
 
             // Pairs not touched this step have separated. Collect the to-end

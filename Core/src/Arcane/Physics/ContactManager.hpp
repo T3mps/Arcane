@@ -3,13 +3,16 @@
 // ContactManager: persistent contact pairs + begin/stay/end + sensor events,
 // with two-granularity event gating (M6, Task P1.8).
 //
-// PORT NOTE: a faithful (VERBATIM-behavior) port of
-// Client/src/physics/ContactManager.lua. Persistent contact pairs over the
-// mover broadphase: begin/stay/end events queued during Step and delivered
-// AFTER it (spec: no user code runs mid-step). Pairs are mover-mover (the
-// broadphase Pairs()) and kinematic-vs-staticBody (the staticList).
-// Mover-vs-TILE contacts deliberately do NOT flow here (cells are not bodies;
-// the character controller owns its statics response).
+// PORT NOTE: a behavior-preserving port of
+// Client/src/physics/ContactManager.lua (begin/stay/end events queued during
+// Step and delivered AFTER it -- spec: no user code runs mid-step), with the
+// collision-rebuild Phase-4 events-as-byproduct change: this manager NO LONGER
+// runs its own broadphase + narrowphase candidate pass. PhysicsWorld derives
+// the TOUCHED event body-pairs from the persistent ContactPool -- mover-mover
+// (dynamic/kinematic, sensors included) and kinematic-vs-staticBody, EXCLUDING
+// dynamic-vs-staticBody -- and hands them to Step() already canonical (min,max),
+// sorted, and deduped. Mover-vs-TILE contacts deliberately do NOT flow here
+// (cells are not bodies; the character controller owns its statics response).
 //
 // EVENT GATING (ported VERBATIM -- spec resolved decision #3): a per-body
 // eventsEnabled flag PLUS a world-level gate. Gated events are DROPPED, not
@@ -35,11 +38,12 @@
 //     (<=) for AABB/poly pairs. The tested scenes are non-degenerate (clear
 //     overlap / clear gap), so this never bites; port shapesOverlap if a later
 //     test needs inclusive edge-touch semantics.
-//   * DETERMINISM: begin/stay events come from the broadphase's SORTED pairs +
-//     index-ordered statics (already deterministic). The END events iterate the
-//     pairs map (unordered_map -> nondeterministic order), so we COLLECT the
-//     to-end pairs, SORT them by (a,b), then emit -- so End order is
-//     deterministic too.
+//   * DETERMINISM: begin/stay events come from the caller-supplied TOUCHED
+//     body-pairs -- PhysicsWorld walks the ContactPool in ascending id and
+//     SORTS the touched pairs by (a,b) before calling Step (already
+//     deterministic). The END events iterate the pairs map (unordered_map ->
+//     nondeterministic order), so we COLLECT the to-end pairs, SORT them by
+//     (a,b), then emit -- so End order is deterministic too.
 //
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll) and
@@ -96,11 +100,19 @@ namespace Arcane
             // when a listener is set.
             void SetListener(Listener fn) { m_listener = std::move(fn); }
 
-            // Process one step's contacts: increment stamp, walk candidate pairs
-            // (mover-mover SORTED + kinematic-vs-static index-ordered), apply
-            // gating, queue begin/stay; detect separations -> queue end (sorted);
-            // then flush the queue to the listener (deferred). Ports step().
-            void Step(PhysicsWorld& w);
+            // Derive one step's events from the pre-built TOUCHED event body-pairs.
+            // Phase 4 (events-as-byproduct): the candidate set is no longer an OWN
+            // second broadphase + kinematic-static overlap pass -- the persistent
+            // ContactPool already computed each pair's `touching` once this Step, so
+            // PhysicsWorld hands us the deduped + sorted (min,max) body-pairs that
+            // are event-relevant AND touching. For each: get/create the pair, stamp,
+            // gate, queue begin/stay (NO overlap re-test -- the pair IS touching);
+            // detect separations -> queue end (sorted); flush deferred to the
+            // listener. `touchedPairs` MUST be ascending-sorted + deduped (Begin/Stay
+            // emit order is exactly that order -- the determinism contract). Ports
+            // the Lua step() with the overlap pass deleted.
+            void Step(PhysicsWorld& w,
+                      const std::vector<BroadphasePair>& touchedPairs);
 
             // Reset `begun` on pairs involving idx (idx omitted = all). No
             // synthetic end (gated events are dropped, not queued). Ports disarm.
@@ -152,13 +164,21 @@ namespace Arcane
             // True iff slots a,b overlap NOW. Delegates to
             // PhysicsWorld::SlotsOverlap (T7: rotation + fixture aware,
             // pointCount>0). Sensor fixtures are NOT skipped (event gating must
-            // see sensor overlaps).
+            // see sensor overlaps). Phase 4: still used by RearmImpl (an out-of-step
+            // op -- it must re-test overlap because no per-Step touch-state is
+            // available); the hot Step path no longer calls it (the pair handed in
+            // is ALREADY known touching).
             [[nodiscard]] static bool ShapesOverlap(const PhysicsWorld& w,
                                                     std::uint32_t a,
                                                     std::uint32_t b);
 
-            // The Lua touch(a,b): if both alive AND overlap, get/create the pair,
-            // stamp it, gate, and queue begin/stay (or drop on gate).
+            // The Lua touch(a,b) for an ALREADY-TOUCHING body-pair (Phase 4): get/
+            // create the pair, stamp it, gate, and queue begin/stay (or drop on
+            // gate). The overlap re-test is GONE -- Step's caller (PhysicsWorld)
+            // already filtered to touching event-relevant pairs from the pool, so
+            // re-testing would be the redundant second narrowphase Phase 4 deletes.
+            // (The alive guard is also redundant -- a pooled touching pair is alive
+            // -- but kept defensive/cheap.)
             void Touch(PhysicsWorld& w, std::uint32_t a, std::uint32_t b,
                        std::uint32_t stamp);
 
@@ -190,14 +210,10 @@ namespace Arcane
             // Named neutrally because both code paths reuse the same member to
             // avoid per-call allocation (no dedicated per-purpose scratch).
             std::vector<Pair> m_workPairs;
-            // Scratch for the broadphase fixture-pairs (reused each Step --
-            // Pairs() does clear()+push_back, so capacity is preserved).
-            std::vector<BroadphasePair> m_pairScratch;
-            // Scratch for the deduped body-pairs derived from m_pairScratch
-            // (Phase 2, Task 2: fixture broadphase emits fixture ids; events
-            // need body ids, and a compound body produces N^2 fixture-pairs for
-            // the same body-pair -- dedup before calling Touch).
-            std::vector<BroadphasePair> m_bodyPairScratch;
+            // PHASE 4: the m_pairScratch / m_bodyPairScratch broadphase scratch are
+            // GONE -- the candidate set is now the pre-built touched body-pairs the
+            // PhysicsWorld derives from the persistent pool (no second broadphase
+            // walk + body-pair dedup here).
         };
 
     } // namespace Physics
