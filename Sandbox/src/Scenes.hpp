@@ -13,7 +13,7 @@
 // kStressWhiskCount - number of kinematic balloon-whisk agitators (always 1).
 namespace Arcane::Sandbox
 {
-    inline constexpr int kStressBodyCount = 1000;
+    inline constexpr int kStressBodyCount = 10000;
     inline constexpr int kStressWhiskCount = 1;
 }
 
