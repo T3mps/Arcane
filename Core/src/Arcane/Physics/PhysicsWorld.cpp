@@ -1441,6 +1441,13 @@ namespace Arcane
             }
 
             // ---- stage 2: solver contact generation (Part A) -----------------
+            // Persistent-contact pool update (collision-rebuild Phase 3, Task 2):
+            // populate m_contactPool this Step BEFORE GenerateContacts. The pool
+            // is NOT yet consumed (GenerateContacts still feeds the solver), so
+            // behavior is unchanged; UpdateContacts is a side pool whose lifecycle
+            // (create/persist/destroy) Task 3+ will assert against GenerateContacts.
+            // Side-effect-free on the sim: writes only m_contactPool + m_cpPairs.
+            UpdateContacts(dt);
             GenerateContacts(dt);
 
             // ---- stage 3: Soft Step solve (Part B) ---------------------------
@@ -2032,6 +2039,294 @@ namespace Arcane
                      m_fxRestitution[fa], m_fxRestitution[fb],
                      /*fixA=*/fa, /*fixB=*/fb);
             }
+        }
+
+        // ----------------------------------------------------------------
+        // Persistent-contact helpers (collision-rebuild Phase 3, Task 2).
+        // ----------------------------------------------------------------
+
+        bool PhysicsWorld::FixtureSlotLive(FixtureHandle h) const noexcept
+        {
+            return h.index < m_fxGen.size() &&
+                   m_fxGen[h.index] == h.generation &&
+                   m_fxGen[h.index] != 0u;
+        }
+
+        bool PhysicsWorld::BothAsleep(const Contact& c) const noexcept
+        {
+            // A static/kinematic body never wakes the recompute on its own, so it
+            // counts as "asleep" here. m_awake is 1 for static/kinematic (they are
+            // never integrated/slept), so guard on body TYPE: only a DYNAMIC body
+            // being awake forces a recompute. Mirrors GenerateContacts' awake gate
+            // (it only ever generates for an awake DYNAMIC A; a static/kinematic B
+            // does not drive the narrowphase by itself).
+            auto bodyAwake = [&](std::uint32_t b) -> bool
+            {
+                if (b >= m_count || m_alive[b] == 0)
+                {
+                    return false;
+                }
+                return static_cast<BodyType>(m_btype[b]) == BodyType::Dynamic &&
+                       m_awake[b] != 0;
+            };
+            const bool aAwake = bodyAwake(c.bodyA);
+            const bool bAwake = c.bIsBody && bodyAwake(c.bodyB);
+            return !aAwake && !bAwake;
+        }
+
+        bool PhysicsWorld::FatBoxesOverlap(const Contact& c) const noexcept
+        {
+            // Fat box of a fixture slot: a MOVER fixture's fat box lives in the
+            // DynamicTree (margin-grown, the broadphase invariant); a STATIC
+            // fixture is not in the mover tree, so reconstruct its fat box as the
+            // tight fixture AABB grown by the SAME tree margin (DynamicTree::kMargin)
+            // -- the consistent fat-box definition the broadphase would use.
+            // FixtureBroadphaseTree() is non-null ONLY for a DynamicTree mover
+            // broadphase; it returns nullptr for SpatialHash / SweepAndPrune. The
+            // tight + DynamicTree::kMargin reconstruction below assumes the tree's
+            // margin invariant, so for a non-DynamicTree WorldDef::broadphase even
+            // mover fixtures fall to that conservative fallback (a fixture's contact
+            // may persist slightly longer than its true fat box). The default /
+            // production broadphase is DynamicTree, so this is latent.
+            const DynamicTree* tree = FixtureBroadphaseTree();
+            auto fatOf = [&](std::uint32_t fxSlot, std::uint32_t bodySlot) -> Aabb2
+            {
+                // Mover fixture (Dynamic/Kinematic): its proxy is in the tree.
+                // O(1) id->fat lookup (vs. the old O(leaves) ForEachLeaf scan).
+                if (tree != nullptr && bodySlot < m_count && m_alive[bodySlot] != 0 &&
+                    static_cast<BodyType>(m_btype[bodySlot]) != BodyType::Static)
+                {
+                    Aabb2 fat{};
+                    if (tree->TryGetFatBox(fxSlot, fat))
+                    {
+                        return fat;
+                    }
+                }
+                // Static fixture (or no tree): tight AABB grown by the tree margin.
+                const Aabb2 tight = FixtureAabb(fxSlot);
+                const Real  m     = DynamicTree::kMargin;
+                return Aabb2{ Vec2(tight.min.x - m, tight.min.y - m),
+                              Vec2(tight.max.x + m, tight.max.y + m) };
+            };
+            const Aabb2 fatA = fatOf(c.a.index, c.bodyA);
+            const Aabb2 fatB = fatOf(c.b.index, c.bodyB);
+            return AabbOverlap(fatA, fatB);
+        }
+
+        void PhysicsWorld::TryCreateContact(std::uint32_t fa, std::uint32_t fb)
+        {
+            // Resolve owning body slots (MIRROR GenerateContacts' mover-mover loop).
+            std::uint32_t a = m_fxBody[fa];
+            std::uint32_t b = m_fxBody[fb];
+
+            // Same body -> two fixtures of one body never collide.
+            if (a == b)
+            {
+                return;
+            }
+            if (a >= m_count || b >= m_count || m_alive[a] == 0 || m_alive[b] == 0)
+            {
+                return;
+            }
+            // Body-level sensor gate (matches the body-pair `m_sensor[a]||[b]`).
+            if (m_sensor[a] != 0 || m_sensor[b] != 0)
+            {
+                return;
+            }
+            // Fixture-level sensor gate (matches the mover loop's defensive check).
+            if (m_fxSensor[fa] != 0u || m_fxSensor[fb] != 0u)
+            {
+                return;
+            }
+
+            const bool da = static_cast<BodyType>(m_btype[a]) == BodyType::Dynamic;
+            const bool db = static_cast<BodyType>(m_btype[b]) == BodyType::Dynamic;
+            if (!da && !db)
+            {
+                return; // neither dynamic -> no dynamic response
+            }
+
+            // ORIENT: A must be dynamic. If both dynamic, the LOWER BODY SLOT is A.
+            // Swap BODY index and its FIXTURE index together so the contact's
+            // (a, b) fixtures match GenerateContacts' (fixA, fixB) order exactly
+            // (Task 3's oracle relies on this matching MixContactId orientation).
+            std::uint32_t ia = a,  ib = b;
+            std::uint32_t fia = fa, fib = fb;
+            if (!da || (da && db && ib < ia))
+            {
+                std::swap(ia, ib);
+                std::swap(fia, fib);
+            }
+
+            const FixtureHandle hA{ fia, m_fxGen[fia] };
+            const FixtureHandle hB{ fib, m_fxGen[fib] };
+            const ContactPool::EnsureResult r = m_contactPool.EnsurePair(hA, hB);
+            if (r.created)
+            {
+                // EnsurePair already stored c.a = hA / c.b = hB on the fresh slot
+                // (and Destroy re-keys from them, so we must NOT overwrite them).
+                // We only fill the body slots + bIsBody, which the pool defaults to
+                // kInvalidSlot/true until the caller sets them (created == true).
+                Contact& c = m_contactPool.Get(r.id);
+                c.bodyA   = ia;
+                c.bodyB   = ib;
+                c.bIsBody = true;
+            }
+            // On a non-created HIT we leave the existing contact untouched (its
+            // body slots + manifold persist) -- mirrors EnsurePair's contract.
+        }
+
+        void PhysicsWorld::UpdateContacts(Real dt)
+        {
+            // ---- 1. CREATE: a contact for every solver-relevant fixture-pair ----
+            //
+            // (a) mover<->mover: the Phase-2 incremental fixture-pair set (sorted
+            //     fa < fb). UpdatePairs ALWAYS emits the full current pair set, so
+            //     draining the move buffer here does NOT change what GenerateContacts
+            //     sees next (it re-emits the same full set from an empty buffer) --
+            //     this is why m_cpPairs is a SEPARATE scratch from m_genPairs.
+            m_fixtureBroadphase->UpdatePairs(m_cpPairs);
+            for (const BroadphasePair& p : m_cpPairs)
+            {
+                TryCreateContact(p.a, p.b);
+            }
+
+            // (b) mover<->static-BODY: per awake non-sensor DYNAMIC body, the
+            //     StaticCandidates static-body list. MIRRORS GenerateContacts'
+            //     static path (the query pad + the genStatics loop), but SKIPS the
+            //     tile-SPAN path (spans are Task 3, transient virtual fixtures).
+            //     A static body's fixture is a real fixture slot, so we pair each
+            //     (dynamic fixture, static fixture) the same way TryCreateContact does.
+            const Real moveDt = dt > Real(0) ? dt : Real(0);
+            const Real threshSq = (moveDt > Real(0))
+                                      ? (kSkin / moveDt) * (kSkin / moveDt)
+                                      : Real(0);
+            for (std::uint32_t i = 0; i < m_count; ++i)
+            {
+                if (m_alive[i] == 0 ||
+                    static_cast<BodyType>(m_btype[i]) != BodyType::Dynamic ||
+                    m_awake[i] == 0 || m_sensor[i] != 0)
+                {
+                    continue;
+                }
+                // Same query pad as GenerateContacts: max(2, specMargin), where
+                // specMargin = max(kSkin, |v|*dt) so the candidate set is identical.
+                const Real speedSqA   = m_velX[i] * m_velX[i] + m_velY[i] * m_velY[i];
+                const Real specMargin = (speedSqA > threshSq)
+                                            ? std::sqrt(speedSqA) * moveDt
+                                            : kSkin;
+                const Aabb box = SlotAabb(i);
+                const Real pad = std::max(Real(2), specMargin);
+                Aabb2 query;
+                query.min = Vec2(box.min.x - pad, box.min.y - pad);
+                query.max = Vec2(box.max.x + pad, box.max.y + pad);
+                // genSpans is intentionally IGNORED (tile spans deferred to Task 3);
+                // reuse the Step-only m_genSpans/m_genStatics scratch -- safe because
+                // UpdateContacts runs immediately before GenerateContacts refills them.
+                StaticCandidates(query, m_genSpans, m_genStatics);
+
+                const std::vector<std::uint32_t>* fxListA = nullptr;
+                if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
+                {
+                    fxListA = &m_bodyFixtures[i];
+                }
+                if (fxListA == nullptr)
+                {
+                    continue; // no fixtures -> no fixture-pair contact to persist
+                }
+
+                for (std::size_t s = 0; s < m_genStatics.size(); ++s)
+                {
+                    const std::uint32_t idx = m_genStatics[s];
+                    if (idx >= m_count || m_alive[idx] == 0 || m_sensor[idx] != 0)
+                    {
+                        continue;
+                    }
+                    const std::vector<std::uint32_t>* fxListB = nullptr;
+                    if (idx < m_bodyFixtures.size() && !m_bodyFixtures[idx].empty())
+                    {
+                        fxListB = &m_bodyFixtures[idx];
+                    }
+                    if (fxListB == nullptr)
+                    {
+                        continue; // static body with no fixtures: no real fixture slot
+                    }
+                    for (const std::uint32_t fiA : *fxListA)
+                    {
+                        if (fiA >= m_fxCount || m_fxGen[fiA] == 0u || m_fxSensor[fiA] != 0u)
+                        {
+                            continue;
+                        }
+                        for (const std::uint32_t fiB : *fxListB)
+                        {
+                            if (fiB >= m_fxCount || m_fxGen[fiB] == 0u || m_fxSensor[fiB] != 0u)
+                            {
+                                continue;
+                            }
+                            // TryCreateContact applies the same filters + orientation
+                            // (dynamic A; static B never reorders since B is not
+                            // dynamic). The fat-box update-pass owns destruction, so
+                            // we ensure the pair whenever it is a static CANDIDATE
+                            // (broadphase-adjacent); a non-overlapping pair is reaped
+                            // by FatBoxesOverlap on the same / a later step.
+                            TryCreateContact(fiA, fiB);
+                        }
+                    }
+                }
+            }
+
+            // ---- 2. UPDATE + DESTROY: one deterministic pass (ascending id) -----
+            m_contactPool.ForEach([&](std::uint32_t id, Contact& c)
+            {
+                // Stale-handle reap: a removed/recycled fixture (gen bumped) or a
+                // dead body kills the contact (Task 5 makes removal immediate; here
+                // the update pass catches it the next step, which the tests allow).
+                if (!FixtureSlotLive(c.a) || (c.bIsBody && !FixtureSlotLive(c.b)))
+                {
+                    m_contactPool.Destroy(id);
+                    return;
+                }
+                // Fat-box separation: the contact owns its destruction.
+                if (!FatBoxesOverlap(c))
+                {
+                    m_contactPool.Destroy(id);
+                    return;
+                }
+                // Both asleep -> reuse the cached manifold (no recompute).
+                // A body moved while still asleep (e.g. SetPosition, which moves
+                // the proxy but does NOT set m_awake) keeps a stale cached manifold,
+                // but it is never consumed while asleep (GenerateContacts + the
+                // solver feed produce no constraint for an asleep dynamic body) and
+                // is recomputed on wake -- benign.
+                if (BothAsleep(c))
+                {
+                    return;
+                }
+                // Recompute the manifold ONCE this step. MIRRORS GenerateContacts'
+                // transform composition (FixtureWorldXf == ComposeFixtureXf) and the
+                // velocity-scaled speculative margin so the manifold matches Task 4.
+                const Transform xfA = ComposeFixtureXf(
+                    Vec2(m_posX[c.bodyA], m_posY[c.bodyA]), m_angle[c.bodyA],
+                    Vec2(m_fxLocalPosX[c.a.index], m_fxLocalPosY[c.a.index]),
+                    m_fxLocalAngle[c.a.index]);
+                const Transform xfB = ComposeFixtureXf(
+                    Vec2(m_posX[c.bodyB], m_posY[c.bodyB]), m_angle[c.bodyB],
+                    Vec2(m_fxLocalPosX[c.b.index], m_fxLocalPosY[c.b.index]),
+                    m_fxLocalAngle[c.b.index]);
+                // Per-pair speculative margin: max(kSkin, sqrt(maxSpeedSq)*dt) over
+                // the two bodies -- the exact GenerateContacts mover-pair formula.
+                const Real speedSqA = m_velX[c.bodyA] * m_velX[c.bodyA] +
+                                      m_velY[c.bodyA] * m_velY[c.bodyA];
+                const Real speedSqB = m_velX[c.bodyB] * m_velX[c.bodyB] +
+                                      m_velY[c.bodyB] * m_velY[c.bodyB];
+                const Real maxSpeedSq = std::max(speedSqA, speedSqB);
+                const Real margin = (maxSpeedSq > threshSq)
+                                        ? std::sqrt(maxSpeedSq) * moveDt
+                                        : kSkin;
+                c.manifold = Collide(m_fxShape[c.a.index], xfA,
+                                     m_fxShape[c.b.index], xfB, margin);
+                c.touching = (c.manifold.pointCount > 0);
+            });
         }
 
         void PhysicsWorld::BulletSweep()

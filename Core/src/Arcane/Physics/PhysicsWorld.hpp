@@ -76,6 +76,7 @@
 #include <Arcane/Physics/Broadphase/TileGrid.hpp>
 #include <Arcane/Physics/Broadphase/SpatialGrid.hpp>
 #include <Arcane/Physics/ContactManager.hpp>
+#include <Arcane/Physics/Contact.hpp>            // ContactPool (collision-rebuild Phase 3)
 #include <Arcane/Physics/Solver/Solver.hpp>      // ISolver + ContactConstraint pool type
 #include <Arcane/Physics/Joints/Joint.hpp>       // Joint base + JointDef (P2.5)
 
@@ -828,6 +829,16 @@ namespace Arcane
                 return m_contactConstraints.size();
             }
 
+            // Test/inspection hook (collision-rebuild Phase 3, Task 2): the live
+            // count of the PERSISTENT contact pool, populated each Step by
+            // UpdateContacts. NOT yet consumed by the solver (GenerateContacts
+            // still feeds it) -- so this only reflects the side pool's lifecycle
+            // (survive across steps, destroy on fat-box separation / body removal).
+            [[nodiscard]] std::size_t DebugContactCount() const noexcept
+            {
+                return m_contactPool.Count();
+            }
+
             // Soft Step config (solver reads it in Prepare / the sub-step loop).
             [[nodiscard]] std::uint32_t SubstepCount() const noexcept { return m_substepCount; }
             [[nodiscard]] Real ContactHertz() const noexcept { return m_contactHertz; }
@@ -1099,6 +1110,48 @@ namespace Arcane
             // A slow/resting body's margin is just kSkin (resting UNCHANGED).
             void GenerateContacts(Real dt);
 
+            // ---- persistent contact update (collision-rebuild Phase 3, Task 2) -
+            //
+            // UpdateContacts(dt): the ONE-PASS persistent-contact update, called
+            // from Step immediately BEFORE GenerateContacts each Step so the pool
+            // is populated -- but its output is NOT yet consumed (GenerateContacts
+            // still feeds the solver; Task 4 retires GenerateContacts and feeds the
+            // pool to the solver). Two phases:
+            //   1. CREATE: ensure a Contact for every solver-relevant fixture-pair
+            //      (mover<->mover from the incremental fixture-pair set; mover<->
+            //      static-BODY from StaticCandidates). MIRRORS GenerateContacts'
+            //      filters + orientation EXACTLY so Task 3's oracle matches.
+            //      DEFERS tile spans to Task 3 (they are transient virtual fixtures).
+            //   2. UPDATE + DESTROY: one deterministic pass over the pool (ascending
+            //      id) -- destroy on stale handle / fat-box separation, recompute the
+            //      cached manifold otherwise (skipping both-asleep pairs).
+            //
+            // SIDE-EFFECT-FREE on the simulation: reads body/fixture state + the
+            // broadphase, writes ONLY m_contactPool + m_cpPairs. It does NOT mutate
+            // m_awake / positions / velocities / m_contactConstraints (the wake
+            // mutation stays in GenerateContacts; here m_awake is read-only).
+            void UpdateContacts(Real dt);
+
+            // CREATE-pass helper: ensure a Contact for the fixture-pair (fa, fb),
+            // applying GenerateContacts' EXACT filters + orientation rule (A's body
+            // dynamic; both-dynamic -> lower body slot is A; bodies + fixtures swap
+            // together). Fills the body slots ONLY on a fresh create.
+            void TryCreateContact(std::uint32_t fa, std::uint32_t fb);
+
+            // True iff fixture handle h still refers to its original live slot.
+            [[nodiscard]] bool FixtureSlotLive(FixtureHandle h) const noexcept;
+
+            // True iff the two fixtures' FAT broadphase boxes still overlap (a
+            // mover fixture's fat box comes from the DynamicTree leaf; a static
+            // fixture's from its tight AABB grown by the tree margin). The contact
+            // owns its destruction when this is false.
+            [[nodiscard]] bool FatBoxesOverlap(const Contact& c) const noexcept;
+
+            // True iff both bodies are asleep (a static/kinematic body counts as
+            // asleep -- it never wakes a recompute on its own). Mirrors the awake
+            // gate GenerateContacts uses to skip work.
+            [[nodiscard]] bool BothAsleep(const Contact& c) const noexcept;
+
             // ---- P3.1 CCD: bullet GJK-TOI clamp (Step stage 6) ---------------
             //
             // PORT of the Lua bullet clamp (PhysicsWorld.lua:313-320): for each
@@ -1169,6 +1222,18 @@ namespace Arcane
             // otherwise recomputes its 37-fixture union AABB ~400x/Step. Filled
             // from the identical SlotAabb(), so the candidate set is byte-identical.
             std::vector<Aabb2>          m_genBodyAabb;
+
+            // ---- persistent contact pool (collision-rebuild Phase 3, Task 2) --
+            //
+            // The durable fixture-pair contact pool, POPULATED each Step by
+            // UpdateContacts (called just before GenerateContacts) but NOT yet
+            // consumed by the solver. Survives across steps; the create pass
+            // dedups, the update pass recomputes manifolds + destroys dead pairs.
+            // m_cpPairs is the move-buffer scratch for the mover<->mover create
+            // pass (parallel to GenerateContacts' m_genPairs -- a SEPARATE buffer
+            // so UpdateContacts' UpdatePairs drain never disturbs GenerateContacts').
+            ContactPool                 m_contactPool;
+            std::vector<BroadphasePair> m_cpPairs;
 
             // ---- island sleep scratch (P2.4; Step-only; zero steady-state) ---
             //

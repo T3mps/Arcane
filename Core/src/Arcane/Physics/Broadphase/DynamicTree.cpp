@@ -482,5 +482,19 @@ namespace Arcane
             }
         }
 
+        // TryGetFatBox: O(1) fat-AABB lookup by proxy id. LeafOf(id) returns the
+        // leaf slot or kNull (absent); on a live leaf the fat box is node.fat --
+        // the same value ForEachLeaf yields, just resolved without scanning.
+        bool DynamicTree::TryGetFatBox(std::uint32_t id, Aabb2& out) const
+        {
+            const std::uint32_t leaf = LeafOf(id);
+            if (leaf == kNull)
+            {
+                return false; // no live proxy for this id
+            }
+            out = m_nodes[leaf].fat;
+            return true;
+        }
+
     } // namespace Physics
 } // namespace Arcane

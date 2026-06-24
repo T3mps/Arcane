@@ -88,6 +88,11 @@ namespace Arcane
                                          const Aabb2& tight,
                                          const Aabb2& fat)>& fn) const;
 
+            // O(1) fat-AABB lookup by proxy/fixture id. Returns false if id has
+            // no live leaf. Mirrors ForEachLeaf's node.fat, but resolves the
+            // leaf in O(1) via m_leafOfId instead of scanning every proxy.
+            [[nodiscard]] bool TryGetFatBox(std::uint32_t id, Aabb2& out) const;
+
         private:
             // Sentinel for "no node" (the Lua used nil parents/children).
             static constexpr std::uint32_t kNull = 0xFFFFFFFFu;
