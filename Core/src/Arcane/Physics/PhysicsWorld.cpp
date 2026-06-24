@@ -2329,6 +2329,112 @@ namespace Arcane
             });
         }
 
+        void PhysicsWorld::EmitContactConstraints(
+            std::vector<ContactConstraint>& out) const
+        {
+            // Oracle-gate (Phase 3, Task 3): the persistent solver feed. Walk the
+            // pool (const ForEach, ascending id) and emit the ContactConstraint set
+            // GenerateContacts WOULD build for these (body<->body) contacts. Each
+            // constraint mirrors GenerateContacts' `emit` lambda field-for-field so
+            // the two sets are provably equivalent BEFORE Task 4 swaps the feed.
+            // READ-ONLY: writes ONLY `out`, mutates NO sim state. Tile SPANS are
+            // deferred to Task 4 (the body-only oracle scene has none).
+            out.clear();
+
+            m_contactPool.ForEach([&](std::uint32_t /*id*/, const Contact& c)
+            {
+                // Not touching (no manifold points) -> GenerateContacts' emit
+                // early-returns on pointCount <= 0; mirror that here.
+                if (!c.touching || c.manifold.pointCount <= 0)
+                {
+                    return;
+                }
+                // Awake-gate (MIRRORS GenerateContacts): it only ever emits for an
+                // AWAKE dynamic A (`if (... m_awake[i] == 0 ...) continue;` in the
+                // static loop / `if (m_awake[ia] == 0) continue;` in the mover loop).
+                // The pool keeps contacts for sleeping mover-pairs too, so without
+                // this gate the emitted set would be a SUPERSET of GenerateContacts'.
+                // (No-op while sleeping is disabled in the oracle, but required for
+                // Task 4's live correctness so an asleep pair never feeds the solver.)
+                const std::uint32_t aIdx = c.bodyA;
+                if (aIdx >= m_count || m_alive[aIdx] == 0 || m_awake[aIdx] == 0)
+                {
+                    return;
+                }
+
+                // NOTE: pool contacts are always bIsBody==true; the non-body
+                // ('false') arms below mirror the emit lambda for Task-4 parity only
+                // and never execute here (UpdateContacts persists body-body fixture
+                // pairs only).
+                const bool          bIsBody = c.bIsBody;
+                const std::uint32_t bIdx    = c.bodyB;
+                const std::uint32_t fixA    = c.a.index;
+                const std::uint32_t fixB    = bIsBody ? c.b.index : kInvalidSlot;
+
+                const Manifold& m = c.manifold;
+
+                // ---- mirror the GenerateContacts `emit` lambda EXACTLY -------
+                ContactConstraint cc;
+                cc.bodyA       = aIdx;
+                cc.bodyB       = bIsBody ? bIdx : kInvalidSlot;
+                cc.bodyBIsBody = bIsBody;
+                cc.invMassA    = m_invMass[aIdx];
+                cc.invInertiaA = m_invInertia[aIdx];
+                cc.invMassB    = bIsBody ? m_invMass[bIdx] : Real(0);
+                cc.invInertiaB = bIsBody ? m_invInertia[bIdx] : Real(0);
+                cc.normal      = m.normal;
+                cc.kind        = m.kind;
+
+                // Combined material: friction = sqrt(fA*fB), restitution = max.
+                // Read per-fixture friction/restitution (the persistent pool is
+                // fixture<->fixture only, so both sides have a real fixture slot;
+                // the legacy single-shape fallbacks in GenerateContacts never apply
+                // here -- UpdateContacts only persists fixture-pair contacts).
+                const Real fricA = m_fxFriction[fixA];
+                const Real fricB = bIsBody ? m_fxFriction[fixB] : m_fxFriction[fixA];
+                const Real restA = m_fxRestitution[fixA];
+                const Real restB = bIsBody ? m_fxRestitution[fixB] : Real(0);
+                cc.friction    = std::sqrt(fricA * fricB);
+                cc.restitution = std::max(restA, restB);
+
+                // Compound-COM anchors: from each body's world CENTER OF MASS
+                // (WorldCom == origin for localCenter==0). A is always dynamic;
+                // B (a real body here) uses its world COM.
+                const Vec2 cA = WorldCom(Vec2(m_posX[aIdx], m_posY[aIdx]),
+                                         m_angle[aIdx],
+                                         Vec2(m_localCenterX[aIdx],
+                                              m_localCenterY[aIdx]));
+                const Vec2 comB = bIsBody
+                    ? WorldCom(Vec2(m_posX[bIdx], m_posY[bIdx]),
+                               m_angle[bIdx],
+                               Vec2(m_localCenterX[bIdx], m_localCenterY[bIdx]))
+                    : Vec2(Real(0), Real(0));
+
+                cc.pointCount = m.pointCount;
+                for (int p = 0; p < m.pointCount; ++p)
+                {
+                    const ManifoldPoint&    mp = m.points[p];
+                    ContactConstraintPoint& cp = cc.points[p];
+                    cp.anchorA        = mp.point - cA;
+                    cp.anchorB        = mp.point - comB;
+                    cp.baseSeparation = -mp.separation;
+                    cp.id             = MixContactId(mp.id, fixA, fixB);
+                }
+                out.push_back(cc);
+            });
+
+            // Deterministic canonical order: sort by (bodyA, bodyB, points[0].id).
+            // This is the same key the oracle compares on, so order independence is
+            // intentional (Task 4 handles the live-feed ordering / determinism).
+            std::sort(out.begin(), out.end(),
+                      [](const ContactConstraint& x, const ContactConstraint& y)
+            {
+                if (x.bodyA != y.bodyA) { return x.bodyA < y.bodyA; }
+                if (x.bodyB != y.bodyB) { return x.bodyB < y.bodyB; }
+                return x.points[0].id < y.points[0].id;
+            });
+        }
+
         void PhysicsWorld::BulletSweep()
         {
             // P3.1 CCD bullet clamp (port of PhysicsWorld.lua:313-320). For each

@@ -839,6 +839,23 @@ namespace Arcane
                 return m_contactPool.Count();
             }
 
+            // Oracle-gate hooks (collision-rebuild Phase 3, Task 3). Read-only.
+            //
+            // DebugEmitPoolConstraints: walk the PERSISTENT contact pool and emit
+            // the solver-feed ContactConstraint set it WOULD produce (Task 4's feed),
+            // sorted into a deterministic canonical order. Does NOT touch sim state.
+            // DebugCopyActiveConstraints: a copy of the constraints GenerateContacts
+            // built this Step (m_contactConstraints) -- the legacy oracle. The two
+            // sets must be EQUAL on a body-only scene (the pre-swap equivalence gate).
+            void DebugEmitPoolConstraints(std::vector<ContactConstraint>& out) const
+            {
+                EmitContactConstraints(out);
+            }
+            void DebugCopyActiveConstraints(std::vector<ContactConstraint>& out) const
+            {
+                out = m_contactConstraints;
+            }
+
             // Soft Step config (solver reads it in Prepare / the sub-step loop).
             [[nodiscard]] std::uint32_t SubstepCount() const noexcept { return m_substepCount; }
             [[nodiscard]] Real ContactHertz() const noexcept { return m_contactHertz; }
@@ -1151,6 +1168,23 @@ namespace Arcane
             // asleep -- it never wakes a recompute on its own). Mirrors the awake
             // gate GenerateContacts uses to skip work.
             [[nodiscard]] bool BothAsleep(const Contact& c) const noexcept;
+
+            // ---- oracle-gate: the persistent solver feed (Phase 3, Task 3) ---
+            //
+            // Walk the persistent contact pool (the const ForEach, ascending id)
+            // and build the ContactConstraint set the solver WOULD be fed once
+            // GenerateContacts retires (Task 4). Read-only: it writes ONLY `out`
+            // and touches NO sim state (not m_contactConstraints). Each emitted
+            // constraint mirrors GenerateContacts' `emit` lambda field-for-field
+            // (body slots, inv mass/inertia, normal/kind, friction = sqrt(fA*fB),
+            // restitution = max(rA,rB), per-point COM-relative anchors,
+            // baseSeparation = -separation, id = MixContactId). Skips a contact
+            // that is not touching and applies the SAME awake-gate GenerateContacts
+            // uses (skip when the dynamic A is asleep) so the emitted set matches.
+            // The walk is sorted into (bodyA, bodyB, points[0].id) order afterward
+            // (the deterministic canonical order the oracle compares on). TILE
+            // SPANS are DEFERRED to Task 4 -- the body-only oracle scene has none.
+            void EmitContactConstraints(std::vector<ContactConstraint>& out) const;
 
             // ---- P3.1 CCD: bullet GJK-TOI clamp (Step stage 6) ---------------
             //
