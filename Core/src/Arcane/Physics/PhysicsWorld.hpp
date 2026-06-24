@@ -841,6 +841,38 @@ namespace Arcane
                 return m_contactPool.Count();
             }
 
+            // Test/inspection hook (collision-rebuild Phase 4, Task 1): true iff the
+            // persistent pool holds a contact whose body SLOTS match the unordered
+            // pair (a, b). Scans the pool's cached body slots (c.bodyA / c.bodyB),
+            // mirroring the DebugContactCount read path. Used by the event-union
+            // tests to assert that sensor + kinematic pairs now create a pooled
+            // contact (even though they do NOT reach the solver feed). Stale/dead
+            // handles return false (they never match a live contact's body slots).
+            [[nodiscard]] bool DebugHasContact(BodyHandle a, BodyHandle b) const
+            {
+                if (!IsValid(a) || !IsValid(b))
+                {
+                    return false;
+                }
+                const std::uint32_t sa = a.index;
+                const std::uint32_t sb = b.index;
+                bool found = false;
+                m_contactPool.ForEach(
+                    [&](std::uint32_t /*id*/, const Contact& c)
+                {
+                    if (!c.bIsBody)
+                    {
+                        return; // tile span (never a body-pair)
+                    }
+                    if ((c.bodyA == sa && c.bodyB == sb) ||
+                        (c.bodyA == sb && c.bodyB == sa))
+                    {
+                        found = true;
+                    }
+                });
+                return found;
+            }
+
             // Oracle-gate hooks (collision-rebuild Phase 3, Task 3). Read-only.
             //
             // DebugEmitPoolConstraints: walk the persistent contact pool + transient

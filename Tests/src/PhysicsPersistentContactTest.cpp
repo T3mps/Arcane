@@ -343,3 +343,77 @@ TEST_CASE("RemoveBody destroys that body's persistent contacts immediately", "[p
     w.RemoveBody(s);                                     // remove the static participant
     REQUIRE(w.DebugContactCount() == 0);                 // destroyed immediately, before the next Step
 }
+
+// ---- Phase 4, Task 1: the contact pool expands to the EVENT union -------------
+//
+// Phase 3 pooled only SOLVER-relevant fixture-pairs: it skipped sensors and
+// `!da && !db` (neither body dynamic), so the pool LACKED sensor pairs +
+// kinematic-kinematic + kinematic-vs-static-body. Phase 4 derives contact EVENTS
+// from the pool's touch-state, and events fire for sensors + kinematic movers
+// (incl. kinematic-vs-static-body) but NOT for dynamic-vs-static-body or tiles.
+// So Task 1 EXPANDS the pool to that event union WITHOUT changing the solver
+// feed: the new contacts are tagged event-only (solverRelevant == false), so
+// EmitContactConstraints skips them -- they produce NO ContactConstraint.
+//
+// This test builds (a) a dynamic body with a SENSOR fixture overlapping another
+// dynamic body, and (b) a KINEMATIC body overlapping a STATIC body. After one
+// Step BOTH pairs must appear in the pool, yet NEITHER may feed the solver.
+TEST_CASE("Contact pool expands to the event union (sensors + kinematic); solver feed unchanged",
+          "[physics]")
+{
+    PhysicsWorld w; // no gravity: bodies stay put for the single-step overlap check
+
+    // (a) A dynamic body whose ONLY fixture is a SENSOR, overlapping a second
+    //     dynamic body. Body-level isSensor (the auto-fixture inherits it, so
+    //     m_fxSensor is set too). fixedRotation because a dynamic AABB must be.
+    BodyDef sensorBody;
+    sensorBody.type          = BodyType::Dynamic;
+    sensorBody.shape         = MakeAabb(Real(10), Real(10));
+    sensorBody.fixedRotation = true;
+    sensorBody.isSensor      = true;                 // sensor fixture, event-only
+    sensorBody.position      = Vec2(Real(0), Real(0));
+    const BodyHandle sensA = w.AddBody(sensorBody);
+
+    BodyDef dynPartner;
+    dynPartner.type          = BodyType::Dynamic;
+    dynPartner.shape         = MakeAabb(Real(10), Real(10));
+    dynPartner.fixedRotation = true;
+    dynPartner.position      = Vec2(Real(5), Real(0)); // overlaps sensA
+    const BodyHandle sensB = w.AddBody(dynPartner);
+
+    // (b) A KINEMATIC body overlapping a STATIC body. Neither is dynamic, so
+    //     Phase 3's `!da && !db` skip kept this out of the pool; Phase 4 pools
+    //     it (kinematic-vs-static-body is event-relevant) but tags it event-only.
+    BodyDef stat;
+    stat.type     = BodyType::Static;
+    stat.shape    = MakeAabb(Real(10), Real(10));
+    stat.position = Vec2(Real(100), Real(0));
+    const BodyHandle statS = w.AddBody(stat);
+
+    BodyDef kin;
+    kin.type     = BodyType::Kinematic;
+    kin.shape    = MakeAabb(Real(10), Real(10));
+    kin.position = Vec2(Real(105), Real(0));         // overlaps statS
+    const BodyHandle kinK = w.AddBody(kin);
+
+    // Capture the solver feed BEFORE the Step has no meaning (it is rebuilt each
+    // Step); we capture AFTER the Step and assert the event-only pairs added
+    // nothing to it.
+    w.Step(Real(1) / Real(60));
+
+    // BOTH event-only pairs are now in the persistent pool.
+    REQUIRE(w.DebugHasContact(sensA, sensB)); // sensor-vs-dynamic pooled
+    REQUIRE(w.DebugHasContact(kinK, statS));  // kinematic-vs-static-body pooled
+
+    // The solver feed is UNCHANGED: neither event-only pair produced a
+    // ContactConstraint. The sensor pair (sensor fixture) and the
+    // kinematic-static pair (no dynamic body) are both solverRelevant == false,
+    // so EmitContactConstraints skips them. With no OTHER touching solver pair in
+    // this scene, the active feed is empty.
+    REQUIRE(w.ActiveContactCount() == 0u);
+
+    // And the pool-walk solver feed (the oracle hook) agrees: zero constraints.
+    std::vector<ContactConstraint> fromPool;
+    w.DebugEmitPoolConstraints(fromPool);
+    REQUIRE(fromPool.empty());
+}

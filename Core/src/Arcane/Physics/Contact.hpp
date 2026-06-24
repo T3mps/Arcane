@@ -51,6 +51,15 @@ namespace Arcane
             bool          bIsBody = true; // false => B is a tile-span virtual fixture
             Manifold      manifold{};     // last computed (pointCount 0 => not touching)
             bool          touching = false;
+            // SOLVER vs EVENT relevance (collision-rebuild Phase 4, Task 1). The
+            // pool now holds the EVENT union -- sensors + kinematic-kinematic +
+            // kinematic-vs-static-body in addition to the solver-relevant pairs.
+            // This flag is the OLD create filter: true iff (da||db) && !sensorA &&
+            // !sensorB, i.e. dynamic-dynamic / dynamic-kinematic / dynamic-static,
+            // non-sensor. EmitContactConstraints emits a ContactConstraint ONLY for
+            // solverRelevant contacts, so the solver feed stays byte-identical to
+            // Phase 3 even though the pool is now a superset. Set at create time.
+            bool          solverRelevant = false;
         };
 
         // ----------------------------------------------------------------

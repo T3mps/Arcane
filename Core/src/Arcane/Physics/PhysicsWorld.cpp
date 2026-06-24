@@ -1722,35 +1722,39 @@ namespace Arcane
             {
                 return;
             }
-            // Body-level sensor gate (matches the body-pair `m_sensor[a]||[b]`).
-            if (m_sensor[a] != 0 || m_sensor[b] != 0)
-            {
-                return;
-            }
-            // Fixture-level sensor gate (matches the mover loop's defensive check).
-            if (m_fxSensor[fa] != 0u || m_fxSensor[fb] != 0u)
-            {
-                return;
-            }
+            // PHASE 4, Task 1: the sensor skip + the `!da && !db` skip are REMOVED
+            // from creation -- a mover<->mover overlapping fixture-pair now ALWAYS
+            // creates a contact (sensors + kinematic-kinematic INCLUDED), so the
+            // pool covers the EVENT union, not just the solver-relevant pairs. The
+            // SOLVER feed stays byte-identical because each contact is tagged
+            // solverRelevant below and EmitContactConstraints emits only those.
 
             const bool da = static_cast<BodyType>(m_btype[a]) == BodyType::Dynamic;
             const bool db = static_cast<BodyType>(m_btype[b]) == BodyType::Dynamic;
-            if (!da && !db)
-            {
-                return; // neither dynamic -> no dynamic response
-            }
 
-            // ORIENT: A must be dynamic. If both dynamic, the LOWER BODY SLOT is A.
-            // Swap BODY index and its FIXTURE index together so the contact's
-            // (a, b) fixtures match GenerateContacts' (fixA, fixB) order exactly
-            // (Task 3's oracle relies on this matching MixContactId orientation).
+            // ORIENT: prefer A dynamic (so the solver-side A is the dynamic body,
+            // matching GenerateContacts' (fixA, fixB) order -- Task 3's oracle +
+            // MixContactId rely on this). If neither is dynamic (kinematic-kinematic,
+            // now poolable), fall back to the LOWER BODY SLOT as A so the orientation
+            // is deterministic. Swap the BODY index + its FIXTURE index together.
             std::uint32_t ia = a,  ib = b;
             std::uint32_t fia = fa, fib = fb;
-            if (!da || (da && db && ib < ia))
+            const bool swap = da ? (db && ib < ia)   // both dynamic: lower slot is A
+                                 : (db || b < a);    // B dynamic, or neither -> lower slot is A
+            if (swap)
             {
                 std::swap(ia, ib);
                 std::swap(fia, fib);
             }
+
+            // SOLVER RELEVANCE (the OLD create filter): true iff a dynamic body is
+            // present AND neither side is a sensor (body-level OR per-fixture). The
+            // sensor check uses the ORIENTED fixtures so each side's body+fixture is
+            // tested consistently. dynamic-dynamic / dynamic-kinematic / dynamic-static
+            // non-sensor -> true; sensors + kinematic-kinematic -> false.
+            const bool sensorA = (m_sensor[ia] != 0) || (m_fxSensor[fia] != 0u);
+            const bool sensorB = (m_sensor[ib] != 0) || (m_fxSensor[fib] != 0u);
+            const bool solverRelevant = (da || db) && !sensorA && !sensorB;
 
             const FixtureHandle hA{ fia, m_fxGen[fia] };
             const FixtureHandle hB{ fib, m_fxGen[fib] };
@@ -1759,12 +1763,13 @@ namespace Arcane
             {
                 // EnsurePair already stored c.a = hA / c.b = hB on the fresh slot
                 // (and Destroy re-keys from them, so we must NOT overwrite them).
-                // We only fill the body slots + bIsBody, which the pool defaults to
-                // kInvalidSlot/true until the caller sets them (created == true).
+                // We only fill the body slots + bIsBody + solverRelevant, which the
+                // pool defaults until the caller sets them (created == true).
                 Contact& c = m_contactPool.Get(r.id);
-                c.bodyA   = ia;
-                c.bodyB   = ib;
-                c.bIsBody = true;
+                c.bodyA          = ia;
+                c.bodyB          = ib;
+                c.bIsBody        = true;
+                c.solverRelevant = solverRelevant;
             }
             // On a non-created HIT we leave the existing contact untouched (its
             // body slots + manifold persist) -- mirrors EnsurePair's contract.
@@ -1957,6 +1962,81 @@ namespace Arcane
                 }
             }
 
+            // (c) KINEMATIC<->static-BODY (Phase 4, Task 1): event-relevant but NOT
+            //     solver-relevant. Static bodies are NOT in the mover broadphase and
+            //     the dynamic-driven static-candidate loop above only covers DYNAMIC
+            //     bodies, so kinematic-vs-static pairs are created here by iterating
+            //     StaticList() per alive Kinematic body -- MIRRORING the old
+            //     ContactManager::Step kinematic-static loop (StaticList, AABB-reject)
+            //     so the create order is index-deterministic. TryCreateContact tags
+            //     these solverRelevant == false (no dynamic body), so the solver feed
+            //     is unchanged; the touch-state still drives the contact's manifold +
+            //     `touching` in the update pass below for the event derivation (Task 2).
+            //     dynamic-vs-static is ALREADY created in (b) -- this path is additive.
+            {
+                const std::vector<std::uint32_t>& statics = m_staticList;
+                for (std::uint32_t i = 0; i < m_count; ++i)
+                {
+                    if (m_alive[i] == 0 ||
+                        static_cast<BodyType>(m_btype[i]) != BodyType::Kinematic)
+                    {
+                        continue;
+                    }
+                    const std::vector<std::uint32_t>* fxListK = nullptr;
+                    if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
+                    {
+                        fxListK = &m_bodyFixtures[i];
+                    }
+                    if (fxListK == nullptr)
+                    {
+                        continue; // kinematic body with no live fixtures
+                    }
+                    const Aabb2 kinBox = SlotAabb(i);
+                    for (std::size_t s = 0; s < statics.size(); ++s)
+                    {
+                        const std::uint32_t idx = statics[s];
+                        if (idx >= m_count || m_alive[idx] == 0)
+                        {
+                            continue;
+                        }
+                        // Cheap body-union AABB reject before the per-fixture pairing
+                        // (mirrors the old ContactManager AABB pre-filter).
+                        if (!AabbOverlap(kinBox, SlotAabb(idx)))
+                        {
+                            continue;
+                        }
+                        const std::vector<std::uint32_t>* fxListB = nullptr;
+                        if (idx < m_bodyFixtures.size() && !m_bodyFixtures[idx].empty())
+                        {
+                            fxListB = &m_bodyFixtures[idx];
+                        }
+                        if (fxListB == nullptr)
+                        {
+                            continue; // static body with no real fixture slot
+                        }
+                        for (const std::uint32_t fiK : *fxListK)
+                        {
+                            if (fiK >= m_fxCount || m_fxGen[fiK] == 0u)
+                            {
+                                continue; // dead slot (defensive); sensors INCLUDED
+                            }
+                            for (const std::uint32_t fiB : *fxListB)
+                            {
+                                if (fiB >= m_fxCount || m_fxGen[fiB] == 0u)
+                                {
+                                    continue; // dead slot; sensors INCLUDED (events)
+                                }
+                                // Orientation: A = the kinematic mover (neither is
+                                // dynamic, so TryCreateContact's lower-slot tiebreak
+                                // orders deterministically); for events the body-pair
+                                // is canonicalized later anyway.
+                                TryCreateContact(fiK, fiB);
+                            }
+                        }
+                    }
+                }
+            }
+
             // ---- 2. UPDATE + DESTROY: one deterministic pass (ascending id) -----
             m_contactPool.ForEach([&](std::uint32_t id, Contact& c)
             {
@@ -2142,8 +2222,20 @@ namespace Arcane
             };
 
             // (a) fixture<->fixture: the persistent pool (ascending id).
+            // SOLVER-RELEVANCE FILTER (Phase 4, Task 1): the pool now holds the
+            // EVENT union (sensors + kinematic-kinematic + kinematic-vs-static-body)
+            // in addition to the solver pairs. Emit a ContactConstraint ONLY for a
+            // solverRelevant contact, so the solver feed stays byte-identical to
+            // Phase 3 even though the pool is a superset. (Spans below are always
+            // solver-relevant -- a dynamic fixture vs a tile span -- and are NOT
+            // gated here; they carry the default solverRelevant==false, so the gate
+            // must NOT be inside the shared emitContact lambda.)
             m_contactPool.ForEach([&](std::uint32_t /*id*/, const Contact& c)
             {
+                if (!c.solverRelevant)
+                {
+                    return; // event-only contact (sensor / kinematic): no constraint
+                }
                 emitContact(c, Vec2(Real(0), Real(0)));
             });
 
