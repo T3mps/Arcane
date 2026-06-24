@@ -477,6 +477,12 @@ namespace Arcane
             m_fxGen[fi] += 1u;
             m_fxShape[fi] = Shape{}; // release polygon vertex/normal storage
 
+            // Immediately destroy any persistent contacts on this fixture (Task 5)
+            // so a recycled slot never leaves a stale contact for the single Step
+            // before UpdateContacts' guard would reap it. The walk matches by slot
+            // index, so it runs correctly after the generation bump above.
+            DestroyContactsForFixture(fi);
+
             // Recycle.
             m_fxFree.push_back(fi);
 
@@ -1031,6 +1037,13 @@ namespace Arcane
             m_contacts.DropBody(idx);
             m_solver->DropBody(idx); // drop warm-start state for the recycled slot
 
+            // Immediately destroy every persistent-pool contact referencing this
+            // body (Task 5). RemoveBody drops ALL the body's fixtures, so the
+            // by-body walk catches every one of them in a single pass -- a removed
+            // body never leaves a stale contact even for the one Step before
+            // UpdateContacts' stale-handle guard would reap it.
+            DestroyContactsForBody(idx);
+
             // Drop joints referencing the destroyed body (ports PhysicsWorld.lua
             // 281-286: `j.a.idx == idx or j.b.idx == idx`). Match by HANDLE index
             // (stable from construction, independent of Prepare). Iterate in
@@ -1531,6 +1544,42 @@ namespace Arcane
             return h.index < m_fxGen.size() &&
                    m_fxGen[h.index] == h.generation &&
                    m_fxGen[h.index] != 0u;
+        }
+
+        // ---- immediate lifecycle-seam contact destruction (Task 5) -------------
+        //
+        // Walk the persistent pool by STORED slot (ascending id, deterministic) and
+        // destroy any contact that touches the removed fixture / body. The match is
+        // by slot INDEX (not the live handle) because the caller runs these AFTER
+        // the slot has already been recycled (generation bumped). Destroying the
+        // CURRENT id mid-ForEach is safe: ForEach iterates ascending ids checking
+        // m_alive[id], and Destroy only flips the alive flag + frees the id without
+        // resizing the pool. Additive over the update-pass stale-handle guard.
+        // NOTE: each helper is a full ContactPool::ForEach scan (O(contacts)), so
+        // mass world teardown should prefer ContactPool::Clear() over a RemoveBody
+        // loop (which would be O(bodies x contacts)).
+        void PhysicsWorld::DestroyContactsForFixture(std::uint32_t fixtureSlot)
+        {
+            m_contactPool.ForEach([&](std::uint32_t id, Contact& c)
+            {
+                if (c.a.index == fixtureSlot ||
+                    (c.bIsBody && c.b.index == fixtureSlot))
+                {
+                    m_contactPool.Destroy(id);
+                }
+            });
+        }
+
+        void PhysicsWorld::DestroyContactsForBody(std::uint32_t bodySlot)
+        {
+            m_contactPool.ForEach([&](std::uint32_t id, Contact& c)
+            {
+                if (c.bodyA == bodySlot ||
+                    (c.bIsBody && c.bodyB == bodySlot))
+                {
+                    m_contactPool.Destroy(id);
+                }
+            });
         }
 
         bool PhysicsWorld::BothAsleep(const Contact& c) const noexcept

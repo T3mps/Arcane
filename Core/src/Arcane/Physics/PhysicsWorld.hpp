@@ -1161,6 +1161,21 @@ namespace Arcane
             // contact is recomputed + emitted this Step.
             void WakeMoverPair(std::uint32_t fa, std::uint32_t fb);
 
+            // ---- immediate lifecycle-seam contact destruction (Task 5) -------
+            //
+            // Destroy every persistent-pool contact that references a fixture /
+            // body the moment it is removed, so a recycled slot never leaves a
+            // stale contact even for the single Step before UpdateContacts' guard
+            // (line ~1917) would reap it. Walk the pool by STORED slot (not by
+            // liveness) -- the caller invokes these AFTER the fixture/body has
+            // been marked dead. ContactPool::ForEach tolerates Destroy(id) of the
+            // CURRENT id mid-walk (it iterates ascending ids checking m_alive[id];
+            // Destroy only flips the flag + frees the id, never resizes the pool),
+            // so destroying in-place is safe. Additive cleanup: the update-pass
+            // guard stays as defense-in-depth, so the sim is byte-identical.
+            void DestroyContactsForFixture(std::uint32_t fixtureSlot);
+            void DestroyContactsForBody(std::uint32_t bodySlot);
+
             // True iff fixture handle h still refers to its original live slot.
             [[nodiscard]] bool FixtureSlotLive(FixtureHandle h) const noexcept;
 

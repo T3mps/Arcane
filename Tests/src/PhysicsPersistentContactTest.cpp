@@ -302,3 +302,44 @@ TEST_CASE("Tile-span solver feed: a dynamic body rests on a merged span (no tunn
     //     is 0 -- proving the span feed is the transient path, not a pooled contact.
     REQUIRE(w.DebugContactCount() == 0u);
 }
+
+// ---- Task 5: immediate contact destruction at the lifecycle seams -------------
+//
+// Dropping a fixture (compound body) destroys exactly that fixture's contacts
+// IMMEDIATELY -- before the next Step, not one step later (the update-pass guard
+// would catch it, but the seam destroys it right away). DropFixture's real
+// signature is DropFixture(FixtureHandle) (single-arg); GetBodyFixture(bh, n)
+// hands back the n-th fixture handle.
+TEST_CASE("DropFixture destroys that fixture's persistent contacts", "[physics]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
+    d.type = BodyType::Static;  d.position = Vec2(0, 100); w.AddBody(d);
+    d.type = BodyType::Dynamic; d.position = Vec2(0, 81);  BodyHandle dyn = w.AddBody(d);
+    const FixtureHandle fx = w.GetBodyFixture(dyn, 0);
+    w.Step(Real(1) / Real(60));
+    REQUIRE(w.DebugContactCount() >= 1);
+
+    w.DropFixture(fx);                                   // real signature: single FixtureHandle
+    REQUIRE(w.DebugContactCount() == 0);                 // destroyed immediately, before the next Step
+}
+
+// Removing a body destroys exactly that body's contacts IMMEDIATELY -- before the
+// next Step (mirrors the DropFixture case above, but pins the by-BODY seam). The
+// older "Persistent contact destroyed when a body is removed" test Steps after the
+// removal, so it would pass whether the contact dies at the seam or one step later
+// via the update-pass guard; this one removes with NO intervening Step. Removing
+// EITHER participant destroys the shared contact -- we remove the static one, as
+// the existing stepped removal test does.
+TEST_CASE("RemoveBody destroys that body's persistent contacts immediately", "[physics]")
+{
+    PhysicsWorld w;
+    BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
+    d.type = BodyType::Static;  d.position = Vec2(0, 100); BodyHandle s = w.AddBody(d);
+    d.type = BodyType::Dynamic; d.position = Vec2(0, 81);  w.AddBody(d);
+    w.Step(Real(1) / Real(60));
+    REQUIRE(w.DebugContactCount() >= 1);
+
+    w.RemoveBody(s);                                     // remove the static participant
+    REQUIRE(w.DebugContactCount() == 0);                 // destroyed immediately, before the next Step
+}
