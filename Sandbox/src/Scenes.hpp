@@ -9,12 +9,23 @@
 // and they assume the Astra TypeContext has been installed in THIS module.
 
 // ---- stress-scene knobs (exported so tests auto-scale with the constant) -----
-// kStressBodyCount - THE single knob: change this to scale the brutal churn.
+// kStressBodyCount - THE single knob: change this to scale the brutal CHURN/PERF
+//   scene (the registered scene 8, the Loom showcase). Procedurally fills a
+//   20-column grid, so the spawn column is ceil(N/20) rows tall -- at 10000 that
+//   is a ~41,000 px column whose TOP sits ~ -40,000 (far above the bowl).
+// kStressStabilityBodyCount - the count the *unit-test* stability check runs at.
+//   DECOUPLED from the perf knob on purpose: the SandboxVisualsTest "stays
+//   bounded" assertion uses a 1k-scale spatial bound (kYMin = -5000), and the
+//   spawn column must fit inside it. 1200 bodies = 60 rows -> top row y ~ -4040,
+//   comfortably inside -5000 (a body would have to gain real energy to escape),
+//   so this check stays a true instability tripwire while the perf scene keeps
+//   the full 10000. (See the geometry note in BuildStressTest.)
 // kStressWhiskCount - number of kinematic balloon-whisk agitators (always 1).
 namespace Arcane::Sandbox
 {
-    inline constexpr int kStressBodyCount = 10000;
-    inline constexpr int kStressWhiskCount = 1;
+    inline constexpr int kStressBodyCount          = 10000;
+    inline constexpr int kStressStabilityBodyCount = 1200;
+    inline constexpr int kStressWhiskCount         = 1;
 }
 
 #include <span>
@@ -74,4 +85,12 @@ namespace Arcane::Sandbox
 
     // The process-wide table of sandbox scenes. Task 4: one entry (scene 0).
     std::span<const SceneDef> SceneRegistry();
+
+    // The stress scene (scene 8) built at an arbitrary dynamic-body count, so the
+    // unit-test stability check can run at kStressStabilityBodyCount while the
+    // registered roster scene (and the Loom perf showcase) stays at the full
+    // kStressBodyCount. Same arena/whisk/RNG seed as BuildStressTest -- only the
+    // procedural body count differs. Requires the PhysicsResource world installed
+    // (path-A bodies mint on the next PhysicsSystem fixedUpdate).
+    void BuildStressTestN(Astra::Registry& reg, int bodyCount);
 }

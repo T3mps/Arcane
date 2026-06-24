@@ -812,7 +812,13 @@ namespace Arcane::Sandbox
         //   whisk tip speed ~1064 px/s at 60 Hz => < wire diameter 30 px per step
         //   low density (0.05-0.10) + low friction (0.3-0.4) => mass flows, churns
         //   seeded std::mt19937 => identical layout every build (deterministic tests)
-        void BuildStressTest(Astra::Registry& reg)
+        //
+        // `bodyCount` is the number of procedural dynamic bodies. The registered
+        // roster scene + Loom perf showcase pass kStressBodyCount (10000); the
+        // unit-test stability check passes kStressStabilityBodyCount (1200) via the
+        // public BuildStressTestN forwarder so its spawn column fits the test bound.
+        // The arena/whisk/seed are identical regardless of count.
+        void BuildStressTestImpl(Astra::Registry& reg, int bodyCount)
         {
             Astra::Entity root = MakeRoot(reg);
 
@@ -919,7 +925,7 @@ namespace Arcane::Sandbox
             const glm::vec4 palette[6] = { kOrange, kBlue, kGreen, kGold, kMagenta, kTeal };
             const int kNGonSides[3]   = { 3, 5, 6 };
 
-            for (int i = 0; i < kStressBodyCount; ++i)
+            for (int i = 0; i < bodyCount; ++i)
             {
                 // 1. Grid position + jitter.
                 const int   row = i / kCols;
@@ -996,6 +1002,12 @@ namespace Arcane::Sandbox
             }
         }
 
+        // The registered roster / Loom-perf entry: full kStressBodyCount churn.
+        void BuildStressTest(Astra::Registry& reg)
+        {
+            BuildStressTestImpl(reg, kStressBodyCount);
+        }
+
         // The static scene table -- the process-wide roster (9 scenes; the 9th is
         // the Item-B stress test).
         constexpr std::array<SceneDef, 9> kScenes = {{
@@ -1014,6 +1026,14 @@ namespace Arcane::Sandbox
     std::span<const SceneDef> SceneRegistry()
     {
         return std::span<const SceneDef>(kScenes.data(), kScenes.size());
+    }
+
+    // Public forwarder onto the file-local BuildStressTestImpl so a test (or any
+    // caller) can build the stress scene at a chosen body count without touching
+    // the registered scene 8 / Loom perf knob (which stays at kStressBodyCount).
+    void BuildStressTestN(Astra::Registry& reg, int bodyCount)
+    {
+        BuildStressTestImpl(reg, bodyCount);
     }
 
     // -------------------------------------------------------------------------
