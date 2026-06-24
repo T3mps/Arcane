@@ -28,6 +28,8 @@
 #include "Camera.hpp"                       // the sandbox 2D pan + zoom view
 #include "Interaction.hpp"                  // mouse spawn/drag/throw + pan/zoom (Task 7)
 
+#include <Arcane/Physics/Fixture.hpp>          // FixtureHandle, kInvalidFixture (subject + partner fixtures)
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseTrace (inspector recorder)
 #include <Arcane/Render/Batcher2D.hpp>        // Batcher2D virtual interface (Circle call)
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>   // PhysicsResource (owns the PhysicsWorld)
@@ -38,12 +40,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
-namespace Arcane { struct InputSnapshot; }
+namespace Arcane { struct InputSnapshot; class OffscreenCanvas; class Runtime; }
 
 namespace Arcane::Sandbox
 {
@@ -104,6 +107,47 @@ namespace Arcane::Sandbox
         bool  drawManifolds      = false;  // per-point contact manifolds + normals
     };
 
+    // -------------------------------------------------------------------------
+    // ContactView: one of the subject fixture's active contacts (subject model).
+    // -------------------------------------------------------------------------
+    // The subject participates in 0..N contacts; each ContactView holds the partner
+    // body id (the OTHER body in the constraint -- stable across frames, used to keep
+    // the HUD's partner selection stable by id rather than index) and the re-collided
+    // NarrowphaseTrace (subject fixture vs the partner's primary fixture). Traces carry
+    // std::vectors; the enclosing resource is never serialized (no-op Serialize).
+    struct ContactView
+    {
+        std::uint32_t                     partnerBodyId = 0;  // partner BodyHandle.index
+        Arcane::Physics::NarrowphaseTrace trace{};            // subject-vs-partner re-run
+    };
+
+    // -------------------------------------------------------------------------
+    // SandboxInspectorResource: the narrowphase-inspector publish channel (subject model).
+    // -------------------------------------------------------------------------
+    // SandboxApp owns the authoritative inspector state (the SUBJECT fixture + body, the
+    // subject's enumerated contacts, the selected contact index, the step index); it
+    // mirrors it into THIS Registry resource each FixedUpdate -- like SandboxDebugDraw.
+    // PhysicsDebugRenderSystem (a separate system with no SandboxApp handle) reads it and
+    // draws the WORLD-SPACE overlay (subject highlighted + ALL contacts, selected
+    // emphasized) when a valid subject exists. The Minkowski INSET is drawn separately by
+    // the HUD (it needs the OffscreenCanvas, which SandboxApp owns directly).
+    //
+    // Defaults to no-subject, so a fresh build is unchanged. The contacts vector carries
+    // traces with std::vectors, so (like PolygonDraftResource) it provides a no-op
+    // Serialize to satisfy Astra's HasSerializeMethod concept (Save excludes resources).
+    struct SandboxInspectorResource
+    {
+        bool                           hasSubject  = false;   // a valid subject this frame
+        Arcane::Physics::FixtureHandle subject     = Arcane::Physics::kInvalidFixture;
+        std::uint32_t                  subjectBody = 0;       // subject BodyHandle.index
+        std::vector<ContactView>       contacts;              // ALL of the subject's contacts
+        int                            selectedIndex = -1;    // focused contact (-1 = none)
+        int                            stepIndex     = 0;     // per-iteration snapshot index
+
+        template<typename Archive>
+        void Serialize(Archive& /*ar*/) {}   // no-op: transient per-frame inspector state
+    };
+
     // Render-phase overlay: collider outlines + contacts on top of the sprites.
     // Reads-only w.r.t. ECS (the side effect is the external batcher submission),
     // matching RenderSubmissionSystem. No SystemTraits component dependencies are
@@ -151,6 +195,33 @@ namespace Arcane::Sandbox
                 opts.drawContacts = true;
             }
             DrawPhysicsDebug(*phys->world, *ctx->batcher, opts);
+
+            // ---- Slice B: subject narrowphase WORLD overlay ---------------------
+            // When the inspector has a valid SUBJECT (published by SandboxApp::FixedUpdate
+            // into SandboxInspectorResource each step), highlight the subject shape and
+            // draw EVERY one of its contacts' world-space internals on top of the base
+            // overlay -- the SELECTED contact emphasized, the others dimmed. The Minkowski
+            // inset is the HUD's job (it owns the OffscreenCanvas).
+            if (const SandboxInspectorResource* insp =
+                    reg.GetResource<SandboxInspectorResource>();
+                insp && insp->hasSubject && !insp->contacts.empty())
+            {
+                // Each ContactView trace shares xfA/shapeA == the subject fixture, so the
+                // selected contact's trace also carries the subject geometry to highlight.
+                const int sel = (insp->selectedIndex >= 0 &&
+                                 insp->selectedIndex < static_cast<int>(insp->contacts.size()))
+                                    ? insp->selectedIndex : 0;
+                for (int i = 0; i < static_cast<int>(insp->contacts.size()); ++i)
+                {
+                    const bool focused = (i == sel);
+                    DrawNarrowphaseWorldOverlay(
+                        insp->contacts[i].trace,
+                        focused ? insp->stepIndex : -1,
+                        *ctx->batcher, ctx->cameraOffset, ctx->zoom,
+                        /*lineThickness=*/focused ? 1.6f : 1.0f,
+                        /*emphasis=*/focused ? 1.0f : 0.4f);
+                }
+            }
         }
     };
 
@@ -198,6 +269,12 @@ namespace Arcane::Sandbox
     class SandboxApp
     {
     public:
+        // Out-of-line dtor: m_inspectorCanvas is a unique_ptr<OffscreenCanvas> (an
+        // incomplete type in this header). The destructor is defined in SandboxApp.cpp,
+        // which includes OffscreenCanvas.hpp, so unique_ptr can delete a complete type.
+        SandboxApp();
+        ~SandboxApp();
+
         // Record the gravity the (re)built PhysicsResource worlds use. Called once by the
         // plugin in Init before BuildInitialScene so SetScene/Reset can mint fresh worlds.
         void Configure(float gravityY) noexcept { m_gravityY = gravityY; }
@@ -283,6 +360,65 @@ namespace Arcane::Sandbox
         [[nodiscard]] const SandboxDebugDraw& DebugOptions() const noexcept { return m_debug; }
         [[nodiscard]] SandboxDebugDraw&       DebugOptionsMut()     noexcept { return m_debug; }
 
+        // ---- NARROWPHASE INSPECTOR (subject model, always on) ----------------------
+        // The inspector subject is set as a SIDE EFFECT of the normal grab: when the
+        // Interaction grabs a body to drag, SandboxApp resolves that body's fixture as the
+        // subject (no enable toggle; dragging is unchanged). The subject PERSISTS after the
+        // drag releases (study a shape at rest in a pile) until you grab another body, the
+        // subject becomes invalid (re-validated each FixedUpdate), or you press "Clear
+        // subject". Each FixedUpdate, if the subject is valid, SandboxApp enumerates ALL
+        // active contacts the subject participates in (re-colliding the subject fixture
+        // against each partner's primary fixture) and publishes a SandboxInspectorResource
+        // for the world overlay + the HUD inset.
+
+        // A valid subject is currently set (re-validated each FixedUpdate).
+        [[nodiscard]] bool HasSubject() const noexcept { return m_subjectValid; }
+
+        // The subject fixture handle (valid only when HasSubject()); the HUD shows its ids.
+        [[nodiscard]] Arcane::Physics::FixtureHandle Subject() const noexcept { return m_subjectFixture; }
+        [[nodiscard]] Arcane::Physics::BodyHandle    SubjectBody() const noexcept { return m_subjectBody; }
+
+        // Set the subject to body `bh`'s primary fixture (fixture 0). No-op (clears the
+        // subject) for a stale/fixtureless body. Called by FixedUpdate from the grab
+        // request; also directly callable by tests. Re-enumerates contacts on the next
+        // UpdateAndPublishInspector. Switching bodies resets the selection + step state.
+        void SetSubjectBody(Astra::Registry& reg, Arcane::Physics::BodyHandle bh);
+
+        // Drop the subject (the HUD "Clear subject" button / an invalid subject).
+        void ClearSubject() noexcept;
+
+        // The subject's enumerated contacts this frame (each a partner + re-run trace).
+        // Empty when the subject is touching nothing. The HUD's partner selector lists them.
+        [[nodiscard]] const std::vector<ContactView>& Contacts() const noexcept { return m_contacts; }
+
+        // The SELECTED contact index (the focused contact: the inset + step + emphasis).
+        // -1 when the subject has no contacts. Defaults to the DEEPEST contact; selecting
+        // a different partner re-points the inset/step. SelectedTrace() is the focused
+        // contact's trace (an idle/empty trace when there are no contacts).
+        [[nodiscard]] int SelectedIndex() const noexcept { return m_selectedIndex; }
+        void SetSelectedIndex(int i) noexcept;
+        [[nodiscard]] const Arcane::Physics::NarrowphaseTrace& SelectedTrace() const noexcept;
+
+        // The step index over the SELECTED contact's recorded iterations (the HUD slider
+        // writes it; clamped to RecordedStepCount() for the selected trace's kind; 0 ->
+        // analytic, slider disabled).
+        [[nodiscard]] int  StepIndex() const noexcept { return m_stepIndex; }
+        void SetStepIndex(int i) noexcept;
+        [[nodiscard]] int  RecordedStepCount() const noexcept;
+
+        // The inspector "Play" auto-advance flag (the HUD checkbox binds to it). Lives
+        // here -- not a HUD-local static -- so it resets in ClearSubject() / on a partner
+        // switch like the rest of the inspector state.
+        [[nodiscard]] bool InspectorPlay() const noexcept { return m_inspectorPlay; }
+        void SetInspectorPlay(bool on) noexcept { m_inspectorPlay = on; }
+
+        // The inspector's Minkowski-inset OffscreenCanvas (lazily created on first use,
+        // null until then / in a headless host with no device). The HUD draws into it.
+        [[nodiscard]] Arcane::OffscreenCanvas* Inspector() noexcept { return m_inspectorCanvas.get(); }
+        // Lazily create (or fetch) the inset canvas at `w`x`h` using the host's device +
+        // shaders (Runtime render-resources bridge). Returns null in a headless host.
+        Arcane::OffscreenCanvas* EnsureInspectorCanvas(std::uint32_t w, std::uint32_t h);
+
         // The sandbox 2D camera (pan + zoom). The plugin pushes it to the engine each
         // frame via Runtime::SetCamera so RenderSubmissionSystem + DrawPhysicsDebug
         // apply the SAME transform (sprites + overlay move together).
@@ -302,6 +438,14 @@ namespace Arcane::Sandbox
         // render-phase overlay system reads them. Idempotent; creates it if absent.
         void PublishDebug(Astra::Registry& reg) const;
 
+        // Re-validate the subject, enumerate ALL its active contacts (re-colliding the
+        // subject fixture against each partner's primary fixture into the reused
+        // m_contacts traces), pick the deepest as the default focus (keeping the prior
+        // selection stable by partner id), and publish the SandboxInspectorResource (for
+        // the world overlay). A stale subject -> clears it. Idempotent; creates the
+        // resource if absent. Called each FixedUpdate so the traces track the live bodies.
+        void UpdateAndPublishInspector(Astra::Registry& reg);
+
         std::size_t m_sceneIndex = 0;
         float       m_gravityY   = 0.0f;
         Camera      m_camera{};      // default identity; configured in RebuildScene
@@ -319,5 +463,47 @@ namespace Arcane::Sandbox
 
         // ---- debug overlay flags (Task 8) ------------------------------------------
         SandboxDebugDraw m_debug{};   // contacts on / AABBs off by default (Task-7 look)
+
+        // ---- narrowphase inspector (subject model, always on) ----------------------
+        bool m_subjectValid = false;  // a valid subject is set (re-validated each step)
+        Arcane::Physics::FixtureHandle m_subjectFixture = Arcane::Physics::kInvalidFixture;
+        Arcane::Physics::BodyHandle    m_subjectBody    = Arcane::Physics::kInvalidBody;
+        int  m_selectedIndex  = -1;   // focused contact index (-1 = subject has none)
+        // Stable selection: re-resolve the focused contact by PARTNER ID across frames
+        // (the contact list order can shift). m_hasSelectedPartner gates the lookup --
+        // body slot 0 is a VALID partner id, so a bare `id != 0` sentinel would wrongly
+        // treat a partner at slot 0 as "no selection". The bool keeps slot 0 selectable.
+        bool m_hasSelectedPartner = false;
+        std::uint32_t m_selectedPartnerId = 0;  // partner BodyHandle.index (valid iff the bool)
+        int  m_stepIndex      = 0;    // per-iteration snapshot index (slider-driven)
+        bool m_inspectorPlay  = false; // HUD "Play" auto-advance (reset on clear/switch)
+
+        // Reused per-frame storage for the subject's enumerated contacts (each carries a
+        // partner id + a re-run trace). m_contacts is .clear()'d + refilled each step;
+        // the inner traces keep their vector capacity across frames (DebugCollide Clears
+        // each before re-recording) -> no gratuitous per-frame heap churn after warmup.
+        std::vector<ContactView> m_contacts;
+
+        // An empty idle trace returned by SelectedTrace() when there are no contacts (so
+        // the HUD inset has something safe to read; fit-to-bounds handles no geometry).
+        Arcane::Physics::NarrowphaseTrace m_idleTrace{};
+
+        // The Minkowski-inset render target. Lazily created on first use from the host's
+        // device + ShaderLibrary (Runtime render-resources bridge); null in a headless
+        // host (no device) so the CPU [sandbox] tests never touch a GPU. Owned here, torn
+        // down with the app. Stored opaquely (unique_ptr<OffscreenCanvas>) so the header
+        // stays nvrhi-light.
+        std::unique_ptr<Arcane::OffscreenCanvas> m_inspectorCanvas;
+
+        // The Runtime is the only path to the host's device + shaders (the OffscreenCanvas
+        // factory needs both). Cached on first DrawUI/FixedUpdate via the engine context;
+        // null in the CPU test harness (which never wires a Runtime in).
+        Arcane::Runtime* m_runtime = nullptr;
+
+    public:
+        // Inject the engine Runtime (the device/shaders source for the inset canvas).
+        // Called by the plugin once in Init; the CPU test harness never calls it, so
+        // EnsureInspectorCanvas returns null there (no GPU touched).
+        void SetRuntime(Arcane::Runtime* rt) noexcept { m_runtime = rt; }
     };
 }

@@ -37,6 +37,13 @@ namespace Arcane
         void* imguiFree     = nullptr;
         void* imguiUserData = nullptr;
 
+        // Render-resources bridge: the host-owned nvrhi device + ShaderLibrary a plugin
+        // may need to build its own engine render objects (e.g. an inspector's
+        // OffscreenCanvas). Null until the host calls SetRenderResources (and in headless
+        // hosts that never create a device). Non-owning: the host owns their lifetime.
+        nvrhi::IDevice* device  = nullptr;
+        ShaderLibrary*  shaders = nullptr;
+
         explicit Impl(Astra::TypeContext* external) : jobs(), sched(jobs.WorkScheduler())
         {
             if (external) { context = external; }
@@ -87,6 +94,14 @@ namespace Arcane
     }
     glm::vec2 Runtime::CameraOffset() const noexcept { return m_impl->cameraOffset; }
     float     Runtime::CameraZoom()   const noexcept { return m_impl->cameraZoom; }
+
+    void Runtime::SetRenderResources(nvrhi::IDevice* device, ShaderLibrary* shaders) noexcept
+    {
+        m_impl->device  = device;
+        m_impl->shaders = shaders;
+    }
+    nvrhi::IDevice* Runtime::Device()  const noexcept { return m_impl->device; }
+    ShaderLibrary*  Runtime::Shaders() const noexcept { return m_impl->shaders; }
 
     void Runtime::SetRenderContext(Batcher2D* batcher)
     {

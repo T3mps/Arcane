@@ -14,6 +14,7 @@
 
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 
+#include <algorithm>   // std::clamp (emphasis floor)
 #include <cmath>
 #include <cstdint>
 
@@ -26,7 +27,7 @@
 #include <Arcane/Physics/Broadphase/Broadphase.hpp>       // BroadphasePair, Aabb2
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>      // FixtureBroadphaseTree / ForEachLeaf
 #include <Arcane/Physics/Broadphase/SpatialGrid.hpp>      // StaticGrid / ResidencyGrid / ForEachCell
-#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseKind
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseKind + NarrowphaseTrace
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Shapes.hpp>
@@ -173,6 +174,66 @@ namespace Arcane
             const glm::vec2 base = tip - dir * head;
             b.Line(tip, base + perp * (head * 0.6f), thickness, color);
             b.Line(tip, base - perp * (head * 0.6f), thickness, color);
+        }
+
+        // ---- Slice B narrowphase-inspector colors ---------------------------
+        // shapeA is the inspector SUBJECT: drawn at a bright-gold highlight (set inline in
+        // DrawNarrowphaseWorldOverlay so it reads distinctly across all the subject's
+        // contacts). shapeB is the contact PARTNER outline.
+        constexpr glm::vec4 kColTraceShapeB{ 0.40f, 0.70f, 1.00f, 1.0f }; // blue outline (partner)
+        constexpr glm::vec4 kColTraceAxis  { 0.55f, 0.55f, 0.60f, 0.6f }; // dim grey (candidate)
+        constexpr glm::vec4 kColTraceAxisHi{ 1.00f, 0.85f, 0.20f, 1.0f }; // gold (chosen axis)
+        constexpr glm::vec4 kColTraceNormal{ 1.00f, 0.25f, 1.00f, 1.0f }; // magenta normal arrow
+        constexpr glm::vec4 kColTracePoint { 1.00f, 1.00f, 1.00f, 1.0f }; // white contact disc
+
+        // Transform a Physics::Vec2 in the shape's LOCAL frame through a
+        // Physics::Transform (rotation + position) to world, then to screen.
+        inline glm::vec2 ShapeLocalToScreen(const Physics::Vec2& local,
+                                            const Physics::Transform& xf,
+                                            const glm::vec2& off, float zoom)
+        {
+            const Physics::Vec2 w = xf.position + Physics::RotateVec(xf.rotation, local);
+            return glm::vec2(static_cast<float>(w.x), static_cast<float>(w.y)) * zoom + off;
+        }
+
+        // Outline one trace shape (the unified core+radius model) in world space:
+        //   * polygon/aabb cores (>= 3 verts) -> closed edge loop.
+        //   * capsule core (2 verts)          -> the segment + its two end discs
+        //                                        (radius is the round inflation).
+        //   * circle core  (<= 1 vert)        -> a single disc at the vert center.
+        // verts are local; xf places them in the world. A radius>0 on a poly is the
+        // collision skin, drawn as end discs at each vert for visual fidelity.
+        void DrawTraceShape(Batcher2D& b, const Physics::Shape& s,
+                            const Physics::Transform& xf, const glm::vec2& off,
+                            float zoom, float thick, const glm::vec4& col)
+        {
+            const float r = static_cast<float>(s.radius) * zoom;
+            const std::size_t vc = s.verts.size();
+
+            if (vc >= 3)
+            {
+                for (std::size_t e = 0; e < vc; ++e)
+                {
+                    const glm::vec2 a = ShapeLocalToScreen(s.verts[e], xf, off, zoom);
+                    const glm::vec2 c = ShapeLocalToScreen(s.verts[(e + 1) % vc], xf, off, zoom);
+                    b.Line(a, c, thick, col);
+                }
+            }
+            else if (vc == 2)
+            {
+                const glm::vec2 a = ShapeLocalToScreen(s.verts[0], xf, off, zoom);
+                const glm::vec2 c = ShapeLocalToScreen(s.verts[1], xf, off, zoom);
+                b.Line(a, c, thick, col);
+                if (r > 0.0f) { b.Circle(a, r, col); b.Circle(c, r, col); }
+            }
+            else
+            {
+                const glm::vec2 ctr = (vc == 1)
+                    ? ShapeLocalToScreen(s.verts[0], xf, off, zoom)
+                    : (glm::vec2(static_cast<float>(xf.position.x),
+                                 static_cast<float>(xf.position.y)) * zoom + off);
+                b.Circle(ctr, (r > 0.0f) ? r : 2.0f, col);
+            }
         }
 
     } // anonymous namespace
@@ -510,6 +571,121 @@ namespace Arcane
                         DrawArrowHead(batcher, spt, tip, thick, col);
                     }
                 });
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // DrawNarrowphaseWorldOverlay (Slice B)
+    // -------------------------------------------------------------------------
+
+    void DrawNarrowphaseWorldOverlay(const Physics::NarrowphaseTrace& trace,
+                                     int stepIndex,
+                                     Batcher2D& batcher,
+                                     glm::vec2 cameraOffset,
+                                     float zoom,
+                                     float lineThickness,
+                                     float emphasis)
+    {
+        using namespace Physics;
+
+        const glm::vec2& off  = cameraOffset;
+        const float      thick = lineThickness;
+
+        // Emphasis scales alpha so the SELECTED contact (emphasis 1) reads bold/bright and
+        // the others (emphasis < 1) dim while staying visible. Clamp to a sane floor.
+        const float em = std::clamp(emphasis, 0.15f, 1.0f);
+        const auto Dim = [em](glm::vec4 c) noexcept -> glm::vec4
+        {
+            c.a *= em;
+            return c;
+        };
+
+        // The SUBJECT (shapeA) is always drawn at a distinct bright highlight so it is
+        // unmistakable across all its contacts; its alpha still rides the emphasis so the
+        // focused contact's subject outline is the boldest.
+        const glm::vec4 colSubject{ 1.00f, 0.95f, 0.35f, 1.0f }; // bright gold = subject
+        DrawTraceShape(batcher, trace.shapeA, trace.xfA, off, zoom,
+                       em >= 1.0f ? thick * 1.3f : thick, Dim(colSubject));
+        DrawTraceShape(batcher, trace.shapeB, trace.xfB, off, zoom, thick, Dim(kColTraceShapeB));
+
+        // Anchor world point for axis/normal drawing: the first manifold contact
+        // point (world space) when present, else the midpoint of the two shape
+        // origins (still a sensible "between the shapes" anchor for a separated pair).
+        glm::vec2 anchorW;
+        if (trace.manifold.pointCount > 0)
+        {
+            const Vec2& p = trace.manifold.points[0].point;
+            anchorW = glm::vec2(static_cast<float>(p.x), static_cast<float>(p.y));
+        }
+        else
+        {
+            anchorW = 0.5f * (glm::vec2(static_cast<float>(trace.xfA.position.x),
+                                        static_cast<float>(trace.xfA.position.y))
+                            + glm::vec2(static_cast<float>(trace.xfB.position.x),
+                                        static_cast<float>(trace.xfB.position.y)));
+        }
+        const glm::vec2 anchorS = anchorW * zoom + off;
+
+        // ---- SAT candidate axes (poly-poly): chosen axis bold ---------------
+        //
+        // Each axis is an infinite separating line; we draw a finite segment
+        // through the anchor along the axis direction so all candidates fan out
+        // from the contact region. The chosen axis (its normal == the manifold
+        // normal) draws gold + bold; the step slider highlights one candidate.
+        if (!trace.satAxes.empty())
+        {
+            const int n = static_cast<int>(trace.satAxes.size());
+            const int sel = (stepIndex >= 0 && stepIndex < n) ? stepIndex : -1;
+            constexpr float kAxisHalfLenPx = 60.0f;  // half-length of the drawn segment
+
+            for (int i = 0; i < n; ++i)
+            {
+                const SatAxis& ax = trace.satAxes[i];
+                const glm::vec2 d(static_cast<float>(ax.dir.x), static_cast<float>(ax.dir.y));
+                const float dl = std::sqrt(d.x * d.x + d.y * d.y);
+                if (dl < 1e-5f) continue;
+                const glm::vec2 dn = d / dl;
+                // The axis LINE runs perpendicular to the separating-axis direction
+                // (a separating axis is a normal; the face it represents is perp).
+                const glm::vec2 along(-dn.y, dn.x);
+                const glm::vec2 a = anchorS - along * kAxisHalfLenPx;
+                const glm::vec2 c = anchorS + along * kAxisHalfLenPx;
+                const bool hi = ax.chosen || i == sel;
+                batcher.Line(a, c, hi ? thick * 1.8f : thick,
+                             Dim(hi ? kColTraceAxisHi : kColTraceAxis));
+            }
+        }
+
+        // ---- support points (per-iteration snapshots) ----------------------
+        //
+        // The EPA closest-edge endpoints / MPR portal endpoints are MINKOWSKI
+        // points (not world), so they are NOT drawn here -- the Minkowski inset
+        // owns them. What we CAN anchor in world space is the manifold's contact
+        // points (drawn below) + the final normal; the per-iteration Minkowski
+        // series is the inset's job. (Drawing MD points in world space would be
+        // meaningless.) We mark the support-region anchor with a small ring so
+        // the contact is unmistakable in the world view.
+        batcher.Circle(anchorS, 4.0f, Dim(kColTracePoint));
+
+        // ---- final representative normal arrow (B -> A) ---------------------
+        const glm::vec2 nrm(static_cast<float>(trace.manifold.normal.x),
+                            static_cast<float>(trace.manifold.normal.y));
+        const float nlen = std::sqrt(nrm.x * nrm.x + nrm.y * nrm.y);
+        if (nlen > 1e-5f)
+        {
+            constexpr float kNormalLen = 28.0f;  // world units
+            const glm::vec2 tip = (anchorW + (nrm / nlen) * kNormalLen) * zoom + off;
+            batcher.Line(anchorS, tip, thick * 1.4f, Dim(kColTraceNormal));
+            DrawArrowHead(batcher, anchorS, tip, thick * 1.4f, Dim(kColTraceNormal));
+        }
+
+        // ---- manifold contact points (white discs) -------------------------
+        for (int pi = 0; pi < trace.manifold.pointCount; ++pi)
+        {
+            const Vec2& p = trace.manifold.points[pi].point;
+            const glm::vec2 sp =
+                glm::vec2(static_cast<float>(p.x), static_cast<float>(p.y)) * zoom + off;
+            batcher.Circle(sp, 3.0f, Dim(kColTracePoint));
         }
     }
 

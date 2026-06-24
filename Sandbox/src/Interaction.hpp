@@ -204,6 +204,23 @@ namespace Arcane::Sandbox
         // (so it rotates about its center) with the verts authored relative to it.
         bool SpawnPolygon(Arcane::Physics::PhysicsWorld& world);
 
+        // ---- NARROWPHASE INSPECTOR SUBJECT (grab-to-select, always on) -------------
+        // The inspector's "subject" is the body of the shape you GRAB TO DRAG -- it is a
+        // SIDE EFFECT of the existing grab, not a separate mode (dragging is unchanged).
+        // When Tick's normal grab path grabs a body (the LMB-press body pick), it records
+        // that body handle as a one-shot "subject grab"; SandboxApp polls it after Tick
+        // and resolves the body's fixture as the inspector subject. Grabbing empty space
+        // (no body) raises NO request, so the subject persists across empty clicks.
+        //
+        // TakeSubjectGrab returns the grabbed body handle exactly once (consumes the
+        // request) and kInvalidBody when no body was grabbed this frame.
+        [[nodiscard]] Arcane::Physics::BodyHandle TakeSubjectGrab() noexcept
+        {
+            const Arcane::Physics::BodyHandle h = m_subjectGrab;
+            m_subjectGrab = Arcane::Physics::kInvalidBody;
+            return h;
+        }
+
         // ---- introspection (test hooks; also handy for a future HUD) ---------------
         [[nodiscard]] bool IsGrabbing() const noexcept
         {
@@ -255,5 +272,11 @@ namespace Arcane::Sandbox
 
         // Pooled scratch for OverlapShape candidate handles (reused; no per-frame alloc).
         mutable std::vector<Arcane::Physics::BodyHandle> m_overlapScratch;
+
+        // ---- narrowphase inspector subject (grab-to-select) ------------------------
+        // One-shot: the body the grab path grabbed this frame (kInvalidBody = none).
+        // Set where Tick assigns m_grabbed on a body pick; consumed by SandboxApp via
+        // TakeSubjectGrab after Tick. Grabbing empty space leaves it kInvalidBody.
+        Arcane::Physics::BodyHandle m_subjectGrab = Arcane::Physics::kInvalidBody;
     };
 }

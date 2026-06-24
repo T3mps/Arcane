@@ -138,6 +138,13 @@ int main(int argc, char** argv)
         static Astra::TypeContext* const s_typeContext = new Astra::TypeContext();
         Arcane::Runtime runtime(s_typeContext);
 
+        // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
+        // Runtime so a plugin can build its own engine render objects (e.g. the
+        // narrowphase inspector's OffscreenCanvas). Non-owning; the host outlives the
+        // plugin (device/shaders are declared in the outer scope above). Null in a
+        // headless host -> the plugin skips its GPU-resource creation.
+        runtime.SetRenderResources(device->Nvrhi(), shaders.get());
+
         // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
         // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
         // at Init time, so the plugin's Init adopts the host's GImGui across the DLL boundary.

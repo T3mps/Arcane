@@ -27,8 +27,10 @@
 #include "../../Sandbox/src/Scenes.hpp"
 
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>  // NarrowphaseTrace (subject contacts)
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
+#include <Arcane/Physics/Solver/Solver.hpp>   // ContactConstraint (subject enumeration)
 
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -422,4 +424,289 @@ TEST_CASE("Hud: draft markers suppressed when shape is not Polygon", "[sandbox]"
     draft = f.reg.GetResource<Arcane::Sandbox::PolygonDraftResource>();
     REQUIRE(draft != nullptr);
     CHECK(draft->worldPoints.size() == 3);   // retained + re-published
+}
+
+// ===========================================================================
+// Narrowphase inspector (subject model, always on). CPU-only -- no GPU device,
+// so the Minkowski-inset OffscreenCanvas path returns null gracefully; the
+// grab-to-select subject + all-contacts enumeration + deepest-default partner
+// selection + step-control + resource-publication wiring is what we gate here.
+// ===========================================================================
+
+namespace
+{
+    // The handle of the FIRST dynamic body that participates in any active contact
+    // (so SetSubjectBody has a body whose contacts we can enumerate). Returns
+    // kInvalidBody if no dynamic body is currently in contact.
+    Phys::BodyHandle FirstDynamicContactBody(Phys::PhysicsWorld& world)
+    {
+        Phys::BodyHandle out = Phys::kInvalidBody;
+        world.ForEachContactConstraint(
+            [&](const Phys::ContactConstraint& cc)
+            {
+                if (out != Phys::kInvalidBody) return;
+                if (cc.bodyA == Phys::kInvalidSlot) return;
+                if (cc.pointCount <= 0) return;
+                // bodyA is always the dynamic slot.
+                out = world.HandleOf(cc.bodyA);
+            });
+        return out;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// (k) Grab-to-select: grabbing a body sets it as the subject; the subject
+//     persists; grabbing empty space does not change it; Clear drops it.
+// ---------------------------------------------------------------------------
+TEST_CASE("Inspector: grabbing a body sets/persists/clears the subject", "[sandbox]")
+{
+    Fixture f;
+    for (int i = 0; i < 90; ++i) f.Step();   // settle so contacts exist
+
+    CHECK_FALSE(f.app.HasSubject());
+
+    // Pick a live dynamic body in contact and set it as the subject directly (the
+    // same path the grab side effect drives through SetSubjectBody).
+    const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
+    REQUIRE(body != Phys::kInvalidBody);
+    f.app.SetSubjectBody(f.reg, body);
+    CHECK(f.app.HasSubject());
+    CHECK(f.Physics().IsValid(f.app.Subject()));
+    CHECK(f.app.SubjectBody().index == body.index);
+
+    // It persists across an idle FixedUpdate (no new grab).
+    Arcane::InputSnapshot idle{};
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    CHECK(f.app.HasSubject());
+
+    // Clear subject drops it.
+    f.app.ClearSubject();
+    CHECK_FALSE(f.app.HasSubject());
+}
+
+// ---------------------------------------------------------------------------
+// (l) Subject enumerates ALL its contacts; resource is published with subject.
+// ---------------------------------------------------------------------------
+TEST_CASE("Inspector: subject enumerates its contacts and publishes the resource", "[sandbox]")
+{
+    Fixture f;
+    for (int i = 0; i < 90; ++i) f.Step();   // settle: dynamics rest on the floor
+
+    const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
+    REQUIRE(body != Phys::kInvalidBody);
+    f.app.SetSubjectBody(f.reg, body);
+
+    // Publish the resource (FixedUpdate enumerates + mirrors the inspector state).
+    Arcane::InputSnapshot idle{};
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+
+    // The subject is touching at least one partner (a settled body on the floor).
+    REQUIRE_FALSE(f.app.Contacts().empty());
+
+    const auto* insp = f.reg.GetResource<Sbx::SandboxInspectorResource>();
+    REQUIRE(insp != nullptr);
+    CHECK(insp->hasSubject);
+    CHECK(f.Physics().IsValid(insp->subject));
+    CHECK(insp->subjectBody == body.index);
+    CHECK(insp->contacts.size() == f.app.Contacts().size());
+    // Every published contact has a recorded (non-empty) manifold (0-point dropped).
+    for (const auto& cv : insp->contacts)
+        CHECK(cv.trace.manifold.pointCount > 0);
+}
+
+// ---------------------------------------------------------------------------
+// (m) Deepest contact is the default focus; selection re-points the inset.
+// ---------------------------------------------------------------------------
+TEST_CASE("Inspector: selection defaults to the deepest contact", "[sandbox]")
+{
+    Fixture f;
+    for (int i = 0; i < 90; ++i) f.Step();
+
+    const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
+    REQUIRE(body != Phys::kInvalidBody);
+    f.app.SetSubjectBody(f.reg, body);
+
+    Arcane::InputSnapshot idle{};
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+
+    REQUIRE_FALSE(f.app.Contacts().empty());
+    const int sel = f.app.SelectedIndex();
+    REQUIRE(sel >= 0);
+    REQUIRE(sel < static_cast<int>(f.app.Contacts().size()));
+
+    // The selected contact is the DEEPEST (max manifold separation over all contacts).
+    auto MaxDepth = [](const Phys::NarrowphaseTrace& t)
+    {
+        float d = -1e30f;
+        for (int pi = 0; pi < t.manifold.pointCount; ++pi)
+            d = std::max(d, static_cast<float>(t.manifold.points[pi].separation));
+        return d;
+    };
+    const float selDepth = MaxDepth(f.app.Contacts()[static_cast<std::size_t>(sel)].trace);
+    for (const auto& cv : f.app.Contacts())
+        CHECK(selDepth >= MaxDepth(cv.trace) - 1e-4f);
+
+    // Selecting a different partner (when present) re-points the selection by id, and
+    // the selection is STABLE by id across a re-enumerate. Pause the sim first so the
+    // contact set is identical on the next enumerate (a running step could legitimately
+    // make the chosen partner lose contact -- that is fallback-to-deepest, not the
+    // stability property we are asserting here).
+    if (f.app.Contacts().size() >= 2)
+    {
+        f.app.SetPaused(true);
+        const int other = (sel == 0) ? 1 : 0;
+        const std::uint32_t otherId = f.app.Contacts()[static_cast<std::size_t>(other)].partnerBodyId;
+        f.app.SetSelectedIndex(other);
+        CHECK(f.app.SelectedIndex() == other);
+        // Stable by id: another enumerate (paused -> same contacts) keeps the partner.
+        f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+        REQUIRE(f.app.SelectedIndex() >= 0);
+        CHECK(f.app.Contacts()[static_cast<std::size_t>(f.app.SelectedIndex())].partnerBodyId == otherId);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// (n) Step control clamps to the recorded iteration count of the SELECTED trace.
+// ---------------------------------------------------------------------------
+TEST_CASE("Inspector: step index clamps to the selected contact's count", "[sandbox]")
+{
+    Fixture f;
+    for (int i = 0; i < 90; ++i) f.Step();
+
+    const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
+    REQUIRE(body != Phys::kInvalidBody);
+    f.app.SetSubjectBody(f.reg, body);
+
+    Arcane::InputSnapshot idle{};
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    REQUIRE_FALSE(f.app.Contacts().empty());
+
+    const int n = f.app.RecordedStepCount();
+    CHECK(n >= 0);   // analytic kinds report 0; stepped kinds report > 0
+
+    // An out-of-range index is clamped (never out of [0, n-1], or 0 when n == 0).
+    f.app.SetStepIndex(99999);
+    if (n > 0) CHECK(f.app.StepIndex() == n - 1);
+    else       CHECK(f.app.StepIndex() == 0);
+
+    f.app.SetStepIndex(-5);
+    CHECK(f.app.StepIndex() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// (o) Grab through FixedUpdate sets the subject; empty grab does not change it.
+// ---------------------------------------------------------------------------
+TEST_CASE("Inspector: a grab through FixedUpdate sets the subject; empty grab keeps it", "[sandbox]")
+{
+    Fixture f;
+    for (int i = 0; i < 90; ++i) f.Step();
+
+    // Find a live dynamic body and its world position so we can click ON it.
+    const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
+    REQUIRE(body != Phys::kInvalidBody);
+    const Phys::Vec2 bp = f.Physics().Position(body);
+
+    // Released baseline, then an LMB press ON the body (identity camera: screen == world).
+    Arcane::InputSnapshot rel{}; rel.mouseX = static_cast<float>(bp.x); rel.mouseY = static_cast<float>(bp.y);
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
+
+    Arcane::InputSnapshot press{}; press.mouseX = static_cast<float>(bp.x);
+    press.mouseY = static_cast<float>(bp.y); press.mouseButtons = 0x1;   // LMB
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);
+
+    REQUIRE(f.app.HasSubject());                 // the grab set the subject
+    const std::uint32_t subjBody = f.app.SubjectBody().index;
+
+    // Release, then an LMB press on FAR EMPTY space: no body grabbed -> subject unchanged.
+    Arcane::InputSnapshot rel2{}; rel2.mouseX = static_cast<float>(bp.x); rel2.mouseY = static_cast<float>(bp.y);
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel2);
+    Arcane::InputSnapshot emptyPress{}; emptyPress.mouseX = -9000.0f; emptyPress.mouseY = -9000.0f;
+    emptyPress.mouseButtons = 0x1;
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, emptyPress);
+
+    CHECK(f.app.HasSubject());                   // subject persisted across the empty grab
+    CHECK(f.app.SubjectBody().index == subjBody);
+}
+
+// ---------------------------------------------------------------------------
+// (p) Headless null-device: EnsureInspectorCanvas returns null and the HUD
+//     (incl. the subject inspector window) draws safely; 0-contact path is safe.
+// ---------------------------------------------------------------------------
+TEST_CASE("Inspector: headless inset is null and the HUD draws safely", "[sandbox]")
+{
+    Fixture f;
+    for (int i = 0; i < 90; ++i) f.Step();
+
+    const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
+    REQUIRE(body != Phys::kInvalidBody);
+    f.app.SetSubjectBody(f.reg, body);
+    Arcane::InputSnapshot idle{};
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+
+    // No Runtime injected (the CPU harness never calls SetRuntime) -> no device ->
+    // no OffscreenCanvas is created (the inset is a render-only nicety).
+    CHECK(f.app.EnsureInspectorCanvas(256, 256) == nullptr);
+    CHECK(f.app.Inspector() == nullptr);
+
+    // The HUD (main panel + the subject inspector window with the partner selector)
+    // issues all its ImGui calls under a headless context without asserting.
+    {
+        ImGuiHeadlessFrame frame;
+        REQUIRE_NOTHROW(Sbx::Hud::Draw(f.app, f.reg));
+    }
+
+    // A subject with ZERO contacts is crash-safe (the "not touching anything" + empty
+    // idle inset path). Spawn an isolated body far from everything, make it the subject.
+    f.app.ClearSubject();
+    {
+        ImGuiHeadlessFrame frame;
+        REQUIRE_NOTHROW(Sbx::Hud::Draw(f.app, f.reg));   // no subject -> no inspector window
+    }
+}
+
+// ---------------------------------------------------------------------------
+// (q) Zero-contact subject: an isolated body (touching nothing) is a valid
+//     subject with an empty contacts list; the HUD draws the "not touching"
+//     path safely and SelectedTrace() returns a safe idle trace.
+// ---------------------------------------------------------------------------
+TEST_CASE("Inspector: a subject touching nothing is crash-safe", "[sandbox]")
+{
+    Fixture f;
+    f.Step();   // materialize the scene-0 bodies
+
+    // Spawn an isolated dynamic box far from everything via the spawn path, pause so it
+    // does not fall into anything, and make it the subject.
+    f.app.SetPaused(true);
+    f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Box;
+    f.app.SpawnConfigMut().size  = 10.0f;
+
+    Arcane::InputSnapshot rel{};  rel.mouseX = 5000.0f; rel.mouseY = -5000.0f;
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
+    Arcane::InputSnapshot press{}; press.mouseX = 5000.0f; press.mouseY = -5000.0f; press.mouseButtons = 0x1;
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);   // spawn + one mint step (paused: no fall)
+
+    // Find the isolated body near the spawn point and make it the subject.
+    Phys::BodyHandle isolated = Phys::kInvalidBody;
+    for (std::uint32_t i = 0; i < f.Physics().Count(); ++i)
+    {
+        if (!f.Physics().Alive(i)) continue;
+        const Phys::Vec2 p = f.Physics().PosSlot(i);
+        if (std::abs(static_cast<float>(p.x) - 5000.0f) < 50.0f &&
+            std::abs(static_cast<float>(p.y) + 5000.0f) < 50.0f)
+        { isolated = f.Physics().HandleOf(i); break; }
+    }
+    REQUIRE(isolated != Phys::kInvalidBody);
+
+    f.app.SetSubjectBody(f.reg, isolated);
+    Arcane::InputSnapshot idle{};
+    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+
+    CHECK(f.app.HasSubject());            // valid subject...
+    CHECK(f.app.Contacts().empty());      // ...touching nothing
+    CHECK(f.app.SelectedIndex() == -1);   // no focused contact
+    CHECK(f.app.RecordedStepCount() == 0);// idle trace -> analytic/no iterations
+
+    // The HUD draws the "subject not touching anything" + empty idle inset path safely.
+    ImGuiHeadlessFrame frame;
+    REQUIRE_NOTHROW(Sbx::Hud::Draw(f.app, f.reg));
 }

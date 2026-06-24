@@ -37,5 +37,11 @@ namespace Arcane::Sandbox
         // resource in `reg` and a pending scene switch/reset through SandboxApp's
         // public API. Static -- the HUD holds no state of its own.
         static void Draw(SandboxApp& app, Astra::Registry& reg);
+
+        // Draw the Slice-B "Narrowphase Inspector" window (header + step control + the
+        // Minkowski inset via the app's OffscreenCanvas). No-op unless a subject is set.
+        // Called by Draw after the main "Sandbox" window. Separated so its render-device
+        // path (OffscreenCanvas::Draw + ImGui::Image) is isolated from the main panel.
+        static void DrawInspectorWindow(SandboxApp& app);
     };
 }

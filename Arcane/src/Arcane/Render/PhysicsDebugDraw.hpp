@@ -22,6 +22,8 @@
 
 #include <glm/vec2.hpp>
 
+#include <cstdint>
+
 namespace Arcane
 {
     class Batcher2D;
@@ -29,6 +31,7 @@ namespace Arcane
     namespace Physics
     {
         class PhysicsWorld;
+        struct NarrowphaseTrace;
     }
 
     // Options for DrawPhysicsDebug.
@@ -138,5 +141,35 @@ namespace Arcane
         const Arcane::Physics::PhysicsWorld& world,
         Batcher2D& batcher,
         const PhysicsDebugDrawOptions& opts = {});
+
+    // ---- Slice B: narrowphase-inspector WORLD overlay ----------------------------
+    //
+    // Draws the WORLD-SPACE internals of one recorded narrowphase trace (one of the
+    // inspector SUBJECT's contacts): the two colliding shapes outlined (shapeA == the
+    // SUBJECT fixture, highlighted distinctly), the SAT candidate axes (chosen axis
+    // bold) drawn through the contact region, the support points, the final
+    // representative normal as an arrow, and the manifold contact points. This is the
+    // world half of the inspector; the Minkowski half draws into an OffscreenCanvas (the
+    // Sandbox HUD). Submits ONLY Batcher2D primitives (Line/Circle) -- no parallel
+    // ImDrawList path (homogenized-rendering mandate).
+    //
+    // The subject's overlay draws ONE call PER contact: the caller emphasizes the
+    // SELECTED contact (emphasis 1.0, bold) and dims the others (emphasis < 1.0) so all
+    // contacts read while the focused one stands out. `emphasis` scales alpha + a subtle
+    // brightness; shapeA (the subject) is always drawn at a recognisable highlight.
+    //
+    // `cameraOffset` + `zoom` are the SAME canonical transform as DrawPhysicsDebug
+    // (screen = world * zoom + offset), so the overlay registers with the sprites.
+    // `stepIndex` selects the per-iteration snapshot to emphasize for stepped kinds
+    // (Epa/Mpr/SatPolygon); pass -1 (or for analytic kinds) to draw no per-step
+    // emphasis. The caller brackets batcher.Begin()/End() (this only submits primitives).
+    ARCANE_API void DrawNarrowphaseWorldOverlay(
+        const Arcane::Physics::NarrowphaseTrace& trace,
+        int stepIndex,
+        Batcher2D& batcher,
+        glm::vec2 cameraOffset,
+        float zoom,
+        float lineThickness = 1.5f,
+        float emphasis = 1.0f);
 
 } // namespace Arcane

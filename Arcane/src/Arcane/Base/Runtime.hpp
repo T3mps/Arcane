@@ -17,11 +17,13 @@
 #include <span>
 #include <vector>
 
+namespace nvrhi { class IDevice; }
 namespace Astra { class Registry; class ComponentRegistry; class TypeContext; class IWorkScheduler; }
 
 namespace Arcane
 {
     class Batcher2D;
+    class ShaderLibrary;
 
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -51,6 +53,18 @@ namespace Arcane
         // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
         // so the PLUGIN owns the camera (via SetCamera) and the host stays camera-agnostic.
         void SetRenderContext(Batcher2D* batcher);
+
+        // --- render-resources bridge: device + shader library the host owns ---------
+        // The plugin reaches the engine ONLY through this Runtime, but the nvrhi device
+        // and the ShaderLibrary are created + owned by the host (Loom's main). A plugin
+        // that needs to build its OWN engine render objects (e.g. an OffscreenCanvas for
+        // a Minkowski-inset inspector) gets them here. The host calls SetRenderResources
+        // ONCE after creating the device + shaders (before the plugin loads); both stay
+        // null in a headless host (no device) so a plugin must null-check Device() before
+        // creating GPU resources. Same homogenized contract as SetImGui / SetRenderContext.
+        void            SetRenderResources(nvrhi::IDevice* device, ShaderLibrary* shaders) noexcept;
+        nvrhi::IDevice* Device()  const noexcept;   // null in a headless host
+        ShaderLibrary*  Shaders() const noexcept;   // null in a headless host
 
         // --- camera bridge: the plugin drives the 2D camera; the render bridge reads it ---
         // CANONICAL transform (matches Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.

@@ -7,14 +7,20 @@
 #include "Hud.hpp"
 #include "Scenes.hpp"
 
+#include <Arcane/Base/Runtime.hpp>              // device + shaders bridge (inset canvas source)
 #include <Arcane/Input/InputSnapshot.hpp>       // InputSnapshot (fed to the interaction layer)
 #include <Arcane/Physics/PhysicsWorld.hpp>      // PhysicsWorld + WorldDef (fresh world per scene)
+#include <Arcane/Physics/Solver/Solver.hpp>     // ContactConstraint (pick-nearest-contact)
+#include <Arcane/Render/OffscreenCanvas.hpp>    // OffscreenCanvas (Minkowski inset target)
+#include <Arcane/Render/ShaderLibrary.hpp>      // ShaderLibrary (OffscreenCanvas::Create arg)
 #include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsResource + PhysicsSystem (sandbox-owned step)
 
 #include <Astra/Registry/Registry.hpp>
 
 #include <algorithm>                            // std::clamp
+#include <cmath>                                // std::sqrt
 #include <cstdlib>                              // std::getenv, std::strtol
+#include <limits>                               // std::numeric_limits
 #include <memory>
 #include <span>
 
@@ -45,6 +51,11 @@ namespace Arcane::Sandbox
             });
         }
     }
+
+    // Defined here (not defaulted in the header) so unique_ptr<OffscreenCanvas> sees a
+    // COMPLETE OffscreenCanvas (included above) when it generates the deleter.
+    SandboxApp::SandboxApp()  = default;
+    SandboxApp::~SandboxApp() = default;
 
     void SandboxApp::SetTimeScale(float s) noexcept
     {
@@ -100,6 +111,261 @@ namespace Arcane::Sandbox
         }
         if (!dbg) return;
         *dbg = m_debug;   // mirror the HUD-owned flags into the render-read resource
+    }
+
+    // ---- narrowphase inspector (subject model, always on) ----------------------
+
+    void SandboxApp::ClearSubject() noexcept
+    {
+        m_subjectValid      = false;
+        m_subjectFixture    = Arcane::Physics::kInvalidFixture;
+        m_subjectBody       = Arcane::Physics::kInvalidBody;
+        m_selectedIndex     = -1;
+        m_hasSelectedPartner = false;
+        m_selectedPartnerId = 0;
+        m_stepIndex         = 0;
+        m_inspectorPlay     = false;
+        m_contacts.clear();   // keeps capacity (incl. per-contact trace vectors)
+    }
+
+    void SandboxApp::SetSubjectBody(Astra::Registry& reg, Arcane::Physics::BodyHandle bh)
+    {
+        namespace Phys = Arcane::Physics;
+        PhysicsResource* phys = reg.GetResource<PhysicsResource>();
+        if (!phys || !phys->world || !phys->world->IsValid(bh))
+        {
+            ClearSubject();
+            return;
+        }
+        Phys::PhysicsWorld& world = *phys->world;
+
+        // The subject is the body's PRIMARY fixture (fixture 0). The "specific fixture
+        // under the cursor" is not cheaply queryable (no per-fixture point query exists),
+        // so we pick fixture 0: exact for the common single-fixture body, an accepted
+        // debug-tier approximation for a compound body (see the partner caveat below).
+        const Phys::FixtureHandle fh = world.GetBodyFixture(bh, 0);
+        if (!world.IsValid(fh))
+        {
+            ClearSubject();
+            return;
+        }
+
+        // Grabbing the SAME body again is a no-op (keep selection/step stable); a
+        // DIFFERENT body switches the subject and resets the selection + step state.
+        if (m_subjectValid && m_subjectBody == bh && m_subjectFixture == fh)
+            return;
+
+        m_subjectFixture     = fh;
+        m_subjectBody        = bh;
+        m_subjectValid       = true;
+        m_selectedIndex      = -1;     // re-resolved to the deepest in the next enumerate
+        m_hasSelectedPartner = false;
+        m_selectedPartnerId  = 0;
+        m_stepIndex          = 0;
+        m_inspectorPlay      = false;
+    }
+
+    const Arcane::Physics::NarrowphaseTrace& SandboxApp::SelectedTrace() const noexcept
+    {
+        if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_contacts.size()))
+            return m_contacts[static_cast<std::size_t>(m_selectedIndex)].trace;
+        return m_idleTrace;   // no contacts -> a Cleared/empty trace (fit handles it)
+    }
+
+    int SandboxApp::RecordedStepCount() const noexcept
+    {
+        // The slider scrubs whichever per-iteration vector is populated for the SELECTED
+        // contact's kind: Epa -> epaSnapshots, Mpr -> mprSnapshots, SatPolygon -> satAxes.
+        // Analytic kinds (CircleCircle / CircleVsPolygon / Capsule / Separated) record no
+        // per-iteration series -> 0 (the HUD disables the slider with a note).
+        using K = Arcane::Physics::NarrowphaseKind;
+        const Arcane::Physics::NarrowphaseTrace& t = SelectedTrace();
+        switch (t.kind)
+        {
+            case K::Epa:        return static_cast<int>(t.epaSnapshots.size());
+            case K::Mpr:        return static_cast<int>(t.mprSnapshots.size());
+            case K::SatPolygon: return static_cast<int>(t.satAxes.size());
+            default:            return 0;
+        }
+    }
+
+    void SandboxApp::SetStepIndex(int i) noexcept
+    {
+        const int n = RecordedStepCount();
+        if (n <= 0) { m_stepIndex = 0; return; }
+        m_stepIndex = std::clamp(i, 0, n - 1);
+    }
+
+    void SandboxApp::SetSelectedIndex(int i) noexcept
+    {
+        if (m_contacts.empty())
+        {
+            m_selectedIndex = -1;
+            m_hasSelectedPartner = false;
+            m_selectedPartnerId = 0;
+            return;
+        }
+        m_selectedIndex      = std::clamp(i, 0, static_cast<int>(m_contacts.size()) - 1);
+        m_hasSelectedPartner = true;
+        m_selectedPartnerId  = m_contacts[static_cast<std::size_t>(m_selectedIndex)].partnerBodyId;
+        SetStepIndex(0);   // a partner switch resets the step scrub
+    }
+
+    void SandboxApp::UpdateAndPublishInspector(Astra::Registry& reg)
+    {
+        namespace Phys = Arcane::Physics;
+
+        m_contacts.clear();   // reuse storage (capacity, incl. per-contact trace vectors)
+
+        // Re-validate the subject against the live world; a stale handle (recycled slot,
+        // a removed body, or a scene rebuild) silently clears the subject. Then enumerate
+        // ALL its active contacts. Cheap + pure (DebugCollide reads world, writes traces).
+        PhysicsResource* phys = reg.GetResource<PhysicsResource>();
+        if (m_subjectValid &&
+            (!phys || !phys->world ||
+             !phys->world->IsValid(m_subjectFixture) ||
+             !phys->world->IsValid(m_subjectBody)))
+        {
+            ClearSubject();
+        }
+
+        if (m_subjectValid && phys && phys->world)
+        {
+            Phys::PhysicsWorld& world = *phys->world;
+            const std::uint32_t subjectSlot = m_subjectBody.index;
+
+            // Track the deepest contact (max penetration) so it can be the default focus.
+            int   deepestIdx   = -1;
+            float deepestDepth = -std::numeric_limits<float>::max();
+
+            // Scan the last Step's ContactConstraints for constraints the subject's body
+            // participates in (bodyA or bodyB == subject slot). The OTHER body is a contact
+            // partner. ContactConstraint exposes body SLOTS (not fixture handles), so this
+            // is BODY-LEVEL enumeration: for each partner body we re-collide the SUBJECT
+            // fixture against the partner's PRIMARY fixture (GetBodyFixture(partner, 0)).
+            // For the common single-fixture body this is exact; for a compound body it is
+            // an accepted debug-tier approximation (partner fixture 0). A partner whose
+            // DebugCollide returns pointCount == 0 (the subject fixture is not really
+            // touching that partner -- e.g. a compound mismatch, or the constraint came
+            // from a different fixture pair) is DROPPED.
+            world.ForEachContactConstraint(
+                [&](const Phys::ContactConstraint& cc)
+                {
+                    std::uint32_t partnerSlot = Phys::kInvalidSlot;
+                    if (cc.bodyA == subjectSlot)      partnerSlot = cc.bodyB;
+                    else if (cc.bodyB == subjectSlot) partnerSlot = cc.bodyA;
+                    else                              return;   // not the subject's contact
+
+                    // Skip tile-span virtual fixtures (no FixtureHandle to DebugCollide).
+                    if (partnerSlot == Phys::kInvalidSlot) return;
+
+                    const Phys::BodyHandle partnerH = world.HandleOf(partnerSlot);
+                    const Phys::FixtureHandle pf = world.GetBodyFixture(partnerH, 0);
+                    if (!world.IsValid(pf)) return;
+
+                    // De-dup: a partner may appear in more than one constraint (e.g. two
+                    // manifold passes). Re-collide ONCE per partner body.
+                    for (const ContactView& existing : m_contacts)
+                        if (existing.partnerBodyId == partnerH.index) return;
+
+                    // Append + re-collide into the new entry's reused trace vectors.
+                    m_contacts.emplace_back();
+                    ContactView& cv = m_contacts.back();
+                    cv.partnerBodyId = partnerH.index;
+                    (void)world.DebugCollide(m_subjectFixture, pf, cv.trace);
+
+                    // Drop a partner the subject fixture is not actually touching.
+                    if (cv.trace.manifold.pointCount <= 0)
+                    {
+                        m_contacts.pop_back();
+                        return;
+                    }
+
+                    // Track the deepest (max penetration = max separation; this engine
+                    // stores manifold separation POSITIVE for penetration).
+                    float depth = -std::numeric_limits<float>::max();
+                    for (int pi = 0; pi < cv.trace.manifold.pointCount; ++pi)
+                        depth = std::max(depth,
+                                         static_cast<float>(cv.trace.manifold.points[pi].separation));
+                    const int idx = static_cast<int>(m_contacts.size()) - 1;
+                    if (depth > deepestDepth) { deepestDepth = depth; deepestIdx = idx; }
+                });
+
+            // ---- resolve the SELECTED contact (stable by partner id; deepest default) --
+            if (m_contacts.empty())
+            {
+                m_selectedIndex      = -1;
+                m_hasSelectedPartner = false;
+                m_selectedPartnerId  = 0;
+                m_stepIndex          = 0;
+            }
+            else
+            {
+                // Try to re-find the previously-selected partner by id (order can shift).
+                // m_hasSelectedPartner gates this -- slot 0 is a valid partner id, so it
+                // can't double as the "no selection" sentinel.
+                int reSel = -1;
+                if (m_hasSelectedPartner)
+                {
+                    for (int i = 0; i < static_cast<int>(m_contacts.size()); ++i)
+                        if (m_contacts[static_cast<std::size_t>(i)].partnerBodyId == m_selectedPartnerId)
+                        { reSel = i; break; }
+                }
+                // Fall back to the deepest when the prior partner is gone / none selected.
+                m_selectedIndex      = (reSel >= 0) ? reSel : deepestIdx;
+                m_hasSelectedPartner = true;
+                m_selectedPartnerId  = m_contacts[static_cast<std::size_t>(m_selectedIndex)].partnerBodyId;
+                SetStepIndex(m_stepIndex);   // re-clamp (the selected kind's count may change)
+            }
+        }
+
+        // Publish the resource (create if absent) so PhysicsDebugRenderSystem can draw the
+        // world overlay. Mirrors PublishDebug. hasSubject defaults false -> a fresh build
+        // with no inspector use looks exactly as before. The render system reads the
+        // published resource (it holds no SandboxApp handle), so the contacts are copied
+        // into it below. That copy only runs while a subject is actively held, and N is the
+        // small number of contacts a single body has, so the per-frame copy is a deliberate,
+        // acceptable debug-tier cost.
+        SandboxInspectorResource* insp = reg.GetResource<SandboxInspectorResource>();
+        if (!insp)
+        {
+            reg.SetResource(SandboxInspectorResource{});
+            insp = reg.GetResource<SandboxInspectorResource>();
+        }
+        if (!insp) return;
+        insp->hasSubject    = m_subjectValid;
+        insp->subject       = m_subjectFixture;
+        insp->subjectBody   = m_subjectBody.index;
+        insp->selectedIndex = m_selectedIndex;
+        insp->stepIndex     = m_stepIndex;
+        insp->contacts      = m_contacts;   // copy for the render system (m_contacts is our master)
+    }
+
+    Arcane::OffscreenCanvas* SandboxApp::EnsureInspectorCanvas(std::uint32_t w,
+                                                               std::uint32_t h)
+    {
+        if (w == 0 || h == 0)
+            return m_inspectorCanvas.get();
+
+        // The device + ShaderLibrary live in the host (Loom); the Runtime render-
+        // resources bridge exposes them. Null in a headless host (the CPU [sandbox]
+        // tests never wire a Runtime in) -> no GPU resource is created.
+        if (!m_runtime)
+            return nullptr;
+        nvrhi::IDevice*        device  = m_runtime->Device();
+        Arcane::ShaderLibrary* shaders = m_runtime->Shaders();
+        if (!device || !shaders)
+            return nullptr;
+
+        if (!m_inspectorCanvas)
+        {
+            m_inspectorCanvas = Arcane::OffscreenCanvas::Create(device, *shaders, w, h);
+        }
+        else
+        {
+            m_inspectorCanvas->Resize(w, h);   // no-op on an unchanged size
+        }
+        return m_inspectorCanvas.get();
     }
 
     void SandboxApp::PublishControl(Astra::Registry& reg) const
@@ -164,7 +430,11 @@ namespace Arcane::Sandbox
         PublishDebug(reg);
 
         PhysicsResource* phys = reg.GetResource<PhysicsResource>();
-        if (!phys || !phys->world) return;
+        if (!phys || !phys->world)
+        {
+            UpdateAndPublishInspector(reg);   // still publish (a missing world clears the subject)
+            return;
+        }
 
         // Task 7: the mouse-interaction layer runs on the (possibly just-rebuilt) scene
         // BEFORE the physics step -- spawned entities are materialized by the step's CREATE
@@ -172,6 +442,22 @@ namespace Arcane::Sandbox
         // pan/zoom is in place before Update pushes the camera. Interaction runs even while
         // PAUSED (spawn/grab/pan still respond; the step below just won't advance the sim).
         m_interaction.Tick(reg, *phys->world, m_camera, input, kFixedDt);
+
+        // Inspector subject: consume the grab-to-select request (raised by the Interaction
+        // when its normal grab grabbed a body this frame). Grabbing a body sets it as the
+        // subject (its primary fixture); grabbing empty space raises no request, so the
+        // subject persists. SetSubjectBody re-validates + resets selection on a switch.
+        if (const Arcane::Physics::BodyHandle grabbed = m_interaction.TakeSubjectGrab();
+            grabbed != Arcane::Physics::kInvalidBody)
+            SetSubjectBody(reg, grabbed);
+
+        // Inspector: re-validate the subject, enumerate ALL its active contacts (re-run
+        // the narrowphase for each), and publish the inspector resource (for the world
+        // overlay). Placed AFTER Tick so a fresh grab this frame is reflected immediately,
+        // and BEFORE the step's early returns so it runs whether paused or running. The
+        // ContactConstraint pool it scans is the previous step's -- the valid post-Step
+        // window. DebugCollide is pure: it reads the live world, writes the reused traces.
+        UpdateAndPublishInspector(reg);
 
         // Mirror the in-progress polygon draft into the render-read resource so
         // PolygonDraftRenderSystem can draw the clicked vertices. Published ONLY when

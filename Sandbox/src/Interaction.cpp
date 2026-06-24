@@ -157,6 +157,11 @@ namespace Arcane::Sandbox
             else if (hit != Phys::kInvalidBody)
             {
                 m_grabbed = hit;                  // grab the body under the cursor
+                // Side effect: this grabbed body is the inspector SUBJECT request.
+                // SandboxApp polls TakeSubjectGrab after Tick and resolves the body's
+                // fixture. Grabbing empty space never reaches here, so the subject
+                // persists across empty clicks. Dragging is otherwise unchanged.
+                m_subjectGrab = hit;
                 // Capture the click point in the body's LOCAL frame so the drag
                 // pulls THAT point (off-center grabs rotate the body):
                 //   localAnchor = R(-angle) * (clickWorld - origin).

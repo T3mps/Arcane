@@ -124,6 +124,10 @@ extern "C"
         //    on the build path; the LoadState path below still calls EnsurePhysicsResource.
         Astra::Registry& reg = ctx->engine->Registry();
         g_app.Configure(kGravityY);   // gravity for every (re)built PhysicsResource world
+        // Slice B: hand the Runtime to the app so the narrowphase inspector can build its
+        // Minkowski-inset OffscreenCanvas from the host's device + ShaderLibrary (Runtime
+        // render-resources bridge). Null device in a headless host -> the inset is skipped.
+        g_app.SetRuntime(ctx->engine);
         if (!reg.GetResource<Arcane::SceneRoot>())
             g_app.BuildInitialScene(reg);
         CacheRoot(reg);
