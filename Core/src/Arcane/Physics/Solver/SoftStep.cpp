@@ -15,7 +15,8 @@
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Joints/Joint.hpp>    // Joint (Prepare/SolveVelocity)
-#include <Arcane/Physics/Solver/SoftCoeffs.hpp> // shared MakeSoft + SoftCoeffs
+#include <Arcane/Physics/Solver/SoftCoeffs.hpp>   // shared MakeSoft + SoftCoeffs
+#include <Arcane/Physics/Solver/BodyStateSoA.hpp> // SyncIn/SyncOut defs (SIMD solver Task 1)
 
 namespace Arcane
 {
@@ -65,6 +66,63 @@ namespace Arcane
             // nothing. Nothing slot-specific to do here today, but the hook keeps
             // the contract explicit for a future id-scheme that embeds the slot.
             (void)slot;
+        }
+
+        // ===================================================================
+        // BodyStateSoA world<->solver sync (SIMD constraint-solver Task 1)
+        // ===================================================================
+        //
+        // CONTRACT: the caller Resize()s the SoA to world.Count() (which zeroes
+        // every array) before SyncIn. SyncIn then OVERWRITES only the slots that
+        // satisfy the awake-dynamic predicate -- the SAME predicate the solver's
+        // IntegrateVelocities / IntegratePositions / FinalizePositions use:
+        //   Alive(i) && TypeSlot(i) == BodyType::Dynamic && AwakeSlot(i).
+        // Non-matching slots (statics, kinematics, asleep/dead dynamics) are
+        // LEFT AS-IS (zero after the caller's Resize). For matched slots SyncIn
+        // also zeroes the TGS position-delta accumulators (dp/dq), since they
+        // start each Step's sub-step loop at zero.
+        //
+        // SyncOut writes the packed velocities BACK to the world for the SAME
+        // predicate, and ONLY the velocities -- positions are committed by the
+        // solver's FinalizePositions, never here. Nothing consumes this bridge
+        // yet (the solver wiring is a later task); these defs live here (not the
+        // header) because they need the PhysicsWorld slot accessors.
+
+        void BodyStateSoA::SyncIn(const PhysicsWorld& world)
+        {
+            const std::uint32_t count = world.Count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!world.Alive(i) ||
+                    world.TypeSlot(i) != BodyType::Dynamic ||
+                    !world.AwakeSlot(i))
+                {
+                    continue; // leave non-matching slots as the caller Resize'd them
+                }
+                const Vec2 v = world.VelSlot(i);
+                vx[i] = v.x;
+                vy[i] = v.y;
+                w[i]  = world.AngVelSlot(i);
+                dpx[i] = 0.f;
+                dpy[i] = 0.f;
+                dq[i]  = 0.f;
+            }
+        }
+
+        void BodyStateSoA::SyncOut(PhysicsWorld& world) const
+        {
+            const std::uint32_t count = world.Count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!world.Alive(i) ||
+                    world.TypeSlot(i) != BodyType::Dynamic ||
+                    !world.AwakeSlot(i))
+                {
+                    continue; // never disturb non-synced slots
+                }
+                world.SetVelSlot(i, Vec2(vx[i], vy[i]));
+                world.SetAngVelSlot(i, w[i]);
+            }
         }
 
         // ===================================================================
