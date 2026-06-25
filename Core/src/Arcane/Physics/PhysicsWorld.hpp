@@ -823,6 +823,17 @@ namespace Arcane
                 return m_solver ? m_solver->WarmStartCacheSize() : std::size_t(0);
             }
 
+            // Solver overflow (un-colorable spill) count from the last Step
+            // (inspection/test hook). Routes through the installed ISolver. Meaningful
+            // ONLY for a coloring solver that spills past kColorCount (SoftStep);
+            // Baumgarte colors nothing and reports 0 (the ISolver default). EXISTS so
+            // the overflow-settle test can directly PROVE the scalar overflow path was
+            // exercised instead of assuming it "by construction".
+            [[nodiscard]] std::size_t SolverOverflowCount() const noexcept
+            {
+                return m_solver ? m_solver->LastOverflowCount() : std::size_t(0);
+            }
+
             // Count of ContactConstraints fed to the solver in the last Step
             // (debug/inspection hook). As of Phase 3 Task 4 m_contactConstraints is
             // produced by EmitContactConstraints (walking the persistent pool + the

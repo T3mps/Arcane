@@ -1007,21 +1007,24 @@ TEST_CASE("PhysicsSimd: overflow (un-colorable hub) contacts settle + bounded",
         ring.push_back(w.AddBody(bd));
     }
 
-    // Sanity: the scene actually overflowed at least once during settling (else
-    // this test would silently not exercise the overflow path). We watch the
-    // active-contact count proxy: a hub touching 20 dynamics yields well over 12
-    // dynamic-dynamic contacts. (No direct overflow accessor; the bound + the
-    // dense dynamic-dynamic fan guarantee it by construction.)
     REQUIRE(w.Count() >= static_cast<std::uint32_t>(kRing + 2));
 
     // Settle (4 s). Track peak per-mass KE of every dynamic -> a dropped/over-
     // packed overflow would explode (huge KE) or sink (hub through the floor).
+    // ALSO track the peak solver overflow count: this test is only meaningful if
+    // the scene actually SPILLS past kColorCount into the scalar overflow path.
+    // We assert that directly (REQUIRE(peakOverflow > 0) below) via the
+    // SolverOverflowCount inspection hook instead of trusting the dense fan to
+    // overflow "by construction" -- a future coloring change that stops it
+    // spilling would then fail loud rather than silently skip the overflow code.
     const Real kStep = Real(1) / Real(60);
     Real peakKE = Real(0);
+    std::size_t peakOverflow = 0;
     const Real keBound = Real(4) * Real(400) * Real(60); // generous (g * drop, x4)
     for (int s = 0; s < 240; ++s)
     {
         w.Step(kStep);
+        peakOverflow = std::max(peakOverflow, w.SolverOverflowCount());
         const Vec2 vh = w.Velocity(hub);
         peakKE = std::max(peakKE, Real(0.5) * (vh.x * vh.x + vh.y * vh.y));
         for (BodyHandle b : ring)
@@ -1032,6 +1035,13 @@ TEST_CASE("PhysicsSimd: overflow (un-colorable hub) contacts settle + bounded",
             REQUIRE(ke < keBound);               // never blows up (overflow not dropped)
         }
     }
+
+    // The overflow path was genuinely exercised: the hub overran kColorCount
+    // dynamic-dynamic contacts and the excess spilled to the scalar tail. This is
+    // the whole point of the scene -- if it ever stops overflowing the test is
+    // void, so prove it with the direct accessor (not "by construction").
+    REQUIRE(peakOverflow > 0);
+    INFO("overflow-hub peak overflow constraint count = " << peakOverflow);
 
     // The hub did not sink through the floor (overflow contacts held it up).
     CHECK(w.Position(hub).y + Real(12) <= floorTop + Real(1));

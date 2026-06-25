@@ -112,6 +112,19 @@ namespace Arcane
             // for Baumgarte, which still keeps its own m_cache.)
             void DropBody(std::uint32_t slot) override;
 
+            // Un-colorable constraint count from the LAST Solve (test/inspection
+            // hook -- see ISolver::LastOverflowCount). Returns m_coloring.overflow's
+            // size: m_coloring is reassigned every Solve (the per-step greedy
+            // coloring at step 3 of the driver) and never cleared afterward, so it
+            // accurately reflects the most recent completed Solve's spill set. The
+            // overflow-settle test asserts this peaks above 0 to PROVE the dense
+            // dynamic-dynamic hub really did spill past kColorCount into the scalar
+            // OverflowSolve tail (else that path would go silently untested).
+            [[nodiscard]] std::size_t LastOverflowCount() const noexcept override
+            {
+                return m_coloring.overflow.size();
+            }
+
         private:
             // ---- scalar prepare + joint helpers (called by Solve) ----------
             //

@@ -245,6 +245,23 @@ namespace Arcane
             {
                 return 0;
             }
+
+            // Number of un-colorable (overflow) constraints the most recent Solve
+            // spilled to its width-1 scalar tail (test/inspection hook). EXISTS so
+            // the overflow-settle test can PROVE the spill path actually ran: the
+            // SIMD solve graph-colors contacts and lane-solves the first kColorCount
+            // colors, spilling any excess (a body that is an endpoint of more than
+            // kColorCount dynamic-dynamic contacts) to the scalar OverflowSolve. A
+            // test that drops > kColorCount disks on one hub asserts this is > 0 so a
+            // future coloring change (raising kColorCount, a different spill rule)
+            // that stops the scene overflowing fails LOUD instead of silently no
+            // longer exercising the overflow code. Default 0: a solver with no
+            // overflow concept (Baumgarte's scalar PGS colors nothing, spills
+            // nothing) inherits this and reports 0.
+            [[nodiscard]] virtual std::size_t LastOverflowCount() const noexcept
+            {
+                return 0;
+            }
         };
 
     } // namespace Physics
