@@ -373,11 +373,15 @@ namespace
         CHECK(b.invMassB[L]    == Approx(cc.invMassB));
         CHECK(b.invInertiaB[L] == Approx(cc.invInertiaB));
         CHECK(b.bodyIndexA[L]  == static_cast<std::int32_t>(cc.bodyA));
-        CHECK(b.bodyIndexB[L]  == static_cast<std::int32_t>(cc.bodyB));
 
         // dynB float mask: 1.0f iff B is a dynamic body (bodyBIsBody && invMassB>0).
         const bool dyn = cc.bodyBIsBody && cc.invMassB > 0.0f;
         CHECK(b.dynB[L] == Approx(dyn ? 1.0f : 0.0f));
+
+        // bodyIndexB mirrors cc.bodyB only when B is dynamic; for a read-only B
+        // (static/kinematic/span) Build clamps it to 0 so the unconditional T5
+        // gather stays in-range (the gathered value is discarded by dynB anyway).
+        CHECK(b.bodyIndexB[L]  == (dyn ? static_cast<std::int32_t>(cc.bodyB) : 0));
 
         for (int p = 0; p < 2; ++p)
         {
@@ -461,14 +465,53 @@ TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build handles 1-point + static-B 
     REQUIRE(batches.size() == 1u);
     CHECK(batches[0].count == 2);
 
-    // Lane 0: 1-point static-B contact.
+    // Lane 0: 1-point static-B contact. B is read-only (dynB 0) so even though
+    // the source bodyB is a finite slot (9), Build clamps the packed index to 0.
     CheckLaneMatches(batches[0], 0, ccs[0]);
     CHECK(batches[0].dynB[0] == Approx(0.0f));           // static fixture
+    CHECK(batches[0].bodyIndexB[0] == 0);                // read-only B clamped to 0
     CHECK(batches[0].points[1].pointValid[0] == Approx(0.0f));  // 2nd point absent
 
     // Lane 1: 2-point contact, but B is a kinematic body (invMassB==0) -> dynB 0.
     CheckLaneMatches(batches[0], 1, ccs[1]);
     CHECK(batches[0].dynB[1] == Approx(0.0f));
+    CHECK(batches[0].bodyIndexB[1] == 0);                // read-only B clamped to 0
+}
+
+TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build clamps a tile-span "
+          "(kInvalidSlot) bodyIndexB to 0", "[physics]")
+{
+    // A tile-span virtual fixture contact: B is NOT a body (bodyBIsBody=false)
+    // and cc.bodyB == kInvalidSlot == 0xFFFFFFFF, which casts to -1. Build MUST
+    // clamp the packed bodyIndexB to 0 (an in-range gather slot) -- NOT leave it
+    // at -1, which would make T5's unconditional AVX2 gather read base[-1] (an
+    // out-of-bounds heap under-read) every sub-step. dynB==0 discards whatever
+    // is gathered, so 0 is harmless and in-range. This pins the contract the
+    // finite-slot static-B case above does not exercise.
+    ContactConstraint span = MakeCC(/*seed=*/5.0f, /*pts=*/1, /*bA=*/2u,
+                                    /*bB=*/kInvalidSlot, /*bIsBody=*/false,
+                                    /*invMB=*/0.0f);
+    span.invInertiaB = 0.0f;   // a span has no rotational inertia either
+
+    std::vector<ContactConstraint> ccs = { span };
+    std::vector<std::uint32_t>     refs = { 0u };
+
+    const std::vector<ContactConstraintSimd> batches =
+        ContactConstraintSimd::Build(ccs.data(), refs.data(), 1);
+
+    REQUIRE(batches.size() == 1u);
+    CHECK(batches[0].count == 1);
+
+    // The crux: B is read-only -> dynB 0 AND bodyIndexB clamped to 0 (NOT -1).
+    CHECK(batches[0].dynB[0]       == Approx(0.0f));
+    CHECK(batches[0].bodyIndexB[0] == 0);
+
+    // Sanity: bodyIndexA is the real (dynamic) A slot, untouched by the clamp.
+    CHECK(batches[0].bodyIndexA[0] == 2);
+
+    // The rest of the lane still mirrors the source (CheckLaneMatches now expects
+    // the clamped bodyIndexB for any read-only B).
+    CheckLaneMatches(batches[0], 0, span);
 }
 
 TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build masks partial-batch padding "

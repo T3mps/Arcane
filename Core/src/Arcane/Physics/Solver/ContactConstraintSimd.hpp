@@ -120,7 +120,10 @@ namespace Arcane
 
             // Body index lanes -> i32w gather/scatter of BodyStateSoA velocities.
             alignas(32) std::int32_t bodyIndexA[kWidth];   // A world slot
-            alignas(32) std::int32_t bodyIndexB[kWidth];   // B world slot
+            // B world slot, OR 0 when dynB==0 (read-only B: static/kinematic/span)
+            // so the unconditional T5 gather stays in-range; the value is
+            // discarded by the dynB mask.
+            alignas(32) std::int32_t bodyIndexB[kWidth];
 
             // Float mask: 1.0f iff B is a DYNAMIC body whose velocity the solve
             // mutates (bodyBIsBody && invMassB > 0); 0.0f for a static/kinematic
@@ -204,13 +207,22 @@ namespace Arcane
                 dst.invInertiaB[L]  = static_cast<float>(cc.invInertiaB);
 
                 dst.bodyIndexA[L]   = static_cast<std::int32_t>(cc.bodyA);
-                dst.bodyIndexB[L]   = static_cast<std::int32_t>(cc.bodyB);
 
                 // dynB: B's velocity is mutated only if B is a real dynamic body.
                 // A static/kinematic body (invMassB == 0) or a tile span
                 // (bodyBIsBody == false) is read-only -> mask off (no scatter).
                 const bool dyn = cc.bodyBIsBody && cc.invMassB > Real(0);
                 dst.dynB[L]         = dyn ? 1.0f : 0.0f;
+
+                // bodyIndexB must be an in-range gather slot on EVERY lane (the
+                // T5 read of B's velocity is an UNMASKED gather). For read-only B
+                // (dynB==0: static/kinematic body OR a tile span whose
+                // cc.bodyB == kInvalidSlot casts to -1) clamp to 0 -- slot 0
+                // always exists if any body exists, and the gathered value is
+                // discarded by the dynB mask anyway. Mirrors the padding-lane
+                // rationale. A is always dynamic in the solver feed, so bodyIndexA
+                // needs no such clamp.
+                dst.bodyIndexB[L]   = dyn ? static_cast<std::int32_t>(cc.bodyB) : 0;
 
                 for (int p = 0; p < 2; ++p)
                 {
