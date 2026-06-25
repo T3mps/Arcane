@@ -20,4 +20,17 @@ ARCANE_SIMD_INLINE void store(float* p, f32w a) noexcept { *p = a.v; }
 ARCANE_SIMD_INLINE f32w loadu(const float* p)   noexcept { return f32w{ *p }; }
 ARCANE_SIMD_INLINE void storeu(float* p, f32w a) noexcept { *p = a.v; }
 
+// Arithmetic operators
+ARCANE_SIMD_INLINE f32w operator+(f32w a, f32w b) noexcept { return f32w{ a.v + b.v }; }
+ARCANE_SIMD_INLINE f32w operator-(f32w a, f32w b) noexcept { return f32w{ a.v - b.v }; }
+ARCANE_SIMD_INLINE f32w operator*(f32w a, f32w b) noexcept { return f32w{ a.v * b.v }; }
+ARCANE_SIMD_INLINE f32w operator/(f32w a, f32w b) noexcept { return f32w{ a.v / b.v }; }
+ARCANE_SIMD_INLINE f32w operator-(f32w a)         noexcept { return f32w{ -a.v }; }
+ARCANE_SIMD_INLINE f32w& operator+=(f32w& a, f32w b) noexcept { a.v += b.v; return a; }
+ARCANE_SIMD_INLINE f32w& operator-=(f32w& a, f32w b) noexcept { a.v -= b.v; return a; }
+ARCANE_SIMD_INLINE f32w& operator*=(f32w& a, f32w b) noexcept { a.v *= b.v; return a; }
+ARCANE_SIMD_INLINE f32w& operator/=(f32w& a, f32w b) noexcept { a.v /= b.v; return a; }
+ARCANE_SIMD_INLINE f32w mul_add(f32w a, f32w b, f32w c) noexcept { return f32w{ std::fma(a.v, b.v,  c.v) }; }
+ARCANE_SIMD_INLINE f32w mul_sub(f32w a, f32w b, f32w c) noexcept { return f32w{ std::fma(a.v, b.v, -c.v) }; }
+
 } } // namespace Arcane::Simd

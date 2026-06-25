@@ -4,6 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>     // std::fma (Task 2+)
 #include <cstdint>
 #include <cstring>   // std::memcpy for index-vector construction (Task 5)
 
@@ -49,4 +50,28 @@ TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: splat/load/store round-trip", "[simd]")
     float uo[W + 1];
     SimdT::storeu(uo + 1, SimdT::loadu(ub + 1));
     for (int i = 0; i < W; ++i) CHECK(uo[i + 1] == in[i]);
+}
+
+TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: arithmetic matches scalar reference", "[simd]")
+{
+    constexpr int W = SimdT::f32w::width;
+    alignas(32) float a[W], b[W], c[W], out[W];
+    for (int i = 0; i < W; ++i) { a[i] = 1.0f + i; b[i] = 0.5f * (i + 2); c[i] = -2.0f + i; }
+
+    SimdT::f32w va = SimdT::load(a), vb = SimdT::load(b), vc = SimdT::load(c);
+
+    SimdT::store(out, va + vb); for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] + b[i]);
+    SimdT::store(out, va - vb); for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] - b[i]);
+    SimdT::store(out, va * vb); for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] * b[i]);
+    SimdT::store(out, va / vb); for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] / b[i]);
+    SimdT::store(out, -va);     for (int i = 0; i < W; ++i) CHECK(out[i] == -a[i]);
+
+    SimdT::f32w acc = va; acc += vb; SimdT::store(out, acc);
+    for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] + b[i]);
+
+    // mul_add / mul_sub use fused multiply-add -> bit-match std::fma per lane.
+    SimdT::store(out, SimdT::mul_add(va, vb, vc));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == std::fma(a[i], b[i], c[i]));
+    SimdT::store(out, SimdT::mul_sub(va, vb, vc));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == std::fma(a[i], b[i], -c[i]));
 }
