@@ -33,4 +33,12 @@ ARCANE_SIMD_INLINE f32w& operator/=(f32w& a, f32w b) noexcept { a.v /= b.v; retu
 ARCANE_SIMD_INLINE f32w mul_add(f32w a, f32w b, f32w c) noexcept { return f32w{ std::fma(a.v, b.v,  c.v) }; }
 ARCANE_SIMD_INLINE f32w mul_sub(f32w a, f32w b, f32w c) noexcept { return f32w{ std::fma(a.v, b.v, -c.v) }; }
 
+// Math ops: min/max/abs/sqrt + estimate rsqrt/recip (Task 3)
+ARCANE_SIMD_INLINE f32w min(f32w a, f32w b) noexcept { return f32w{ a.v < b.v ? a.v : b.v }; }
+ARCANE_SIMD_INLINE f32w max(f32w a, f32w b) noexcept { return f32w{ a.v > b.v ? a.v : b.v }; }
+ARCANE_SIMD_INLINE f32w abs(f32w a)         noexcept { return f32w{ std::fabs(a.v) }; }
+ARCANE_SIMD_INLINE f32w sqrt(f32w a)        noexcept { return f32w{ std::sqrt(a.v) }; }
+ARCANE_SIMD_INLINE f32w rsqrt(f32w a)       noexcept { return f32w{ 1.0f / std::sqrt(a.v) }; }
+ARCANE_SIMD_INLINE f32w recip(f32w a)       noexcept { return f32w{ 1.0f / a.v }; }
+
 } } // namespace Arcane::Simd

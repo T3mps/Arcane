@@ -4,7 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cmath>     // std::fma (Task 2+)
+#include <algorithm> // std::min / std::max (Task 3)
+#include <cmath>     // std::fma / std::fabs / std::sqrt (Task 2+)
 #include <cstdint>
 #include <cstring>   // std::memcpy for index-vector construction (Task 5)
 
@@ -74,4 +75,32 @@ TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: arithmetic matches scalar reference", "[
     for (int i = 0; i < W; ++i) CHECK(out[i] == std::fma(a[i], b[i], c[i]));
     SimdT::store(out, SimdT::mul_sub(va, vb, vc));
     for (int i = 0; i < W; ++i) CHECK(out[i] == std::fma(a[i], b[i], -c[i]));
+}
+
+TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: min/max/abs/sqrt exact; rsqrt/recip approx", "[simd]")
+{
+    constexpr int W = SimdT::f32w::width;
+    alignas(32) float a[W], b[W], out[W];
+    for (int i = 0; i < W; ++i) { a[i] = (i % 2 ? -1.0f : 1.0f) * (i + 1) * 1.25f; b[i] = (i + 1) * 0.75f; }
+
+    SimdT::f32w va = SimdT::load(a), vb = SimdT::load(b);
+
+    SimdT::store(out, SimdT::min(va, vb)); for (int i = 0; i < W; ++i) CHECK(out[i] == std::min(a[i], b[i]));
+    SimdT::store(out, SimdT::max(va, vb)); for (int i = 0; i < W; ++i) CHECK(out[i] == std::max(a[i], b[i]));
+    SimdT::store(out, SimdT::abs(va));     for (int i = 0; i < W; ++i) CHECK(out[i] == std::fabs(a[i]));
+    SimdT::store(out, SimdT::sqrt(vb));    for (int i = 0; i < W; ++i) CHECK(out[i] == std::sqrt(b[i]));
+
+    // rsqrt / recip are hardware-estimate ops -> relative tolerance (AVX2 rcp/rsqrt
+    // ~12-bit; scalar backend is exact and well within tol).
+    constexpr float kRelTol = 4.0e-3f;
+    SimdT::store(out, SimdT::rsqrt(vb));
+    for (int i = 0; i < W; ++i) {
+        float ref = 1.0f / std::sqrt(b[i]);
+        CHECK(std::fabs(out[i] - ref) <= kRelTol * std::fabs(ref));
+    }
+    SimdT::store(out, SimdT::recip(vb));
+    for (int i = 0; i < W; ++i) {
+        float ref = 1.0f / b[i];
+        CHECK(std::fabs(out[i] - ref) <= kRelTol * std::fabs(ref));
+    }
 }
