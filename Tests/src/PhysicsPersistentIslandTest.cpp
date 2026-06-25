@@ -169,3 +169,54 @@ TEST_CASE("PhysicsPersistentIsland: impulse on one member wakes the whole island
         CHECK(w.IsAwake(boxes[i])); // every member awake (island wake)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Determinism: a scene exercising merge + split + sleep is bit-identical
+// across two runs (positions, awake state, island roots).
+// ---------------------------------------------------------------------------
+TEST_CASE("PhysicsPersistentIsland: merge+split+sleep is deterministic across two runs",
+          "[physics][island]")
+{
+    auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake,
+                  std::vector<std::uint32_t>& roots)
+    {
+        WorldDef wd;
+        wd.gravityY = Real(400);
+        PhysicsWorld w(wd);
+
+        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+        const Real hw = Real(4), hh = Real(4);
+        std::vector<BodyHandle> boxes;
+        for (int i = 0; i < 4; ++i)
+        {
+            const Real y = -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1);
+            boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
+        }
+        for (int k = 0; k < 200; ++k) { w.Step(kStep); }
+        // Disturb the top -> a split candidate forms, then re-settles.
+        w.ApplyImpulse(boxes[3], Vec2(Real(150), Real(-3000)));
+        for (int k = 0; k < 500; ++k) { w.Step(kStep); }
+
+        pos.clear(); awake.clear(); roots.clear();
+        for (const BodyHandle b : boxes)
+        {
+            pos.push_back(w.Position(b));
+            awake.push_back(w.IsAwake(b) ? 1 : 0);
+            roots.push_back(w.IslandRootOf(b.index));
+        }
+    };
+
+    std::vector<Vec2> p1, p2; std::vector<int> a1, a2;
+    std::vector<std::uint32_t> r1, r2;
+    run(p1, a1, r1);
+    run(p2, a2, r2);
+
+    REQUIRE(p1.size() == p2.size());
+    for (std::size_t i = 0; i < p1.size(); ++i)
+    {
+        REQUIRE(p1[i].x == p2[i].x);
+        REQUIRE(p1[i].y == p2[i].y);
+        REQUIRE(a1[i] == a2[i]);
+        REQUIRE(r1[i] == r2[i]); // island ids reproduce run-to-run
+    }
+}

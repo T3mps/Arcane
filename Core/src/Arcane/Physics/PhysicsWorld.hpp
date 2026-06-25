@@ -807,16 +807,6 @@ namespace Arcane
             {
                 m_awake[i] = on ? std::uint8_t(1) : std::uint8_t(0);
             }
-            // Pooled union-find scratch for the island graph (ports the Lua
-            // w._uf). Grown to m_count once per Step; reused -> zero steady-state
-            // alloc. Exposed so Island::UpdateSleep builds the constraint graph
-            // in the world's own buffer instead of allocating its own.
-            // INTERNAL: only for Island::UpdateSleep -- do not call from general
-            // code (it is stomped each Step).
-            [[nodiscard]] std::vector<std::uint32_t>& UnionFindScratch() noexcept
-            {
-                return m_uf;
-            }
             // Visit each LIVE island's member-slot list (Phase A sleep seam). A live
             // island has a non-empty member list; freed ids (empty) are skipped.
             // Iterated ascending island-id (deterministic). Const callback (sleep
@@ -1133,8 +1123,8 @@ namespace Arcane
             // kInvalidIsland for Static/Kinematic or an un-assigned dynamic slot).
             // m_islands is the id-indexed record pool; freed ids are recycled via
             // m_islandFree. Maintained incrementally at the lifecycle seams; the
-            // old per-step union-find (m_uf) is gone AFTER Task 6 -- it still
-            // exists now so Island::UpdateSleep continues to compile.
+            // per-step union-find (m_uf / UnionFindScratch) has been deleted (Task 6)
+            // -- the persistent registry IS the sole island structure.
             std::vector<std::uint32_t>      m_islandId;   // per-body island id
             std::vector<Island::Island>     m_islands;    // id-indexed record pool
             std::vector<std::uint32_t>      m_islandFree; // recycled island ids
@@ -1435,13 +1425,6 @@ namespace Arcane
             mutable std::vector<std::size_t>       m_emitOrder;
             mutable std::vector<ContactConstraint> m_emitSorted;
 
-            // ---- island sleep scratch (P2.4; Step-only; zero steady-state) ---
-            //
-            // Union-find parent array for the per-Step constraint graph (bodies =
-            // nodes, contacts = edges). Sized to m_count once per Step and reused
-            // (ports the Lua w._uf). Island::UpdateSleep owns its contents; it
-            // lives here so the island pass allocates nothing after warmup.
-            std::vector<std::uint32_t>  m_uf;
         };
 
     } // namespace Physics

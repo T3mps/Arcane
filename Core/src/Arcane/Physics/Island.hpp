@@ -1,41 +1,39 @@
 #pragma once
 
-// Island: the constraint-graph + sleep module (M6, Task P2.4).
+// Island: the persistent island registry + sleep module (Phase A).
 //
-// PORT NOTE: there is NO Island.lua -- the island/sleep logic lives INLINE in
-// Client/src/physics/PhysicsWorld.lua (the union-find ufFind at lines 28-31 and
-// the step() stage-5 island-sleep bookkeeping at lines 403-452). P2.4 EXTRACTS
-// that inline logic into this clean module so the Step pipeline names a single
-// island pass at the [P2.4 islands] seam. The behavior is a faithful port:
+// This module owns the per-Step sleep pass (UpdateSleep) over the PERSISTENT
+// island registry. The old per-step union-find graph build (M6, P2.4) has been
+// replaced by a per-island O(island) walk over the registry (members already
+// known -- no UF rebuild, no O(n^2) global scan).
 //
-//   * Build a union-find constraint graph over the body slots: bodies are
-//     nodes; THIS step's contacts (the GenerateContacts output) are edges. Two
-//     bodies are unioned only when BOTH are DYNAMIC (a dynamic-vs-static /
-//     kinematic / tile-span contact does NOT union -- statics anchor, they are
-//     not island members). Ports PhysicsWorld.lua:411.
-//   * Joint-attached dynamic bodies reset their sleep timer (jointed bodies
-//     never sleep so target joints keep authority). Ports lines 415-423. The
-//     joint list is empty until P2.5; the empty case is a no-op.
-//   * Per-body sleep-timer update for awake dynamics: a body accumulates idle
-//     time while its linear speed^2 < kSleepLinVel2 AND |angVel| < kSleepAngVel;
-//     any faster motion resets the timer to 0. Ports lines 424-433.
-//   * Island sleep: an island sleeps only when EVERY awake-dynamic member has
-//     sleepT > kSleepTime. When it does, those members are set asleep (awake=0)
-//     and their linear + angular velocities are zeroed. Ports lines 435-451.
+// REGISTRY LIFECYCLE (maintained INCREMENTALLY at PhysicsWorld lifecycle seams):
+//   * AddBody(Dynamic)  -> AllocIsland: a new dynamic body is its own 1-body island.
+//   * touch-BEGIN       -> MergeIslands: two dynamic bodies in fresh contact merge
+//     into the larger island (weighted union, O(smaller island)).
+//   * touch-END/destroy -> MarkSplitCandidate: the island is flagged; a quota-
+//     limited deferred pass (kMaxSplitsPerStep per Step) runs SplitIsland, which
+//     re-derives the connected components via a local UF over the body's current
+//     contacts. Split pass is O(island) and amortized over a few Steps.
+//   * Static/Kinematic bodies are NOT island members (they anchor; they are not
+//     island nodes -- identical to the old dynamic-dynamic-only union rule).
 //
-// DETERMINISM (port + modernize): the graph is built by iterating contacts then
-// bodies in STABLE SLOT INDEX order; ufFind is order-stable path-halving; the
-// island sleep decision scans members by index. No wall clock, no fast math.
-// Zero steady-state allocation: the union-find parent array is the world's
-// pooled scratch (PhysicsWorld::UnionFindScratch -- the Lua w._uf), grown once
-// per Step and reused.
+// UpdateSleep (Step stage 4): iterates the registry via PhysicsWorld::ForEachIsland,
+// advances each awake dynamic body's idle timer, then sleeps an island AS A UNIT
+// when EVERY awake-dynamic member has accumulated kSleepTime seconds of idle.
+// The thresholds and whole-island-unit-sleep behavior are UNCHANGED from the M6
+// global-UF version this replaces.
 //
-// WAKE paths live ELSEWHERE (this module only puts islands to SLEEP):
-//   * wake-on-contact -- PhysicsWorld::WakeMoverPair (a sleeping dynamic
-//     touched by an awake mover wakes; ports lines 369-382).
-//   * wake-on-force   -- PhysicsWorld::ApplyImpulse / SetVelocity / Wake (P2.1).
+// WAKE paths live in PhysicsWorld (this module only puts islands to SLEEP):
+//   * wake-on-contact -- PhysicsWorld::WakeMoverPair (a sleeping dynamic touched
+//     by an awake mover wakes and pulls the whole island via WakeIsland).
+//   * wake-on-force   -- PhysicsWorld::ApplyImpulse / SetVelocity / Wake.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// DETERMINISM: merges are applied in canonical (min,max)-slot order; splits
+// iterate members by ascending slot index; ForEachIsland iterates ascending
+// island id. No wall clock, no fast math.
+//
+// PRESENTATION-FREE + C++23-clean: glm + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. namespace Arcane::Physics, Core style.
 
 #include <cstdint>
@@ -48,8 +46,7 @@ namespace Arcane
     namespace Physics
     {
         class PhysicsWorld;        // the SoA owner; Island reads/writes through it
-        struct ContactConstraint;  // Solver/Solver.hpp -- the GenerateContacts edges
-        struct JointConstraint;    // Solver/Solver.hpp -- joint edges (empty until P2.5)
+        struct JointConstraint;    // Solver/Solver.hpp -- joint edges (P2.5)
 
         namespace Island
         {
