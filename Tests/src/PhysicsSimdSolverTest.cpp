@@ -32,6 +32,8 @@
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Solver/BodyStateSoA.hpp>
 #include <Arcane/Physics/Solver/ContactColoring.hpp>
+#include <Arcane/Physics/Solver/ContactConstraintSimd.hpp>
+#include <Arcane/Physics/Solver/Solver.hpp>
 
 using namespace Arcane::Physics;
 using Catch::Approx;
@@ -296,5 +298,235 @@ TEST_CASE("PhysicsSimd: ColorConstraints overflows a star past kColorCount",
     for (std::uint32_t i = 0; i < n; ++i)
     {
         CHECK(refs[i] == i);
+    }
+}
+
+// ===========================================================================
+// SoA contact-constraint batch (Task 4) -- the lane-wide solve (Task 5) wants
+// the per-color ContactConstraints packed into width-lane Structure-of-Arrays
+// batches (one CONTACT per lane, up to 2 points per contact). ContactConstraint-
+// Simd::Build is the pure packer that fills those batches from a color's refs.
+//
+// SCOPE (Task 4): only the SoA struct + Build exist; nothing solves it yet
+// (Task 5 loads these lane arrays into f32w/i32w/b32w and runs the TGS-Soft
+// math). These cases pin the packer contract:
+//   (a) every per-lane SoA field mirrors the source ContactConstraint/...Point;
+//   (b) a 1-point contact has point-2's pointValid false + its masses zeroed;
+//   (c) a partial final batch masks its padding lanes to a lane-wide no-op
+//       (invMassA==invMassB==0, pointValid false, impulses 0, bodyIndex 0).
+// ===========================================================================
+
+namespace
+{
+    // Build a fully-populated ContactConstraint with distinct known values keyed
+    // off `seed`, so every packed lane field can be checked against a unique
+    // number (a transposition bug -> a mismatch). `pts` chooses 1 or 2 points.
+    ContactConstraint MakeCC(float seed, int pts, std::uint32_t bA,
+                             std::uint32_t bB, bool bIsBody, float invMB)
+    {
+        ContactConstraint cc{};
+        cc.bodyA       = bA;
+        cc.bodyB       = bB;
+        cc.bodyBIsBody = bIsBody;
+        cc.invMassA    = seed + 0.10f;
+        cc.invInertiaA = seed + 0.20f;
+        cc.invMassB    = invMB;                 // caller controls (dynB depends on it)
+        cc.invInertiaB = seed + 0.40f;
+        cc.normal      = Vec2(seed + 0.50f, seed + 0.60f);
+        cc.friction    = seed + 0.70f;
+        cc.restitution = seed + 0.80f;
+        cc.biasRate    = seed + 0.90f;
+        cc.massScale   = seed + 1.10f;
+        cc.impulseScale= seed + 1.20f;
+        cc.pointCount  = pts;
+        for (int p = 0; p < pts; ++p)
+        {
+            const float ps = seed + 10.0f * static_cast<float>(p + 1);
+            ContactConstraintPoint& cp = cc.points[p];
+            cp.anchorA         = Vec2(ps + 0.01f, ps + 0.02f);
+            cp.anchorB         = Vec2(ps + 0.03f, ps + 0.04f);
+            cp.baseSeparation  = ps + 0.05f;
+            cp.normalMass      = ps + 0.06f;
+            cp.tangentMass     = ps + 0.07f;
+            cp.normalImpulse   = ps + 0.08f;
+            cp.tangentImpulse  = ps + 0.09f;
+            cp.relativeVelocity= ps + 0.11f;
+            cp.id              = static_cast<std::uint32_t>(seed) * 100u
+                                 + static_cast<std::uint32_t>(p);
+        }
+        return cc;
+    }
+
+    // Assert lane L of batch `b` mirrors source ContactConstraint `cc` exactly.
+    void CheckLaneMatches(const ContactConstraintSimd& b, int L,
+                          const ContactConstraint& cc)
+    {
+        CHECK(b.normalX[L]     == Approx(cc.normal.x));
+        CHECK(b.normalY[L]     == Approx(cc.normal.y));
+        CHECK(b.friction[L]    == Approx(cc.friction));
+        CHECK(b.restitution[L] == Approx(cc.restitution));
+        CHECK(b.biasRate[L]    == Approx(cc.biasRate));
+        CHECK(b.massScale[L]   == Approx(cc.massScale));
+        CHECK(b.impulseScale[L]== Approx(cc.impulseScale));
+        CHECK(b.invMassA[L]    == Approx(cc.invMassA));
+        CHECK(b.invInertiaA[L] == Approx(cc.invInertiaA));
+        CHECK(b.invMassB[L]    == Approx(cc.invMassB));
+        CHECK(b.invInertiaB[L] == Approx(cc.invInertiaB));
+        CHECK(b.bodyIndexA[L]  == static_cast<std::int32_t>(cc.bodyA));
+        CHECK(b.bodyIndexB[L]  == static_cast<std::int32_t>(cc.bodyB));
+
+        // dynB float mask: 1.0f iff B is a dynamic body (bodyBIsBody && invMassB>0).
+        const bool dyn = cc.bodyBIsBody && cc.invMassB > 0.0f;
+        CHECK(b.dynB[L] == Approx(dyn ? 1.0f : 0.0f));
+
+        for (int p = 0; p < 2; ++p)
+        {
+            const ContactConstraintSimd::Point& pt = b.points[p];
+            if (p < cc.pointCount)
+            {
+                const ContactConstraintPoint& cp = cc.points[p];
+                CHECK(pt.anchorAx[L]      == Approx(cp.anchorA.x));
+                CHECK(pt.anchorAy[L]      == Approx(cp.anchorA.y));
+                CHECK(pt.anchorBx[L]      == Approx(cp.anchorB.x));
+                CHECK(pt.anchorBy[L]      == Approx(cp.anchorB.y));
+                CHECK(pt.baseSep[L]       == Approx(cp.baseSeparation));
+                CHECK(pt.normalMass[L]    == Approx(cp.normalMass));
+                CHECK(pt.tangentMass[L]   == Approx(cp.tangentMass));
+                CHECK(pt.normalImpulse[L] == Approx(cp.normalImpulse));
+                CHECK(pt.tangentImpulse[L]== Approx(cp.tangentImpulse));
+                CHECK(pt.relVel[L]        == Approx(cp.relativeVelocity));
+                CHECK(pt.pointValid[L]    == Approx(1.0f));
+            }
+            else
+            {
+                // (b) point >= pointCount: invalid lane, masses + impulses zeroed.
+                CHECK(pt.pointValid[L]    == Approx(0.0f));
+                CHECK(pt.normalMass[L]    == Approx(0.0f));
+                CHECK(pt.tangentMass[L]   == Approx(0.0f));
+                CHECK(pt.normalImpulse[L] == Approx(0.0f));
+                CHECK(pt.tangentImpulse[L]== Approx(0.0f));
+            }
+        }
+    }
+} // namespace
+
+TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build packs lane fields verbatim",
+          "[physics]")
+{
+    constexpr int W = ContactConstraintSimd::kWidth;
+
+    // One full batch worth of distinct 2-point contacts, all dynamic-vs-dynamic
+    // so dynB == 1 on every lane.
+    std::vector<ContactConstraint> ccs;
+    std::vector<std::uint32_t>     refs;
+    for (int i = 0; i < W; ++i)
+    {
+        ccs.push_back(MakeCC(/*seed=*/static_cast<float>(i + 1), /*pts=*/2,
+                             /*bA=*/static_cast<std::uint32_t>(i * 2 + 0),
+                             /*bB=*/static_cast<std::uint32_t>(i * 2 + 1),
+                             /*bIsBody=*/true, /*invMB=*/0.5f + static_cast<float>(i)));
+        refs.push_back(static_cast<std::uint32_t>(i));
+    }
+
+    const std::vector<ContactConstraintSimd> batches =
+        ContactConstraintSimd::Build(ccs.data(), refs.data(),
+                                     static_cast<int>(refs.size()));
+
+    REQUIRE(batches.size() == 1u);
+    CHECK(batches[0].count == W);
+
+    // (a) every lane mirrors its source ContactConstraint verbatim.
+    for (int L = 0; L < W; ++L)
+    {
+        CheckLaneMatches(batches[0], L, ccs[refs[L]]);
+    }
+}
+
+TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build handles 1-point + static-B "
+          "contacts", "[physics]")
+{
+    // Lane 0: a 1-point contact against a STATIC fixture (bodyBIsBody=false ->
+    // dynB must be 0 even though we never set invMassB). Lane 1: a 2-point
+    // contact against a body with invMassB==0 (kinematic -> dynB 0 too).
+    std::vector<ContactConstraint> ccs;
+    ccs.push_back(MakeCC(/*seed=*/3.0f, /*pts=*/1, /*bA=*/5u, /*bB=*/9u,
+                         /*bIsBody=*/false, /*invMB=*/0.0f));
+    ccs.push_back(MakeCC(/*seed=*/7.0f, /*pts=*/2, /*bA=*/2u, /*bB=*/4u,
+                         /*bIsBody=*/true,  /*invMB=*/0.0f));   // kinematic B
+    std::vector<std::uint32_t> refs = { 0u, 1u };
+
+    const std::vector<ContactConstraintSimd> batches =
+        ContactConstraintSimd::Build(ccs.data(), refs.data(), 2);
+
+    REQUIRE(batches.size() == 1u);
+    CHECK(batches[0].count == 2);
+
+    // Lane 0: 1-point static-B contact.
+    CheckLaneMatches(batches[0], 0, ccs[0]);
+    CHECK(batches[0].dynB[0] == Approx(0.0f));           // static fixture
+    CHECK(batches[0].points[1].pointValid[0] == Approx(0.0f));  // 2nd point absent
+
+    // Lane 1: 2-point contact, but B is a kinematic body (invMassB==0) -> dynB 0.
+    CheckLaneMatches(batches[0], 1, ccs[1]);
+    CHECK(batches[0].dynB[1] == Approx(0.0f));
+}
+
+TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build masks partial-batch padding "
+          "lanes", "[physics]")
+{
+    constexpr int W = ContactConstraintSimd::kWidth;
+
+    // count = W + 1 -> two batches; the SECOND batch has exactly one live lane
+    // and (W - 1) padding lanes (>=0; if W==1 there is no partial tail, so the
+    // test still passes trivially with the count==1 live lane).
+    const int count = W + 1;
+    std::vector<ContactConstraint> ccs;
+    std::vector<std::uint32_t>     refs;
+    for (int i = 0; i < count; ++i)
+    {
+        ccs.push_back(MakeCC(static_cast<float>(i + 1), /*pts=*/2,
+                             static_cast<std::uint32_t>(i * 2 + 0),
+                             static_cast<std::uint32_t>(i * 2 + 1),
+                             /*bIsBody=*/true, /*invMB=*/1.0f));
+        refs.push_back(static_cast<std::uint32_t>(i));
+    }
+
+    const std::vector<ContactConstraintSimd> batches =
+        ContactConstraintSimd::Build(ccs.data(), refs.data(), count);
+
+    const std::size_t expectedBatches =
+        static_cast<std::size_t>((count + W - 1) / W);
+    REQUIRE(batches.size() == expectedBatches);
+
+    const ContactConstraintSimd& tail = batches.back();
+    const int live = count - static_cast<int>((batches.size() - 1) * W);
+    CHECK(tail.count == live);
+
+    // Live lanes of the tail batch mirror their source.
+    for (int L = 0; L < live; ++L)
+    {
+        const std::uint32_t ref = refs[(batches.size() - 1) * W + L];
+        CheckLaneMatches(tail, L, ccs[ref]);
+    }
+
+    // (c) padding lanes [live, W) are a lane-wide no-op: zero inv-mass on BOTH
+    // bodies, both points invalid + impulses zero, body index a safe 0.
+    for (int L = live; L < W; ++L)
+    {
+        CHECK(tail.invMassA[L]    == Approx(0.0f));
+        CHECK(tail.invInertiaA[L] == Approx(0.0f));
+        CHECK(tail.invMassB[L]    == Approx(0.0f));
+        CHECK(tail.invInertiaB[L] == Approx(0.0f));
+        CHECK(tail.bodyIndexA[L]  == 0);
+        CHECK(tail.bodyIndexB[L]  == 0);
+        CHECK(tail.dynB[L]        == Approx(0.0f));
+        for (int p = 0; p < 2; ++p)
+        {
+            CHECK(tail.points[p].pointValid[L]     == Approx(0.0f));
+            CHECK(tail.points[p].normalImpulse[L]  == Approx(0.0f));
+            CHECK(tail.points[p].tangentImpulse[L] == Approx(0.0f));
+            CHECK(tail.points[p].normalMass[L]     == Approx(0.0f));
+            CHECK(tail.points[p].tangentMass[L]    == Approx(0.0f));
+        }
     }
 }
