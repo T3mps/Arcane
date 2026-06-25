@@ -605,11 +605,22 @@ TEST_CASE("physics-invariant: a deeply-overlapping round body recovers cleanly",
 }
 
 // ====================================================================
-// 7. WARM-START CACHE BOUNDED: as contacts persist by stable feature id, the
-//    solver warm-start cache stays bounded. A small settled scene has a small,
-//    steady cache; it does NOT grow without bound as the scene is stepped.
+// 7. WARM-START LIVE + BOUNDED: as contacts persist by stable feature id, warm-
+//    start carries impulses forward across steps. A small settled scene's
+//    warm-start is LIVE (resting contacts carry a non-zero accumulated impulse)
+//    and the persistent contact set stays BOUNDED -- it does NOT grow without
+//    bound (no feature-id churn) as the scene is stepped.
+//
+//    RE-BASELINED (warm-start-on-Contact): this invariant formerly read
+//    SolverWarmStartCacheSize() (peak > 0 for liveness, <= bound for no-churn).
+//    The solver-owned m_cache was RETIRED -- warm-start impulses now live on the
+//    persistent Contact's manifold point, so that hook always returns 0 for
+//    SoftStep. We assert the SAME two properties through the live surfaces:
+//    liveness via the accumulated normal impulse on the emitted constraints
+//    (ForEachContactConstraint), and boundedness via ActiveContactCount() (the
+//    pool that warm-start now lives on -- a feature-id leak would grow it).
 // ====================================================================
-TEST_CASE("physics-invariant: warm-start cache stays bounded as contacts persist",
+TEST_CASE("physics-invariant: warm-start is live and the contact set stays bounded",
           "[physics][invariant]")
 {
     WorldDef wd;
@@ -628,36 +639,52 @@ TEST_CASE("physics-invariant: warm-start cache stays bounded as contacts persist
     }
 
     // The persistent contact set is at most a few constraints per box (box-box +
-    // box-floor, up to 2 points each). The warm-start cache is keyed by stable
-    // feature id, so while the scene is active the cache size is steady. Bound:
-    // generously, a few entries per box. A leak (id churn) would grow it every
-    // step.
+    // box-floor, up to 2 points each). Warm-start is keyed by stable feature id,
+    // so while the scene is active the contact set is steady. Bound: generously, a
+    // few per box. A leak (id churn) would grow it every step.
     const std::size_t boundedCap = static_cast<std::size_t>(kBoxes) * 8u + 16u;
 
-    // Warm up + settle, tracking the PEAK cache size while the stack is still
-    // active. We track the peak rather than snapshot post-settle because Island
-    // sleep freezes a fully-rested stack -> a sleeping body skips GenerateContacts
-    // so the cache legitimately drains to 0 once asleep. The invariant is about
-    // the cache WHILE contacts persist: peak > 0 proves warm-starting is actually
-    // live (guards a regression that silently disabled it -- which the upper bound
-    // alone would not catch); peak <= bound proves it does not grow without bound
-    // (no feature-id churn).
-    std::size_t peakSettle = 0;
+    // Helper: the peak accumulated normal impulse across this Step's emitted
+    // constraints. Non-zero proves warm-start fed the solver a real seed (it is
+    // ON, not cold-starting every step).
+    auto peakNormalImpulseThisStep = [&]() -> Real
+    {
+        Real peak = Real(0);
+        w.ForEachContactConstraint([&](const ContactConstraint& cc)
+        {
+            for (int p = 0; p < cc.pointCount; ++p)
+            {
+                peak = std::max(peak, cc.points[p].normalImpulse);
+            }
+        });
+        return peak;
+    };
+
+    // Warm up + settle, tracking the PEAK warm-start impulse + contact count while
+    // the stack is still active. We track peaks (not a post-settle snapshot)
+    // because Island sleep freezes a fully-rested stack -> a sleeping body skips
+    // the solver feed so warm-start legitimately falls to 0 once asleep. The
+    // invariant is about the ACTIVE window: peak impulse > 0 proves warm-starting
+    // is live (guards a regression that silently disabled it); count <= bound
+    // proves the contact set does not grow without bound (no feature-id churn).
+    Real        peakImpulse = Real(0);
+    std::size_t peakCount   = 0;
     for (int i = 0; i < 120; ++i)
     {
         w.Step(kStep);
-        peakSettle = std::max(peakSettle, w.SolverWarmStartCacheSize());
+        peakImpulse = std::max(peakImpulse, peakNormalImpulseThisStep());
+        peakCount   = std::max(peakCount, w.ActiveContactCount());
     }
-    CHECK(peakSettle > 0u);            // warm-start populated (liveness)
-    CHECK(peakSettle <= boundedCap);   // bounded (no id churn)
+    CHECK(peakImpulse > Real(0));     // warm-start populated (liveness)
+    CHECK(peakCount <= boundedCap);   // bounded (no id churn)
 
-    // Step a lot more: the cache must NOT keep growing (no unbounded id churn),
-    // tracked over the whole window so a body that re-wakes is still gated.
+    // Step a lot more: the contact set must NOT keep growing (no unbounded id
+    // churn), tracked over the whole window so a body that re-wakes is still gated.
     std::size_t peakLater = 0;
     for (int i = 0; i < 300; ++i)
     {
         w.Step(kStep);
-        peakLater = std::max(peakLater, w.SolverWarmStartCacheSize());
+        peakLater = std::max(peakLater, w.ActiveContactCount());
     }
     CHECK(peakLater <= boundedCap);
     // The active-contact pool is likewise bounded (a few per box).

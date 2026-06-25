@@ -463,10 +463,21 @@ TEST_CASE("PhysicsSolver: deterministic dynamic scene", "[physics][solver]")
 }
 
 // ---------------------------------------------------------------------------
-// Warm-start cache stays bounded across many steps
+// Warm-start CONTINUITY: a settled stack stays settled (bounded, non-growing
+// penetration) across a long run -- and warm-start is demonstrably LIVE.
 // ---------------------------------------------------------------------------
-
-TEST_CASE("PhysicsSolver: warm-start cache bounded", "[physics][solver]")
+//
+// RE-BASELINED (warm-start-on-Contact). This case formerly asserted
+// SolverWarmStartCacheSize() < 64 -- a proxy for "warm-start state does not leak
+// without bound". The solver-owned m_cache was RETIRED (warm-start impulses now
+// ride the persistent Contact's manifold point, so the cache-size hook always
+// returns 0 for SoftStep). We assert the INVARIANT that cache-bound was a proxy
+// for, directly + behaviorally: a settled stack's penetration is bounded and does
+// NOT grow over a long run (a warm-start regression -- impulse churn / a leak that
+// destabilized the solve -- would show up as drift or blow-up), AND warm-start is
+// LIVE (each step's resting contacts carry a non-zero accumulated normal impulse
+// seeded from the prior step -- a cold-start-every-step bug would leave it 0).
+TEST_CASE("PhysicsSolver: warm-start continuity keeps a stack settled", "[physics][solver]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
@@ -481,32 +492,61 @@ TEST_CASE("PhysicsSolver: warm-start cache bounded", "[physics][solver]")
                                hw, hh));
     }
 
-    // The cache holds one entry per live contact point. A 4-box stack on a
-    // floor has a bounded number of contact points (each box: vs the box below
-    // or floor, up to 2 points). The cache must NOT grow without bound over a
-    // long run -- assert a generous ceiling. (Each AABB-AABB manifold emits <= 2
-    // points; 4 boxes -> <= ~10 points -> well under 64.)
-    std::size_t maxCache = 0;
-    for (int k = 0; k < 1000; ++k)
+    // Settle the stack, capturing the PEAK accumulated normal impulse WHILE it is
+    // still awake (active contacts). Once the island pass sleeps a fully-rested
+    // stack it stops feeding the solver, so warm-start legitimately reports 0 --
+    // we must observe liveness during the active window, not the frozen tail.
+    Real peakNormalImpulse = Real(0);
+    for (int k = 0; k < 200; ++k)
+    {
+        w.Step(kStep);
+        w.ForEachContactConstraint([&](const ContactConstraint& cc)
+        {
+            for (int p = 0; p < cc.pointCount; ++p)
+            {
+                peakNormalImpulse = std::max(peakNormalImpulse, cc.points[p].normalImpulse);
+            }
+        });
+    }
+    // Live: warm-start fed the solver a non-zero seed at least once (it was on,
+    // not cold-starting every step).
+    REQUIRE(peakNormalImpulse > Real(0));
+
+    // Snapshot the settled top-box Y, then run a LONG tail. With warm-start live,
+    // the stack holds: the top box does not creep (penetration does not grow,
+    // whether the stack stays awake or freezes asleep -- either way it must not
+    // sag step over step).
+    const Real settledTopY = w.Position(boxes.back()).y;
+    Real maxDrift = Real(0);
+    for (int k = 0; k < 800; ++k)
     {
         w.Step(kStep);
         for (auto h : boxes)
         {
             REQUIRE(std::isfinite(w.Position(h).y));
         }
-        maxCache = std::max(maxCache, w.SolverWarmStartCacheSize());
+        const Real drift = std::abs(w.Position(boxes.back()).y - settledTopY);
+        maxDrift = std::max(maxDrift, drift);
     }
-    REQUIRE(maxCache < std::size_t(64)); // bounded -- eviction works
+    // Bounded: a settled stack does not creep more than a hair over 800 steps
+    // (a warm-start leak / churn would let it drift or blow up). The bound is a
+    // small fraction of a box half-extent (hh = 2).
+    REQUIRE(maxDrift < Real(0.5));
 }
 
 // ---------------------------------------------------------------------------
-// Warm-start cache eviction (direct SoftStep unit test)
+// Warm-start state is DROPPED when a body is removed (no stale resurrection).
 // ---------------------------------------------------------------------------
-
-TEST_CASE("PhysicsSolver: warm-start cache evicts stale entries", "[physics][solver]")
+//
+// RE-BASELINED (warm-start-on-Contact). This case formerly asserted the solver
+// cache DRAINED to 0 after the contacting body was removed. The cache is gone;
+// warm-start now lives on the persistent Contact, which the broadphase DESTROYS
+// when the body is removed (DestroyContactsForBody). We assert the BEHAVIORAL
+// guarantee that the cache-drain check stood in for: once the ball is removed
+// there are NO more contact constraints (its warm-start home is gone -- nothing
+// stale resurrects), and the rest of the scene stays finite.
+TEST_CASE("PhysicsSolver: warm-start dropped on body removal", "[physics][solver]")
 {
-    // Drive a SoftStep directly with a tiny synthetic scene through the world so
-    // the cache fills, then run steps with NO contacts and confirm it drains.
     WorldDef wd;
     wd.gravityY = Real(400);
     PhysicsWorld w(wd);
@@ -514,25 +554,105 @@ TEST_CASE("PhysicsSolver: warm-start cache evicts stale entries", "[physics][sol
     AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
     BodyHandle ball = AddCircle(w, Vec2(Real(0), Real(-10)), Real(2));
 
-    // Settle the ball so it is generating contacts (cache populated). Capture the
-    // peak cache size WHILE the ball is still in contact -- as of P2.4 the island
-    // pass eventually sleeps a resting ball, which stops contact generation and
-    // legitimately drains the cache, so we must observe the populated state during
-    // the active-contact window rather than at a fixed late step.
-    std::size_t peakCache = 0;
+    // Settle the ball so it is generating warm-started contacts. Confirm warm-
+    // start is actually live before we remove it (a non-zero accumulated normal
+    // impulse on the ball-floor contact).
+    Real peakNormalImpulse = Real(0);
     for (int k = 0; k < 120; ++k)
     {
         w.Step(kStep);
-        peakCache = std::max(peakCache, w.SolverWarmStartCacheSize());
+        w.ForEachContactConstraint([&](const ContactConstraint& cc)
+        {
+            for (int p = 0; p < cc.pointCount; ++p)
+            {
+                peakNormalImpulse = std::max(peakNormalImpulse, cc.points[p].normalImpulse);
+            }
+        });
     }
-    REQUIRE(peakCache > std::size_t(0)); // populated while in contact
+    REQUIRE(peakNormalImpulse > Real(0)); // warm-start was live while in contact
 
-    // Remove the ball -> no more contacts -> the cache must DRAIN to 0 within a
-    // few steps (kCacheLife = 2 means an entry survives <= 2 unused stamps).
+    // Remove the ball -> its persistent Contact is destroyed -> no constraint can
+    // be emitted for it. The solver feed must be empty (no stale resurrection),
+    // and the scene stays finite.
     w.RemoveBody(ball);
     for (int k = 0; k < 5; ++k)
     {
         w.Step(kStep);
     }
-    REQUIRE(w.SolverWarmStartCacheSize() == std::size_t(0)); // fully evicted
+    REQUIRE(w.ActiveContactCount() == std::size_t(0)); // warm-start home gone
+}
+
+// ---------------------------------------------------------------------------
+// Warm-start continuity (EXPLICIT): a stack settled by step N has bounded
+// penetration that does NOT grow at N+50.
+// ---------------------------------------------------------------------------
+//
+// This is Task 3's stated gate: warm-start impulses on the persistent Contact
+// must CONTINUE across steps for pool contacts. We settle a box stack on a floor,
+// keep it AWAKE (force-wake every step so island sleep never freezes it -- the
+// warm-start carry-forward is then exercised on a LIVE contact every step), then
+// confirm the stack's penetration at step N and at step N+50 are both bounded and
+// the later one is no worse than a hair over the earlier (the stack holds, it does
+// not creep down as overlap accumulates). A cold-start-every-step regression
+// (warm-start NOT carried across the per-step manifold recompute) makes a soft
+// solver re-converge from zero each frame -> the stack sags + jitters, which this
+// growth bound catches.
+TEST_CASE("PhysicsSolver: warm-start continuity -- settled stack stays put N -> N+50",
+          "[physics][solver]")
+{
+    WorldDef wd;
+    wd.gravityY = Real(400);
+    PhysicsWorld w(wd);
+
+    // Floor top surface at y = 0 (center +5, hh 5).
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
+
+    // A 4-box stack resting on the floor (half-extent 2, stacked tightly).
+    std::vector<BodyHandle> boxes;
+    const Real hh = Real(2);
+    for (int i = 0; i < 4; ++i)
+    {
+        boxes.push_back(AddBox(w, Vec2(Real(0),
+                                       -(Real(2) * hh + Real(0.05)) * static_cast<Real>(i) - hh - Real(0.1)),
+                               hh, hh));
+    }
+
+    // Per-step penetration of the BOTTOM box into the floor: floor top is y = 0,
+    // the box bottom is Position.y + hh (Y is DOWN), so penetration = box.y + hh.
+    auto bottomPenetration = [&]() -> Real
+    {
+        return w.Position(boxes.front()).y + hh; // > 0 == into the floor
+    };
+
+    // Keep the stack awake so the solver is fed every step (the carry-forward
+    // path runs on a live contact, not a frozen one).
+    auto wakeAll = [&]()
+    {
+        for (auto h : boxes) { w.Wake(h); }
+    };
+
+    // Settle by step N = 200.
+    for (int k = 0; k < 200; ++k)
+    {
+        wakeAll();
+        w.Step(kStep);
+    }
+    const Real penAtN = bottomPenetration();
+    REQUIRE(std::isfinite(penAtN));
+    // Settled overlap is small (this soft solver rests a stack at a few percent of
+    // a half-extent; hh = 2). A generous bound -- the point is the NON-GROWTH below.
+    REQUIRE(penAtN < Real(0.5));
+
+    // Step 50 more, tracking the worst penetration over the tail.
+    Real penPeakTail = penAtN;
+    for (int k = 0; k < 50; ++k)
+    {
+        wakeAll();
+        w.Step(kStep);
+        penPeakTail = std::max(penPeakTail, bottomPenetration());
+    }
+
+    // CONTINUITY: penetration at N+50 (and across the tail) did not grow beyond a
+    // hair past step N. Warm-start held the stack; it did not sag step over step.
+    REQUIRE(penPeakTail <= penAtN + Real(0.05));
 }

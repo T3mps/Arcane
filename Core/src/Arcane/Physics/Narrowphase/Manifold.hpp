@@ -43,12 +43,27 @@ namespace Arcane
         //              the deepest point and 2 for the second-deepest (so the
         //              first manifold point carries keyBase+1, the second
         //              keyBase+2). This matches manifold.json's `key` field.
+        // normalImpulse / tangentImpulse :
+        //              WARM-START STATE (Box2D-v3 form). The accumulated
+        //              (normal, tangent) impulse the solver converged on LAST
+        //              step, carried HERE on the persistent pool Contact's
+        //              manifold point so it survives across steps without a
+        //              solver-side cache. EmitContactConstraints seeds the
+        //              emitted ContactConstraintPoint from these; PhysicsWorld
+        //              writes them back after Solve(). Default 0 == cold start
+        //              (a brand-new feature, or a transient tile span that has
+        //              no persistent home). They ride the feature id: when
+        //              UpdateContacts replaces the manifold each step it copies
+        //              these forward by matching id (see UpdateContacts), so the
+        //              same physical contact keeps its impulse history.
         struct ManifoldPoint
         {
             Vec2          point{ Real(0), Real(0) };
             Real          separation = Real(0);
             Vec2          normal{ Real(0), Real(0) };
             std::uint32_t id         = 0;
+            Real          normalImpulse  = Real(0);
+            Real          tangentImpulse = Real(0);
         };
 
         // ----------------------------------------------------------------

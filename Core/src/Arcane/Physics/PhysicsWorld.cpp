@@ -1463,7 +1463,10 @@ namespace Arcane
             //     fixtures, refilled each Step).
             // EmitContactConstraints then walks BOTH into m_contactConstraints in
             // the canonical (bodyA, bodyB, fixtureA, fixtureB) order; the ids are
-            // stable (MixContactId) so the solver's warm-start cache matches.
+            // stable (MixContactId) so warm-start impulses (now carried on each
+            // persistent Contact's manifold point, seeded into the emitted
+            // constraint here and written back after Solve -- see stage 3b) line up
+            // with the same physical contact across steps.
             UpdateContacts(dt);
             m_contactConstraints.clear();
             EmitContactConstraints(m_contactConstraints);
@@ -1503,6 +1506,41 @@ namespace Arcane
                 ctx.invSubDt     = ctx.subDt > Real(0) ? Real(1) / ctx.subDt : Real(0);
                 ctx.gravity      = Vec2(m_gravityX, m_gravityY);
                 m_solver->Solve(ctx);
+            }
+
+            // ---- stage 3b: warm-start write-back (warm-start-on-Contact) -----
+            // The solver no longer owns a warm-start cache: the converged per-point
+            // impulses live on the persistent Contact. After Solve() (POST-
+            // restitution, so we capture the FINAL accumulated impulses -- exactly
+            // what the retired SoftStep Store loop stored), walk the emitted
+            // constraints and write each point's (normal, tangent) impulse back onto
+            // its source Contact's manifold point. Pool contacts carry their pool id
+            // in sourceContactId; transient tile spans carry kNoContact and are
+            // skipped (they have no persistent home -> cold-start next step). The
+            // Contact then carries these into next step's emit (UpdateContacts
+            // copies them across the manifold recompute by feature id). Decoupled:
+            // the solver never touches the pool; only the world does the round-trip.
+            // Baumgarte keeps its own cache and ignores sourceContactId, so this is
+            // a no-op for it (its constraints still carry the field; Get() is only
+            // reached for SoftStep-emitted pool contacts -- the same constraints
+            // either way -- and writing the manifold impulses is harmless for a
+            // solver that does not read them back).
+            for (const ContactConstraint& cc : m_contactConstraints)
+            {
+                if (cc.sourceContactId == ContactConstraint::kNoContact)
+                {
+                    continue; // transient span: no persistent Contact to update
+                }
+                Contact& src = m_contactPool.Get(cc.sourceContactId);
+                // Defensive bound: within one Step the source Contact's manifold
+                // cannot change after emit, so cc.pointCount == manifold.pointCount;
+                // clamp anyway so a future reordering can never index out of range.
+                const int n = std::min(cc.pointCount, src.manifold.pointCount);
+                for (int p = 0; p < n; ++p)
+                {
+                    src.manifold.points[p].normalImpulse  = cc.points[p].normalImpulse;
+                    src.manifold.points[p].tangentImpulse = cc.points[p].tangentImpulse;
+                }
             }
 
             // ---- stage 4: bullet GJK-TOI clamp (P3.1 CCD) --------------------
@@ -2175,6 +2213,21 @@ namespace Arcane
                 {
                     return;
                 }
+                // WARM-START CARRY-FORWARD (warm-start-on-Contact). The recompute
+                // below REPLACES c.manifold wholesale, which would wipe the
+                // accumulated impulses the solver wrote onto last step's manifold
+                // points. Box2D-v3 keeps warm-start alive across the per-step
+                // manifold rebuild by MATCHING the new points to the old ones by
+                // feature id and copying the impulses forward. Snapshot the old
+                // points' (id, normalImpulse, tangentImpulse) BEFORE the overwrite;
+                // after, each NEW point inherits the impulses of the OLD point with
+                // the SAME id (no match -> stays 0, i.e. a fresh feature cold-
+                // starts). Without this the persistent-Contact warm-start would be
+                // no better than a cold start every step (stacks would jitter).
+                // (The BothAsleep early-return above SKIPS the recompute, so the
+                // manifold -- and its impulses -- persist there for free.)
+                const Manifold oldManifold = c.manifold;
+
                 // Recompute the manifold ONCE this step, mirroring the retired
                 // GenerateContacts transform composition (ComposeFixtureXf) + the
                 // velocity-scaled speculative margin computed above.
@@ -2189,6 +2242,24 @@ namespace Arcane
                 c.manifold = Collide(m_fxShape[c.a.index], xfA,
                                      m_fxShape[c.b.index], xfB, margin);
                 c.touching = (c.manifold.pointCount > 0);
+
+                // Copy warm-start impulses forward by matching feature id (small
+                // fixed loop: at most 2 new x 2 old points). A new point with no
+                // old id-match keeps its default 0 (cold start).
+                for (int np = 0; np < c.manifold.pointCount; ++np)
+                {
+                    ManifoldPoint& nm = c.manifold.points[np];
+                    for (int op = 0; op < oldManifold.pointCount; ++op)
+                    {
+                        const ManifoldPoint& om = oldManifold.points[op];
+                        if (om.id == nm.id)
+                        {
+                            nm.normalImpulse  = om.normalImpulse;
+                            nm.tangentImpulse = om.tangentImpulse;
+                            break;
+                        }
+                    }
+                }
             });
         }
 
@@ -2305,6 +2376,15 @@ namespace Arcane
                     cp.anchorB        = mp.point - comB;
                     cp.baseSeparation = -mp.separation;
                     cp.id             = MixContactId(mp.id, fixA, fixB);
+                    // WARM-START SEED (read path): carry the persistent Contact's
+                    // accumulated impulses INTO the emitted constraint point. For a
+                    // pool contact these were written back after last step's Solve
+                    // (+ carried across the manifold recompute by UpdateContacts);
+                    // for a transient tile span mp.normalImpulse is 0, so spans
+                    // cold-start (acceptable -- they have no persistent home). The
+                    // solver's Prepare leaves these untouched.
+                    cp.normalImpulse  = mp.normalImpulse;
+                    cp.tangentImpulse = mp.tangentImpulse;
                 }
                 out.push_back(cc);
                 keys.push_back(EmitSortKey{ aIdx, cc.bodyB, fixA, fixB });
@@ -2320,13 +2400,20 @@ namespace Arcane
             // solver-relevant -- a dynamic fixture vs a tile span -- and are NOT
             // gated here; they carry the default solverRelevant==false, so the gate
             // must NOT be inside the shared emitContact lambda.)
-            m_contactPool.ForEach([&](std::uint32_t /*id*/, const Contact& c)
+            m_contactPool.ForEach([&](std::uint32_t id, const Contact& c)
             {
                 if (!c.solverRelevant)
                 {
                     return; // event-only contact (sensor / kinematic): no constraint
                 }
-                emitContact(c, Vec2(Real(0), Real(0)));
+                if (emitContact(c, Vec2(Real(0), Real(0))))
+                {
+                    // Tag the just-emitted constraint with its persistent pool id so
+                    // the post-Solve write-back lands the converged impulses on THIS
+                    // Contact. Spans (below) leave the default kNoContact. The field
+                    // travels with the constraint through the canonical sort.
+                    out.back().sourceContactId = id;
+                }
             });
 
             // (b) tile spans: the transient scratch UpdateContacts filled this Step.

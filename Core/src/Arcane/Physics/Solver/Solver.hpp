@@ -74,7 +74,9 @@ namespace Arcane
             // Effective masses along the normal + tangent (inverse-K scalars).
             Real normalMass  = Real(0);
             Real tangentMass = Real(0);
-            // Accumulated impulses (warm-started across steps via the cache).
+            // Accumulated impulses. Warm-start-seeded at emit from the persistent
+            // Contact's manifold point (NOT a solver cache anymore); the world
+            // writes the converged values back onto that Contact after Solve().
             Real normalImpulse  = Real(0);
             Real tangentImpulse = Real(0);
             // Relative normal velocity at Prepare (for the restitution pass).
@@ -97,9 +99,25 @@ namespace Arcane
         // toward A (push A out of B), matching ManifoldPoint::normal.
         struct ContactConstraint
         {
+            // Sentinel for sourceContactId below: this constraint has NO persistent
+            // ContactPool home (a transient tile span), so warm-start impulses are
+            // not written back to a pool Contact -- it cold-starts every step.
+            static constexpr std::uint32_t kNoContact = 0xFFFFFFFFu;
+
             std::uint32_t bodyA = 0;            // SoA slot index (always dynamic)
             std::uint32_t bodyB = 0;            // SoA slot index, or kInvalidSlot for a span
             bool          bodyBIsBody = false;  // false -> tile-span virtual fixture
+
+            // The persistent ContactPool id this constraint was emitted from
+            // (EmitContactConstraints sets it for a pool contact); kNoContact for a
+            // transient tile span (no warm-start home). Warm-start impulses on the
+            // persistent Contact replaced the solver's old m_cache: emit seeds the
+            // ContactConstraintPoint from the source Contact's manifold, and after
+            // Solve() the world writes the accumulated impulses back onto that
+            // Contact via this id. Travels with the constraint through the canonical
+            // sort (it is a field on the struct, not a parallel array), so the
+            // post-sort permutation does not desync it.
+            std::uint32_t sourceContactId = kNoContact;
 
             // Cached inverse mass/inertia (copied at Prepare so the solver does
             // not re-touch the world SoA per sub-step iteration). For spans /
@@ -193,8 +211,11 @@ namespace Arcane
         // ----------------------------------------------------------------
         //
         // ONE entry: Solve(ctx) runs the installed solver's WHOLE per-Step
-        // pipeline (it owns dynamic integration + the constraint solve + warm-
-        // start persistence -- see the INTEGRATION OWNERSHIP note up top). The
+        // pipeline (it owns dynamic integration + the constraint solve -- see the
+        // INTEGRATION OWNERSHIP note up top). Warm-start persistence is solver-
+        // specific: Baumgarte keeps its own m_cache; SoftStep stores the converged
+        // impulses on the persistent Contact (the world seeds + writes them back),
+        // so it keeps no cache at all (WarmStartCacheSize() returns 0). The
         // world holds a std::unique_ptr<ISolver> chosen by WorldDef::solverKind
         // and calls Solve once per Step; it does NOT drive a phase sequence (the
         // six P2.1 phase pure-virtuals were demoted to SoftStep-private helpers

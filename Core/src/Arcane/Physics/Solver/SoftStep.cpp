@@ -24,10 +24,6 @@ namespace Arcane
     {
         namespace
         {
-            // Steps a warm-start cache entry survives unused before eviction
-            // (the Lua CACHE_LIFE = 2). Bounds the cache.
-            constexpr std::uint32_t kCacheLife = 2u;
-
             // 2D cross products (port of the Lua applyAt / contact math).
             //   scalar(w) x vec(r) -> vec : (-w*r.y, w*r.x)
             //   vec(r)    x vec(p) -> scalar : r.x*p.y - r.y*p.x
@@ -60,11 +56,12 @@ namespace Arcane
 
         void SoftStep::DropBody(std::uint32_t slot)
         {
-            // Stale impulses keyed by manifold ids that referenced this slot are
-            // evicted by the normal stamp-based eviction; the per-body scratch is
-            // re-zeroed at the start of each Solve, so a recycled slot inherits
-            // nothing. Nothing slot-specific to do here today, but the hook keeps
-            // the contract explicit for a future id-scheme that embeds the slot.
+            // Warm-start impulses now live on the persistent Contact, which the
+            // broadphase destroys when a fixture/body is removed
+            // (PhysicsWorld::DestroyContactsForBody/Fixture), so a recycled slot
+            // inherits no stale impulse. The per-body sub-step scratch is re-zeroed
+            // at the start of each Solve. Nothing slot-specific to do here; the
+            // override stays only to honor the ISolver contract.
             (void)slot;
         }
 
@@ -132,7 +129,6 @@ namespace Arcane
         void SoftStep::PrepareContacts(SolverContext& ctx)
         {
             PhysicsWorld& w = *ctx.world;
-            ++m_stamp;
 
             // High contact hertz that, with the small sub-step, appears rigid --
             // but never out-running the sub-step solve rate (Box2D v3 clamps to
@@ -190,18 +186,11 @@ namespace Arcane
                     const Vec2 dv = (vA + CrossWR(wA, rA)) - (vB + CrossWR(wB, rB));
                     cp.relativeVelocity = Dot(dv, n);
 
-                    // Warm start: seed accumulators from the prior step's cache.
-                    auto it = m_cache.find(cp.id);
-                    if (it != m_cache.end())
-                    {
-                        cp.normalImpulse  = it->second.normalImpulse;
-                        cp.tangentImpulse = it->second.tangentImpulse;
-                    }
-                    else
-                    {
-                        cp.normalImpulse  = Real(0);
-                        cp.tangentImpulse = Real(0);
-                    }
+                    // Warm start: the accumulators ARRIVE already seeded on cp
+                    // (EmitContactConstraints copied them off the persistent
+                    // Contact's manifold point; 0 for a fresh feature or a
+                    // transient tile span). Prepare must NOT reset them -- doing so
+                    // would discard the carried-forward impulse history.
                 }
             }
         }
@@ -625,9 +614,11 @@ namespace Arcane
             const Real h = ctx.subDt;
             const int substeps = static_cast<int>(ctx.substepCount);
 
-            // 1) Prepare (once): effective masses, soft coefficients, warm-start
-            //    seeds, rest-relative velocity. Always run so warm-start impulses
-            //    persist + the cache stamp advances even with zero contacts.
+            // 1) Prepare (once): effective masses, soft coefficients, rest-relative
+            //    velocity. Warm-start impulses are NOT seeded here -- they arrive
+            //    already set on each ContactConstraintPoint (the world copies them
+            //    off the persistent Contact's manifold at emit). Prepare leaves them
+            //    untouched. Always run, even with zero contacts (harmless).
             PrepareContacts(ctx);
             PrepareJoints(ctx);
 
@@ -652,36 +643,11 @@ namespace Arcane
             // 3) Restitution (once).
             ApplyRestitution(ctx);
 
-            // 4) Store impulses to the warm-start cache (+ evict stale entries).
-            // insert_or_assign avoids the default-construct+insert on NEW ids that
-            // operator[] performs, eliminating the per-step heap allocation when
-            // contact ids churn (e.g. bodies cycling in/out of sleep in P2.4).
-            for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
-            {
-                const ContactConstraint& cc = ctx.contacts[c];
-                for (int p = 0; p < cc.pointCount; ++p)
-                {
-                    const ContactConstraintPoint& cp = cc.points[p];
-                    m_cache.insert_or_assign(cp.id, CacheEntry{ cp.normalImpulse,
-                                                                cp.tangentImpulse,
-                                                                m_stamp });
-                }
-            }
-            // Bounded cache: drop entries unused for more than kCacheLife stamps.
-            // iteration order over m_cache is unobservable here (delete-only);
-            // determinism is preserved (warm-start seeds are loaded by find(id),
-            // not by iteration).
-            for (auto it = m_cache.begin(); it != m_cache.end();)
-            {
-                if (m_stamp - it->second.stamp > kCacheLife)
-                {
-                    it = m_cache.erase(it);
-                }
-                else
-                {
-                    ++it;
-                }
-            }
+            // The converged per-point impulses are NOT stored by the solver. After
+            // Solve() returns, PhysicsWorld::Step walks ctx.contacts and writes each
+            // point's accumulated (normal, tangent) impulse back onto its source
+            // persistent Contact's manifold point (via sourceContactId), where it
+            // persists to next step. This replaced the old solver-owned m_cache.
 
             // Commit accumulated position deltas onto the world (the solver owns
             // dynamic position integration; Step's old inline stage-4 is gone).

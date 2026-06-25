@@ -9,9 +9,12 @@
 // that these tests + PhysicsCompoundComTest (e) guard:
 //
 //   1. WARM-START ID COLLISION across fixture pairs -- two fixtures of one body
-//      that hit the same surface produced the SAME warm-start key and aliased in
-//      the solver cache. PROBE below pins that each contact point now owns a
-//      distinct key (cache size >= contact-point count).
+//      that hit the same surface produced the SAME warm-start key and aliased
+//      (one fixture's impulse seeded the other's at the wrong lever arm). PROBE
+//      below pins that each contact point now owns a DISTINCT key and is
+//      individually warm-started (non-zero accumulated impulse). [Originally
+//      asserted via the solver cache size; re-baselined after warm-start moved
+//      onto the persistent Contact -- the solver cache was retired.]
 //   2. ApplyImpulse-at-point torqued about the ORIGIN, not the COM (off-COM
 //      bodies span wrong) -- guarded analytically by PhysicsCompoundComTest (e).
 //
@@ -21,6 +24,7 @@
 //
 // CONVENTION: Cartesian, +Y DOWN (gravity +Y). PRESENTATION-FREE + C++20-clean.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -104,10 +108,21 @@ namespace
 // PROBE [FIX 1 GUARD]: two-fixture contacts own DISTINCT warm-start ids.
 //
 // A 2-fixture body whose two fixtures both rest on the floor produces two
-// contact points. The solver warm-start cache is keyed by the contact point id;
-// before the fix both points shared one id (the geometric feature id carried no
-// fixture identity) and aliased -- the cache held FEWER entries than there were
-// contact points. After the fix each fixture pair's contact owns a distinct key.
+// contact points. Warm-start is keyed by the contact point id; before the fix
+// both points shared one id (the geometric feature id carried no fixture
+// identity) and ALIASED -- one fixture's accumulated impulse would seed the
+// other's contact at the wrong lever arm. After the fix each fixture pair's
+// contact owns a distinct key (MixContactId folds the fixture slots in).
+//
+// RE-BASELINED (warm-start-on-Contact): this PROBE used SolverWarmStartCacheSize
+// >= 2 as a proxy for "two distinct warm-start ids exist" -- but the solver-owned
+// m_cache was RETIRED (warm-start impulses now live on the persistent Contact's
+// manifold point, seeded into each ContactConstraintPoint at emit), so that hook
+// always returns 0 for SoftStep. We assert the property the cache-size check was
+// a proxy for, DIRECTLY and more strictly: there are >= 2 emitted contact points,
+// their warm-start ids are DISTINCT (no aliasing), AND each carries a non-zero
+// accumulated normal impulse (both fixtures are individually warm-started -- an
+// aliasing regression would collapse them to one warm-started point + one cold).
 // ============================================================================
 TEST_CASE("compound-slide PROBE: two-fixture contacts have distinct warm-start ids",
           "[physics]")
@@ -139,14 +154,42 @@ TEST_CASE("compound-slide PROBE: two-fixture contacts have distinct warm-start i
 
     for (int i = 0; i < 30; ++i) w.Step(kStep);
 
-    const std::size_t activeContacts = w.ActiveContactCount();
-    const std::size_t cacheSize      = w.SolverWarmStartCacheSize();
-    INFO("active contact constraints = " << activeContacts
-         << ", warm-start cache size = " << cacheSize);
+    // Collect each emitted contact point's (id, accumulated normal impulse). The
+    // impulse on the LAST Step's constraints is the warm-start seed carried in
+    // from the prior step's converged solve -- non-zero for a contact bearing the
+    // body's weight, zero for a fresh/aliased-away point.
+    std::vector<std::uint32_t> ids;
+    std::vector<Real>          normalImpulses;
+    w.ForEachContactConstraint([&](const ContactConstraint& cc)
+    {
+        for (int p = 0; p < cc.pointCount; ++p)
+        {
+            ids.push_back(cc.points[p].id);
+            normalImpulses.push_back(cc.points[p].normalImpulse);
+        }
+    });
 
-    CHECK(activeContacts >= 2u);   // both circles rest on the floor
-    // Each distinct contact point owns a distinct warm-start id (no aliasing).
-    CHECK(cacheSize >= 2u);
+    const std::size_t activeContacts = w.ActiveContactCount();
+    INFO("active contact constraints = " << activeContacts
+         << ", emitted contact points = " << ids.size());
+
+    CHECK(activeContacts >= 2u);     // both circles rest on the floor
+    REQUIRE(ids.size() >= 2u);       // at least the two floor-contact points
+
+    // No aliasing: every contact point id is DISTINCT (the FIX-1 invariant).
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+
+    // Warm-start is LIVE on each point: at least two points carry a non-zero
+    // accumulated normal impulse (an aliasing regression would warm-start one and
+    // leave the other cold -- this is the behavioral teeth the cache-size check
+    // lacked).
+    int warmStarted = 0;
+    for (Real ni : normalImpulses)
+    {
+        if (ni > Real(0)) { ++warmStarted; }
+    }
+    CHECK(warmStarted >= 2);
 }
 
 // ============================================================================

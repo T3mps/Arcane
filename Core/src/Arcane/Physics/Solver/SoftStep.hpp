@@ -16,8 +16,10 @@
 //   1. PrepareContacts (once): per contact point compute anchors, normal +
 //      tangent effective masses, the rest-relative normal velocity (for
 //      restitution), and the SOFT (biasRate, massScale, impulseScale) from
-//      b2MakeSoft(contactHertz, dampingRatio, h). Seed warm-start impulses
-//      from the prior step's cache (keyed by the manifold point id).
+//      b2MakeSoft(contactHertz, dampingRatio, h). Warm-start impulses are NOT
+//      seeded here -- they arrive already set on each ContactConstraintPoint
+//      (EmitContactConstraints copies them off the persistent Contact's
+//      manifold point). PrepareContacts must NOT reset them.
 //   2. for substep in [0, substepCount):
 //        a. integrate velocities (gravity + linear damping) for awake dynamics
 //        b. warm start: apply accumulated normal + tangent impulses
@@ -29,15 +31,20 @@
 //           impulseScale=0 -- removes the bias-injected energy
 //   3. ApplyRestitution (once): add restitution impulse for points whose
 //      approach speed exceeded the threshold.
-//   4. StoreImpulses (once): write accumulated impulses to the warm-start cache.
+// The converged per-point impulses are NOT stored by the solver -- after Solve()
+// returns, PhysicsWorld::Step writes each ContactConstraintPoint's accumulated
+// (normal, tangent) impulse back onto its source persistent Contact's manifold
+// point (via ContactConstraint::sourceContactId), where they persist to next
+// step. This replaced the old solver-owned m_cache (a behavior-preserving
+// refactor that de-risks the SIMD rewrite).
 // At the end the solver commits each awake dynamic body's accumulated deltaPos
 // /deltaRot to the world position/angle (the world's stage-4 inline dynamic
 // position integrate is SUPERSEDED -- the solver owns dynamic integration).
 //
 // The world drives the phase sequence (PhysicsWorld::Step). The world owns the
-// ContactConstraint pool; the solver owns the warm-start cache + the per-body
-// sub-step scratch (deltaPos/deltaRot), both reused across steps -> zero
-// steady-state allocation. Determinism: fixed iteration order by stable slot
+// ContactConstraint pool AND the warm-start impulses (on the persistent Contact);
+// the solver owns only the per-body sub-step scratch (deltaPos/deltaRot), reused
+// across steps -> zero steady-state allocation. Determinism: fixed iteration order by stable slot
 // index over the world-built (already sorted) contact array; no wall-clock; no
 // fast-math (the workspace builds /fp:precise).
 //
@@ -45,7 +52,6 @@
 // only. No SDL3/NVRHI/ImGui. namespace Arcane::Physics, Core style.
 
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -75,15 +81,16 @@ namespace Arcane
             // interface refactor -- this method's body did not change).
             void Solve(SolverContext& ctx) override;
 
-            // Drop a body from the warm-start cache + scratch (called on
-            // RemoveBody so a recycled slot does not inherit stale impulses).
+            // Drop a body's warm-start state on slot recycle (RemoveBody). SoftStep
+            // keeps NO solver-side cache anymore -- warm-start impulses live on the
+            // persistent Contact, which the broadphase destroys when a fixture/body
+            // is removed (DestroyContactsForBody/Fixture), so a recycled slot
+            // inherits nothing. This override stays a no-op purely to honor the
+            // ISolver contract. (WarmStartCacheSize() is intentionally NOT
+            // overridden: it falls back to ISolver's default 0 -- there is no cache
+            // to report. The hook + PhysicsWorld::SolverWarmStartCacheSize remain
+            // for Baumgarte, which still keeps its own m_cache.)
             void DropBody(std::uint32_t slot) override;
-
-            // Current warm-start cache entry count (ISolver inspection hook).
-            [[nodiscard]] std::size_t WarmStartCacheSize() const noexcept override
-            {
-                return m_cache.size();
-            }
 
         private:
             // ---- per-Step phase helpers (private since P2.3) ---------------
@@ -126,21 +133,6 @@ namespace Arcane
             // Commit the accumulated deltaPos/deltaRot onto the world's
             // position/angle + refresh the mover broadphase (end of Step).
             void FinalizePositions(SolverContext& ctx);
-
-            // ---- warm-start cache (per-solver; bounded) --------------------
-            //
-            // Keyed by the manifold point id (the Lua _siCache key). Holds the
-            // last step's accumulated (normal, tangent) impulse + a stamp; stale
-            // entries (unused for kCacheLife stamps) are evicted in StoreImpulses
-            // so the map stays bounded (the harness asserts this).
-            struct CacheEntry
-            {
-                Real          normalImpulse  = Real(0);
-                Real          tangentImpulse = Real(0);
-                std::uint32_t stamp          = 0;
-            };
-            std::unordered_map<std::uint32_t, CacheEntry> m_cache;
-            std::uint32_t m_stamp = 0;
 
             // ---- per-body sub-step scratch (SoA-indexed; reused) -----------
             //
