@@ -23,7 +23,9 @@ workspace "Arcane"
     -- MSVC: /utf-8 ensures source + execution charsets are UTF-8.
     -- Required by fmt 11+ (bundled in spdlog 1.17).
     filter "system:windows"
-        buildoptions { "/utf-8" }
+        buildoptions { "/utf-8", "/arch:AVX2" }   -- AVX2 is the x86 min-spec for the engine (Arcane::Simd)
+    filter { "system:linux or system:macosx", "architecture:x86_64" }
+        buildoptions { "-mavx2", "-mfma" }         -- gcc/clang x64 parity; ARM port supplies NEON flags later
     filter {}
 
     -- "-md" suffix keeps ThirdParty wrapper outputs (each dep builds into

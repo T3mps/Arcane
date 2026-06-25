@@ -2,7 +2,7 @@
 // compiled standalone.
 #include <cmath>   // std::fma / std::sqrt in the scalar math ops (Tasks 2-3)
 
-namespace Arcane { namespace Simd {
+namespace Arcane { namespace Simd { namespace Scalar {
 
 inline constexpr const char* kBackendName = "scalar";
 
@@ -56,4 +56,4 @@ ARCANE_SIMD_INLINE bool none (b32w m) noexcept { return !m.m; }
 ARCANE_SIMD_INLINE f32w gather(const float* base, i32w idx) noexcept { return f32w{ base[idx.v] }; }
 ARCANE_SIMD_INLINE void scatter(float* base, i32w idx, f32w a) noexcept { base[idx.v] = a.v; }
 
-} } // namespace Arcane::Simd
+} } } // namespace Arcane::Simd::Scalar

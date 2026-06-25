@@ -13,7 +13,10 @@
     #define ARCANE_SIMD_TUTAG "active"
 #endif
 
-namespace SimdT = Arcane::Simd;
+// ARCANE_SIMD_NS is defined by Simd.hpp to point at the active backend's
+// sub-namespace (e.g. ::Arcane::Simd::Avx2 or ::Arcane::Simd::Scalar).
+// This avoids ODR violations when both TUs are linked into the same binary.
+namespace SimdT = ARCANE_SIMD_NS;
 
 TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: backend + width are sane", "[simd]")
 {
@@ -69,6 +72,13 @@ TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: arithmetic matches scalar reference", "[
 
     SimdT::f32w acc = va; acc += vb; SimdT::store(out, acc);
     for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] + b[i]);
+
+    SimdT::f32w acc2 = va; acc2 -= vb; SimdT::store(out, acc2);
+    for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] - b[i]);
+    SimdT::f32w acc3 = va; acc3 *= vb; SimdT::store(out, acc3);
+    for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] * b[i]);
+    SimdT::f32w acc4 = va; acc4 /= vb; SimdT::store(out, acc4);
+    for (int i = 0; i < W; ++i) CHECK(out[i] == a[i] / b[i]);
 
     // mul_add / mul_sub use fused multiply-add -> bit-match std::fma per lane.
     SimdT::store(out, SimdT::mul_add(va, vb, vc));
