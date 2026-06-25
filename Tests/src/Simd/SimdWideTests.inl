@@ -139,3 +139,56 @@ TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: compare/select/mask reductions", "[simd]
     // direct any-false path: a >= 0 > f, so cmp_lt(va,vf) is all-false.
     CHECK(SimdT::any(SimdT::cmp_lt(va, vf)) == false);
 }
+
+TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: gather/scatter round-trip", "[simd]")
+{
+    constexpr int W = SimdT::f32w::width;
+    // base table large enough for any index pattern.
+    float base[64];
+    for (int i = 0; i < 64; ++i) base[i] = float(i) * 10.0f;
+
+    // build an index vector via memcpy of a plain int array into i32w.
+    alignas(32) int32_t idx[W];
+    for (int i = 0; i < W; ++i) idx[i] = (i * 7 + 3) % 64;   // scattered, in-range
+    SimdT::i32w vi;
+    std::memcpy(&vi, idx, sizeof(vi));   // backends lay i32w out as `width` int32 lanes
+
+    alignas(32) float out[W];
+    SimdT::store(out, SimdT::gather(base, vi));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == base[idx[i]]);
+
+    // scatter into a fresh table, then read back.
+    float dst[64]; for (int i = 0; i < 64; ++i) dst[i] = -1.0f;
+    alignas(32) float vals[W]; for (int i = 0; i < W; ++i) vals[i] = float(i) + 0.25f;
+    SimdT::scatter(dst, vi, SimdT::load(vals));
+    for (int i = 0; i < W; ++i) CHECK(dst[idx[i]] == vals[i]);
+
+    // index-vector constructors (isplat / iota) -- the solver builds gather
+    // indices from these, so verify their lane layout here.
+    alignas(32) int32_t ib[W];
+    SimdT::i32w vs5 = SimdT::isplat(5); std::memcpy(ib, &vs5, sizeof(vs5));
+    for (int i = 0; i < W; ++i) CHECK(ib[i] == 5);
+    SimdT::i32w vio = SimdT::iota();    std::memcpy(ib, &vio, sizeof(vio));
+    for (int i = 0; i < W; ++i) CHECK(ib[i] == i);
+}
+
+TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: run-twice determinism (bit-identical)", "[simd]")
+{
+    constexpr int W = SimdT::f32w::width;
+    auto run = [](float* out) {
+        alignas(32) float a[W], b[W], c[W];
+        for (int i = 0; i < W; ++i) { a[i] = 1.0f + i * 0.3f; b[i] = 2.0f - i * 0.1f; c[i] = 0.5f * i; }
+        SimdT::f32w r = SimdT::mul_add(SimdT::load(a), SimdT::load(b),
+                                       SimdT::max(SimdT::load(c), SimdT::setzero()));
+        r = SimdT::select(SimdT::cmp_gt(r, SimdT::splat(3.0f)), SimdT::sqrt(r), r);
+        SimdT::store(out, r);
+    };
+    alignas(32) float o1[W], o2[W];
+    run(o1); run(o2);
+    for (int i = 0; i < W; ++i)
+    {
+        std::uint32_t u1, u2;
+        std::memcpy(&u1, &o1[i], 4); std::memcpy(&u2, &o2[i], 4);
+        CHECK(u1 == u2);   // bit-identical across runs
+    }
+}

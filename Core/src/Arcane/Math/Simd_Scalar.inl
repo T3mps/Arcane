@@ -52,4 +52,8 @@ ARCANE_SIMD_INLINE bool any (b32w m) noexcept { return  m.m; }
 ARCANE_SIMD_INLINE bool all (b32w m) noexcept { return  m.m; }
 ARCANE_SIMD_INLINE bool none (b32w m) noexcept { return !m.m; }
 
+// Gather / scatter (Task 5)
+ARCANE_SIMD_INLINE f32w gather(const float* base, i32w idx) noexcept { return f32w{ base[idx.v] }; }
+ARCANE_SIMD_INLINE void scatter(float* base, i32w idx, f32w a) noexcept { base[idx.v] = a.v; }
+
 } } // namespace Arcane::Simd
