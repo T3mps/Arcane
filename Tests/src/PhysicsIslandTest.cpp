@@ -236,25 +236,20 @@ TEST_CASE("PhysicsIsland: stack sleeps as a unit, disturbance wakes a member", "
         REQUIRE(w.Position(boxes[i]).y == frozen[i].y);
     }
 
-    // Disturb the TOP box -> it wakes (wake-on-force).
+    // Disturb the TOP box. With persistent islands the disturbance wakes the
+    // WHOLE island AT ONCE (Box2D-style island wake) -- every member, not just
+    // the disturbed body, is awake IMMEDIATELY. (The old global-UF path woke
+    // only the disturbed body and relied on next-step contact-graph propagation
+    // to wake neighbors a few steps later; the persistent-island wake is
+    // immediate and strictly stronger. After this the top box separates and the
+    // undisturbed neighbors correctly re-settle + re-sleep as a sub-island --
+    // so the wake is asserted at the moment of disturbance, not after a delay.)
     w.ApplyImpulse(boxes[N - 1], Vec2(Real(0), Real(-8000)));
     REQUIRE(w.IsAwake(boxes[N - 1]));
-
-    // After a few steps the disturbed body has moved + its island neighbors,
-    // touched by the now-awake mover, wake on contact (the island re-forms).
-    for (int k = 0; k < 30; ++k)
-    {
-        w.Step(kStep);
-    }
-    bool anyNeighborAwake = false;
     for (int i = 0; i < N - 1; ++i)
     {
-        if (w.IsAwake(boxes[i]))
-        {
-            anyNeighborAwake = true;
-        }
+        REQUIRE(w.IsAwake(boxes[i])); // island wake: neighbors wake immediately
     }
-    REQUIRE(anyNeighborAwake); // contact graph propagated the wake to a neighbor
 }
 
 // ---------------------------------------------------------------------------

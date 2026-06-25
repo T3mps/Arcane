@@ -1258,6 +1258,7 @@ namespace Arcane
                 {
                     m_awake[i]      = 1;
                     m_sleepTimer[i] = Real(0);
+                    WakeIsland(i); // wake the whole island, not just this body
                 }
             }
         }
@@ -1276,6 +1277,7 @@ namespace Arcane
             }
             m_awake[i]      = 1;
             m_sleepTimer[i] = Real(0);
+            WakeIsland(i); // wake the whole island, not just this body
             m_velX[i] += impulse.x * m_invMass[i];
             m_velY[i] += impulse.y * m_invMass[i];
         }
@@ -1302,6 +1304,7 @@ namespace Arcane
             }
             m_awake[i]      = 1;
             m_sleepTimer[i] = Real(0);
+            WakeIsland(i); // wake the whole island, not just this body
             m_velX[i] += impulse.x * m_invMass[i];
             m_velY[i] += impulse.y * m_invMass[i];
             const Vec2 com = WorldCom(Vec2(m_posX[i], m_posY[i]), m_angle[i],
@@ -1323,6 +1326,7 @@ namespace Arcane
             {
                 m_awake[i]      = 1;
                 m_sleepTimer[i] = Real(0);
+                WakeIsland(i); // wake the whole island, not just this body
             }
         }
 
@@ -1886,13 +1890,15 @@ namespace Arcane
             // gated the constraint, not the wake).
             if (da && m_awake[a] == 0 && (!db || m_awake[b] != 0))
             {
-                m_awake[a] = 1;
+                m_awake[a]      = 1;
                 m_sleepTimer[a] = Real(0);
+                WakeIsland(a); // wake the sleeper's whole island (Box2D contact wake)
             }
             if (db && m_awake[b] == 0 && (!da || m_awake[a] != 0))
             {
-                m_awake[b] = 1;
+                m_awake[b]      = 1;
                 m_sleepTimer[b] = Real(0);
+                WakeIsland(b); // wake the sleeper's whole island (Box2D contact wake)
             }
         }
 
@@ -3034,6 +3040,7 @@ namespace Arcane
                 m_islandId[slot] = isl;
                 m_islands[isl].bodies.push_back(slot);
             }
+
         }
 
         void PhysicsWorld::WakeIsland(std::uint32_t slot) noexcept

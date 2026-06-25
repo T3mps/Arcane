@@ -138,3 +138,34 @@ TEST_CASE("PhysicsPersistentIsland: separating a chain splits the island (deferr
 
     CHECK(w.IslandRootOf(b0.index) != w.IslandRootOf(b1.index)); // split
 }
+
+// ---------------------------------------------------------------------------
+// Wake fan-out: disturbing ONE member of a sleeping island wakes the WHOLE
+// island immediately (Box2D-style island wake), not just the disturbed body.
+// ---------------------------------------------------------------------------
+TEST_CASE("PhysicsPersistentIsland: impulse on one member wakes the whole island",
+          "[physics][island]")
+{
+    WorldDef wd;
+    wd.gravityY = Real(400);
+    PhysicsWorld w(wd);
+
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    const Real hw = Real(4), hh = Real(4);
+    const int N = 3;
+    std::vector<BodyHandle> boxes;
+    for (int i = 0; i < N; ++i)
+    {
+        const Real y = -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1);
+        boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
+    }
+    for (int k = 0; k < 700; ++k) { w.Step(kStep); }
+    for (int i = 0; i < N; ++i) { REQUIRE_FALSE(w.IsAwake(boxes[i])); }
+
+    // Impulse the MIDDLE box -> the whole island wakes at once.
+    w.ApplyImpulse(boxes[1], Vec2(Real(0), Real(-8000)));
+    for (int i = 0; i < N; ++i)
+    {
+        CHECK(w.IsAwake(boxes[i])); // every member awake (island wake)
+    }
+}
