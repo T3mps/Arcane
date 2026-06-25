@@ -39,6 +39,7 @@
 // No SDL3/NVRHI/Batcher2D/ImGui. namespace Arcane::Physics, Core style.
 
 #include <cstdint>
+#include <vector>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
@@ -52,6 +53,42 @@ namespace Arcane
 
         namespace Island
         {
+            // ----------------------------------------------------------------
+            // Persistent island registry (Phase A -- replaces the per-step UF).
+            // ----------------------------------------------------------------
+            //
+            // An Island is a connected component of DYNAMIC bodies joined by
+            // touching dynamic-dynamic contacts. It SURVIVES across steps and is
+            // maintained INCREMENTALLY at the body/contact lifecycle seams (create
+            // = a 1-body island; touch-begin = merge; touch-end/destroy = mark a
+            // split candidate; a deferred quota-limited pass rebuilds candidates).
+            // Static/Kinematic bodies are NOT members (they anchor, they are not
+            // island nodes -- the same dynamic-dynamic-only rule the old UF used).
+            //
+            // The registry lives on PhysicsWorld (m_islands, id-indexed, free-list
+            // recycled). Sleep bookkeeping is DERIVED from members (per-body idle
+            // timers stay per-body in m_sleepTimer); an island holds no timer.
+            struct Island
+            {
+                // Member body SLOTS (dynamic only). Order is append-order; the
+                // sleep + wake passes iterate it directly (no global scan).
+                std::vector<std::uint32_t> bodies;
+
+                // Set when a member's contact separated or a member was destroyed:
+                // the deferred split pass (quota-limited, once per Step) re-derives
+                // this island's connected components and clears the flag.
+                bool splitCandidate = false;
+            };
+
+            // A body with no island (Static/Kinematic, or a transiently un-assigned
+            // dynamic slot). m_islandId[slot] == kInvalidIsland.
+            inline constexpr std::uint32_t kInvalidIsland = 0xFFFFFFFFu;
+
+            // At most this many split-candidate islands are rebuilt per Step (Box2D
+            // v3's value). Splits are deferred + amortized; the registry converges
+            // over a few steps. Processed in ascending island-id order (determinism).
+            inline constexpr std::uint32_t kMaxSplitsPerStep = 1u;
+
             // ---- sleep thresholds (ports the Lua magic numbers verbatim) -----
 
             // Linear speed^2 below which a body counts as idle (Lua line 426:

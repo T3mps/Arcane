@@ -79,6 +79,7 @@
 #include <Arcane/Physics/Contact.hpp>            // ContactPool (collision-rebuild Phase 3)
 #include <Arcane/Physics/Solver/Solver.hpp>      // ISolver + ContactConstraint pool type
 #include <Arcane/Physics/Joints/Joint.hpp>       // Joint base + JointDef (P2.5)
+#include <Arcane/Physics/Island.hpp>             // Island::Island registry struct + constants (Phase A)
 
 namespace Arcane
 {
@@ -763,14 +764,34 @@ namespace Arcane
                 const std::function<void(std::uint32_t a,
                                          std::uint32_t b)>& fn) const;
 
-            // Island ROOT of slot i from the LAST Step's island pass
-            // (debug/inspection).  Bodies in the same dynamic island share the
-            // SAME root (found by walking the path-halved parent chain to the
-            // self-pointing root).  Returns i itself when the island pass has not
-            // run or i >= m_uf.size() (body is not a unioned member at that point).
-            // Walk is non-destructive (world is const; m_uf is not mutated).
-            // Reflects the most recently completed Step; stale between Steps.
+            // Island ROOT of slot i (debug/inspection, Phase A).
+            // Phase A: reads m_islandId -- the persistent island id IS the root
+            // (equal for all co-island members after merge, distinct across
+            // islands). Non-members (static/kinematic or un-assigned) return a
+            // high-bit-tagged slot that can never collide with a real (dense,
+            // small) island id. Replaces the old per-step UF walk.
             [[nodiscard]] std::uint32_t IslandRootOf(std::uint32_t i) const noexcept;
+
+            // ---- island registry management (Phase A) -----------------------
+            // Mint or reuse an island id (empty members, not a split candidate).
+            std::uint32_t AllocIsland();
+            // Return an island id to the free list (clears members + flag).
+            void          FreeIsland(std::uint32_t id) noexcept;
+            // m_islandId[slot] (or kInvalidIsland). Inline -> zero call cost.
+            [[nodiscard]] std::uint32_t IslandOf(std::uint32_t slot) const noexcept
+            {
+                return slot < m_islandId.size() ? m_islandId[slot] : Island::kInvalidIsland;
+            }
+            // Weighted union: relabel the smaller island's members into the larger,
+            // free the smaller, return the survivor id. Pass two DISTINCT live ids.
+            std::uint32_t MergeIslands(std::uint32_t idA, std::uint32_t idB);
+            // Flag an island for the deferred split pass (no-op for kInvalidIsland).
+            void          MarkSplitCandidate(std::uint32_t islandId) noexcept;
+            // Rebuild one candidate island into 1+ connected components (fresh local
+            // UF over its members' current touching pool contacts); clears the flag.
+            void          SplitIsland(std::uint32_t islandId);
+            // Wake every member of the body's island (set awake, reset timer).
+            void          WakeIsland(std::uint32_t slot) noexcept;
 
             // ---- internals consumed by the Island sleep module (P2.4 seam) ---
             //
@@ -1090,6 +1111,25 @@ namespace Arcane
             std::vector<Real>          m_sleepTimer;          // island sleep (P2.4)
             std::vector<std::uint8_t>  m_awake;               // 1 = awake (integrates this step; P2.4 sleep clears to 0)
             std::vector<std::uint8_t>  m_bullet;              // CCD clamp (P3)
+
+            // ---- persistent island registry (Phase A) -----------------------
+            //
+            // m_islandId[slot] is the body's persistent island id (Island::
+            // kInvalidIsland for Static/Kinematic or an un-assigned dynamic slot).
+            // m_islands is the id-indexed record pool; freed ids are recycled via
+            // m_islandFree. Maintained incrementally at the lifecycle seams; the
+            // old per-step union-find (m_uf) is gone AFTER Task 6 -- it still
+            // exists now so Island::UpdateSleep continues to compile.
+            std::vector<std::uint32_t>      m_islandId;   // per-body island id
+            std::vector<Island::Island>     m_islands;    // id-indexed record pool
+            std::vector<std::uint32_t>      m_islandFree; // recycled island ids
+
+            // Step scratch (zero steady-state alloc -- clear() keeps capacity).
+            // m_pendingMerges: dynamic-dynamic touch-BEGIN body-pairs collected in
+            // the UpdateContacts pass, sorted canonically then applied (determinism).
+            // m_splitCandidates: island ids to rebuild this Step (quota-limited).
+            std::vector<BroadphasePair>     m_pendingMerges;
+            std::vector<std::uint32_t>      m_splitCandidates;
 
             std::uint32_t              m_count = 0; // high-water slot count
             std::vector<std::uint32_t> m_free;      // recycled slot stack

@@ -187,6 +187,10 @@ namespace Arcane
             m_sleepTimer.resize(next, Real(0));
             m_awake.resize(next, std::uint8_t(1));
             m_bullet.resize(next, std::uint8_t(0));
+            // Phase A: new per-body island id column. A never-touched tail slot
+            // has no island yet; it will be assigned (or left kInvalidIsland for
+            // non-Dynamic) in AddBody.
+            m_islandId.resize(next, Island::kInvalidIsland);
         }
 
         // ----------------------------------------------------------------
@@ -864,6 +868,21 @@ namespace Arcane
             m_sleepTimer[idx] = Real(0);
             m_awake[idx]      = 1;
             m_bullet[idx]     = def.bullet ? std::uint8_t(1) : std::uint8_t(0);
+
+            // ---- persistent island assignment (Phase A) ---------------------
+            // A new DYNAMIC body is its own 1-body island; static/kinematic are
+            // not island members (they anchor). The slot may be recycled, so
+            // overwrite unconditionally.
+            if (def.type == BodyType::Dynamic)
+            {
+                const std::uint32_t isl = AllocIsland();
+                m_islands[isl].bodies.push_back(idx);
+                m_islandId[idx] = isl;
+            }
+            else
+            {
+                m_islandId[idx] = Island::kInvalidIsland;
+            }
 
             if (def.type == BodyType::Dynamic)
             {
@@ -2688,26 +2707,109 @@ namespace Arcane
             m_contacts.ForEachBegunPair(fn);
         }
 
+        // ---- island registry management (Phase A) --------------------------
+
+        std::uint32_t PhysicsWorld::AllocIsland()
+        {
+            if (!m_islandFree.empty())
+            {
+                const std::uint32_t id = m_islandFree.back();
+                m_islandFree.pop_back();
+                m_islands[id].bodies.clear();      // capacity kept (zero re-alloc)
+                m_islands[id].splitCandidate = false;
+                return id;
+            }
+            const std::uint32_t id = static_cast<std::uint32_t>(m_islands.size());
+            m_islands.emplace_back();
+            return id;
+        }
+
+        void PhysicsWorld::FreeIsland(std::uint32_t id) noexcept
+        {
+            // Defensive: never free an invalid/out-of-range id.
+            if (id == Island::kInvalidIsland || id >= m_islands.size())
+            {
+                return;
+            }
+            m_islands[id].bodies.clear();
+            m_islands[id].splitCandidate = false;
+            m_islandFree.push_back(id);
+        }
+
+        std::uint32_t PhysicsWorld::MergeIslands(std::uint32_t idA, std::uint32_t idB)
+        {
+            // Weighted union: keep the LARGER island; relabel the smaller's
+            // members + append, then free the smaller id. Stable membership ->
+            // fewer relabels -> the island id of a big pile is sticky.
+            if (idA == idB)
+            {
+                return idA;
+            }
+            std::uint32_t big   = idA;
+            std::uint32_t small = idB;
+            if (m_islands[big].bodies.size() < m_islands[small].bodies.size())
+            {
+                std::swap(big, small);
+            }
+            for (const std::uint32_t s : m_islands[small].bodies)
+            {
+                m_islandId[s] = big;
+                m_islands[big].bodies.push_back(s);
+            }
+            // The survivor inherits the UNION of both islands' pending split-candidate
+            // state. If the absorbed island was flagged for a deferred split (a member
+            // separated/was destroyed before this merge), that fracture need transfers
+            // to the survivor -- dropping it could leave a genuinely disconnected pile
+            // over-grouped until another edge re-marks it. big keeps its own flag.
+            const bool absorbedSplit = m_islands[small].splitCandidate;
+            FreeIsland(small);
+            m_islands[big].splitCandidate = m_islands[big].splitCandidate || absorbedSplit;
+            return big;
+        }
+
+        void PhysicsWorld::MarkSplitCandidate(std::uint32_t islandId) noexcept
+        {
+            if (islandId == Island::kInvalidIsland || islandId >= m_islands.size())
+            {
+                return;
+            }
+            m_islands[islandId].splitCandidate = true;
+        }
+
+        void PhysicsWorld::SplitIsland(std::uint32_t /*islandId*/)
+        {
+            // STUB: full implementation in Task 3 (deferred quota-limited UF
+            // rebuild over the island's current contact graph). Phase A only
+            // needs the create-time 1-body islands; split is not exercised yet.
+        }
+
+        void PhysicsWorld::WakeIsland(std::uint32_t slot) noexcept
+        {
+            const std::uint32_t isl = IslandOf(slot);
+            if (isl == Island::kInvalidIsland)
+            {
+                return; // static/kinematic -> nothing to wake on itself
+            }
+            for (const std::uint32_t b : m_islands[isl].bodies)
+            {
+                m_awake[b]      = 1;
+                m_sleepTimer[b] = Real(0);
+            }
+        }
+
         std::uint32_t PhysicsWorld::IslandRootOf(std::uint32_t i) const noexcept
         {
-            // m_uf[i] is the union-find parent for slot i from the last Step's
-            // island pass (Island::UpdateSleep writes it via UnionFindScratch()).
-            // If the island pass has not run or i is beyond the filled range,
-            // return i itself (every un-unioned body is its own island root).
-            //
-            // IMPORTANT: Island::UpdateSleep uses PATH-HALVING when unioning, so
-            // m_uf[i] is a halved parent, NOT necessarily the root. Two bodies in
-            // the same island at depth > 1 would yield DIFFERENT m_uf[i] values
-            // if we return the one-hop parent directly. Walk to the root
-            // non-destructively (world is const here -- do NOT mutate m_uf).
-            // Termination: the root satisfies m_uf[root] == root (self-pointing);
-            // path-halving never reparents a root, so the walk always terminates.
-            if (i >= m_uf.size())
-                return i;
-            std::uint32_t x = i;
-            while (m_uf[x] != x)
-                x = m_uf[x];
-            return x;
+            // Phase A: the persistent island id IS the root (equal for all
+            // co-island members after merge, distinct across islands). A non-member
+            // (static/kinematic, or an un-assigned slot) has no island; return
+            // a high-bit-tagged slot so it can never collide with a real island
+            // id (ids are dense + small, < 2^31). Consumed by PhysicsDebugDraw
+            // (color-by-island, Dynamic only) + the island tests.
+            if (i >= m_islandId.size() || m_islandId[i] == Island::kInvalidIsland)
+            {
+                return i | 0x80000000u;
+            }
+            return m_islandId[i];
         }
 
         int PhysicsWorld::QueryAABB(const Aabb2& box,
