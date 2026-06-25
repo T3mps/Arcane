@@ -1,6 +1,7 @@
 // Shared [simd] test bodies. Included by SimdWideTest.cpp (active backend) and
 // SimdWideScalarTest.cpp (forced scalar). Width-agnostic: loops f32w::width.
 #include <Arcane/Math/Simd.hpp>
+#include <Arcane/Math/SimdSmoke.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -201,4 +202,15 @@ TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: run-twice determinism (bit-identical)", 
         std::memcpy(&u1, &o1[i], 4); std::memcpy(&u2, &o2[i], 4);
         CHECK(u1 == u2);   // bit-identical across runs
     }
+}
+
+TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: Core pilot SimdSmokeSum matches scalar sum", "[simd]")
+{
+    float data[37];
+    double ref = 0.0;
+    for (int i = 0; i < 37; ++i) { data[i] = float(i) * 0.5f - 4.0f; ref += data[i]; }
+    float got = Arcane::Simd::SimdSmokeSum(data, 37);
+    // SoA lane-sum reorders additions -> tolerance check, not bit-exact (documents
+    // that horizontal sums are order-dependent across widths).
+    CHECK(std::fabs(got - static_cast<float>(ref)) <= 1e-3f * (1.0f + std::fabs(static_cast<float>(ref))));
 }
