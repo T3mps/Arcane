@@ -41,4 +41,15 @@ ARCANE_SIMD_INLINE f32w sqrt(f32w a)        noexcept { return f32w{ std::sqrt(a.
 ARCANE_SIMD_INLINE f32w rsqrt(f32w a)       noexcept { return f32w{ 1.0f / std::sqrt(a.v) }; }
 ARCANE_SIMD_INLINE f32w recip(f32w a)       noexcept { return f32w{ 1.0f / a.v }; }
 
+// Compare / select / mask reductions (Task 4)
+ARCANE_SIMD_INLINE b32w cmp_gt(f32w a, f32w b) noexcept { return b32w{ a.v >  b.v }; }
+ARCANE_SIMD_INLINE b32w cmp_ge(f32w a, f32w b) noexcept { return b32w{ a.v >= b.v }; }
+ARCANE_SIMD_INLINE b32w cmp_lt(f32w a, f32w b) noexcept { return b32w{ a.v <  b.v }; }
+ARCANE_SIMD_INLINE b32w cmp_le(f32w a, f32w b) noexcept { return b32w{ a.v <= b.v }; }
+ARCANE_SIMD_INLINE b32w cmp_eq(f32w a, f32w b) noexcept { return b32w{ a.v == b.v }; }
+ARCANE_SIMD_INLINE f32w select(b32w m, f32w t, f32w f) noexcept { return m.m ? t : f; }
+ARCANE_SIMD_INLINE bool any (b32w m) noexcept { return  m.m; }
+ARCANE_SIMD_INLINE bool all (b32w m) noexcept { return  m.m; }
+ARCANE_SIMD_INLINE bool none (b32w m) noexcept { return !m.m; }
+
 } } // namespace Arcane::Simd

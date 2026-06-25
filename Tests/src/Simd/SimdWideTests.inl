@@ -104,3 +104,38 @@ TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: min/max/abs/sqrt exact; rsqrt/recip appr
         CHECK(std::fabs(out[i] - ref) <= kRelTol * std::fabs(ref));
     }
 }
+
+TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: compare/select/mask reductions", "[simd]")
+{
+    constexpr int W = SimdT::f32w::width;
+    alignas(32) float a[W], b[W], t[W], f[W], out[W];
+    for (int i = 0; i < W; ++i) { a[i] = float(i); b[i] = float(W - 1 - i); t[i] = 100.0f + i; f[i] = -100.0f - i; }
+
+    SimdT::f32w va = SimdT::load(a), vb = SimdT::load(b), vt = SimdT::load(t), vf = SimdT::load(f);
+
+    // select(cmp_gt(a,b), t, f) -> t where a>b else f
+    SimdT::store(out, SimdT::select(SimdT::cmp_gt(va, vb), vt, vf));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == (a[i] > b[i] ? t[i] : f[i]));
+
+    SimdT::store(out, SimdT::select(SimdT::cmp_ge(va, vb), vt, vf));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == (a[i] >= b[i] ? t[i] : f[i]));
+    SimdT::store(out, SimdT::select(SimdT::cmp_lt(va, vb), vt, vf));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == (a[i] <  b[i] ? t[i] : f[i]));
+    SimdT::store(out, SimdT::select(SimdT::cmp_le(va, vb), vt, vf));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == (a[i] <= b[i] ? t[i] : f[i]));
+    SimdT::store(out, SimdT::select(SimdT::cmp_eq(va, va), vt, vf));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == t[i]);
+
+    // cmp_eq false-lane coverage: va vs vb differ on most lanes (W>1 backends).
+    SimdT::store(out, SimdT::select(SimdT::cmp_eq(va, vb), vt, vf));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == (a[i] == b[i] ? t[i] : f[i]));
+
+    // mask reductions
+    CHECK(SimdT::all(SimdT::cmp_eq(va, va)));
+    CHECK(SimdT::none(SimdT::cmp_lt(va, vf)));     // a >= 0 > f, never <
+    bool anyExpected = false; for (int i = 0; i < W; ++i) if (a[i] > b[i]) { anyExpected = true; break; }
+    CHECK(SimdT::any(SimdT::cmp_gt(va, vb)) == anyExpected);
+
+    // direct any-false path: a >= 0 > f, so cmp_lt(va,vf) is all-false.
+    CHECK(SimdT::any(SimdT::cmp_lt(va, vf)) == false);
+}
