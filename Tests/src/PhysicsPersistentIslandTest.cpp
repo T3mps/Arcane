@@ -107,3 +107,34 @@ TEST_CASE("PhysicsPersistentIsland: touching chain merges to one island",
     CHECK(r0 == w.IslandRootOf(b2.index));
     CHECK(r0 != w.IslandRootOf(far.index)); // isolated body -> different island
 }
+
+// ---------------------------------------------------------------------------
+// Split: separating a touching pair fractures the island (deferred); a body
+// that loses all contacts becomes its own 1-body island.
+// ---------------------------------------------------------------------------
+TEST_CASE("PhysicsPersistentIsland: separating a chain splits the island (deferred)",
+          "[physics][island]")
+{
+    WorldDef wd;
+    wd.gravityY = Real(400);
+    PhysicsWorld w(wd);
+
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    const Real hw = Real(5), hh = Real(5);
+    const Real gap = Real(0.5);
+    const BodyHandle b0 = AddBox(w, Vec2(Real(0), -hh),                      hw, hh);
+    const BodyHandle b1 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)), hw, hh);
+
+    for (int k = 0; k < 30; ++k) { w.Step(kStep); }
+    REQUIRE(w.IsAwake(b0));
+    REQUIRE(w.IsAwake(b1));
+    REQUIRE(w.IslandRootOf(b0.index) == w.IslandRootOf(b1.index)); // merged
+
+    // Fling the top box far up + sideways so its contact with b0 separates.
+    w.SetVelocity(b1, Vec2(Real(400), Real(-2000)));
+    // A few steps for the contact to drop + the deferred split to resolve
+    // (quota = 1 per step, but only 1 candidate here, so it resolves quickly).
+    for (int k = 0; k < 20; ++k) { w.Step(kStep); }
+
+    CHECK(w.IslandRootOf(b0.index) != w.IslandRootOf(b1.index)); // split
+}

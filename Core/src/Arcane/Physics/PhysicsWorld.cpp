@@ -1063,6 +1063,38 @@ namespace Arcane
             // UpdateContacts' stale-handle guard would reap it.
             DestroyContactsForBody(idx);
 
+            // Release the removed body's island membership (Phase A). Erase the
+            // slot from its island's member list; if the island is now empty, free
+            // it; otherwise mark it a split candidate (losing a member can fracture
+            // the remaining pile). A recycled slot is reassigned a fresh island in
+            // AddBody. Order-stable enough: SplitIsland re-derives membership from
+            // contacts, not member order, so the swap-erase is determinism-safe.
+            {
+                const std::uint32_t isl = IslandOf(idx);
+                if (isl != Island::kInvalidIsland)
+                {
+                    auto& bodies = m_islands[isl].bodies;
+                    for (std::size_t i = 0; i < bodies.size(); ++i)
+                    {
+                        if (bodies[i] == idx)
+                        {
+                            bodies[i] = bodies.back();
+                            bodies.pop_back();
+                            break;
+                        }
+                    }
+                    if (bodies.empty())
+                    {
+                        FreeIsland(isl);
+                    }
+                    else
+                    {
+                        MarkSplitCandidate(isl);
+                    }
+                    m_islandId[idx] = Island::kInvalidIsland;
+                }
+            }
+
             // Drop joints referencing the destroyed body (ports PhysicsWorld.lua
             // 281-286: `j.a.idx == idx or j.b.idx == idx`). Match by HANDLE index
             // (stable from construction, independent of Prepare). Iterate in
@@ -1580,6 +1612,30 @@ namespace Arcane
             // the solve using this step's contacts; sleeping bodies are then
             // skipped by the next Step's contact feed + solver (the awake gate in
             // EmitContactConstraints), freezing their positions. Ports PhysicsWorld.lua:403-452.
+
+            // ---- deferred island split (quota-limited, Phase A) -----------------
+            // Process AT MOST kMaxSplitsPerStep split-candidate islands per Step
+            // (Box2D's amortization). Collect candidates ascending-id (determinism),
+            // then split the first quota; the rest carry their flag to the next Step.
+            // A single big pile that fractures resolves over a few steps.
+            m_splitCandidates.clear();
+            for (std::uint32_t id = 0; id < static_cast<std::uint32_t>(m_islands.size()); ++id)
+            {
+                if (m_islands[id].splitCandidate && !m_islands[id].bodies.empty())
+                {
+                    m_splitCandidates.push_back(id);
+                }
+            }
+            {
+                std::uint32_t processed = 0;
+                for (const std::uint32_t id : m_splitCandidates)
+                {
+                    if (processed >= Island::kMaxSplitsPerStep) { break; }
+                    SplitIsland(id);
+                    ++processed;
+                }
+            }
+
             Island::UpdateSleep(
                 *this,
                 m_contactConstraints.empty() ? nullptr : m_contactConstraints.data(),
@@ -1671,6 +1727,20 @@ namespace Arcane
                 if (c.a.index == fixtureSlot ||
                     (c.bIsBody && c.b.index == fixtureSlot))
                 {
+                    // A removed fixture's touching dynamic-dynamic contact may
+                    // fracture its island. Mark both bodies' islands and wake them
+                    // so the removed body's pile re-settles.
+                    if (c.bIsBody && c.touching &&
+                        c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
+                        c.bodyA < m_islandId.size() && c.bodyB < m_islandId.size() &&
+                        TypeSlot(c.bodyA) == BodyType::Dynamic &&
+                        TypeSlot(c.bodyB) == BodyType::Dynamic)
+                    {
+                        MarkSplitCandidate(IslandOf(c.bodyA));
+                        MarkSplitCandidate(IslandOf(c.bodyB));
+                        WakeIsland(c.bodyA);
+                        WakeIsland(c.bodyB);
+                    }
                     m_contactPool.Destroy(id);
                 }
             });
@@ -1683,6 +1753,21 @@ namespace Arcane
                 if (c.bodyA == bodySlot ||
                     (c.bIsBody && c.bodyB == bodySlot))
                 {
+                    // A removed body's touching dynamic-dynamic contact may fracture
+                    // its island. Mark both bodies' islands and wake them so the
+                    // remaining pile re-settles. The removed body's slot still has a
+                    // valid m_islandId here -- RemoveBody clears it AFTER this call.
+                    if (c.bIsBody && c.touching &&
+                        c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
+                        c.bodyA < m_islandId.size() && c.bodyB < m_islandId.size() &&
+                        TypeSlot(c.bodyA) == BodyType::Dynamic &&
+                        TypeSlot(c.bodyB) == BodyType::Dynamic)
+                    {
+                        MarkSplitCandidate(IslandOf(c.bodyA));
+                        MarkSplitCandidate(IslandOf(c.bodyB));
+                        WakeIsland(c.bodyA);
+                        WakeIsland(c.bodyB);
+                    }
                     m_contactPool.Destroy(id);
                 }
             });
@@ -2179,6 +2264,19 @@ namespace Arcane
                 // the update pass catches it the next step, which the tests allow).
                 if (!FixtureSlotLive(c.a) || (c.bIsBody && !FixtureSlotLive(c.b)))
                 {
+                    // A destroyed contact may fracture the island. For a touching
+                    // dynamic-dynamic pair BOTH bodies share one island id (the merge
+                    // united them), so marking either slot's island flags the whole pile
+                    // for the deferred split-rebuild.
+                    if (c.bIsBody && c.touching &&
+                        c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
+                        c.bodyA < m_islandId.size() &&
+                        TypeSlot(c.bodyA) == BodyType::Dynamic &&
+                        c.bodyB < m_islandId.size() &&
+                        TypeSlot(c.bodyB) == BodyType::Dynamic)
+                    {
+                        MarkSplitCandidate(IslandOf(c.bodyA));
+                    }
                     m_contactPool.Destroy(id);
                     return;
                 }
@@ -2206,6 +2304,16 @@ namespace Arcane
                                             margin - DynamicTree::kMargin);
                 if (!FatBoxesOverlap(c, extra))
                 {
+                    // Separation may fracture the island (same guard as stale-handle).
+                    if (c.bIsBody && c.touching &&
+                        c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
+                        c.bodyA < m_islandId.size() &&
+                        TypeSlot(c.bodyA) == BodyType::Dynamic &&
+                        c.bodyB < m_islandId.size() &&
+                        TypeSlot(c.bodyB) == BodyType::Dynamic)
+                    {
+                        MarkSplitCandidate(IslandOf(c.bodyA));
+                    }
                     m_contactPool.Destroy(id);
                     return;
                 }
@@ -2836,11 +2944,98 @@ namespace Arcane
             m_islands[islandId].splitCandidate = true;
         }
 
-        void PhysicsWorld::SplitIsland(std::uint32_t /*islandId*/)
+        void PhysicsWorld::SplitIsland(std::uint32_t islandId)
         {
-            // STUB: full implementation in Task 3 (deferred quota-limited UF
-            // rebuild over the island's current contact graph). Phase A only
-            // needs the create-time 1-body islands; split is not exercised yet.
+            // Re-derive the connected components of one candidate island using a
+            // FRESH local union-find over its CURRENT member bodies joined by
+            // their touching dynamic-dynamic pool contacts. Bodies that no longer
+            // share any touching contact fall into separate components; a body
+            // with no touching contact becomes its own 1-body island. O(island).
+            // Walk the pool ascending-id (deterministic). Clears the flag.
+            if (islandId == Island::kInvalidIsland || islandId >= m_islands.size())
+            {
+                return;
+            }
+            m_islands[islandId].splitCandidate = false;
+
+            // Snapshot the members (the rebuild reassigns m_islandId + may reuse
+            // this island id for the largest/first component).
+            std::vector<std::uint32_t> members = m_islands[islandId].bodies;
+            if (members.size() <= 1)
+            {
+                return; // 0 or 1 member: nothing to fracture
+            }
+
+            // Local UF keyed by a body's position WITHIN `members` (a small dense
+            // index space, not the global slot id) so the parent array is tiny.
+            const std::uint32_t n = static_cast<std::uint32_t>(members.size());
+            std::vector<std::uint32_t> parent(n);
+            for (std::uint32_t i = 0; i < n; ++i) { parent[i] = i; }
+
+            auto localOf = [&](std::uint32_t slot) -> std::uint32_t
+            {
+                for (std::uint32_t i = 0; i < n; ++i)
+                {
+                    if (members[i] == slot) { return i; }
+                }
+                return 0xFFFFFFFFu; // not a member of this island
+            };
+            auto find = [&](std::uint32_t x) -> std::uint32_t
+            {
+                while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+                return x;
+            };
+
+            // Union members joined by a touching dynamic-dynamic pool contact.
+            // ForEach is ascending-id (deterministic). A contact whose bodies are
+            // not BOTH in `members` is skipped (cannot happen for an intact island
+            // but is cheap to guard).
+            m_contactPool.ForEach([&](std::uint32_t /*id*/, const Contact& c)
+            {
+                if (!c.bIsBody || !c.touching) { return; }
+                if (c.bodyA == kInvalidSlot || c.bodyB == kInvalidSlot) { return; }
+                if (TypeSlot(c.bodyA) != BodyType::Dynamic ||
+                    TypeSlot(c.bodyB) != BodyType::Dynamic) { return; }
+                const std::uint32_t la = localOf(c.bodyA);
+                const std::uint32_t lb = localOf(c.bodyB);
+                if (la == 0xFFFFFFFFu || lb == 0xFFFFFFFFu) { return; }
+                parent[find(la)] = find(lb);
+            });
+
+            // Group members by their local root. The FIRST component encountered
+            // reuses `islandId` (keeps the id sticky); every other distinct root
+            // gets a fresh island id. Reset this island's member list first.
+            // SAFETY: AllocIsland() may emplace_back and REALLOCATE m_islands.
+            // We do NOT hold any Island& reference across an AllocIsland call --
+            // we only index m_islands[isl] freshly by id after each alloc.
+            m_islands[islandId].bodies.clear();
+            std::vector<std::uint32_t> rootLocal;   // distinct local roots, first-seen order
+            std::vector<std::uint32_t> rootIsland;  // parallel island id per root
+            for (std::uint32_t i = 0; i < n; ++i)
+            {
+                const std::uint32_t r = find(i);
+                std::uint32_t ri = 0xFFFFFFFFu;
+                for (std::uint32_t k = 0; k < static_cast<std::uint32_t>(rootLocal.size()); ++k)
+                {
+                    if (rootLocal[k] == r) { ri = k; break; }
+                }
+                std::uint32_t isl;
+                if (ri == 0xFFFFFFFFu)
+                {
+                    // First member of a new component: the FIRST component reuses
+                    // islandId; subsequent components allocate fresh ids.
+                    isl = rootLocal.empty() ? islandId : AllocIsland();
+                    rootLocal.push_back(r);
+                    rootIsland.push_back(isl);
+                }
+                else
+                {
+                    isl = rootIsland[ri];
+                }
+                const std::uint32_t slot = members[i];
+                m_islandId[slot] = isl;
+                m_islands[isl].bodies.push_back(slot);
+            }
         }
 
         void PhysicsWorld::WakeIsland(std::uint32_t slot) noexcept
