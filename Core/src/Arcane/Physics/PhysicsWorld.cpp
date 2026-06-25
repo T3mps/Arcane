@@ -1904,6 +1904,11 @@ namespace Arcane
 
         void PhysicsWorld::UpdateContacts(Real dt)
         {
+            // Phase A per-step island merge scratch: reset here so the apply pass
+            // below only sees pairs collected THIS step. clear() keeps capacity
+            // -> zero steady-state allocation after the first few steps.
+            m_pendingMerges.clear();
+
             // ---- 1. CREATE: a contact for every fixture-pair in the EVENT UNION --
             // (solver-relevant pairs + the event-only tail: sensors,
             //  kinematic-kinematic, kinematic-vs-static-body; tiles stay out).
@@ -2260,7 +2265,42 @@ namespace Arcane
                     m_fxLocalAngle[c.b.index]);
                 c.manifold = Collide(m_fxShape[c.a.index], xfA,
                                      m_fxShape[c.b.index], xfB, margin);
+                // Snapshot the previous touch-state BEFORE the overwrite so the
+                // island registry can react to false->true (merge) / true->false
+                // (split) edges. The snapshot is the last committed value from
+                // the previous Step (or false for a brand-new contact).
+                const bool wasTouching = c.touching;
                 c.touching = (c.manifold.pointCount > 0);
+
+                // Phase A island maintenance. Only DYNAMIC-DYNAMIC pairs are island
+                // edges (statics/kinematics anchor; a tile span has c.bIsBody ==
+                // false and never reaches this pass). Collect begin/end EDGES here;
+                // merges are APPLIED after the pass in a canonical order
+                // (determinism), and splits are deferred + quota-limited (Task 3
+                // consumes the split-candidate marks -- SplitIsland is still a stub).
+                if (c.bIsBody &&
+                    c.bodyB != kInvalidSlot &&
+                    TypeSlot(c.bodyA) == BodyType::Dynamic &&
+                    TypeSlot(c.bodyB) == BodyType::Dynamic)
+                {
+                    if (!wasTouching && c.touching)
+                    {
+                        // false->true: queue a merge of the two bodies' islands.
+                        // Canonicalise to (min,max) slot so the later std::sort
+                        // produces a run-twice-identical sequence regardless of
+                        // which body is A and which is B in the Contact record.
+                        const std::uint32_t lo = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
+                        const std::uint32_t hi = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
+                        m_pendingMerges.push_back(BroadphasePair{ lo, hi });
+                    }
+                    else if (wasTouching && !c.touching)
+                    {
+                        // true->false: the island may have fractured.
+                        // Mark as a split candidate so Task 3 can rebuild it.
+                        // SplitIsland is a stub until Task 3 -> harmless now.
+                        MarkSplitCandidate(IslandOf(c.bodyA));
+                    }
+                }
 
                 // Copy warm-start impulses forward by matching feature id (small
                 // fixed loop: at most 2 new x 2 old points). A new point with no
@@ -2280,6 +2320,26 @@ namespace Arcane
                     }
                 }
             });
+
+            // ---- apply queued island merges in a canonical order ----------------
+            // Sort by (min,max) body slot (mirrors the m_touchedEventPairs sort) so
+            // the merge sequence is run-twice-identical regardless of pool emission
+            // order. Each pair re-resolves its bodies' CURRENT islands (an earlier
+            // merge this step may have already united them -> MergeIslands is a
+            // no-op when both resolve to the same id). No dedup needed: duplicate
+            // pairs become same-island no-ops after the first merge.
+            std::sort(m_pendingMerges.begin(), m_pendingMerges.end());
+            for (const BroadphasePair& pr : m_pendingMerges)
+            {
+                const std::uint32_t ia = IslandOf(pr.a);
+                const std::uint32_t ib = IslandOf(pr.b);
+                if (ia != Island::kInvalidIsland &&
+                    ib != Island::kInvalidIsland &&
+                    ia != ib)
+                {
+                    MergeIslands(ia, ib);
+                }
+            }
         }
 
         void PhysicsWorld::EmitContactConstraints(

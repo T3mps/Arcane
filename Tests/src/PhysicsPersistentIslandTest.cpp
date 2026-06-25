@@ -77,3 +77,33 @@ TEST_CASE("PhysicsPersistentIsland: fresh dynamic body is its own island; static
     for (int k = 0; k < 5; ++k) { w.Step(kStep); }
     CHECK(w.IslandRootOf(b0.index) != w.IslandRootOf(b1.index));
 }
+
+// ---------------------------------------------------------------------------
+// Merge: dynamic bodies in a touching chain coalesce into ONE island.
+// ---------------------------------------------------------------------------
+TEST_CASE("PhysicsPersistentIsland: touching chain merges to one island",
+          "[physics][island]")
+{
+    WorldDef wd;
+    wd.gravityY = Real(400);
+    PhysicsWorld w(wd);
+
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    const Real hw = Real(5), hh = Real(5);
+    const Real gap = Real(0.5);
+    const BodyHandle b0 = AddBox(w, Vec2(Real(0), -hh),                              hw, hh);
+    const BodyHandle b1 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)),         hw, hh);
+    const BodyHandle b2 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)*Real(2)), hw, hh);
+    const BodyHandle far = AddBox(w, Vec2(Real(500), -hh), hw, hh);
+
+    // Settle into contact while still awake (mirrors PhysicsIslandTest case 5).
+    for (int k = 0; k < 30; ++k) { w.Step(kStep); }
+    REQUIRE(w.IsAwake(b0));
+    REQUIRE(w.IsAwake(b1));
+    REQUIRE(w.IsAwake(b2));
+
+    const std::uint32_t r0 = w.IslandRootOf(b0.index);
+    CHECK(r0 == w.IslandRootOf(b1.index));
+    CHECK(r0 == w.IslandRootOf(b2.index));
+    CHECK(r0 != w.IslandRootOf(far.index)); // isolated body -> different island
+}
