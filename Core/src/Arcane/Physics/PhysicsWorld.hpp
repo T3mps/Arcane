@@ -813,9 +813,11 @@ namespace Arcane
             {
                 return Vec2(m_gravityX, m_gravityY);
             }
-            // Solver warm-start cache size (inspection/test hook -- the harness
-            // asserts the cache stays bounded as transient contacts come + go).
-            // Routes through the installed ISolver (both solvers report it).
+            // Solver warm-start cache size (inspection/test hook). Routes through
+            // the installed ISolver. Meaningful ONLY for a solver that keeps a
+            // keyed cache (Baumgarte); SoftStep relocated warm-start onto the
+            // persistent Contact's manifold points and reports 0 (the ISolver
+            // default override).
             [[nodiscard]] std::size_t SolverWarmStartCacheSize() const noexcept
             {
                 return m_solver ? m_solver->WarmStartCacheSize() : std::size_t(0);
