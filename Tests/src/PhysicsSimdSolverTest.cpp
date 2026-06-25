@@ -24,10 +24,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <algorithm>
+#include <vector>
+
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Solver/BodyStateSoA.hpp>
+#include <Arcane/Physics/Solver/ContactColoring.hpp>
 
 using namespace Arcane::Physics;
 using Catch::Approx;
@@ -125,4 +129,172 @@ TEST_CASE("PhysicsSimd: BodyStateSoA SyncIn/SyncOut round-trips world velocities
     // ---- invariant: the non-synced static slot is untouched ---------------
     CHECK(w.VelSlot(s.index) == Vec2(Real(0), Real(0)));
     CHECK(w.AngVelSlot(s.index) == Approx(0.0f));
+}
+
+// ===========================================================================
+// Graph coloring (Task 2) -- the SIMD solve processes constraints 8-wide; two
+// constraints in one lane-batch that share a DYNAMIC body would race on the
+// read-modify-write of that body's velocity. ColorConstraints partitions edges
+// into colors such that no two edges in a color share a dynamic body, so each
+// color is safe to solve lane-wide. Static/kinematic endpoints (invMass==0) are
+// read-only in the solve, so they may be shared freely within a color.
+//
+// SCOPE (Task 2): only ColorConstraints + these property tests exist; nothing
+// consumes the coloring yet (Task 5 wires it into the solve). These cases pin:
+//   (a) within-color dynamic-disjointness,
+//   (b) a static body may fan out across one color,
+//   (c) determinism (same input -> identical output),
+//   (d) star overflow when one dynamic body needs > kColorCount colors,
+//   plus the no-drop / no-duplicate ref invariant.
+// ===========================================================================
+
+namespace
+{
+    // Collect every ref emitted across all colors + overflow, so a test can
+    // assert nothing was dropped or duplicated.
+    std::vector<std::uint32_t> AllRefs(const Coloring& c)
+    {
+        std::vector<std::uint32_t> out;
+        for (const auto& color : c.colors)
+        {
+            out.insert(out.end(), color.begin(), color.end());
+        }
+        out.insert(out.end(), c.overflow.begin(), c.overflow.end());
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+} // namespace
+
+TEST_CASE("PhysicsSimd: ColorConstraints keeps dynamic bodies disjoint per color",
+          "[physics]")
+{
+    // A chain of dynamic edges 0-1, 1-2, 2-3, 3-4: adjacent edges share a
+    // dynamic body, so each must land in a different color than its neighbour.
+    std::vector<ColorEdge> edges = {
+        { 0u, 1u, true, true, 0u },
+        { 1u, 2u, true, true, 1u },
+        { 2u, 3u, true, true, 2u },
+        { 3u, 4u, true, true, 3u },
+    };
+
+    const Coloring c = ColorConstraints(edges, /*bodyCount=*/5u);
+
+    // (a) Within each color, no two edges share a dynamic body. Walk each color
+    // and assert its dynamic endpoints are all distinct.
+    for (const auto& color : c.colors)
+    {
+        std::vector<std::uint32_t> dynBodies;
+        for (std::uint32_t ref : color)
+        {
+            const ColorEdge& e = edges[ref];
+            if (e.aDyn) dynBodies.push_back(e.a);
+            if (e.bDyn) dynBodies.push_back(e.b);
+        }
+        std::sort(dynBodies.begin(), dynBodies.end());
+        const bool hasDup =
+            std::adjacent_find(dynBodies.begin(), dynBodies.end()) != dynBodies.end();
+        CHECK_FALSE(hasDup);
+    }
+
+    // No overflow expected -- a 5-vertex chain needs only 2 colors.
+    CHECK(c.overflow.empty());
+
+    // No-drop / no-duplicate: every input ref appears exactly once.
+    const std::vector<std::uint32_t> refs = AllRefs(c);
+    REQUIRE(refs.size() == edges.size());
+    CHECK(refs == std::vector<std::uint32_t>({ 0u, 1u, 2u, 3u }));
+}
+
+TEST_CASE("PhysicsSimd: ColorConstraints shares a static body across one color",
+          "[physics]")
+{
+    // (b) A fan of edges that all share ONE static body (body 0, aDyn=false),
+    // each with a distinct dynamic partner. The static endpoint does not
+    // constrain coloring, so -- since each edge's dynamic body is unique --
+    // every edge should land in color 0.
+    std::vector<ColorEdge> edges = {
+        { 0u, 1u, false, true, 0u },
+        { 0u, 2u, false, true, 1u },
+        { 0u, 3u, false, true, 2u },
+        { 0u, 4u, false, true, 3u },
+        { 0u, 5u, false, true, 4u },
+    };
+
+    const Coloring c = ColorConstraints(edges, /*bodyCount=*/6u);
+
+    // All five edges land in color 0; later colors stay empty.
+    CHECK(c.colors[0] == std::vector<std::uint32_t>({ 0u, 1u, 2u, 3u, 4u }));
+    for (std::size_t k = 1; k < c.colors.size(); ++k)
+    {
+        CHECK(c.colors[k].empty());
+    }
+    CHECK(c.overflow.empty());
+
+    const std::vector<std::uint32_t> refs = AllRefs(c);
+    REQUIRE(refs.size() == edges.size());
+}
+
+TEST_CASE("PhysicsSimd: ColorConstraints is deterministic", "[physics]")
+{
+    // (c) Same input vector -> identical Coloring output. Use a non-trivial mix
+    // of dynamic/static endpoints so a non-deterministic implementation would
+    // be likely to diverge.
+    std::vector<ColorEdge> edges = {
+        { 0u, 1u, true,  true,  0u },
+        { 1u, 2u, true,  true,  1u },
+        { 0u, 2u, true,  true,  2u },   // closes a triangle -> needs color 2
+        { 3u, 0u, false, true,  3u },   // static 3 fans onto dynamic 0
+        { 4u, 1u, true,  true,  4u },
+        { 2u, 4u, true,  true,  5u },
+    };
+
+    const Coloring first  = ColorConstraints(edges, /*bodyCount=*/5u);
+    const Coloring second = ColorConstraints(edges, /*bodyCount=*/5u);
+
+    REQUIRE(first.colors.size() == second.colors.size());
+    for (std::size_t k = 0; k < first.colors.size(); ++k)
+    {
+        CHECK(first.colors[k] == second.colors[k]);
+    }
+    CHECK(first.overflow == second.overflow);
+}
+
+TEST_CASE("PhysicsSimd: ColorConstraints overflows a star past kColorCount",
+          "[physics]")
+{
+    // (d) A star: one central dynamic body (0) shared by N edges with
+    // N > kColorCount. Each edge touches body 0, so each needs its OWN color;
+    // only kColorCount colors exist, so the excess edges spill to overflow.
+    const std::uint32_t n = static_cast<std::uint32_t>(kColorCount) + 3u;
+    std::vector<ColorEdge> edges;
+    edges.reserve(n);
+    for (std::uint32_t i = 0; i < n; ++i)
+    {
+        // hub = body 0 (dynamic); each spoke = a distinct dynamic body i+1.
+        edges.push_back(ColorEdge{ 0u, i + 1u, true, true, i });
+    }
+
+    const Coloring c = ColorConstraints(edges, /*bodyCount=*/n + 1u);
+
+    // The first kColorCount edges each take a distinct color (one per color).
+    for (int k = 0; k < kColorCount; ++k)
+    {
+        REQUIRE(c.colors[k].size() == 1u);
+        CHECK(c.colors[k][0] == static_cast<std::uint32_t>(k));
+    }
+
+    // The remaining edges (refs kColorCount .. n-1) found no free color.
+    REQUIRE(c.overflow.size() == n - static_cast<std::uint32_t>(kColorCount));
+    for (std::uint32_t i = 0; i < c.overflow.size(); ++i)
+    {
+        CHECK(c.overflow[i] == static_cast<std::uint32_t>(kColorCount) + i);
+    }
+
+    // No-drop / no-duplicate across the full union.
+    const std::vector<std::uint32_t> refs = AllRefs(c);
+    REQUIRE(refs.size() == n);
+    for (std::uint32_t i = 0; i < n; ++i)
+    {
+        CHECK(refs[i] == i);
+    }
 }
