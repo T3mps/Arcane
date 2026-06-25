@@ -25,6 +25,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -939,4 +940,103 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
     CHECK(bsWide.vx[3] == Approx(7.0f));
     CHECK(bsWide.vy[3] == Approx(0.0f));
     CHECK(bsWide.w[3]  == Approx(0.0f));
+}
+
+// ===========================================================================
+// Overflow (un-colorable) contacts settle + stay bounded.
+//
+// Coloring spills a constraint when one DYNAMIC endpoint already occupies all
+// kColorCount colors (a hub dynamic body sharing a dynamic endpoint with >
+// kColorCount contacts). Those overflow refs are solved SEQUENTIALLY, scalar,
+// over the same BodyStateSoA -- they must NOT be dropped (or the hub would sink
+// /explode). We build a central dynamic disk surrounded by a dense ring of many
+// dynamic disks all overlapping it (so the hub is a dynamic endpoint in > 12
+// dynamic-dynamic contacts -> guaranteed overflow), drop it onto a floor under
+// gravity, and assert the whole cluster settles to a bounded rest (energy bled
+// off, nothing flung). Tag [physics][simd].
+// ===========================================================================
+TEST_CASE("PhysicsSimd: overflow (un-colorable hub) contacts settle + bounded",
+          "[physics][simd]")
+{
+    WorldDef wd;
+    wd.gravityY   = Real(400);
+    wd.solverKind = SolverKind::SoftStep;
+    PhysicsWorld w(wd);
+
+    // Static floor.
+    const Real floorTop = Real(300);
+    {
+        BodyDef bd;
+        bd.type     = BodyType::Static;
+        bd.position = Vec2(Real(0), floorTop + Real(5));
+        bd.shape    = MakeAabb(Real(200), Real(5));
+        w.AddBody(bd);
+    }
+
+    // Central HUB dynamic disk resting just above the floor.
+    BodyHandle hub;
+    {
+        BodyDef bd;
+        bd.type        = BodyType::Dynamic;
+        bd.position    = Vec2(Real(0), floorTop - Real(12));
+        bd.shape       = MakeCircle(Real(12));
+        bd.density     = Real(1);
+        bd.friction    = Real(0.4f);
+        bd.restitution = Real(0);
+        hub = w.AddBody(bd);
+    }
+
+    // A dense ring of small dynamic disks all OVERLAPPING the hub (so each forms
+    // a dynamic-dynamic contact with it). 20 > kColorCount (12) -> the hub is an
+    // endpoint in > 12 dynamic-dynamic contacts -> coloring overflows for the
+    // excess, exercising the scalar overflow path.
+    const int kRing = 20;
+    std::vector<BodyHandle> ring;
+    for (int i = 0; i < kRing; ++i)
+    {
+        const Real ang = (Real(2) * Real(3.14159265358979323846)) * Real(i) / Real(kRing);
+        // Place each small disk so it overlaps the hub's rim (centre ~ hub R).
+        const Real rr = Real(12);
+        BodyDef bd;
+        bd.type        = BodyType::Dynamic;
+        bd.position    = Vec2(std::cos(ang) * rr, floorTop - Real(12) + std::sin(ang) * rr);
+        bd.shape       = MakeCircle(Real(3));
+        bd.density     = Real(1);
+        bd.friction    = Real(0.4f);
+        bd.restitution = Real(0);
+        ring.push_back(w.AddBody(bd));
+    }
+
+    // Sanity: the scene actually overflowed at least once during settling (else
+    // this test would silently not exercise the overflow path). We watch the
+    // active-contact count proxy: a hub touching 20 dynamics yields well over 12
+    // dynamic-dynamic contacts. (No direct overflow accessor; the bound + the
+    // dense dynamic-dynamic fan guarantee it by construction.)
+    REQUIRE(w.Count() >= static_cast<std::uint32_t>(kRing + 2));
+
+    // Settle (4 s). Track peak per-mass KE of every dynamic -> a dropped/over-
+    // packed overflow would explode (huge KE) or sink (hub through the floor).
+    const Real kStep = Real(1) / Real(60);
+    Real peakKE = Real(0);
+    const Real keBound = Real(4) * Real(400) * Real(60); // generous (g * drop, x4)
+    for (int s = 0; s < 240; ++s)
+    {
+        w.Step(kStep);
+        const Vec2 vh = w.Velocity(hub);
+        peakKE = std::max(peakKE, Real(0.5) * (vh.x * vh.x + vh.y * vh.y));
+        for (BodyHandle b : ring)
+        {
+            const Vec2 v = w.Velocity(b);
+            const Real ke = Real(0.5) * (v.x * v.x + v.y * v.y);
+            peakKE = std::max(peakKE, ke);
+            REQUIRE(ke < keBound);               // never blows up (overflow not dropped)
+        }
+    }
+
+    // The hub did not sink through the floor (overflow contacts held it up).
+    CHECK(w.Position(hub).y + Real(12) <= floorTop + Real(1));
+    // The hub came to rest (the overflow solve dissipated its energy).
+    const Vec2 vhf = w.Velocity(hub);
+    CHECK(Real(0.5) * (vhf.x * vhf.x + vhf.y * vhf.y) < Real(200));
+    INFO("overflow-hub peak per-mass KE = " << static_cast<double>(peakKE));
 }

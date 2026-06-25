@@ -749,21 +749,26 @@ namespace Arcane
         {
             // Per-overflow-constraint scalar helpers (SoA-resident). cc is the
             // emitted ContactConstraint; bs holds vel + dp/dq by world slot.
+            //   bIsBody : B is a real body (read its velocity for the relative-
+            //             velocity term -- a kinematic plate's velocity drives the
+            //             push; SyncIn mirrors all alive bodies for this).
+            //   dynB    : B is a real DYNAMIC body whose velocity is MUTATED.
             struct OverflowBodies
             {
                 std::uint32_t ia, ib;
-                bool dynB;
+                bool bIsBody, dynB;
                 Real iMa, iIa, iMb, iIb;
             };
 
             inline OverflowBodies OverflowSetup(const ContactConstraint& cc)
             {
                 OverflowBodies ob;
-                ob.ia   = cc.bodyA;
-                ob.ib   = cc.bodyB;
-                ob.dynB = cc.bodyBIsBody && cc.invMassB > Real(0);
-                ob.iMa  = cc.invMassA; ob.iIa = cc.invInertiaA;
-                ob.iMb  = cc.invMassB; ob.iIb = cc.invInertiaB;
+                ob.ia      = cc.bodyA;
+                ob.ib      = cc.bodyB;
+                ob.bIsBody = cc.bodyBIsBody;
+                ob.dynB    = cc.bodyBIsBody && cc.invMassB > Real(0);
+                ob.iMa     = cc.invMassA; ob.iIa = cc.invInertiaA;
+                ob.iMb     = cc.invMassB; ob.iIb = cc.invInertiaB;
                 return ob;
             }
         } // namespace
@@ -780,7 +785,7 @@ namespace Arcane
                 Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
                 Real wA = m_bodyState.w[ob.ia];
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.dynB) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+                if (ob.bIsBody) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
 
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
@@ -818,7 +823,7 @@ namespace Arcane
                 Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
                 Real wA = m_bodyState.w[ob.ia];
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.dynB) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+                if (ob.bIsBody) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
 
                 const Vec2 dpA(m_bodyState.dpx[ob.ia], m_bodyState.dpy[ob.ia]);
                 const Real drA = m_bodyState.dq[ob.ia];
@@ -891,7 +896,7 @@ namespace Arcane
                 Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
                 Real wA = m_bodyState.w[ob.ia];
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.dynB) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+                if (ob.bIsBody) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
 
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
