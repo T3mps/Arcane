@@ -1,12 +1,14 @@
-// Island.cpp -- the constraint-graph + sleep module (M6, Task P2.4).
+// Island.cpp -- the constraint-graph + sleep module (Phase A).
 //
-// See Island.hpp for the contract + the PORT mapping (the inline Lua logic at
-// PhysicsWorld.lua:28-31 + 403-452 extracted into UpdateSleep). This TU owns the
-// union-find graph build, the per-body sleep-timer update, and the all-members-
-// idle island-sleep decision. Wake paths live in PhysicsWorld (GenerateContacts
-// wake-on-contact + ApplyImpulse/SetVelocity/Wake wake-on-force).
+// See Island.hpp for the contract. This TU owns the per-island sleep pass
+// (UpdateSleep). The old per-step union-find graph build + O(n^2) scan have
+// been replaced by a per-island O(island) pass over the PERSISTENT registry
+// (members already known -- no UF rebuild, no global scan).
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// Wake paths live in PhysicsWorld (UpdateContacts wake-on-contact +
+// ApplyImpulse/SetVelocity/Wake wake-on-force).
+//
+// PRESENTATION-FREE + C++23-clean: glm + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Island.hpp>
 
@@ -14,7 +16,7 @@
 #include <vector>
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Solver/Solver.hpp> // ContactConstraint + JointConstraint
+#include <Arcane/Physics/Solver/Solver.hpp> // JointConstraint
 #include <Arcane/Physics/Joints/Joint.hpp>  // Joint (BodyA/BodyB slots)
 
 namespace Arcane
@@ -23,25 +25,7 @@ namespace Arcane
     {
         namespace Island
         {
-            namespace
-            {
-                // Union-find path-halving (ports PhysicsWorld.lua ufFind, lines
-                // 28-31). Order-stable: the find result depends only on the
-                // parent links, not on traversal timing -> deterministic.
-                std::uint32_t UfFind(std::vector<std::uint32_t>& uf, std::uint32_t x) noexcept
-                {
-                    while (uf[x] != x)
-                    {
-                        uf[x] = uf[uf[x]];
-                        x = uf[x];
-                    }
-                    return x;
-                }
-            } // namespace
-
             void UpdateSleep(PhysicsWorld& world,
-                             const ContactConstraint* contacts,
-                             std::uint32_t contactCount,
                              const JointConstraint* joints,
                              std::uint32_t jointCount,
                              Real dt)
@@ -52,53 +36,10 @@ namespace Arcane
                     return;
                 }
 
-                // ---- build the union-find constraint graph -------------------
-                // Bodies = nodes; this step's contacts = edges. Reuse the world's
-                // pooled scratch (the Lua w._uf) -> zero steady-state alloc.
-                std::vector<std::uint32_t>& uf = world.UnionFindScratch();
-                if (uf.size() < count)
-                {
-                    uf.resize(count);
-                }
-                for (std::uint32_t i = 0; i < count; ++i)
-                {
-                    uf[i] = i;
-                }
-
-                // Union two DYNAMIC bodies sharing a contact (ports line 411:
-                // `if ct.b >= 0 and btype[ct.b] == DYNAMIC then union(ct.a, ct.b)`).
-                // GenerateContacts already orients A = dynamic; we union only when
-                // B is ALSO a real dynamic body. A dynamic-vs-static / kinematic /
-                // tile-span contact does NOT union (statics anchor, they are not
-                // island members). Index-ordered over the contact prefix.
-                for (std::uint32_t k = 0; k < contactCount; ++k)
-                {
-                    const ContactConstraint& ct = contacts[k];
-                    if (!ct.bodyBIsBody)
-                    {
-                        continue; // tile-span virtual fixture -> no union
-                    }
-                    const std::uint32_t a = ct.bodyA;
-                    const std::uint32_t b = ct.bodyB;
-                    if (b == kInvalidSlot)
-                    {
-                        continue;
-                    }
-                    // A is always dynamic (GenerateContacts orientation); union
-                    // only when B is dynamic too.
-                    if (world.TypeSlot(b) == BodyType::Dynamic)
-                    {
-                        uf[UfFind(uf, a)] = UfFind(uf, b);
-                    }
-                }
-
-                // Joint-attached dynamic bodies reset their sleep timer so they
-                // never sleep (target joints keep authority over their captives;
-                // ports lines 415-423). The Lua resets sleepT on jointed bodies
-                // rather than unioning them -- that is the faithful behavior:
-                // jointed dynamic bodies stay AWAKE. The solver Prepared each
-                // joint earlier this Step (stage 3, before this stage-4 pass), so
-                // BodyA()/BodyB() are the resolved slots. Index-ordered.
+                // ---- joint-attached dynamics reset their sleep timer ------------
+                // Jointed dynamic bodies never sleep so target joints keep authority
+                // (ports the original behavior verbatim). The solver Prepared each
+                // joint earlier this Step, so BodyA()/BodyB() are resolved slots.
                 for (std::uint32_t k = 0; k < jointCount; ++k)
                 {
                     const Joint* j = joints[k].joint;
@@ -120,9 +61,9 @@ namespace Arcane
                     }
                 }
 
-                // ---- per-body sleep-timer update (awake dynamics) -----------
+                // ---- per-body idle-timer update (awake dynamics) ----------------
                 // Idle: linear speed^2 < kSleepLinVel2 AND |angVel| < kSleepAngVel
-                // -> accumulate dt; otherwise reset to 0 (ports lines 424-433).
+                // -> accumulate dt; otherwise reset to 0 (UNCHANGED thresholds).
                 for (std::uint32_t i = 0; i < count; ++i)
                 {
                     if (!world.Alive(i) ||
@@ -131,10 +72,10 @@ namespace Arcane
                     {
                         continue;
                     }
-                    const Vec2 v = world.VelSlot(i);
+                    const Vec2 v  = world.VelSlot(i);
                     const Real v2 = v.x * v.x + v.y * v.y;
-                    const Real w = world.AngVelSlot(i);
-                    if (v2 < kSleepLinVel2 && std::fabs(w) < kSleepAngVel)
+                    const Real wv = world.AngVelSlot(i);
+                    if (v2 < kSleepLinVel2 && std::fabs(wv) < kSleepAngVel)
                     {
                         world.SetSleepTimerSlot(i, world.SleepTimerSlot(i) + dt);
                     }
@@ -144,50 +85,50 @@ namespace Arcane
                     }
                 }
 
-                // ---- island sleep (all members idle) ------------------------
-                // An island sleeps only when EVERY awake-dynamic member has
-                // sleepT > kSleepTime. For each such candidate, find its island
-                // root, scan ALL island members; if any member's sleepT is not
-                // yet past the threshold the island stays awake. If all are past,
-                // sleep this member (awake=0; zero velocities). Ports lines
-                // 435-451 -- order-stable: bodies scanned by index.
-                // Members slept earlier in this same outer pass are skipped as
-                // outer candidates by the AwakeSlot(i) guard above; they need not
-                // reappear in the inner all-check.
-                //
-                // TODO(P3.3): the per-candidate inner scan is O(n) -> O(n^2) for
-                // one large island; if body counts grow, replace with a
-                // root-grouped single pass (sort slots by UF root, one contiguous
-                // scan per island).
-                for (std::uint32_t i = 0; i < count; ++i)
+                // ---- per-island sleep decision (O(island), no global scan) ------
+                // For each island: if EVERY awake-dynamic member is past kSleepTime,
+                // sleep the WHOLE island as a unit (clear awake + zero linear AND
+                // angular velocity for each member). A member already asleep is
+                // skipped (it does not veto). The per-body idle timer (reset above
+                // for movers) gates each member; a transiently over-grouped island
+                // only DELAYS sleep, never sleeps a mover -- mirrors the old
+                // global-UF behavior (which also never woke bodies on a split).
+                world.ForEachIsland([&](const std::vector<std::uint32_t>& bodies)
                 {
-                    if (!world.Alive(i) ||
-                        world.TypeSlot(i) != BodyType::Dynamic ||
-                        !world.AwakeSlot(i) ||
-                        world.SleepTimerSlot(i) <= kSleepTime)
+                    bool anyAwake             = false;
+                    bool allIdlePastThreshold = true;
+                    for (const std::uint32_t b : bodies)
                     {
-                        continue;
-                    }
-                    const std::uint32_t root = UfFind(uf, i);
-                    bool all = true;
-                    for (std::uint32_t j = 0; j < count; ++j)
-                    {
-                        if (world.Alive(j) &&
-                            world.TypeSlot(j) == BodyType::Dynamic &&
-                            UfFind(uf, j) == root &&
-                            world.SleepTimerSlot(j) <= kSleepTime)
+                        if (!world.Alive(b) || world.TypeSlot(b) != BodyType::Dynamic)
                         {
-                            all = false;
+                            continue; // defensive: a stale member is ignored
+                        }
+                        if (!world.AwakeSlot(b))
+                        {
+                            continue; // already asleep -> does not veto
+                        }
+                        anyAwake = true;
+                        if (world.SleepTimerSlot(b) <= kSleepTime)
+                        {
+                            allIdlePastThreshold = false;
                             break;
                         }
                     }
-                    if (all)
+                    if (anyAwake && allIdlePastThreshold)
                     {
-                        world.SetAwakeSlot(i, false);
-                        world.SetVelSlot(i, Vec2(Real(0), Real(0)));
-                        world.SetAngVelSlot(i, Real(0));
+                        for (const std::uint32_t b : bodies)
+                        {
+                            if (world.Alive(b) &&
+                                world.TypeSlot(b) == BodyType::Dynamic &&
+                                world.AwakeSlot(b))
+                            {
+                                world.SetAwakeSlot(b, false);
+                                world.SetVelSlot(b, Vec2(Real(0), Real(0)));
+                                world.SetAngVelSlot(b, Real(0));
+                            }
+                        }
                     }
-                }
+                });
             }
 
         } // namespace Island

@@ -103,25 +103,22 @@ namespace Arcane
             inline constexpr Real kSleepTime = Real(0.5);
 
             // ----------------------------------------------------------------
-            // UpdateSleep: the per-Step island sleep pass (stage 5).
+            // UpdateSleep: the per-Step island sleep pass (Step stage 5).
             // ----------------------------------------------------------------
             //
-            // Runs AFTER the solver, using THIS step's contacts (the
-            // GenerateContacts output) as the constraint-graph edges. Builds the
-            // union-find graph (dynamic-dynamic unions only), resets the sleep
-            // timer of joint-attached dynamics, advances each awake dynamic's
-            // sleep timer by `dt` when idle, and sleeps any island whose every
-            // member is past kSleepTime (clearing awake + zeroing velocities).
+            // Phase A: iterates the PERSISTENT island registry (members already
+            // known -- no per-step union-find rebuild, no O(n^2) global scan).
+            // Resets the sleep timer of joint-attached dynamics (jointed bodies
+            // never sleep so target joints keep authority), advances each awake
+            // dynamic's idle timer by `dt`, then for each island sleeps it AS A
+            // UNIT iff every awake-dynamic member is past kSleepTime (clearing
+            // awake + zeroing linear & angular velocity).
             //
-            // `contacts` / `contactCount` is the live prefix of the world's
-            // ContactConstraint pool for this Step (may be nullptr/0). `joints` /
-            // `jointCount` is the joint constraint list (nullptr/0 until P2.5).
-            // `dt` is the full Step timestep.
-            //
-            // No-op when the world has no awake dynamics to consider.
+            // `joints`/`jointCount` is the joint constraint list (nullptr/0 if no
+            // joints). `dt` is the full Step timestep. No-op when the world has no
+            // dynamics. Thresholds + whole-island-unit + exact-freeze are UNCHANGED
+            // from the global-UF version this replaces.
             void UpdateSleep(PhysicsWorld& world,
-                             const ContactConstraint* contacts,
-                             std::uint32_t contactCount,
                              const JointConstraint* joints,
                              std::uint32_t jointCount,
                              Real dt);

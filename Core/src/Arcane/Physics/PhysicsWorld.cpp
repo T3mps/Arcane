@@ -1638,8 +1638,6 @@ namespace Arcane
 
             Island::UpdateSleep(
                 *this,
-                m_contactConstraints.empty() ? nullptr : m_contactConstraints.data(),
-                static_cast<std::uint32_t>(m_contactConstraints.size()),
                 m_jointConstraints.empty() ? nullptr : m_jointConstraints.data(),
                 static_cast<std::uint32_t>(m_jointConstraints.size()),
                 dt);

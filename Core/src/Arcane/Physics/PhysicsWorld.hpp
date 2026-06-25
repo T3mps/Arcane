@@ -817,6 +817,21 @@ namespace Arcane
             {
                 return m_uf;
             }
+            // Visit each LIVE island's member-slot list (Phase A sleep seam). A live
+            // island has a non-empty member list; freed ids (empty) are skipped.
+            // Iterated ascending island-id (deterministic). Const callback (sleep
+            // mutates bodies through the slot accessors, not the island record).
+            void ForEachIsland(
+                const std::function<void(const std::vector<std::uint32_t>&)>& fn) const
+            {
+                for (const Island::Island& isl : m_islands)
+                {
+                    if (!isl.bodies.empty())
+                    {
+                        fn(isl.bodies);
+                    }
+                }
+            }
             // Commit final position/angle for slot i + refresh the mover
             // broadphase AABB (solver FinalizePositions). Dynamic-only call site.
             void CommitSlotPosition(std::uint32_t i, Vec2 p, Real angle) noexcept
