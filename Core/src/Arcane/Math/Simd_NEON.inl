@@ -20,6 +20,10 @@ ARCANE_SIMD_INLINE f32w splat(float x)    noexcept { return f32w{ vdupq_n_f32(x)
 ARCANE_SIMD_INLINE f32w setzero()         noexcept { return f32w{ vdupq_n_f32(0.0f) }; }
 ARCANE_SIMD_INLINE i32w isplat(int32_t x) noexcept { return i32w{ vdupq_n_s32(x) }; }
 ARCANE_SIMD_INLINE i32w iota()            noexcept { const int32_t k[4] = {0,1,2,3}; return i32w{ vld1q_s32(k) }; }
+// Load `width` int32 lanes from an int32_t array (NEON vld1q tolerates unaligned,
+// but the solver's index arrays are alignas(32) regardless). Exact load ->
+// bit-identical. Mirrors the AVX2/scalar iload contract.
+ARCANE_SIMD_INLINE i32w iload(const int32_t* p) noexcept { return i32w{ vld1q_s32(p) }; }
 
 ARCANE_SIMD_INLINE f32w load(const float* p)      noexcept { return f32w{ vld1q_f32(p) }; }
 ARCANE_SIMD_INLINE void store(float* p, f32w a)   noexcept { vst1q_f32(p, a.v); }

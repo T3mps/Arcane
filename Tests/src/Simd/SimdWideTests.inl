@@ -183,6 +183,42 @@ TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: gather/scatter round-trip", "[simd]")
     for (int i = 0; i < W; ++i) CHECK(ib[i] == i);
 }
 
+TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: iload round-trips an int32 array -> i32w", "[simd]")
+{
+    // iload is the int counterpart to f32w `load`: the contact solver packs each
+    // lane's body slot into an alignas(32) int32_t[width] array (ContactConstraint-
+    // Simd::bodyIndexA/B) and turns it into the gather/scatter index vector with
+    // iload. Build a known index pattern, iload it, and gather a base table by it
+    // -> the gathered lanes must equal base[idx[i]] (proving iload's lane layout
+    // matches what gather/scatter consume). Then exercise iload directly through a
+    // scatter round-trip (the solver scatters velocities back by the same i32w).
+    constexpr int W = SimdT::f32w::width;
+
+    alignas(32) int32_t idx[W];
+    for (int i = 0; i < W; ++i) idx[i] = (i * 5 + 2) % 60;   // scattered, in-range
+
+    // iload the aligned index array (AVX2 _mm256_load_si256 asserts 32B-aligned).
+    SimdT::i32w vi = SimdT::iload(idx);
+
+    // Lane layout: iload(idx) must equal the memcpy-built i32w the existing
+    // gather/scatter test relied on (same lanes in the same order).
+    alignas(32) int32_t back[W];
+    std::memcpy(back, &vi, sizeof(vi));
+    for (int i = 0; i < W; ++i) CHECK(back[i] == idx[i]);
+
+    // gather by the iload'd index -> base[idx[i]] per lane.
+    float base[64]; for (int i = 0; i < 64; ++i) base[i] = float(i) * 3.0f + 1.0f;
+    alignas(32) float out[W];
+    SimdT::store(out, SimdT::gather(base, vi));
+    for (int i = 0; i < W; ++i) CHECK(out[i] == base[idx[i]]);
+
+    // scatter by the iload'd index -> dst[idx[i]] = vals[i].
+    float dst[64]; for (int i = 0; i < 64; ++i) dst[i] = -7.0f;
+    alignas(32) float vals[W]; for (int i = 0; i < W; ++i) vals[i] = float(i) * 2.0f - 0.5f;
+    SimdT::scatter(dst, vi, SimdT::load(vals));
+    for (int i = 0; i < W; ++i) CHECK(dst[idx[i]] == vals[i]);
+}
+
 TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: run-twice determinism (bit-identical)", "[simd]")
 {
     constexpr int W = SimdT::f32w::width;

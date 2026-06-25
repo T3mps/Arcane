@@ -90,19 +90,32 @@ namespace Arcane
             const std::uint32_t count = world.Count();
             for (std::uint32_t i = 0; i < count; ++i)
             {
-                if (!world.Alive(i) ||
-                    world.TypeSlot(i) != BodyType::Dynamic ||
-                    !world.AwakeSlot(i))
+                if (!world.Alive(i))
                 {
-                    continue; // leave non-matching slots as the caller Resize'd them
+                    continue; // dead slot: leave as the caller Resize'd it (zero)
                 }
+
+                // ALL alive bodies' velocities are mirrored so the lane-wide solve
+                // can GATHER a read-only B's velocity (a kinematic plate's authored
+                // +X, a static body's 0). The scalar SolveContacts reads vB/wB for
+                // ANY bodyBIsBody endpoint (its velocity feeds the relative-velocity
+                // term that drives the push), even when B is not MUTATED -- so the
+                // SoA must carry that velocity too, else a kinematic-pushes-dynamic
+                // contact would see B at rest and never push. dp/dq stay 0 for a
+                // non-awake-dynamic body (it never integrates).
                 const Vec2 v = world.VelSlot(i);
                 vx[i] = v.x;
                 vy[i] = v.y;
                 w[i]  = world.AngVelSlot(i);
-                dpx[i] = 0.f;
-                dpy[i] = 0.f;
-                dq[i]  = 0.f;
+
+                if (world.TypeSlot(i) == BodyType::Dynamic && world.AwakeSlot(i))
+                {
+                    // Awake dynamic: zero the TGS position-delta accumulators (they
+                    // start each Step's sub-step loop at zero).
+                    dpx[i] = 0.f;
+                    dpy[i] = 0.f;
+                    dq[i]  = 0.f;
+                }
             }
         }
 
@@ -594,64 +607,442 @@ namespace Arcane
         }
 
         // ===================================================================
-        // Whole-Step driver
+        // SIMD lane-wide solve helpers (Part 1) -- integrate / bridge / overflow
+        // ===================================================================
+        //
+        // These operate on m_bodyState (the packed SoA the lane-wide passes
+        // gather/scatter through), NOT the world velocity SoA. The world<->SoA
+        // sync happens at the Step boundary (SyncIn/SyncOut) + around joint passes
+        // (SyncVelTo/FromWorld). The integrate loops stay scalar O(n) (not the hot
+        // path); the WIN is the lane-wide colored contact solve.
+
+        void SoftStep::IntegrateVelocitiesSoA(SolverContext& ctx, Real h)
+        {
+            // SoA-resident port of IntegrateVelocities: gravity + linear damping
+            // for awake dynamics. Reads world type/awake/invMass/linDamp (immutable
+            // this Step) but writes the packed SoA velocities. Same predicate +
+            // math as IntegrateVelocities so the SoA path is behavior-equivalent.
+            PhysicsWorld& w = *ctx.world;
+            const Vec2 g = ctx.gravity;
+            const std::uint32_t count = w.Count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
+                {
+                    continue;
+                }
+                if (w.InvMassSlot(i) <= Real(0))
+                {
+                    continue; // pinned dynamic -- never integrates
+                }
+                float vx = m_bodyState.vx[i] + static_cast<float>(g.x * h);
+                float vy = m_bodyState.vy[i] + static_cast<float>(g.y * h);
+                float wv = m_bodyState.w[i];
+                const Real d = w.LinDampSlot(i);
+                if (d > Real(0))
+                {
+                    const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
+                    vx *= f; vy *= f; wv *= f;
+                }
+                m_bodyState.vx[i] = vx;
+                m_bodyState.vy[i] = vy;
+                m_bodyState.w[i]  = wv;
+            }
+        }
+
+        void SoftStep::IntegratePositionsSoA(SolverContext& ctx, Real h)
+        {
+            // dp/dq += v*h for awake dynamics (SoA-resident port of
+            // IntegratePositions). The lane-wide contact solve re-reads dp/dq next
+            // sub-step to re-evaluate separation (the TGS heart).
+            PhysicsWorld& w = *ctx.world;
+            const float fh = static_cast<float>(h);
+            const std::uint32_t count = w.Count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
+                {
+                    continue;
+                }
+                m_bodyState.dpx[i] += m_bodyState.vx[i] * fh;
+                m_bodyState.dpy[i] += m_bodyState.vy[i] * fh;
+                m_bodyState.dq[i]  += m_bodyState.w[i]  * fh;
+            }
+        }
+
+        void SoftStep::FinalizePositionsSoA(SolverContext& ctx)
+        {
+            // SAME compound-COM commit as FinalizePositions (SoftStep.cpp:483-513),
+            // but reading the per-body deltas from m_bodyState.dp*/dq instead of
+            // m_deltaPos/m_deltaRot. Integrate the COM along its inertial path, then
+            // reconstruct the origin from new COM + new angle.
+            PhysicsWorld& w = *ctx.world;
+            const std::uint32_t count = w.Count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
+                {
+                    continue;
+                }
+                const Vec2 dp(static_cast<Real>(m_bodyState.dpx[i]),
+                              static_cast<Real>(m_bodyState.dpy[i]));
+                const Real dr = static_cast<Real>(m_bodyState.dq[i]);
+                const Vec2 p0 = w.PosSlot(i);
+                const Real a0 = w.GetAngle(w.HandleOf(i));
+                const Vec2 lc = w.LocalCenterSlot(i);
+                const Vec2 c0 = p0 + RotateVec(a0, lc);
+                const Vec2 c  = c0 + dp;
+                const Real a  = a0 + dr;
+                const Vec2 p  = c - RotateVec(a, lc);
+                w.CommitSlotPosition(i, p, a);
+            }
+        }
+
+        void SoftStep::SyncVelToWorld(SolverContext& ctx)
+        {
+            // Push the SoA velocities back to the world so the scalar joint passes
+            // read the in-flight (contact-solved) velocities. Awake dynamics only.
+            PhysicsWorld& w = *ctx.world;
+            const std::uint32_t count = w.Count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
+                {
+                    continue;
+                }
+                w.SetVelSlot(i, Vec2(static_cast<Real>(m_bodyState.vx[i]),
+                                     static_cast<Real>(m_bodyState.vy[i])));
+                w.SetAngVelSlot(i, static_cast<Real>(m_bodyState.w[i]));
+            }
+        }
+
+        void SoftStep::SyncVelFromWorld(SolverContext& ctx)
+        {
+            // Pull the world velocities back into the SoA after a joint pass mutated
+            // them. dp/dq untouched (joints do not read them). Awake dynamics only.
+            PhysicsWorld& w = *ctx.world;
+            const std::uint32_t count = w.Count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
+                {
+                    continue;
+                }
+                const Vec2 v = w.VelSlot(i);
+                m_bodyState.vx[i] = static_cast<float>(v.x);
+                m_bodyState.vy[i] = static_cast<float>(v.y);
+                m_bodyState.w[i]  = static_cast<float>(w.AngVelSlot(i));
+            }
+        }
+
+        // ----- Overflow: width-1 SCALAR solve over the SoA (scatter-safe) ------
+        //
+        // The colorer spills constraints that found no free color into m_coloring.
+        // overflow (a hub body in > kColorCount contacts). They CANNOT solve lane-
+        // wide (they share bodies), so we solve them one-at-a-time, scalar, over the
+        // SAME BodyStateSoA -- sequential => no scatter conflict. The math mirrors
+        // the scalar SoftStep WarmStart/SolveContacts/ApplyRestitution exactly, but
+        // reads/writes the SoA velocity + dp/dq (so overflow composes with the
+        // colored result in the same velocity store). One contact per call iter.
+
+        namespace
+        {
+            // Per-overflow-constraint scalar helpers (SoA-resident). cc is the
+            // emitted ContactConstraint; bs holds vel + dp/dq by world slot.
+            struct OverflowBodies
+            {
+                std::uint32_t ia, ib;
+                bool dynB;
+                Real iMa, iIa, iMb, iIb;
+            };
+
+            inline OverflowBodies OverflowSetup(const ContactConstraint& cc)
+            {
+                OverflowBodies ob;
+                ob.ia   = cc.bodyA;
+                ob.ib   = cc.bodyB;
+                ob.dynB = cc.bodyBIsBody && cc.invMassB > Real(0);
+                ob.iMa  = cc.invMassA; ob.iIa = cc.invInertiaA;
+                ob.iMb  = cc.invMassB; ob.iIb = cc.invInertiaB;
+                return ob;
+            }
+        } // namespace
+
+        void SoftStep::OverflowWarmStart(SolverContext& ctx)
+        {
+            for (std::uint32_t ref : m_coloring.overflow)
+            {
+                ContactConstraint& cc = ctx.contacts[ref];
+                const OverflowBodies ob = OverflowSetup(cc);
+                const Vec2 n = cc.normal;
+                const Vec2 tangent(-n.y, n.x);
+
+                Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
+                Real wA = m_bodyState.w[ob.ia];
+                Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
+                if (ob.dynB) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+
+                for (int p = 0; p < cc.pointCount; ++p)
+                {
+                    const ContactConstraintPoint& cp = cc.points[p];
+                    const Vec2 P = n * cp.normalImpulse + tangent * cp.tangentImpulse;
+                    vA += P * ob.iMa;
+                    wA += ob.iIa * CrossRP(cp.anchorA, P);
+                    if (ob.dynB) { vB -= P * ob.iMb; wB -= ob.iIb * CrossRP(cp.anchorB, P); }
+                }
+
+                m_bodyState.vx[ob.ia] = static_cast<float>(vA.x);
+                m_bodyState.vy[ob.ia] = static_cast<float>(vA.y);
+                m_bodyState.w[ob.ia]  = static_cast<float>(wA);
+                if (ob.dynB)
+                {
+                    m_bodyState.vx[ob.ib] = static_cast<float>(vB.x);
+                    m_bodyState.vy[ob.ib] = static_cast<float>(vB.y);
+                    m_bodyState.w[ob.ib]  = static_cast<float>(wB);
+                }
+            }
+        }
+
+        void SoftStep::OverflowSolve(SolverContext& ctx, Real h, bool useBias)
+        {
+            const Real invH = (h > Real(0)) ? (Real(1) / h) : Real(0);
+            const Real maxBiasVel = ctx.world->ContactPushMaxVelocity();
+
+            for (std::uint32_t ref : m_coloring.overflow)
+            {
+                ContactConstraint& cc = ctx.contacts[ref];
+                const OverflowBodies ob = OverflowSetup(cc);
+                const Vec2 n = cc.normal;
+                const Vec2 tangent(-n.y, n.x);
+
+                Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
+                Real wA = m_bodyState.w[ob.ia];
+                Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
+                if (ob.dynB) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+
+                const Vec2 dpA(m_bodyState.dpx[ob.ia], m_bodyState.dpy[ob.ia]);
+                const Real drA = m_bodyState.dq[ob.ia];
+                Vec2 dpB(Real(0), Real(0)); Real drB = Real(0);
+                if (ob.dynB) { dpB = Vec2(m_bodyState.dpx[ob.ib], m_bodyState.dpy[ob.ib]); drB = m_bodyState.dq[ob.ib]; }
+
+                for (int p = 0; p < cc.pointCount; ++p)
+                {
+                    ContactConstraintPoint& cp = cc.points[p];
+                    const Vec2 rA = cp.anchorA, rB = cp.anchorB;
+                    const Vec2 prA = dpA + CrossWR(drA, rA);
+                    const Vec2 prB = dpB + CrossWR(drB, rB);
+                    const Real s = cp.baseSeparation + Dot(prA - prB, n);
+
+                    Real bias = Real(0), massScale = Real(1), impulseScale = Real(0);
+                    if (s > Real(0))            { bias = s * invH; }
+                    else if (useBias)           { bias = std::max(cc.biasRate * s, -maxBiasVel); massScale = cc.massScale; impulseScale = cc.impulseScale; }
+
+                    const Vec2 dv = (vA + CrossWR(wA, rA)) - (vB + CrossWR(wB, rB));
+                    const Real vn = Dot(dv, n);
+                    Real impulse = -cp.normalMass * massScale * (vn + bias) - impulseScale * cp.normalImpulse;
+                    const Real newImpulse = std::max(cp.normalImpulse + impulse, Real(0));
+                    impulse = newImpulse - cp.normalImpulse;
+                    cp.normalImpulse = newImpulse;
+
+                    const Vec2 P = n * impulse;
+                    vA += P * ob.iMa; wA += ob.iIa * CrossRP(rA, P);
+                    if (ob.dynB) { vB -= P * ob.iMb; wB -= ob.iIb * CrossRP(rB, P); }
+                }
+
+                for (int p = 0; p < cc.pointCount; ++p)
+                {
+                    ContactConstraintPoint& cp = cc.points[p];
+                    const Vec2 rA = cp.anchorA, rB = cp.anchorB;
+                    const Vec2 dv = (vA + CrossWR(wA, rA)) - (vB + CrossWR(wB, rB));
+                    const Real vt = Dot(dv, tangent);
+                    Real impulse = -cp.tangentMass * vt;
+                    const Real maxFriction = cc.friction * cp.normalImpulse;
+                    const Real newImpulse = std::clamp(cp.tangentImpulse + impulse, -maxFriction, maxFriction);
+                    impulse = newImpulse - cp.tangentImpulse;
+                    cp.tangentImpulse = newImpulse;
+
+                    const Vec2 P = tangent * impulse;
+                    vA += P * ob.iMa; wA += ob.iIa * CrossRP(rA, P);
+                    if (ob.dynB) { vB -= P * ob.iMb; wB -= ob.iIb * CrossRP(rB, P); }
+                }
+
+                m_bodyState.vx[ob.ia] = static_cast<float>(vA.x);
+                m_bodyState.vy[ob.ia] = static_cast<float>(vA.y);
+                m_bodyState.w[ob.ia]  = static_cast<float>(wA);
+                if (ob.dynB)
+                {
+                    m_bodyState.vx[ob.ib] = static_cast<float>(vB.x);
+                    m_bodyState.vy[ob.ib] = static_cast<float>(vB.y);
+                    m_bodyState.w[ob.ib]  = static_cast<float>(wB);
+                }
+            }
+        }
+
+        void SoftStep::OverflowRestitution(SolverContext& ctx)
+        {
+            const Real threshold = ctx.world->RestitutionThreshold();
+            for (std::uint32_t ref : m_coloring.overflow)
+            {
+                ContactConstraint& cc = ctx.contacts[ref];
+                if (cc.restitution <= Real(0)) { continue; }
+                const OverflowBodies ob = OverflowSetup(cc);
+                const Vec2 n = cc.normal;
+
+                Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
+                Real wA = m_bodyState.w[ob.ia];
+                Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
+                if (ob.dynB) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+
+                for (int p = 0; p < cc.pointCount; ++p)
+                {
+                    ContactConstraintPoint& cp = cc.points[p];
+                    if (cp.relativeVelocity > -threshold || cp.normalImpulse <= Real(0)) { continue; }
+                    const Vec2 rA = cp.anchorA, rB = cp.anchorB;
+                    const Vec2 dv = (vA + CrossWR(wA, rA)) - (vB + CrossWR(wB, rB));
+                    const Real vn = Dot(dv, n);
+                    Real impulse = -cp.normalMass * (vn + cc.restitution * cp.relativeVelocity);
+                    const Real newImpulse = std::max(cp.normalImpulse + impulse, Real(0));
+                    impulse = newImpulse - cp.normalImpulse;
+                    cp.normalImpulse = newImpulse;
+
+                    const Vec2 P = n * impulse;
+                    vA += P * ob.iMa; wA += ob.iIa * CrossRP(rA, P);
+                    if (ob.dynB) { vB -= P * ob.iMb; wB -= ob.iIb * CrossRP(rB, P); }
+                }
+
+                m_bodyState.vx[ob.ia] = static_cast<float>(vA.x);
+                m_bodyState.vy[ob.ia] = static_cast<float>(vA.y);
+                m_bodyState.w[ob.ia]  = static_cast<float>(wA);
+                if (ob.dynB)
+                {
+                    m_bodyState.vx[ob.ib] = static_cast<float>(vB.x);
+                    m_bodyState.vy[ob.ib] = static_cast<float>(vB.y);
+                    m_bodyState.w[ob.ib]  = static_cast<float>(wB);
+                }
+            }
+        }
+
+        // ===================================================================
+        // Whole-Step driver (lane-wide colored SoA contact solve, Part 1)
         // ===================================================================
 
         void SoftStep::Solve(SolverContext& ctx)
         {
             PhysicsWorld& w = *ctx.world;
             const std::uint32_t count = w.Count();
-            EnsureScratch(count);
-
-            // Reset this step's per-body position deltas (awake dynamics only;
-            // others stay irrelevant but are cheap to clear for determinism).
-            for (std::uint32_t i = 0; i < count; ++i)
-            {
-                m_deltaPos[i] = Vec2(Real(0), Real(0));
-                m_deltaRot[i] = Real(0);
-            }
 
             const Real h = ctx.subDt;
             const int substeps = static_cast<int>(ctx.substepCount);
+            const bool hasJoints = ctx.jointCount > 0;
+            const float maxBiasVel = static_cast<float>(w.ContactPushMaxVelocity());
+            const float threshold = static_cast<float>(w.RestitutionThreshold());
 
-            // 1) Prepare (once): effective masses, soft coefficients, rest-relative
-            //    velocity. Warm-start impulses are NOT seeded here -- they arrive
-            //    already set on each ContactConstraintPoint (the world copies them
-            //    off the persistent Contact's manifold at emit). Prepare leaves them
-            //    untouched. Always run, even with zero contacts (harmless).
+            // 1) Prepare (once), SCALAR on ctx.contacts -- effective masses, soft
+            //    coefficients, rest-relative velocity. Warm-start impulses arrive
+            //    already seeded on each ContactConstraintPoint (emit). We run Prepare
+            //    BEFORE building the SoA batches so Build packs the PREPARED values
+            //    (lower churn than a lane-wide Prepare; the per-step b2MakeSoft is
+            //    scalar regardless). Joints prepare as before (Part 2 leaves joints
+            //    scalar).
             PrepareContacts(ctx);
             PrepareJoints(ctx);
 
-            // 2) Sub-step loop.
-            //    Stage order per sub-step (matches Box2D v3 b2SolverStage sequence
-            //    in solver.h / solver.c: b2_stageIntegrateVelocities ->
-            //    b2_stageWarmStart -> b2_stageSolve -> b2_stageIntegratePositions ->
-            //    b2_stageRelax). WarmStart is a PER-SUBSTEP stage in v3 (executed
-            //    inside the substep loop, not once before it). The current placement
-            //    is correct and intentional.
-            for (int s = 0; s < substeps; ++s)
+            // 2) Body-state SoA: size to count+1 (the extra slot = the scatter-safe
+            //    DUMMY) and sync world velocities in (zeroes dp/dq for awake
+            //    dynamics). The dummy slot is index `count`; Resize zeroes it and
+            //    SyncIn leaves it zero (not an awake dynamic), so a redundant scatter
+            //    there is harmless.
+            const std::int32_t dummyIndex = static_cast<std::int32_t>(count);
+            m_bodyState.Resize(count + 1u);
+            m_bodyState.SyncIn(w);
+
+            // 3) Per-step greedy coloring of the solver-relevant touching contacts.
+            //    A is already the dynamic orientation (always aDyn). B is dynamic iff
+            //    it is a real body with positive inverse mass. Static/kinematic/span
+            //    endpoints are read-only -> not marked dynamic (do not constrain
+            //    coloring). ref = the constraint index into ctx.contacts.
+            m_edges.clear();
+            m_edges.reserve(ctx.contactCount);
+            for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
             {
-                IntegrateVelocities(ctx, h);   // gravity + damping (per sub-step)
-                WarmStart(ctx);                // apply accumulated impulses (per sub-step -- v3 stage order)
-                SolveJoints(ctx);              // joints solve first each sub-step (Lua ordering)
-                SolveContacts(ctx, h, /*useBias=*/true);
-                IntegratePositions(ctx, h);    // accumulate deltaPos/deltaRot
-                SolveJoints(ctx);              // relax-side joint pass (drives biased joints, keeps them tight)
-                SolveContacts(ctx, h, /*useBias=*/false); // relax (no bias)
+                const ContactConstraint& cc = ctx.contacts[c];
+                const bool bDyn = cc.bodyBIsBody && cc.invMassB > Real(0);
+                ColorEdge e;
+                e.a    = cc.bodyA;
+                e.b    = bDyn ? cc.bodyB : cc.bodyA; // b unused for coloring when !bDyn
+                e.aDyn = true;                       // A is always dynamic in the feed
+                e.bDyn = bDyn;
+                e.ref  = c;
+                m_edges.push_back(e);
+            }
+            m_coloring = ColorConstraints(m_edges, count);
+
+            // 4) Build one SoA batch list per color (warm-start already on the
+            //    prepared ctx.contacts points). Padding + read-only-B lanes point at
+            //    the dummy slot (scatter-safe).
+            m_colorBatches.assign(m_coloring.colors.size(), {});
+            for (std::size_t k = 0; k < m_coloring.colors.size(); ++k)
+            {
+                const std::vector<std::uint32_t>& color = m_coloring.colors[k];
+                if (color.empty()) { continue; }
+                m_colorBatches[k] = ContactConstraintSimd::Build(
+                    ctx.contacts, color.data(), static_cast<int>(color.size()), dummyIndex);
             }
 
-            // 3) Restitution (once).
-            ApplyRestitution(ctx);
+            // 5) Sub-step loop. Stage order matches the scalar driver (Box2D v3
+            //    b2SolverStage sequence): integrate-vel -> warm-start -> solve(bias)
+            //    -> integrate-pos -> relax(no-bias). Joints solve scalar against the
+            //    world; bridge velocities SoA<->world only around the joint passes
+            //    (skipped entirely when there are no joints -> pure-SoA hot path).
+            for (int s = 0; s < substeps; ++s)
+            {
+                IntegrateVelocitiesSoA(ctx, h);
 
-            // The converged per-point impulses are NOT stored by the solver. After
-            // Solve() returns, PhysicsWorld::Step walks ctx.contacts and writes each
-            // point's accumulated (normal, tangent) impulse back onto its source
-            // persistent Contact's manifold point (via sourceContactId), where it
-            // persists to next step. This replaced the old solver-owned m_cache.
+                // Warm start (per sub-step -- v3 stage order): all colors + overflow.
+                for (auto& batches : m_colorBatches) { SimdSolve::WarmStart(batches, m_bodyState); }
+                OverflowWarmStart(ctx);
 
-            // Commit accumulated position deltas onto the world (the solver owns
-            // dynamic position integration; Step's old inline stage-4 is gone).
-            FinalizePositions(ctx);
+                if (hasJoints) { SyncVelToWorld(ctx); SolveJoints(ctx); SyncVelFromWorld(ctx); }
+
+                // Biased solve: all colors + overflow.
+                for (auto& batches : m_colorBatches)
+                {
+                    SimdSolve::SolveNormalAndFriction(batches, m_bodyState, static_cast<float>(h), /*useBias=*/true, maxBiasVel);
+                }
+                OverflowSolve(ctx, h, /*useBias=*/true);
+
+                IntegratePositionsSoA(ctx, h);
+
+                if (hasJoints) { SyncVelToWorld(ctx); SolveJoints(ctx); SyncVelFromWorld(ctx); }
+
+                // Relax (no bias): all colors + overflow.
+                for (auto& batches : m_colorBatches)
+                {
+                    SimdSolve::SolveNormalAndFriction(batches, m_bodyState, static_cast<float>(h), /*useBias=*/false, maxBiasVel);
+                }
+                OverflowSolve(ctx, h, /*useBias=*/false);
+            }
+
+            // 6) Restitution (once): all colors + overflow.
+            for (auto& batches : m_colorBatches) { SimdSolve::ApplyRestitution(batches, m_bodyState, threshold); }
+            OverflowRestitution(ctx);
+
+            // 7) Store the converged impulses back onto ctx.contacts so the world's
+            //    stage-3b pool write-back persists warm-start (HAZARD 3). Overflow
+            //    constraints already carry their accumulated impulses on
+            //    ctx.contacts (the scalar overflow path wrote them in place); only
+            //    the colored batches need this copy-back.
+            for (std::size_t k = 0; k < m_coloring.colors.size(); ++k)
+            {
+                const std::vector<std::uint32_t>& color = m_coloring.colors[k];
+                if (color.empty()) { continue; }
+                SimdSolve::StoreImpulses(m_colorBatches[k], ctx.contacts, color.data());
+            }
+
+            // 8) Push final velocities to the world, then commit positions (compound-
+            //    COM) from the SoA dp/dq.
+            m_bodyState.SyncOut(w);
+            FinalizePositionsSoA(ctx);
         }
 
     } // namespace Physics

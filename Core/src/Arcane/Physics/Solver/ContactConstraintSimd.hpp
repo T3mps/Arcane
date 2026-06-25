@@ -68,8 +68,9 @@
 #include <cstdint>
 #include <vector>
 
-#include <Arcane/Math/Simd.hpp>              // Arcane::Simd::f32w::width
-#include <Arcane/Physics/Solver/Solver.hpp>  // ContactConstraint / ...Point
+#include <Arcane/Math/Simd.hpp>                  // Arcane::Simd::f32w::width + ops
+#include <Arcane/Physics/Solver/BodyStateSoA.hpp> // gather/scatter target (T5 solve)
+#include <Arcane/Physics/Solver/Solver.hpp>       // ContactConstraint / ...Point
 
 namespace Arcane
 {
@@ -149,12 +150,28 @@ namespace Arcane
             // lane L (computing dynB + per-point pointValid, and zeroing a point
             // whose index >= pointCount); otherwise lane L is PADDING -> a
             // lane-wide no-op (zero inv-mass/inertia on both bodies, both points
-            // invalid + impulses 0, bodyIndex 0). It COPIES values only -- it
-            // does not compute effective masses or soft coefficients.
+            // invalid + impulses 0). It COPIES values only -- it does not compute
+            // effective masses or soft coefficients.
+            //
+            // SCATTER-SAFE DUMMY SLOT (Task 5). The lane-wide solve scatters body
+            // velocities back UNMASKED (AVX2 scatter serializes -> last write wins).
+            // A padding lane, or a read-only-B lane (static/kinematic/span), must
+            // NOT scatter to a real dynamic body's slot or it could clobber that
+            // body's freshly-solved velocity with a stale value. So the caller
+            // sizes BodyStateSoA to world.Count()+1 and passes dummyIndex =
+            // world.Count(): a zeroed throwaway slot that ONLY padding + read-only-B
+            // lanes target. The gather/scatter then run unconditionally and only the
+            // dummy slot ever takes a redundant write -- no real body is corrupted.
+            //
+            // dummyIndex DEFAULTS to 0 so existing Task-4 packer tests (which assert
+            // read-only-B / padding bodyIndexB == 0) keep their contract; the solver
+            // always passes a real dummy index. bodyIndexA is never dummied (A is
+            // always a dynamic body in the solver feed).
             //
             // refs may be null iff count == 0.
             static std::vector<ContactConstraintSimd>
-            Build(const ContactConstraint* ccs, const std::uint32_t* refs, int count)
+            Build(const ContactConstraint* ccs, const std::uint32_t* refs, int count,
+                  std::int32_t dummyIndex = 0)
             {
                 std::vector<ContactConstraintSimd> batches;
                 if (count <= 0)
@@ -177,11 +194,11 @@ namespace Arcane
                         const int g = base + L;
                         if (g < count)
                         {
-                            PackLane(dst, L, ccs[refs[g]]);
+                            PackLane(dst, L, ccs[refs[g]], dummyIndex);
                         }
                         else
                         {
-                            PadLane(dst, L);
+                            PadLane(dst, L, dummyIndex);
                         }
                     }
                 }
@@ -191,8 +208,10 @@ namespace Arcane
 
         private:
             // Copy one source ContactConstraint into lane L (the live path).
+            // dummyIndex is the scatter-safe throwaway slot a read-only B points at.
             static void PackLane(ContactConstraintSimd& dst, int L,
-                                 const ContactConstraint& cc)
+                                 const ContactConstraint& cc,
+                                 std::int32_t dummyIndex)
             {
                 dst.normalX[L]      = static_cast<float>(cc.normal.x);
                 dst.normalY[L]      = static_cast<float>(cc.normal.y);
@@ -208,21 +227,35 @@ namespace Arcane
 
                 dst.bodyIndexA[L]   = static_cast<std::int32_t>(cc.bodyA);
 
-                // dynB: B's velocity is mutated only if B is a real dynamic body.
-                // A static/kinematic body (invMassB == 0) or a tile span
-                // (bodyBIsBody == false) is read-only -> mask off (no scatter).
+                // dynB: B's velocity is MUTATED (scattered back) only if B is a real
+                // dynamic body. A static/kinematic body (invMassB == 0) or a tile
+                // span (bodyBIsBody == false) is read-only -> mask off (no scatter).
                 const bool dyn = cc.bodyBIsBody && cc.invMassB > Real(0);
                 dst.dynB[L]         = dyn ? 1.0f : 0.0f;
 
-                // bodyIndexB must be an in-range gather slot on EVERY lane (the
-                // T5 read of B's velocity is an UNMASKED gather). For read-only B
-                // (dynB==0: static/kinematic body OR a tile span whose
-                // cc.bodyB == kInvalidSlot casts to -1) clamp to 0 -- slot 0
-                // always exists if any body exists, and the gathered value is
-                // discarded by the dynB mask anyway. Mirrors the padding-lane
-                // rationale. A is always dynamic in the solver feed, so bodyIndexA
-                // needs no such clamp.
-                dst.bodyIndexB[L]   = dyn ? static_cast<std::int32_t>(cc.bodyB) : 0;
+                // bodyIndexB must be an in-range gather slot on EVERY lane (the T5
+                // read of B's velocity is an UNMASKED gather) AND must not let a
+                // read-only B's UNMASKED scatter clobber a real DYNAMIC body's
+                // freshly-solved velocity. Two cases for a read-only B:
+                //   * a REAL body (kinematic/static, bodyBIsBody && invMassB==0):
+                //     point at its REAL slot cc.bodyB. The solver MUST gather its
+                //     velocity (a kinematic plate's authored +X feeds the relative-
+                //     velocity term that drives the push -- the scalar SolveContacts
+                //     reads vB for any bodyBIsBody endpoint). The scatter writes back
+                //     the UNCHANGED gathered value (select(dynB=0, new, gathered)),
+                //     so the kinematic/static slot is preserved -- idempotent even if
+                //     several read-only-B lanes in a color share it, and a kinematic
+                //     body is never a dynamic A, so it can never collide with an
+                //     updated A slot.
+                //   * NOT a real body (tile span, bodyBIsBody == false, cc.bodyB ==
+                //     kInvalidSlot -> -1): point at the scatter-safe DUMMY slot (the
+                //     gather must hit a valid address; the value is discarded by the
+                //     dynB mask and the scatter only touches the throwaway dummy).
+                // A is always dynamic in the solver feed, so bodyIndexA needs no
+                // clamp. dummyIndex defaults to 0 (the Task-4 packer contract).
+                dst.bodyIndexB[L]   = cc.bodyBIsBody
+                                          ? static_cast<std::int32_t>(cc.bodyB)
+                                          : dummyIndex;
 
                 for (int p = 0; p < 2; ++p)
                 {
@@ -254,9 +287,13 @@ namespace Arcane
 
             // Mask a whole lane to a no-op (a padding lane in the tail batch).
             // Zero inv-mass/inertia (immovable -> zero impulse), both points
-            // invalid, bodyIndex a safe in-range 0 (the gather must hit a valid
-            // slot; the masked impulse is 0 so the scatter writes nothing).
-            static void PadLane(ContactConstraintSimd& dst, int L)
+            // invalid, BOTH body indices the scatter-safe dummy slot (the gather
+            // must hit a valid slot; the impulse is 0 so the scatter writes 0 to
+            // the throwaway dummy -- never a real body). dummyIndex defaults to 0
+            // (the Task-4 padding contract) and is the world.Count() throwaway in
+            // the solver feed.
+            static void PadLane(ContactConstraintSimd& dst, int L,
+                                std::int32_t dummyIndex)
             {
                 dst.normalX[L]      = 0.0f;
                 dst.normalY[L]      = 0.0f;
@@ -269,8 +306,8 @@ namespace Arcane
                 dst.invInertiaA[L]  = 0.0f;
                 dst.invMassB[L]     = 0.0f;
                 dst.invInertiaB[L]  = 0.0f;
-                dst.bodyIndexA[L]   = 0;
-                dst.bodyIndexB[L]   = 0;
+                dst.bodyIndexA[L]   = dummyIndex;
+                dst.bodyIndexB[L]   = dummyIndex;
                 dst.dynB[L]         = 0.0f;
                 for (int p = 0; p < 2; ++p)
                 {
@@ -295,6 +332,385 @@ namespace Arcane
                 pt.pointValid[L]     = 0.0f;
             }
         };
+
+        // ====================================================================
+        // Lane-wide contact solve passes (Task 5) -- the TGS-Soft math ported
+        // from SoftStep.cpp, per lane, over Arcane::Simd.
+        // ====================================================================
+        //
+        // Each pass takes the per-color batch vector + the solver's BodyStateSoA
+        // and processes ALL kWidth lanes of every batch (padding/read-only-B lanes
+        // are masked no-ops by construction -- zero inv-mass and the dummy slot).
+        // Graph coloring guarantees no two LIVE lanes in a batch share a dynamic
+        // body, so the gather -> math -> scatter is hazard-free; the only redundant
+        // scatter lands on the dummy slot (see Build's SCATTER-SAFE DUMMY note).
+        //
+        // The math mirrors SoftStep.cpp EXACTLY (per lane):
+        //   WarmStart        : SoftStep.cpp:285-328
+        //   SolveNormalAndFriction(useBias): SoftStep.cpp:330-466 (normal 367-426,
+        //                      friction 428-456, separation re-eval 379-381)
+        //   ApplyRestitution : SoftStep.cpp:519-586
+        // 2D cross helpers inline: CrossWR(w,r) = (-w*r.y, w*r.x);
+        // CrossRP(r,p) = r.x*p.y - r.y*p.x; Dot(a,b) = a.x*b.x + a.y*b.y.
+        //
+        // FP NOTE: the wrapper's plain `* + -` operators round per-op (only
+        // mul_add/mul_sub fuse under /fp:strict). The scalar SoftStep.cpp uses
+        // plain `*`/`+` everywhere (no std::fma), so to BIT-MATCH the scalar oracle
+        // these passes ALSO use plain operators -- NOT mul_add -- for the impulse
+        // accumulation. (mul_add would fuse and diverge from the scalar reference,
+        // breaking lane-width invariance against the forced-scalar oracle.) The
+        // scalar backend's plain operators are exactly C++ float arithmetic, so the
+        // 1-wide path reproduces SoftStep.cpp's scalar result bit-for-bit, and the
+        // 8-wide path differs only by the same per-lane float rounding the scalar
+        // path has -> lane-width invariance holds to <1e-5.
+
+        namespace SimdSolve
+        {
+            using namespace Arcane::Simd;
+
+            // Turn a 1.0f/0.0f float mask lane array into a b32w predicate.
+            ARCANE_SIMD_INLINE b32w MaskOf(const float* maskArr) noexcept
+            {
+                return cmp_gt(load(maskArr), setzero());
+            }
+
+            // Gather a body-state array (vx/vy/w/dpx/dpy/dq) by an i32w slot index.
+            ARCANE_SIMD_INLINE f32w GatherBody(const std::vector<float>& arr,
+                                               i32w idx) noexcept
+            {
+                return gather(arr.data(), idx);
+            }
+            ARCANE_SIMD_INLINE void ScatterBody(std::vector<float>& arr, i32w idx,
+                                                f32w v) noexcept
+            {
+                scatter(arr.data(), idx, v);
+            }
+
+            // ---- WarmStart: apply accumulated n*nImp + t*tImp to body vels -----
+            // Port of SoftStep::WarmStart (SoftStep.cpp:285-328), per lane.
+            inline void WarmStart(std::vector<ContactConstraintSimd>& batches,
+                                  BodyStateSoA& bs)
+            {
+                for (ContactConstraintSimd& cc : batches)
+                {
+                    const i32w ia = iload(cc.bodyIndexA);
+                    const i32w ib = iload(cc.bodyIndexB);
+                    const b32w dyn = MaskOf(cc.dynB);
+
+                    const f32w nx = load(cc.normalX);
+                    const f32w ny = load(cc.normalY);
+                    const f32w tx = -ny;            // tangent = (-n.y, n.x)
+                    const f32w ty = nx;
+
+                    const f32w iMa = load(cc.invMassA);
+                    const f32w iIa = load(cc.invInertiaA);
+                    const f32w iMb = load(cc.invMassB);
+                    const f32w iIb = load(cc.invInertiaB);
+
+                    f32w vAx = GatherBody(bs.vx, ia), vAy = GatherBody(bs.vy, ia);
+                    f32w wA  = GatherBody(bs.w,  ia);
+                    f32w vBx = GatherBody(bs.vx, ib), vBy = GatherBody(bs.vy, ib);
+                    f32w wB  = GatherBody(bs.w,  ib);
+
+                    for (int p = 0; p < 2; ++p)
+                    {
+                        const ContactConstraintSimd::Point& pt = cc.points[p];
+                        const f32w nImp = load(pt.normalImpulse);
+                        const f32w tImp = load(pt.tangentImpulse);
+                        const f32w rAx = load(pt.anchorAx), rAy = load(pt.anchorAy);
+                        const f32w rBx = load(pt.anchorBx), rBy = load(pt.anchorBy);
+
+                        // P = n*nImp + tangent*tImp (an inactive point has both
+                        // impulses 0 -> contributes nothing, no mask needed).
+                        const f32w Px = nx * nImp + tx * tImp;
+                        const f32w Py = ny * nImp + ty * tImp;
+
+                        // A += P*iMa ; wA += iIa*(rA x P)
+                        vAx = vAx + Px * iMa;
+                        vAy = vAy + Py * iMa;
+                        wA  = wA  + iIa * (rAx * Py - rAy * Px);
+                        // B -= P*iMb ; wB -= iIb*(rB x P)  (gated by dynB)
+                        vBx = vBx - Px * iMb;
+                        vBy = vBy - Py * iMb;
+                        wB  = wB  - iIb * (rBx * Py - rBy * Px);
+                    }
+
+                    ScatterBody(bs.vx, ia, vAx);
+                    ScatterBody(bs.vy, ia, vAy);
+                    ScatterBody(bs.w,  ia, wA);
+                    // B writes only where dynB; non-dyn lanes write back the
+                    // unchanged gathered value (-> the dummy slot, harmless).
+                    ScatterBody(bs.vx, ib, select(dyn, vBx, GatherBody(bs.vx, ib)));
+                    ScatterBody(bs.vy, ib, select(dyn, vBy, GatherBody(bs.vy, ib)));
+                    ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
+                }
+            }
+
+            // ---- Normal + friction solve --------------------------------------
+            // Port of SoftStep::SolveContacts (SoftStep.cpp:330-466), per lane.
+            // invH = 1/h, maxBiasVel = world.ContactPushMaxVelocity().
+            inline void SolveNormalAndFriction(std::vector<ContactConstraintSimd>& batches,
+                                               BodyStateSoA& bs, float h, bool useBias,
+                                               float maxBiasVel)
+            {
+                const f32w invH = (h > 0.0f) ? splat(1.0f / h) : setzero();
+                const f32w vMaxNeg = splat(-maxBiasVel);
+                const f32w one = splat(1.0f);
+                const f32w zero = setzero();
+
+                for (ContactConstraintSimd& cc : batches)
+                {
+                    const i32w ia = iload(cc.bodyIndexA);
+                    const i32w ib = iload(cc.bodyIndexB);
+                    const b32w dyn = MaskOf(cc.dynB);
+
+                    const f32w nx = load(cc.normalX);
+                    const f32w ny = load(cc.normalY);
+                    const f32w tx = -ny;
+                    const f32w ty = nx;
+
+                    const f32w iMa = load(cc.invMassA);
+                    const f32w iIa = load(cc.invInertiaA);
+                    const f32w iMb = load(cc.invMassB);
+                    const f32w iIb = load(cc.invInertiaB);
+
+                    const f32w ccBias = load(cc.biasRate);
+                    const f32w ccMassScale = load(cc.massScale);
+                    const f32w ccImpScale = load(cc.impulseScale);
+                    const f32w ccFriction = load(cc.friction);
+
+                    f32w vAx = GatherBody(bs.vx, ia), vAy = GatherBody(bs.vy, ia);
+                    f32w wA  = GatherBody(bs.w,  ia);
+                    f32w vBx = GatherBody(bs.vx, ib), vBy = GatherBody(bs.vy, ib);
+                    f32w wB  = GatherBody(bs.w,  ib);
+
+                    const f32w dpAx = GatherBody(bs.dpx, ia), dpAy = GatherBody(bs.dpy, ia);
+                    const f32w drA  = GatherBody(bs.dq,  ia);
+                    const f32w dpBx = GatherBody(bs.dpx, ib), dpBy = GatherBody(bs.dpy, ib);
+                    const f32w drB  = GatherBody(bs.dq,  ib);
+
+                    // ---- normal solve (per point) -----------------------------
+                    for (int p = 0; p < 2; ++p)
+                    {
+                        ContactConstraintSimd::Point& pt = cc.points[p];
+                        const f32w rAx = load(pt.anchorAx), rAy = load(pt.anchorAy);
+                        const f32w rBx = load(pt.anchorBx), rBy = load(pt.anchorBy);
+                        const f32w baseSep = load(pt.baseSep);
+                        const f32w nMass = load(pt.normalMass);
+                        f32w nImp = load(pt.normalImpulse);
+
+                        // s = baseSep + dot((dpA + drA x rA) - (dpB + drB x rB), n).
+                        // CrossWR(dr, r) = (-dr*r.y, dr*r.x).
+                        const f32w prAx = dpAx + (-drA * rAy);
+                        const f32w prAy = dpAy + ( drA * rAx);
+                        const f32w prBx = dpBx + (-drB * rBy);
+                        const f32w prBy = dpBy + ( drB * rBx);
+                        const f32w s = baseSep + ((prAx - prBx) * nx + (prAy - prBy) * ny);
+
+                        // bias / massScale / impulseScale branch (SoftStep:383-400).
+                        //   s > 0  : speculative gap -> bias = s*invH, scale 1/0
+                        //   s <= 0 & useBias : bias = max(ccBias*s, -maxBiasVel),
+                        //                      massScale/impulseScale from contact
+                        //   s <= 0 & !useBias: bias 0, scale 1/0 (relax)
+                        const b32w gap = cmp_gt(s, zero);
+                        const f32w biasGap = s * invH;
+                        const f32w biasPen = max(ccBias * s, vMaxNeg);
+                        f32w bias, massScale, impScale;
+                        if (useBias)
+                        {
+                            bias      = select(gap, biasGap, biasPen);
+                            massScale = select(gap, one, ccMassScale);
+                            impScale  = select(gap, zero, ccImpScale);
+                        }
+                        else
+                        {
+                            // Relax pass: penetration branch is bias 0, scale 1/0.
+                            bias      = select(gap, biasGap, zero);
+                            massScale = one;
+                            impScale  = zero;
+                        }
+
+                        // vn = dot((vA + wA x rA) - (vB + wB x rB), n).
+                        const f32w dvx = (vAx + (-wA * rAy)) - (vBx + (-wB * rBy));
+                        const f32w dvy = (vAy + ( wA * rAx)) - (vBy + ( wB * rBx));
+                        const f32w vn = dvx * nx + dvy * ny;
+
+                        // impulse = -nMass*massScale*(vn+bias) - impScale*nImp.
+                        f32w impulse = -nMass * massScale * (vn + bias) - impScale * nImp;
+                        // accumulated clamp >= 0.
+                        const f32w newI = max(nImp + impulse, zero);
+                        impulse = newI - nImp;
+                        nImp = newI;
+                        store(pt.normalImpulse, nImp);
+
+                        // P = n*impulse ; apply to A (+) and B (-, gated).
+                        const f32w Px = nx * impulse, Py = ny * impulse;
+                        vAx = vAx + Px * iMa;
+                        vAy = vAy + Py * iMa;
+                        wA  = wA  + iIa * (rAx * Py - rAy * Px);
+                        vBx = vBx - Px * iMb;
+                        vBy = vBy - Py * iMb;
+                        wB  = wB  - iIb * (rBx * Py - rBy * Px);
+                    }
+
+                    // ---- friction solve (per point) ---------------------------
+                    for (int p = 0; p < 2; ++p)
+                    {
+                        ContactConstraintSimd::Point& pt = cc.points[p];
+                        const f32w rAx = load(pt.anchorAx), rAy = load(pt.anchorAy);
+                        const f32w rBx = load(pt.anchorBx), rBy = load(pt.anchorBy);
+                        const f32w tMass = load(pt.tangentMass);
+                        const f32w nImp = load(pt.normalImpulse);
+                        f32w tImp = load(pt.tangentImpulse);
+
+                        const f32w dvx = (vAx + (-wA * rAy)) - (vBx + (-wB * rBy));
+                        const f32w dvy = (vAy + ( wA * rAx)) - (vBy + ( wB * rBx));
+                        const f32w vt = dvx * tx + dvy * ty;
+
+                        f32w impulse = -tMass * vt;
+
+                        // clamp to [-friction*nImp, +friction*nImp] (Coulomb cone).
+                        const f32w maxFric = ccFriction * nImp;
+                        const f32w cand = tImp + impulse;
+                        const f32w newI = max(-maxFric, min(cand, maxFric));
+                        impulse = newI - tImp;
+                        tImp = newI;
+                        store(pt.tangentImpulse, tImp);
+
+                        const f32w Px = tx * impulse, Py = ty * impulse;
+                        vAx = vAx + Px * iMa;
+                        vAy = vAy + Py * iMa;
+                        wA  = wA  + iIa * (rAx * Py - rAy * Px);
+                        vBx = vBx - Px * iMb;
+                        vBy = vBy - Py * iMb;
+                        wB  = wB  - iIb * (rBx * Py - rBy * Px);
+                    }
+
+                    ScatterBody(bs.vx, ia, vAx);
+                    ScatterBody(bs.vy, ia, vAy);
+                    ScatterBody(bs.w,  ia, wA);
+                    ScatterBody(bs.vx, ib, select(dyn, vBx, GatherBody(bs.vx, ib)));
+                    ScatterBody(bs.vy, ib, select(dyn, vBy, GatherBody(bs.vy, ib)));
+                    ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
+                }
+            }
+
+            // ---- Restitution ---------------------------------------------------
+            // Port of SoftStep::ApplyRestitution (SoftStep.cpp:519-586), per lane.
+            // A whole contact with restitution <= 0 is skipped scalar-side; here we
+            // mask it lane-wise (restitution<=0 -> no rebound impulse). A point only
+            // rebounds when relVel <= -threshold AND nImp > 0.
+            inline void ApplyRestitution(std::vector<ContactConstraintSimd>& batches,
+                                         BodyStateSoA& bs, float threshold)
+            {
+                const f32w negThresh = splat(-threshold);
+                const f32w zero = setzero();
+
+                for (ContactConstraintSimd& cc : batches)
+                {
+                    const i32w ia = iload(cc.bodyIndexA);
+                    const i32w ib = iload(cc.bodyIndexB);
+                    const b32w dyn = MaskOf(cc.dynB);
+
+                    const f32w rest = load(cc.restitution);
+                    const b32w ccHasRest = cmp_gt(rest, zero);
+                    // SoftStep skips a contact with restitution<=0 entirely; if NO
+                    // lane in this batch has restitution, the whole batch is a no-op.
+                    if (none(ccHasRest))
+                    {
+                        continue;
+                    }
+
+                    const f32w nx = load(cc.normalX);
+                    const f32w ny = load(cc.normalY);
+                    const f32w iMa = load(cc.invMassA);
+                    const f32w iIa = load(cc.invInertiaA);
+                    const f32w iMb = load(cc.invMassB);
+                    const f32w iIb = load(cc.invInertiaB);
+
+                    f32w vAx = GatherBody(bs.vx, ia), vAy = GatherBody(bs.vy, ia);
+                    f32w wA  = GatherBody(bs.w,  ia);
+                    f32w vBx = GatherBody(bs.vx, ib), vBy = GatherBody(bs.vy, ib);
+                    f32w wB  = GatherBody(bs.w,  ib);
+
+                    for (int p = 0; p < 2; ++p)
+                    {
+                        ContactConstraintSimd::Point& pt = cc.points[p];
+                        const f32w rAx = load(pt.anchorAx), rAy = load(pt.anchorAy);
+                        const f32w rBx = load(pt.anchorBx), rBy = load(pt.anchorBy);
+                        const f32w nMass = load(pt.normalMass);
+                        const f32w relVel = load(pt.relVel);
+                        f32w nImp = load(pt.normalImpulse);
+
+                        // Active lane: ccHasRest AND relVel <= -threshold AND nImp>0.
+                        const b32w fast = cmp_le(relVel, negThresh);
+                        const b32w took = cmp_gt(nImp, zero);
+                        // combine masks: ccHasRest & fast & took. b32w has no & op,
+                        // so AND via select (true-lane keeps next mask, else false).
+                        const f32w fastF = select(fast, splat(1.0f), zero);
+                        const f32w tookF = select(took, splat(1.0f), zero);
+                        const f32w restF = select(ccHasRest, splat(1.0f), zero);
+                        const b32w active = cmp_gt(restF * fastF * tookF, zero);
+
+                        const f32w dvx = (vAx + (-wA * rAy)) - (vBx + (-wB * rBy));
+                        const f32w dvy = (vAy + ( wA * rAx)) - (vBy + ( wB * rBx));
+                        const f32w vn = dvx * nx + dvy * ny;
+
+                        // impulse = -nMass*(vn + restitution*relVel); accumulated >=0.
+                        f32w impulse = -nMass * (vn + rest * relVel);
+                        const f32w newI = max(nImp + impulse, zero);
+                        impulse = newI - nImp;
+                        // gate the impulse to active lanes only (inactive -> 0).
+                        impulse = select(active, impulse, zero);
+                        // nImp only updates on active lanes (matches scalar skip).
+                        store(pt.normalImpulse, select(active, newI, nImp));
+
+                        const f32w Px = nx * impulse, Py = ny * impulse;
+                        vAx = vAx + Px * iMa;
+                        vAy = vAy + Py * iMa;
+                        wA  = wA  + iIa * (rAx * Py - rAy * Px);
+                        vBx = vBx - Px * iMb;
+                        vBy = vBy - Py * iMb;
+                        wB  = wB  - iIb * (rBx * Py - rBy * Px);
+                    }
+
+                    ScatterBody(bs.vx, ia, vAx);
+                    ScatterBody(bs.vy, ia, vAy);
+                    ScatterBody(bs.w,  ia, wA);
+                    ScatterBody(bs.vx, ib, select(dyn, vBx, GatherBody(bs.vx, ib)));
+                    ScatterBody(bs.vy, ib, select(dyn, vBy, GatherBody(bs.vy, ib)));
+                    ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
+                }
+            }
+
+            // ---- Store accumulated impulses back onto ctx.contacts (Hazard 3) --
+            // After the solve, the converged impulses live in the SoA batches. Copy
+            // them back into ctx.contacts[ref].points[p].normalImpulse/tangentImpulse
+            // so the world's stage-3b pool write-back persists warm-start. Keyed by
+            // the color's refs (same order Build packed them: lane L of batch b is
+            // global index b*kWidth+L = refs index, EXCLUDING padding lanes).
+            inline void StoreImpulses(const std::vector<ContactConstraintSimd>& batches,
+                                      ContactConstraint* ccs, const std::uint32_t* refs)
+            {
+                constexpr int W = ContactConstraintSimd::kWidth;
+                for (std::size_t b = 0; b < batches.size(); ++b)
+                {
+                    const ContactConstraintSimd& batch = batches[b];
+                    for (int L = 0; L < batch.count; ++L)   // live lanes only
+                    {
+                        const std::uint32_t ref = refs[b * W + static_cast<std::size_t>(L)];
+                        ContactConstraint& cc = ccs[ref];
+                        for (int p = 0; p < cc.pointCount; ++p)
+                        {
+                            cc.points[p].normalImpulse =
+                                static_cast<Real>(batch.points[p].normalImpulse[L]);
+                            cc.points[p].tangentImpulse =
+                                static_cast<Real>(batch.points[p].tangentImpulse[L]);
+                        }
+                    }
+                }
+            }
+        } // namespace SimdSolve
 
     } // namespace Physics
 } // namespace Arcane

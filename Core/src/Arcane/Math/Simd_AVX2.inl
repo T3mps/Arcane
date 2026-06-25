@@ -16,6 +16,11 @@ ARCANE_SIMD_INLINE f32w splat(float x)    noexcept { return f32w{ _mm256_set1_ps
 ARCANE_SIMD_INLINE f32w setzero()         noexcept { return f32w{ _mm256_setzero_ps() }; }
 ARCANE_SIMD_INLINE i32w isplat(int32_t x) noexcept { return i32w{ _mm256_set1_epi32(x) }; }
 ARCANE_SIMD_INLINE i32w iota()            noexcept { return i32w{ _mm256_setr_epi32(0,1,2,3,4,5,6,7) }; }
+// Aligned load of `width` int32 lanes from a 32-byte-aligned array (the SoA
+// body-index arrays the solver gathers/scatters by are alignas(32)). Exact load
+// -> bit-identical (no rounding). The contact-solver builds its gather/scatter
+// index vector from a plain int32_t[width] array via this op.
+ARCANE_SIMD_INLINE i32w iload(const int32_t* p) noexcept { assert((reinterpret_cast<std::uintptr_t>(p) & 31u) == 0); return i32w{ _mm256_load_si256(reinterpret_cast<const __m256i*>(p)) }; }
 
 ARCANE_SIMD_INLINE f32w load(const float* p)    noexcept { assert((reinterpret_cast<std::uintptr_t>(p) & 31u) == 0); return f32w{ _mm256_load_ps(p) }; }
 ARCANE_SIMD_INLINE void store(float* p, f32w a)  noexcept { assert((reinterpret_cast<std::uintptr_t>(p) & 31u) == 0); _mm256_store_ps(p, a.v); }

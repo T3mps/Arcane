@@ -56,6 +56,9 @@
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Solver/Solver.hpp>
+#include <Arcane/Physics/Solver/BodyStateSoA.hpp>        // SIMD solve body state
+#include <Arcane/Physics/Solver/ContactColoring.hpp>     // per-step coloring
+#include <Arcane/Physics/Solver/ContactConstraintSimd.hpp> // SoA batches + lane solve
 
 namespace Arcane
 {
@@ -134,14 +137,68 @@ namespace Arcane
             // position/angle + refresh the mover broadphase (end of Step).
             void FinalizePositions(SolverContext& ctx);
 
+            // ---- SIMD lane-wide contact-solve helpers (Part 1) -------------
+            //
+            // The contact solve is the hot path; Solve() now runs it lane-wide
+            // over a graph-colored SoA (BodyStateSoA + ContactConstraintSimd) via
+            // the SimdSolve passes. These helpers integrate velocity/position over
+            // the SoA (scalar O(n)), bridge velocities to/from the world for the
+            // (unchanged) scalar joint passes, and solve the per-constraint overflow
+            // bucket scalar. The scalar SolveContacts/WarmStart/ApplyRestitution
+            // above are RETAINED only for the ISolver SolveVelocity/Relax phase
+            // entry points (a profiler/oracle seam) -- Solve() no longer calls them.
+
+            // Integrate awake-dynamic velocities (gravity + linear damping) over
+            // the BodyStateSoA for one sub-step (the SoA-resident counterpart of
+            // IntegrateVelocities; same predicate + math).
+            void IntegrateVelocitiesSoA(SolverContext& ctx, Real h);
+
+            // Accumulate dp/dq += v*h over the BodyStateSoA for one sub-step.
+            void IntegratePositionsSoA(SolverContext& ctx, Real h);
+
+            // Commit the SoA dp/dq onto the world position/angle (compound-COM
+            // commit, byte-identical to FinalizePositions but reading the SoA).
+            void FinalizePositionsSoA(SolverContext& ctx);
+
+            // Velocity bridge for the scalar joint passes: copy awake-dynamic
+            // velocities SoA->world (before a joint pass) / world->SoA (after).
+            // Skipped entirely when there are no joints (the hot-path stays pure
+            // SoA). dp/dq are NOT touched (joints do not read them).
+            void SyncVelToWorld(SolverContext& ctx);
+            void SyncVelFromWorld(SolverContext& ctx);
+
+            // Solve the overflow (un-colorable) refs SEQUENTIALLY, width-1 scalar,
+            // over the BodyStateSoA -- one constraint at a time so they are scatter-
+            // safe even though they may share bodies. Mirrors SoftStep's scalar
+            // WarmStart/SolveContacts/ApplyRestitution math, reading/writing the SoA.
+            void OverflowWarmStart(SolverContext& ctx);
+            void OverflowSolve(SolverContext& ctx, Real h, bool useBias);
+            void OverflowRestitution(SolverContext& ctx);
+
             // ---- per-body sub-step scratch (SoA-indexed; reused) -----------
             //
             // deltaPos/deltaRot accumulate this Step's motion across sub-steps
             // (TGS: positions are tracked as deltas so the soft solve can
             // re-evaluate the current separation each sub-step, then committed
             // once at the end). Sized to the world's high-water slot count.
+            // RETAINED for the scalar SolveContacts/IntegratePositions/Finalize
+            // path (the ISolver phase seam); the SIMD Solve() path uses m_bodyState.
             std::vector<Vec2> m_deltaPos;
             std::vector<Real> m_deltaRot;
+
+            // ---- SIMD solve state (reused across steps) --------------------
+            //
+            // m_bodyState: packed velocity + TGS dp/dq, indexed by world slot, sized
+            //   to world.Count()+1 (the extra slot is the SCATTER-SAFE DUMMY -- see
+            //   ContactConstraintSimd::Build). The lane-wide solve gathers/scatters
+            //   through it; world<->SoA sync happens at the Step boundary + around
+            //   joint passes.
+            // m_edges/m_coloring/m_colorBatches: per-step coloring scratch. The
+            //   batch vectors are kept per color so overflow can be solved after.
+            BodyStateSoA                    m_bodyState;
+            std::vector<ColorEdge>          m_edges;
+            Coloring                        m_coloring;
+            std::vector<std::vector<ContactConstraintSimd>> m_colorBatches;
         };
 
     } // namespace Physics

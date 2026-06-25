@@ -12,6 +12,14 @@
 // multiply-add on every backend, incl. std::fma in scalar); rsqrt/recip are
 // hardware-estimate approximations (tolerance-checked, not bit-matched).
 //
+// Op surface (each backend provides): splat/setzero/isplat/iota/iload, load/
+// store/loadu/storeu, + - * / unary- (and the compound-assign forms), mul_add/
+// mul_sub (the only fused ops under /fp:strict), min/max/abs/sqrt/rsqrt/recip,
+// cmp_gt/ge/lt/le/eq -> b32w, select, any/all/none, gather/scatter. `iload`
+// builds an i32w from a plain int32_t[width] array (the missing counterpart to
+// load's f32w; the contact solver needs per-lane body indices as an i32w for
+// gather/scatter). It is an EXACT load (bit-identical, no rounding).
+//
 // Define ARCANE_SIMD_SCALAR before including to force the scalar backend on any
 // target (used by the forced-scalar test TU).
 //
