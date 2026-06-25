@@ -101,7 +101,7 @@ namespace Arcane
                     continue;
                 }
                 // Compound-COM dynamics (cross-check oracle parity with
-                // SoftStep::FinalizePositions): integrate the CENTER OF MASS by
+                // SoftStep::FinalizePositionsSoA): integrate the CENTER OF MASS by
                 // the (COM) linear velocity, advance the angle, then reconstruct
                 // the ORIGIN from the new COM + new angle. VelSlot is the COM
                 // linear velocity (Box2D body-origin/COM model). For

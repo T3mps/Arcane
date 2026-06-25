@@ -41,19 +41,6 @@ namespace Arcane
             }
         } // namespace
 
-        // ===================================================================
-        // Scratch sizing
-        // ===================================================================
-
-        void SoftStep::EnsureScratch(std::uint32_t n)
-        {
-            if (n > m_deltaPos.size())
-            {
-                m_deltaPos.resize(n, Vec2(Real(0), Real(0)));
-                m_deltaRot.resize(n, Real(0));
-            }
-        }
-
         void SoftStep::DropBody(std::uint32_t slot)
         {
             // Warm-start impulses now live on the persistent Contact, which the
@@ -69,10 +56,11 @@ namespace Arcane
         // BodyStateSoA world<->solver sync (SIMD constraint-solver Task 1)
         // ===================================================================
         //
-        // CONTRACT: the caller Resize()s the SoA to world.Count() (which zeroes
-        // every array) before SyncIn. SyncIn then OVERWRITES only the slots that
-        // satisfy the awake-dynamic predicate -- the SAME predicate the solver's
-        // IntegrateVelocities / IntegratePositions / FinalizePositions use:
+        // CONTRACT: the caller Resize()s the SoA to world.Count()+1 (which zeroes
+        // every array; the "+1" tail is the scatter-safe dummy slot) before SyncIn.
+        // SyncIn then OVERWRITES only the slots that satisfy the awake-dynamic
+        // predicate -- the SAME predicate the solver's IntegrateVelocitiesSoA /
+        // IntegratePositionsSoA / FinalizePositionsSoA use:
         //   Alive(i) && TypeSlot(i) == BodyType::Dynamic && AwakeSlot(i).
         // Non-matching slots (statics, kinematics, asleep/dead dynamics) are
         // LEFT AS-IS (zero after the caller's Resize). For matched slots SyncIn
@@ -81,9 +69,10 @@ namespace Arcane
         //
         // SyncOut writes the packed velocities BACK to the world for the SAME
         // predicate, and ONLY the velocities -- positions are committed by the
-        // solver's FinalizePositions, never here. Nothing consumes this bridge
-        // yet (the solver wiring is a later task); these defs live here (not the
-        // header) because they need the PhysicsWorld slot accessors.
+        // solver's FinalizePositionsSoA, never here. SoftStep::Solve consumes this
+        // bridge (SyncIn at the Step boundary, SyncOut after the colored solve);
+        // these defs live here (not the header) because they need the PhysicsWorld
+        // slot accessors.
 
         void BodyStateSoA::SyncIn(const PhysicsWorld& world)
         {
@@ -97,8 +86,8 @@ namespace Arcane
 
                 // ALL alive bodies' velocities are mirrored so the lane-wide solve
                 // can GATHER a read-only B's velocity (a kinematic plate's authored
-                // +X, a static body's 0). The scalar SolveContacts reads vB/wB for
-                // ANY bodyBIsBody endpoint (its velocity feeds the relative-velocity
+                // +X, a static body's 0). The contact solve reads vB/wB for ANY
+                // bodyBIsBody endpoint (its velocity feeds the relative-velocity
                 // term that drives the push), even when B is not MUTATED -- so the
                 // SoA must carry that velocity too, else a kinematic-pushes-dynamic
                 // contact would see B at rest and never push. dp/dq stay 0 for a
@@ -244,368 +233,6 @@ namespace Arcane
             }
         }
 
-        // ISolver phase entry points. The whole-Step Solve() driver above calls
-        // the lower-level SolveContacts directly (it interleaves the velocity +
-        // position integration the v3 algorithm folds into the sub-step loop),
-        // but these honor the ISolver contract so a profiler / oracle / future
-        // caller can drive the phases individually. SolveVelocity = biased soft
-        // solve; Relax = the no-bias pass that removes the bias-injected energy.
-        void SoftStep::SolveVelocity(SolverContext& ctx, int /*substep*/)
-        {
-            SolveContacts(ctx, ctx.subDt, /*useBias=*/true);
-        }
-
-        void SoftStep::Relax(SolverContext& ctx, int /*substep*/)
-        {
-            SolveContacts(ctx, ctx.subDt, /*useBias=*/false);
-        }
-
-        // ===================================================================
-        // Sub-step phases
-        // ===================================================================
-
-        void SoftStep::IntegrateVelocities(SolverContext& ctx, Real h)
-        {
-            PhysicsWorld& w = *ctx.world;
-            const Vec2 g = ctx.gravity;
-
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
-            {
-                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
-                {
-                    continue;
-                }
-                if (w.InvMassSlot(i) <= Real(0))
-                {
-                    continue; // pinned dynamic (mass override 0) -- never integrates
-                }
-                Vec2 v = w.VelSlot(i);
-                v += g * h;                 // gravity (gravityScale = 1)
-                const Real d = w.LinDampSlot(i);
-                Real wv = w.AngVelSlot(i);
-                if (d > Real(0))
-                {
-                    const Real f = Real(1) / (Real(1) + d * h);
-                    v  *= f;
-                    wv *= f;
-                }
-                w.SetVelSlot(i, v);
-                w.SetAngVelSlot(i, wv);
-            }
-        }
-
-        void SoftStep::WarmStart(SolverContext& ctx)
-        {
-            PhysicsWorld& w = *ctx.world;
-            for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
-            {
-                ContactConstraint& cc = ctx.contacts[c];
-                const Vec2 n = cc.normal;
-                const Vec2 tangent(-n.y, n.x);
-
-                Vec2 vA = w.VelSlot(cc.bodyA);
-                Real wA = w.AngVelSlot(cc.bodyA);
-                Vec2 vB(Real(0), Real(0));
-                Real wB = Real(0);
-                const bool dynB = cc.bodyBIsBody && cc.invMassB > Real(0);
-                if (cc.bodyBIsBody)
-                {
-                    vB = w.VelSlot(cc.bodyB);
-                    wB = w.AngVelSlot(cc.bodyB);
-                }
-
-                for (int p = 0; p < cc.pointCount; ++p)
-                {
-                    const ContactConstraintPoint& cp = cc.points[p];
-                    // Normal points B->A (push A out of B): A gets +P, B gets -P
-                    // (matches the Lua applyAt(a, +..) / applyAt(b, -..)).
-                    const Vec2 P = n * cp.normalImpulse + tangent * cp.tangentImpulse;
-                    vA += P * cc.invMassA;
-                    wA += cc.invInertiaA * CrossRP(cp.anchorA, P);
-                    if (dynB)
-                    {
-                        vB -= P * cc.invMassB;
-                        wB -= cc.invInertiaB * CrossRP(cp.anchorB, P);
-                    }
-                }
-
-                w.SetVelSlot(cc.bodyA, vA);
-                w.SetAngVelSlot(cc.bodyA, wA);
-                if (dynB)
-                {
-                    w.SetVelSlot(cc.bodyB, vB);
-                    w.SetAngVelSlot(cc.bodyB, wB);
-                }
-            }
-        }
-
-        void SoftStep::SolveContacts(SolverContext& ctx, Real h, bool useBias)
-        {
-            PhysicsWorld& w = *ctx.world;
-            const Real invH = (h > Real(0)) ? (Real(1) / h) : Real(0);
-            const Real maxBiasVel = w.ContactPushMaxVelocity();
-
-            for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
-            {
-                ContactConstraint& cc = ctx.contacts[c];
-                const Vec2 n = cc.normal;
-                const Vec2 tangent(-n.y, n.x);
-
-                const Real iMa = cc.invMassA, iIa = cc.invInertiaA;
-                const Real iMb = cc.invMassB, iIb = cc.invInertiaB;
-                const bool dynB = cc.bodyBIsBody && iMb > Real(0);
-
-                Vec2 vA = w.VelSlot(cc.bodyA);
-                Real wA = w.AngVelSlot(cc.bodyA);
-                Vec2 vB(Real(0), Real(0));
-                Real wB = Real(0);
-                if (cc.bodyBIsBody)
-                {
-                    vB = w.VelSlot(cc.bodyB);
-                    wB = w.AngVelSlot(cc.bodyB);
-                }
-
-                // Per-body accumulated position deltas (TGS separation tracking).
-                const Vec2 dpA = m_deltaPos[cc.bodyA];
-                const Real drA = m_deltaRot[cc.bodyA];
-                Vec2 dpB(Real(0), Real(0));
-                Real drB = Real(0);
-                if (cc.bodyBIsBody)
-                {
-                    dpB = m_deltaPos[cc.bodyB];
-                    drB = m_deltaRot[cc.bodyB];
-                }
-
-                // ---- normal solve (per point) ------------------------------
-                for (int p = 0; p < cc.pointCount; ++p)
-                {
-                    ContactConstraintPoint& cp = cc.points[p];
-                    const Vec2 rA = cp.anchorA;
-                    const Vec2 rB = cp.anchorB;
-
-                    // Current separation: base + the change from this step's
-                    // accumulated position deltas (incl. the small anchor-rotation
-                    // term). With the B->A normal, A moving along +n INCREASES the
-                    // separation, so ds = dot((dpA + drA x rA) - (dpB + drB x rB), n).
-                    // Separation s > 0 == a gap; s < 0 == penetration.
-                    const Vec2 prA = dpA + CrossWR(drA, rA);
-                    const Vec2 prB = dpB + CrossWR(drB, rB);
-                    const Real s = cp.baseSeparation + Dot(prA - prB, n);
-
-                    Real bias = Real(0);
-                    Real massScale = Real(1);
-                    Real impulseScale = Real(0);
-                    if (s > Real(0))
-                    {
-                        // Speculative gap: allow the bodies to approach only fast
-                        // enough to close the gap in one sub-step (a hard upper
-                        // bound on the closing velocity, NOT a soft push).
-                        bias = s * invH;
-                    }
-                    else if (useBias)
-                    {
-                        // Penetration (s < 0): a soft push-OUT. Clamp the push
-                        // velocity so a deep overlap recovers without exploding.
-                        bias = std::max(cc.biasRate * s, -maxBiasVel);
-                        massScale = cc.massScale;
-                        impulseScale = cc.impulseScale;
-                    }
-
-                    // Relative normal velocity (A relative to B, along B->A n).
-                    // Approaching (penetrating further) -> vn < 0.
-                    const Vec2 dv = (vA + CrossWR(wA, rA)) - (vB + CrossWR(wB, rB));
-                    const Real vn = Dot(dv, n);
-
-                    // Soft TGS normal impulse. (vn + bias): for penetration bias
-                    // is negative -> a larger positive impulse that pushes apart.
-                    Real impulse = -cp.normalMass * massScale * (vn + bias)
-                                 - impulseScale * cp.normalImpulse;
-
-                    // Accumulated clamp >= 0 (contacts only push).
-                    const Real newImpulse = std::max(cp.normalImpulse + impulse, Real(0));
-                    impulse = newImpulse - cp.normalImpulse;
-                    cp.normalImpulse = newImpulse;
-
-                    // Normal points B->A: A gets +P, B gets -P.
-                    const Vec2 P = n * impulse;
-                    vA += P * iMa;
-                    wA += iIa * CrossRP(rA, P);
-                    if (dynB)
-                    {
-                        vB -= P * iMb;
-                        wB -= iIb * CrossRP(rB, P);
-                    }
-                }
-
-                // ---- friction solve (per point) ----------------------------
-                for (int p = 0; p < cc.pointCount; ++p)
-                {
-                    ContactConstraintPoint& cp = cc.points[p];
-                    const Vec2 rA = cp.anchorA;
-                    const Vec2 rB = cp.anchorB;
-
-                    const Vec2 dv = (vA + CrossWR(wA, rA)) - (vB + CrossWR(wB, rB));
-                    const Real vt = Dot(dv, tangent);
-
-                    Real impulse = -cp.tangentMass * vt;
-
-                    // |tangent| <= friction * normal (Coulomb cone).
-                    const Real maxFriction = cc.friction * cp.normalImpulse;
-                    const Real newImpulse =
-                        std::clamp(cp.tangentImpulse + impulse, -maxFriction, maxFriction);
-                    impulse = newImpulse - cp.tangentImpulse;
-                    cp.tangentImpulse = newImpulse;
-
-                    // Same B->A convention: A gets +P, B gets -P.
-                    const Vec2 P = tangent * impulse;
-                    vA += P * iMa;
-                    wA += iIa * CrossRP(rA, P);
-                    if (dynB)
-                    {
-                        vB -= P * iMb;
-                        wB -= iIb * CrossRP(rB, P);
-                    }
-                }
-
-                w.SetVelSlot(cc.bodyA, vA);
-                w.SetAngVelSlot(cc.bodyA, wA);
-                if (dynB)
-                {
-                    w.SetVelSlot(cc.bodyB, vB);
-                    w.SetAngVelSlot(cc.bodyB, wB);
-                }
-            }
-        }
-
-        void SoftStep::IntegratePositions(SolverContext& ctx, Real h)
-        {
-            PhysicsWorld& w = *ctx.world;
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
-            {
-                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
-                {
-                    continue;
-                }
-                m_deltaPos[i] += w.VelSlot(i) * h;
-                m_deltaRot[i] += w.AngVelSlot(i) * h;
-            }
-        }
-
-        void SoftStep::FinalizePositions(SolverContext& ctx)
-        {
-            PhysicsWorld& w = *ctx.world;
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
-            {
-                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
-                {
-                    continue;
-                }
-                // Compound-COM dynamics: integrate the body's CENTER OF MASS
-                // along its inertial path (deltaPos = sum of VelSlot*h is the
-                // COM linear displacement), advance the angle, then reconstruct
-                // the ORIGIN from the new COM + new angle. PosSlot/GetAngle here
-                // are the START-OF-STEP origin/angle (p0/a0): deltaPos/deltaRot
-                // were accumulated across the sub-step loop and committed only
-                // here, so the world position is untouched until this point.
-                //
-                // For localCenter == (0,0) this is byte-identical to the old
-                //   p = PosSlot + deltaPos; a = GetAngle + deltaRot
-                // because c0 == p0, c == p0 + deltaPos, and p == c (R*lc == 0).
-                const Vec2 p0 = w.PosSlot(i);
-                const Real a0 = w.GetAngle(w.HandleOf(i));
-                const Vec2 lc = w.LocalCenterSlot(i);
-                const Vec2 c0 = p0 + RotateVec(a0, lc);   // start-of-step world COM
-                const Vec2 c  = c0 + m_deltaPos[i];       // integrate COM by linear vel
-                const Real a  = a0 + m_deltaRot[i];       // integrate angle
-                const Vec2 p  = c - RotateVec(a, lc);     // origin from new COM + angle
-                w.CommitSlotPosition(i, p, a);
-            }
-        }
-
-        // ===================================================================
-        // Restitution
-        // ===================================================================
-
-        void SoftStep::ApplyRestitution(SolverContext& ctx)
-        {
-            PhysicsWorld& w = *ctx.world;
-            const Real threshold = w.RestitutionThreshold();
-
-            for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
-            {
-                ContactConstraint& cc = ctx.contacts[c];
-                if (cc.restitution <= Real(0))
-                {
-                    continue;
-                }
-                const Vec2 n = cc.normal;
-                const Real iMa = cc.invMassA, iIa = cc.invInertiaA;
-                const Real iMb = cc.invMassB, iIb = cc.invInertiaB;
-                const bool dynB = cc.bodyBIsBody && iMb > Real(0);
-
-                Vec2 vA = w.VelSlot(cc.bodyA);
-                Real wA = w.AngVelSlot(cc.bodyA);
-                Vec2 vB(Real(0), Real(0));
-                Real wB = Real(0);
-                if (cc.bodyBIsBody)
-                {
-                    vB = w.VelSlot(cc.bodyB);
-                    wB = w.AngVelSlot(cc.bodyB);
-                }
-
-                for (int p = 0; p < cc.pointCount; ++p)
-                {
-                    ContactConstraintPoint& cp = cc.points[p];
-                    // Only points that approached fast enough AND took a normal
-                    // impulse (i.e. genuinely collided) rebound.
-                    if (cp.relativeVelocity > -threshold || cp.normalImpulse <= Real(0))
-                    {
-                        continue;
-                    }
-                    const Vec2 rA = cp.anchorA;
-                    const Vec2 rB = cp.anchorB;
-                    const Vec2 dv = (vA + CrossWR(wA, rA)) - (vB + CrossWR(wB, rB));
-                    const Real vn = Dot(dv, n);
-
-                    // Target separating speed = -e * approachSpeed. relativeVelocity
-                    // is the (negative) approach speed; the new vn should be at
-                    // least -e*relativeVelocity (positive == separating).
-                    Real impulse = -cp.normalMass * (vn + cc.restitution * cp.relativeVelocity);
-                    const Real newImpulse = std::max(cp.normalImpulse + impulse, Real(0));
-                    impulse = newImpulse - cp.normalImpulse;
-                    cp.normalImpulse = newImpulse;
-
-                    const Vec2 P = n * impulse;
-                    vA += P * iMa;
-                    wA += iIa * CrossRP(rA, P);
-                    if (dynB)
-                    {
-                        vB -= P * iMb;
-                        wB -= iIb * CrossRP(rB, P);
-                    }
-                }
-
-                w.SetVelSlot(cc.bodyA, vA);
-                w.SetAngVelSlot(cc.bodyA, wA);
-                if (dynB)
-                {
-                    w.SetVelSlot(cc.bodyB, vB);
-                    w.SetAngVelSlot(cc.bodyB, wB);
-                }
-            }
-        }
-
-        void SoftStep::SolvePosition(SolverContext& ctx)
-        {
-            // Soft contacts + the speculative bias handle penetration recovery;
-            // no separate NGS pass is needed for the Soft Step solver. (The
-            // Baumgarte oracle in P2.3 leans on its own position bias instead.)
-            (void)ctx;
-        }
-
         // ===================================================================
         // SIMD lane-wide solve helpers (Part 1) -- integrate / bridge / overflow
         // ===================================================================
@@ -672,10 +299,14 @@ namespace Arcane
 
         void SoftStep::FinalizePositionsSoA(SolverContext& ctx)
         {
-            // SAME compound-COM commit as FinalizePositions (SoftStep.cpp:483-513),
-            // but reading the per-body deltas from m_bodyState.dp*/dq instead of
-            // m_deltaPos/m_deltaRot. Integrate the COM along its inertial path, then
-            // reconstruct the origin from new COM + new angle.
+            // Compound-COM position commit, reading the per-body deltas from
+            // m_bodyState.dp*/dq. Integrate the body's CENTER OF MASS along its
+            // inertial path (dp = sum of v*h is the COM linear displacement), advance
+            // the angle (dq), then reconstruct the ORIGIN from the new COM + new angle
+            // (PosSlot/GetAngle here are the start-of-step origin/angle p0/a0: the
+            // SoA dp/dq were accumulated across the sub-step loop and are committed
+            // only here, so the world position is untouched until this point). For
+            // localCenter == (0,0) this reduces to p = p0 + dp ; a = a0 + dq.
             PhysicsWorld& w = *ctx.world;
             const std::uint32_t count = w.Count();
             for (std::uint32_t i = 0; i < count; ++i)
@@ -740,10 +371,18 @@ namespace Arcane
         // The colorer spills constraints that found no free color into m_coloring.
         // overflow (a hub body in > kColorCount contacts). They CANNOT solve lane-
         // wide (they share bodies), so we solve them one-at-a-time, scalar, over the
-        // SAME BodyStateSoA -- sequential => no scatter conflict. The math mirrors
-        // the scalar SoftStep WarmStart/SolveContacts/ApplyRestitution exactly, but
-        // reads/writes the SoA velocity + dp/dq (so overflow composes with the
-        // colored result in the same velocity store). One contact per call iter.
+        // SAME BodyStateSoA -- sequential => no scatter conflict. They read/write the
+        // SoA velocity + dp/dq (so overflow composes with the colored result in the
+        // same velocity store). One contact per call iter.
+        //
+        // LOCKSTEP: this overflow trio (OverflowWarmStart / OverflowSolve /
+        // OverflowRestitution) is the WIDTH-1 SEQUENTIAL version of the same TGS
+        // step the lane-wide SimdSolve::WarmStart / SolveNormalAndFriction /
+        // ApplyRestitution passes run (ContactConstraintSimd.hpp). The two paths
+        // share one m_bodyState and compose in one velocity store, so they MUST stay
+        // numerically in lockstep lane-for-scalar. Keep the math here identical to
+        // the SimdSolve::* passes (and to the plain-float ScalarRef oracle in
+        // PhysicsSimdSolverTest.cpp); change one and you change all three.
 
         namespace
         {

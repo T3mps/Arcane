@@ -1,12 +1,19 @@
 #pragma once
 
-// ContactConstraintSimd.hpp -- the SoA contact-constraint BATCH + its packer.
+// ContactConstraintSimd.hpp -- the SoA contact-constraint BATCH + its packer +
+// the lane-wide TGS-Soft solve passes.
 //
-// PURE DATA + PACKER. This header holds NO solve math: it is the Structure-of-
-// Arrays staging buffer the lane-wide TGS-Soft solve (a later task, SoftStep)
-// reads, plus the deterministic packer (`Build`) that fills it from a color's
-// emitted `ContactConstraint`s. The actual `f32w` load / gather / select / solve
-// / scatter lives in SoftStep -- this file is just the transposed layout.
+// DATA + PACKER + LANE-WIDE SOLVE. This header owns three things:
+//   1. ContactConstraintSimd -- the Structure-of-Arrays staging buffer (one
+//      contact per SIMD lane, up to 2 points), the transposed layout the solve
+//      gathers/scatters through.
+//   2. Build -- the deterministic packer that fills a batch list from a color's
+//      emitted `ContactConstraint`s (a pure COPY; it computes no masses/coeffs).
+//   3. namespace SimdSolve -- the lane-wide `f32w` load / gather / select / solve
+//      / scatter passes (WarmStart / SolveNormalAndFriction / ApplyRestitution +
+//      StoreImpulses). SoftStep::Solve drives these per color per substep; the
+//      scalar twin for the un-colorable overflow bucket lives in SoftStep.cpp
+//      (Overflow{WarmStart/Solve/Restitution}), and the two MUST stay in lockstep.
 //
 // ----------------------------------------------------------------------------
 // ONE CONTACT PER LANE (the Box2D-v3 layout)
@@ -56,11 +63,12 @@
 // address). The solve therefore runs uniformly across all `width` lanes without
 // a per-lane branch, and padding contributes nothing to any body.
 //
-// SCOPE (Task 4): the struct + Build + its unit tests. NOTHING consumes a batch
-// yet (Task 5 wires it into the SoftStep lane-wide solve). Build is a pure
-// packer: it COPIES field values out of the source ContactConstraint/...Point
-// (it does NOT compute effective masses or soft coefficients -- those are either
-// already filled on the source cc or computed lane-wide at solve time).
+// SCOPE: the struct + Build (a pure packer) + the lane-wide SimdSolve passes
+// (further down this file) that consume a batch list. SoftStep::Solve drives the
+// SimdSolve passes per color per substep. Build COPIES field values out of the
+// source ContactConstraint/...Point (it does NOT compute effective masses or soft
+// coefficients -- those are either already filled on the source cc or computed
+// lane-wide at solve time).
 //
 // PRESENTATION-FREE + C++20-clean: std + the Simd width constant + Solver.hpp
 // (for ContactConstraint). No SDL3/NVRHI/Batcher2D. namespace Arcane::Physics.
@@ -240,8 +248,8 @@ namespace Arcane
                 //   * a REAL body (kinematic/static, bodyBIsBody && invMassB==0):
                 //     point at its REAL slot cc.bodyB. The solver MUST gather its
                 //     velocity (a kinematic plate's authored +X feeds the relative-
-                //     velocity term that drives the push -- the scalar SolveContacts
-                //     reads vB for any bodyBIsBody endpoint). The scatter writes back
+                //     velocity term that drives the push -- the solve reads vB for any
+                //     bodyBIsBody endpoint). The scatter writes back
                 //     the UNCHANGED gathered value (select(dynB=0, new, gathered)),
                 //     so the kinematic/static slot is preserved -- idempotent even if
                 //     several read-only-B lanes in a color share it, and a kinematic
@@ -345,11 +353,23 @@ namespace Arcane
         // body, so the gather -> math -> scatter is hazard-free; the only redundant
         // scatter lands on the dummy slot (see Build's SCATTER-SAFE DUMMY note).
         //
-        // The math mirrors SoftStep.cpp EXACTLY (per lane):
-        //   WarmStart        : SoftStep.cpp:285-328
-        //   SolveNormalAndFriction(useBias): SoftStep.cpp:330-466 (normal 367-426,
-        //                      friction 428-456, separation re-eval 379-381)
-        //   ApplyRestitution : SoftStep.cpp:519-586
+        // LOCKSTEP: this SimdSolve trio (WarmStart / SolveNormalAndFriction /
+        // ApplyRestitution) must match the scalar overflow trio Overflow{WarmStart/
+        // Solve/Restitution} in SoftStep.cpp lane-for-scalar. The colored batches and
+        // the overflow constraints share ONE BodyStateSoA and compose into ONE
+        // velocity store within a single substep, so the lane-wide math here and the
+        // width-1 sequential overflow math MUST stay numerically identical (they are
+        // the same TGS normal+friction+restitution step at two widths). The plain-
+        // float ScalarRef oracle in PhysicsSimdSolverTest.cpp is the third copy and
+        // the bit-match gate -- change one, change all three.
+        //
+        // The math mirrors the scalar SoftStep TGS step EXACTLY (per lane):
+        //   WarmStart        <-> SoftStep.cpp Overflow{WarmStart} normal+tangent apply
+        //   SolveNormalAndFriction(useBias) <-> Overflow{Solve} (normal solve w/ the
+        //                      s>0 / penetration / relax bias branch + the friction
+        //                      Coulomb-cone clamp + the per-substep separation re-eval)
+        //   ApplyRestitution <-> Overflow{Restitution} (rebound for points that
+        //                      approached fast enough AND took a normal impulse)
         // 2D cross helpers inline: CrossWR(w,r) = (-w*r.y, w*r.x);
         // CrossRP(r,p) = r.x*p.y - r.y*p.x; Dot(a,b) = a.x*b.x + a.y*b.y.
         //
@@ -387,7 +407,8 @@ namespace Arcane
             }
 
             // ---- WarmStart: apply accumulated n*nImp + t*tImp to body vels -----
-            // Port of SoftStep::WarmStart (SoftStep.cpp:285-328), per lane.
+            // Lane-wide TGS warm-start; the scalar twin is SoftStep::OverflowWarmStart
+            // (SoftStep.cpp). LOCKSTEP -- keep identical lane-for-scalar.
             inline void WarmStart(std::vector<ContactConstraintSimd>& batches,
                                   BodyStateSoA& bs)
             {
@@ -447,7 +468,8 @@ namespace Arcane
             }
 
             // ---- Normal + friction solve --------------------------------------
-            // Port of SoftStep::SolveContacts (SoftStep.cpp:330-466), per lane.
+            // Lane-wide TGS normal+friction; the scalar twin is SoftStep::OverflowSolve
+            // (SoftStep.cpp). LOCKSTEP -- keep identical lane-for-scalar.
             // invH = 1/h, maxBiasVel = world.ContactPushMaxVelocity().
             inline void SolveNormalAndFriction(std::vector<ContactConstraintSimd>& batches,
                                                BodyStateSoA& bs, float h, bool useBias,
@@ -596,7 +618,8 @@ namespace Arcane
             }
 
             // ---- Restitution ---------------------------------------------------
-            // Port of SoftStep::ApplyRestitution (SoftStep.cpp:519-586), per lane.
+            // Lane-wide TGS restitution; the scalar twin is SoftStep::OverflowRestitution
+            // (SoftStep.cpp). LOCKSTEP -- keep identical lane-for-scalar.
             // A whole contact with restitution <= 0 is skipped scalar-side; here we
             // mask it lane-wise (restitution<=0 -> no rebound impulse). A point only
             // rebounds when relVel <= -threshold AND nImp > 0.

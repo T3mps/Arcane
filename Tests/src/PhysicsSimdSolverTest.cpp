@@ -14,7 +14,7 @@
 //   * mutating the packed velocities then SyncOut writes them BACK to the world.
 //   * non-matching slots (a Static body) are LEFT UNTOUCHED by SyncOut.
 //
-// The awake-dynamic predicate MUST mirror SoftStep::FinalizePositions:
+// The awake-dynamic predicate MUST mirror SoftStep::FinalizePositionsSoA:
 //   Alive(i) && TypeSlot(i) == BodyType::Dynamic && AwakeSlot(i).
 //
 // PRESENTATION-FREE + C++20-clean.
