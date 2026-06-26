@@ -6,22 +6,15 @@
 #include <Arcane/Base/Engine.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/ImGui/ImGuiLayer.hpp>
-#include <Arcane/Input/InputActions.hpp>
-#include <Arcane/Input/InputDevices.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
-#include <Arcane/Platform/Window.hpp>
-#include <Arcane/Render/Batcher2D.hpp>
-#include <Arcane/Render/Canvas.hpp>
-#include <Arcane/Render/Device.hpp>
-#include <Arcane/Render/ShaderLibrary.hpp>
-#include <Arcane/Render/Swapchain.hpp>
-#include <Arcane/Render/TonemapPass.hpp>
+#include <Arcane/Render/Batcher2D.hpp>   // Arcane::Batch2DStats (loop HUD + perf tick)
+#include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (boot log + HUD)
 
 #include <LoomConfig.hpp>
 
 #include "FramePerf.hpp"
+#include "GpuContext.hpp"
 
 #include <Astra/Core/TypeContext.hpp>
 
@@ -35,7 +28,6 @@
 #include <filesystem>
 #include <string>
 #include <thread>
-#include <unordered_map>
 
 int main(int argc, char** argv)
 {
@@ -45,62 +37,30 @@ int main(int argc, char** argv)
     const LoomConfig& cfg = *parsed.config;
 
     // Transitional: locals shadow cfg.* so the rest of main compiles untouched;
-    // Tasks 3-5 thread cfg through directly + fold these away.
+    // Tasks 3-5 thread cfg through directly + fold these away. (vsync now flows
+    // straight into GpuContext::Create(cfg), so its shadow is gone.)
     Arcane::GraphicsBackend backend = cfg.backend;
     uint64_t maxFrames = cfg.maxFrames;
-    bool vsync = cfg.vsync;
     bool perf  = cfg.perf;
     std::string pluginPath = cfg.pluginPath;
 
     ARC_INFO("{} -- Loom host, backend {}", Arcane::BuildInfo(), Arcane::ToString(backend));
 
-    // window is declared first so the destructor fires last (after all modules
-    // that hold references to the SDL window -- imgui, inputDevices -- are gone).
-    Arcane::Window window;
-    Arcane::WindowDesc wd;
-    wd.title  = "Arcane Loom";
-    wd.vulkan = (backend == Arcane::GraphicsBackend::Vulkan);
-    if (!window.Create(wd))
-        return 1;
-
-    Arcane::RenderDeviceDesc dd;
-    dd.backend = backend;
-    auto device = Arcane::RenderDevice::Create(dd);
-    if (!device) return 1;
-
-    auto swapchain = device->CreateSwapchain(window, vsync);
-    if (!swapchain) return 1;
-
-    auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
-    if (!shaders) return 1;
-
-    auto canvas = Arcane::CreateCanvas(device->Nvrhi(), swapchain->Width(), swapchain->Height());
-    if (!canvas) return 1;
-
-    auto batcher = Arcane::Batcher2D::Create(device->Nvrhi(), *shaders);
-    if (!batcher) return 1;
-
-    auto tonemap = Arcane::TonemapPass::Create(device->Nvrhi(), *shaders);
-    if (!tonemap) return 1;
-
-    // ImGuiLayer must be destroyed before window (the layer taps window events),
-    // so it is declared AFTER window -- stack unwinds in reverse declaration order.
-    auto imgui = Arcane::ImGuiLayer::Create(window, *device, *shaders);
-    if (!imgui) return 1;
-
-    auto inputDevices = Arcane::InputDevices::Create();
-    auto input = Arcane::InputActions::Create();
-    if (!inputDevices || !input || !input->LoadFile("data/input_actions.json"))
-        return 1;
-    input->SetBaseContext("demo");
+    // The whole platform/render/input stack, booted in order. Declared in main's
+    // OUTER scope -- BEFORE the inner runtime/plugin scope below -- so it destructs
+    // AFTER them: the render resources it owns (window/device/swapchain/shaders/
+    // canvas/batcher/tonemap/imgui/input + commandList/framebuffers) must outlive
+    // the runtime + plugin. GpuContext's own member order is the teardown contract.
+    auto gpu = GpuContext::Create(cfg);
+    if (!gpu) return 1;
 
     uint64_t frameCount = 0;
 
     // Runtime and PluginHost live in this inner scope so they destruct BEFORE
-    // the render resources (batcher/canvas/shaders/swapchain/device/window) that
-    // outlive them. PluginHost::~PluginHost calls Unload -> TeardownLive ->
-    // ClearSystems + ResetRegistry, which must run while the plugin DLL is still
-    // mapped and before the render pipeline is torn down.
+    // `gpu` (the render stack) in the outer scope -- which therefore outlives
+    // them. PluginHost::~PluginHost calls Unload -> TeardownLive -> ClearSystems
+    // + ResetRegistry, which must run while the plugin DLL is still mapped and
+    // before the render pipeline (owned by gpu) is torn down.
     {
         // The TypeContext is the process-wide type-identity singleton shared across
         // Loom.exe, Arcane.dll, and every loaded plugin. It is intentionally
@@ -120,9 +80,9 @@ int main(int argc, char** argv)
         // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
         // Runtime so a plugin can build its own engine render objects (e.g. the
         // narrowphase inspector's OffscreenCanvas). Non-owning; the host outlives the
-        // plugin (device/shaders are declared in the outer scope above). Null in a
-        // headless host -> the plugin skips its GPU-resource creation.
-        runtime.SetRenderResources(device->Nvrhi(), shaders.get());
+        // plugin (gpu is declared in the outer scope above). Null in a headless host
+        // -> the plugin skips its GPU-resource creation.
+        runtime.SetRenderResources(gpu->Device().Nvrhi(), &gpu->Shaders());
 
         // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
         // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
@@ -144,8 +104,9 @@ int main(int argc, char** argv)
             return 1;
         }
 
-        nvrhi::CommandListHandle commandList = device->Nvrhi()->createCommandList();
-        std::unordered_map<nvrhi::ITexture*, nvrhi::FramebufferHandle> backbufferFramebuffers;
+        // The reused command list + the lazy backbuffer-framebuffer cache now live
+        // in `gpu` (gpu->Cmd() / gpu->FramebufferFor(bb)) so they release their
+        // NVRHI handles before the device, in the outer scope's teardown.
 
         auto simPrev       = std::chrono::steady_clock::now();
         auto lastFrameTime = simPrev;
@@ -156,15 +117,11 @@ int main(int argc, char** argv)
 
         while (running)
         {
-            auto events = window.PumpEvents();
+            auto events = gpu->Win().PumpEvents();
             if (events.quitRequested) break;
             if (events.resized)
-            {
-                backbufferFramebuffers.clear();
-                swapchain->Resize(events.width, events.height);
-                canvas->Resize(swapchain->Width(), swapchain->Height());
-            }
-            if (window.IsMinimized())
+                gpu->OnResize(events.width, events.height);
+            if (gpu->Win().IsMinimized())
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
@@ -179,12 +136,13 @@ int main(int argc, char** argv)
                 const double frameDt = std::chrono::duration<double>(now - lastFrameTime).count();
                 lastFrameTime = now;
                 const Arcane::InputSnapshot snap =
-                    inputDevices->Sample(imgui->WantCaptureKeyboard(), imgui->WantCaptureMouse());
+                    gpu->InDevices().Sample(gpu->Imgui().WantCaptureKeyboard(),
+                                            gpu->Imgui().WantCaptureMouse());
                 runtime.SetInputSnapshot(snap);   // plugins read it via Runtime::Input()
-                input->Update(frameDt, snap);
-                if (input->Pressed("quit"))                break;
-                if (input->Pressed("reload_plugin"))       plugin.ForceReload();
-                if (input->Pressed("reload_plugin_fresh")) plugin.ReloadFresh();
+                gpu->Input().Update(frameDt, snap);
+                if (gpu->Input().Pressed("quit"))                break;
+                if (gpu->Input().Pressed("reload_plugin"))       plugin.ForceReload();
+                if (gpu->Input().Pressed("reload_plugin_fresh")) plugin.ReloadFresh();
             }
 
             // Sim advance: clamp dt, drive RunLoop with plugin callbacks interleaved.
@@ -201,12 +159,12 @@ int main(int argc, char** argv)
                 fp.Add(fp.accSim, t0, fp.Now());
             }
 
-            imgui->BeginFrame();
+            gpu->Imgui().BeginFrame();
             {
                 ImGui::Begin("Loom");
-                ImGui::Text("Backend: %s", Arcane::ToString(device->Backend()));
+                ImGui::Text("Backend: %s", Arcane::ToString(gpu->Device().Backend()));
                 ImGui::Text("Plugin gen: %u", plugin.Generation());
-                const Arcane::Batch2DStats s = batcher->Stats();
+                const Arcane::Batch2DStats s = gpu->Batch().Stats();
                 ImGui::Text("Quads: %u  Draws: %u", s.quads, s.drawCalls);
                 ImGui::End();
             }
@@ -216,7 +174,7 @@ int main(int argc, char** argv)
             const Arcane::PluginVTable* vtUI = plugin.Vtable();
             if (vtUI && vtUI->DrawUI) vtUI->DrawUI();
 
-            nvrhi::ITexture* backbuffer = swapchain->BeginFrame();
+            nvrhi::ITexture* backbuffer = gpu->Swap().BeginFrame();
             if (!backbuffer)
             {
                 // No backbuffer this frame: still balance BeginFrame with EndFrame
@@ -230,16 +188,17 @@ int main(int argc, char** argv)
                 const auto now0 = std::chrono::steady_clock::now();
                 if (std::chrono::duration<double>(now0 - lastShaderPoll).count() >= 1.0)
                 {
-                    shaders->Poll();
+                    gpu->Shaders().Poll();
                     lastShaderPoll = now0;
                 }
             }
 
-            commandList->open();
-            commandList->clearTextureFloat(canvas->Texture(), nvrhi::AllSubresources,
-                                           nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
+            gpu->Cmd()->open();
+            gpu->Cmd()->clearTextureFloat(gpu->Cnv().Texture(), nvrhi::AllSubresources,
+                                          nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
 
-            batcher->Begin(commandList, canvas->Framebuffer(), canvas->Width(), canvas->Height());
+            gpu->Batch().Begin(gpu->Cmd(), gpu->Cnv().Framebuffer(),
+                               gpu->Cnv().Width(), gpu->Cnv().Height());
 
             // Set the render context IN Arcane.dll so TypeID<RenderContext2D> resolves
             // in the correct module; then drive the plugin's RenderSubmissionSystem.
@@ -247,37 +206,34 @@ int main(int argc, char** argv)
             // plugin drives via Runtime::SetCamera (default identity if it never does).
             {
                 const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
-                runtime.SetRenderContext(batcher.get());
+                runtime.SetRenderContext(&gpu->Batch());
                 runtime.Loop().SubmitRender();
                 fp.Add(fp.accRec, t0, fp.Now());
             }
 
             {
                 const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
-                batcher->End();
+                gpu->Batch().End();
                 fp.Add(fp.accEnd, t0, fp.Now());
             }
 
-            nvrhi::FramebufferHandle& fb = backbufferFramebuffers[backbuffer];
-            if (!fb)
-                fb = device->Nvrhi()->createFramebuffer(
-                    nvrhi::FramebufferDesc().addColorAttachment(backbuffer));
+            nvrhi::FramebufferHandle& fb = gpu->FramebufferFor(backbuffer);
             {
                 const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
-                tonemap->Run(commandList, canvas->Texture(), fb);
+                gpu->Tone().Run(gpu->Cmd(), gpu->Cnv().Texture(), fb);
                 fp.Add(fp.accTone, t0, fp.Now());
             }
             {
                 const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
-                imgui->Render(commandList, fb);
+                gpu->Imgui().Render(gpu->Cmd(), fb);
                 fp.Add(fp.accImgui, t0, fp.Now());
             }
 
-            commandList->close();
+            gpu->Cmd()->close();
             {
                 const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
-                device->Nvrhi()->executeCommandList(commandList);
-                swapchain->Present();
+                gpu->Device().Nvrhi()->executeCommandList(gpu->Cmd());
+                gpu->Swap().Present();
                 fp.Add(fp.accPresent, t0, fp.Now());
             }
 
@@ -290,7 +246,7 @@ int main(int argc, char** argv)
 
             if (fp.On())
             {
-                const Arcane::Batch2DStats bs = batcher->Stats();
+                const Arcane::Batch2DStats bs = gpu->Batch().Stats();
                 fp.Tick(bs.quads, bs.drawCalls);
             }
 
@@ -299,11 +255,13 @@ int main(int argc, char** argv)
                 running = false;
         }
 
-        device->Nvrhi()->waitForIdle();
-        // commandList and backbufferFramebuffers release their NVRHI handles here
-        // (end of scope), while device is still alive in the outer scope above.
-        // ~PluginHost fires next (Unload: TeardownLive while DLL is still loaded).
-        // ~Runtime fires last in this scope (destroys JobSystem + empty Registry).
+        gpu->Device().Nvrhi()->waitForIdle();
+        // ~PluginHost fires at the end of this inner scope (Unload: TeardownLive
+        // while the DLL is still loaded); ~Runtime fires last in this scope
+        // (destroys JobSystem + empty Registry). `gpu` (the render stack, incl. the
+        // command list + framebuffer cache that hold NVRHI handles) is in the OUTER
+        // scope, so it tears down AFTER -- releasing those handles before the device
+        // it owns, exactly as the old in-scope locals did. See GpuContext's header.
     }
 
     ARC_INFO("Loom exiting after {} frames", frameCount);
