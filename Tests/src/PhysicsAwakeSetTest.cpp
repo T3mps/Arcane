@@ -28,3 +28,38 @@ TEST_CASE("PhysicsAwakeSet: StepProf is a no-op when ARCANE_STEPPROF is off", "[
     for (int k = 0; k < 10; ++k) { w.Step(kStep); }
     REQUIRE(StepProf::Enabled() == false);
 }
+// The awake-set must, at all times, contain EXACTLY the awake dynamic slots.
+TEST_CASE("PhysicsAwakeSet: set membership tracks awake-dynamic slots", "[physics][awakeset]")
+{
+    auto checkInvariant = [](PhysicsWorld& w) {
+        const std::vector<std::uint32_t>& set = w.AwakeBodies();
+        std::vector<std::uint8_t> seen(w.Count(), 0u);
+        for (const std::uint32_t s : set) {
+            REQUIRE(s < w.Count());
+            REQUIRE(w.Alive(s));
+            REQUIRE(w.TypeSlot(s) == BodyType::Dynamic);
+            REQUIRE(w.AwakeSlot(s));
+            REQUIRE(seen[s] == 0u); // no duplicates
+            seen[s] = 1u;
+        }
+        for (std::uint32_t i = 0; i < w.Count(); ++i) {
+            const bool awakeDyn = w.Alive(i) && w.TypeSlot(i) == BodyType::Dynamic && w.AwakeSlot(i);
+            REQUIRE((seen[i] != 0u) == awakeDyn);
+        }
+    };
+
+    WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    const BodyHandle b0 = AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
+    const BodyHandle b1 = AddBox(w, Vec2(Real(0), Real(-40)), Real(5), Real(5));
+    checkInvariant(w);                                  // 2 awake dynamics
+    for (int k = 0; k < 700; ++k) { w.Step(kStep); }
+    checkInvariant(w);                                  // settled -> asleep -> not in set
+    w.ApplyImpulse(b1, Vec2(Real(0), Real(-8000)));     // wake fan-out
+    checkInvariant(w);
+    w.RemoveBody(b0);                                   // out of the set
+    checkInvariant(w);
+    const BodyHandle b2 = AddBox(w, Vec2(Real(0), Real(-60)), Real(5), Real(5)); // recycle a slot
+    (void)b2;
+    checkInvariant(w);
+}

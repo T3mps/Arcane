@@ -295,6 +295,11 @@ namespace Arcane
             BodyHandle exclude = kInvalidBody;
         };
 
+        // A body slot NOT in the awake-set (static, kinematic, sleeping, or dead).
+        // Sentinel stored in m_awakeIndex[slot] when the slot is not a member of
+        // m_awakeBodies. Must not collide with any real dense position index.
+        static constexpr std::uint32_t kNotAwake = 0xFFFFFFFFu;
+
         // ----------------------------------------------------------------
         // PhysicsWorld: the SoA body store + Step pipeline (kinematic subset).
         // ----------------------------------------------------------------
@@ -732,6 +737,19 @@ namespace Arcane
             // solver's FinalizePositions. All are inline -> the per-iteration
             // call cost vanishes in an optimized build.
             [[nodiscard]] bool AwakeSlot(std::uint32_t i) const noexcept { return m_awake[i] != 0; }
+
+            // ---- awake-set (Phase B) ----------------------------------------
+            // Read-only view of the dense awake-dynamic body slot list (tasks 3/4
+            // reroute the hot Step loops onto this; here it is maintained but not
+            // yet iterated by any loop -- behavior is byte-identical to Task 1).
+            [[nodiscard]] const std::vector<std::uint32_t>& AwakeBodies() const noexcept { return m_awakeBodies; }
+            // Visit each awake dynamic slot (replaces for(i=0..count) if(awake&&dynamic)).
+            template <typename Fn> void ForEachAwake(Fn&& fn) const { for (const std::uint32_t s : m_awakeBodies) { fn(s); } }
+            // Awake-set maintenance (called at create/sleep/wake/remove seams).
+            // Both are idempotent and are PUBLIC so Island.cpp can reach them at
+            // the sleep seam without coupling Island.cpp to a PhysicsWorld private.
+            void AddToAwakeSet(std::uint32_t slot) noexcept;
+            void RemoveFromAwakeSet(std::uint32_t slot) noexcept;
             [[nodiscard]] Real InvMassSlot(std::uint32_t i) const noexcept { return m_invMass[i]; }
             [[nodiscard]] Real InvInertiaSlot(std::uint32_t i) const noexcept { return m_invInertia[i]; }
             [[nodiscard]] Real RestSlot(std::uint32_t i) const noexcept { return m_rest[i]; }
@@ -1128,6 +1146,16 @@ namespace Arcane
             std::vector<std::uint32_t>      m_islandId;   // per-body island id
             std::vector<Island::Island>     m_islands;    // id-indexed record pool
             std::vector<std::uint32_t>      m_islandFree; // recycled island ids
+
+            // ---- awake-set (Phase B) ----------------------------------------
+            // m_awakeBodies is the dense list of AWAKE DYNAMIC body slots (the
+            // solver/integrate working set; Tasks 3/4 reroute the hot loops onto
+            // it). m_awakeIndex[slot] is the slot's position in that list (or
+            // kNotAwake). Maintained incrementally at create/sleep/wake/remove;
+            // iteration order is NOT ascending-slot (append/swap-remove) -- safe
+            // because the rerouted loops do only independent per-body work.
+            std::vector<std::uint32_t> m_awakeBodies;
+            std::vector<std::uint32_t> m_awakeIndex;   // per-body-slot position, or kNotAwake
 
             // Step scratch (zero steady-state alloc -- clear() keeps capacity).
             // m_pendingMerges: dynamic-dynamic touch-BEGIN body-pairs collected in

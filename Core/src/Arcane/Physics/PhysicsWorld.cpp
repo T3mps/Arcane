@@ -192,6 +192,9 @@ namespace Arcane
             // has no island yet; it will be assigned (or left kInvalidIsland for
             // non-Dynamic) in AddBody.
             m_islandId.resize(next, Island::kInvalidIsland);
+            // Phase B: awake-set back-index column. kNotAwake = not in the set.
+            // A tail slot is never in the set until AddBody writes it.
+            m_awakeIndex.resize(next, kNotAwake);
         }
 
         // ----------------------------------------------------------------
@@ -879,10 +882,18 @@ namespace Arcane
                 const std::uint32_t isl = AllocIsland();
                 m_islands[isl].bodies.push_back(idx);
                 m_islandId[idx] = isl;
+                // Phase B: a recycled slot may carry a stale awakeIndex; clear it
+                // BEFORE AddToAwakeSet so the idempotency guard does not wrongly
+                // skip re-adding a slot that belonged to a prior body.
+                m_awakeIndex[idx] = kNotAwake;
+                AddToAwakeSet(idx); // new dynamic body starts awake (m_awake[idx]=1 above)
             }
             else
             {
                 m_islandId[idx] = Island::kInvalidIsland;
+                // Phase B: static/kinematic never enter the set; clear any stale
+                // index left by a recycled slot's prior dynamic lifetime.
+                m_awakeIndex[idx] = kNotAwake;
             }
 
             if (def.type == BodyType::Dynamic)
@@ -1063,6 +1074,12 @@ namespace Arcane
             // body never leaves a stale contact even for the one Step before
             // UpdateContacts' stale-handle guard would reap it.
             DestroyContactsForBody(idx);
+
+            // Phase B: remove from the awake-set while the slot is still typed
+            // Dynamic (btype has not been touched yet; RemoveFromAwakeSet checks
+            // the btype to guard non-dynamics -- though a sleeping body is already
+            // absent, being idempotent makes it unconditional and safe).
+            RemoveFromAwakeSet(idx);
 
             // Release the removed body's island membership (Phase A). Erase the
             // slot from its island's member list; if the island is now empty, free
@@ -1259,6 +1276,7 @@ namespace Arcane
                 {
                     m_awake[i]      = 1;
                     m_sleepTimer[i] = Real(0);
+                    AddToAwakeSet(i); // Phase B: kInvalidIsland safety net (WakeIsland also adds, but may not run for isolated body)
                     WakeIsland(i); // wake the whole island, not just this body
                 }
             }
@@ -1278,6 +1296,7 @@ namespace Arcane
             }
             m_awake[i]      = 1;
             m_sleepTimer[i] = Real(0);
+            AddToAwakeSet(i); // Phase B: kInvalidIsland safety net
             WakeIsland(i); // wake the whole island, not just this body
             m_velX[i] += impulse.x * m_invMass[i];
             m_velY[i] += impulse.y * m_invMass[i];
@@ -1305,6 +1324,7 @@ namespace Arcane
             }
             m_awake[i]      = 1;
             m_sleepTimer[i] = Real(0);
+            AddToAwakeSet(i); // Phase B: kInvalidIsland safety net
             WakeIsland(i); // wake the whole island, not just this body
             m_velX[i] += impulse.x * m_invMass[i];
             m_velY[i] += impulse.y * m_invMass[i];
@@ -1327,6 +1347,7 @@ namespace Arcane
             {
                 m_awake[i]      = 1;
                 m_sleepTimer[i] = Real(0);
+                AddToAwakeSet(i); // Phase B: kInvalidIsland safety net
                 WakeIsland(i); // wake the whole island, not just this body
             }
         }
@@ -1905,12 +1926,14 @@ namespace Arcane
             {
                 m_awake[a]      = 1;
                 m_sleepTimer[a] = Real(0);
+                AddToAwakeSet(a); // Phase B: kInvalidIsland safety net
                 WakeIsland(a); // wake the sleeper's whole island (Box2D contact wake)
             }
             if (db && m_awake[b] == 0 && (!da || m_awake[a] != 0))
             {
                 m_awake[b]      = 1;
                 m_sleepTimer[b] = Real(0);
+                AddToAwakeSet(b); // Phase B: kInvalidIsland safety net
                 WakeIsland(b); // wake the sleeper's whole island (Box2D contact wake)
             }
         }
@@ -3056,6 +3079,43 @@ namespace Arcane
 
         }
 
+        // ---- awake-set maintainers (Phase B, Task 2) ----------------------------
+        //
+        // AddToAwakeSet / RemoveFromAwakeSet keep m_awakeBodies + m_awakeIndex
+        // in sync with the awake-dynamic population. Both are idempotent: a
+        // double-add or double-remove is a no-op. The Step loops are NOT rerouted
+        // here (Tasks 3/4 do that); these are PURE bookkeeping appended to every
+        // existing wake/sleep seam so the invariant holds at all times.
+
+        void PhysicsWorld::AddToAwakeSet(std::uint32_t slot) noexcept
+        {
+            // Only awake dynamics belong in the set; idempotent (already-present
+            // or non-dynamic is a no-op). The size guard handles a slot index that
+            // has not been grown into yet (should not occur in normal flow, but
+            // guards against out-of-bound reads on a half-initialized world).
+            if (slot >= m_awakeIndex.size()) { return; }
+            if (static_cast<BodyType>(m_btype[slot]) != BodyType::Dynamic) { return; }
+            if (m_awakeIndex[slot] != kNotAwake) { return; }  // already in the set
+            m_awakeIndex[slot] = static_cast<std::uint32_t>(m_awakeBodies.size());
+            m_awakeBodies.push_back(slot);
+        }
+
+        void PhysicsWorld::RemoveFromAwakeSet(std::uint32_t slot) noexcept
+        {
+            // Swap-remove: move the last element into the vacated position + patch
+            // the moved element's back-index.  Idempotent: a slot that is already
+            // absent (kNotAwake) or out of range is a no-op.
+            if (slot >= m_awakeIndex.size()) { return; }
+            const std::uint32_t pos = m_awakeIndex[slot];
+            if (pos == kNotAwake) { return; }                  // not in the set
+            const std::uint32_t last  = static_cast<std::uint32_t>(m_awakeBodies.size() - 1u);
+            const std::uint32_t moved = m_awakeBodies[last];
+            m_awakeBodies[pos]  = moved;   // fill the hole with the last element
+            m_awakeIndex[moved] = pos;     // patch the moved element's back-index
+            m_awakeBodies.pop_back();
+            m_awakeIndex[slot]  = kNotAwake;
+        }
+
         void PhysicsWorld::WakeIsland(std::uint32_t slot) noexcept
         {
             const std::uint32_t isl = IslandOf(slot);
@@ -3067,6 +3127,7 @@ namespace Arcane
             {
                 m_awake[b]      = 1;
                 m_sleepTimer[b] = Real(0);
+                AddToAwakeSet(b); // Phase B: migrate every island member back into the awake-set
             }
         }
 

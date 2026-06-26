@@ -123,6 +123,7 @@ namespace Arcane
                                 world.AwakeSlot(b))
                             {
                                 world.SetAwakeSlot(b, false);
+                                world.RemoveFromAwakeSet(b); // Phase B: sleeping body migrates OUT of the awake-set
                                 world.SetVelSlot(b, Vec2(Real(0), Real(0)));
                                 world.SetAngVelSlot(b, Real(0));
                             }
