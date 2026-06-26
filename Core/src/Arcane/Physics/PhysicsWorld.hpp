@@ -821,6 +821,16 @@ namespace Arcane
             // per-body call cost vanishes in an optimized build.
             [[nodiscard]] Real SleepTimerSlot(std::uint32_t i) const noexcept { return m_sleepTimer[i]; }
             void SetSleepTimerSlot(std::uint32_t i, Real t) noexcept { m_sleepTimer[i] = t; }
+            // WARNING (Phase B awake-set invariant): this writes ONLY the m_awake
+            // flag -- it does NOT maintain the awake-set (m_awakeBodies). The sleep
+            // seam pairs SetAwakeSlot(i,false) with RemoveFromAwakeSet(i) in
+            // Island::UpdateSleep. To WAKE a body, do NOT call SetAwakeSlot(i,true)
+            // as a primitive: use Wake()/WakeIsland() (which call AddToAwakeSet), or
+            // pair an explicit AddToAwakeSet(i). A raw SetAwakeSlot(i,true) on a
+            // slept dynamic would leave it awake-but-not-in-the-set: the solver
+            // loops (ForEachAwake) would skip it (frozen) while EmitContactConstraints
+            // (gating on m_awake) would still emit a constraint reading its stale
+            // SoA velocity -- a silent desync. (No caller does this today.)
             void SetAwakeSlot(std::uint32_t i, bool on) noexcept
             {
                 m_awake[i] = on ? std::uint8_t(1) : std::uint8_t(0);
