@@ -195,6 +195,9 @@ namespace Arcane
             // Phase B: awake-set back-index column. kNotAwake = not in the set.
             // A tail slot is never in the set until AddBody writes it.
             m_awakeIndex.resize(next, kNotAwake);
+            // Phase C: kinematic-set back-index column. kNotKinematic = not in the
+            // set. A tail slot is never in the set until AddBody writes it.
+            m_kinematicIndex.resize(next, kNotKinematic);
         }
 
         // ----------------------------------------------------------------
@@ -891,9 +894,22 @@ namespace Arcane
             else
             {
                 m_islandId[idx] = Island::kInvalidIsland;
-                // Phase B: static/kinematic never enter the set; clear any stale
-                // index left by a recycled slot's prior dynamic lifetime.
+                // Phase B: static/kinematic never enter the awake-set; clear any
+                // stale index left by a recycled slot's prior dynamic lifetime.
                 m_awakeIndex[idx] = kNotAwake;
+            }
+
+            // Phase C: maintain the kinematic solver-set. A KINEMATIC body enters
+            // the set; static/dynamic do not. Reset the back-index BEFORE the add
+            // so a recycled slot carrying a stale m_kinematicIndex cannot make the
+            // idempotency guard wrongly skip the re-add (mirrors the awake-set's
+            // reset-before-add). For a non-kinematic recycled slot, clear any stale
+            // index left by a prior kinematic lifetime so RemoveFromKinematicSet
+            // stays a no-op and the invariant holds.
+            m_kinematicIndex[idx] = kNotKinematic;
+            if (def.type == BodyType::Kinematic)
+            {
+                AddToKinematicSet(idx); // m_btype[idx] is already set to Kinematic above
             }
 
             if (def.type == BodyType::Dynamic)
@@ -1080,6 +1096,11 @@ namespace Arcane
             // the btype to guard non-dynamics -- though a sleeping body is already
             // absent, being idempotent makes it unconditional and safe).
             RemoveFromAwakeSet(idx);
+
+            // Phase C: remove from the kinematic-set while the slot is still typed
+            // Kinematic (btype is untouched here; RemoveFromKinematicSet is
+            // idempotent, so a non-kinematic slot -- already absent -- is a no-op).
+            RemoveFromKinematicSet(idx);
 
             // Release the removed body's island membership (Phase A). Erase the
             // slot from its island's member list; if the island is now empty, free
@@ -3188,6 +3209,46 @@ namespace Arcane
             m_awakeIndex[moved] = pos;     // patch the moved element's back-index
             m_awakeBodies.pop_back();
             m_awakeIndex[slot]  = kNotAwake;
+        }
+
+        // ---- kinematic solver-set maintainers (Phase C, Task 1) -----------------
+        //
+        // AddToKinematicSet / RemoveFromKinematicSet keep m_kinematicBodies +
+        // m_kinematicIndex in sync with the live-kinematic population. They mirror
+        // AddToAwakeSet/RemoveFromAwakeSet exactly (idempotent swap-remove with a
+        // back-index patch) but gate on BodyType::Kinematic instead of Dynamic, and
+        // -- because kinematics never sleep -- they are wired ONLY at the AddBody /
+        // RemoveBody seams (there is no sleep/wake path for this set). The solver is
+        // NOT rerouted onto this list here (Task 2 does that); this is PURE
+        // bookkeeping so behavior stays byte-identical.
+
+        void PhysicsWorld::AddToKinematicSet(std::uint32_t slot) noexcept
+        {
+            // Only kinematics belong in the set; idempotent (already-present or
+            // non-kinematic is a no-op). The size guard handles a slot index not
+            // grown into yet (should not occur in normal flow, but guards against
+            // out-of-bound reads on a half-initialized world).
+            if (slot >= m_kinematicIndex.size()) { return; }
+            if (static_cast<BodyType>(m_btype[slot]) != BodyType::Kinematic) { return; }
+            if (m_kinematicIndex[slot] != kNotKinematic) { return; }  // already in the set
+            m_kinematicIndex[slot] = static_cast<std::uint32_t>(m_kinematicBodies.size());
+            m_kinematicBodies.push_back(slot);
+        }
+
+        void PhysicsWorld::RemoveFromKinematicSet(std::uint32_t slot) noexcept
+        {
+            // Swap-remove: move the last element into the vacated position + patch
+            // the moved element's back-index. Idempotent: a slot that is already
+            // absent (kNotKinematic) or out of range is a no-op.
+            if (slot >= m_kinematicIndex.size()) { return; }
+            const std::uint32_t pos = m_kinematicIndex[slot];
+            if (pos == kNotKinematic) { return; }                  // not in the set
+            const std::uint32_t last  = static_cast<std::uint32_t>(m_kinematicBodies.size() - 1u);
+            const std::uint32_t moved = m_kinematicBodies[last];
+            m_kinematicBodies[pos]  = moved;   // fill the hole with the last element
+            m_kinematicIndex[moved] = pos;     // patch the moved element's back-index
+            m_kinematicBodies.pop_back();
+            m_kinematicIndex[slot]  = kNotKinematic;
         }
 
         void PhysicsWorld::WakeIsland(std::uint32_t slot) noexcept

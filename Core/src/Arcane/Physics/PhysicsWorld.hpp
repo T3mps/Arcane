@@ -300,6 +300,11 @@ namespace Arcane
         // m_awakeBodies. Must not collide with any real dense position index.
         static constexpr std::uint32_t kNotAwake = 0xFFFFFFFFu;
 
+        // A body slot NOT in the kinematic-set (static, dynamic, or dead). Sentinel
+        // stored in m_kinematicIndex[slot] when the slot is not a member of
+        // m_kinematicBodies. Mirrors kNotAwake for the kinematic solver-set (Phase C).
+        static constexpr std::uint32_t kNotKinematic = 0xFFFFFFFFu;
+
         // ----------------------------------------------------------------
         // PhysicsWorld: the SoA body store + Step pipeline (kinematic subset).
         // ----------------------------------------------------------------
@@ -750,6 +755,21 @@ namespace Arcane
             // the sleep seam without coupling Island.cpp to a PhysicsWorld private.
             void AddToAwakeSet(std::uint32_t slot) noexcept;
             void RemoveFromAwakeSet(std::uint32_t slot) noexcept;
+
+            // ---- kinematic solver-set (Phase C) -----------------------------
+            // Read-only view of the dense KINEMATIC body slot list (the solver's
+            // read-only B-endpoint working set). Task 2 reroutes the solver onto
+            // this; here it is maintained but not yet iterated by any loop --
+            // behavior is byte-identical. Unlike the awake-set, kinematics never
+            // sleep, so this set is maintained ONLY at create/remove (no sleep/wake
+            // path exists for it).
+            [[nodiscard]] const std::vector<std::uint32_t>& KinematicBodies() const noexcept { return m_kinematicBodies; }
+            // Visit each live kinematic slot (mirrors ForEachAwake for kinematics).
+            template <typename Fn> void ForEachKinematic(Fn&& fn) const { for (const std::uint32_t s : m_kinematicBodies) { fn(s); } }
+            // Kinematic-set maintenance (called at the AddBody/RemoveBody seams).
+            // Both are idempotent; gate on BodyType::Kinematic.
+            void AddToKinematicSet(std::uint32_t slot) noexcept;
+            void RemoveFromKinematicSet(std::uint32_t slot) noexcept;
             [[nodiscard]] Real InvMassSlot(std::uint32_t i) const noexcept { return m_invMass[i]; }
             [[nodiscard]] Real InvInertiaSlot(std::uint32_t i) const noexcept { return m_invInertia[i]; }
             [[nodiscard]] Real RestSlot(std::uint32_t i) const noexcept { return m_rest[i]; }
@@ -1177,6 +1197,17 @@ namespace Arcane
             // because the rerouted loops do only independent per-body work.
             std::vector<std::uint32_t> m_awakeBodies;
             std::vector<std::uint32_t> m_awakeIndex;   // per-body-slot position, or kNotAwake
+
+            // ---- kinematic solver-set (Phase C) -----------------------------
+            // m_kinematicBodies is the dense list of LIVE KINEMATIC body slots (the
+            // solver's read-only B-endpoint working set; Task 2 reroutes onto it).
+            // m_kinematicIndex[slot] is the slot's position in that list (or
+            // kNotKinematic). Maintained incrementally ONLY at create/remove --
+            // kinematics never sleep, so there is no sleep/wake seam. Iteration
+            // order is NOT ascending-slot (append/swap-remove), which is safe
+            // because the consumer does only independent per-body reads.
+            std::vector<std::uint32_t> m_kinematicBodies;
+            std::vector<std::uint32_t> m_kinematicIndex; // per-body-slot position, or kNotKinematic
 
             // Step scratch (zero steady-state alloc -- clear() keeps capacity).
             // m_pendingMerges: dynamic-dynamic touch-BEGIN body-pairs collected in
