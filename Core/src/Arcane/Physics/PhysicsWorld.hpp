@@ -795,6 +795,47 @@ namespace Arcane
             // Both are idempotent; gate on BodyType::Kinematic.
             void AddToKinematicSet(std::uint32_t slot) noexcept;
             void RemoveFromKinematicSet(std::uint32_t slot) noexcept;
+
+            // ---- persistent incremental contact coloring (Phase C, Task 4) ---
+            //
+            // A solver-relevant body-body contact is assigned a graph color ONCE at
+            // create (AssignContactColor) and releases it at destroy
+            // (ReleaseContactColor) -- the assign-at-create / release-at-destroy
+            // replacement for the per-step greedy recolor. The invariant: no two
+            // same-color contacts share a DYNAMIC body (a static/kinematic endpoint
+            // never constrains coloring, mirroring ColorConstraints' aDyn/bDyn rule).
+            //
+            // NOT yet consumed by the solver (Task 5 wires it in). Maintaining the
+            // coloring here is pure bookkeeping, so the sim is byte-identical. Public
+            // so the [phasec] coloring-validity test can call the oracle/probes.
+
+            // Assign the lowest free color to a NEW solver-relevant body-body
+            // contact `id` between body slots `a`/`b`. `aDyn`/`bDyn` mark which
+            // endpoints are dynamic (only dynamic endpoints constrain coloring +
+            // occupy a per-body color bit). If no color in [0, kColorCount) is free
+            // for both dynamic endpoints, the contact spills to overflow
+            // (color == kInvalidColor). Caller passes the ORIENTED slots/dyn flags
+            // computed in TryCreateContact.
+            void AssignContactColor(std::uint32_t id, std::uint32_t a, std::uint32_t b,
+                                    bool aDyn, bool bDyn);
+
+            // Release contact `id`'s color back to its dynamic endpoints. No-op for
+            // an uncolored (kInvalidColor) contact. Recomputes dyn-ness from the
+            // contact's cached body slots (a body's type is fixed for its life), so
+            // this is exact: the coloring invariant guarantees a body has at most
+            // one contact per color, so clearing the bit on destroy frees it cleanly.
+            void ReleaseContactColor(std::uint32_t id);
+
+            // The persistent color of contact `id` (kInvalidColor if uncolored).
+            // Read-only probe; not used by the Step path.
+            [[nodiscard]] std::uint8_t ContactColorOf(std::uint32_t id) const;
+
+            // Oracle: walk the live coloring and prove the invariant -- no DYNAMIC
+            // body appears twice in one color, every listed contact is alive and
+            // tagged with its color. Returns false on any violation. Used by the
+            // [phasec] coloring-validity test (Debug + Release).
+            [[nodiscard]] bool ValidatePersistentColoring() const;
+
             [[nodiscard]] Real InvMassSlot(std::uint32_t i) const noexcept { return m_invMass[i]; }
             [[nodiscard]] Real InvInertiaSlot(std::uint32_t i) const noexcept { return m_invInertia[i]; }
             [[nodiscard]] Real RestSlot(std::uint32_t i) const noexcept { return m_rest[i]; }
@@ -1471,6 +1512,19 @@ namespace Arcane
             // create pass.
             ContactPool                 m_contactPool;
             std::vector<BroadphasePair> m_cpPairs;
+
+            // ---- persistent incremental contact coloring (Phase C, Task 4) -----
+            //
+            // m_bodyColorMask[slot] is a 12-bit (one bit per color, kColorCount<32)
+            // occupancy mask over the colors that body slot currently has a contact
+            // in. Keyed by WORLD body slot; a removed/recycled slot resets to 0
+            // (EnsureCapacity defaults new slots to 0; the RemoveBody leak-detector
+            // asserts a removed body left mask 0). m_colorContacts[k] is the list of
+            // contact ids assigned to color k (sized kColorCount in the ctor). These
+            // are maintained at create/destroy; NOT consumed by the solver yet
+            // (Task 5), so they are pure bookkeeping and the sim is byte-identical.
+            std::vector<std::uint32_t>              m_bodyColorMask;
+            std::vector<std::vector<std::uint32_t>> m_colorContacts;
 
             // ---- per-step touched EVENT body-pairs (collision-rebuild Phase 4) --
             //

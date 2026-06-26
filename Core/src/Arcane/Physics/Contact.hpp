@@ -36,6 +36,16 @@ namespace Arcane
 {
     namespace Physics
     {
+        // PERSISTENT INCREMENTAL COLORING (collision-rebuild Phase C, Stage 2,
+        // Task 4). A solver-relevant body-body contact is assigned a graph color
+        // ONCE at create and releases it at destroy (no per-step greedy recolor).
+        // kInvalidColor marks "uncolored" -- the default for a fresh/recycled slot
+        // and the value carried by sensors, non-solver, span, and OVERFLOW contacts
+        // (a body-body contact that found no free color among the kColorCount). The
+        // value is < kColorCount sentinel territory and < 32 (the per-body mask is a
+        // 32-bit bitmask), so 0xFF can never collide with a real color index.
+        inline constexpr std::uint8_t kInvalidColor = 0xFFu;
+
         // ----------------------------------------------------------------
         // Contact: one persistent contact per solver-relevant overlapping
         // fixture-pair. Survives across steps; the manifold is recomputed at
@@ -76,6 +86,17 @@ namespace Arcane
             // LIFETIME-INVARIANT like solverRelevant: set once at create, never
             // updated on a HIT.
             bool          eventRelevant = false;
+            // PERSISTENT COLOR (collision-rebuild Phase C, Stage 2, Task 4).
+            // The graph color assigned ONCE when this solver-relevant body-body
+            // contact is created (PhysicsWorld::AssignContactColor), released back
+            // at destroy (ReleaseContactColor). kInvalidColor means uncolored:
+            // a sensor / non-solver / span contact, an OVERFLOW contact (no free
+            // color), or a fresh/recycled pool slot. NOT yet consumed by the solver
+            // (Task 5); maintaining it here is pure bookkeeping, so the sim stays
+            // byte-identical. Reset to kInvalidColor on every pool-slot recycle
+            // (ContactPool::EnsurePair MISS path) so a recycled slot never carries
+            // a stale color.
+            std::uint8_t  color = kInvalidColor;
         };
 
         // ----------------------------------------------------------------

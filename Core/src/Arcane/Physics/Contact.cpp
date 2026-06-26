@@ -51,13 +51,18 @@ namespace Arcane
             {
                 id = m_free.back();
                 m_free.pop_back();
-                m_pool[id]  = Contact{}; // reset the recycled slot (body slots -> kInvalidSlot)
+                // Reset the recycled slot to a fresh default Contact: body slots ->
+                // kInvalidSlot AND color -> kInvalidColor (Phase C, Task 4 -- the
+                // recycled slot must NOT carry a stale color from the contact that
+                // previously occupied this id; the caller re-colors via
+                // AssignContactColor on a fresh create).
+                m_pool[id]  = Contact{};
                 m_alive[id] = 1u;
             }
             else
             {
                 id = static_cast<std::uint32_t>(m_pool.size());
-                m_pool.emplace_back();   // default Contact (body slots kInvalidSlot)
+                m_pool.emplace_back();   // default Contact (body slots kInvalidSlot, color kInvalidColor)
                 m_alive.push_back(1u);
             }
 

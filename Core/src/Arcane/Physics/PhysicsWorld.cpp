@@ -24,6 +24,7 @@
 #include <Arcane/Physics/Narrowphase/Collide.hpp>        // Collide (rotation-aware fixture-pair narrowphase: contacts T5, events/overlap T7)
 #include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl
 #include <Arcane/Physics/Solver/Baumgarte.hpp>           // Baumgarte oracle impl (A/B)
+#include <Arcane/Physics/Solver/ContactColoring.hpp>     // kColorCount (persistent incremental coloring, Phase C Task 4)
 #include <Arcane/Physics/Island.hpp>                     // island sleep pass (stage 4)
 #include <Arcane/Physics/Joints/Joints.hpp>              // joint set + MakeJoint factory (P2.5)
 #include <Arcane/Physics/StepProf.hpp>                   // opt-in per-Step-phase timing (zero-cost when ARCANE_STEPPROF==0)
@@ -143,6 +144,12 @@ namespace Arcane
                                                         def.tileCellSize,
                                                         def.tileOrigin);
             }
+
+            // Phase C, Task 4: one contact-id list per graph color. Sized once here
+            // to kColorCount (overflow contacts are not listed -- they carry
+            // color == kInvalidColor and never enter m_colorContacts). m_bodyColorMask
+            // grows lazily with the body SoA in EnsureCapacity (default 0).
+            m_colorContacts.resize(static_cast<std::size_t>(kColorCount));
         }
 
         PhysicsWorld::~PhysicsWorld() = default;
@@ -198,6 +205,10 @@ namespace Arcane
             // Phase C: kinematic-set back-index column. kNotKinematic = not in the
             // set. A tail slot is never in the set until AddBody writes it.
             m_kinematicIndex.resize(next, kNotKinematic);
+            // Phase C, Task 4: per-body color-occupancy bitmask. A fresh/recycled
+            // slot starts with NO colors occupied (the RemoveBody leak-detector
+            // asserts a removed body left mask 0, so a recycled slot is always 0).
+            m_bodyColorMask.resize(next, 0u);
         }
 
         // ----------------------------------------------------------------
@@ -1091,6 +1102,16 @@ namespace Arcane
             // UpdateContacts' stale-handle guard would reap it.
             DestroyContactsForBody(idx);
 
+            // Phase C, Task 4 leak-detector: every contact referencing this body
+            // released its color bits above (DestroyContactsForBody -> ReleaseContactColor
+            // per contact), so the removed slot's color mask MUST be 0. If this
+            // fires, a destroy path is missing its ReleaseContactColor call (a leaked
+            // bit would mis-color a future body recycled into this slot). Debug-only;
+            // the recycle path also defaults the mask to 0 in EnsureCapacity, so a
+            // leak here is a real bug, not a benign stale value.
+            assert((idx >= m_bodyColorMask.size() || m_bodyColorMask[idx] == 0u) &&
+                   "RemoveBody: body left a non-zero color mask -- a Destroy site is missing ReleaseContactColor");
+
             // Phase B: remove from the awake-set while the slot is still typed
             // Dynamic (btype has not been touched yet; RemoveFromAwakeSet checks
             // the btype to guard non-dynamics -- though a sleeping body is already
@@ -1844,6 +1865,7 @@ namespace Arcane
                         WakeIsland(c.bodyA);
                         WakeIsland(c.bodyB);
                     }
+                    ReleaseContactColor(id); // free the color while c still holds it
                     m_contactPool.Destroy(id);
                 }
             });
@@ -1871,9 +1893,143 @@ namespace Arcane
                         WakeIsland(c.bodyA);
                         WakeIsland(c.bodyB);
                     }
+                    ReleaseContactColor(id);
                     m_contactPool.Destroy(id);
                 }
             });
+        }
+
+        // ----------------------------------------------------------------
+        // Persistent incremental contact coloring (Phase C, Stage 2, Task 4)
+        // ----------------------------------------------------------------
+        //
+        // A solver-relevant body-body contact is colored ONCE at create and frees
+        // its color at destroy -- the incremental replacement for the per-step
+        // greedy recolor. The solver still consumes the per-step ColorConstraints,
+        // so these are pure bookkeeping (the sim is byte-identical until Task 5).
+
+        void PhysicsWorld::AssignContactColor(std::uint32_t id, std::uint32_t a, std::uint32_t b,
+                                              bool aDyn, bool bDyn)
+        {
+            // Lowest free color: one whose bit is unset in BOTH dynamic endpoints'
+            // masks. A static/kinematic endpoint never blocks (it is read-only in
+            // the solve, so sharing it across a color is harmless -- mirrors
+            // ColorConstraints' aDyn/bDyn rule).
+            int chosen = -1;
+            for (int k = 0; k < kColorCount; ++k)
+            {
+                const std::uint32_t bit = 1u << k;
+                const bool aFree = !aDyn || !(m_bodyColorMask[a] & bit);
+                const bool bFree = !bDyn || !(m_bodyColorMask[b] & bit);
+                if (aFree && bFree) { chosen = k; break; }
+            }
+            Contact& c = m_contactPool.Get(id);
+            if (chosen < 0)
+            {
+                // OVERFLOW: no free color. The contact stays uncolored
+                // (kInvalidColor) and is NOT listed in m_colorContacts; the solver
+                // (Task 5) will solve it in the scalar tail.
+                c.color = kInvalidColor;
+                return;
+            }
+            c.color = static_cast<std::uint8_t>(chosen);
+            const std::uint32_t bit = 1u << chosen;
+            // Occupy the color bit on each DYNAMIC endpoint only.
+            if (aDyn) m_bodyColorMask[a] |= bit;
+            if (bDyn) m_bodyColorMask[b] |= bit;
+            m_colorContacts[chosen].push_back(id);
+        }
+
+        void PhysicsWorld::ReleaseContactColor(std::uint32_t id)
+        {
+            Contact& c = m_contactPool.Get(id);
+            const std::uint8_t col = c.color;
+            if (col == kInvalidColor)
+            {
+                // Sensor / non-solver / span / overflow contact -- never colored,
+                // never in m_colorContacts. Nothing to release.
+                return;
+            }
+
+            // RATIONALE: the coloring invariant (no two same-color contacts share a
+            // dynamic body) means each body has AT MOST ONE contact per color, so
+            // clearing the body's bit for this color is exact -- no OTHER live
+            // contact of this body occupies the same color, so we never strip a bit
+            // a sibling contact still needs.
+            //
+            // Recompute dyn-ness from the cached body slots (a body's type is fixed
+            // for its life -- m_btype is set only in AddBody -- so this matches the
+            // aDyn/bDyn passed at AssignContactColor). A SPAN (c.bIsBody == false)
+            // has no real B body, so only A can be a dynamic endpoint there.
+            const std::uint32_t bit = 1u << col;
+            const std::uint32_t bA  = c.bodyA;
+            const std::uint32_t bB  = c.bodyB;
+            const bool aDyn = (bA != kInvalidSlot) &&
+                              (static_cast<BodyType>(m_btype[bA]) == BodyType::Dynamic);
+            const bool bDyn = c.bIsBody && (bB != kInvalidSlot) &&
+                              (static_cast<BodyType>(m_btype[bB]) == BodyType::Dynamic);
+            if (aDyn) m_bodyColorMask[bA] &= ~bit;
+            if (bDyn) m_bodyColorMask[bB] &= ~bit;
+
+            // Swap-remove id from this color's contact list (order-independent --
+            // the list is a set, never walked in a determinism-sensitive order).
+            std::vector<std::uint32_t>& list = m_colorContacts[col];
+            for (std::size_t i = 0; i < list.size(); ++i)
+            {
+                if (list[i] == id)
+                {
+                    list[i] = list.back();
+                    list.pop_back();
+                    break;
+                }
+            }
+            c.color = kInvalidColor;
+        }
+
+        std::uint8_t PhysicsWorld::ContactColorOf(std::uint32_t id) const
+        {
+            // Read-only probe (not used by the Step path). Get() asserts liveness
+            // in Debug; the caller is expected to pass a live id. A dead/recycled
+            // slot carries kInvalidColor (the EnsurePair recycle reset), so the
+            // value is meaningful even on the recycled path.
+            return m_contactPool.Get(id).color;
+        }
+
+        bool PhysicsWorld::ValidatePersistentColoring() const
+        {
+            // For each color, no DYNAMIC body slot may appear in two contacts, and
+            // every listed contact must be alive AND tagged with this color.
+            std::vector<std::uint8_t> seen; // per-body-slot "claimed this color"
+            for (int k = 0; k < kColorCount; ++k)
+            {
+                seen.assign(m_bodyColorMask.size(), 0u);
+                const std::vector<std::uint32_t>& list = m_colorContacts[static_cast<std::size_t>(k)];
+                for (const std::uint32_t id : list)
+                {
+                    const Contact& c = m_contactPool.Get(id); // asserts alive in Debug
+                    if (c.color != static_cast<std::uint8_t>(k))
+                    {
+                        return false; // listed under the wrong color
+                    }
+                    const std::uint32_t bA = c.bodyA;
+                    const std::uint32_t bB = c.bodyB;
+                    const bool aDyn = (bA != kInvalidSlot) &&
+                                      (static_cast<BodyType>(m_btype[bA]) == BodyType::Dynamic);
+                    const bool bDyn = c.bIsBody && (bB != kInvalidSlot) &&
+                                      (static_cast<BodyType>(m_btype[bB]) == BodyType::Dynamic);
+                    if (aDyn)
+                    {
+                        if (seen[bA] != 0u) return false; // dynamic body twice in one color
+                        seen[bA] = 1u;
+                    }
+                    if (bDyn)
+                    {
+                        if (seen[bB] != 0u) return false;
+                        seen[bB] = 1u;
+                    }
+                }
+            }
+            return true;
         }
 
         bool PhysicsWorld::BothAsleep(const Contact& c) const noexcept
@@ -2101,6 +2257,24 @@ namespace Arcane
                 c.bIsBody        = true;
                 c.solverRelevant = solverRelevant;
                 c.eventRelevant  = eventRelevant;
+
+                // Phase C, Task 4: assign a persistent graph color to a NEW
+                // solver-relevant body-body contact (assign-at-create). Sensors,
+                // non-solver, and span contacts stay uncolored (kInvalidColor).
+                // Every created contact here is body-body (bIsBody == true), but
+                // keep the explicit gate for intent.
+                //
+                // Pass the ORIENTED slots ia/ib together with the ORIENTED dyn
+                // flags aDyn/bDyn (computed above from m_btype[ia]/m_btype[ib]),
+                // NOT the pre-orientation da/db: the swap moves the slots but not
+                // the da/db labels, so under a swap da/db would describe the wrong
+                // endpoint. ReleaseContactColor + ValidatePersistentColoring both
+                // recompute dyn-ness from m_btype[bodyA]/m_btype[bodyB] (== ia/ib),
+                // so assign MUST key off the same oriented flags to stay consistent.
+                if (solverRelevant && c.bIsBody)
+                {
+                    AssignContactColor(r.id, ia, ib, aDyn, bDyn);
+                }
             }
             // On a non-created HIT we leave the existing contact untouched (its
             // body slots + manifold persist) -- mirrors EnsurePair's contract.
@@ -2401,6 +2575,7 @@ namespace Arcane
                     {
                         MarkSplitCandidate(IslandOf(c.bodyA));
                     }
+                    ReleaseContactColor(id); // free the color while c still holds it (stale-handle reap)
                     m_contactPool.Destroy(id);
                     return;
                 }
@@ -2438,6 +2613,7 @@ namespace Arcane
                     {
                         MarkSplitCandidate(IslandOf(c.bodyA));
                     }
+                    ReleaseContactColor(id); // free the color while c still holds it (fat-box separation)
                     m_contactPool.Destroy(id);
                     return;
                 }
