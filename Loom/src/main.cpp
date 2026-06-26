@@ -19,6 +19,8 @@
 #include <Arcane/Render/Swapchain.hpp>
 #include <Arcane/Render/TonemapPass.hpp>
 
+#include <LoomConfig.hpp>
+
 #include <Astra/Core/TypeContext.hpp>
 
 #include <nvrhi/nvrhi.h>
@@ -28,51 +30,24 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <string>
 #include <thread>
 #include <unordered_map>
 
-namespace
-{
-    void PrintUsage()
-    {
-        std::printf(
-            "Arcane Loom (M5: plugin host)\n"
-            "  --backend dx12|vulkan   graphics backend (default dx12)\n"
-            "  --frames N              render N frames then exit\n"
-            "  --no-vsync              present without vsync\n"
-            "  --plugin <path>         game DLL to host (default ./Sandbox.dll)\n"
-            "  --perf                  log per-phase ms every 60 frames\n");
-    }
-}
-
 int main(int argc, char** argv)
 {
-    Arcane::GraphicsBackend backend = Arcane::GraphicsBackend::D3D12;
-    uint64_t maxFrames = 0;
-    bool vsync = true;
-    bool perf = false;
-    std::string pluginPath = "Sandbox.dll";
-
-    for (int i = 1; i < argc; ++i)
-    {
-        if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc)
-        {
-            ++i;
-            if      (std::strcmp(argv[i], "vulkan") == 0) backend = Arcane::GraphicsBackend::Vulkan;
-            else if (std::strcmp(argv[i], "dx12")   == 0) backend = Arcane::GraphicsBackend::D3D12;
-            else { PrintUsage(); return 2; }
-        }
-        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) { maxFrames = std::strtoull(argv[++i], nullptr, 10); }
-        else if (std::strcmp(argv[i], "--no-vsync") == 0)               { vsync = false; }
-        else if (std::strcmp(argv[i], "--plugin") == 0 && i + 1 < argc) { pluginPath = argv[++i]; }
-        else if (std::strcmp(argv[i], "--perf") == 0)                   { perf = true; }
-        else { PrintUsage(); return 2; }
-    }
-
     Arcane::Log::Init();
+    const LoomConfig::ParseOutcome parsed = LoomConfig::Parse(argc, argv);
+    if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
+    const LoomConfig& cfg = *parsed.config;
+
+    Arcane::GraphicsBackend backend = cfg.backend;
+    uint64_t maxFrames = cfg.maxFrames;
+    bool vsync = cfg.vsync;
+    bool perf  = cfg.perf;
+    std::string pluginPath = cfg.pluginPath;
+
     ARC_INFO("{} -- Loom host, backend {}", Arcane::BuildInfo(), Arcane::ToString(backend));
 
     // window is declared first so the destructor fires last (after all modules

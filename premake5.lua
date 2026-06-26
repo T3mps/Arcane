@@ -357,6 +357,7 @@ project "Loom"
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
+        "%{prj.location}/src",           -- LoomConfig.hpp (<LoomConfig.hpp> from main/LoomConfig.cpp)
         "%{wks.location}/Arcane/src",
         "%{IncludeDir.Core}",
         "%{IncludeDir.nlohmann}",
@@ -367,7 +368,13 @@ project "Loom"
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
     }
-    links { "Arcane" }
+    -- Core is linked directly (alongside the Arcane DLL) so Loom's own TUs can call
+    -- un-exported Core APIs -- LoomConfig.cpp uses Arcane::Cli, which is header-only
+    -- declared without ARCANE_API, so it is NOT exported from Arcane.dll. Two static
+    -- Core copies in different modules is the established workspace pattern (see the
+    -- ArcaneTests links comment). Core links into exactly ONE module per PROCESS
+    -- holds because Loom.exe and Arcane.dll are distinct modules.
+    links { "Core", "Arcane" }
     dependson { "PlaygroundGame", "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
@@ -412,12 +419,16 @@ project "ArcaneTests"
         "%{wks.location}/Sandbox/src/Scenes.cpp",
         "%{wks.location}/Sandbox/src/SandboxApp.cpp",
         "%{wks.location}/Sandbox/src/Hud.cpp",
+        -- LoomConfig (the typed Loom CLI result over Arcane::Cli) compiles into the
+        -- test exe so [loom] round-trips Parse without loading the Loom binary.
+        "%{wks.location}/Loom/src/LoomConfig.cpp",
     }
 
     includedirs {
         "%{IncludeDir.Core}",
         "%{wks.location}/Arcane/src",
         "%{wks.location}/Sandbox/src",   -- Interaction.hpp / Scenes.hpp / Camera.hpp for the [sandbox] tests
+        "%{wks.location}/Loom/src",      -- LoomConfig.hpp for the [loom] test
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",
