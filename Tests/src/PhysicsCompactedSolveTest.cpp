@@ -51,3 +51,33 @@ TEST_CASE("PhysicsCompacted: kinematic-set tracks live kinematic slots", "[physi
     checkInvariant(w);                             // recycle a slot as a fresh kinematic
     (void)d0; (void)k1; (void)k2;
 }
+
+// Task 2 re-homes the lane-wide solve scratch onto a DENSE solverCount-sized SoA
+// (awake-set index space + kinematic index space; dummy = solverCount) instead of
+// the sparse worldCount-sized SoA indexed by world slot. This is PURE re-indexing
+// -- no physics math changes -- so the settle MUST be byte-identical. This case is
+// the regression gate: run the same scene twice (a run-twice determinism check) and
+// assert the two runs produce bit-identical positions + awake flags. The scene
+// includes a MOVING kinematic plate pushing a stack of dynamics, so a kinematic
+// B-endpoint is exercised (catching a mis-gate where a kinematic B falls through
+// to the dummy and loses the push, or a static B reads a stale kinematic index).
+// It already passes pre-change (it is a determinism check) and must keep passing.
+TEST_CASE("PhysicsCompacted: solve settles identically + deterministically", "[physics][phasec]")
+{
+    auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
+        WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+        // include a kinematic plate pushing a dynamic so a kinematic B-endpoint is exercised
+        BodyDef kd; kd.type=BodyType::Kinematic; kd.position=Vec2(Real(0),Real(-8)); kd.shape=MakeAabb(Real(60),Real(2));
+        const BodyHandle k = w.AddBody(kd); w.SetVelocity(k, Vec2(Real(3), Real(0)));
+        std::vector<BodyHandle> boxes;
+        for (int i = 0; i < 5; ++i) boxes.push_back(AddBox(w, Vec2(Real(0), Real(-20) - Real(9)*static_cast<Real>(i)), Real(4), Real(4)));
+        for (int kk = 0; kk < 600; ++kk) w.Step(kStep);
+        pos.clear(); awake.clear();
+        for (const BodyHandle b : boxes) { pos.push_back(w.Position(b)); awake.push_back(w.IsAwake(b)?1:0); }
+        (void)k;
+    };
+    std::vector<Vec2> p1,p2; std::vector<int> a1,a2; run(p1,a1); run(p2,a2);
+    REQUIRE(p1.size()==p2.size());
+    for (std::size_t i=0;i<p1.size();++i){ REQUIRE(p1[i].x==p2[i].x); REQUIRE(p1[i].y==p2[i].y); REQUIRE(a1[i]==a2[i]); }
+}

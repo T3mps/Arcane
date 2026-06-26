@@ -53,29 +53,30 @@ namespace Arcane
         }
 
         // ===================================================================
-        // BodyStateSoA world<->solver sync (SIMD constraint-solver Task 1)
+        // BodyStateSoA world<->solver sync (SIMD constraint-solver Task 1;
+        // dense re-home Phase C, Task 2)
         // ===================================================================
         //
-        // CONTRACT: the caller Resize()s the SoA to world.Count()+1 (which zeroes
-        // every array; the "+1" tail is the scatter-safe dummy slot) before SyncIn.
-        // SyncIn then OVERWRITES only the slots that satisfy the awake-dynamic
-        // predicate -- the SAME predicate the solver's IntegrateVelocitiesSoA /
-        // IntegratePositionsSoA / FinalizePositionsSoA use:
-        //   Alive(i) && TypeSlot(i) == BodyType::Dynamic && AwakeSlot(i).
-        // Non-matching slots (statics, kinematics, asleep/dead dynamics) are
-        // LEFT AS-IS (zero after the caller's Resize). For matched slots SyncIn
-        // also zeroes the TGS position-delta accumulators (dp/dq), since they
-        // start each Step's sub-step loop at zero.
-        // SyncIn additionally copies all Alive non-dynamic (Static/Kinematic) slots
-        // so the solver's B-endpoint velocity reads see current values (and a
-        // recycled dynamic->static slot does not keep a stale velocity).
+        // TWO INDEX SPACES live here. The SOLVER hot path uses the DENSE pair
+        // SyncInCompacted / SyncOutCompacted (Phase C, Task 2): the scratch is sized
+        // solverCount+1 (= AwakeCount()+KinematicCount()+1) and indexed by solverIndex
+        // (awake dynamics at AwakeIndexOf(slot) in [0,awakeCount); kinematics at
+        // awakeCount+KinematicIndexOf(slot); the dummy tail at solverCount). The
+        // legacy SyncIn / SyncOut pair (below) is the original sparse world-slot
+        // bridge, kept only for the standalone SyncIn/SyncOut round-trip contract
+        // test -- it is NO LONGER on the solver path. Both pairs share the same
+        // awake-dynamic predicate (Alive && Dynamic && Awake), differing only in the
+        // index they write/read. These defs live here (not the header) because they
+        // need the PhysicsWorld slot accessors.
         //
-        // SyncOut writes the packed velocities BACK to the world for the SAME
-        // predicate, and ONLY the velocities -- positions are committed by the
-        // solver's FinalizePositionsSoA, never here. SoftStep::Solve consumes this
-        // bridge (SyncIn at the Step boundary, SyncOut after the colored solve);
-        // these defs live here (not the header) because they need the PhysicsWorld
-        // slot accessors.
+        // CONTRACT (legacy SyncIn): the caller Resize()s the SoA to world.Count()+1
+        // (which zeroes every array; the "+1" tail is the scatter-safe dummy slot)
+        // before SyncIn. SyncIn then OVERWRITES only the slots that satisfy the
+        // awake-dynamic predicate. Non-matching slots (statics, kinematics, asleep/
+        // dead dynamics) are LEFT AS-IS (zero after the caller's Resize). For matched
+        // slots SyncIn also zeroes the TGS position-delta accumulators (dp/dq).
+        // SyncIn additionally copies all Alive non-dynamic (Static/Kinematic) slots
+        // so the solver's B-endpoint velocity reads see current values.
 
         void BodyStateSoA::SyncIn(const PhysicsWorld& world)
         {
@@ -132,6 +133,61 @@ namespace Arcane
             {
                 world.SetVelSlot(i, Vec2(vx[i], vy[i]));
                 world.SetAngVelSlot(i, w[i]);
+            });
+        }
+
+        void BodyStateSoA::SyncInCompacted(const PhysicsWorld& world)
+        {
+            // DENSE fill (Phase C, Task 2). The caller Resize()d to solverCount+1, so
+            // every row -- including the dummy tail at solverCount -- starts at zero.
+            //
+            // (a) Awake dynamics -> dense row AwakeIndexOf(slot) in [0, awakeCount):
+            //     mirror velocity + reset the TGS position-delta accumulators (only
+            //     awake dynamics integrate, so only they need a fresh dp/dq = 0).
+            world.ForEachAwake([&](std::uint32_t s)
+            {
+                const std::uint32_t i = world.AwakeIndexOf(s);
+                const Vec2 v = world.VelSlot(s);
+                vx[i] = v.x;
+                vy[i] = v.y;
+                w[i]  = world.AngVelSlot(s);
+                dpx[i] = 0.f;
+                dpy[i] = 0.f;
+                dq[i]  = 0.f;
+            });
+
+            // (b) Kinematics -> dense row awakeCount + KinematicIndexOf(slot) in
+            //     [awakeCount, solverCount): mirror velocity ONLY. A kinematic B is a
+            //     contact endpoint whose authored velocity drives the relative-velocity
+            //     push term, so its dense row MUST carry the current velocity. dp/dq
+            //     stay at zero (kinematics never integrate -> the Resize zero stands).
+            //     Sleeping dynamics get NO row -- safe because no emitted constraint
+            //     references one (EmitContactConstraints gates on awake-A, and a
+            //     touching dyn-dyn pair shares one island, so awake-A => awake-B).
+            //     Statics likewise get no row (they map to the zero dummy tail).
+            const std::uint32_t awakeCount = world.AwakeCount();
+            world.ForEachKinematic([&](std::uint32_t s)
+            {
+                const std::uint32_t i = awakeCount + world.KinematicIndexOf(s);
+                const Vec2 v = world.VelSlot(s);
+                vx[i] = v.x;
+                vy[i] = v.y;
+                w[i]  = world.AngVelSlot(s);
+                // dp/dq intentionally left at zero (kinematics never integrate).
+            });
+        }
+
+        void BodyStateSoA::SyncOutCompacted(PhysicsWorld& world) const
+        {
+            // DENSE write-back (Phase C, Task 2). Read each awake dynamic's velocity
+            // from its dense row AwakeIndexOf(slot) and push it to the world. Only
+            // awake dynamics were integrated; kinematics are read-only (their dense
+            // rows are never written back), and statics/sleeping dynamics have no row.
+            world.ForEachAwake([&](std::uint32_t s)
+            {
+                const std::uint32_t i = world.AwakeIndexOf(s);
+                world.SetVelSlot(s, Vec2(vx[i], vy[i]));
+                world.SetAngVelSlot(s, w[i]);
             });
         }
 
@@ -259,18 +315,21 @@ namespace Arcane
             // Phase B, Task 3: iterate the awake-set directly -- the set guarantees
             // Alive + Dynamic + Awake. Only the InvMassSlot<=0 guard is retained
             // (a degenerate zero-invMass dynamic is valid; it never integrates).
+            // Phase C, Task 2: index m_bodyState by the DENSE solverIndex
+            // AwakeIndexOf(slot), NOT the world slot.
             PhysicsWorld& w = *ctx.world;
             const Vec2 g = ctx.gravity;
-            w.ForEachAwake([&](std::uint32_t i)
+            w.ForEachAwake([&](std::uint32_t s)
             {
-                if (w.InvMassSlot(i) <= Real(0))
+                if (w.InvMassSlot(s) <= Real(0))
                 {
                     return; // pinned dynamic -- never integrates
                 }
+                const std::uint32_t i = w.AwakeIndexOf(s);
                 float vx = m_bodyState.vx[i] + static_cast<float>(g.x * h);
                 float vy = m_bodyState.vy[i] + static_cast<float>(g.y * h);
                 float wv = m_bodyState.w[i];
-                const Real d = w.LinDampSlot(i);
+                const Real d = w.LinDampSlot(s);
                 if (d > Real(0))
                 {
                     const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
@@ -286,10 +345,12 @@ namespace Arcane
         {
             // Phase B, Task 3: iterate the awake-set directly -- Alive+Dynamic+Awake
             // is guaranteed. dp/dq += v*h for the TGS separation re-evaluation.
+            // Phase C, Task 2: index by the DENSE solverIndex AwakeIndexOf(slot).
             PhysicsWorld& w = *ctx.world;
             const float fh = static_cast<float>(h);
-            w.ForEachAwake([&](std::uint32_t i)
+            w.ForEachAwake([&](std::uint32_t s)
             {
+                const std::uint32_t i = w.AwakeIndexOf(s);
                 m_bodyState.dpx[i] += m_bodyState.vx[i] * fh;
                 m_bodyState.dpy[i] += m_bodyState.vy[i] * fh;
                 m_bodyState.dq[i]  += m_bodyState.w[i]  * fh;
@@ -301,20 +362,23 @@ namespace Arcane
             // Phase B, Task 3: iterate the awake-set directly -- Alive+Dynamic+Awake
             // is guaranteed. Commit the compound-COM position from SoA dp/dq.
             // For localCenter==(0,0) this reduces to p=p0+dp, a=a0+dq.
+            // Phase C, Task 2: index dp/dq by the DENSE solverIndex AwakeIndexOf(slot);
+            // CommitSlotPosition still takes the WORLD slot `s` (unchanged).
             PhysicsWorld& w = *ctx.world;
-            w.ForEachAwake([&](std::uint32_t i)
+            w.ForEachAwake([&](std::uint32_t s)
             {
+                const std::uint32_t i = w.AwakeIndexOf(s);
                 const Vec2 dp(static_cast<Real>(m_bodyState.dpx[i]),
                               static_cast<Real>(m_bodyState.dpy[i]));
                 const Real dr = static_cast<Real>(m_bodyState.dq[i]);
-                const Vec2 p0 = w.PosSlot(i);
-                const Real a0 = w.GetAngle(w.HandleOf(i));
-                const Vec2 lc = w.LocalCenterSlot(i);
+                const Vec2 p0 = w.PosSlot(s);
+                const Real a0 = w.GetAngle(w.HandleOf(s));
+                const Vec2 lc = w.LocalCenterSlot(s);
                 const Vec2 c0 = p0 + RotateVec(a0, lc);
                 const Vec2 c  = c0 + dp;
                 const Real a  = a0 + dr;
                 const Vec2 p  = c - RotateVec(a, lc);
-                w.CommitSlotPosition(i, p, a);
+                w.CommitSlotPosition(s, p, a);
             });
         }
 
@@ -322,37 +386,32 @@ namespace Arcane
         {
             // Push the SoA velocities back to the world so the scalar joint passes
             // read the in-flight (contact-solved) velocities. Awake dynamics only.
+            // Phase C, Task 2: index m_bodyState by the DENSE solverIndex; iterate
+            // the awake-set (it IS the Alive+Dynamic+Awake gate).
             PhysicsWorld& w = *ctx.world;
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
+            w.ForEachAwake([&](std::uint32_t s)
             {
-                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
-                {
-                    continue;
-                }
-                w.SetVelSlot(i, Vec2(static_cast<Real>(m_bodyState.vx[i]),
+                const std::uint32_t i = w.AwakeIndexOf(s);
+                w.SetVelSlot(s, Vec2(static_cast<Real>(m_bodyState.vx[i]),
                                      static_cast<Real>(m_bodyState.vy[i])));
-                w.SetAngVelSlot(i, static_cast<Real>(m_bodyState.w[i]));
-            }
+                w.SetAngVelSlot(s, static_cast<Real>(m_bodyState.w[i]));
+            });
         }
 
         void SoftStep::SyncVelFromWorld(SolverContext& ctx)
         {
             // Pull the world velocities back into the SoA after a joint pass mutated
             // them. dp/dq untouched (joints do not read them). Awake dynamics only.
+            // Phase C, Task 2: index m_bodyState by the DENSE solverIndex.
             PhysicsWorld& w = *ctx.world;
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
+            w.ForEachAwake([&](std::uint32_t s)
             {
-                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
-                {
-                    continue;
-                }
-                const Vec2 v = w.VelSlot(i);
+                const std::uint32_t i = w.AwakeIndexOf(s);
+                const Vec2 v = w.VelSlot(s);
                 m_bodyState.vx[i] = static_cast<float>(v.x);
                 m_bodyState.vy[i] = static_cast<float>(v.y);
-                m_bodyState.w[i]  = static_cast<float>(w.AngVelSlot(i));
-            }
+                m_bodyState.w[i]  = static_cast<float>(w.AngVelSlot(s));
+            });
         }
 
         // ----- Overflow: width-1 SCALAR solve over the SoA (scatter-safe) ------
@@ -376,11 +435,13 @@ namespace Arcane
         namespace
         {
             // Per-overflow-constraint scalar helpers (SoA-resident). cc is the
-            // emitted ContactConstraint; bs holds vel + dp/dq by world slot.
+            // emitted ContactConstraint; bs holds vel + dp/dq by DENSE solverIndex
+            // (Phase C, Task 2).
             //   bIsBody : B is a real body (read its velocity for the relative-
             //             velocity term -- a kinematic plate's velocity drives the
-            //             push; SyncIn copies non-dynamic alive slots for this).
+            //             push; SyncInCompacted gives kinematics a real dense row).
             //   dynB    : B is a real DYNAMIC body whose velocity is MUTATED.
+            //   ia, ib  : DENSE solverIndex of A and B (NOT world slots).
             struct OverflowBodies
             {
                 std::uint32_t ia, ib;
@@ -388,13 +449,40 @@ namespace Arcane
                 Real iMa, iIa, iMb, iIb;
             };
 
-            inline OverflowBodies OverflowSetup(const ContactConstraint& cc)
+            // Map a contact B-endpoint world slot to its dense solverIndex, matching
+            // the packer's kinematic-vs-static gate exactly: a dynamic B -> its awake
+            // row; a kinematic B -> awakeCount + its kinematic row (real velocity ->
+            // push); a static B or a span -> the zero dummy tail at solverCount.
+            inline std::uint32_t DenseB(const ContactConstraint& cc, const PhysicsWorld& w,
+                                        std::uint32_t awakeCount, std::uint32_t solverCount,
+                                        bool dynB)
+            {
+                if (!cc.bodyBIsBody)
+                {
+                    return solverCount;                 // tile span -> dummy tail
+                }
+                if (dynB)
+                {
+                    return w.AwakeIndexOf(cc.bodyB);     // dynamic B -> its awake row
+                }
+                const std::uint32_t ki = w.KinematicIndexOf(cc.bodyB);
+                if (ki != kNotKinematic)
+                {
+                    return awakeCount + ki;             // kinematic B -> its dense row
+                }
+                return solverCount;                     // static B -> dummy tail
+            }
+
+            // ia/ib are DENSE solverIndices. awakeCount/solverCount come from the
+            // world's per-step dense index space; A is ALWAYS an awake dynamic.
+            inline OverflowBodies OverflowSetup(const ContactConstraint& cc, const PhysicsWorld& w,
+                                                std::uint32_t awakeCount, std::uint32_t solverCount)
             {
                 OverflowBodies ob;
-                ob.ia      = cc.bodyA;
-                ob.ib      = cc.bodyB;
                 ob.bIsBody = cc.bodyBIsBody;
                 ob.dynB    = cc.bodyBIsBody && cc.invMassB > Real(0);
+                ob.ia      = w.AwakeIndexOf(cc.bodyA);
+                ob.ib      = DenseB(cc, w, awakeCount, solverCount, ob.dynB);
                 ob.iMa     = cc.invMassA; ob.iIa = cc.invInertiaA;
                 ob.iMb     = cc.invMassB; ob.iIb = cc.invInertiaB;
                 return ob;
@@ -403,10 +491,13 @@ namespace Arcane
 
         void SoftStep::OverflowWarmStart(SolverContext& ctx)
         {
+            const PhysicsWorld& w = *ctx.world;
+            const std::uint32_t awakeCount = w.AwakeCount();
+            const std::uint32_t solverCount = awakeCount + w.KinematicCount();
             for (std::uint32_t ref : m_coloring.overflow)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
-                const OverflowBodies ob = OverflowSetup(cc);
+                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
                 const Vec2 n = cc.normal;
                 const Vec2 tangent(-n.y, n.x);
 
@@ -440,11 +531,14 @@ namespace Arcane
         {
             const Real invH = (h > Real(0)) ? (Real(1) / h) : Real(0);
             const Real maxBiasVel = ctx.world->ContactPushMaxVelocity();
+            const PhysicsWorld& w = *ctx.world;
+            const std::uint32_t awakeCount = w.AwakeCount();
+            const std::uint32_t solverCount = awakeCount + w.KinematicCount();
 
             for (std::uint32_t ref : m_coloring.overflow)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
-                const OverflowBodies ob = OverflowSetup(cc);
+                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
                 const Vec2 n = cc.normal;
                 const Vec2 tangent(-n.y, n.x);
 
@@ -514,11 +608,14 @@ namespace Arcane
         void SoftStep::OverflowRestitution(SolverContext& ctx)
         {
             const Real threshold = ctx.world->RestitutionThreshold();
+            const PhysicsWorld& w = *ctx.world;
+            const std::uint32_t awakeCount = w.AwakeCount();
+            const std::uint32_t solverCount = awakeCount + w.KinematicCount();
             for (std::uint32_t ref : m_coloring.overflow)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
                 if (cc.restitution <= Real(0)) { continue; }
-                const OverflowBodies ob = OverflowSetup(cc);
+                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
                 const Vec2 n = cc.normal;
 
                 Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
@@ -562,7 +659,15 @@ namespace Arcane
         void SoftStep::Solve(SolverContext& ctx)
         {
             PhysicsWorld& w = *ctx.world;
-            const std::uint32_t count = w.Count();
+
+            // Phase C, Task 2: the body-state scratch is now DENSE, sized by the
+            // per-step solver index space (awake dynamics + kinematics + 1 dummy),
+            // NOT the sparse world slot count. awakeCount = the awake-dynamic count
+            // (solverIndex [0, awakeCount)); solverCount = awakeCount + kinematicCount
+            // (kinematics occupy [awakeCount, solverCount)); the dummy tail is at
+            // solverCount (statics/spans/padding gather/scatter through it).
+            const std::uint32_t awakeCount  = w.AwakeCount();
+            const std::uint32_t solverCount = awakeCount + w.KinematicCount();
 
             const Real h = ctx.subDt;
             const int substeps = static_cast<int>(ctx.substepCount);
@@ -580,20 +685,25 @@ namespace Arcane
             PrepareContacts(ctx);
             PrepareJoints(ctx);
 
-            // 2) Body-state SoA: size to count+1 (the extra slot = the scatter-safe
-            //    DUMMY) and sync world velocities in (zeroes dp/dq for awake
-            //    dynamics). The dummy slot is index `count`; Resize zeroes it and
-            //    SyncIn leaves it zero (not an awake dynamic), so a redundant scatter
-            //    there is harmless.
-            const std::int32_t dummyIndex = static_cast<std::int32_t>(count);
-            m_bodyState.Resize(count + 1u);
-            m_bodyState.SyncIn(w);
+            // 2) Body-state SoA: size to solverCount+1 (the extra slot = the
+            //    scatter-safe DUMMY) and sync world velocities into the DENSE rows
+            //    (zeroes dp/dq for awake dynamics; kinematics get a real velocity row;
+            //    the dummy tail stays zero from Resize). The dummy slot is index
+            //    `solverCount`; a redundant scatter there is harmless.
+            const std::int32_t dummyIndex = static_cast<std::int32_t>(solverCount);
+            m_bodyState.Resize(solverCount + 1u);
+            m_bodyState.SyncInCompacted(w);
 
             // 3) Per-step greedy coloring of the solver-relevant touching contacts.
             //    A is already the dynamic orientation (always aDyn). B is dynamic iff
             //    it is a real body with positive inverse mass. Static/kinematic/span
             //    endpoints are read-only -> not marked dynamic (do not constrain
             //    coloring). ref = the constraint index into ctx.contacts.
+            //    Phase C, Task 2: coloring only constrains DYNAMIC endpoints, so map
+            //    them to the dense AWAKE index space (AwakeIndexOf); kinematics/statics
+            //    are read-only and never block a color, so their endpoint is irrelevant
+            //    (e.b is unused when !bDyn). bodyCount for the colorer is awakeCount
+            //    (only awake dynamics can collide a color).
             m_edges.clear();
             m_edges.reserve(ctx.contactCount);
             for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
@@ -601,25 +711,29 @@ namespace Arcane
                 const ContactConstraint& cc = ctx.contacts[c];
                 const bool bDyn = cc.bodyBIsBody && cc.invMassB > Real(0);
                 ColorEdge e;
-                e.a    = cc.bodyA;
-                e.b    = bDyn ? cc.bodyB : cc.bodyA; // b unused for coloring when !bDyn
-                e.aDyn = true;                       // A is always dynamic in the feed
+                e.a    = w.AwakeIndexOf(cc.bodyA);
+                e.b    = bDyn ? w.AwakeIndexOf(cc.bodyB) : e.a; // b unused for coloring when !bDyn
+                e.aDyn = true;                                  // A is always dynamic in the feed
                 e.bDyn = bDyn;
                 e.ref  = c;
                 m_edges.push_back(e);
             }
-            m_coloring = ColorConstraints(m_edges, count);
+            m_coloring = ColorConstraints(m_edges, awakeCount);
 
             // 4) Build one SoA batch list per color (warm-start already on the
-            //    prepared ctx.contacts points). Padding + read-only-B lanes point at
-            //    the dummy slot (scatter-safe).
+            //    prepared ctx.contacts points). Build re-homes each body index onto
+            //    the dense solverIndex space via the world's awake/kinematic index
+            //    maps; padding + static/span B lanes point at the dummy slot
+            //    (scatter-safe), and a kinematic B reads its real dense row.
             m_colorBatches.assign(m_coloring.colors.size(), {});
             for (std::size_t k = 0; k < m_coloring.colors.size(); ++k)
             {
                 const std::vector<std::uint32_t>& color = m_coloring.colors[k];
                 if (color.empty()) { continue; }
                 m_colorBatches[k] = ContactConstraintSimd::Build(
-                    ctx.contacts, color.data(), static_cast<int>(color.size()), dummyIndex);
+                    ctx.contacts, color.data(), static_cast<int>(color.size()), dummyIndex,
+                    w.AwakeIndexData(), w.KinematicIndexData(), awakeCount,
+                    kNotKinematic);
             }
 
             // 5) Sub-step loop. Stage order matches the scalar driver (Box2D v3
@@ -672,9 +786,9 @@ namespace Arcane
                 SimdSolve::StoreImpulses(m_colorBatches[k], ctx.contacts, color.data());
             }
 
-            // 8) Push final velocities to the world, then commit positions (compound-
-            //    COM) from the SoA dp/dq.
-            m_bodyState.SyncOut(w);
+            // 8) Push final velocities to the world (DENSE write-back), then commit
+            //    positions (compound-COM) from the SoA dp/dq.
+            m_bodyState.SyncOutCompacted(w);
             FinalizePositionsSoA(ctx);
         }
 

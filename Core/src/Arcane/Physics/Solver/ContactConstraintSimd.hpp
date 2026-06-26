@@ -166,8 +166,8 @@ namespace Arcane
             // A padding lane, or a read-only-B lane (static/kinematic/span), must
             // NOT scatter to a real dynamic body's slot or it could clobber that
             // body's freshly-solved velocity with a stale value. So the caller
-            // sizes BodyStateSoA to world.Count()+1 and passes dummyIndex =
-            // world.Count(): a zeroed throwaway slot that ONLY padding + read-only-B
+            // sizes BodyStateSoA to solverCount+1 and passes dummyIndex =
+            // solverCount: a zeroed throwaway slot that ONLY padding + static/span B
             // lanes target. The gather/scatter then run unconditionally and only the
             // dummy slot ever takes a redundant write -- no real body is corrupted.
             //
@@ -176,10 +176,35 @@ namespace Arcane
             // always passes a real dummy index. bodyIndexA is never dummied (A is
             // always a dynamic body in the solver feed).
             //
+            // DENSE solverIndex MAPPING (Phase C, Task 2). Build re-homes the packed
+            // body indices from WORLD SLOTS onto the solver's DENSE index space:
+            //   * A (always an awake dynamic) -> awakeIndex[cc.bodyA] in [0,awakeCnt)
+            //   * B dynamic                   -> awakeIndex[cc.bodyB] in [0,awakeCnt)
+            //   * B kinematic (real body, invMassB==0, a live kinematic) ->
+            //       awakeCount + kinematicIndex[cc.bodyB] in [awakeCnt, solverCnt)
+            //   * B static (real body, invMassB==0, NOT kinematic) -> dummyIndex
+            //   * B span (bodyBIsBody==false)                       -> dummyIndex
+            // The maps are passed as raw per-world-slot pointers (awakeIndex /
+            // kinematicIndex, each sized world.Count()) so this header stays free of
+            // a PhysicsWorld.hpp dependency. The kinematic-vs-static gate keys off
+            // kinematicIndex[bodyB] != kNotKinematic: a kinematic B carries a REAL
+            // dense row (its authored velocity drives the relative-velocity push
+            // term), a static B reads the zero dummy tail.
+            //
+            // BACKWARD-COMPAT IDENTITY MODE. When awakeIndex == nullptr the packer
+            // falls back to the pre-Task-2 contract: bodyIndexA = cc.bodyA verbatim,
+            // bodyIndexB = cc.bodyB (real body) or dummyIndex (span). This keeps the
+            // Task-4 packer-contract tests (which pack already-dense small indices and
+            // assert bodyIndex == bodyA/bodyB) compiling + passing unchanged.
+            //
             // refs may be null iff count == 0.
             static std::vector<ContactConstraintSimd>
             Build(const ContactConstraint* ccs, const std::uint32_t* refs, int count,
-                  std::int32_t dummyIndex = 0)
+                  std::int32_t dummyIndex = 0,
+                  const std::uint32_t* awakeIndex = nullptr,
+                  const std::uint32_t* kinematicIndex = nullptr,
+                  std::uint32_t awakeCount = 0u,
+                  std::uint32_t kNotKinematic = 0xFFFFFFFFu)
             {
                 std::vector<ContactConstraintSimd> batches;
                 if (count <= 0)
@@ -202,7 +227,8 @@ namespace Arcane
                         const int g = base + L;
                         if (g < count)
                         {
-                            PackLane(dst, L, ccs[refs[g]], dummyIndex);
+                            PackLane(dst, L, ccs[refs[g]], dummyIndex,
+                                     awakeIndex, kinematicIndex, awakeCount, kNotKinematic);
                         }
                         else
                         {
@@ -217,9 +243,16 @@ namespace Arcane
         private:
             // Copy one source ContactConstraint into lane L (the live path).
             // dummyIndex is the scatter-safe throwaway slot a read-only B points at.
+            // awakeIndex / kinematicIndex (per-world-slot maps, or nullptr for the
+            // identity/back-compat mode) + awakeCount + kNotKinematic re-home the
+            // packed body indices onto the dense solverIndex space (Phase C, Task 2).
             static void PackLane(ContactConstraintSimd& dst, int L,
                                  const ContactConstraint& cc,
-                                 std::int32_t dummyIndex)
+                                 std::int32_t dummyIndex,
+                                 const std::uint32_t* awakeIndex,
+                                 const std::uint32_t* kinematicIndex,
+                                 std::uint32_t awakeCount,
+                                 std::uint32_t kNotKinematic)
             {
                 dst.normalX[L]      = static_cast<float>(cc.normal.x);
                 dst.normalY[L]      = static_cast<float>(cc.normal.y);
@@ -233,7 +266,13 @@ namespace Arcane
                 dst.invMassB[L]     = static_cast<float>(cc.invMassB);
                 dst.invInertiaB[L]  = static_cast<float>(cc.invInertiaB);
 
-                dst.bodyIndexA[L]   = static_cast<std::int32_t>(cc.bodyA);
+                // A is ALWAYS an awake dynamic (orientation rule + the awake-A emit
+                // gate), so its dense solverIndex is awakeIndex[cc.bodyA]. In the
+                // identity/back-compat mode (awakeIndex == nullptr) we pack cc.bodyA
+                // verbatim (the pre-Task-2 contract the packer tests pin).
+                dst.bodyIndexA[L]   = (awakeIndex != nullptr)
+                                          ? static_cast<std::int32_t>(awakeIndex[cc.bodyA])
+                                          : static_cast<std::int32_t>(cc.bodyA);
 
                 // dynB: B's velocity is MUTATED (scattered back) only if B is a real
                 // dynamic body. A static/kinematic body (invMassB == 0) or a tile
@@ -244,26 +283,50 @@ namespace Arcane
                 // bodyIndexB must be an in-range gather slot on EVERY lane (the T5
                 // read of B's velocity is an UNMASKED gather) AND must not let a
                 // read-only B's UNMASKED scatter clobber a real DYNAMIC body's
-                // freshly-solved velocity. Two cases for a read-only B:
-                //   * a REAL body (kinematic/static, bodyBIsBody && invMassB==0):
-                //     point at its REAL slot cc.bodyB. The solver MUST gather its
-                //     velocity (a kinematic plate's authored +X feeds the relative-
-                //     velocity term that drives the push -- the solve reads vB for any
-                //     bodyBIsBody endpoint). The scatter writes back
-                //     the UNCHANGED gathered value (select(dynB=0, new, gathered)),
-                //     so the kinematic/static slot is preserved -- idempotent even if
-                //     several read-only-B lanes in a color share it, and a kinematic
-                //     body is never a dynamic A, so it can never collide with an
-                //     updated A slot.
-                //   * NOT a real body (tile span, bodyBIsBody == false, cc.bodyB ==
-                //     kInvalidSlot -> -1): point at the scatter-safe DUMMY slot (the
-                //     gather must hit a valid address; the value is discarded by the
-                //     dynB mask and the scatter only touches the throwaway dummy).
-                // A is always dynamic in the solver feed, so bodyIndexA needs no
-                // clamp. dummyIndex defaults to 0 (the Task-4 packer contract).
-                dst.bodyIndexB[L]   = cc.bodyBIsBody
-                                          ? static_cast<std::int32_t>(cc.bodyB)
-                                          : dummyIndex;
+                // freshly-solved velocity. The dense mapping (Phase C, Task 2) splits
+                // the read-only-B case in two on the kinematic-vs-static gate -- THE
+                // SUBTLEST POINT OF THE TASK:
+                //   * B DYNAMIC: dense awake row awakeIndex[cc.bodyB] -- its velocity
+                //     is gathered AND scattered (island unity => an awake A's touching
+                //     dynamic B is also awake, so it has a real awake row).
+                //   * B KINEMATIC (real body, invMassB==0, kinematicIndex != kNot):
+                //     its REAL dense kinematic row awakeCount + kinematicIndex[bodyB].
+                //     The solver MUST gather its velocity -- a kinematic plate's
+                //     authored +X feeds the relative-velocity term that drives the
+                //     push (the solve reads vB for any bodyBIsBody endpoint). The
+                //     scatter writes back the UNCHANGED gathered value
+                //     (select(dynB=0, new, gathered)), so the kinematic row is
+                //     preserved -- idempotent even if several lanes share it, and a
+                //     kinematic body is never a dynamic A, so it never collides with
+                //     an updated A slot. A mis-gate that fell through to the dummy
+                //     here would LOSE the push (zero vB).
+                //   * B STATIC (real body, invMassB==0, kinematicIndex == kNot) OR a
+                //     tile span (bodyBIsBody == false): the scatter-safe DUMMY slot
+                //     (zero velocity). A static contributes a zero relative velocity,
+                //     and the gather must still hit a valid address; the dummy tail
+                //     is exactly that. Using a stale kinematicIndex for a static B
+                //     would gather garbage -- the kNotKinematic sentinel guards it.
+                // In the identity/back-compat mode (awakeIndex == nullptr) we keep the
+                // pre-Task-2 contract: cc.bodyB verbatim for any real body, dummyIndex
+                // for a span. A is never dummied. dummyIndex defaults to 0.
+                if (awakeIndex == nullptr)
+                {
+                    dst.bodyIndexB[L] = cc.bodyBIsBody
+                                            ? static_cast<std::int32_t>(cc.bodyB)
+                                            : dummyIndex;
+                }
+                else if (dyn)
+                {
+                    dst.bodyIndexB[L] = static_cast<std::int32_t>(awakeIndex[cc.bodyB]);
+                }
+                else if (cc.bodyBIsBody && kinematicIndex[cc.bodyB] != kNotKinematic)
+                {
+                    dst.bodyIndexB[L] = static_cast<std::int32_t>(awakeCount + kinematicIndex[cc.bodyB]);
+                }
+                else
+                {
+                    dst.bodyIndexB[L] = dummyIndex; // static (zero tail) or span
+                }
 
                 for (int p = 0; p < 2; ++p)
                 {

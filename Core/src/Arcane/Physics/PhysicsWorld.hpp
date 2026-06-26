@@ -750,6 +750,31 @@ namespace Arcane
             [[nodiscard]] const std::vector<std::uint32_t>& AwakeBodies() const noexcept { return m_awakeBodies; }
             // Visit each awake dynamic slot (replaces for(i=0..count) if(awake&&dynamic)).
             template <typename Fn> void ForEachAwake(Fn&& fn) const { for (const std::uint32_t s : m_awakeBodies) { fn(s); } }
+
+            // ---- dense solverIndex helpers (Phase C, Task 2) ----------------
+            // The lane-wide solve re-homes its body-state scratch onto a DENSE
+            // solverCount-sized SoA (no per-world-slot holes): awake dynamics take
+            // [0, AwakeCount()) at AwakeIndexOf(slot); kinematics take
+            // [AwakeCount(), AwakeCount()+KinematicCount()) at
+            // AwakeCount()+KinematicIndexOf(slot); statics/spans/padding map to the
+            // shared zero DUMMY tail at solverCount. These inline accessors let the
+            // solver + the ContactConstraintSimd packer compute solverIndex without
+            // friending PhysicsWorld internals. AwakeIndexOf(slot) returns kNotAwake
+            // for a non-awake-dynamic slot; KinematicIndexOf(slot) returns
+            // kNotKinematic for a non-kinematic slot -- the packer's kinematic-vs-
+            // static B gate uses the kNotKinematic sentinel to tell a real kinematic
+            // B (real dense row -> authored-velocity push) from a static B (dummy).
+            [[nodiscard]] std::uint32_t AwakeIndexOf(std::uint32_t slot) const noexcept { return m_awakeIndex[slot]; }
+            [[nodiscard]] std::uint32_t KinematicIndexOf(std::uint32_t slot) const noexcept { return m_kinematicIndex[slot]; }
+            [[nodiscard]] std::uint32_t AwakeCount() const noexcept { return static_cast<std::uint32_t>(m_awakeBodies.size()); }
+            [[nodiscard]] std::uint32_t KinematicCount() const noexcept { return static_cast<std::uint32_t>(m_kinematicBodies.size()); }
+            // Raw per-slot index-array pointers so the packer (ContactConstraintSimd::
+            // Build/PackLane) can map a body slot -> solverIndex without depending on
+            // PhysicsWorld.hpp (it takes the arrays as plain pointers). The arrays are
+            // per-world-slot-sized (== Count()), so a bodyA/bodyB world slot indexes
+            // them directly. Stable for the duration of a Step (no resize mid-solve).
+            [[nodiscard]] const std::uint32_t* AwakeIndexData() const noexcept { return m_awakeIndex.data(); }
+            [[nodiscard]] const std::uint32_t* KinematicIndexData() const noexcept { return m_kinematicIndex.data(); }
             // Awake-set maintenance (called at create/sleep/wake/remove seams).
             // Both are idempotent and are PUBLIC so Island.cpp can reach them at
             // the sleep seam without coupling Island.cpp to a PhysicsWorld private.
