@@ -99,3 +99,36 @@ TEST_CASE("PhysicsAwakeSet: sleeping body render-lerp is frozen (prev==pos)", "[
     const Vec2 mid2 = w.DrawPosition(b, Real(0.5));
     REQUIRE(mid2.x == pos.x); REQUIRE(mid2.y == pos.y); // still frozen
 }
+// A dense settled pile must fully sleep (the awake-set drains). This is the
+// Phase B sleep WIN: a connected pile that quiesces migrates out of the awake
+// set. If it FAILS, the soft solver leaves residual jitter above the sleep
+// threshold -> the controller decides the minimal quiescence fix.
+TEST_CASE("PhysicsAwakeSet: a dense settled pile fully sleeps", "[physics][awakeset]")
+{
+    WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
+    std::vector<BodyHandle> boxes;
+    const Real hw = Real(4), hh = Real(4);
+    for (int row = 0; row < 6; ++row) {
+        const int n = 10 - row;
+        for (int c = 0; c < n; ++c) {
+            const Real x = (static_cast<Real>(c) - static_cast<Real>(n)*Real(0.5)) * (Real(2)*hw + Real(0.2));
+            const Real y = Real(-5) - static_cast<Real>(row) * (Real(2)*hh + Real(0.2));
+            boxes.push_back(AddBox(w, Vec2(x, y), hw, hh));
+        }
+    }
+    for (int k = 0; k < 300; ++k) { w.Step(kStep); }
+    INFO("awake bodies remaining: " << w.AwakeBodies().size() << " / " << boxes.size());
+    REQUIRE(w.AwakeBodies().empty());
+}
+// Guard: a body in clear motion must NEVER sleep (protects the sleep threshold
+// from being loosened to the point a visibly-moving body would freeze). With
+// zero gravity it coasts at constant velocity -- far above the sleep threshold
+// (|v| < 2.0) -- for the whole window.
+TEST_CASE("PhysicsAwakeSet: a body in clear motion never sleeps", "[physics][awakeset]")
+{
+    WorldDef wd; wd.gravityY = Real(0); PhysicsWorld w(wd);
+    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(0)), Real(5), Real(5));
+    w.SetVelocity(b, Vec2(Real(50), Real(0)));   // |v|=50, far above threshold
+    for (int k = 0; k < 120; ++k) { w.Step(kStep); REQUIRE(w.IsAwake(b)); }
+}
