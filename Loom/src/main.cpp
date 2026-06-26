@@ -21,6 +21,8 @@
 
 #include <LoomConfig.hpp>
 
+#include "FramePerf.hpp"
+
 #include <Astra/Core/TypeContext.hpp>
 
 #include <nvrhi/nvrhi.h>
@@ -150,11 +152,7 @@ int main(int argc, char** argv)
         auto lastShaderPoll = simPrev;
         bool running = true;
 
-        using PClock = std::chrono::steady_clock;
-        auto perfT = [](PClock::time_point a, PClock::time_point b) {
-            return std::chrono::duration<double, std::milli>(b - a).count(); };
-        double accFrame=0, accSim=0, accRec=0, accEnd=0, accTone=0, accImgui=0, accPresent=0, accPoll=0;
-        uint64_t perfFrames = 0;
+        FramePerf fp(perf);
 
         while (running)
         {
@@ -172,8 +170,7 @@ int main(int argc, char** argv)
                 continue;
             }
 
-            PClock::time_point perfFrameStart{};
-            if (perf) perfFrameStart = PClock::now();
+            fp.FrameStart();
 
             // Input: sample SDL state, evaluate actions. Must precede ImGui BeginFrame
             // so capture flags are set before the evaluator reads them.
@@ -197,12 +194,11 @@ int main(int argc, char** argv)
                 simPrev = now;
                 if (simDt > 0.25) simDt = 0.25;
                 const Arcane::PluginVTable* vt = plugin.Vtable();
-                PClock::time_point t0{};
-                if (perf) t0 = PClock::now();
+                const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
                 runtime.Loop().Advance(simDt,
                     [&](double dt)          { if (vt) vt->FixedUpdate(dt); },
                     [&](double dt, double a){ if (vt) vt->Update(dt, a); });
-                if (perf) accSim += perfT(t0, PClock::now());
+                fp.Add(fp.accSim, t0, fp.Now());
             }
 
             imgui->BeginFrame();
@@ -250,18 +246,16 @@ int main(int argc, char** argv)
             // Loom stays camera-agnostic: SetRenderContext writes the STORED camera the
             // plugin drives via Runtime::SetCamera (default identity if it never does).
             {
-                PClock::time_point t0{};
-                if (perf) t0 = PClock::now();
+                const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
                 runtime.SetRenderContext(batcher.get());
                 runtime.Loop().SubmitRender();
-                if (perf) accRec += perfT(t0, PClock::now());
+                fp.Add(fp.accRec, t0, fp.Now());
             }
 
             {
-                PClock::time_point t0{};
-                if (perf) t0 = PClock::now();
+                const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
                 batcher->End();
-                if (perf) accEnd += perfT(t0, PClock::now());
+                fp.Add(fp.accEnd, t0, fp.Now());
             }
 
             nvrhi::FramebufferHandle& fb = backbufferFramebuffers[backbuffer];
@@ -269,46 +263,35 @@ int main(int argc, char** argv)
                 fb = device->Nvrhi()->createFramebuffer(
                     nvrhi::FramebufferDesc().addColorAttachment(backbuffer));
             {
-                PClock::time_point t0{};
-                if (perf) t0 = PClock::now();
+                const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
                 tonemap->Run(commandList, canvas->Texture(), fb);
-                if (perf) accTone += perfT(t0, PClock::now());
+                fp.Add(fp.accTone, t0, fp.Now());
             }
             {
-                PClock::time_point t0{};
-                if (perf) t0 = PClock::now();
+                const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
                 imgui->Render(commandList, fb);
-                if (perf) accImgui += perfT(t0, PClock::now());
+                fp.Add(fp.accImgui, t0, fp.Now());
             }
 
             commandList->close();
             {
-                PClock::time_point t0{};
-                if (perf) t0 = PClock::now();
+                const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
                 device->Nvrhi()->executeCommandList(commandList);
                 swapchain->Present();
-                if (perf) accPresent += perfT(t0, PClock::now());
+                fp.Add(fp.accPresent, t0, fp.Now());
             }
 
             // Debounced watcher: rebuild PlaygroundGame -> auto hot reload.
             {
-                PClock::time_point t0{};
-                if (perf) t0 = PClock::now();
+                const auto t0 = fp.On() ? fp.Now() : FramePerf::Clock::time_point{};
                 plugin.Poll();
-                if (perf) accPoll += perfT(t0, PClock::now());
+                fp.Add(fp.accPoll, t0, fp.Now());
             }
 
-            if (perf) accFrame += perfT(perfFrameStart, PClock::now());
-
-            if (perf && ++perfFrames >= 60)
+            if (fp.On())
             {
                 const Arcane::Batch2DStats bs = batcher->Stats();
-                ARC_INFO("[PERF] {:.2f} ms ({:.1f} FPS) | sim {:.2f} rec {:.2f} end {:.2f} "
-                         "tone {:.2f} imgui {:.2f} present {:.2f} poll {:.2f} | quads {} draws {}",
-                         accFrame/perfFrames, 1000.0*perfFrames/accFrame, accSim/perfFrames,
-                         accRec/perfFrames, accEnd/perfFrames, accTone/perfFrames, accImgui/perfFrames,
-                         accPresent/perfFrames, accPoll/perfFrames, bs.quads, bs.drawCalls);
-                accFrame=accSim=accRec=accEnd=accTone=accImgui=accPresent=accPoll=0; perfFrames=0;
+                fp.Tick(bs.quads, bs.drawCalls);
             }
 
             ++frameCount;
