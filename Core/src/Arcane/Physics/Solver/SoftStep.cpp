@@ -470,7 +470,12 @@ namespace Arcane
                 {
                     return awakeCount + ki;             // kinematic B -> its dense row
                 }
-                return solverCount;                     // static B -> dummy tail
+                // static B -> dummy tail. NOTE: a non-idiomatic moving ZERO-invMass
+                // *dynamic* B (BodyType::Dynamic with invMass==0) is not dynB and not
+                // in the kinematic set, so it falls HERE -> the zero dummy tail; its
+                // velocity is NOT gathered and its push is dropped BY DESIGN -- use a
+                // Kinematic body for an infinite-mass mover.
+                return solverCount;
             }
 
             // ia/ib are DENSE solverIndices. awakeCount/solverCount come from the

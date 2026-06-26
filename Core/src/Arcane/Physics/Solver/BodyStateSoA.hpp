@@ -20,8 +20,11 @@
 // SCALAR CHOICE: these arrays are `float` (NOT Real) deliberately -- they feed
 // the SIMD f32w path directly. Vec2/Real/std::uint32_t come from PhysicsTypes.
 //
-// SCOPE: the struct + its SyncIn/SyncOut bridge. SoftStep::Solve consumes it (the
-// lane-wide colored SoA contact solve gathers/scatters through it). The sync
+// SCOPE: the struct + its sync bridge. SoftStep::Solve consumes the DENSE
+// SyncInCompacted/SyncOutCompacted methods (solverIndex-indexed -- the lane-wide
+// colored SoA contact solve gathers/scatters through them). The legacy world-slot
+// SyncIn/SyncOut survive ONLY for the standalone round-trip contract test in
+// PhysicsSimdSolverTest.cpp (they are NOT on the solver hot path). All four sync
 // helpers are DECLARED here (lightweight: forward-declare PhysicsWorld, include
 // only PhysicsTypes) and DEFINED in SoftStep.cpp where the PhysicsWorld accessors
 // are in scope.

@@ -55,13 +55,16 @@ TEST_CASE("PhysicsCompacted: kinematic-set tracks live kinematic slots", "[physi
 // Task 2 re-homes the lane-wide solve scratch onto a DENSE solverCount-sized SoA
 // (awake-set index space + kinematic index space; dummy = solverCount) instead of
 // the sparse worldCount-sized SoA indexed by world slot. This is PURE re-indexing
-// -- no physics math changes -- so the settle MUST be byte-identical. This case is
-// the regression gate: run the same scene twice (a run-twice determinism check) and
-// assert the two runs produce bit-identical positions + awake flags. The scene
-// includes a MOVING kinematic plate pushing a stack of dynamics, so a kinematic
-// B-endpoint is exercised (catching a mis-gate where a kinematic B falls through
-// to the dummy and loses the push, or a static B reads a stale kinematic index).
-// It already passes pre-change (it is a determinism check) and must keep passing.
+// -- no physics math changes -- so the settle MUST be byte-identical.
+//
+// What this case actually guards: RUN-TWICE DETERMINISM under the dense re-home.
+// It runs the same scene twice and asserts bit-identical positions + awake flags.
+// The scene includes a MOVING kinematic plate over a stack of dynamics so a moving
+// kinematic B-endpoint is EXERCISED (the dense kinematic-index gather path runs),
+// but a determinism check passes both pre- and post-change, so it cannot by itself
+// catch a *consistent* mis-gate (one that drops the push identically on both runs).
+// The kinematic-PUSH behavior itself (a kinematic B actually moving a dynamic) is
+// guarded by PhysicsSolverTest.cpp's "PhysicsSolver: kinematic pushes dynamic".
 TEST_CASE("PhysicsCompacted: solve settles identically + deterministically", "[physics][phasec]")
 {
     auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {

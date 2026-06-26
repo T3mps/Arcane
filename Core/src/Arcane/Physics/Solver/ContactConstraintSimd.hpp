@@ -325,7 +325,13 @@ namespace Arcane
                 }
                 else
                 {
-                    dst.bodyIndexB[L] = dummyIndex; // static (zero tail) or span
+                    // static (zero tail) or span. NOTE: a non-idiomatic moving
+                    // ZERO-invMass *dynamic* B (BodyType::Dynamic with invMass==0) is
+                    // not dynamic here (dyn==false) and is not in the kinematic set,
+                    // so it lands HERE -> the zero dummy tail. Its velocity is NOT
+                    // gathered and its push is dropped BY DESIGN; use a Kinematic body
+                    // for an infinite-mass mover.
+                    dst.bodyIndexB[L] = dummyIndex;
                 }
 
                 for (int p = 0; p < 2; ++p)
