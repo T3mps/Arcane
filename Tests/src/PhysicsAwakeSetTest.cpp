@@ -146,3 +146,28 @@ TEST_CASE("PhysicsAwakeSet: a stationary kinematic does not prevent the scene fr
     REQUIRE_FALSE(w.IsAwake(b));                  // dynamic still sleeps
     (void)k;
 }
+// Determinism: a scene that exercises create + sleep + wake + remove + slot
+// RECYCLE (so the awake-set goes through append + swap-remove cycles) is
+// bit-identical across two runs (positions + awake state). The awake-set's
+// non-ascending (append/swap-remove) order must not perturb determinism.
+TEST_CASE("PhysicsAwakeSet: create/sleep/wake/remove is deterministic across two runs", "[physics][awakeset]")
+{
+    auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
+        WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+        std::vector<BodyHandle> boxes;
+        for (int i = 0; i < 6; ++i) { boxes.push_back(AddBox(w, Vec2(Real(0), Real(-10) - Real(9)*static_cast<Real>(i)), Real(4), Real(4))); }
+        for (int k = 0; k < 200; ++k) { w.Step(kStep); }
+        w.RemoveBody(boxes[2]);                                          // swap-remove from the awake-set mid-life
+        const BodyHandle nb = AddBox(w, Vec2(Real(30), Real(-10)), Real(4), Real(4)); // recycle a slot
+        w.ApplyImpulse(boxes[5], Vec2(Real(120), Real(-3000)));          // wake fan-out
+        for (int k = 0; k < 500; ++k) { w.Step(kStep); }
+        pos.clear(); awake.clear();
+        for (std::size_t i = 0; i < boxes.size(); ++i) { if (i==2) continue; pos.push_back(w.Position(boxes[i])); awake.push_back(w.IsAwake(boxes[i])?1:0); }
+        pos.push_back(w.Position(nb)); awake.push_back(w.IsAwake(nb)?1:0);
+    };
+    std::vector<Vec2> p1, p2; std::vector<int> a1, a2;
+    run(p1, a1); run(p2, a2);
+    REQUIRE(p1.size() == p2.size());
+    for (std::size_t i = 0; i < p1.size(); ++i) { REQUIRE(p1[i].x == p2[i].x); REQUIRE(p1[i].y == p2[i].y); REQUIRE(a1[i] == a2[i]); }
+}
