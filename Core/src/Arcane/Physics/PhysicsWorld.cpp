@@ -26,6 +26,7 @@
 #include <Arcane/Physics/Solver/Baumgarte.hpp>           // Baumgarte oracle impl (A/B)
 #include <Arcane/Physics/Island.hpp>                     // island sleep pass (stage 4)
 #include <Arcane/Physics/Joints/Joints.hpp>              // joint set + MakeJoint factory (P2.5)
+#include <Arcane/Physics/StepProf.hpp>                   // opt-in per-Step-phase timing (zero-cost when ARCANE_STEPPROF==0)
 
 namespace Arcane
 {
@@ -1485,26 +1486,29 @@ namespace Arcane
             // sub-step regrouping). Index-ordered, no wall-clock, no fast-math.
 
             // ---- stage 1: prev snapshot (all) + kinematic integrate ----------
-            for (std::uint32_t i = 0; i < m_count; ++i)
             {
-                if (m_alive[i] == 0)
+                ARCANE_STEPPROF_SCOPE(Stage1Snapshot);
+                for (std::uint32_t i = 0; i < m_count; ++i)
                 {
-                    continue;
-                }
-                m_prevX[i] = m_posX[i];
-                m_prevY[i] = m_posY[i];
+                    if (m_alive[i] == 0)
+                    {
+                        continue;
+                    }
+                    m_prevX[i] = m_posX[i];
+                    m_prevY[i] = m_posY[i];
 
-                // Kinematic bodies integrate ONCE per Step (unchanged from P2.1).
-                // Dynamic gravity/damping + position now live in the solver's
-                // sub-step loop (stage 3); a dynamic body with no contacts still
-                // gets the same semi-implicit fall, just regrouped over sub-steps.
-                if (static_cast<BodyType>(m_btype[i]) == BodyType::Kinematic)
-                {
-                    m_posX[i] += m_velX[i] * dt;
-                    m_posY[i] += m_velY[i] * dt;
-                    // UpdateMoverProxies refreshes all per-fixture mover-broadphase
-                    // proxies and the body's residency grid (Phase 2, Task 3).
-                    UpdateMoverProxies(i);
+                    // Kinematic bodies integrate ONCE per Step (unchanged from P2.1).
+                    // Dynamic gravity/damping + position now live in the solver's
+                    // sub-step loop (stage 3); a dynamic body with no contacts still
+                    // gets the same semi-implicit fall, just regrouped over sub-steps.
+                    if (static_cast<BodyType>(m_btype[i]) == BodyType::Kinematic)
+                    {
+                        m_posX[i] += m_velX[i] * dt;
+                        m_posY[i] += m_velY[i] * dt;
+                        // UpdateMoverProxies refreshes all per-fixture mover-broadphase
+                        // proxies and the body's residency grid (Phase 2, Task 3).
+                        UpdateMoverProxies(i);
+                    }
                 }
             }
 
@@ -1522,9 +1526,9 @@ namespace Arcane
             // persistent Contact's manifold point, seeded into the emitted
             // constraint here and written back after Solve -- see stage 3b) line up
             // with the same physical contact across steps.
-            UpdateContacts(dt);
+            { ARCANE_STEPPROF_SCOPE(Narrowphase); UpdateContacts(dt); }
             m_contactConstraints.clear();
-            EmitContactConstraints(m_contactConstraints);
+            { ARCANE_STEPPROF_SCOPE(EmitConstraints); EmitContactConstraints(m_contactConstraints); }
 
             // ---- stage 3: Soft Step solve (Part B) ---------------------------
             // The solver integrates dynamic velocity + position across sub-steps,
@@ -1544,6 +1548,7 @@ namespace Arcane
             }
 
             {
+                ARCANE_STEPPROF_SCOPE(Solve);
                 SolverContext ctx;
                 ctx.world        = this;
                 ctx.contacts     = m_contactConstraints.empty()
@@ -1580,21 +1585,24 @@ namespace Arcane
             // reached for SoftStep-emitted pool contacts -- the same constraints
             // either way -- and writing the manifold impulses is harmless for a
             // solver that does not read them back).
-            for (const ContactConstraint& cc : m_contactConstraints)
             {
-                if (cc.sourceContactId == ContactConstraint::kNoContact)
+                ARCANE_STEPPROF_SCOPE(WarmStartWriteback);
+                for (const ContactConstraint& cc : m_contactConstraints)
                 {
-                    continue; // transient span: no persistent Contact to update
-                }
-                Contact& src = m_contactPool.Get(cc.sourceContactId);
-                // Defensive bound: within one Step the source Contact's manifold
-                // cannot change after emit, so cc.pointCount == manifold.pointCount;
-                // clamp anyway so a future reordering can never index out of range.
-                const int n = std::min(cc.pointCount, src.manifold.pointCount);
-                for (int p = 0; p < n; ++p)
-                {
-                    src.manifold.points[p].normalImpulse  = cc.points[p].normalImpulse;
-                    src.manifold.points[p].tangentImpulse = cc.points[p].tangentImpulse;
+                    if (cc.sourceContactId == ContactConstraint::kNoContact)
+                    {
+                        continue; // transient span: no persistent Contact to update
+                    }
+                    Contact& src = m_contactPool.Get(cc.sourceContactId);
+                    // Defensive bound: within one Step the source Contact's manifold
+                    // cannot change after emit, so cc.pointCount == manifold.pointCount;
+                    // clamp anyway so a future reordering can never index out of range.
+                    const int n = std::min(cc.pointCount, src.manifold.pointCount);
+                    for (int p = 0; p < n; ++p)
+                    {
+                        src.manifold.points[p].normalImpulse  = cc.points[p].normalImpulse;
+                        src.manifold.points[p].tangentImpulse = cc.points[p].tangentImpulse;
+                    }
                 }
             }
 
@@ -1607,7 +1615,7 @@ namespace Arcane
             // position; the speculative margin (stage 2) handles fast dynamics
             // inline, with this as the safety net. CCD runs after the solver
             // commits positions, before island/events.
-            BulletSweep();
+            { ARCANE_STEPPROF_SCOPE(Bullet); BulletSweep(); }
 
             // ---- stage 5: island sleep bookkeeping (P2.4) --------------------
             // Build the per-Step constraint graph (bodies = nodes, THIS step's
@@ -1616,35 +1624,37 @@ namespace Arcane
             // the solve using this step's contacts; sleeping bodies are then
             // skipped by the next Step's contact feed + solver (the awake gate in
             // EmitContactConstraints), freezing their positions. Ports PhysicsWorld.lua:403-452.
-
-            // ---- deferred island split (quota-limited, Phase A) -----------------
-            // Process AT MOST kMaxSplitsPerStep split-candidate islands per Step
-            // (Box2D's amortization). Collect candidates ascending-id (determinism),
-            // then split the first quota; the rest carry their flag to the next Step.
-            // A single big pile that fractures resolves over a few steps.
-            m_splitCandidates.clear();
-            for (std::uint32_t id = 0; id < static_cast<std::uint32_t>(m_islands.size()); ++id)
             {
-                if (m_islands[id].splitCandidate && !m_islands[id].bodies.empty())
+                ARCANE_STEPPROF_SCOPE(IslandSleep);
+                // ---- deferred island split (quota-limited, Phase A) -----------------
+                // Process AT MOST kMaxSplitsPerStep split-candidate islands per Step
+                // (Box2D's amortization). Collect candidates ascending-id (determinism),
+                // then split the first quota; the rest carry their flag to the next Step.
+                // A single big pile that fractures resolves over a few steps.
+                m_splitCandidates.clear();
+                for (std::uint32_t id = 0; id < static_cast<std::uint32_t>(m_islands.size()); ++id)
                 {
-                    m_splitCandidates.push_back(id);
+                    if (m_islands[id].splitCandidate && !m_islands[id].bodies.empty())
+                    {
+                        m_splitCandidates.push_back(id);
+                    }
                 }
-            }
-            {
-                std::uint32_t processed = 0;
-                for (const std::uint32_t id : m_splitCandidates)
                 {
-                    if (processed >= Island::kMaxSplitsPerStep) { break; }
-                    SplitIsland(id);
-                    ++processed;
+                    std::uint32_t processed = 0;
+                    for (const std::uint32_t id : m_splitCandidates)
+                    {
+                        if (processed >= Island::kMaxSplitsPerStep) { break; }
+                        SplitIsland(id);
+                        ++processed;
+                    }
                 }
-            }
 
-            Island::UpdateSleep(
-                *this,
-                m_jointConstraints.empty() ? nullptr : m_jointConstraints.data(),
-                static_cast<std::uint32_t>(m_jointConstraints.size()),
-                dt);
+                Island::UpdateSleep(
+                    *this,
+                    m_jointConstraints.empty() ? nullptr : m_jointConstraints.data(),
+                    static_cast<std::uint32_t>(m_jointConstraints.size()),
+                    dt);
+            }
 
             // ---- stage 6: events + gating + deferred flush -------------------
             // Events-as-byproduct (collision-rebuild Phase 4): derive the touched
@@ -1668,35 +1678,38 @@ namespace Arcane
             // point reports the SAME positive separation regardless of the margin
             // used to compute the manifold, and an exact edge-touch at separation==0
             // is excluded by both, matching the old semantics).
-            auto exactlyOverlapping = [](const Contact& c) noexcept -> bool
             {
-                for (int p = 0; p < c.manifold.pointCount; ++p)
+                ARCANE_STEPPROF_SCOPE(Events);
+                auto exactlyOverlapping = [](const Contact& c) noexcept -> bool
                 {
-                    if (c.manifold.points[p].separation > Real(0))
+                    for (int p = 0; p < c.manifold.pointCount; ++p)
                     {
-                        return true;
+                        if (c.manifold.points[p].separation > Real(0))
+                        {
+                            return true;
+                        }
                     }
-                }
-                return false;
-            };
-            m_touchedEventPairs.clear();
-            m_contactPool.ForEach(
-                [&](std::uint32_t /*id*/, const Contact& c)
-                {
-                    if (!c.eventRelevant || !exactlyOverlapping(c))
+                    return false;
+                };
+                m_touchedEventPairs.clear();
+                m_contactPool.ForEach(
+                    [&](std::uint32_t /*id*/, const Contact& c)
                     {
-                        return;
-                    }
-                    const std::uint32_t a = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
-                    const std::uint32_t b = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
-                    m_touchedEventPairs.push_back(BroadphasePair{ a, b });
-                });
-            std::sort(m_touchedEventPairs.begin(), m_touchedEventPairs.end());
-            m_touchedEventPairs.erase(
-                std::unique(m_touchedEventPairs.begin(),
-                            m_touchedEventPairs.end()),
-                m_touchedEventPairs.end());
-            m_contacts.Step(*this, m_touchedEventPairs);
+                        if (!c.eventRelevant || !exactlyOverlapping(c))
+                        {
+                            return;
+                        }
+                        const std::uint32_t a = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
+                        const std::uint32_t b = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
+                        m_touchedEventPairs.push_back(BroadphasePair{ a, b });
+                    });
+                std::sort(m_touchedEventPairs.begin(), m_touchedEventPairs.end());
+                m_touchedEventPairs.erase(
+                    std::unique(m_touchedEventPairs.begin(),
+                                m_touchedEventPairs.end()),
+                    m_touchedEventPairs.end());
+                m_contacts.Step(*this, m_touchedEventPairs);
+            }
         }
 
         // ----------------------------------------------------------------
