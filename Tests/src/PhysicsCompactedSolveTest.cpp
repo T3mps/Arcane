@@ -107,3 +107,22 @@ TEST_CASE("PhysicsCompacted: persistent contact coloring is valid", "[physics][p
     // one body-body contact got colored. ColoredContactCount sums m_colorContacts[k].
     REQUIRE(w.ColoredContactCount() > 0u);
 }
+
+TEST_CASE("PhysicsCompacted: incremental coloring is deterministic across two runs (create/destroy churn)", "[physics][phasec]")
+{
+    auto run = [](std::vector<Vec2>& pos) {
+        WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+        AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
+        std::vector<BodyHandle> b;
+        for (int i = 0; i < 16; ++i) b.push_back(AddBox(w, Vec2(Real(-20) + Real(3)*static_cast<Real>(i), Real(-20)), Real(4), Real(4)));
+        for (int k = 0; k < 120; ++k) w.Step(kStep);
+        w.RemoveBody(b[4]); w.RemoveBody(b[9]);
+        for (int k = 0; k < 60; ++k) w.Step(kStep);
+        b.push_back(AddBox(w, Vec2(Real(0), Real(-30)), Real(4), Real(4)));
+        for (int k = 0; k < 200; ++k) w.Step(kStep);
+        pos.clear(); for (std::size_t i = 0; i < b.size(); ++i) { if (i==4||i==9) continue; pos.push_back(w.Position(b[i])); }
+    };
+    std::vector<Vec2> p1,p2; run(p1); run(p2);
+    REQUIRE(p1.size()==p2.size());
+    for (std::size_t i=0;i<p1.size();++i){ REQUIRE(p1[i].x==p2[i].x); REQUIRE(p1[i].y==p2[i].y); }
+}

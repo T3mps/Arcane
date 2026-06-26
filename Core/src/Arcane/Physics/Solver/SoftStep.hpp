@@ -84,7 +84,8 @@ namespace Arcane
             // Runs the full TGS Soft pipeline as a LANE-WIDE COLORED-SoA solve:
             //   sync world velocities -> BodyStateSoA (sized count+1, the +1 = the
             //     scatter-safe dummy slot) ; PrepareContacts/PrepareJoints (scalar)
-            //   -> per-step greedy graph-coloring of the touching contacts
+            //   -> bucket the touching contacts by their PERSISTENT contact color
+            //      (assigned incrementally at create/destroy -- no per-step recolor)
             //   -> Build one ContactConstraintSimd batch list per color
             //   -> sub-step loop: integrate-vel(SoA) -> warm-start -> solve(bias)
             //      -> integrate-pos(SoA) -> relax(no-bias), each contact pass run

@@ -805,9 +805,12 @@ namespace Arcane
             // same-color contacts share a DYNAMIC body (a static/kinematic endpoint
             // never constrains coloring, mirroring ColorConstraints' aDyn/bDyn rule).
             //
-            // NOT yet consumed by the solver (Task 5 wires it in). Maintaining the
-            // coloring here is pure bookkeeping, so the sim is byte-identical. Public
-            // so the [phasec] coloring-validity test can call the oracle/probes.
+            // CONSUMED by the solver (Task 5): the per-body color mask gates
+            // AssignContactColor's lowest-free search, and the solver buckets
+            // contacts by this persistent color instead of recoloring per step.
+            // The sim stays byte-identical -- any valid coloring yields the same
+            // solve. Public so the [phasec] coloring-validity test can call the
+            // oracle/probes.
 
             // Assign the lowest free color to a NEW solver-relevant body-body
             // contact `id` between body slots `a`/`b`. `aDyn`/`bDyn` mark which
@@ -1528,8 +1531,10 @@ namespace Arcane
             // (EnsureCapacity defaults new slots to 0; the RemoveBody leak-detector
             // asserts a removed body left mask 0). m_colorContacts[k] is the list of
             // contact ids assigned to color k (sized kColorCount in the ctor). These
-            // are maintained at create/destroy; NOT consumed by the solver yet
-            // (Task 5), so they are pure bookkeeping and the sim is byte-identical.
+            // are maintained at create/destroy and CONSUMED by the solver (Task 5):
+            // m_bodyColorMask gates color assignment, m_colorContacts is the
+            // solver's per-color bucket list. The sim stays byte-identical -- a
+            // valid coloring yields the same solve.
             std::vector<std::uint32_t>              m_bodyColorMask;
             std::vector<std::vector<std::uint32_t>> m_colorContacts;
 
