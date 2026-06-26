@@ -239,6 +239,8 @@ void Loom::MainLoop()
 
 void Loom::Shutdown()
 {
+    // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
+    // the guard covers a future partial-init/destructor path.
     if (m_gpu) m_gpu->Device().Nvrhi()->waitForIdle();
     ARC_INFO("Loom exiting after {} frames", m_frameCount);
 

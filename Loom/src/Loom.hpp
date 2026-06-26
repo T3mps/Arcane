@@ -26,6 +26,7 @@ private:
     LoomConfig                        m_config;
     std::unique_ptr<GpuContext>       m_gpu;          // destructs LAST among engine state
     Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
+    // engaged by Init() before MainLoop()/Shutdown() touch them (bare -> deref is safe).
     std::optional<Arcane::Runtime>    m_runtime;      // destructs before m_gpu
     std::optional<Arcane::PluginHost> m_plugin;       // destructs before m_runtime
     FramePerf                         m_perf;
