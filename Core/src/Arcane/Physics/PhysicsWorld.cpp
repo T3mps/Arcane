@@ -1552,11 +1552,21 @@ namespace Arcane
                     // gets the same semi-implicit fall, just regrouped over sub-steps.
                     if (t == BodyType::Kinematic)
                     {
-                        m_posX[i] += m_velX[i] * dt;
-                        m_posY[i] += m_velY[i] * dt;
-                        // UpdateMoverProxies refreshes all per-fixture mover-broadphase
-                        // proxies and the body's residency grid (Phase 2, Task 3).
-                        UpdateMoverProxies(i);
+                        // Only a MOVING kinematic integrates + refreshes its broadphase
+                        // proxy.  A stationary kinematic's proxy is already current (its
+                        // last mutation -- SetPosition/SetAngle/SetVelocity -- refreshed
+                        // it at the call site), so the per-step UpdateMoverProxies +
+                        // residency-grid Move would be pure waste.  Stage-1 integration
+                        // is LINEAR only (angle is not integrated here; SetAngle refreshes
+                        // at its call site), so "moved this step" == nonzero linear vel.
+                        if (m_velX[i] != Real(0) || m_velY[i] != Real(0))
+                        {
+                            m_posX[i] += m_velX[i] * dt;
+                            m_posY[i] += m_velY[i] * dt;
+                            // UpdateMoverProxies refreshes all per-fixture mover-broadphase
+                            // proxies and the body's residency grid (Phase 2, Task 3).
+                            UpdateMoverProxies(i);
+                        }
                     }
                 }
 

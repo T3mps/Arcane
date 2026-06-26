@@ -132,3 +132,17 @@ TEST_CASE("PhysicsAwakeSet: a body in clear motion never sleeps", "[physics][awa
     w.SetVelocity(b, Vec2(Real(50), Real(0)));   // |v|=50, far above threshold
     for (int k = 0; k < 120; ++k) { w.Step(kStep); REQUIRE(w.IsAwake(b)); }
 }
+// A stationary (zero-velocity) kinematic must not prevent the scene from
+// sleeping, and a settled dynamic still sleeps with such a kinematic present.
+// (Regression guard for the Stage-1 zero-velocity kinematic proxy gate.)
+TEST_CASE("PhysicsAwakeSet: a stationary kinematic does not prevent the scene from sleeping", "[physics][awakeset]")
+{
+    WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    BodyDef kd; kd.type = BodyType::Kinematic; kd.position = Vec2(Real(150), Real(-50)); kd.shape = MakeAabb(Real(5), Real(5));
+    const BodyHandle k = w.AddBody(kd);          // zero velocity, off to the side
+    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
+    for (int n = 0; n < 700; ++n) { w.Step(kStep); }
+    REQUIRE_FALSE(w.IsAwake(b));                  // dynamic still sleeps
+    (void)k;
+}
