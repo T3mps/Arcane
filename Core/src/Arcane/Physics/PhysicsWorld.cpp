@@ -1506,15 +1506,43 @@ namespace Arcane
             // tolerance (the PhysicsDynamics free-fall test's margins absorb the
             // sub-step regrouping). Index-ordered, no wall-clock, no fast-math.
 
-            // ---- stage 1: prev snapshot (all) + kinematic integrate ----------
+            // ---- stage 1: prev snapshot + kinematic integrate ----------------
+            //
+            // WHY two passes instead of one (Phase B, Task 4):
+            //
+            // Pass A (0..m_count, non-dynamics): statics + kinematics.
+            //   * Statics: snapping prev is harmless (AddBody already sets
+            //     prev==pos and statics never move), but it keeps the old
+            //     invariant for any teleport/manual-edit that touched pos.
+            //   * Kinematics: snap prev then integrate pos; update broadphase.
+            //   Kinematics are NOT in the awake-set (YAGNI a kinematic list), so
+            //   they stay on the 0..m_count path.
+            //
+            // Pass B (ForEachAwake): AWAKE dynamic slots only.
+            //   Sleeping dynamics are snapped by NEITHER pass -- their prev was
+            //   set to pos at the moment they fell asleep (SnapPrevToPos in
+            //   Island::UpdateSleep), and their pos is frozen thereafter, so
+            //   prev==pos persists without any per-step work.
+            //
+            // WIN: sleeping dynamics (potentially the MAJORITY in a settled
+            // scene) are entirely skipped by Stage 1 after warmup.
             {
                 ARCANE_STEPPROF_SCOPE(Stage1Snapshot);
+
+                // Pass A: statics + kinematics (0..m_count; no dynamic slots).
                 for (std::uint32_t i = 0; i < m_count; ++i)
                 {
                     if (m_alive[i] == 0)
                     {
                         continue;
                     }
+                    const BodyType t = static_cast<BodyType>(m_btype[i]);
+                    if (t == BodyType::Dynamic)
+                    {
+                        continue; // handled in Pass B below
+                    }
+                    // Static prev==pos always (AddBody seeds it; statics never move).
+                    // Snap harmlessly keeps the invariant for manual teleports.
                     m_prevX[i] = m_posX[i];
                     m_prevY[i] = m_posY[i];
 
@@ -1522,7 +1550,7 @@ namespace Arcane
                     // Dynamic gravity/damping + position now live in the solver's
                     // sub-step loop (stage 3); a dynamic body with no contacts still
                     // gets the same semi-implicit fall, just regrouped over sub-steps.
-                    if (static_cast<BodyType>(m_btype[i]) == BodyType::Kinematic)
+                    if (t == BodyType::Kinematic)
                     {
                         m_posX[i] += m_velX[i] * dt;
                         m_posY[i] += m_velY[i] * dt;
@@ -1531,6 +1559,14 @@ namespace Arcane
                         UpdateMoverProxies(i);
                     }
                 }
+
+                // Pass B: snap prev for every AWAKE dynamic slot.
+                // Sleeping dynamics are covered by SnapPrevToPos at sleep-time.
+                ForEachAwake([&](std::uint32_t i)
+                {
+                    m_prevX[i] = m_posX[i];
+                    m_prevY[i] = m_posY[i];
+                });
             }
 
             // ---- stage 2: solver contact generation (Part A) -----------------
@@ -2062,22 +2098,27 @@ namespace Arcane
             //     spans are virtual fixtures (no slot), so they go into the TRANSIENT
             //     m_spanContacts scratch (cleared here, refilled each Step).
             //
+            // Rerouted to ForEachAwake (Phase B, Task 4): the awake-set is the
+            // compact list of awake dynamic slots; sleeping dynamics are skipped
+            // entirely (they cannot move, so their static candidates are stable).
+            // The !Dynamic / !awake guards inside the old loop body are DROPPED
+            // (the set guarantees awake-dynamic); the sensor skip is KEPT.
+            // The kinematic<->static-body sub-loop (c) stays on 0..m_count
+            // (kinematics are not in the awake-set -- YAGNI a kinematic list).
+            //
             // Clear the transient span scratch -- it is rebuilt from scratch this
             // Step (spans are not pooled; they are virtual/transient fixtures).
             m_spanContacts.clear();
             m_spanCenters.clear();
-
             const Real moveDt = dt > Real(0) ? dt : Real(0);
             const Real threshSq = (moveDt > Real(0))
                                       ? (kSkin / moveDt) * (kSkin / moveDt)
                                       : Real(0);
-            for (std::uint32_t i = 0; i < m_count; ++i)
+            ForEachAwake([&](std::uint32_t i)
             {
-                if (m_alive[i] == 0 ||
-                    static_cast<BodyType>(m_btype[i]) != BodyType::Dynamic ||
-                    m_awake[i] == 0 || m_sensor[i] != 0)
+                if (m_sensor[i] != 0)
                 {
-                    continue;
+                    return; // sensor dynamic body: skip (no static contacts)
                 }
                 // Same query pad as the legacy GenerateContacts: max(2, specMargin),
                 // where specMargin = max(kSkin, |v|*dt) so the candidate set is
@@ -2178,7 +2219,7 @@ namespace Arcane
 
                 if (fxListA == nullptr)
                 {
-                    continue; // no fixtures -> no fixture-pair contact to persist
+                    return; // no fixtures -> no fixture-pair contact to persist
                 }
 
                 for (std::size_t s = 0; s < m_genStatics.size(); ++s)
@@ -2219,7 +2260,7 @@ namespace Arcane
                         }
                     }
                 }
-            }
+            }); // end ForEachAwake (b)
 
             // (c) KINEMATIC<->static-BODY (Phase 4, Task 1): event-relevant but NOT
             //     solver-relevant. Static bodies are NOT in the mover broadphase and

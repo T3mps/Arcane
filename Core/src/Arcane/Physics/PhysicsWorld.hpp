@@ -825,6 +825,17 @@ namespace Arcane
             {
                 m_awake[i] = on ? std::uint8_t(1) : std::uint8_t(0);
             }
+            // Snap the prev-position to the current position for slot i.
+            // Called at the sleep seam (Island::UpdateSleep) so a body that just
+            // fell asleep has prev==pos. Required because Stage 1 will only snap
+            // AWAKE dynamics after the reroute: a sleeping body is never snapped
+            // by Stage 1, so without this call its prev could drift from its
+            // frozen pos and DrawPosition(alpha) would interpolate incorrectly.
+            void SnapPrevToPos(std::uint32_t i) noexcept
+            {
+                m_prevX[i] = m_posX[i];
+                m_prevY[i] = m_posY[i];
+            }
             // Visit each LIVE island's member-slot list (Phase A sleep seam). A live
             // island has a non-empty member list; freed ids (empty) are skipped.
             // Iterated ascending island-id (deterministic). Const callback (sleep

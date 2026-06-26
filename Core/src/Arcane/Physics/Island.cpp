@@ -126,6 +126,15 @@ namespace Arcane
                                 world.RemoveFromAwakeSet(b); // Phase B: sleeping body migrates OUT of the awake-set
                                 world.SetVelSlot(b, Vec2(Real(0), Real(0)));
                                 world.SetAngVelSlot(b, Real(0));
+                                // Snap prev to pos so DrawPosition(alpha) is frozen
+                                // from this step onward. Required because Stage 1
+                                // only snaps AWAKE dynamics after the B4 reroute;
+                                // sleeping dynamics are skipped by both passes, so
+                                // prev must equal pos at the MOMENT the body sleeps.
+                                // (The body was awake at Stage 1 this step, so prev
+                                // was set to pre-integrate pos; now pos is settled
+                                // after the solver -- snap prev to match it.)
+                                world.SnapPrevToPos(b);
                             }
                         }
                     }

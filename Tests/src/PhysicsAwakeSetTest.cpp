@@ -81,3 +81,21 @@ TEST_CASE("PhysicsAwakeSet: set membership tracks awake-dynamic slots", "[physic
     (void)b2;
     checkInvariant(w);
 }
+// A sleeping body must keep prev==pos at all times (render-lerp stays frozen).
+// WHY: once Stage 1 only snaps awake dynamics, a sleeping body is never snapped
+// each step -- prev-on-sleep (SnapPrevToPos at the sleep seam) is the only
+// mechanism that guarantees prev==pos for a body that has settled and frozen.
+TEST_CASE("PhysicsAwakeSet: sleeping body render-lerp is frozen (prev==pos)", "[physics][awakeset]")
+{
+    WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
+    for (int k = 0; k < 700; ++k) { w.Step(kStep); }
+    REQUIRE_FALSE(w.IsAwake(b));
+    const Vec2 mid = w.DrawPosition(b, Real(0.5));
+    const Vec2 pos = w.Position(b);
+    REQUIRE(mid.x == pos.x); REQUIRE(mid.y == pos.y); // prev==pos -> no lerp drift
+    for (int k = 0; k < 60; ++k) { w.Step(kStep); }
+    const Vec2 mid2 = w.DrawPosition(b, Real(0.5));
+    REQUIRE(mid2.x == pos.x); REQUIRE(mid2.y == pos.y); // still frozen
+}
