@@ -2613,6 +2613,17 @@ namespace Arcane
                     cp.normalImpulse  = mp.normalImpulse;
                     cp.tangentImpulse = mp.tangentImpulse;
                 }
+                // Phase B invariant: no emitted constraint references a SLEEPING
+                // dynamic. Awake-A gate above + island-as-a-unit sleep (a touching
+                // dynamic-dynamic pair shares one island, so awake-A => awake-B)
+                // guarantees this. This assertion proves SyncIn can safely skip
+                // sleeping dynamics (they are NEVER gathered by a live constraint).
+                assert(!(static_cast<BodyType>(m_btype[aIdx]) == BodyType::Dynamic &&
+                         m_awake[aIdx] == 0));
+                assert(!(bIsBody &&
+                         static_cast<BodyType>(m_btype[bIdx]) == BodyType::Dynamic &&
+                         m_awake[bIdx] == 0));
+
                 out.push_back(cc);
                 keys.push_back(EmitSortKey{ aIdx, cc.bodyB, fixA, fixB });
                 return true;

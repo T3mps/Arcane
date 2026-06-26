@@ -66,6 +66,9 @@ namespace Arcane
         // LEFT AS-IS (zero after the caller's Resize). For matched slots SyncIn
         // also zeroes the TGS position-delta accumulators (dp/dq), since they
         // start each Step's sub-step loop at zero.
+        // SyncIn additionally copies all Alive non-dynamic (Static/Kinematic) slots
+        // so the solver's B-endpoint velocity reads see current values (and a
+        // recycled dynamic->static slot does not keep a stale velocity).
         //
         // SyncOut writes the packed velocities BACK to the world for the SAME
         // predicate, and ONLY the velocities -- positions are committed by the
@@ -76,52 +79,60 @@ namespace Arcane
 
         void BodyStateSoA::SyncIn(const PhysicsWorld& world)
         {
-            const std::uint32_t count = world.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
+            // Two-pass design (Phase B, Task 3):
+            //
+            // (a) Awake dynamics: mirror velocity + reset the TGS position-delta
+            //     accumulators. Only awake dynamics are integrated, so only they need
+            //     a fresh dp/dq=0 at the start of the sub-step loop.
+            world.ForEachAwake([&](std::uint32_t i)
             {
-                if (!world.Alive(i))
-                {
-                    continue; // dead slot: leave as the caller Resize'd it (zero)
-                }
-
-                // ALL alive bodies' velocities are mirrored so the lane-wide solve
-                // can GATHER a read-only B's velocity (a kinematic plate's authored
-                // +X, a static body's 0). The contact solve reads vB/wB for ANY
-                // bodyBIsBody endpoint (its velocity feeds the relative-velocity
-                // term that drives the push), even when B is not MUTATED -- so the
-                // SoA must carry that velocity too, else a kinematic-pushes-dynamic
-                // contact would see B at rest and never push. dp/dq stay 0 for a
-                // non-awake-dynamic body (it never integrates).
                 const Vec2 v = world.VelSlot(i);
                 vx[i] = v.x;
                 vy[i] = v.y;
                 w[i]  = world.AngVelSlot(i);
+                dpx[i] = 0.f;
+                dpy[i] = 0.f;
+                dq[i]  = 0.f;
+            });
 
-                if (world.TypeSlot(i) == BodyType::Dynamic && world.AwakeSlot(i))
+            // (b) Static / kinematic slots are gathered as contact B-endpoints, so
+            //     their velocity MUST stay correct in the SoA every step (statics = 0;
+            //     kinematics = their set velocity). This also handles the recycled-slot
+            //     hole: a slot that was a moving Dynamic, removed, then recycled as a
+            //     Static would keep a stale non-zero velocity in the SoA if SyncIn
+            //     never copies it. Non-dynamics do not integrate, so dp/dq stay zero
+            //     (they arrive zero from the caller's Resize; we never touch them).
+            //
+            //     Sleeping dynamics are visited by NEITHER pass -- safe because no
+            //     emitted constraint references a sleeping dynamic: EmitContactConstraints
+            //     gates on awake-A, and a touching dynamic-dynamic pair shares one
+            //     island (islands sleep as a unit), so awake-A implies awake-B.
+            //     This is asserted in EmitContactConstraints (Debug builds only).
+            const std::uint32_t count = world.Count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!world.Alive(i) || world.TypeSlot(i) == BodyType::Dynamic)
                 {
-                    // Awake dynamic: zero the TGS position-delta accumulators (they
-                    // start each Step's sub-step loop at zero).
-                    dpx[i] = 0.f;
-                    dpy[i] = 0.f;
-                    dq[i]  = 0.f;
+                    continue; // dead or dynamic (handled by ForEachAwake above)
                 }
+                const Vec2 v = world.VelSlot(i);
+                vx[i] = v.x;
+                vy[i] = v.y;
+                w[i]  = world.AngVelSlot(i);
+                // dp/dq intentionally left at zero (non-dynamics never integrate).
             }
         }
 
         void BodyStateSoA::SyncOut(PhysicsWorld& world) const
         {
-            const std::uint32_t count = world.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
+            // Phase B, Task 3: iterate the awake-set directly -- it IS the gate.
+            // Only awake dynamics were SyncIn'd and integrated; only they get written
+            // back. Non-dynamics and sleeping dynamics are never disturbed.
+            world.ForEachAwake([&](std::uint32_t i)
             {
-                if (!world.Alive(i) ||
-                    world.TypeSlot(i) != BodyType::Dynamic ||
-                    !world.AwakeSlot(i))
-                {
-                    continue; // never disturb non-synced slots
-                }
                 world.SetVelSlot(i, Vec2(vx[i], vy[i]));
                 world.SetAngVelSlot(i, w[i]);
-            }
+            });
         }
 
         // ===================================================================
@@ -245,22 +256,16 @@ namespace Arcane
 
         void SoftStep::IntegrateVelocitiesSoA(SolverContext& ctx, Real h)
         {
-            // SoA-resident port of IntegrateVelocities: gravity + linear damping
-            // for awake dynamics. Reads world type/awake/invMass/linDamp (immutable
-            // this Step) but writes the packed SoA velocities. Same predicate +
-            // math as IntegrateVelocities so the SoA path is behavior-equivalent.
+            // Phase B, Task 3: iterate the awake-set directly -- the set guarantees
+            // Alive + Dynamic + Awake. Only the InvMassSlot<=0 guard is retained
+            // (a degenerate zero-invMass dynamic is valid; it never integrates).
             PhysicsWorld& w = *ctx.world;
             const Vec2 g = ctx.gravity;
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
+            w.ForEachAwake([&](std::uint32_t i)
             {
-                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
-                {
-                    continue;
-                }
                 if (w.InvMassSlot(i) <= Real(0))
                 {
-                    continue; // pinned dynamic -- never integrates
+                    return; // pinned dynamic -- never integrates
                 }
                 float vx = m_bodyState.vx[i] + static_cast<float>(g.x * h);
                 float vy = m_bodyState.vy[i] + static_cast<float>(g.y * h);
@@ -274,47 +279,31 @@ namespace Arcane
                 m_bodyState.vx[i] = vx;
                 m_bodyState.vy[i] = vy;
                 m_bodyState.w[i]  = wv;
-            }
+            });
         }
 
         void SoftStep::IntegratePositionsSoA(SolverContext& ctx, Real h)
         {
-            // dp/dq += v*h for awake dynamics (SoA-resident port of
-            // IntegratePositions). The lane-wide contact solve re-reads dp/dq next
-            // sub-step to re-evaluate separation (the TGS heart).
+            // Phase B, Task 3: iterate the awake-set directly -- Alive+Dynamic+Awake
+            // is guaranteed. dp/dq += v*h for the TGS separation re-evaluation.
             PhysicsWorld& w = *ctx.world;
             const float fh = static_cast<float>(h);
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
+            w.ForEachAwake([&](std::uint32_t i)
             {
-                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
-                {
-                    continue;
-                }
                 m_bodyState.dpx[i] += m_bodyState.vx[i] * fh;
                 m_bodyState.dpy[i] += m_bodyState.vy[i] * fh;
                 m_bodyState.dq[i]  += m_bodyState.w[i]  * fh;
-            }
+            });
         }
 
         void SoftStep::FinalizePositionsSoA(SolverContext& ctx)
         {
-            // Compound-COM position commit, reading the per-body deltas from
-            // m_bodyState.dp*/dq. Integrate the body's CENTER OF MASS along its
-            // inertial path (dp = sum of v*h is the COM linear displacement), advance
-            // the angle (dq), then reconstruct the ORIGIN from the new COM + new angle
-            // (PosSlot/GetAngle here are the start-of-step origin/angle p0/a0: the
-            // SoA dp/dq were accumulated across the sub-step loop and are committed
-            // only here, so the world position is untouched until this point). For
-            // localCenter == (0,0) this reduces to p = p0 + dp ; a = a0 + dq.
+            // Phase B, Task 3: iterate the awake-set directly -- Alive+Dynamic+Awake
+            // is guaranteed. Commit the compound-COM position from SoA dp/dq.
+            // For localCenter==(0,0) this reduces to p=p0+dp, a=a0+dq.
             PhysicsWorld& w = *ctx.world;
-            const std::uint32_t count = w.Count();
-            for (std::uint32_t i = 0; i < count; ++i)
+            w.ForEachAwake([&](std::uint32_t i)
             {
-                if (!w.Alive(i) || w.TypeSlot(i) != BodyType::Dynamic || !w.AwakeSlot(i))
-                {
-                    continue;
-                }
                 const Vec2 dp(static_cast<Real>(m_bodyState.dpx[i]),
                               static_cast<Real>(m_bodyState.dpy[i]));
                 const Real dr = static_cast<Real>(m_bodyState.dq[i]);
@@ -326,7 +315,7 @@ namespace Arcane
                 const Real a  = a0 + dr;
                 const Vec2 p  = c - RotateVec(a, lc);
                 w.CommitSlotPosition(i, p, a);
-            }
+            });
         }
 
         void SoftStep::SyncVelToWorld(SolverContext& ctx)
@@ -390,7 +379,7 @@ namespace Arcane
             // emitted ContactConstraint; bs holds vel + dp/dq by world slot.
             //   bIsBody : B is a real body (read its velocity for the relative-
             //             velocity term -- a kinematic plate's velocity drives the
-            //             push; SyncIn mirrors all alive bodies for this).
+            //             push; SyncIn copies non-dynamic alive slots for this).
             //   dynB    : B is a real DYNAMIC body whose velocity is MUTATED.
             struct OverflowBodies
             {

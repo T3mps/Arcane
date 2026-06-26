@@ -28,6 +28,24 @@ TEST_CASE("PhysicsAwakeSet: StepProf is a no-op when ARCANE_STEPPROF is off", "[
     for (int k = 0; k < 10; ++k) { w.Step(kStep); }
     REQUIRE(StepProf::Enabled() == false);
 }
+// Rerouting the solver loops to the awake-set must not change the result:
+// a settle scene is run-twice-identical AND ends fully asleep + frozen.
+TEST_CASE("PhysicsAwakeSet: awake-only solve is deterministic + settles identically", "[physics][awakeset]")
+{
+    auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
+        WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+        std::vector<BodyHandle> boxes;
+        for (int i = 0; i < 5; ++i) { boxes.push_back(AddBox(w, Vec2(Real(0), Real(-10) - Real(9)*static_cast<Real>(i)), Real(4), Real(4))); }
+        for (int k = 0; k < 900; ++k) { w.Step(kStep); }
+        pos.clear(); awake.clear();
+        for (const BodyHandle b : boxes) { pos.push_back(w.Position(b)); awake.push_back(w.IsAwake(b)?1:0); }
+    };
+    std::vector<Vec2> p1, p2; std::vector<int> a1, a2;
+    run(p1, a1); run(p2, a2);
+    REQUIRE(p1.size() == p2.size());
+    for (std::size_t i = 0; i < p1.size(); ++i) { REQUIRE(p1[i].x == p2[i].x); REQUIRE(p1[i].y == p2[i].y); REQUIRE(a1[i] == a2[i]); }
+}
 // The awake-set must, at all times, contain EXACTLY the awake dynamic slots.
 TEST_CASE("PhysicsAwakeSet: set membership tracks awake-dynamic slots", "[physics][awakeset]")
 {
