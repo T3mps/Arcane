@@ -256,20 +256,16 @@ TEST_CASE("PhysicsIsland: stack sleeps as a unit, disturbance wakes a member", "
 // IslandRootOf: four stacked boxes in mutual contact (all awake) form ONE
 // island; a body far away is in a DIFFERENT island.
 //
-// Gates the P3.6 bug: the old one-hop `m_uf[i]` return gave DIFFERENT values
-// for bodies at depth > 1 in the path-halved union-find.
+// Phase A (persistent islands): IslandRootOf returns the body's persistent
+// m_islandId (a non-member returns a high-bit-tagged slot). A stack coalesces
+// into ONE island as its dynamic-dynamic contacts begin touching (touch-begin
+// merges the per-body 1-body islands), so all four members share one root.
 //
-// WHY CHECKED WHILE AWAKE: IslandRootOf reads the UF written by the LAST
-// Step's island pass. When all bodies sleep, no contacts are generated (awake
-// gate), so the UF is identity (every body self-roots). The path-halving bug
-// is observable only while the bodies are awake and actively in contact.
-// We therefore sample IslandRootOf while the stack is still settling (awake),
-// specifically on a step where all four boxes are confirmed in contact.
-//
-// WHY 4 BOXES: with 3 bodies (b0→b1→b2), path-halving inside UpdateSleep's
-// inner UfFind scan flattens all to depth 1 before we read (all → b2). With
-// 4 bodies the chain is b0→b1→b2→b3; path-halving makes b0→b2 (still not
-// root b3), so old code returns b2 for b0 but b3 for b3 → different roots.
+// WHY CHECKED WHILE AWAKE: the boxes only MERGE into one island once their
+// contacts are touching, so we settle the stack into mutual contact first
+// (still awake) and sample IslandRootOf on a step where all four are confirmed
+// in contact. The persistent id is valid while asleep too, but checking while
+// awake keeps the test independent of the sleep timeline.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("PhysicsIsland: IslandRootOf returns the same root for all members of one island",

@@ -18,7 +18,7 @@
 //   * Static/Kinematic bodies are NOT island members (they anchor; they are not
 //     island nodes -- identical to the old dynamic-dynamic-only union rule).
 //
-// UpdateSleep (Step stage 4): iterates the registry via PhysicsWorld::ForEachIsland,
+// UpdateSleep (Step stage 5): iterates the registry via PhysicsWorld::ForEachIsland,
 // advances each awake dynamic body's idle timer, then sleeps an island AS A UNIT
 // when EVERY awake-dynamic member has accumulated kSleepTime seconds of idle.
 // The thresholds and whole-island-unit-sleep behavior are UNCHANGED from the M6
