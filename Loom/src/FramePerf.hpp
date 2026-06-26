@@ -23,7 +23,6 @@ public:
 
     // Accumulators (public for the loop to add into; only touched when On()).
     double accFrame=0, accSim=0, accRec=0, accEnd=0, accTone=0, accImgui=0, accPresent=0, accPoll=0;
-    Clock::time_point m_frameStart{};
 
     // Call once per frame end with the frame's batcher stats. Emits + resets every 60 frames.
     void Tick(std::uint32_t quads, std::uint32_t draws)
@@ -41,4 +40,7 @@ public:
 private:
     bool m_on;
     std::uint64_t m_frames = 0;
+    // Per-frame start stamp: only FrameStart()/Tick() read/write it, so it lives
+    // private (the loop touches the public acc* accumulators, never this directly).
+    Clock::time_point m_frameStart{};
 };
