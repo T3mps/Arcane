@@ -42,6 +42,8 @@ int main(int argc, char** argv)
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
     const LoomConfig& cfg = *parsed.config;
 
+    // Transitional: locals shadow cfg.* so the rest of main compiles untouched;
+    // Tasks 3-5 thread cfg through directly + fold these away.
     Arcane::GraphicsBackend backend = cfg.backend;
     uint64_t maxFrames = cfg.maxFrames;
     bool vsync = cfg.vsync;

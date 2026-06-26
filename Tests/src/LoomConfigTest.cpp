@@ -4,7 +4,6 @@
 #include <string>
 #include <catch2/catch_test_macros.hpp>
 #include <LoomConfig.hpp>
-#include <Arcane/Base/Engine.hpp>   // GraphicsBackend
 namespace {
     LoomConfig::ParseOutcome Run(std::vector<std::string> args) {
         std::vector<char*> argv; argv.push_back(const_cast<char*>("Loom"));
