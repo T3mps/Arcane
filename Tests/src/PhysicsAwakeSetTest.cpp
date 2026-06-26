@@ -171,3 +171,42 @@ TEST_CASE("PhysicsAwakeSet: create/sleep/wake/remove is deterministic across two
     REQUIRE(p1.size() == p2.size());
     for (std::size_t i = 0; i < p1.size(); ++i) { REQUIRE(p1[i].x == p2[i].x); REQUIRE(p1[i].y == p2[i].y); REQUIRE(a1[i] == a2[i]); }
 }
+
+// REGRESSION (scene-0 "Playground"): a mixed AABB+circle pile must FULLY settle
+// and sleep. Bug: WakeMoverPair woke a settled body every sleep cycle from a
+// STATIONARY neighbour across a sub-pixel gap (the bodies were in different
+// islands, not touching) -> the pile flashed rest/wake forever. Fix: a body
+// idle enough to be a sleep candidate must not wake its sleeping neighbours.
+TEST_CASE("PhysicsAwakeSet: scene-0 mixed AABB+circle pile fully settles (no rest/wake flashing)",
+          "[physics][awakeset]")
+{
+    WorldDef wd; wd.gravityY = Real(900); PhysicsWorld w(wd);
+    // Floor + 2 walls (static).
+    auto staticBox = [&](Real cx, Real cy, Real hw, Real hh){
+        BodyDef d; d.type=BodyType::Static; d.position=Vec2(cx,cy); d.shape=MakeAabb(hw,hh); d.friction=Real(0.4); return w.AddBody(d);
+    };
+    staticBox(Real(640), Real(820), Real(760), Real(36));
+    staticBox(Real(-80), Real(560), Real(36),  Real(300));
+    staticBox(Real(1360),Real(560), Real(36),  Real(300));
+    // 3 dynamic boxes (fixedRotation) + 2 dynamic circles.
+    auto dynBox = [&](Real cx, Real cy, Real hw, Real hh){
+        BodyDef d; d.type=BodyType::Dynamic; d.position=Vec2(cx,cy); d.shape=MakeAabb(hw,hh);
+        d.density=Real(1); d.friction=Real(0.4); d.restitution=Real(0.1); d.fixedRotation=true; return w.AddBody(d);
+    };
+    auto dynCircle = [&](Real cx, Real cy, Real r){
+        BodyDef d; d.type=BodyType::Dynamic; d.position=Vec2(cx,cy); d.shape=MakeCircle(r);
+        d.density=Real(1); d.friction=Real(0.4); d.restitution=Real(0.2); return w.AddBody(d);
+    };
+    std::vector<BodyHandle> dyn;
+    dyn.push_back(dynBox(Real(440), Real(120), Real(54), Real(54)));
+    dyn.push_back(dynBox(Real(640), Real(40),  Real(66), Real(42)));
+    dyn.push_back(dynBox(Real(860), Real(90),  Real(46), Real(46)));
+    dyn.push_back(dynCircle(Real(540), Real(260), Real(50)));
+    dyn.push_back(dynCircle(Real(760), Real(200), Real(58)));
+
+    // 10 seconds is ample for a 5-body pile to settle + sleep.
+    for (int k = 0; k < 600; ++k) { w.Step(kStep); }
+    int awake = 0; for (const BodyHandle b : dyn) { if (w.IsAwake(b)) ++awake; }
+    INFO("awake dynamic bodies after settle: " << awake << " / " << dyn.size());
+    REQUIRE(w.AwakeBodies().empty());   // the whole pile drained the awake-set
+}

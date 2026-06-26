@@ -1962,20 +1962,32 @@ namespace Arcane
             {
                 return; // kinematic-kinematic: no dynamic response, nothing to wake
             }
+            // Only a NON-IDLE (moving) mover wakes a sleeping neighbour. A body idle
+            // enough to be a sleep candidate itself (same predicate as
+            // Island::UpdateSleep) must NOT wake its sleeping neighbours -- otherwise
+            // two near-resting bodies in different islands (a sub-pixel gap; NOT
+            // touching) ping-pong each other awake forever (each wakes the other the
+            // step it sleeps). A real mover (thrown body, moving/spinning kinematic)
+            // is non-idle and still wakes. (Static wakers never reach here -- this
+            // loop is the mover-mover broadphase.)
+            auto moverIsMoving = [&](std::uint32_t s) -> bool {
+                const Real v2 = m_velX[s] * m_velX[s] + m_velY[s] * m_velY[s];
+                return v2 > Island::kSleepLinVel2 || std::fabs(m_angVel[s]) > Island::kSleepAngVel;
+            };
             // Wake a sleeping dynamic touched by an awake mover (a static/kinematic
             // counterpart reports awake; a dynamic counterpart must itself be awake).
             // The wake GATING here matches the old GenerateContacts pre-orientation
             // wake byte-for-byte -- including fixture-sensor pairs, which the old
             // path woke before reaching its fixture-sensor `continue` (that skip
             // gated the constraint, not the wake).
-            if (da && m_awake[a] == 0 && (!db || m_awake[b] != 0))
+            if (da && m_awake[a] == 0 && (!db || m_awake[b] != 0) && moverIsMoving(b))
             {
                 m_awake[a]      = 1;
                 m_sleepTimer[a] = Real(0);
                 AddToAwakeSet(a); // Phase B: kInvalidIsland safety net
                 WakeIsland(a); // wake the sleeper's whole island (Box2D contact wake)
             }
-            if (db && m_awake[b] == 0 && (!da || m_awake[a] != 0))
+            if (db && m_awake[b] == 0 && (!da || m_awake[a] != 0) && moverIsMoving(a))
             {
                 m_awake[b]      = 1;
                 m_sleepTimer[b] = Real(0);
