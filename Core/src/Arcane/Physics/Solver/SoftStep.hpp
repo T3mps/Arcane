@@ -56,13 +56,14 @@
 // PRESENTATION-FREE + C++20-clean: glm::vec2 + std + sibling Physics headers
 // only. No SDL3/NVRHI/ImGui. namespace Arcane::Physics, Core style.
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Solver/Solver.hpp>
 #include <Arcane/Physics/Solver/BodyStateSoA.hpp>        // SIMD solve body state
-#include <Arcane/Physics/Solver/ContactColoring.hpp>     // per-step coloring
+#include <Arcane/Physics/Solver/ContactColoring.hpp>     // kColorCount (color bucket count)
 #include <Arcane/Physics/Solver/ContactConstraintSimd.hpp> // SoA batches + lane solve
 
 namespace Arcane
@@ -113,16 +114,18 @@ namespace Arcane
             void DropBody(std::uint32_t slot) override;
 
             // Un-colorable constraint count from the LAST Solve (test/inspection
-            // hook -- see ISolver::LastOverflowCount). Returns m_coloring.overflow's
-            // size: m_coloring is reassigned every Solve (the per-step greedy
-            // coloring at step 3 of the driver) and never cleared afterward, so it
-            // accurately reflects the most recent completed Solve's spill set. The
-            // overflow-settle test asserts this peaks above 0 to PROVE the dense
+            // hook -- see ISolver::LastOverflowCount). Returns m_overflowRefs's size:
+            // Phase C, Task 5 deleted the per-step greedy recolor; the driver now
+            // buckets the emitted constraints by their PERSISTENT contact color and
+            // collects every kInvalidColor constraint (an overflow contact OR a span)
+            // into m_overflowRefs, refilled every Solve and never cleared afterward,
+            // so it accurately reflects the most recent completed Solve's spill set.
+            // The overflow-settle test asserts this peaks above 0 to PROVE the dense
             // dynamic-dynamic hub really did spill past kColorCount into the scalar
             // OverflowSolve tail (else that path would go silently untested).
             [[nodiscard]] std::size_t LastOverflowCount() const noexcept override
             {
-                return m_coloring.overflow.size();
+                return m_overflowRefs.size();
             }
 
         private:
@@ -185,11 +188,19 @@ namespace Arcane
             //   ContactConstraintSimd::Build). The lane-wide solve gathers/scatters
             //   through it; world<->SoA sync happens at the Step boundary + around
             //   joint passes.
-            // m_edges/m_coloring/m_colorBatches: per-step coloring scratch. The
-            //   batch vectors are kept per color so overflow can be solved after.
+            // m_colorRefs/m_overflowRefs: per-step bucketing of the emitted
+            //   constraints by their PERSISTENT contact color (Phase C, Task 5; the
+            //   per-step greedy recolor + its m_edges/m_coloring scratch are gone).
+            //   m_colorRefs[k] holds the ctx.contacts indices whose color == k (a
+            //   valid coloring -> within a color no two constraints share an awake
+            //   dynamic body, so each is one scatter-safe lane-wide batch);
+            //   m_overflowRefs holds the kInvalidColor indices (an overflow contact
+            //   that found no free color at create, OR a span) -> the scalar tail.
+            // m_colorBatches: per-color SoA batch lists built from m_colorRefs[k],
+            //   kept per color so the overflow scalar pass composes after.
             BodyStateSoA                    m_bodyState;
-            std::vector<ColorEdge>          m_edges;
-            Coloring                        m_coloring;
+            std::array<std::vector<std::uint32_t>, kColorCount> m_colorRefs;
+            std::vector<std::uint32_t>      m_overflowRefs;
             std::vector<std::vector<ContactConstraintSimd>> m_colorBatches;
         };
 

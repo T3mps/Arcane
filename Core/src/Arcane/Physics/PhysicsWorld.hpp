@@ -836,6 +836,13 @@ namespace Arcane
             // [phasec] coloring-validity test (Debug + Release).
             [[nodiscard]] bool ValidatePersistentColoring() const;
 
+            // Read-only probe: the total number of COLORED contacts (the sum of
+            // m_colorContacts[k].size() over all colors). Lets the [phasec] coloring-
+            // validity test prove the oracle did not trivially pass on an EMPTY
+            // coloring (assert this > 0 after a settle that creates contacts). Not
+            // used by the Step path.
+            [[nodiscard]] std::size_t ColoredContactCount() const noexcept;
+
             [[nodiscard]] Real InvMassSlot(std::uint32_t i) const noexcept { return m_invMass[i]; }
             [[nodiscard]] Real InvInertiaSlot(std::uint32_t i) const noexcept { return m_invInertia[i]; }
             [[nodiscard]] Real RestSlot(std::uint32_t i) const noexcept { return m_rest[i]; }

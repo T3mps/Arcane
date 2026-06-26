@@ -1844,6 +1844,10 @@ namespace Arcane
         // NOTE: each helper is a full ContactPool::ForEach scan (O(contacts)), so
         // mass world teardown should prefer ContactPool::Clear() over a RemoveBody
         // loop (which would be O(bodies x contacts)).
+        // CAVEAT (Phase C, Task 5): ContactPool::Clear() bypasses ReleaseContactColor,
+        // so a future Clear()-based teardown path MUST also reset m_bodyColorMask (to
+        // 0) and m_colorContacts (clear each list) -- otherwise the persistent coloring
+        // bookkeeping leaks stale bits/ids against recycled slots.
         void PhysicsWorld::DestroyContactsForFixture(std::uint32_t fixtureSlot)
         {
             m_contactPool.ForEach([&](std::uint32_t id, Contact& c)
@@ -1900,13 +1904,17 @@ namespace Arcane
         }
 
         // ----------------------------------------------------------------
-        // Persistent incremental contact coloring (Phase C, Stage 2, Task 4)
+        // Persistent incremental contact coloring (Phase C, Stage 2, Tasks 4-5)
         // ----------------------------------------------------------------
         //
         // A solver-relevant body-body contact is colored ONCE at create and frees
         // its color at destroy -- the incremental replacement for the per-step
-        // greedy recolor. The solver still consumes the per-step ColorConstraints,
-        // so these are pure bookkeeping (the sim is byte-identical until Task 5).
+        // greedy recolor. Task 5 makes the solver CONSUME this coloring
+        // (EmitContactConstraints copies Contact::color onto the emitted constraint;
+        // SoftStep buckets by it instead of recoloring), so the color is now
+        // load-bearing -- the mask GATES this lowest-free search. The settle stays
+        // byte-identical (a valid coloring yields the same solve as the old greedy
+        // one). ValidatePersistentColoring cross-checks the mask against the lists.
 
         void PhysicsWorld::AssignContactColor(std::uint32_t id, std::uint32_t a, std::uint32_t b,
                                               bool aDyn, bool bDyn)
@@ -1973,6 +1981,8 @@ namespace Arcane
 
             // Swap-remove id from this color's contact list (order-independent --
             // the list is a set, never walked in a determinism-sensitive order).
+            // TODO(perf): O(1) swap-remove by a stored per-contact index if destroy
+            // frequency shows on a profile.
             std::vector<std::uint32_t>& list = m_colorContacts[col];
             for (std::size_t i = 0; i < list.size(); ++i)
             {
@@ -1998,11 +2008,20 @@ namespace Arcane
         bool PhysicsWorld::ValidatePersistentColoring() const
         {
             // For each color, no DYNAMIC body slot may appear in two contacts, and
-            // every listed contact must be alive AND tagged with this color.
-            std::vector<std::uint8_t> seen; // per-body-slot "claimed this color"
+            // every listed contact must be alive AND tagged with this color. Task 5
+            // also cross-checks the per-body color MASK against the lists: now that
+            // the mask is load-bearing (it GATES AssignContactColor's lowest-free
+            // search), a mask/list divergence would silently corrupt the coloring, so
+            // reconstruct the mask from the lists and require it to match m_bodyColorMask
+            // bit-for-bit -- bit k is set IFF the slot has exactly one contact in
+            // m_colorContacts[k] (uniqueness is enforced by the per-color seen check
+            // below; "no stray bits" is enforced by the final equality).
+            std::vector<std::uint8_t>  seen;      // per-body-slot "claimed this color"
+            std::vector<std::uint32_t> rebuilt(m_bodyColorMask.size(), 0u); // mask from the lists
             for (int k = 0; k < kColorCount; ++k)
             {
                 seen.assign(m_bodyColorMask.size(), 0u);
+                const std::uint32_t bit = 1u << k;
                 const std::vector<std::uint32_t>& list = m_colorContacts[static_cast<std::size_t>(k)];
                 for (const std::uint32_t id : list)
                 {
@@ -2021,15 +2040,37 @@ namespace Arcane
                     {
                         if (seen[bA] != 0u) return false; // dynamic body twice in one color
                         seen[bA] = 1u;
+                        rebuilt[bA] |= bit;
                     }
                     if (bDyn)
                     {
                         if (seen[bB] != 0u) return false;
                         seen[bB] = 1u;
+                        rebuilt[bB] |= bit;
                     }
                 }
             }
+            // The mask must equal what the lists imply -- catches a set bit with no
+            // backing contact (a missed ReleaseContactColor) or a contact in a list
+            // whose mask bit was never set (a missed AssignContactColor mask write).
+            for (std::size_t s = 0; s < m_bodyColorMask.size(); ++s)
+            {
+                if (m_bodyColorMask[s] != rebuilt[s]) { return false; }
+            }
             return true;
+        }
+
+        std::size_t PhysicsWorld::ColoredContactCount() const noexcept
+        {
+            // Sum the per-color lists. Read-only probe (not on the Step path): the
+            // [phasec] coloring-validity test asserts this > 0 so the oracle cannot
+            // trivially pass on an EMPTY coloring.
+            std::size_t n = 0;
+            for (const std::vector<std::uint32_t>& list : m_colorContacts)
+            {
+                n += list.size();
+            }
+            return n;
         }
 
         bool PhysicsWorld::BothAsleep(const Contact& c) const noexcept
@@ -2911,6 +2952,11 @@ namespace Arcane
                     // Contact. Spans (below) leave the default kNoContact. The field
                     // travels with the constraint through the canonical sort.
                     out.back().sourceContactId = id;
+                    // Phase C, Task 5: also carry the persistent contact COLOR so the
+                    // solver buckets by it (deleting the per-step greedy recolor). An
+                    // overflow contact carries kInvalidColor here -> the scalar tail;
+                    // spans (below) keep the default kInvalidColor (no pool home).
+                    out.back().color = c.color;
                 }
             });
 

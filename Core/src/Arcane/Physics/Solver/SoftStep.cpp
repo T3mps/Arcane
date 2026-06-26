@@ -416,9 +416,12 @@ namespace Arcane
 
         // ----- Overflow: width-1 SCALAR solve over the SoA (scatter-safe) ------
         //
-        // The colorer spills constraints that found no free color into m_coloring.
-        // overflow (a hub body in > kColorCount contacts). They CANNOT solve lane-
-        // wide (they share bodies), so we solve them one-at-a-time, scalar, over the
+        // Phase C, Task 5: the overflow set is m_overflowRefs -- the emitted
+        // constraints whose PERSISTENT contact color is kInvalidColor (an overflow
+        // contact whose source Contact found no free color among kColorCount at
+        // create -- a hub body in > kColorCount contacts -- OR a transient span with
+        // no pool home). They CANNOT solve lane-wide (an overflow hub shares a body
+        // with a colored contact), so we solve them one-at-a-time, scalar, over the
         // SAME BodyStateSoA -- sequential => no scatter conflict. They read/write the
         // SoA velocity + dp/dq (so overflow composes with the colored result in the
         // same velocity store). One contact per call iter.
@@ -499,7 +502,7 @@ namespace Arcane
             const PhysicsWorld& w = *ctx.world;
             const std::uint32_t awakeCount = w.AwakeCount();
             const std::uint32_t solverCount = awakeCount + w.KinematicCount();
-            for (std::uint32_t ref : m_coloring.overflow)
+            for (std::uint32_t ref : m_overflowRefs)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
                 const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
@@ -540,7 +543,7 @@ namespace Arcane
             const std::uint32_t awakeCount = w.AwakeCount();
             const std::uint32_t solverCount = awakeCount + w.KinematicCount();
 
-            for (std::uint32_t ref : m_coloring.overflow)
+            for (std::uint32_t ref : m_overflowRefs)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
                 const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
@@ -616,7 +619,7 @@ namespace Arcane
             const PhysicsWorld& w = *ctx.world;
             const std::uint32_t awakeCount = w.AwakeCount();
             const std::uint32_t solverCount = awakeCount + w.KinematicCount();
-            for (std::uint32_t ref : m_coloring.overflow)
+            for (std::uint32_t ref : m_overflowRefs)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
                 if (cc.restitution <= Real(0)) { continue; }
@@ -699,41 +702,75 @@ namespace Arcane
             m_bodyState.Resize(solverCount + 1u);
             m_bodyState.SyncInCompacted(w);
 
-            // 3) Per-step greedy coloring of the solver-relevant touching contacts.
-            //    A is already the dynamic orientation (always aDyn). B is dynamic iff
-            //    it is a real body with positive inverse mass. Static/kinematic/span
-            //    endpoints are read-only -> not marked dynamic (do not constrain
-            //    coloring). ref = the constraint index into ctx.contacts.
-            //    Phase C, Task 2: coloring only constrains DYNAMIC endpoints, so map
-            //    them to the dense AWAKE index space (AwakeIndexOf); kinematics/statics
-            //    are read-only and never block a color, so their endpoint is irrelevant
-            //    (e.b is unused when !bDyn). bodyCount for the colorer is awakeCount
-            //    (only awake dynamics can collide a color).
-            m_edges.clear();
-            m_edges.reserve(ctx.contactCount);
+            // 3) Group the emitted constraints by their PERSISTENT contact color
+            //    (Phase C, Task 4/5). The per-step greedy recolor is GONE: every
+            //    solver-relevant body-body contact was colored once at create
+            //    (PhysicsWorld::AssignContactColor) and EmitContactConstraints copied
+            //    that color onto cc.color. A kInvalidColor constraint -- an OVERFLOW
+            //    contact (the source Contact found no free color at create) OR a span
+            //    (no pool home) -- goes to the scalar overflow path; everything else
+            //    buckets into its color. The colored solve is within-color order-
+            //    independent (a valid coloring has one contact per dynamic body per
+            //    color), so bucket order does not affect the result.
+            //
+            //    WHY THIS IS SCATTER-SAFE: the persistent coloring is valid w.r.t.
+            //    WORLD SLOTS (no two same-color contacts share a dynamic world-slot
+            //    body). Each awake dynamic world slot maps to a UNIQUE awake index
+            //    (AwakeIndexOf is a bijection), so world-slot-disjoint <=> awake-index-
+            //    disjoint -> the coloring is also valid for the dense awake-index space
+            //    PackLane/ScatterBody rely on. A color's EMITTED subset (awake +
+            //    touching + solver-relevant) is a SUBSET of its persistent members, so
+            //    it is still a valid (disjoint) coloring.
+            for (auto& bucket : m_colorRefs) { bucket.clear(); }
+            m_overflowRefs.clear();
             for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
             {
-                const ContactConstraint& cc = ctx.contacts[c];
-                const bool bDyn = cc.bodyBIsBody && cc.invMassB > Real(0);
-                ColorEdge e;
-                e.a    = w.AwakeIndexOf(cc.bodyA);
-                e.b    = bDyn ? w.AwakeIndexOf(cc.bodyB) : e.a; // b unused for coloring when !bDyn
-                e.aDyn = true;                                  // A is always dynamic in the feed
-                e.bDyn = bDyn;
-                e.ref  = c;
-                m_edges.push_back(e);
+                const std::uint8_t col = ctx.contacts[c].color;
+                if (col < kColorCount) { m_colorRefs[col].push_back(c); }
+                else                   { m_overflowRefs.push_back(c); }
             }
-            m_coloring = ColorConstraints(m_edges, awakeCount);
+
+#ifndef NDEBUG
+            // Debug-only: PROVE the active emitted subset of the persistent coloring is
+            // still a valid coloring -- within each color no awake-dynamic body index
+            // appears twice. This is WHY grouping-by-persistent-color is scatter-safe:
+            // PackLane/ScatterBody require no two constraints in a lane-wide batch to
+            // share a dynamic awake-index. A is always an awake dynamic; B is dynamic
+            // iff it is a real body with positive inverse mass (statics/kinematics/spans
+            // are read-only, never block a color). Reuses awakeCount as the index bound.
+            {
+                std::vector<std::uint8_t> seen(static_cast<std::size_t>(awakeCount), 0u);
+                for (std::uint32_t k = 0; k < static_cast<std::uint32_t>(kColorCount); ++k)
+                {
+                    std::fill(seen.begin(), seen.end(), 0u);
+                    for (const std::uint32_t ref : m_colorRefs[k])
+                    {
+                        const ContactConstraint& cc = ctx.contacts[ref];
+                        const std::uint32_t ia = w.AwakeIndexOf(cc.bodyA);
+                        assert(ia < awakeCount && seen[ia] == 0u &&
+                               "within-color clash: awake-dynamic A twice in one color");
+                        seen[ia] = 1u;
+                        if (cc.bodyBIsBody && cc.invMassB > Real(0))
+                        {
+                            const std::uint32_t ib = w.AwakeIndexOf(cc.bodyB);
+                            assert(ib < awakeCount && seen[ib] == 0u &&
+                                   "within-color clash: awake-dynamic B twice in one color");
+                            seen[ib] = 1u;
+                        }
+                    }
+                }
+            }
+#endif
 
             // 4) Build one SoA batch list per color (warm-start already on the
             //    prepared ctx.contacts points). Build re-homes each body index onto
             //    the dense solverIndex space via the world's awake/kinematic index
             //    maps; padding + static/span B lanes point at the dummy slot
             //    (scatter-safe), and a kinematic B reads its real dense row.
-            m_colorBatches.assign(m_coloring.colors.size(), {});
-            for (std::size_t k = 0; k < m_coloring.colors.size(); ++k)
+            m_colorBatches.assign(static_cast<std::size_t>(kColorCount), {});
+            for (std::size_t k = 0; k < static_cast<std::size_t>(kColorCount); ++k)
             {
-                const std::vector<std::uint32_t>& color = m_coloring.colors[k];
+                const std::vector<std::uint32_t>& color = m_colorRefs[k];
                 if (color.empty()) { continue; }
                 m_colorBatches[k] = ContactConstraintSimd::Build(
                     ctx.contacts, color.data(), static_cast<int>(color.size()), dummyIndex,
@@ -784,9 +821,9 @@ namespace Arcane
             //    constraints already carry their accumulated impulses on
             //    ctx.contacts (the scalar overflow path wrote them in place); only
             //    the colored batches need this copy-back.
-            for (std::size_t k = 0; k < m_coloring.colors.size(); ++k)
+            for (std::size_t k = 0; k < static_cast<std::size_t>(kColorCount); ++k)
             {
-                const std::vector<std::uint32_t>& color = m_coloring.colors[k];
+                const std::vector<std::uint32_t>& color = m_colorRefs[k];
                 if (color.empty()) { continue; }
                 SimdSolve::StoreImpulses(m_colorBatches[k], ctx.contacts, color.data());
             }

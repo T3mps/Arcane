@@ -86,16 +86,18 @@ namespace Arcane
             // LIFETIME-INVARIANT like solverRelevant: set once at create, never
             // updated on a HIT.
             bool          eventRelevant = false;
-            // PERSISTENT COLOR (collision-rebuild Phase C, Stage 2, Task 4).
+            // PERSISTENT COLOR (collision-rebuild Phase C, Stage 2, Tasks 4-5).
             // The graph color assigned ONCE when this solver-relevant body-body
             // contact is created (PhysicsWorld::AssignContactColor), released back
             // at destroy (ReleaseContactColor). kInvalidColor means uncolored:
             // a sensor / non-solver / span contact, an OVERFLOW contact (no free
-            // color), or a fresh/recycled pool slot. NOT yet consumed by the solver
-            // (Task 5); maintaining it here is pure bookkeeping, so the sim stays
-            // byte-identical. Reset to kInvalidColor on every pool-slot recycle
-            // (ContactPool::EnsurePair MISS path) so a recycled slot never carries
-            // a stale color.
+            // color), or a fresh/recycled pool slot. CONSUMED by the solver
+            // (Task 5): EmitContactConstraints copies this onto the emitted
+            // ContactConstraint::color, and SoftStep buckets the emitted constraints
+            // by it (the per-step greedy recolor is gone) -- a valid coloring yields
+            // the same solve, so the settle is byte-identical. Reset to kInvalidColor
+            // on every pool-slot recycle (ContactPool::EnsurePair MISS path) so a
+            // recycled slot never carries a stale color.
             std::uint8_t  color = kInvalidColor;
         };
 

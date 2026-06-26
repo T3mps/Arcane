@@ -88,11 +88,13 @@ TEST_CASE("PhysicsCompacted: solve settles identically + deterministically", "[p
 // Task 4 maintains a PERSISTENT incremental graph-coloring of the solver-relevant
 // body-body contacts: each such contact is assigned a color ONCE at create and
 // releases it at destroy (no per-step greedy recolor). The coloring invariant is
-// that no two same-color contacts share a DYNAMIC body. ValidatePersistentcoloring
+// that no two same-color contacts share a DYNAMIC body. ValidatePersistentColoring
 // is the oracle that walks the live coloring and proves that invariant after a
 // churny settle (30 boxes piling onto a floor, contacts created + destroyed as the
-// pile compacts). The solver still consumes the per-step ColorConstraints, so this
-// only exercises the bookkeeping -- behavior stays byte-identical.
+// pile compacts). Task 5 makes the solver CONSUME this coloring (the per-step greedy
+// recolor is gone), and ValidatePersistentColoring also cross-checks the per-body
+// color mask against the lists. The settle stays byte-identical (a valid coloring
+// yields the same solve regardless of greedy-vs-persistent provenance).
 TEST_CASE("PhysicsCompacted: persistent contact coloring is valid", "[physics][phasec]")
 {
     WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
@@ -100,4 +102,8 @@ TEST_CASE("PhysicsCompacted: persistent contact coloring is valid", "[physics][p
     for (int i = 0; i < 30; ++i) AddBox(w, Vec2(Real(-40) + Real(3)*static_cast<Real>(i%20), Real(-20) - Real(9)*static_cast<Real>(i/20)), Real(4), Real(4));
     for (int k = 0; k < 60; ++k) w.Step(kStep);
     REQUIRE(w.ValidatePersistentColoring());     // no two same-color contacts share a dynamic body
+    // The oracle must not trivially pass on an EMPTY coloring: a 30-box pile on a
+    // floor settles into many dynamic-static + dynamic-dynamic contacts, so at least
+    // one body-body contact got colored. ColoredContactCount sums m_colorContacts[k].
+    REQUIRE(w.ColoredContactCount() > 0u);
 }

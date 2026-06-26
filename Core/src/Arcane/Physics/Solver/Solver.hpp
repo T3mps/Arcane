@@ -41,6 +41,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <Arcane/Physics/Contact.hpp>   // kInvalidColor (persistent contact coloring, Phase C Task 5)
 #include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
@@ -151,6 +152,17 @@ namespace Arcane
             // producing Manifold by GenerateContacts' emit. The solver NEVER
             // reads it -- it is a pure inspection field (determinism unaffected).
             NarrowphaseKind kind = NarrowphaseKind::Separated;
+
+            // PERSISTENT CONTACT COLOR (Phase C, Stage 2, Task 5). Copied at emit
+            // from the source persistent Contact's `color` (EmitContactConstraints).
+            // The solver CONSUMES it: it buckets the emitted constraints by this
+            // color (deleting the old per-step greedy recolor), feeding each color
+            // as one scatter-safe lane-wide batch. kInvalidColor means "no color":
+            // a transient tile span (kNoContact home) OR an overflow contact (the
+            // source Contact found no free color at create) -> the scalar overflow
+            // path. Travels with the constraint through the canonical sort (a struct
+            // field, copied by the post-sort permutation), like sourceContactId.
+            std::uint8_t color = kInvalidColor;
         };
 
         // ----------------------------------------------------------------
