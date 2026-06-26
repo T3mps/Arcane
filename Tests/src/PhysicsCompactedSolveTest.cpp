@@ -93,8 +93,13 @@ TEST_CASE("PhysicsCompacted: solve settles identically + deterministically", "[p
 // churny settle (30 boxes piling onto a floor, contacts created + destroyed as the
 // pile compacts). Task 5 makes the solver CONSUME this coloring (the per-step greedy
 // recolor is gone), and ValidatePersistentColoring also cross-checks the per-body
-// color mask against the lists. The settle stays byte-identical (a valid coloring
-// yields the same solve regardless of greedy-vs-persistent provenance).
+// color mask against the lists. The persistent coloring is a DIFFERENT but
+// equally-valid color partition than the old per-step greedy one, so the colored
+// Gauss-Seidel solve is an INTENTIONAL re-baseline vs pre-Phase-C main (different
+// floats), NOT bit-identical -- this case only proves the coloring is VALID (and
+// non-empty), not byte-equality to any prior baseline. The contract that holds is
+// run-twice DETERMINISM (the case above) + the behavioral [physics] suite (no exact
+// goldens), per the engine's re-baseline-numerics-on-purpose rule.
 TEST_CASE("PhysicsCompacted: persistent contact coloring is valid", "[physics][phasec]")
 {
     WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);

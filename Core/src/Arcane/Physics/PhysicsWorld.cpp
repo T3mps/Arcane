@@ -1912,9 +1912,15 @@ namespace Arcane
         // greedy recolor. Task 5 makes the solver CONSUME this coloring
         // (EmitContactConstraints copies Contact::color onto the emitted constraint;
         // SoftStep buckets by it instead of recoloring), so the color is now
-        // load-bearing -- the mask GATES this lowest-free search. The settle stays
-        // byte-identical (a valid coloring yields the same solve as the old greedy
-        // one). ValidatePersistentColoring cross-checks the mask against the lists.
+        // load-bearing -- the mask GATES this lowest-free search. This persistent
+        // coloring is a DIFFERENT but equally-valid color partition than the old
+        // per-step greedy one; because the colored solve is Gauss-Seidel (color k's
+        // velocity updates feed color k+1), a different valid partition is an
+        // INTENTIONAL re-baseline vs pre-Phase-C main (different floats), NOT
+        // bit-identical. The contract that holds is run-twice DETERMINISM + the
+        // behavioral [physics] suite (no exact goldens) -- per the engine's
+        // re-baseline-numerics-on-purpose rule. ValidatePersistentColoring
+        // cross-checks the mask against the lists.
 
         void PhysicsWorld::AssignContactColor(std::uint32_t id, std::uint32_t a, std::uint32_t b,
                                               bool aDyn, bool bDyn)

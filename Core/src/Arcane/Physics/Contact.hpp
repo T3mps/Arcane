@@ -94,10 +94,15 @@ namespace Arcane
             // color), or a fresh/recycled pool slot. CONSUMED by the solver
             // (Task 5): EmitContactConstraints copies this onto the emitted
             // ContactConstraint::color, and SoftStep buckets the emitted constraints
-            // by it (the per-step greedy recolor is gone) -- a valid coloring yields
-            // the same solve, so the settle is byte-identical. Reset to kInvalidColor
-            // on every pool-slot recycle (ContactPool::EnsurePair MISS path) so a
-            // recycled slot never carries a stale color.
+            // by it (the per-step greedy recolor is gone). The persistent coloring is
+            // a DIFFERENT but equally-valid color partition than the old per-step
+            // greedy one, so the colored Gauss-Seidel solve is an INTENTIONAL
+            // re-baseline vs pre-Phase-C main (different floats), NOT bit-identical.
+            // The contract that holds is run-twice DETERMINISM + the behavioral
+            // [physics] suite (no exact goldens) -- per the engine's
+            // re-baseline-numerics-on-purpose rule. Reset to kInvalidColor on every
+            // pool-slot recycle (ContactPool::EnsurePair MISS path) so a recycled
+            // slot never carries a stale color.
             std::uint8_t  color = kInvalidColor;
         };
 

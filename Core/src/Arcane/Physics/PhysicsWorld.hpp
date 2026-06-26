@@ -808,8 +808,14 @@ namespace Arcane
             // CONSUMED by the solver (Task 5): the per-body color mask gates
             // AssignContactColor's lowest-free search, and the solver buckets
             // contacts by this persistent color instead of recoloring per step.
-            // The sim stays byte-identical -- any valid coloring yields the same
-            // solve. Public so the [phasec] coloring-validity test can call the
+            // This persistent coloring is a DIFFERENT but equally-valid color
+            // partition than the old per-step greedy one; because the colored solve
+            // is Gauss-Seidel (color k's velocity updates feed color k+1), a
+            // different valid partition is an INTENTIONAL re-baseline vs pre-Phase-C
+            // main (different floats), NOT bit-identical. The contract that holds is
+            // run-twice DETERMINISM + the behavioral [physics] suite (no exact
+            // goldens) -- per the engine's re-baseline-numerics-on-purpose rule.
+            // Public so the [phasec] coloring-validity test can call the
             // oracle/probes.
 
             // Assign the lowest free color to a NEW solver-relevant body-body
@@ -1533,8 +1539,12 @@ namespace Arcane
             // contact ids assigned to color k (sized kColorCount in the ctor). These
             // are maintained at create/destroy and CONSUMED by the solver (Task 5):
             // m_bodyColorMask gates color assignment, m_colorContacts is the
-            // solver's per-color bucket list. The sim stays byte-identical -- a
-            // valid coloring yields the same solve.
+            // solver's per-color bucket list. The persistent coloring is a DIFFERENT
+            // but equally-valid color partition than the old per-step greedy one, so
+            // the colored Gauss-Seidel solve is an INTENTIONAL re-baseline vs
+            // pre-Phase-C main (different floats), NOT bit-identical. The contract is
+            // run-twice DETERMINISM + the behavioral [physics] suite (no exact
+            // goldens) -- per the engine's re-baseline-numerics-on-purpose rule.
             std::vector<std::uint32_t>              m_bodyColorMask;
             std::vector<std::vector<std::uint32_t>> m_colorContacts;
 
