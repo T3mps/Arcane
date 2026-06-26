@@ -60,7 +60,7 @@ namespace Arcane
     private:
         struct Opt
         {
-            std::string name, help, def, raw;
+            std::string name, help, def;
             char shortAlias = 0;
             bool isFlag = false, required = false;
             CliType type = CliType::String;

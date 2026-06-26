@@ -16,7 +16,7 @@ namespace {
     Cli MakeCli() {
         Cli c{"prog", "desc"};
         c.Flag("verbose", "verbose logging").Short('v');
-        c.Option("backend", "dx12", "graphics backend").Choices({"dx12", "vulkan"});
+        c.Option("backend", "dx12", "graphics backend").Short('b').Choices({"dx12", "vulkan"});
         c.Option("frames", "0", "frame count").Type(CliType::Uint);
         c.Option("name", "world", "a name");
         return c;
@@ -73,4 +73,26 @@ TEST_CASE("Cli: Required missing is a parse error", "[cli]") {
     c.Option("out", "", "output path").Required();
     REQUIRE(ParseArgs(c, {}).exitCode == 2);
     REQUIRE(ParseArgs(c, {"--out", "x"}).ok);
+}
+TEST_CASE("Cli: trailing garbage on a number is rejected (full consume)", "[cli]") {
+    const Cli c = MakeCli();
+    const Cli::Result r = ParseArgs(c, {"--frames", "180abc"});
+    REQUIRE_FALSE(r.ok); REQUIRE(r.exitCode == 2);
+}
+TEST_CASE("Cli: short-alias =value resolves an option", "[cli]") {
+    const Cli c = MakeCli();
+    const Cli::Result r = ParseArgs(c, {"-b=vulkan"});
+    REQUIRE(r.ok); REQUIRE(r.Get("backend") == "vulkan");
+}
+TEST_CASE("Cli: multiple options + a flag in one parse", "[cli]") {
+    const Cli c = MakeCli();
+    const Cli::Result r = ParseArgs(c, {"--backend", "vulkan", "--frames", "180", "--verbose"});
+    REQUIRE(r.ok);
+    REQUIRE(r.Get("backend") == "vulkan");
+    REQUIRE(r.GetAs<std::uint64_t>("frames") == 180u);
+    REQUIRE(r.Flag("verbose"));
+}
+TEST_CASE("Cli: a flag given an inline value is a parse error", "[cli]") {
+    const Cli c = MakeCli();
+    REQUIRE(ParseArgs(c, {"--verbose=1"}).exitCode == 2);
 }

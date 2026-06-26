@@ -5,12 +5,12 @@ namespace Arcane
 {
     Cli::Builder Cli::Flag(std::string name, std::string help)
     {
-        m_opts.push_back(Opt{ std::move(name), std::move(help), "false", "", 0, true, false, CliType::String, {} });
+        m_opts.push_back(Opt{ std::move(name), std::move(help), "false", 0, true, false, CliType::String, {} });
         return Builder{ this, m_opts.size() - 1 };
     }
     Cli::Builder Cli::Option(std::string name, std::string defaultValue, std::string help)
     {
-        m_opts.push_back(Opt{ std::move(name), std::move(help), std::move(defaultValue), "", 0, false, false, CliType::String, {} });
+        m_opts.push_back(Opt{ std::move(name), std::move(help), std::move(defaultValue), 0, false, false, CliType::String, {} });
         return Builder{ this, m_opts.size() - 1 };
     }
     const Cli::Opt* Cli::FindLong(std::string_view name) const
@@ -84,7 +84,12 @@ namespace Arcane
             }
             if (!opt) return fail("unknown argument '" + a + "'");
 
-            if (opt->isFlag) { r.flags[opt->name] = true; continue; }
+            if (opt->isFlag)
+            {
+                if (hasInline) return fail("flag '--" + opt->name + "' takes no value");
+                r.flags[opt->name] = true;
+                continue;
+            }
 
             std::string val;
             if (hasInline) val = inlineVal;
