@@ -49,9 +49,11 @@ std::unique_ptr<GpuContext> GpuContext::Create(const LoomConfig& cfg)
     if (!ctx->m_imgui) { ARC_ERROR("GpuContext: imgui create failed"); return nullptr; }
 
     ctx->m_inputDevices = Arcane::InputDevices::Create();
-    ctx->m_input        = Arcane::InputActions::Create();
-    if (!ctx->m_inputDevices || !ctx->m_input || !ctx->m_input->LoadFile("data/input_actions.json"))
-    { ARC_ERROR("GpuContext: input create/load failed"); return nullptr; }
+    if (!ctx->m_inputDevices) { ARC_ERROR("GpuContext: input devices create failed"); return nullptr; }
+    ctx->m_input = Arcane::InputActions::Create();
+    if (!ctx->m_input) { ARC_ERROR("GpuContext: input actions create failed"); return nullptr; }
+    if (!ctx->m_input->LoadFile("data/input_actions.json"))
+    { ARC_ERROR("GpuContext: input actions load failed (data/input_actions.json)"); return nullptr; }
     ctx->m_input->SetBaseContext("demo");
 
     // One reused command list for the whole loop. Holds an NVRHI handle ->
