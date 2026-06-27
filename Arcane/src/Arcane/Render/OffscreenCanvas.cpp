@@ -47,7 +47,7 @@ namespace Arcane
                 return BuildTargets(width, height);
             }
 
-            void Draw(const std::function<void(Batcher2D&)>& fn,
+            void Draw(FunctionRef<void(Batcher2D&)> fn,
                       glm::vec4 clear) override
             {
                 if (!m_canvas || !m_output)

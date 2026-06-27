@@ -10,10 +10,9 @@
 // called). The host brackets SubmitRender() between Batcher2D::Begin/End.
 
 #include <Arcane/Sim/SystemSchedulers.hpp>
+#include <Arcane/Util/FunctionRef.hpp>
 
 #include <Astra/Registry/Registry.hpp>
-
-#include <functional>
 
 namespace Arcane
 {
@@ -56,8 +55,8 @@ namespace Arcane
         // pluginUpdate(dt, alpha) runs once after the Update scheduler. Same spiral-of-death
         // clamp as Advance(realDt).
         double Advance(double realDt,
-                       const std::function<void(double)>& pluginFixed,
-                       const std::function<void(double, double)>& pluginUpdate)
+                       FunctionRef<void(double)> pluginFixed,
+                       FunctionRef<void(double, double)> pluginUpdate)
         {
             const double fixedDt = 1.0 / m_cfg.fixedHz;
             m_accumulator += realDt;
