@@ -73,6 +73,7 @@ namespace Arcane
             // imgui handoff are (re)set by RefreshContext before each Init.
             ctx.typeContext   = runtime.TypeContext();
             ctx.workScheduler = runtime.WorkScheduler();
+            ctx.taskExecutor  = runtime.TaskExecutor();
             ctx.engine        = &runtime;
             RefreshContext();
         }

@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Jobs/TaskExecutor.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -26,6 +27,8 @@ TEST_CASE("Runtime boots a usable substrate", "[runtime]")
     REQUIRE(rt.TypeContext() != nullptr);
     REQUIRE(rt.WorkScheduler() != nullptr);
     REQUIRE(rt.WorkScheduler()->WorkerCount() >= 1);
+    REQUIRE(rt.TaskExecutor() != nullptr);
+    REQUIRE(rt.TaskExecutor()->WorkerCount() >= 1);
 
     rt.Components()->RegisterComponent<Counter>();
     auto& reg = rt.Registry();
