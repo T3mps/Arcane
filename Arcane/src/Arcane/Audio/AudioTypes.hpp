@@ -55,16 +55,18 @@ namespace Arcane::Audio
 
 	inline constexpr SoundHandle kInvalidSound{ 0u, 0u };
 	inline constexpr VoiceHandle kInvalidVoice{ 0u, 0u };	
-	inline constexpr BusHandle kInvalidBus{ 0u, 0u }; //Master bus is always index=0, gen=0
+	inline constexpr BusHandle kInvalidBus{ 0u, 0u }; // In descs, invalid/default means route to master.
 
 	enum class SoundLoadMode : std::uint8_t
 	{
 		DecodeToMemory,
-		SteamFromDisk,
+		StreamFromDisk,
 	};
 
 	struct AudioDeviceDesc
 	{
+		std::uint32_t sampleRate = 48000;
+		std::uint32_t channels = 2;
 		bool enableDevice = true;
 	};
 
