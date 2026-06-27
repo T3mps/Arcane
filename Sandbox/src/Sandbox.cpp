@@ -54,10 +54,10 @@ namespace
         if (reg.GetResource<Arcane::PhysicsResource>()) return;
         Arcane::Physics::WorldDef wd;
         wd.gravityY = kGravityY;
-        reg.SetResource(Arcane::PhysicsResource{
-            std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
-            {}
-        });
+        auto world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
+        // Phase D1: wire executor (g_ctx is always valid here; LoadState is called after Init).
+        world->SetExecutor(g_ctx ? g_ctx->taskExecutor : nullptr);
+        reg.SetResource(Arcane::PhysicsResource{ std::move(world), {} });
     }
 
     // Cache the SceneRoot entity from the resource (set by the scene builder or restored
@@ -124,6 +124,9 @@ extern "C"
         //    on the build path; the LoadState path below still calls EnsurePhysicsResource.
         Astra::Registry& reg = ctx->engine->Registry();
         g_app.Configure(kGravityY);   // gravity for every (re)built PhysicsResource world
+        // Phase D1: wire the real task executor so each (re)built PhysicsWorld is ready
+        // to parallelize the solver once later tasks enable it (null -> serial default).
+        g_app.SetExecutor(ctx->taskExecutor);
         // Slice B: hand the Runtime to the app so the narrowphase inspector can build its
         // Minkowski-inset OffscreenCanvas from the host's device + ShaderLibrary (Runtime
         // render-resources bridge). Null device in a headless host -> the inset is skipped.

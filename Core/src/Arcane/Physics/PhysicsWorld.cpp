@@ -1673,6 +1673,7 @@ namespace Arcane
                 ctx.subDt        = dt / static_cast<Real>(m_substepCount);
                 ctx.invSubDt     = ctx.subDt > Real(0) ? Real(1) / ctx.subDt : Real(0);
                 ctx.gravity      = Vec2(m_gravityX, m_gravityY);
+                ctx.executor     = Executor();   // Phase D1: always non-null (serial default)
                 m_solver->Solve(ctx);
             }
 

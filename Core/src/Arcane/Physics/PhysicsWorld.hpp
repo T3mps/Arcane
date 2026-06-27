@@ -67,6 +67,7 @@
 #include <vector>
 
 #include <Arcane/Util/FunctionRef.hpp>
+#include <Arcane/Jobs/TaskExecutor.hpp>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
@@ -509,6 +510,14 @@ namespace Arcane
             // integration + mover-broadphase update, then ContactManager::Step
             // (events + gating + deferred flush). NO dynamics solving.
             void Step(Real dt);
+
+            // Phase D1: inject the task executor the solver parallelizes over.
+            // nullptr -> the world's owned SerialTaskExecutor (deterministic default).
+            void SetExecutor(ITaskExecutor* exec) noexcept { m_executor = exec; }
+            [[nodiscard]] ITaskExecutor* Executor() noexcept
+            {
+                return m_executor ? m_executor : &m_serialExecutor;   // always valid; move-safe
+            }
 
             // ---- queries ---------------------------------------------------
 
@@ -1361,6 +1370,10 @@ namespace Arcane
             // steady-state allocation in Step.
             std::unique_ptr<ISolver>       m_solver;
             std::vector<ContactConstraint> m_contactConstraints;
+
+            // ---- task executor (Phase D1) -----------------------------------
+            ITaskExecutor*     m_executor = nullptr;   // injected; null -> m_serialExecutor
+            SerialTaskExecutor m_serialExecutor;       // owned deterministic fallback
 
             // ---- joints (P2.5) ---------------------------------------------
             //

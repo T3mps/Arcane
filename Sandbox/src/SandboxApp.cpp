@@ -41,14 +41,14 @@ namespace Arcane::Sandbox
         // replacing any existing one. SetResource overwrites the resource slot in place, so
         // the previous world (and all its bodies) is destroyed -- nothing leaks into the new
         // scene. Mirrors EnsurePhysicsResource in Sandbox.cpp but unconditionally replaces.
-        void InstallFreshPhysicsResource(Astra::Registry& reg, float gravityY)
+        void InstallFreshPhysicsResource(Astra::Registry& reg, float gravityY,
+                                         Arcane::ITaskExecutor* exec = nullptr)
         {
             Arcane::Physics::WorldDef wd;
             wd.gravityY = gravityY;
-            reg.SetResource(Arcane::PhysicsResource{
-                std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
-                {}
-            });
+            auto world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
+            world->SetExecutor(exec);   // Phase D1: wire executor (null -> serial default)
+            reg.SetResource(Arcane::PhysicsResource{ std::move(world), {} });
         }
     }
 
@@ -77,7 +77,7 @@ namespace Arcane::Sandbox
 
         // 2. Mint a fresh PhysicsResource so the new scene's bodies start from an empty
         //    world + empty entity<->body map (no stale handles from the old scene).
-        InstallFreshPhysicsResource(reg, m_gravityY);
+        InstallFreshPhysicsResource(reg, m_gravityY, m_executor);
 
         // 3. Run the target builder -- it repopulates entities and re-sets SceneRoot.
         scenes[m_sceneIndex].build(reg);

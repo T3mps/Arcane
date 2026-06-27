@@ -45,6 +45,8 @@
 #include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
+namespace Arcane { struct ITaskExecutor; }
+
 namespace Arcane
 {
     namespace Physics
@@ -216,6 +218,10 @@ namespace Arcane
 
             // Gravity (read for soft-constraint bias terms that reference it).
             Vec2          gravity{ Real(0), Real(0) };
+
+            // Task-parallelism seam (Phase D1). Always non-null when the solver runs
+            // (PhysicsWorld resolves it to its serial default if none was injected).
+            ITaskExecutor* executor = nullptr;
         };
 
         // ----------------------------------------------------------------

@@ -28,6 +28,7 @@
 #include "Camera.hpp"                       // the sandbox 2D pan + zoom view
 #include "Interaction.hpp"                  // mouse spawn/drag/throw + pan/zoom (Task 7)
 
+#include <Arcane/Jobs/TaskExecutor.hpp>     // ITaskExecutor (Phase D1 executor injection)
 #include <Arcane/Physics/Fixture.hpp>          // FixtureHandle, kInvalidFixture (subject + partner fixtures)
 #include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseTrace (inspector recorder)
 #include <Arcane/Render/Batcher2D.hpp>        // Batcher2D virtual interface (Circle call)
@@ -279,6 +280,10 @@ namespace Arcane::Sandbox
         // plugin in Init before BuildInitialScene so SetScene/Reset can mint fresh worlds.
         void Configure(float gravityY) noexcept { m_gravityY = gravityY; }
 
+        // Phase D1: inject the task executor that each (re)built PhysicsWorld will use.
+        // nullptr -> the world's owned SerialTaskExecutor (deterministic default).
+        void SetExecutor(Arcane::ITaskExecutor* exec) noexcept { m_executor = exec; }
+
         // Build the current scene index into `reg` from scratch (fresh PhysicsResource +
         // builder). Called by GamePlugin_Init on a fresh boot (after the components are
         // registered). The scene index is recorded so SetScene/Reset can switch later.
@@ -446,8 +451,9 @@ namespace Arcane::Sandbox
         // resource if absent. Called each FixedUpdate so the traces track the live bodies.
         void UpdateAndPublishInspector(Astra::Registry& reg);
 
-        std::size_t m_sceneIndex = 0;
-        float       m_gravityY   = 0.0f;
+        std::size_t            m_sceneIndex = 0;
+        float                  m_gravityY   = 0.0f;
+        Arcane::ITaskExecutor* m_executor   = nullptr;   // Phase D1; null -> serial default
         Camera      m_camera{};      // default identity; configured in RebuildScene
         Interaction m_interaction{}; // mouse spawn/drag/throw + pan/zoom (Task 7)
 
