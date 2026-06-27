@@ -392,30 +392,32 @@ namespace Arcane
             // For localCenter==(0,0) this reduces to p=p0+dp, a=a0+dq.
             // Phase C, Task 2: index dp/dq by the DENSE solverIndex AwakeIndexOf(slot);
             // CommitSlotPosition still takes the WORLD slot `s` (unchanged).
-            // Phase D1, Task 4: ParallelFor over AwakeBodies(). Each body reads from
-            // its own dense row and commits to its own world slot -- fully disjoint.
+            // Phase D1, Task 4: this loop is intentionally SERIAL -- CommitSlotPosition
+            // calls UpdateMoverProxies which modifies the shared DynamicTree; concurrent
+            // calls from different ParallelFor tasks would race on tree-node updates even
+            // for disjoint body slots (tree rotations touch shared parent nodes).
+            // IntegrateVelocitiesSoA / IntegratePositionsSoA are safely parallelised
+            // (writes to disjoint m_bodyState dense indices). FinalizePositionsSoA is
+            // called ONCE per step (outside the substep hot loop) so it is not the
+            // bottleneck.
             PhysicsWorld& w = *ctx.world;
             const std::vector<std::uint32_t>& aw = w.AwakeBodies();
-            ctx.executor->ParallelFor(aw.size(), kSolverBodyGrain,
-                [&](std::size_t bgn, std::size_t end, std::uint32_t)
-                {
-                    for (std::size_t j = bgn; j < end; ++j)
-                    {
-                        const std::uint32_t s = aw[j];
-                        const std::uint32_t i = w.AwakeIndexOf(s);
-                        const Vec2 dp(static_cast<Real>(m_bodyState.dpx[i]),
-                                      static_cast<Real>(m_bodyState.dpy[i]));
-                        const Real dr = static_cast<Real>(m_bodyState.dq[i]);
-                        const Vec2 p0 = w.PosSlot(s);
-                        const Real a0 = w.GetAngle(w.HandleOf(s));
-                        const Vec2 lc = w.LocalCenterSlot(s);
-                        const Vec2 c0 = p0 + RotateVec(a0, lc);
-                        const Vec2 c  = c0 + dp;
-                        const Real a  = a0 + dr;
-                        const Vec2 p  = c - RotateVec(a, lc);
-                        w.CommitSlotPosition(s, p, a);
-                    }
-                });
+            for (std::size_t j = 0; j < aw.size(); ++j)
+            {
+                const std::uint32_t s = aw[j];
+                const std::uint32_t i = w.AwakeIndexOf(s);
+                const Vec2 dp(static_cast<Real>(m_bodyState.dpx[i]),
+                              static_cast<Real>(m_bodyState.dpy[i]));
+                const Real dr = static_cast<Real>(m_bodyState.dq[i]);
+                const Vec2 p0 = w.PosSlot(s);
+                const Real a0 = w.GetAngle(w.HandleOf(s));
+                const Vec2 lc = w.LocalCenterSlot(s);
+                const Vec2 c0 = p0 + RotateVec(a0, lc);
+                const Vec2 c  = c0 + dp;
+                const Real a  = a0 + dr;
+                const Vec2 p  = c - RotateVec(a, lc);
+                w.CommitSlotPosition(s, p, a);
+            }
         }
 
         void SoftStep::SyncVelToWorld(SolverContext& ctx)

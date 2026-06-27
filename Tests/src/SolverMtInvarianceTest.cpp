@@ -24,7 +24,11 @@ TEST_CASE("PhysicsWorld accepts an executor and steps with it (serial default)",
 
 namespace
 {
-    // Deterministic pile: a static floor + 200 dynamic boxes in a 10-wide column.
+    // Deterministic pile: a static floor + 500 dynamic boxes in a 10-wide column.
+    // 500 bodies ensures the awake count exceeds kSolverBodyGrain=256, so
+    // IntegrateVelocitiesSoA/IntegratePositionsSoA genuinely split across >=2
+    // ParallelFor chunks (real concurrency, not inline single-chunk). The per-color
+    // contact count also exceeds kSolverColorGrain=8, exercising the within-color MT.
     // Gravity pulls in +Y; floor at y=5 (half-extent 0.5), boxes spawn at
     // negative Y (above the floor) -- same convention as PhysicsAwakeSetTest.
     // Returns (x, y, angle, vx, vy) per body after `steps`. Within-color-parallel
@@ -36,21 +40,22 @@ namespace
         PhysicsWorld w(wd);
         w.SetExecutor(exec);
 
-        // Static floor: half-extents 20 x 0.5 at origin.
+        // Static floor: half-extents 25 x 0.5 at origin (wide enough for 10 columns).
         {
             BodyDef fd;
             fd.type     = BodyType::Static;
             fd.position = Vec2(Real(0), Real(5));
-            fd.shape    = MakeAabb(Real(20), Real(0.5));
+            fd.shape    = MakeAabb(Real(25), Real(0.5));
             w.AddBody(fd);
         }
 
-        // 200 dynamic boxes in a 10-column grid, spawned above the floor.
+        // 500 dynamic boxes in a 10-column grid, spawned above the floor.
         // Column index c = i % 10  -> x in [-4.5 .. 4.5] step 1.0
         // Row index r    = i / 10  -> y = -1 - r*1.2 (above the floor)
+        // 500 bodies / 10 columns = 50 rows -> column height ~60 units above floor.
         std::vector<BodyHandle> bodies;
-        bodies.reserve(200);
-        for (int i = 0; i < 200; ++i)
+        bodies.reserve(500);
+        for (int i = 0; i < 500; ++i)
         {
             const int c = i % 10;
             const int r = i / 10;
@@ -71,7 +76,7 @@ namespace
         }
 
         std::vector<float> out;
-        out.reserve(static_cast<std::size_t>(bodies.size()) * 5u);
+        out.reserve(bodies.size() * 5u);
         for (auto h : bodies)
         {
             const Vec2 p = w.Position(h);
@@ -96,6 +101,7 @@ TEST_CASE("solver thread-count invariance: serial == enki(1) == enki(N)", "[phys
     const auto b = RunPile(one.TaskExecutor(), 120);
     const auto c = RunPile(many.TaskExecutor(), 120);
 
+    INFO("workers=" << many.TaskExecutor()->WorkerCount());
     REQUIRE(many.TaskExecutor()->WorkerCount() >= 1);
     REQUIRE(a.size() == b.size());
     REQUIRE(a == b);
