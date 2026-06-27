@@ -11,12 +11,14 @@
 #include <Arcane/Physics/Solver/SoftStep.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Joints/Joint.hpp>    // Joint (Prepare/SolveVelocity)
 #include <Arcane/Physics/Solver/SoftCoeffs.hpp>   // shared MakeSoft + SoftCoeffs
 #include <Arcane/Physics/Solver/BodyStateSoA.hpp> // SyncIn/SyncOut defs (SIMD solver Task 1)
+#include <Arcane/Jobs/TaskExecutor.hpp>            // ITaskExecutor::ParallelFor (Phase D1)
 
 namespace Arcane
 {
@@ -24,6 +26,10 @@ namespace Arcane
     {
         namespace
         {
+            // Minimum batch size for ParallelFor over per-color SIMD batches (Phase D1).
+            // Keeps very small colors on one worker; avoids sync overhead outweighing gain.
+            static constexpr std::size_t kSolverColorGrain = 8;
+
             // 2D cross products (port of the Lua applyAt / contact math).
             //   scalar(w) x vec(r) -> vec : (-w*r.y, w*r.x)
             //   vec(r)    x vec(p) -> scalar : r.x*p.y - r.y*p.x
@@ -666,6 +672,7 @@ namespace Arcane
 
         void SoftStep::Solve(SolverContext& ctx)
         {
+            assert(ctx.executor && "SolverContext::executor must be set (PhysicsWorld resolves a serial default)");
             PhysicsWorld& w = *ctx.world;
 
             // Phase C, Task 2: the body-state scratch is now DENSE, sized by the
@@ -788,7 +795,14 @@ namespace Arcane
                 IntegrateVelocitiesSoA(ctx, h);
 
                 // Warm start (per sub-step -- v3 stage order): all colors + overflow.
-                for (auto& batches : m_colorBatches) { SimdSolve::WarmStart(batches, m_bodyState); }
+                // Phase D1: outer color loop stays serial (Gauss-Seidel); within each
+                // color, batches are disjoint-body -> ParallelFor is scatter-safe.
+                for (auto& batches : m_colorBatches)
+                {
+                    ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
+                        [&](std::size_t b, std::size_t e, std::uint32_t)
+                        { SimdSolve::WarmStart(batches, m_bodyState, b, e); });
+                }
                 OverflowWarmStart(ctx);
 
                 if (hasJoints) { SyncVelToWorld(ctx); SolveJoints(ctx); SyncVelFromWorld(ctx); }
@@ -796,7 +810,9 @@ namespace Arcane
                 // Biased solve: all colors + overflow.
                 for (auto& batches : m_colorBatches)
                 {
-                    SimdSolve::SolveNormalAndFriction(batches, m_bodyState, static_cast<float>(h), /*useBias=*/true, maxBiasVel);
+                    ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
+                        [&](std::size_t b, std::size_t e, std::uint32_t)
+                        { SimdSolve::SolveNormalAndFriction(batches, m_bodyState, static_cast<float>(h), /*useBias=*/true, maxBiasVel, b, e); });
                 }
                 OverflowSolve(ctx, h, /*useBias=*/true);
 
@@ -807,13 +823,20 @@ namespace Arcane
                 // Relax (no bias): all colors + overflow.
                 for (auto& batches : m_colorBatches)
                 {
-                    SimdSolve::SolveNormalAndFriction(batches, m_bodyState, static_cast<float>(h), /*useBias=*/false, maxBiasVel);
+                    ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
+                        [&](std::size_t b, std::size_t e, std::uint32_t)
+                        { SimdSolve::SolveNormalAndFriction(batches, m_bodyState, static_cast<float>(h), /*useBias=*/false, maxBiasVel, b, e); });
                 }
                 OverflowSolve(ctx, h, /*useBias=*/false);
             }
 
             // 6) Restitution (once): all colors + overflow.
-            for (auto& batches : m_colorBatches) { SimdSolve::ApplyRestitution(batches, m_bodyState, threshold); }
+            for (auto& batches : m_colorBatches)
+            {
+                ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
+                    [&](std::size_t b, std::size_t e, std::uint32_t)
+                    { SimdSolve::ApplyRestitution(batches, m_bodyState, threshold, b, e); });
+            }
             OverflowRestitution(ctx);
 
             // 7) Store the converged impulses back onto ctx.contacts so the world's
