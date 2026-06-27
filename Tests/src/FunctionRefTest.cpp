@@ -61,3 +61,12 @@ TEST_CASE("FunctionRef supports void return + multiple args", "[functionref]")
     ref("ab", 2);
     REQUIRE(out == "abab");
 }
+
+TEST_CASE("FunctionRef binds a mutable lambda", "[functionref]")
+{
+    int count = 0;
+    auto mut = [count](int) mutable { return ++count; };  // mutable: non-const operator()
+    FunctionRef<int(int)> ref = mut;
+    REQUIRE(ref(0) == 1);
+    REQUIRE(ref(0) == 2);   // each call mutates the captured copy
+}

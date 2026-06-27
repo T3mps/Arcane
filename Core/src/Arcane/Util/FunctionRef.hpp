@@ -6,10 +6,8 @@
 // owning std::function (or a future Delegate). C++26 std::function_ref-aligned:
 // this can be replaced by a using-alias when MSVC ships it.
 
-#include <cstddef>
 #include <memory>
 #include <type_traits>
-#include <utility>
 
 namespace Arcane
 {
@@ -29,6 +27,10 @@ namespace Arcane
             requires (!std::is_same_v<std::remove_cvref_t<F>, FunctionRef>
                       && std::is_invocable_r_v<R, F&, Args...>)
         FunctionRef(F&& f) noexcept
+            // For a raw function name, F deduces as a function TYPE and addressof(f)
+            // yields the function's stable address (not a temporary) -- safe. Same for
+            // any lvalue callable. Do NOT bind a function-POINTER rvalue (e.g. a cast
+            // result): F would deduce as a pointer type and m_obj would dangle.
             : m_obj(const_cast<void*>(static_cast<const void*>(std::addressof(f)))),
               m_thunk(+[](void* o, Args... a) -> R {
                   return (*static_cast<std::remove_reference_t<F>*>(o))(static_cast<Args&&>(a)...);
