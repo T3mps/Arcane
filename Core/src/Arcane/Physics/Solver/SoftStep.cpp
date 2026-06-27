@@ -30,6 +30,11 @@ namespace Arcane
             // Keeps very small colors on one worker; avoids sync overhead outweighing gain.
             static constexpr std::size_t kSolverColorGrain = 8;
 
+            // Minimum awake-body chunk for ParallelFor over the integrate loops (Phase D1 Task 4).
+            // Per-body writes are disjoint (each slot unique); 256 bodies per chunk keeps
+            // dispatch overhead small relative to the O(n) integrate work.
+            static constexpr std::size_t kSolverBodyGrain = 256;
+
             // 2D cross products (port of the Lua applyAt / contact math).
             //   scalar(w) x vec(r) -> vec : (-w*r.y, w*r.x)
             //   vec(r)    x vec(p) -> scalar : r.x*p.y - r.y*p.x
@@ -323,28 +328,37 @@ namespace Arcane
             // (a degenerate zero-invMass dynamic is valid; it never integrates).
             // Phase C, Task 2: index m_bodyState by the DENSE solverIndex
             // AwakeIndexOf(slot), NOT the world slot.
+            // Phase D1, Task 4: iterate over the INDEXABLE AwakeBodies() vector via
+            // ParallelFor. Per-body writes are disjoint (each awake slot is unique),
+            // so this is scatter-safe and byte-identical at any worker count.
             PhysicsWorld& w = *ctx.world;
             const Vec2 g = ctx.gravity;
-            w.ForEachAwake([&](std::uint32_t s)
-            {
-                if (w.InvMassSlot(s) <= Real(0))
+            const std::vector<std::uint32_t>& aw = w.AwakeBodies();
+            ctx.executor->ParallelFor(aw.size(), kSolverBodyGrain,
+                [&](std::size_t bgn, std::size_t end, std::uint32_t)
                 {
-                    return; // pinned dynamic -- never integrates
-                }
-                const std::uint32_t i = w.AwakeIndexOf(s);
-                float vx = m_bodyState.vx[i] + static_cast<float>(g.x * h);
-                float vy = m_bodyState.vy[i] + static_cast<float>(g.y * h);
-                float wv = m_bodyState.w[i];
-                const Real d = w.LinDampSlot(s);
-                if (d > Real(0))
-                {
-                    const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
-                    vx *= f; vy *= f; wv *= f;
-                }
-                m_bodyState.vx[i] = vx;
-                m_bodyState.vy[i] = vy;
-                m_bodyState.w[i]  = wv;
-            });
+                    for (std::size_t j = bgn; j < end; ++j)
+                    {
+                        const std::uint32_t s = aw[j];
+                        if (w.InvMassSlot(s) <= Real(0))
+                        {
+                            continue; // pinned dynamic -- never integrates
+                        }
+                        const std::uint32_t i = w.AwakeIndexOf(s);
+                        float vx = m_bodyState.vx[i] + static_cast<float>(g.x * h);
+                        float vy = m_bodyState.vy[i] + static_cast<float>(g.y * h);
+                        float wv = m_bodyState.w[i];
+                        const Real d = w.LinDampSlot(s);
+                        if (d > Real(0))
+                        {
+                            const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
+                            vx *= f; vy *= f; wv *= f;
+                        }
+                        m_bodyState.vx[i] = vx;
+                        m_bodyState.vy[i] = vy;
+                        m_bodyState.w[i]  = wv;
+                    }
+                });
         }
 
         void SoftStep::IntegratePositionsSoA(SolverContext& ctx, Real h)
@@ -352,15 +366,23 @@ namespace Arcane
             // Phase B, Task 3: iterate the awake-set directly -- Alive+Dynamic+Awake
             // is guaranteed. dp/dq += v*h for the TGS separation re-evaluation.
             // Phase C, Task 2: index by the DENSE solverIndex AwakeIndexOf(slot).
+            // Phase D1, Task 4: ParallelFor over AwakeBodies(). Each body writes to
+            // its own dense row (AwakeIndexOf is a bijection), so writes are disjoint.
             PhysicsWorld& w = *ctx.world;
             const float fh = static_cast<float>(h);
-            w.ForEachAwake([&](std::uint32_t s)
-            {
-                const std::uint32_t i = w.AwakeIndexOf(s);
-                m_bodyState.dpx[i] += m_bodyState.vx[i] * fh;
-                m_bodyState.dpy[i] += m_bodyState.vy[i] * fh;
-                m_bodyState.dq[i]  += m_bodyState.w[i]  * fh;
-            });
+            const std::vector<std::uint32_t>& aw = w.AwakeBodies();
+            ctx.executor->ParallelFor(aw.size(), kSolverBodyGrain,
+                [&](std::size_t bgn, std::size_t end, std::uint32_t)
+                {
+                    for (std::size_t j = bgn; j < end; ++j)
+                    {
+                        const std::uint32_t s = aw[j];
+                        const std::uint32_t i = w.AwakeIndexOf(s);
+                        m_bodyState.dpx[i] += m_bodyState.vx[i] * fh;
+                        m_bodyState.dpy[i] += m_bodyState.vy[i] * fh;
+                        m_bodyState.dq[i]  += m_bodyState.w[i]  * fh;
+                    }
+                });
         }
 
         void SoftStep::FinalizePositionsSoA(SolverContext& ctx)
@@ -370,22 +392,30 @@ namespace Arcane
             // For localCenter==(0,0) this reduces to p=p0+dp, a=a0+dq.
             // Phase C, Task 2: index dp/dq by the DENSE solverIndex AwakeIndexOf(slot);
             // CommitSlotPosition still takes the WORLD slot `s` (unchanged).
+            // Phase D1, Task 4: ParallelFor over AwakeBodies(). Each body reads from
+            // its own dense row and commits to its own world slot -- fully disjoint.
             PhysicsWorld& w = *ctx.world;
-            w.ForEachAwake([&](std::uint32_t s)
-            {
-                const std::uint32_t i = w.AwakeIndexOf(s);
-                const Vec2 dp(static_cast<Real>(m_bodyState.dpx[i]),
-                              static_cast<Real>(m_bodyState.dpy[i]));
-                const Real dr = static_cast<Real>(m_bodyState.dq[i]);
-                const Vec2 p0 = w.PosSlot(s);
-                const Real a0 = w.GetAngle(w.HandleOf(s));
-                const Vec2 lc = w.LocalCenterSlot(s);
-                const Vec2 c0 = p0 + RotateVec(a0, lc);
-                const Vec2 c  = c0 + dp;
-                const Real a  = a0 + dr;
-                const Vec2 p  = c - RotateVec(a, lc);
-                w.CommitSlotPosition(s, p, a);
-            });
+            const std::vector<std::uint32_t>& aw = w.AwakeBodies();
+            ctx.executor->ParallelFor(aw.size(), kSolverBodyGrain,
+                [&](std::size_t bgn, std::size_t end, std::uint32_t)
+                {
+                    for (std::size_t j = bgn; j < end; ++j)
+                    {
+                        const std::uint32_t s = aw[j];
+                        const std::uint32_t i = w.AwakeIndexOf(s);
+                        const Vec2 dp(static_cast<Real>(m_bodyState.dpx[i]),
+                                      static_cast<Real>(m_bodyState.dpy[i]));
+                        const Real dr = static_cast<Real>(m_bodyState.dq[i]);
+                        const Vec2 p0 = w.PosSlot(s);
+                        const Real a0 = w.GetAngle(w.HandleOf(s));
+                        const Vec2 lc = w.LocalCenterSlot(s);
+                        const Vec2 c0 = p0 + RotateVec(a0, lc);
+                        const Vec2 c  = c0 + dp;
+                        const Real a  = a0 + dr;
+                        const Vec2 p  = c - RotateVec(a, lc);
+                        w.CommitSlotPosition(s, p, a);
+                    }
+                });
         }
 
         void SoftStep::SyncVelToWorld(SolverContext& ctx)
