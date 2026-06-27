@@ -478,11 +478,15 @@ namespace Arcane
             // ---- WarmStart: apply accumulated n*nImp + t*tImp to body vels -----
             // Lane-wide TGS warm-start; the scalar twin is SoftStep::OverflowWarmStart
             // (SoftStep.cpp). LOCKSTEP -- keep identical lane-for-scalar.
+
+            // Range overload: process batches [begin, end). Loop body unchanged.
             inline void WarmStart(std::vector<ContactConstraintSimd>& batches,
-                                  BodyStateSoA& bs)
+                                  BodyStateSoA& bs,
+                                  std::size_t begin, std::size_t end)
             {
-                for (ContactConstraintSimd& cc : batches)
+                for (std::size_t i = begin; i < end; ++i)
                 {
+                    ContactConstraintSimd& cc = batches[i];
                     const i32w ia = iload(cc.bodyIndexA);
                     const i32w ib = iload(cc.bodyIndexB);
                     const b32w dyn = MaskOf(cc.dynB);
@@ -535,22 +539,31 @@ namespace Arcane
                     ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
                 }
             }
+            inline void WarmStart(std::vector<ContactConstraintSimd>& batches,
+                                  BodyStateSoA& bs)
+            {
+                WarmStart(batches, bs, 0, batches.size());
+            }
 
             // ---- Normal + friction solve --------------------------------------
             // Lane-wide TGS normal+friction; the scalar twin is SoftStep::OverflowSolve
             // (SoftStep.cpp). LOCKSTEP -- keep identical lane-for-scalar.
             // invH = 1/h, maxBiasVel = world.ContactPushMaxVelocity().
+
+            // Range overload: process batches [begin, end). Loop body unchanged.
             inline void SolveNormalAndFriction(std::vector<ContactConstraintSimd>& batches,
                                                BodyStateSoA& bs, float h, bool useBias,
-                                               float maxBiasVel)
+                                               float maxBiasVel,
+                                               std::size_t begin, std::size_t end)
             {
                 const f32w invH = (h > 0.0f) ? splat(1.0f / h) : setzero();
                 const f32w vMaxNeg = splat(-maxBiasVel);
                 const f32w one = splat(1.0f);
                 const f32w zero = setzero();
 
-                for (ContactConstraintSimd& cc : batches)
+                for (std::size_t i = begin; i < end; ++i)
                 {
+                    ContactConstraintSimd& cc = batches[i];
                     const i32w ia = iload(cc.bodyIndexA);
                     const i32w ib = iload(cc.bodyIndexB);
                     const b32w dyn = MaskOf(cc.dynB);
@@ -685,6 +698,12 @@ namespace Arcane
                     ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
                 }
             }
+            inline void SolveNormalAndFriction(std::vector<ContactConstraintSimd>& batches,
+                                               BodyStateSoA& bs, float h, bool useBias,
+                                               float maxBiasVel)
+            {
+                SolveNormalAndFriction(batches, bs, h, useBias, maxBiasVel, 0, batches.size());
+            }
 
             // ---- Restitution ---------------------------------------------------
             // Lane-wide TGS restitution; the scalar twin is SoftStep::OverflowRestitution
@@ -692,14 +711,18 @@ namespace Arcane
             // A whole contact with restitution <= 0 is skipped scalar-side; here we
             // mask it lane-wise (restitution<=0 -> no rebound impulse). A point only
             // rebounds when relVel <= -threshold AND nImp > 0.
+
+            // Range overload: process batches [begin, end). Loop body unchanged.
             inline void ApplyRestitution(std::vector<ContactConstraintSimd>& batches,
-                                         BodyStateSoA& bs, float threshold)
+                                         BodyStateSoA& bs, float threshold,
+                                         std::size_t begin, std::size_t end)
             {
                 const f32w negThresh = splat(-threshold);
                 const f32w zero = setzero();
 
-                for (ContactConstraintSimd& cc : batches)
+                for (std::size_t i = begin; i < end; ++i)
                 {
+                    ContactConstraintSimd& cc = batches[i];
                     const i32w ia = iload(cc.bodyIndexA);
                     const i32w ib = iload(cc.bodyIndexB);
                     const b32w dyn = MaskOf(cc.dynB);
@@ -773,6 +796,11 @@ namespace Arcane
                     ScatterBody(bs.vy, ib, select(dyn, vBy, GatherBody(bs.vy, ib)));
                     ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
                 }
+            }
+            inline void ApplyRestitution(std::vector<ContactConstraintSimd>& batches,
+                                         BodyStateSoA& bs, float threshold)
+            {
+                ApplyRestitution(batches, bs, threshold, 0, batches.size());
             }
 
             // ---- Store accumulated impulses back onto ctx.contacts (Hazard 3) --
