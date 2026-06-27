@@ -82,7 +82,8 @@ namespace Arcane
         // before every Init: the host may call Runtime::SetImGui AFTER this PluginHost is
         // constructed (Loom installs the ImGui handoff once the ImGuiLayer exists), and a
         // reload must hand the live context to the new image. The substrate fields
-        // (typeContext/workScheduler/engine) are fixed for the Runtime's lifetime.
+        // (typeContext/workScheduler/taskExecutor/engine) are fixed for the Runtime's
+        // lifetime and are NOT refreshed here.
         void RefreshContext()
         {
             ctx.abiVersion    = kGamePluginABIVersion;

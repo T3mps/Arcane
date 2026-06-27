@@ -42,8 +42,8 @@ TEST_CASE("PlaygroundGame runs and survives a reload", "[hotreload]")
     Arcane::PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
     REQUIRE(host.Load());
 
-    // ABI v3: the plugin reports the current ABI version and the host resolved
-    // the DrawUI entry point (v2) and the taskExecutor field (v3).
+    // ABI v3: the plugin reports the current ABI version; the DrawUI entry point
+    // (v2) was resolved, and EngineContext::taskExecutor was populated (v3).
     const Arcane::PluginVTable* vt = host.Vtable();
     REQUIRE(vt != nullptr);
     REQUIRE(vt->ABIVersion != nullptr);
