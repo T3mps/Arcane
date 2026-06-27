@@ -20,6 +20,7 @@ namespace Arcane
         // worker in [0,WorkerCount()) names the running thread (per-worker scratch).
         // BLOCKS until all sub-ranges complete. count==0 is a no-op. Re-entrant:
         // legal to call from within an fn already running on this executor.
+        // A minBatch of 0 is treated as 1.
         virtual void ParallelFor(std::size_t count, std::size_t minBatch,
                                  FunctionRef<void(std::size_t begin, std::size_t end,
                                                   std::uint32_t worker)> fn) = 0;

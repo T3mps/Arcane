@@ -15,6 +15,8 @@
 
 namespace Arcane
 {
+    struct ITaskExecutor;   // <Arcane/Jobs/TaskExecutor.hpp>; full def used in the .cpp
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4251)  // unique_ptr<Impl> member on a dll-exported class: benign under /MD (shared CRT heap)
@@ -32,6 +34,11 @@ namespace Arcane
         // The shared enkiTS-backed scheduler. Inject the SAME pointer into every
         // module / registry / executor that needs parallelism.
         std::shared_ptr<Astra::IWorkScheduler> WorkScheduler() const;
+
+        // The SAME enki pool as WorkScheduler(), exposed through the engine's
+        // ITaskExecutor seam (worker-index-aware ParallelFor; FunctionRef callback).
+        // Borrowed pointer; lifetime == this JobSystem. Consume from PhysicsWorld etc.
+        ITaskExecutor* TaskExecutor() const noexcept;
 
         uint32_t WorkerCount() const noexcept;
 
