@@ -64,6 +64,7 @@ namespace Arcane
                 if (count == 0)
                     return;
                 assert(count <= static_cast<std::size_t>((std::numeric_limits<uint32_t>::max)()));
+                assert(minBatch <= static_cast<std::size_t>((std::numeric_limits<uint32_t>::max)()));
 
                 // fn outlives the task: WaitforTask blocks until all partitions complete.
                 // The enki `threadnum` is the worker index (the value the old

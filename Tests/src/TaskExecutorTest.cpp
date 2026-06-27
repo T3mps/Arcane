@@ -2,6 +2,7 @@
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -12,15 +13,18 @@ using Arcane::SerialTaskExecutor;
 // Fill out[i] = i*i over [0,count); verify disjoint full cover + worker range.
 static void RunCoverWorkload(ITaskExecutor& exec, std::size_t count, std::size_t minBatch,
                              std::vector<int>& visited, std::vector<std::uint64_t>& out,
-                             std::uint32_t& maxWorker)
+                             std::atomic<std::uint32_t>& maxWorker)
 {
     visited.assign(count, 0);
     out.assign(count, 0);
-    maxWorker = 0;
+    maxWorker.store(0, std::memory_order_relaxed);
     exec.ParallelFor(count, minBatch,
         [&](std::size_t b, std::size_t e, std::uint32_t worker)
         {
-            if (worker > maxWorker) maxWorker = worker;   // serial: single worker
+            // Race-free fetch-max: safe under concurrent callers.
+            std::uint32_t prev = maxWorker.load(std::memory_order_relaxed);
+            while (worker > prev &&
+                   !maxWorker.compare_exchange_weak(prev, worker, std::memory_order_relaxed)) {}
             for (std::size_t i = b; i < e; ++i)
             {
                 visited[i] += 1;                           // disjoint => exactly 1
@@ -36,10 +40,10 @@ TEST_CASE("SerialTaskExecutor: disjoint full cover + per-element result", "[jobs
 
     std::vector<int> visited;
     std::vector<std::uint64_t> out;
-    std::uint32_t maxWorker = 999;
+    std::atomic<std::uint32_t> maxWorker{999};
     RunCoverWorkload(exec, 1000, 64, visited, out, maxWorker);
 
-    REQUIRE(maxWorker < exec.WorkerCount());               // worker in [0,WorkerCount())
+    REQUIRE(maxWorker.load() < exec.WorkerCount());        // worker in [0,WorkerCount())
     for (std::size_t i = 0; i < 1000; ++i)
     {
         REQUIRE(visited[i] == 1);                          // covered exactly once
@@ -50,7 +54,7 @@ TEST_CASE("SerialTaskExecutor: disjoint full cover + per-element result", "[jobs
 TEST_CASE("SerialTaskExecutor: edge counts", "[jobs]")
 {
     SerialTaskExecutor exec;
-    std::vector<int> visited; std::vector<std::uint64_t> out; std::uint32_t mw;
+    std::vector<int> visited; std::vector<std::uint64_t> out; std::atomic<std::uint32_t> mw{0};
 
     RunCoverWorkload(exec, 0, 64, visited, out, mw);        // no-op
     REQUIRE(visited.empty());
