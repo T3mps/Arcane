@@ -10,9 +10,10 @@
 // called). The host brackets SubmitRender() between Batcher2D::Begin/End.
 
 #include <Arcane/Sim/SystemSchedulers.hpp>
-#include <Arcane/Util/FunctionRef.hpp>
 
 #include <Astra/Registry/Registry.hpp>
+
+#include <functional>
 
 namespace Arcane
 {
@@ -50,13 +51,18 @@ namespace Arcane
             return m_alpha;
         }
 
+        // Advance stays on std::function (NOT FunctionRef): RunLoop.hpp is in the
+        // plugin-facing Runtime.hpp include chain, which is kept Core-free so the
+        // minimal/ABI plugins build without Core/src. Advance is a once-per-frame
+        // host call, not a hot path, so std::function is fine here.
+        //
         // Host-driven variant: pluginFixed(fixedDt) runs each fixed step BEFORE the engine
         // fixedUpdate scheduler (gameplay moves transforms; propagation reads them after).
         // pluginUpdate(dt, alpha) runs once after the Update scheduler. Same spiral-of-death
         // clamp as Advance(realDt).
         double Advance(double realDt,
-                       FunctionRef<void(double)> pluginFixed,
-                       FunctionRef<void(double, double)> pluginUpdate)
+                       const std::function<void(double)>& pluginFixed,
+                       const std::function<void(double, double)>& pluginUpdate)
         {
             const double fixedDt = 1.0 / m_cfg.fixedHz;
             m_accumulator += realDt;
