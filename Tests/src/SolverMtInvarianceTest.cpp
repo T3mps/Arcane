@@ -9,11 +9,13 @@ TEST_CASE("PhysicsWorld accepts an executor and steps with it (serial default)",
     PhysicsWorld w{};
     Arcane::SerialTaskExecutor serial;
     w.SetExecutor(&serial);                 // explicit serial
+    REQUIRE(w.Executor() == &serial);       // always-non-null invariant: returns the injected executor
     w.Step(1.0f / 60.0f);                   // must not crash; serial path unchanged
     SUCCEED("stepped with an injected executor");
 
     PhysicsWorld w2{};
     w2.SetExecutor(nullptr);                // null -> falls back to the world's serial default
+    REQUIRE(w2.Executor() != nullptr);      // always-non-null invariant: serial fallback, never null
     w2.Step(1.0f / 60.0f);
     SUCCEED("stepped with null executor (serial fallback)");
 }

@@ -514,7 +514,7 @@ namespace Arcane
             // Phase D1: inject the task executor the solver parallelizes over.
             // nullptr -> the world's owned SerialTaskExecutor (deterministic default).
             void SetExecutor(ITaskExecutor* exec) noexcept { m_executor = exec; }
-            [[nodiscard]] ITaskExecutor* Executor() noexcept
+            [[nodiscard]] ITaskExecutor* Executor() const noexcept
             {
                 return m_executor ? m_executor : &m_serialExecutor;   // always valid; move-safe
             }
@@ -1372,8 +1372,8 @@ namespace Arcane
             std::vector<ContactConstraint> m_contactConstraints;
 
             // ---- task executor (Phase D1) -----------------------------------
-            ITaskExecutor*     m_executor = nullptr;   // injected; null -> m_serialExecutor
-            SerialTaskExecutor m_serialExecutor;       // owned deterministic fallback
+            ITaskExecutor*         m_executor = nullptr;   // injected; null -> m_serialExecutor
+            mutable SerialTaskExecutor m_serialExecutor;   // owned deterministic fallback
 
             // ---- joints (P2.5) ---------------------------------------------
             //

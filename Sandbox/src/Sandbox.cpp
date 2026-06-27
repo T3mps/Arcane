@@ -126,7 +126,7 @@ extern "C"
         g_app.Configure(kGravityY);   // gravity for every (re)built PhysicsResource world
         // Phase D1: wire the real task executor so each (re)built PhysicsWorld is ready
         // to parallelize the solver once later tasks enable it (null -> serial default).
-        g_app.SetExecutor(ctx->taskExecutor);
+        g_app.SetExecutor(ctx ? ctx->taskExecutor : nullptr);
         // Slice B: hand the Runtime to the app so the narrowphase inspector can build its
         // Minkowski-inset OffscreenCanvas from the host's device + ShaderLibrary (Runtime
         // render-resources bridge). Null device in a headless host -> the inset is skipped.
