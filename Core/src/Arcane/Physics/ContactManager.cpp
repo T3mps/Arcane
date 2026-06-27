@@ -27,7 +27,7 @@ namespace Arcane
     namespace Physics
     {
         void ContactManager::ForEachBegunPair(
-            const std::function<void(std::uint32_t, std::uint32_t)>& fn) const
+            FunctionRef<void(std::uint32_t, std::uint32_t)> fn) const
         {
             for (const auto& [key, p] : m_pairs)
             {

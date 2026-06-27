@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <functional>
 
 #include <Arcane/Physics/Body.hpp>
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
@@ -3233,7 +3232,7 @@ namespace Arcane
         // ---- pull API for debug draw / inspection (P3.6) -------------------
 
         void PhysicsWorld::ForEachContact(
-            const std::function<void(std::uint32_t, std::uint32_t)>& fn) const
+            FunctionRef<void(std::uint32_t, std::uint32_t)> fn) const
         {
             m_contacts.ForEachBegunPair(fn);
         }

@@ -25,9 +25,10 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <unordered_map>
 #include <vector>
+
+#include <Arcane/Util/FunctionRef.hpp>
 
 #include <Arcane/Physics/Fixture.hpp>        // pulls in PhysicsTypes.hpp (kInvalidSlot)
 #include <Arcane/Physics/Narrowphase/Manifold.hpp>
@@ -153,8 +154,8 @@ namespace Arcane
 
             // Visit live contacts in ascending id order (deterministic). A const
             // overload (Phase 3 Task 3 walks the pool read-only).
-            void ForEach(const std::function<void(std::uint32_t id, Contact&)>& fn);
-            void ForEach(const std::function<void(std::uint32_t id, const Contact&)>& fn) const;
+            void ForEach(FunctionRef<void(std::uint32_t id, Contact&)> fn);
+            void ForEach(FunctionRef<void(std::uint32_t id, const Contact&)> fn) const;
             void Clear();
 
         private:

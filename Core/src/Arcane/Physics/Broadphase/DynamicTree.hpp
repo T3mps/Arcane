@@ -44,9 +44,10 @@
 // PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
 
 #include <cstdint>
-#include <functional>
 #include <unordered_set>
 #include <vector>
+
+#include <Arcane/Util/FunctionRef.hpp>
 
 #include <Arcane/Physics/Broadphase/Broadphase.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -84,9 +85,9 @@ namespace Arcane
             // depend on it. The fat box always contains the tight box (the
             // MARGIN-grown invariant) -- the overlay draws both.
             void ForEachLeaf(
-                const std::function<void(std::uint32_t id,
-                                         const Aabb2& tight,
-                                         const Aabb2& fat)>& fn) const;
+                FunctionRef<void(std::uint32_t id,
+                                 const Aabb2& tight,
+                                 const Aabb2& fat)> fn) const;
 
             // O(1) fat-AABB lookup by proxy/fixture id. Returns false if id has
             // no live leaf. Mirrors ForEachLeaf's node.fat, but resolves the
