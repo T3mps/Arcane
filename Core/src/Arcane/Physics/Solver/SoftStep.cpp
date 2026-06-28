@@ -375,19 +375,6 @@ namespace Arcane
             }
         }
 
-        void SoftStep::IntegrateVelocitiesSoA(SolverContext& ctx, Real h)
-        {
-            // Thin SERIAL full-range delegator (Gap 1.1). The solver region drives
-            // IntegrateVelocitiesRange directly via a body stage; this wrapper is kept
-            // so the public phase name still resolves to the same work.
-            IntegrateVelocitiesRange(ctx, h, 0, ctx.world->AwakeBodies().size());
-        }
-
-        void SoftStep::IntegratePositionsSoA(SolverContext& ctx, Real h)
-        {
-            IntegratePositionsRange(ctx, h, 0, ctx.world->AwakeBodies().size());
-        }
-
         void SoftStep::FinalizePositionsSoA(SolverContext& ctx)
         {
             // Phase B, Task 3: iterate the awake-set directly -- Alive+Dynamic+Awake
@@ -397,12 +384,13 @@ namespace Arcane
             // CommitSlotPosition still takes the WORLD slot `s` (unchanged).
             // Phase D1, Task 4: this loop is intentionally SERIAL -- CommitSlotPosition
             // calls UpdateMoverProxies which modifies the shared DynamicTree; concurrent
-            // calls from different ParallelFor tasks would race on tree-node updates even
-            // for disjoint body slots (tree rotations touch shared parent nodes).
-            // IntegrateVelocitiesSoA / IntegratePositionsSoA are safely parallelised
-            // (writes to disjoint m_bodyState dense indices). FinalizePositionsSoA is
-            // called ONCE per step (outside the substep hot loop) so it is not the
-            // bottleneck.
+            // calls from different workers would race on tree-node updates even for
+            // disjoint body slots (tree rotations touch shared parent nodes). It runs
+            // OUTSIDE the persistent solver region (post-region, after SyncOutCompacted),
+            // called ONCE per step (not in the substep hot loop), so it is not the
+            // bottleneck. The IntegrateVelocities/IntegratePositions body stages, by
+            // contrast, write disjoint m_bodyState dense rows and ARE run inside the MT
+            // region (IntegrateVelocitiesRange / IntegratePositionsRange).
             PhysicsWorld& w = *ctx.world;
             const std::vector<std::uint32_t>& aw = w.AwakeBodies();
             for (std::size_t j = 0; j < aw.size(); ++j)
@@ -956,23 +944,28 @@ namespace Arcane
                     kNotKinematic);
             }
 
-            // 5) Build the flat per-step stage list (Gap 1.1) and run the WHOLE
-            //    substep loop inside ONE worker region -- replacing the ~190 per-color
-            //    ParallelFor dispatches/step (the D1 dispatch storm) with one stage
-            //    walk + atomic stage-sync barriers. THIS task drives the region
-            //    SERIALLY via the main worker (SolverWorker(sc, /*workerIndex=*/0));
-            //    real ParallelFor(workerCount) + thieves arrive in Gap 1.2. The
-            //    stage walk reproduces D1's EXACT order per substep --
+            // 5) Build the flat per-step stage list and run the WHOLE substep loop
+            //    inside ONE persistent worker region (Gap 1.2) -- replacing the ~190
+            //    per-color ParallelFor dispatches/step (the D1 dispatch storm) with a
+            //    SINGLE ParallelFor(workerCount, 1, ...) whose body is the stage walk +
+            //    atomic stage-sync barriers + ring-CAS block stealing. The worker index
+            //    is the partition start `begin` (Box2D b2SolverTask style): begin == 0
+            //    is the main/orchestrator (drives the stages, runs overflow/joints
+            //    main-serial inline) and every begin > 0 is a thief that steals blocks.
+            //    The stage walk reproduces D1's EXACT order per substep --
             //      integrate-vel -> warm-start[colors] -> (overflow) -> [joints] ->
             //      solve[colors](bias) -> (overflow) -> integrate-pos -> [joints] ->
             //      relax[colors] -> (overflow)
             //    then ONCE: restitution[colors] -> (overflow) -> store[colors] -- so
-            //    the result is BYTE-IDENTICAL to the per-color loop it replaces (within
-            //    a color the batches are body-disjoint -> block partition is order-
-            //    independent; color boundaries are hard barriers -> Gauss-Seidel order
-            //    preserved). Overflow + joints run MAIN-SERIAL inline between stages
-            //    (the existing scalar methods, bound as FunctionRef lambdas below).
-            const int activeColors = BuildStages(awakeCount, /*sizingWorkers=*/1u);
+            //    the result is BYTE-IDENTICAL to the per-color loop it replaces AT ANY
+            //    WORKER COUNT (serial == enki(1) == enki(N)): within a color the batches
+            //    are body-disjoint, so the block partition -- hence the worker count --
+            //    is order-independent; color boundaries are hard barriers, so the
+            //    Gauss-Seidel order is preserved. Overflow + joints run MAIN-SERIAL
+            //    inline between stages (the existing scalar methods, bound as
+            //    FunctionRef lambdas below; thieves spin while the main runs them).
+            const std::uint32_t workerCount = ctx.executor->WorkerCount();
+            const int activeColors = BuildStages(awakeCount, workerCount);
 
             SolverStageContext sc;
             sc.solver            = this;
@@ -1009,7 +1002,18 @@ namespace Arcane
             sc.overflowRestitution = overflowRestitutionFn;
             sc.jointBridge         = jointBridgeFn;
 
-            SolverWorker(sc, /*workerIndex=*/0);
+            // Dispatch the persistent region ONCE. Worker index = the partition start
+            // `begin` (unique per partition; begin == 0 always present -> exactly one
+            // main). ParallelFor BLOCKS until every partition's SolverWorker returns:
+            // the main returns after publishing the terminal sentinel, and every thief
+            // returns the moment it observes that sentinel -> the join always completes.
+            // workerCount == 1 (SerialTaskExecutor or JobSystem(1)) -> a single
+            // partition fn(0,1,0) -> main only -> the deterministic serial reference.
+            ctx.executor->ParallelFor(workerCount, /*minBatch=*/1,
+                [&](std::size_t begin, std::size_t /*end*/, std::uint32_t /*enkiThread*/)
+                {
+                    SolverWorker(sc, static_cast<std::uint32_t>(begin));
+                });
 
             // 8) Push final velocities to the world (DENSE write-back), then commit
             //    positions (compound-COM) from the SoA dp/dq.

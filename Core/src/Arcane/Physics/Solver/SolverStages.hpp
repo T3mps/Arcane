@@ -20,13 +20,18 @@
 // barrier costs one atomic store + one spin, NOT an enqueue+join. This replaces
 // SoftStep's ~190 fork-join ParallelFor dispatches/step with ONE region.
 //
-// THIS TASK (Gap 1.1): the region is driven SERIALLY by the main worker only
-// (workerIndex == 0; ParallelFor(workerCount,1,...) + thieves arrive in Gap 1.2).
-// The atomic protocol is fully present but UNCONTENDED here: the main self-
-// completes every block alone (claim-at-execution), so a single pass through
-// ExecuteStage claims + runs all blocks and the completionCount barrier exits
-// immediately. The stage walk reproduces SoftStep's exact D1 substep order, so
-// the result is BYTE-IDENTICAL to the per-color ParallelFor it replaces.
+// GAP 1.2 (this task): the region is genuinely MULTITHREADED. SoftStep::Solve
+// dispatches it ONCE per step via ITaskExecutor::ParallelFor(workerCount, 1, ...)
+// (worker index = the partition start `begin`, Box2D b2SolverTask style):
+// `begin == 0` is the main/orchestrator (the partition covering index 0 always
+// exists -> exactly one main); every `begin > 0` is a thief that spins on the
+// stageSync word and steals blocks via ring-CAS. The main self-completes every
+// block alone (claim-at-execution), so thieves are pure optimization: liveness +
+// correctness hold at ANY worker count (serial == enki(1) == enki(N)). After the
+// last stage the main publishes a TERMINAL sentinel (kSolverStageSyncTerminal)
+// the thieves check to EXIT, so ParallelFor's join never hangs. The stage walk
+// reproduces SoftStep's exact D1 substep order, so the result is BYTE-IDENTICAL
+// to the per-color ParallelFor it replaces, at any worker count.
 //
 // DETERMINISM. Stage order is fixed; a color boundary is a hard barrier (spin
 // until completionCount == blockCount -- adjacent colors share bodies, Gauss-
@@ -150,8 +155,10 @@ namespace Arcane
         // SoftStep's definition; the FunctionRefs forward the body-integrate range +
         // the main-serial overflow/joint passes to SoftStep methods (bound as
         // lambdas in Solve). stageSync is the single "advance to next stage" word
-        // (Box2D atomicSyncBits) the thieves will read in Gap 1.2; it is written but
-        // unread in this serial-main task.
+        // (Box2D atomicSyncBits): the main publishes (syncIndex<<16)|stageIndex with
+        // release on every stage advance and kSolverStageSyncTerminal at the end; the
+        // thieves (workerIndex > 0) load it with acquire to find + steal the live stage
+        // and to know when to exit.
         struct SolverStageContext
         {
             SoftStep*      solver = nullptr;   // forward-declared; carried for reference
@@ -186,7 +193,10 @@ namespace Arcane
         // -----------------------------------------------------------------------
         // Block sizing (Box2D b2ComputeBlockCount). Contact blocks min ~4 wide-
         // constraints (batches), body blocks min ~32, target ~= blocksPerWorker *
-        // workerCount. For the serial main (Gap 1.1) workerCount sizes to 1.
+        // workerCount (Gap 1.2 sizes with the executor's real WorkerCount() so the
+        // ring-CAS work-stealing has enough blocks to spread across the thieves;
+        // the per-color/body partition is disjoint, so the block count -- hence the
+        // worker count -- never changes any float: byte-identical at any width).
         // -----------------------------------------------------------------------
         inline int ComputeBlockCount(int itemCount, int minBlockSize, int targetBlocks) noexcept
         {
@@ -265,7 +275,9 @@ namespace Arcane
         // is exactly one ring (blockCount visits): after it, every block has been
         // claimed by SOME worker. Returns the count this worker executed.
         //
-        // For the serial main (Gap 1.1) one full ring claims + runs all blocks.
+        // The main rings from 0 and self-completes whatever the thieves did not grab;
+        // each thief rings from its own workerIndex offset (Gap 1.2) so the claims
+        // stagger instead of all hammering block 0.
         // -----------------------------------------------------------------------
         template <class RunBlock>
         inline int ExecuteStage(SolverStage& stage, int prevSync, int curSync,
@@ -320,8 +332,8 @@ namespace Arcane
             const int curSync = prevSync + 1;
 
             // Single-store "advance to next stage" signal (syncIndex round + stage
-            // index) for the thieves (Gap 1.2). Written here; unread in the serial
-            // main task. Release so a thief that observes it sees the stage setup.
+            // index) for the thieves (Gap 1.2). Release so a thief that observes it
+            // sees the stage setup (and, transitively, the prior stages' block writes).
             const std::uint32_t syncBits =
                 (static_cast<std::uint32_t>(curSync) << 16) |
                 (static_cast<std::uint32_t>(stageIndex) & 0xFFFFu);
@@ -344,13 +356,38 @@ namespace Arcane
             stage.syncIndex = curSync;
         }
 
+        // Terminal stage-sync sentinel (Box2D's UINT_MAX). The main publishes this
+        // after the LAST stage; a thief loop exits the moment it observes it. It is
+        // unambiguous: a real publish is (curSync << 16) | stageIndex with both
+        // halves small (curSync <= substepCount, stageIndex < stageCount), so it can
+        // never equal 0xFFFFFFFF. This is liveness-critical -- a thief that never
+        // exits would hang ParallelFor's join (it never returns from its partition).
+        inline constexpr std::uint32_t kSolverStageSyncTerminal = 0xFFFFFFFFu;
+
         // -----------------------------------------------------------------------
-        // SolverWorker -- the persistent region entry. workerIndex == 0 is the main
-        // driver: it walks the flat stage list in D1's exact substep order, running
-        // each colored/body stage via ExecuteMainStage and the overflow + joint
-        // passes main-serial inline between them. The thief branch (workerIndex > 0)
-        // is added in Gap 1.2; for now only the main path exists, so a serial
-        // executor (one partition, begin==0) reproduces the deterministic reference.
+        // SolverWorker -- the persistent region entry, dispatched once per step via
+        // ParallelFor(workerCount, 1, ...) with worker index = the partition start
+        // `begin` (Box2D b2SolverTask style).
+        //
+        // workerIndex == 0 -> the MAIN/orchestrator (the partition covering index 0
+        //   always exists, so there is exactly one). It walks the flat stage list in
+        //   D1's exact substep order, driving each colored/body stage via
+        //   ExecuteMainStage (publish stageSync -> claim+run blocks -> spin the
+        //   completion barrier -> reset+advance) and the overflow + joint passes
+        //   main-serial inline between them, then publishes the terminal sentinel.
+        //
+        // workerIndex > 0 -> a THIEF. It spins reading sc.stageSync (acquire); when it
+        //   names a live stage it runs that stage's ring-CAS claim loop (ExecuteStage)
+        //   from its own worker offset, stealing whatever blocks the main has not yet
+        //   self-completed. A thief NEVER advances a stage, NEVER runs overflow/joints
+        //   (main-only), and NEVER resets completionCount -- it only CAS-claims blocks
+        //   and release-bumps completionCount on each win. Re-reading the SAME syncBits
+        //   is a harmless no-op (every block's CAS expects prevSync and is already at
+        //   curSync), so the loop needs no last-seen tracking for correctness; the CAS
+        //   protocol makes re-execution idempotent. The thief exits on the terminal
+        //   sentinel. Because the main self-completes every block alone, a thief that
+        //   starts late, runs nothing, or exits late only wastes spins -- it can never
+        //   change a result or deadlock the join.
         //
         // Stage layout in sc.stages (C = activeColorStages):
         //   [0]            IntegrateVelocities
@@ -367,10 +404,29 @@ namespace Arcane
         {
             if (workerIndex != 0)
             {
-                // Thief path: Gap 1.2. No-op in the serial-main task.
+                // ----- Thief (Gap 1.2) -----------------------------------------
+                // Ring from this worker's own offset so concurrent thieves stagger
+                // their CAS claims instead of all starting at block 0.
+                const int startIndex = static_cast<int>(workerIndex);
+                std::uint32_t syncBits;
+                while ((syncBits = sc.stageSync.load(std::memory_order_acquire)) !=
+                       kSolverStageSyncTerminal)
+                {
+                    // Decode (curSync<<16)|stageIndex. The pre-start value 0 decodes to
+                    // stageIndex 0 / curSync 0 -> prevSync = -1, which no reset block
+                    // (syncIndex == 0) ever matches, so a thief that wakes before the
+                    // main's first publish just no-op-spins until a real stage appears.
+                    const int stageIndex = static_cast<int>(syncBits & 0xFFFFu);
+                    const int curSync    = static_cast<int>(syncBits >> 16);
+                    SolverStage& stage = sc.stages[static_cast<std::size_t>(stageIndex)];
+                    ExecuteStage(stage, curSync - 1, curSync,
+                                 [&](int blockIndex) { ExecuteBlock(sc, stage, blockIndex); },
+                                 startIndex);
+                }
                 return;
             }
 
+            // ----- Main / orchestrator (workerIndex == 0) ----------------------
             const int C = sc.activeColorStages;
             for (int s = 0; s < sc.substepCount; ++s)
             {
@@ -393,6 +449,10 @@ namespace Arcane
             for (int c = 0; c < C; ++c) { ExecuteMainStage(sc, 2 + 3 * C + c); }      // Restitution (once)
             if (sc.overflowRestitution) { sc.overflowRestitution(); }
             for (int c = 0; c < C; ++c) { ExecuteMainStage(sc, 2 + 4 * C + c); }      // StoreImpulses (once)
+
+            // Liveness: tell every thief to exit so ParallelFor's join completes.
+            // Release so a thief observing it has seen all of the region's writes.
+            sc.stageSync.store(kSolverStageSyncTerminal, std::memory_order_release);
         }
 
     } // namespace Physics

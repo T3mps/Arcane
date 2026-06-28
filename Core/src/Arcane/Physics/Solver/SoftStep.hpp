@@ -154,21 +154,13 @@ namespace Arcane
             // width-1 sequential twin of the SimdSolve passes -- they share one
             // BodyStateStore so they MUST stay numerically in lockstep).
 
-            // Integrate awake-dynamic velocities (gravity + linear damping) over
-            // the BodyStateStore AoS rows for one sub-step (the AoS-resident counterpart of
-            // IntegrateVelocities; same predicate + math). Now a thin SERIAL delegator
-            // to the [begin,end) range helper below (kept so nothing external breaks;
-            // the solver region drives the range helper directly via a stage block).
-            void IntegrateVelocitiesSoA(SolverContext& ctx, Real h);
-
-            // Accumulate dp/dq += v*h over the BodyStateStore AoS rows for one sub-step.
-            void IntegratePositionsSoA(SolverContext& ctx, Real h);
-
-            // Range helpers (Gap 1.1): the per-body loop bodies of the two integrate
-            // passes, callable over AwakeBodies()[begin,end). A solver-region body
-            // stage runs a sub-range; the SoA-method wrappers above run the full range
-            // serially. Per-body writes are to disjoint dense rows (AwakeIndexOf is a
-            // bijection), so any partition is scatter-safe + byte-identical.
+            // Integrate-range helpers: the per-body loop bodies of the two integrate
+            // passes (velocity = gravity + linear damping; position = dp/dq += v*h),
+            // callable over AwakeBodies()[begin,end). The persistent solver region
+            // drives these directly via the IntegrateVelocities / IntegratePositions
+            // body stages, one sub-range per block. Per-body writes are to disjoint
+            // dense rows (AwakeIndexOf is a bijection), so any partition -- hence any
+            // worker count -- is scatter-safe + byte-identical.
             void IntegrateVelocitiesRange(SolverContext& ctx, Real h, std::size_t begin, std::size_t end);
             void IntegratePositionsRange(SolverContext& ctx, Real h, std::size_t begin, std::size_t end);
 

@@ -28,14 +28,20 @@ TEST_CASE("PhysicsWorld accepts an executor and steps with it (serial default)",
 namespace
 {
     // Deterministic pile: a static floor + 500 dynamic boxes in a 10-wide column.
-    // 500 bodies ensures the awake count exceeds kSolverBodyGrain=256, so
-    // IntegrateVelocitiesSoA/IntegratePositionsSoA genuinely split across >=2
-    // ParallelFor chunks (real concurrency, not inline single-chunk). The per-color
-    // contact count also exceeds kSolverColorGrain=8, exercising the within-color MT.
-    // Gravity pulls in +Y; floor at y=5 (half-extent 0.5), boxes spawn at
-    // negative Y (above the floor) -- same convention as PhysicsAwakeSetTest.
-    // Returns (x, y, angle, vx, vy) per body after `steps`. Within-color-parallel
-    // == serial => byte-identical across executors/thread counts.
+    // 500 bodies + the dense contact pile size the per-step SolverStage list (Gap 1.2)
+    // into many blocks per stage: BuildStages targets ~4*WorkerCount() blocks (body
+    // stages min 32 bodies/block -> ceil(500/32)=16 blocks; colored contact stages
+    // min 4 batches/block), so at WorkerCount() > 1 the persistent solver region runs
+    // GENUINE within-color (ring-CAS block-stealing) and within-body MT -- not a single
+    // inline block. (The old kSolverBodyGrain/kSolverColorGrain per-color ParallelFor
+    // dispatch is gone; the block partition replaced it.) The whole substep loop is
+    // dispatched ONCE per step via ParallelFor(workerCount, 1, ...): begin==0 is the
+    // main, begin>0 are thieves. Because every block is body-disjoint, the block count
+    // -- hence the worker count -- cannot change any float, so the MT result is
+    // byte-identical to serial. Gravity pulls in +Y; floor at y=5 (half-extent 0.5),
+    // boxes spawn at negative Y (above the floor) -- same convention as
+    // PhysicsAwakeSetTest. Returns (x, y, angle, vx, vy) per body after `steps`:
+    // serial == enki(1) == enki(N), byte-identical across executors/thread counts.
     std::vector<float> RunPile(Arcane::ITaskExecutor* exec, int steps)
     {
         WorldDef wd;
