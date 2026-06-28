@@ -1,7 +1,9 @@
 # Arcane Physics Phase D2 — Narrowphase Multithreading (Design)
 
+> **SUPERSEDED (2026-06-28):** the D2 target pivoted to broadphase pair-finding after measure-first found Phase-1 pair-finding (68.5%) dominates narrow, not the Collide recompute (21%). See `docs/superpowers/specs/2026-06-28-arcane-physics-phaseD2-broadphase-mt-design.md`.
+
 - **Date:** 2026-06-28
-- **Status:** Design approved (brainstorming complete). Implementation plan pending.
+- **Status:** SUPERSEDED — pivoted to broadphase-MT after profiling. See banner above.
 - **Branch:** fresh `feature/arcane-physics-phaseD2-narrowphase-mt` off `main` (the solver-MT rework is merged + pushed @ `63270c80`).
 - **Scope:** Multithread the `narrowphase` stage of `PhysicsWorld::Step` (`UpdateContacts`, the measured **38% / 18.4 ms** stage at 10k) by parallelizing the per-pair `Collide()` manifold recompute — the embarrassingly-parallel, **compute-bound** hot work — over the engine's existing executor, using **Box2D v3 as the direct model** (`b2Collide`/`b2CollideTask`: serial broadphase pair management -> parallel collide -> serial event/island processing). Determinism is preserved byte-identically at any thread count. This is **D2** of the physics-MT sequence (**D1 solver-MT** shipped; **D3 island/sleep MT** is out of scope here).
 - **Relates to:** D1 solver-MT (the `PhysicsWorld` executor seam / `SetExecutor` this reuses — no new ABI; the `ParallelFor` fork-join primitive; the byte-identity-invariance gate discipline); the collision-rebuild phases 2-4 (per-fixture DynamicTree broadphase, the persistent `ContactPool` + one-pass `UpdateContacts`, events-as-byproduct — the pipeline this parallelizes).

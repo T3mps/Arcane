@@ -1,5 +1,7 @@
 # Arcane Physics Phase D2 — Narrowphase Multithreading Implementation Plan
 
+> **SUPERSEDED (2026-06-28):** the D2 target pivoted to broadphase pair-finding after measure-first found Phase-1 pair-finding (68.5%) dominates narrow, not the Collide recompute (21%). See `docs/superpowers/plans/2026-06-28-arcane-physics-phaseD2-broadphase-mt.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Multithread the narrowphase (`UpdateContacts`, the measured 38% / 18.4 ms stage) by parallelizing the per-pair `Collide()` manifold recompute via the existing executor + fork-join `ParallelFor`, byte-identical at any worker count.

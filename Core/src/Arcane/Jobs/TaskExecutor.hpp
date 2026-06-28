@@ -18,6 +18,7 @@ namespace Arcane
         // Partition [0,count) into DISJOINT sub-ranges (grain >= minBatch where
         // possible) covering it exactly once; invoke fn(begin,end,worker) on each.
         // worker in [0,WorkerCount()) names the running thread (per-worker scratch).
+        // Each concurrently-running sub-range gets a DISTINCT worker id, so fn may use worker as an index into per-worker scratch without locking (the physics solver-MT and broadphase-MT rely on this for disjoint per-worker writes).
         // BLOCKS until all sub-ranges complete. count==0 is a no-op. Re-entrant:
         // legal to call from within an fn already running on this executor.
         // A minBatch of 0 is treated as 1.

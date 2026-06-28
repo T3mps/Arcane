@@ -421,6 +421,7 @@ namespace Arcane
             const Aabb2 fatA   = m_nodes[leafA].fat;
             const Aabb2 tightA = m_nodes[leafA].tight;
 
+            // defensive: a live leafA (guarded above) implies a non-null root, so this cannot trigger; the early return is the per-proxy equivalent of the old STEP-2 loop's continue.
             if (m_root == kNull)
             {
                 return;

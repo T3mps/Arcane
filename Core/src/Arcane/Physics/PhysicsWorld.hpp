@@ -1386,6 +1386,7 @@ namespace Arcane
             // UpdateContacts is switched to the parallel orchestration.
             static constexpr std::size_t kBroadphaseGrain = 64;
             std::vector<std::uint32_t>              m_bpMovedScratch;
+            // false-sharing of adjacent inner-vector control blocks is DEFERRED (Task 4 measured this stage DRAM/latency-bound, so it is masked; pad each per-worker entry to 64B if it ever dominates).
             std::vector<std::vector<std::uint64_t>> m_bpFindScratch;   // per-worker key buffers
             std::vector<std::vector<std::uint32_t>> m_bpStackScratch;  // per-worker descent stacks
 
