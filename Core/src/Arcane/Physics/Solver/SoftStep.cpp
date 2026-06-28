@@ -725,7 +725,7 @@ namespace Arcane
         {
             // Box2D b2ComputeBlockCount sizing: contacts min ~4 wide-constraints
             // (SIMD batches), bodies min ~32, target ~= blocksPerWorker * workerCount.
-            constexpr int kContactMinBlock = 4;   // SIMD batches per contact block
+            constexpr int kContactMinBlock = 8;   // SIMD batches per contact block
             constexpr int kBodyMinBlock    = 32;  // awake bodies per body block
             const int target = 4 * static_cast<int>(sizingWorkers > 0u ? sizingWorkers : 1u);
 
