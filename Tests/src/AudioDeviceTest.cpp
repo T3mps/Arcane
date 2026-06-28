@@ -1,4 +1,5 @@
 #include <Arcane/Audio/AudioDevice.hpp>
+#include <Arcane/Assets/Assets.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -62,10 +63,11 @@ TEST_CASE("AudioDevice null backend lifecycle and controls", "[audio]")
     using namespace Arcane::Audio;
 
     AudioDevice audio;
+    auto assets = Arcane::Assets::Create(nullptr);
     AudioDeviceDesc desc;
     desc.enableDevice = false;
 
-    REQUIRE(audio.Init(desc));
+    REQUIRE(audio.Init(assets.get(), desc));
     CHECK(audio.IsInitialized());
 
     audio.SetMasterVolume(0.5f);
@@ -80,9 +82,10 @@ TEST_CASE("AudioDevice null backend sound bus voice handles", "[audio]")
     using namespace Arcane::Audio;
 
     AudioDevice audio;
+    auto assets = Arcane::Assets::Create(nullptr);
     AudioDeviceDesc deviceDesc;
     deviceDesc.enableDevice = false;
-    REQUIRE(audio.Init(deviceDesc));
+    REQUIRE(audio.Init(assets.get(), deviceDesc));
 
     const auto wav = WriteSilentWav();
 
@@ -117,4 +120,17 @@ TEST_CASE("AudioDevice null backend sound bus voice handles", "[audio]")
 
     audio.UnloadSound(sound);
     CHECK_FALSE(audio.IsValid(sound));
+
+    SoundLoadDesc streamDesc;
+    streamDesc.mode = SoundLoadMode::StreamFromDisk;
+    SoundHandle streamed = audio.LoadSound(wav, streamDesc);
+    REQUIRE(audio.IsValid(streamed));
+
+    PlayDesc streamPlayDesc;
+    streamPlayDesc.startPaused = true;
+    VoiceHandle streamedVoice = audio.Play(streamed, streamPlayDesc);
+    REQUIRE(audio.IsValid(streamedVoice));
+
+    audio.Stop(streamedVoice);
+    audio.UnloadSound(streamed);
 }

@@ -1,9 +1,13 @@
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Assets/Assets.hpp>
 
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
 
+#include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace Arcane::Audio
@@ -15,6 +19,13 @@ namespace Arcane::Audio
 
 		std::filesystem::path path;
 		SoundLoadMode mode = SoundLoadMode::DecodeToMemory;
+
+		std::shared_ptr<const std::vector<std::uint8_t>> bytes;
+		std::vector<std::uint8_t> decodedPcm;
+		ma_format format = ma_format_unknown;
+		ma_uint32 channels = 0;
+		ma_uint32 sampleRate = 0;
+		ma_uint64 frameCount = 0;
 	};
 
 	struct BusSlot
@@ -37,12 +48,17 @@ namespace Arcane::Audio
 		BusHandle bus = kInvalidBus;
 
 		ma_sound sound{};
+		ma_decoder decoder{};
+		ma_audio_buffer buffer{};
+		bool decoderInitialized = false;
+		bool bufferInitialized = false;
 	};
 
 	struct AudioDevice::Impl
 	{
 		ma_engine engine{};
 		bool initialized = false;
+		Assets* assets = nullptr;
 
 		std::vector<SoundSlot> sounds;
 		std::vector<BusSlot> buses;
@@ -129,6 +145,12 @@ namespace Arcane::Audio
 
 			slot.alive = false;
 			slot.path.clear();
+			slot.bytes.reset();
+			slot.decodedPcm.clear();
+			slot.format = ma_format_unknown;
+			slot.channels = 0;
+			slot.sampleRate = 0;
+			slot.frameCount = 0;
 			slot.mode = SoundLoadMode::DecodeToMemory;
 			++slot.generation;
 
@@ -219,6 +241,8 @@ namespace Arcane::Audio
 			slot.alive = false;
 			slot.source = kInvalidSound;
 			slot.bus = kInvalidBus;
+			slot.decoderInitialized = false;
+			slot.bufferInitialized = false;
 			++slot.generation;
 
 			freeVoices.push_back(h.index);
@@ -229,8 +253,13 @@ namespace Arcane::Audio
 			if (!IsValid(h))
 				return;
 
-			ma_sound_stop(&voices[h.index].sound);
-			ma_sound_uninit(&voices[h.index].sound);
+			VoiceSlot& slot = voices[h.index];
+			ma_sound_stop(&slot.sound);
+			ma_sound_uninit(&slot.sound);
+			if (slot.bufferInitialized)
+				ma_audio_buffer_uninit(&slot.buffer);
+			if (slot.decoderInitialized)
+				ma_decoder_uninit(&slot.decoder);
 			FreeVoiceSlotOnly(h);
 		}
 
@@ -266,11 +295,17 @@ namespace Arcane::Audio
 		Shutdown();
 	}
 
-	bool AudioDevice::Init(const AudioDeviceDesc& desc)
+	bool AudioDevice::Init(Assets* assets, const AudioDeviceDesc& desc)
 	{
 		if (m_impl->initialized)
 		{
 			Shutdown();
+		}
+
+		if (!assets)
+		{
+			ARC_WARN("AudioDevice: Init requires Assets");
+			return false;
 		}
 
 		ma_engine_config config = ma_engine_config_init();
@@ -291,6 +326,7 @@ namespace Arcane::Audio
 		}
 
 		m_impl->initialized = true;
+		m_impl->assets = assets;
 
 		m_impl->ResetPools();
 
@@ -308,6 +344,7 @@ namespace Arcane::Audio
 
 		ma_engine_uninit(&m_impl->engine);
 		m_impl->initialized = false;
+		m_impl->assets = nullptr;
 	}
 
 	bool AudioDevice::IsInitialized() const noexcept
@@ -317,7 +354,11 @@ namespace Arcane::Audio
 
 	SoundHandle AudioDevice::LoadSound(const std::filesystem::path& path, const SoundLoadDesc& desc)
 	{
-		if (!IsInitialized() || path.empty())
+		if (!IsInitialized() || !m_impl->assets || path.empty())
+			return kInvalidSound;
+
+		auto bytes = m_impl->assets->GetBytes(path);
+		if (!bytes)
 			return kInvalidSound;
 
 		const SoundHandle handle = m_impl->AllocSound();
@@ -325,6 +366,68 @@ namespace Arcane::Audio
 
 		slot.path = path;
 		slot.mode = desc.mode;
+		slot.bytes = std::move(bytes);
+
+		if (desc.mode == SoundLoadMode::DecodeToMemory)
+		{
+			ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_f32, 0, 0);
+			ma_decoder decoder{};
+			ma_result result = ma_decoder_init_memory(
+				slot.bytes->data(),
+				slot.bytes->size(),
+				&decoderConfig,
+				&decoder);
+			if (result != MA_SUCCESS)
+			{
+				ARC_WARN("AudioDevice: decode init failed for '{}': {}",
+				         path.string(), ma_result_description(result));
+				m_impl->FreeSoundSlot(handle);
+				return kInvalidSound;
+			}
+
+			ma_format format = ma_format_unknown;
+			ma_uint32 channels = 0;
+			ma_uint32 sampleRate = 0;
+			result = ma_decoder_get_data_format(&decoder, &format, &channels, &sampleRate, nullptr, 0);
+			if (result != MA_SUCCESS || format == ma_format_unknown || channels == 0)
+			{
+				ARC_WARN("AudioDevice: decode format failed for '{}': {}",
+				         path.string(), ma_result_description(result));
+				ma_decoder_uninit(&decoder);
+				m_impl->FreeSoundSlot(handle);
+				return kInvalidSound;
+			}
+
+			ma_uint64 frameCount = 0;
+			result = ma_decoder_get_length_in_pcm_frames(&decoder, &frameCount);
+			if (result != MA_SUCCESS || frameCount == 0)
+			{
+				ARC_WARN("AudioDevice: decode length failed for '{}': {}",
+				         path.string(), ma_result_description(result));
+				ma_decoder_uninit(&decoder);
+				m_impl->FreeSoundSlot(handle);
+				return kInvalidSound;
+			}
+
+			const size_t bytesPerFrame = ma_get_bytes_per_frame(format, channels);
+			slot.decodedPcm.resize(static_cast<size_t>(frameCount) * bytesPerFrame);
+
+			ma_uint64 framesRead = 0;
+			result = ma_decoder_read_pcm_frames(&decoder, slot.decodedPcm.data(), frameCount, &framesRead);
+			ma_decoder_uninit(&decoder);
+			if (result != MA_SUCCESS || framesRead != frameCount)
+			{
+				ARC_WARN("AudioDevice: decode read failed for '{}': {}",
+				         path.string(), ma_result_description(result));
+				m_impl->FreeSoundSlot(handle);
+				return kInvalidSound;
+			}
+
+			slot.format = format;
+			slot.channels = channels;
+			slot.sampleRate = sampleRate;
+			slot.frameCount = frameCount;
+		}
 
 		return handle;
 	}
@@ -422,24 +525,57 @@ namespace Arcane::Audio
 		VoiceSlot& voiceSlot = m_impl->voices[voice.index];
 
 		ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION;
-		if (soundSlot.mode == SoundLoadMode::DecodeToMemory)
-			flags |= MA_SOUND_FLAG_DECODE;
-		else
-			flags |= MA_SOUND_FLAG_STREAM;
-
 		const std::string path = soundSlot.path.string();
-		const ma_result result = ma_sound_init_from_file(
-			&m_impl->engine,
-			path.c_str(),
-			flags,
-			group,
-			nullptr,
-			&voiceSlot.sound);
+
+		ma_result result = MA_SUCCESS;
+		if (soundSlot.mode == SoundLoadMode::DecodeToMemory)
+		{
+			ma_audio_buffer_config bufferConfig = ma_audio_buffer_config_init(
+				soundSlot.format,
+				soundSlot.channels,
+				soundSlot.frameCount,
+				soundSlot.decodedPcm.data(),
+				nullptr);
+			result = ma_audio_buffer_init(&bufferConfig, &voiceSlot.buffer);
+			if (result == MA_SUCCESS)
+			{
+				voiceSlot.bufferInitialized = true;
+				result = ma_sound_init_from_data_source(
+					&m_impl->engine,
+					reinterpret_cast<ma_data_source*>(&voiceSlot.buffer),
+					flags,
+					group,
+					&voiceSlot.sound);
+			}
+		}
+		else
+		{
+			ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_f32, 0, 0);
+			result = ma_decoder_init_memory(
+				soundSlot.bytes->data(),
+				soundSlot.bytes->size(),
+				&decoderConfig,
+				&voiceSlot.decoder);
+			if (result == MA_SUCCESS)
+			{
+				voiceSlot.decoderInitialized = true;
+				result = ma_sound_init_from_data_source(
+					&m_impl->engine,
+					reinterpret_cast<ma_data_source*>(&voiceSlot.decoder),
+					flags,
+					group,
+					&voiceSlot.sound);
+			}
+		}
 
 		if (result != MA_SUCCESS)
 		{
-			ARC_WARN("AudioDevice: ma_sound_init_from_file failed for '{}': {}",
+			ARC_WARN("AudioDevice: sound init failed for '{}': {}",
 			         path, ma_result_description(result));
+			if (voiceSlot.bufferInitialized)
+				ma_audio_buffer_uninit(&voiceSlot.buffer);
+			if (voiceSlot.decoderInitialized)
+				ma_decoder_uninit(&voiceSlot.decoder);
 			m_impl->FreeVoiceSlotOnly(voice);
 			return kInvalidVoice;
 		}

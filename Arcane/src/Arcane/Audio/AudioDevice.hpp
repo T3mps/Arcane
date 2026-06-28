@@ -4,6 +4,8 @@
 
 #include <memory>
 
+namespace Arcane { class Assets; }
+
 namespace Arcane::Audio
 {
 #if defined(_MSC_VER)
@@ -20,7 +22,7 @@ namespace Arcane::Audio
 		AudioDevice(const AudioDevice&) = delete;
 		AudioDevice& operator=(const AudioDevice&) = delete;
 
-		bool Init(const AudioDeviceDesc& desc = {});
+		bool Init(Assets* assets, const AudioDeviceDesc& desc = {});
 		void Shutdown() noexcept;
 
 		[[nodiscard]] bool IsInitialized() const noexcept;
