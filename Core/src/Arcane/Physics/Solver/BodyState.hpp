@@ -7,15 +7,16 @@
 // component Vec2 SoA (m_velX/m_velY/m_angVel) that is NOT gather-friendly, so
 // per Step we mirror a PACKED copy of the body state into the AoS rows below,
 // indexed BY SOLVERINDEX -- a DENSE per-step index space (Phase C, Task 2),
-// NOT the sparse world slot. The solver sizes them to solverCount+1 where
+// NOT the sparse world slot. The solver sizes them to solverCount where
 // solverCount = AwakeCount() + KinematicCount():
 //   * awake dynamics occupy [0, AwakeCount())              at AwakeIndexOf(slot)
 //   * kinematics    occupy [AwakeCount(), solverCount)     at AwakeCount()+KinematicIndexOf(slot)
-//   * statics / spans / padding map to the shared zero DUMMY tail at solverCount.
-// The "+1" tail (index solverCount) is the SCATTER-SAFE DUMMY that padding +
-// static/span B lanes gather/scatter through; see ContactConstraintSimd Build's
-// SCATTER-SAFE DUMMY note. The packed scratch is dense (no per-world-slot holes),
-// so the gathers stay cache-local (the WIN -- not gather elimination).
+//   * statics / spans / padding have NO row -- they pack kNullBodyIndex (-1) and
+//     the lane-wide gather injects a shared zero IDENTITY row for them (Task 3,
+//     Gap 2.2; see ContactConstraintSimd's NULL-INDEX BRANCH note). This REPLACES
+//     the old "+1" scatter-safe dummy tail (no dummy slot, no write contention).
+// The packed scratch is dense (no per-world-slot holes), so the gathers stay
+// cache-local (the WIN -- not gather elimination).
 //
 // LAYOUT: one 32-byte AoS row per solver slot (8 floats: vx/vy/w/dpx/dpy/dq +
 // 2 padding floats). alignas(32) places rows on cache-line boundaries.
@@ -59,16 +60,17 @@ namespace Arcane
         static_assert(sizeof(BodyState) == 32, "BodyState must be 32 bytes");
         static_assert(alignof(BodyState) == 32, "BodyState must be 32-byte aligned");
 
-        // Container for the solver's AoS body-state scratch. Sized to solverCount+1
-        // per Solve (the extra slot is the SCATTER-SAFE DUMMY padding + static/span B
-        // lanes target). MSVC's std::allocator honors 32-byte over-alignment for
-        // BodyState (C++17 over-aligned new), so the default vector is fine.
+        // Container for the solver's AoS body-state scratch. Sized to solverCount
+        // per Solve (Task 3 dropped the old "+1" scatter-safe dummy tail for the
+        // null-index branch). MSVC's std::allocator honors 32-byte over-alignment for
+        // BodyState (C++17 over-aligned new), so the default vector is fine -- the
+        // transpose gather does an aligned 256-bit load per row, which requires it.
         //
         // Declared here, sync defs in SoftStep.cpp (needs PhysicsWorld accessors).
         class BodyStateStore
         {
         public:
-            // Resize to n zero-initialized rows. Caller always passes solverCount+1.
+            // Resize to n zero-initialized rows. The solver passes solverCount.
             void Resize(std::uint32_t n)
             {
                 m_states.assign(static_cast<std::size_t>(n), BodyState{});
@@ -86,8 +88,8 @@ namespace Arcane
             // SyncInCompacted (Phase C, Task 2): fill the DENSE scratch -- awake
             // dynamics at AwakeIndexOf(slot) (vel mirrored, dp/dq zeroed), kinematics
             // at AwakeCount()+KinematicIndexOf(slot) (vel mirrored; dp/dq stay zero,
-            // they never integrate). Statics have no row (they map to the dummy tail,
-            // which Resize already zeroed). The caller Resize()s to solverCount+1.
+            // they never integrate). Statics/spans have no row (they pack the null
+            // index and gather a zero identity). The caller Resize()s to solverCount.
             //
             // SyncOut writes awake dynamics' velocity back to the world (kinematics are
             // read-only -> never written). The caller passes the same dense index map

@@ -70,10 +70,12 @@ namespace Arcane
         //
         // TWO INDEX SPACES live here. The SOLVER hot path uses the DENSE pair
         // SyncInCompacted / SyncOutCompacted (Phase C, Task 2): the scratch is sized
-        // solverCount+1 (= AwakeCount()+KinematicCount()+1) and indexed by solverIndex
+        // solverCount (= AwakeCount()+KinematicCount()) and indexed by solverIndex
         // (awake dynamics at AwakeIndexOf(slot) in [0,awakeCount); kinematics at
-        // awakeCount+KinematicIndexOf(slot); the dummy tail at solverCount). The
-        // legacy SyncIn / SyncOut pair (below) is the original sparse world-slot
+        // awakeCount+KinematicIndexOf(slot)). Statics/spans/padding have no row -- they
+        // pack the null index (-1) and the lane-wide gather injects a zero identity
+        // (Task 3; the old "+1" dummy tail is gone). The legacy SyncIn / SyncOut pair
+        // (below) is the original sparse world-slot
         // bridge, kept only for the standalone SyncIn/SyncOut round-trip contract
         // test -- it is NO LONGER on the solver path. Both pairs share the same
         // awake-dynamic predicate (Alive && Dynamic && Awake), differing only in the
@@ -149,8 +151,9 @@ namespace Arcane
 
         void BodyStateStore::SyncInCompacted(const PhysicsWorld& world)
         {
-            // DENSE fill (Phase C, Task 2). The caller Resize()d to solverCount+1, so
-            // every row -- including the dummy tail at solverCount -- starts at zero.
+            // DENSE fill (Phase C, Task 2). The caller Resize()d to solverCount, so
+            // every dense row starts at zero (statics/spans pack the null index and
+            // gather a zero identity -- no row to fill).
             //
             // (a) Awake dynamics -> dense row AwakeIndexOf(slot) in [0, awakeCount):
             //     mirror velocity + reset the TGS position-delta accumulators (only
@@ -175,7 +178,7 @@ namespace Arcane
             //     Sleeping dynamics get NO row -- safe because no emitted constraint
             //     references one (EmitContactConstraints gates on awake-A, and a
             //     touching dyn-dyn pair shares one island, so awake-A => awake-B).
-            //     Statics likewise get no row (they map to the zero dummy tail).
+            //     Statics likewise get no row (they pack the null index -> zero identity).
             const std::uint32_t awakeCount = world.AwakeCount();
             world.ForEachKinematic([&](std::uint32_t s)
             {
@@ -478,57 +481,58 @@ namespace Arcane
             // Per-overflow-constraint scalar helpers (SoA-resident). cc is the
             // emitted ContactConstraint; bs holds vel + dp/dq by DENSE solverIndex
             // (Phase C, Task 2).
-            //   bIsBody : B is a real body (read its velocity for the relative-
-            //             velocity term -- a kinematic plate's velocity drives the
-            //             push; SyncInCompacted gives kinematics a real dense row).
             //   dynB    : B is a real DYNAMIC body whose velocity is MUTATED.
-            //   ia, ib  : DENSE solverIndex of A and B (NOT world slots).
+            //   ia      : DENSE solverIndex of A (always an awake dynamic, >= 0).
+            //   ib      : DENSE solverIndex of B, or kNullBodyIndex (-1) for a
+            //             static body / tile span (read vB=0, skip the B write) --
+            //             the scalar twin of the lane-wide null-index gather/scatter.
             struct OverflowBodies
             {
-                std::uint32_t ia, ib;
-                bool bIsBody, dynB;
+                std::uint32_t ia;
+                std::int32_t  ib;
+                bool dynB;
                 Real iMa, iIa, iMb, iIb;
             };
 
             // Map a contact B-endpoint world slot to its dense solverIndex, matching
             // the packer's kinematic-vs-static gate exactly: a dynamic B -> its awake
             // row; a kinematic B -> awakeCount + its kinematic row (real velocity ->
-            // push); a static B or a span -> the zero dummy tail at solverCount.
-            inline std::uint32_t DenseB(const ContactConstraint& cc, const PhysicsWorld& w,
-                                        std::uint32_t awakeCount, std::uint32_t solverCount,
-                                        bool dynB)
+            // push); a static B or a span -> kNullBodyIndex (the scalar twin of the
+            // lane-wide null-index branch: read vB=0, never write B).
+            inline std::int32_t DenseB(const ContactConstraint& cc, const PhysicsWorld& w,
+                                       std::uint32_t awakeCount, bool dynB)
             {
                 if (!cc.bodyBIsBody)
                 {
-                    return solverCount;                 // tile span -> dummy tail
+                    return kNullBodyIndex;              // tile span -> null
                 }
                 if (dynB)
                 {
-                    return w.AwakeIndexOf(cc.bodyB);     // dynamic B -> its awake row
+                    return static_cast<std::int32_t>(w.AwakeIndexOf(cc.bodyB)); // dynamic B -> awake row
                 }
                 const std::uint32_t ki = w.KinematicIndexOf(cc.bodyB);
                 if (ki != kNotKinematic)
                 {
-                    return awakeCount + ki;             // kinematic B -> its dense row
+                    return static_cast<std::int32_t>(awakeCount + ki); // kinematic B -> its dense row
                 }
-                // static B -> dummy tail. NOTE: a non-idiomatic moving ZERO-invMass
+                // static B -> null. NOTE: a non-idiomatic moving ZERO-invMass
                 // *dynamic* B (BodyType::Dynamic with invMass==0) is not dynB and not
-                // in the kinematic set, so it falls HERE -> the zero dummy tail; its
+                // in the kinematic set, so it falls HERE -> the zero identity; its
                 // velocity is NOT gathered and its push is dropped BY DESIGN -- use a
                 // Kinematic body for an infinite-mass mover.
-                return solverCount;
+                return kNullBodyIndex;
             }
 
-            // ia/ib are DENSE solverIndices. awakeCount/solverCount come from the
-            // world's per-step dense index space; A is ALWAYS an awake dynamic.
+            // ia is a DENSE solverIndex; ib is a DENSE solverIndex or kNullBodyIndex.
+            // awakeCount comes from the world's per-step dense index space; A is
+            // ALWAYS an awake dynamic.
             inline OverflowBodies OverflowSetup(const ContactConstraint& cc, const PhysicsWorld& w,
-                                                std::uint32_t awakeCount, std::uint32_t solverCount)
+                                                std::uint32_t awakeCount)
             {
                 OverflowBodies ob;
-                ob.bIsBody = cc.bodyBIsBody;
                 ob.dynB    = cc.bodyBIsBody && cc.invMassB > Real(0);
                 ob.ia      = w.AwakeIndexOf(cc.bodyA);
-                ob.ib      = DenseB(cc, w, awakeCount, solverCount, ob.dynB);
+                ob.ib      = DenseB(cc, w, awakeCount, ob.dynB);
                 ob.iMa     = cc.invMassA; ob.iIa = cc.invInertiaA;
                 ob.iMb     = cc.invMassB; ob.iIb = cc.invInertiaB;
                 return ob;
@@ -539,18 +543,24 @@ namespace Arcane
         {
             const PhysicsWorld& w = *ctx.world;
             const std::uint32_t awakeCount = w.AwakeCount();
-            const std::uint32_t solverCount = awakeCount + w.KinematicCount();
             for (std::uint32_t ref : m_overflowRefs)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
-                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
+                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount);
                 const Vec2 n = cc.normal;
                 const Vec2 tangent(-n.y, n.x);
 
                 Vec2 vA(m_bodyState[ob.ia].vx, m_bodyState[ob.ia].vy);
                 Real wA = m_bodyState[ob.ia].w;
+                // B read mirrors the lane-wide null-index gather: a real row (>=0)
+                // is read for its velocity (dynamic OR kinematic push), a -1 (static/
+                // span) reads the zero identity -> vB=0, wB=0.
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.bIsBody) { vB = Vec2(m_bodyState[ob.ib].vx, m_bodyState[ob.ib].vy); wB = m_bodyState[ob.ib].w; }
+                if (ob.ib >= 0)
+                {
+                    const std::size_t ib = static_cast<std::size_t>(ob.ib);
+                    vB = Vec2(m_bodyState[ib].vx, m_bodyState[ib].vy); wB = m_bodyState[ib].w;
+                }
 
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
@@ -564,11 +574,13 @@ namespace Arcane
                 m_bodyState[ob.ia].vx = static_cast<float>(vA.x);
                 m_bodyState[ob.ia].vy = static_cast<float>(vA.y);
                 m_bodyState[ob.ia].w  = static_cast<float>(wA);
+                // dynB => ib >= 0 (a dynamic B always has a real awake row).
                 if (ob.dynB)
                 {
-                    m_bodyState[ob.ib].vx = static_cast<float>(vB.x);
-                    m_bodyState[ob.ib].vy = static_cast<float>(vB.y);
-                    m_bodyState[ob.ib].w  = static_cast<float>(wB);
+                    const std::size_t ib = static_cast<std::size_t>(ob.ib);
+                    m_bodyState[ib].vx = static_cast<float>(vB.x);
+                    m_bodyState[ib].vy = static_cast<float>(vB.y);
+                    m_bodyState[ib].w  = static_cast<float>(wB);
                 }
             }
         }
@@ -579,24 +591,34 @@ namespace Arcane
             const Real maxBiasVel = ctx.world->ContactPushMaxVelocity();
             const PhysicsWorld& w = *ctx.world;
             const std::uint32_t awakeCount = w.AwakeCount();
-            const std::uint32_t solverCount = awakeCount + w.KinematicCount();
 
             for (std::uint32_t ref : m_overflowRefs)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
-                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
+                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount);
                 const Vec2 n = cc.normal;
                 const Vec2 tangent(-n.y, n.x);
 
                 Vec2 vA(m_bodyState[ob.ia].vx, m_bodyState[ob.ia].vy);
                 Real wA = m_bodyState[ob.ia].w;
+                // B velocity read: real row (>=0) -> its velocity; -1 -> zero identity.
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.bIsBody) { vB = Vec2(m_bodyState[ob.ib].vx, m_bodyState[ob.ib].vy); wB = m_bodyState[ob.ib].w; }
+                if (ob.ib >= 0)
+                {
+                    const std::size_t ib = static_cast<std::size_t>(ob.ib);
+                    vB = Vec2(m_bodyState[ib].vx, m_bodyState[ib].vy); wB = m_bodyState[ib].w;
+                }
 
                 const Vec2 dpA(m_bodyState[ob.ia].dpx, m_bodyState[ob.ia].dpy);
                 const Real drA = m_bodyState[ob.ia].dq;
+                // Only a dynamic B integrates dp/dq; a kinematic/static B's deltas are
+                // zero (matching the lane-wide gather of a zero kinematic row / identity).
                 Vec2 dpB(Real(0), Real(0)); Real drB = Real(0);
-                if (ob.dynB) { dpB = Vec2(m_bodyState[ob.ib].dpx, m_bodyState[ob.ib].dpy); drB = m_bodyState[ob.ib].dq; }
+                if (ob.dynB)
+                {
+                    const std::size_t ib = static_cast<std::size_t>(ob.ib);
+                    dpB = Vec2(m_bodyState[ib].dpx, m_bodyState[ib].dpy); drB = m_bodyState[ib].dq;
+                }
 
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
@@ -642,11 +664,12 @@ namespace Arcane
                 m_bodyState[ob.ia].vx = static_cast<float>(vA.x);
                 m_bodyState[ob.ia].vy = static_cast<float>(vA.y);
                 m_bodyState[ob.ia].w  = static_cast<float>(wA);
-                if (ob.dynB)
+                if (ob.dynB)   // dynB => ib >= 0
                 {
-                    m_bodyState[ob.ib].vx = static_cast<float>(vB.x);
-                    m_bodyState[ob.ib].vy = static_cast<float>(vB.y);
-                    m_bodyState[ob.ib].w  = static_cast<float>(wB);
+                    const std::size_t ib = static_cast<std::size_t>(ob.ib);
+                    m_bodyState[ib].vx = static_cast<float>(vB.x);
+                    m_bodyState[ib].vy = static_cast<float>(vB.y);
+                    m_bodyState[ib].w  = static_cast<float>(wB);
                 }
             }
         }
@@ -656,18 +679,22 @@ namespace Arcane
             const Real threshold = ctx.world->RestitutionThreshold();
             const PhysicsWorld& w = *ctx.world;
             const std::uint32_t awakeCount = w.AwakeCount();
-            const std::uint32_t solverCount = awakeCount + w.KinematicCount();
             for (std::uint32_t ref : m_overflowRefs)
             {
                 ContactConstraint& cc = ctx.contacts[ref];
                 if (cc.restitution <= Real(0)) { continue; }
-                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
+                const OverflowBodies ob = OverflowSetup(cc, w, awakeCount);
                 const Vec2 n = cc.normal;
 
                 Vec2 vA(m_bodyState[ob.ia].vx, m_bodyState[ob.ia].vy);
                 Real wA = m_bodyState[ob.ia].w;
+                // B velocity read: real row (>=0) -> its velocity; -1 -> zero identity.
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.bIsBody) { vB = Vec2(m_bodyState[ob.ib].vx, m_bodyState[ob.ib].vy); wB = m_bodyState[ob.ib].w; }
+                if (ob.ib >= 0)
+                {
+                    const std::size_t ib = static_cast<std::size_t>(ob.ib);
+                    vB = Vec2(m_bodyState[ib].vx, m_bodyState[ib].vy); wB = m_bodyState[ib].w;
+                }
 
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
@@ -689,11 +716,12 @@ namespace Arcane
                 m_bodyState[ob.ia].vx = static_cast<float>(vA.x);
                 m_bodyState[ob.ia].vy = static_cast<float>(vA.y);
                 m_bodyState[ob.ia].w  = static_cast<float>(wA);
-                if (ob.dynB)
+                if (ob.dynB)   // dynB => ib >= 0
                 {
-                    m_bodyState[ob.ib].vx = static_cast<float>(vB.x);
-                    m_bodyState[ob.ib].vy = static_cast<float>(vB.y);
-                    m_bodyState[ob.ib].w  = static_cast<float>(wB);
+                    const std::size_t ib = static_cast<std::size_t>(ob.ib);
+                    m_bodyState[ib].vx = static_cast<float>(vB.x);
+                    m_bodyState[ib].vy = static_cast<float>(vB.y);
+                    m_bodyState[ib].w  = static_cast<float>(wB);
                 }
             }
         }
@@ -732,13 +760,13 @@ namespace Arcane
             PrepareContacts(ctx);
             PrepareJoints(ctx);
 
-            // 2) Body-state SoA: size to solverCount+1 (the extra slot = the
-            //    scatter-safe DUMMY) and sync world velocities into the DENSE rows
-            //    (zeroes dp/dq for awake dynamics; kinematics get a real velocity row;
-            //    the dummy tail stays zero from Resize). The dummy slot is index
-            //    `solverCount`; a redundant scatter there is harmless.
-            const std::int32_t dummyIndex = static_cast<std::int32_t>(solverCount);
-            m_bodyState.Resize(solverCount + 1u);
+            // 2) Body-state SoA: size to solverCount (NO dummy tail -- Task 3 dropped
+            //    the scatter-safe dummy slot for the null-index branch) and sync world
+            //    velocities into the DENSE rows (zeroes dp/dq for awake dynamics;
+            //    kinematics get a real velocity row). A read-only-B / padding lane now
+            //    packs kNullBodyIndex (-1): the gather injects a shared zero identity
+            //    row (no real-body memory touch) and the scatter skips it.
+            m_bodyState.Resize(solverCount);
             m_bodyState.SyncInCompacted(w);
 
             // 3) Group the emitted constraints by their PERSISTENT contact color
@@ -804,15 +832,16 @@ namespace Arcane
             // 4) Build one SoA batch list per color (warm-start already on the
             //    prepared ctx.contacts points). Build re-homes each body index onto
             //    the dense solverIndex space via the world's awake/kinematic index
-            //    maps; padding + static/span B lanes point at the dummy slot
-            //    (scatter-safe), and a kinematic B reads its real dense row.
+            //    maps; padding + static/span B lanes pack kNullBodyIndex (null-index
+            //    branch: zero-identity gather, no scatter), and a kinematic B reads
+            //    its real dense row.
             m_colorBatches.assign(static_cast<std::size_t>(kColorCount), {});
             for (std::size_t k = 0; k < static_cast<std::size_t>(kColorCount); ++k)
             {
                 const std::vector<std::uint32_t>& color = m_colorRefs[k];
                 if (color.empty()) { continue; }
                 m_colorBatches[k] = ContactConstraintSimd::Build(
-                    ctx.contacts, color.data(), static_cast<int>(color.size()), dummyIndex,
+                    ctx.contacts, color.data(), static_cast<int>(color.size()),
                     w.AwakeIndexData(), w.KinematicIndexData(), awakeCount,
                     kNotKinematic);
             }

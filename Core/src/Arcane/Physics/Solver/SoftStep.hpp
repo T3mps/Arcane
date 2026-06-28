@@ -82,8 +82,9 @@ namespace Arcane
             // ---- ISolver entry (the single per-Step driver) ----------------
             //
             // Runs the full TGS Soft pipeline as a LANE-WIDE COLORED-SoA solve:
-            //   sync world velocities -> BodyStateStore AoS rows (sized count+1, the +1 =
-            //     the scatter-safe dummy slot) ; PrepareContacts/PrepareJoints (scalar)
+            //   sync world velocities -> BodyStateStore AoS rows (sized solverCount;
+            //     read-only-B/padding lanes pack the null index, not a dummy slot) ;
+            //     PrepareContacts/PrepareJoints (scalar)
             //   -> bucket the touching contacts by their PERSISTENT contact color
             //      (assigned incrementally at create/destroy -- no per-step recolor)
             //   -> Build one ContactConstraintSimd batch list per color
@@ -186,10 +187,11 @@ namespace Arcane
             //
             // m_bodyState: AoS packed velocity + TGS dp/dq (BodyStateStore: 32-byte
             //   aligned rows), indexed by dense solverIndex (Phase C, Task 2), sized
-            //   to solverCount+1 (the extra slot is the SCATTER-SAFE DUMMY -- see
-            //   ContactConstraintSimd::Build). The lane-wide solve gathers/scatters
-            //   through it via .data(); world<->AoS sync happens at the Step boundary
-            //   + around joint passes.
+            //   to solverCount (Task 3 dropped the "+1" dummy slot for the null-index
+            //   branch -- a read-only-B/padding lane packs kNullBodyIndex and the
+            //   gather injects a zero identity; see ContactConstraintSimd::Build). The
+            //   lane-wide solve gathers/scatters through it via .data(); world<->AoS
+            //   sync happens at the Step boundary + around joint passes.
             // m_colorRefs/m_overflowRefs: per-step bucketing of the emitted
             //   constraints by their PERSISTENT contact color (Phase C, Task 5; the
             //   per-step greedy recolor + its m_edges/m_coloring scratch are gone).

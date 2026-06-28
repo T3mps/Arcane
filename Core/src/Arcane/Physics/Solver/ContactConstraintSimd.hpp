@@ -58,10 +58,11 @@
 // A color's contact count is rarely a multiple of `width`, so the final batch
 // has padding lanes. Build masks them to a pure no-op: invMass*/invInertia* = 0
 // (immovable -> zero effective impulse), both points invalid + their impulses 0,
-// and bodyIndex = 0 (a safe in-range gather slot -- the masked impulse is 0 so
-// the scatter writes nothing meaningful, but the gather must still hit a valid
-// address). The solve therefore runs uniformly across all `width` lanes without
-// a per-lane branch, and padding contributes nothing to any body.
+// and bodyIndexA/bodyIndexB = kNullBodyIndex (-1): the gather injects the shared
+// zero identity row for a -1 lane (no real-body memory touch) and the scatter
+// skips it, so a padding lane never reads or writes a real body. The solve
+// therefore runs uniformly across all `width` lanes without a per-lane branch,
+// and padding contributes nothing to any body.
 //
 // SCOPE: the struct + Build (a pure packer) + the lane-wide SimdSolve passes
 // (further down this file) that consume a batch list. SoftStep::Solve drives the
@@ -73,6 +74,7 @@
 // PRESENTATION-FREE + C++20-clean: std + the Simd width constant + Solver.hpp
 // (for ContactConstraint). No SDL3/NVRHI/Batcher2D. namespace Arcane::Physics.
 
+#include <cassert>
 #include <cstdint>
 #include <vector>
 
@@ -80,10 +82,31 @@
 #include <Arcane/Physics/Solver/BodyState.hpp>   // gather/scatter target (T5 solve -> AoS)
 #include <Arcane/Physics/Solver/Solver.hpp>       // ContactConstraint / ...Point
 
+// Backend intrinsics for the AoS->SoA transpose gather (Task 3, Gap 2.2). Simd.hpp
+// already pulls these in for the active backend; re-including under the SAME ladder
+// arm keeps the transpose helpers self-documenting. The transpose width is lane-
+// count-specific, so it lives here (a physics-SIMD helper) -- NOT as a portable
+// Arcane::Simd primitive.
+#if defined(__AVX2__) && !defined(ARCANE_SIMD_SCALAR)
+    #include <immintrin.h>
+#elif (defined(__ARM_NEON__) || defined(__ARM_NEON)) && !defined(ARCANE_SIMD_SCALAR)
+    #include <arm_neon.h>
+#endif
+
 namespace Arcane
 {
     namespace Physics
     {
+        // Null body-index sentinel (Task 3, Gap 2.2). A read-only B (static body
+        // or tile span) and every padding lane pack bodyIndexB/bodyIndexA == -1.
+        // The gather injects a shared zero identity row for a -1 lane (no real-body
+        // memory touch -- Box2D's B2_NULL_INDEX path), and the scatter skips it.
+        // This REPLACES the old scatter-safe dummy slot (a one-hot zero tail every
+        // read-only-B/padding lane wrote to) -- removing both that slot and the
+        // multithreaded write-contention it would create under the persistent
+        // solver region (Gap 1).
+        inline constexpr std::int32_t kNullBodyIndex = -1;
+
         // SoA batch of `kWidth` independent contacts -- one contact per lane,
         // up to 2 points per contact. Built scalar by Build(); loaded into f32w
         // at solve time (Task 5). All float lane arrays are alignas(32) for
@@ -128,10 +151,16 @@ namespace Arcane
             alignas(32) float invInertiaB[kWidth];  // body B inverse inertia
 
             // Body index lanes -> i32w gather/scatter of BodyState rows (AoS).
-            alignas(32) std::int32_t bodyIndexA[kWidth];   // A world slot
-            // B world slot, OR 0 when dynB==0 (read-only B: static/kinematic/span)
-            // so the unconditional T5 gather stays in-range; the value is
-            // discarded by the dynB mask.
+            // A dense solver row (>= 0), or kNullBodyIndex (-1) for a read-only B
+            // (static/span) / a padding lane: the gather injects a shared zero
+            // identity row for a -1 lane (no real-body memory touch) and the
+            // scatter skips it. A is ALWAYS an awake dynamic, so bodyIndexA is
+            // never -1 on a LIVE lane (only padding lanes set it to -1).
+            alignas(32) std::int32_t bodyIndexA[kWidth];   // A dense row (live), -1 (pad)
+            // B dense row, OR -1 (kNullBodyIndex) for a read-only B that has no
+            // dense row (static body or tile span) or a padding lane. A kinematic B
+            // keeps its REAL dense row (its authored velocity feeds the push term),
+            // so it is NOT -1 -- only static/span/padding are.
             alignas(32) std::int32_t bodyIndexB[kWidth];
 
             // Float mask: 1.0f iff B is a DYNAMIC body whose velocity the solve
@@ -161,20 +190,16 @@ namespace Arcane
             // invalid + impulses 0). It COPIES values only -- it does not compute
             // effective masses or soft coefficients.
             //
-            // SCATTER-SAFE DUMMY SLOT (Task 5). The lane-wide solve scatters body
-            // velocities back UNMASKED (AVX2 scatter serializes -> last write wins).
-            // A padding lane, or a read-only-B lane (static/kinematic/span), must
-            // NOT scatter to a real dynamic body's slot or it could clobber that
-            // body's freshly-solved velocity with a stale value. So the caller
-            // sizes BodyStateStore to solverCount+1 and passes dummyIndex =
-            // solverCount: a zeroed throwaway slot that ONLY padding + static/span B
-            // lanes target. The gather/scatter then run unconditionally and only the
-            // dummy slot ever takes a redundant write -- no real body is corrupted.
-            //
-            // dummyIndex DEFAULTS to 0 so existing Task-4 packer tests (which assert
-            // read-only-B / padding bodyIndexB == 0) keep their contract; the solver
-            // always passes a real dummy index. bodyIndexA is never dummied (A is
-            // always a dynamic body in the solver feed).
+            // NULL-INDEX BRANCH (Task 3, Gap 2.2 -- replaces the scatter-safe dummy
+            // slot). A padding lane, or a read-only-B lane that has no dense row
+            // (static body or tile span), packs bodyIndexB == kNullBodyIndex (-1).
+            // The lane-wide gather injects a shared zero identity row for a -1 lane
+            // (no real-body memory touch) and the scatter skips it, so such a lane
+            // never reads or writes a real body's row. This removes the old
+            // dummy-tail slot (and the one-hot write contention every read-only-B
+            // lane created on it) -- the caller now sizes BodyStateStore to
+            // solverCount (NO +1). bodyIndexA is never -1 on a LIVE lane (A is
+            // always an awake dynamic in the solver feed); only padding sets it -1.
             //
             // DENSE solverIndex MAPPING (Phase C, Task 2). Build re-homes the packed
             // body indices from WORLD SLOTS onto the solver's DENSE index space:
@@ -182,25 +207,24 @@ namespace Arcane
             //   * B dynamic                   -> awakeIndex[cc.bodyB] in [0,awakeCnt)
             //   * B kinematic (real body, invMassB==0, a live kinematic) ->
             //       awakeCount + kinematicIndex[cc.bodyB] in [awakeCnt, solverCnt)
-            //   * B static (real body, invMassB==0, NOT kinematic) -> dummyIndex
-            //   * B span (bodyBIsBody==false)                       -> dummyIndex
+            //   * B static (real body, invMassB==0, NOT kinematic) -> kNullBodyIndex
+            //   * B span (bodyBIsBody==false)                       -> kNullBodyIndex
             // The maps are passed as raw per-world-slot pointers (awakeIndex /
             // kinematicIndex, each sized world.Count()) so this header stays free of
             // a PhysicsWorld.hpp dependency. The kinematic-vs-static gate keys off
             // kinematicIndex[bodyB] != kNotKinematic: a kinematic B carries a REAL
             // dense row (its authored velocity drives the relative-velocity push
-            // term), a static B reads the zero dummy tail.
+            // term), a static B reads the zero identity via the null index.
             //
             // BACKWARD-COMPAT IDENTITY MODE. When awakeIndex == nullptr the packer
-            // falls back to the pre-Task-2 contract: bodyIndexA = cc.bodyA verbatim,
-            // bodyIndexB = cc.bodyB (real body) or dummyIndex (span). This keeps the
-            // Task-4 packer-contract tests (which pack already-dense small indices and
-            // assert bodyIndex == bodyA/bodyB) compiling + passing unchanged.
+            // falls back to the pre-Phase-C contract: bodyIndexA = cc.bodyA verbatim,
+            // bodyIndexB = cc.bodyB (any real body) or kNullBodyIndex (span). This
+            // keeps the packer-contract tests (which pack already-dense small indices
+            // and assert bodyIndex == bodyA/bodyB) compiling + passing unchanged.
             //
             // refs may be null iff count == 0.
             static std::vector<ContactConstraintSimd>
             Build(const ContactConstraint* ccs, const std::uint32_t* refs, int count,
-                  std::int32_t dummyIndex = 0,
                   const std::uint32_t* awakeIndex = nullptr,
                   const std::uint32_t* kinematicIndex = nullptr,
                   std::uint32_t awakeCount = 0u,
@@ -227,12 +251,12 @@ namespace Arcane
                         const int g = base + L;
                         if (g < count)
                         {
-                            PackLane(dst, L, ccs[refs[g]], dummyIndex,
+                            PackLane(dst, L, ccs[refs[g]],
                                      awakeIndex, kinematicIndex, awakeCount, kNotKinematic);
                         }
                         else
                         {
-                            PadLane(dst, L, dummyIndex);
+                            PadLane(dst, L);
                         }
                     }
                 }
@@ -242,13 +266,13 @@ namespace Arcane
 
         private:
             // Copy one source ContactConstraint into lane L (the live path).
-            // dummyIndex is the scatter-safe throwaway slot a read-only B points at.
+            // A read-only B with no dense row (static/span) packs kNullBodyIndex (the
+            // gather injects the zero identity; the scatter skips it).
             // awakeIndex / kinematicIndex (per-world-slot maps, or nullptr for the
             // identity/back-compat mode) + awakeCount + kNotKinematic re-home the
             // packed body indices onto the dense solverIndex space (Phase C, Task 2).
             static void PackLane(ContactConstraintSimd& dst, int L,
                                  const ContactConstraint& cc,
-                                 std::int32_t dummyIndex,
                                  const std::uint32_t* awakeIndex,
                                  const std::uint32_t* kinematicIndex,
                                  std::uint32_t awakeCount,
@@ -280,12 +304,11 @@ namespace Arcane
                 const bool dyn = cc.bodyBIsBody && cc.invMassB > Real(0);
                 dst.dynB[L]         = dyn ? 1.0f : 0.0f;
 
-                // bodyIndexB must be an in-range gather slot on EVERY lane (the T5
-                // read of B's velocity is an UNMASKED gather) AND must not let a
-                // read-only B's UNMASKED scatter clobber a real DYNAMIC body's
-                // freshly-solved velocity. The dense mapping (Phase C, Task 2) splits
-                // the read-only-B case in two on the kinematic-vs-static gate -- THE
-                // SUBTLEST POINT OF THE TASK:
+                // bodyIndexB is either a real dense row (gather AND/OR scatter a real
+                // body) or kNullBodyIndex (-1: gather the zero identity, never
+                // scatter). The dense mapping (Phase C, Task 2) splits the read-only-B
+                // case in two on the kinematic-vs-static gate -- THE SUBTLEST POINT
+                // OF THE TASK:
                 //   * B DYNAMIC: dense awake row awakeIndex[cc.bodyB] -- its velocity
                 //     is gathered AND scattered (island unity => an awake A's touching
                 //     dynamic B is also awake, so it has a real awake row).
@@ -298,22 +321,21 @@ namespace Arcane
                 //     (select(dynB=0, new, gathered)), so the kinematic row is
                 //     preserved -- idempotent even if several lanes share it, and a
                 //     kinematic body is never a dynamic A, so it never collides with
-                //     an updated A slot. A mis-gate that fell through to the dummy
-                //     here would LOSE the push (zero vB).
+                //     an updated A slot. Packing -1 here would LOSE the push (zero vB).
                 //   * B STATIC (real body, invMassB==0, kinematicIndex == kNot) OR a
-                //     tile span (bodyBIsBody == false): the scatter-safe DUMMY slot
-                //     (zero velocity). A static contributes a zero relative velocity,
-                //     and the gather must still hit a valid address; the dummy tail
-                //     is exactly that. Using a stale kinematicIndex for a static B
-                //     would gather garbage -- the kNotKinematic sentinel guards it.
+                //     tile span (bodyBIsBody == false): kNullBodyIndex. The gather
+                //     injects the zero identity (a static contributes a zero relative
+                //     velocity) with NO real-body memory touch, and the scatter skips
+                //     the lane. Using a stale kinematicIndex for a static B would
+                //     gather garbage -- the kNotKinematic sentinel guards it.
                 // In the identity/back-compat mode (awakeIndex == nullptr) we keep the
-                // pre-Task-2 contract: cc.bodyB verbatim for any real body, dummyIndex
-                // for a span. A is never dummied. dummyIndex defaults to 0.
+                // pre-Phase-C contract: cc.bodyB verbatim for any real body,
+                // kNullBodyIndex for a span. A is never -1 on a live lane.
                 if (awakeIndex == nullptr)
                 {
                     dst.bodyIndexB[L] = cc.bodyBIsBody
                                             ? static_cast<std::int32_t>(cc.bodyB)
-                                            : dummyIndex;
+                                            : kNullBodyIndex;
                 }
                 else if (dyn)
                 {
@@ -325,13 +347,14 @@ namespace Arcane
                 }
                 else
                 {
-                    // static (zero tail) or span. NOTE: a non-idiomatic moving
-                    // ZERO-invMass *dynamic* B (BodyType::Dynamic with invMass==0) is
-                    // not dynamic here (dyn==false) and is not in the kinematic set,
-                    // so it lands HERE -> the zero dummy tail. Its velocity is NOT
-                    // gathered and its push is dropped BY DESIGN; use a Kinematic body
-                    // for an infinite-mass mover.
-                    dst.bodyIndexB[L] = dummyIndex;
+                    // static or span -> null index (zero identity gather, no scatter).
+                    // NOTE: a non-idiomatic moving ZERO-invMass *dynamic* B
+                    // (BodyType::Dynamic with invMass==0) is not dynamic here
+                    // (dyn==false) and is not in the kinematic set, so it lands HERE
+                    // -> the zero identity. Its velocity is NOT gathered and its push
+                    // is dropped BY DESIGN; use a Kinematic body for an infinite-mass
+                    // mover.
+                    dst.bodyIndexB[L] = kNullBodyIndex;
                 }
 
                 for (int p = 0; p < 2; ++p)
@@ -364,13 +387,10 @@ namespace Arcane
 
             // Mask a whole lane to a no-op (a padding lane in the tail batch).
             // Zero inv-mass/inertia (immovable -> zero impulse), both points
-            // invalid, BOTH body indices the scatter-safe dummy slot (the gather
-            // must hit a valid slot; the impulse is 0 so the scatter writes 0 to
-            // the throwaway dummy -- never a real body). dummyIndex defaults to 0
-            // (the Task-4 padding contract) and is the world.Count() throwaway in
-            // the solver feed.
-            static void PadLane(ContactConstraintSimd& dst, int L,
-                                std::int32_t dummyIndex)
+            // invalid, BOTH body indices kNullBodyIndex (-1): the gather injects the
+            // zero identity (no real-body memory touch) and the scatter skips the
+            // lane, so a padding lane never reads or writes a real body.
+            static void PadLane(ContactConstraintSimd& dst, int L)
             {
                 dst.normalX[L]      = 0.0f;
                 dst.normalY[L]      = 0.0f;
@@ -383,8 +403,8 @@ namespace Arcane
                 dst.invInertiaA[L]  = 0.0f;
                 dst.invMassB[L]     = 0.0f;
                 dst.invInertiaB[L]  = 0.0f;
-                dst.bodyIndexA[L]   = dummyIndex;
-                dst.bodyIndexB[L]   = dummyIndex;
+                dst.bodyIndexA[L]   = kNullBodyIndex;
+                dst.bodyIndexB[L]   = kNullBodyIndex;
                 dst.dynB[L]         = 0.0f;
                 for (int p = 0; p < 2; ++p)
                 {
@@ -416,11 +436,13 @@ namespace Arcane
         // ====================================================================
         //
         // Each pass takes the per-color batch vector + the solver's BodyStateStore
-        // (AoS rows, accessed via .data()) and processes ALL kWidth lanes of every batch (padding/read-only-B lanes
-        // are masked no-ops by construction -- zero inv-mass and the dummy slot).
-        // Graph coloring guarantees no two LIVE lanes in a batch share a dynamic
-        // body, so the gather -> math -> scatter is hazard-free; the only redundant
-        // scatter lands on the dummy slot (see Build's SCATTER-SAFE DUMMY note).
+        // (AoS rows, accessed via .data()) and processes ALL kWidth lanes of every
+        // batch (padding/read-only-B lanes are masked no-ops by construction -- zero
+        // inv-mass and the kNullBodyIndex null-index branch). Graph coloring
+        // guarantees no two LIVE lanes in a batch share a dynamic body, so the
+        // gather -> math -> scatter is hazard-free; a -1 (null) lane gathers the
+        // shared zero identity row and is never scattered (see Build's NULL-INDEX
+        // BRANCH note).
         //
         // LOCKSTEP: this SimdSolve trio (WarmStart / SolveNormalAndFriction /
         // ApplyRestitution) must match the scalar overflow trio Overflow{WarmStart/
@@ -465,21 +487,99 @@ namespace Arcane
 
             // Gathered body-state from the AoS store: one f32w per field.
             struct BodyStateW { f32w vx, vy, w, dpx, dpy, dq; };
+            // Velocity-only gather (WarmStart + ApplyRestitution read no dp/dq).
+            struct BodyVelW { f32w vx, vy, w; };
 
-            // Naive per-lane scalar gather of all 6 velocity/delta fields from
-            // the AoS BodyState rows. idx holds the dense solverIndex per lane.
-            // We store idx to an aligned scratch, loop over lanes, load each row,
-            // then pack the 6 fields back into f32w via aligned load. The lanes are
-            // independent (graph-colored), so the order is irrelevant.
+            // Shared zero IDENTITY row a null (-1) lane gathers, instead of touching
+            // a real body's memory (Box2D's B2_NULL_INDEX path). 32-byte aligned by
+            // BodyState's alignas(32), so the AVX2 aligned row load over it is valid.
+            // `inline constexpr` -> one object across TUs; address taken at runtime.
+            inline constexpr BodyState kIdentityRow{};
+
+            // -----------------------------------------------------------------
+            // AoS->SoA TRANSPOSE GATHER (Task 3, Gap 2.2 -- the single-thread win)
+            // -----------------------------------------------------------------
+            // Box2D's b2GatherBodies model: load each lane's WHOLE 32-byte body row
+            // with an aligned vector load (prefetchable, one cache line per 2 bodies),
+            // then transpose AoS rows -> SoA field vectors. This replaces the prior
+            // naive per-lane scalar field copy (six dependent scalar reads per body)
+            // and the old hardware-gather plan. A -1 (null) lane selects the shared
+            // zero identity row BEFORE the load, so it never reads states[-1].
+            //
+            // The transpose only REORDERS bits (it computes nothing), so the gathered
+            // lane values are EXACTLY the stored floats -> byte-identical to the naive
+            // gather and lane-width invariance holds. The transpose width is lane-
+            // count-specific, so it is a backend #if here (NOT a portable Simd op).
+            // The scalar (oracle) + NEON + fallback paths use a plain per-lane read.
+
+            // Per-lane row pointers with the null-index identity select. Fills p[W]
+            // (idx >= 0 -> &states[idx]; -1 -> &kIdentityRow) and returns ix[] too.
+            ARCANE_SIMD_INLINE void GatherRowPtrs(const BodyState* states, i32w idx,
+                                                  const BodyState** p) noexcept
+            {
+                constexpr int W = ContactConstraintSimd::kWidth;
+                alignas(32) std::int32_t ix[W];
+                istore(ix, idx);
+                for (int L = 0; L < W; ++L)
+                {
+                    p[L] = (ix[L] >= 0) ? (states + ix[L]) : &kIdentityRow;
+                }
+            }
+
+            // Full gather (vx,vy,w,dpx,dpy,dq) -- feeds SolveNormalAndFriction.
             ARCANE_SIMD_INLINE BodyStateW GatherBodies(const BodyState* states, i32w idx) noexcept
             {
                 constexpr int W = ContactConstraintSimd::kWidth;
-                alignas(32) std::int32_t idxBuf[W];
-                istore(idxBuf, idx);
+                const BodyState* p[W];
+                GatherRowPtrs(states, idx, p);
+
+#if defined(__AVX2__) && !defined(ARCANE_SIMD_SCALAR)
+                // Eight aligned 256-bit row loads, then an 8x8 AoS->SoA transpose
+                // (_mm256_unpacklo/hi_ps + _mm256_shuffle_ps + _mm256_permute2f128_ps).
+                assert((reinterpret_cast<std::uintptr_t>(p[0]) & 31u) == 0u);
+                const __m256 r0 = _mm256_load_ps(reinterpret_cast<const float*>(p[0]));
+                const __m256 r1 = _mm256_load_ps(reinterpret_cast<const float*>(p[1]));
+                const __m256 r2 = _mm256_load_ps(reinterpret_cast<const float*>(p[2]));
+                const __m256 r3 = _mm256_load_ps(reinterpret_cast<const float*>(p[3]));
+                const __m256 r4 = _mm256_load_ps(reinterpret_cast<const float*>(p[4]));
+                const __m256 r5 = _mm256_load_ps(reinterpret_cast<const float*>(p[5]));
+                const __m256 r6 = _mm256_load_ps(reinterpret_cast<const float*>(p[6]));
+                const __m256 r7 = _mm256_load_ps(reinterpret_cast<const float*>(p[7]));
+
+                const __m256 t0 = _mm256_unpacklo_ps(r0, r1);
+                const __m256 t1 = _mm256_unpackhi_ps(r0, r1);
+                const __m256 t2 = _mm256_unpacklo_ps(r2, r3);
+                const __m256 t3 = _mm256_unpackhi_ps(r2, r3);
+                const __m256 t4 = _mm256_unpacklo_ps(r4, r5);
+                const __m256 t5 = _mm256_unpackhi_ps(r4, r5);
+                const __m256 t6 = _mm256_unpacklo_ps(r6, r7);
+                const __m256 t7 = _mm256_unpackhi_ps(r6, r7);
+
+                const __m256 s0 = _mm256_shuffle_ps(t0, t2, 0x44);
+                const __m256 s1 = _mm256_shuffle_ps(t0, t2, 0xEE);
+                const __m256 s2 = _mm256_shuffle_ps(t1, t3, 0x44);
+                const __m256 s3 = _mm256_shuffle_ps(t1, t3, 0xEE);
+                const __m256 s4 = _mm256_shuffle_ps(t4, t6, 0x44);
+                const __m256 s5 = _mm256_shuffle_ps(t4, t6, 0xEE);
+                const __m256 s6 = _mm256_shuffle_ps(t5, t7, 0x44);
+                const __m256 s7 = _mm256_shuffle_ps(t5, t7, 0xEE);
+
+                BodyStateW r;
+                r.vx  = f32w{ _mm256_permute2f128_ps(s0, s4, 0x20) }; // col0 = vx
+                r.vy  = f32w{ _mm256_permute2f128_ps(s1, s5, 0x20) }; // col1 = vy
+                r.w   = f32w{ _mm256_permute2f128_ps(s2, s6, 0x20) }; // col2 = w
+                r.dpx = f32w{ _mm256_permute2f128_ps(s3, s7, 0x20) }; // col3 = dpx
+                r.dpy = f32w{ _mm256_permute2f128_ps(s0, s4, 0x31) }; // col4 = dpy
+                r.dq  = f32w{ _mm256_permute2f128_ps(s1, s5, 0x31) }; // col5 = dq
+                return r;
+#else
+                // Scalar oracle (W==1) + NEON + fallback: plain per-lane read. A pure
+                // reorder -> bit-identical to the AVX2 transpose and to the stored
+                // floats (the scalar path IS the lane-width-invariance oracle).
                 alignas(32) float tvx[W], tvy[W], tw[W], tdpx[W], tdpy[W], tdq[W];
                 for (int L = 0; L < W; ++L)
                 {
-                    const BodyState& s = states[idxBuf[L]];
+                    const BodyState& s = *p[L];
                     tvx[L]  = s.vx;  tvy[L]  = s.vy;  tw[L]  = s.w;
                     tdpx[L] = s.dpx; tdpy[L] = s.dpy; tdq[L] = s.dq;
                 }
@@ -487,12 +587,66 @@ namespace Arcane
                 r.vx  = load(tvx);  r.vy  = load(tvy);  r.w  = load(tw);
                 r.dpx = load(tdpx); r.dpy = load(tdpy); r.dq = load(tdq);
                 return r;
+#endif
             }
 
-            // Scatter velocity (vx, vy, w) back to the AoS rows. Only writes lanes
-            // where write mask is true (skip-on-false: non-dynamic B / dummy lanes
-            // never update a real row). Uses a store-to-temp / scalar write-back so
-            // no actual scatter instruction is needed.
+            // Velocity-only gather (vx,vy,w) -- the WarmStart/ApplyRestitution passes
+            // read no dp/dq, so this loads only each row's low 128 bits and uses a
+            // reduced transpose (fewer shuffles, half the row bytes). Same null-index
+            // identity select; same byte-identical pure-reorder guarantee.
+            ARCANE_SIMD_INLINE BodyVelW GatherVel(const BodyState* states, i32w idx) noexcept
+            {
+                constexpr int W = ContactConstraintSimd::kWidth;
+                const BodyState* p[W];
+                GatherRowPtrs(states, idx, p);
+
+#if defined(__AVX2__) && !defined(ARCANE_SIMD_SCALAR)
+                // Load the low __m128 (vx,vy,w,dpx) of each row; build 256-bit lane
+                // pairs (lanes 0-3 | 4-7), then unpack + shuffle to vx/vy/w. No
+                // permute2f128 needed (insertf128 already placed the high lanes).
+                assert((reinterpret_cast<std::uintptr_t>(p[0]) & 15u) == 0u);
+                const __m128 m0 = _mm_load_ps(reinterpret_cast<const float*>(p[0]));
+                const __m128 m1 = _mm_load_ps(reinterpret_cast<const float*>(p[1]));
+                const __m128 m2 = _mm_load_ps(reinterpret_cast<const float*>(p[2]));
+                const __m128 m3 = _mm_load_ps(reinterpret_cast<const float*>(p[3]));
+                const __m128 m4 = _mm_load_ps(reinterpret_cast<const float*>(p[4]));
+                const __m128 m5 = _mm_load_ps(reinterpret_cast<const float*>(p[5]));
+                const __m128 m6 = _mm_load_ps(reinterpret_cast<const float*>(p[6]));
+                const __m128 m7 = _mm_load_ps(reinterpret_cast<const float*>(p[7]));
+
+                const __m256 a04 = _mm256_insertf128_ps(_mm256_castps128_ps256(m0), m4, 1);
+                const __m256 a15 = _mm256_insertf128_ps(_mm256_castps128_ps256(m1), m5, 1);
+                const __m256 a26 = _mm256_insertf128_ps(_mm256_castps128_ps256(m2), m6, 1);
+                const __m256 a37 = _mm256_insertf128_ps(_mm256_castps128_ps256(m3), m7, 1);
+
+                const __m256 u0 = _mm256_unpacklo_ps(a04, a15); // [vx,vx,vy,vy | ...]
+                const __m256 u1 = _mm256_unpackhi_ps(a04, a15); // [w,w,dpx,dpx | ...]
+                const __m256 u2 = _mm256_unpacklo_ps(a26, a37);
+                const __m256 u3 = _mm256_unpackhi_ps(a26, a37);
+
+                BodyVelW r;
+                r.vx = f32w{ _mm256_shuffle_ps(u0, u2, 0x44) }; // vx[0..7]
+                r.vy = f32w{ _mm256_shuffle_ps(u0, u2, 0xEE) }; // vy[0..7]
+                r.w  = f32w{ _mm256_shuffle_ps(u1, u3, 0x44) }; // w[0..7]
+                return r;
+#else
+                alignas(32) float tvx[W], tvy[W], tw[W];
+                for (int L = 0; L < W; ++L)
+                {
+                    const BodyState& s = *p[L];
+                    tvx[L] = s.vx; tvy[L] = s.vy; tw[L] = s.w;
+                }
+                return BodyVelW{ load(tvx), load(tvy), load(tw) };
+#endif
+            }
+
+            // Scatter velocity (vx, vy, w) back to the AoS rows. Only writes a lane
+            // where the write mask is true AND the index is non-null (skip-on-false:
+            // a non-dynamic B, or a -1 null lane, never updates a real row). We write
+            // only the three velocity fields per row (NOT a whole-row store) so the
+            // body's dp/dq -- integrated separately -- are left untouched. Uses a
+            // store-to-temp / scalar write-back (AVX2 has no scatter instruction; and
+            // a per-field masked write is the natural form for partial-row writes).
             ARCANE_SIMD_INLINE void ScatterVel(BodyState* states, i32w idx,
                                                f32w vx, f32w vy, f32w w, b32w write) noexcept
             {
@@ -504,7 +658,7 @@ namespace Arcane
                 store(wm, select(write, splat(1.0f), setzero()));
                 for (int L = 0; L < W; ++L)
                 {
-                    if (wm[L] != 0.0f)
+                    if (wm[L] != 0.0f && idxBuf[L] >= 0)
                     {
                         states[idxBuf[L]].vx = tvx[L];
                         states[idxBuf[L]].vy = tvy[L];
@@ -540,8 +694,9 @@ namespace Arcane
                     const f32w iMb = load(cc.invMassB);
                     const f32w iIb = load(cc.invInertiaB);
 
-                    const BodyStateW sA = GatherBodies(states, ia);
-                    const BodyStateW sB = GatherBodies(states, ib);
+                    // WarmStart consumes velocity only (no dp/dq) -> velocity gather.
+                    const BodyVelW sA = GatherVel(states, ia);
+                    const BodyVelW sB = GatherVel(states, ib);
                     f32w vAx = sA.vx, vAy = sA.vy, wA = sA.w;
                     f32w vBx = sB.vx, vBy = sB.vy, wB = sB.w;
 
@@ -774,8 +929,9 @@ namespace Arcane
                     const f32w iMb = load(cc.invMassB);
                     const f32w iIb = load(cc.invInertiaB);
 
-                    const BodyStateW sA = GatherBodies(states, ia);
-                    const BodyStateW sB = GatherBodies(states, ib);
+                    // Restitution consumes velocity only (no dp/dq) -> velocity gather.
+                    const BodyVelW sA = GatherVel(states, ia);
+                    const BodyVelW sB = GatherVel(states, ib);
                     f32w vAx = sA.vx, vAy = sA.vy, wA = sA.w;
                     f32w vBx = sB.vx, vBy = sB.vy, wB = sB.w;
 

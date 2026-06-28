@@ -382,12 +382,11 @@ namespace
         // bodyIndexB mirrors cc.bodyB for ANY real body B (bodyBIsBody) -- dynamic
         // OR read-only (kinematic/static): a read-only B's velocity must still be
         // gatherable (a kinematic plate's authored velocity feeds the push). Only a
-        // tile span (bodyBIsBody==false, cc.bodyB==kInvalidSlot) points at the
-        // scatter-safe dummy (here the default 0). The scatter writes back the
-        // unchanged gathered value for a read-only B, so its slot is preserved.
+        // tile span (bodyBIsBody==false, cc.bodyB==kInvalidSlot) packs kNullBodyIndex
+        // (-1): the gather injects a zero identity row for it, the scatter skips it.
         CHECK(b.bodyIndexB[L]  == (cc.bodyBIsBody
                                        ? static_cast<std::int32_t>(cc.bodyB)
-                                       : 0));
+                                       : kNullBodyIndex));
 
         for (int p = 0; p < 2; ++p)
         {
@@ -472,11 +471,11 @@ TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build handles 1-point + static-B 
     CHECK(batches[0].count == 2);
 
     // Lane 0: 1-point contact against a tile SPAN (bodyBIsBody=false, bodyB=9 but
-    // NOT a real body). B is read-only (dynB 0) AND not a real body, so Build
-    // points the packed index at the dummy (default 0). 2nd point absent.
+    // NOT a real body). B is read-only (dynB 0) AND not a real body, so Build packs
+    // the null index (-1: zero-identity gather, no scatter). 2nd point absent.
     CheckLaneMatches(batches[0], 0, ccs[0]);
-    CHECK(batches[0].dynB[0] == Approx(0.0f));           // span fixture
-    CHECK(batches[0].bodyIndexB[0] == 0);                // span -> dummy (default 0)
+    CHECK(batches[0].dynB[0] == Approx(0.0f));               // span fixture
+    CHECK(batches[0].bodyIndexB[0] == kNullBodyIndex);       // span -> null index
     CHECK(batches[0].points[1].pointValid[0] == Approx(0.0f));  // 2nd point absent
 
     // Lane 1: 2-point contact, B a REAL kinematic body (bodyBIsBody=true,
@@ -487,16 +486,15 @@ TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build handles 1-point + static-B 
     CHECK(batches[0].bodyIndexB[1] == 4);                // real kinematic slot, gatherable
 }
 
-TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build clamps a tile-span "
-          "(kInvalidSlot) bodyIndexB to 0", "[physics]")
+TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build packs a tile-span "
+          "(kInvalidSlot) bodyIndexB as the null index", "[physics]")
 {
     // A tile-span virtual fixture contact: B is NOT a body (bodyBIsBody=false)
-    // and cc.bodyB == kInvalidSlot == 0xFFFFFFFF, which casts to -1. Build MUST
-    // clamp the packed bodyIndexB to 0 (an in-range gather slot) -- NOT leave it
-    // at -1, which would make T5's unconditional AVX2 gather read base[-1] (an
-    // out-of-bounds heap under-read) every sub-step. dynB==0 discards whatever
-    // is gathered, so 0 is harmless and in-range. This pins the contract the
-    // finite-slot static-B case above does not exercise.
+    // and cc.bodyB == kInvalidSlot == 0xFFFFFFFF. Build MUST pack the packed
+    // bodyIndexB as kNullBodyIndex (-1): the lane-wide gather then injects a shared
+    // zero IDENTITY row for the -1 lane (no real-body memory touch -- NOT a
+    // states[-1] under-read), and the scatter skips it. dynB==0 (read-only). This
+    // pins the contract the finite-slot static-B case above does not exercise.
     ContactConstraint span = MakeCC(/*seed=*/5.0f, /*pts=*/1, /*bA=*/2u,
                                     /*bB=*/kInvalidSlot, /*bIsBody=*/false,
                                     /*invMB=*/0.0f);
@@ -511,15 +509,15 @@ TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build clamps a tile-span "
     REQUIRE(batches.size() == 1u);
     CHECK(batches[0].count == 1);
 
-    // The crux: B is read-only -> dynB 0 AND bodyIndexB clamped to 0 (NOT -1).
+    // The crux: B is read-only -> dynB 0 AND bodyIndexB == kNullBodyIndex (-1).
     CHECK(batches[0].dynB[0]       == Approx(0.0f));
-    CHECK(batches[0].bodyIndexB[0] == 0);
+    CHECK(batches[0].bodyIndexB[0] == kNullBodyIndex);
 
-    // Sanity: bodyIndexA is the real (dynamic) A slot, untouched by the clamp.
+    // Sanity: bodyIndexA is the real (dynamic) A slot, never the null index.
     CHECK(batches[0].bodyIndexA[0] == 2);
 
     // The rest of the lane still mirrors the source (CheckLaneMatches now expects
-    // the clamped bodyIndexB for any read-only B).
+    // the null index for any span B).
     CheckLaneMatches(batches[0], 0, span);
 }
 
@@ -562,15 +560,16 @@ TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build masks partial-batch padding
     }
 
     // (c) padding lanes [live, W) are a lane-wide no-op: zero inv-mass on BOTH
-    // bodies, both points invalid + impulses zero, body index a safe 0.
+    // bodies, both points invalid + impulses zero, both body indices the null
+    // index (-1: zero-identity gather, scatter skipped).
     for (int L = live; L < W; ++L)
     {
         CHECK(tail.invMassA[L]    == Approx(0.0f));
         CHECK(tail.invInertiaA[L] == Approx(0.0f));
         CHECK(tail.invMassB[L]    == Approx(0.0f));
         CHECK(tail.invInertiaB[L] == Approx(0.0f));
-        CHECK(tail.bodyIndexA[L]  == 0);
-        CHECK(tail.bodyIndexB[L]  == 0);
+        CHECK(tail.bodyIndexA[L]  == kNullBodyIndex);
+        CHECK(tail.bodyIndexB[L]  == kNullBodyIndex);
         CHECK(tail.dynB[L]        == Approx(0.0f));
         for (int p = 0; p < 2; ++p)
         {
@@ -602,10 +601,10 @@ TEST_CASE("PhysicsSimd: ContactConstraintSimd::Build masks partial-batch padding
 //
 //   * SCATTER-CORRUPTION GUARD: a color-batch where body slot 0 is a real DYNAMIC
 //     body sharing the batch with PADDING lanes (and a read-only-B lane) must NOT
-//     let those lanes clobber body 0's solved velocity. With the dummy slot at
-//     world.Count(), padding scatters there, not to body 0; and a read-only B
-//     scatters back its unchanged value. We assert body 0's velocity equals the
-//     scalar-oracle value (a corruption would zero/stale it).
+//     let those lanes clobber body 0's solved velocity. Padding lanes pack the
+//     null index (-1) and are SKIPPED by the scatter; a read-only B (dynB=0) is
+//     never scattered. We assert body 0's velocity equals the scalar-oracle value
+//     (a corruption would zero/stale it).
 //
 // All three drive the header-only SimdSolve passes directly (no PhysicsWorld), so
 // they pin the ported math in isolation. Tag [physics][simd].
@@ -770,7 +769,6 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
     // (2*N dynamic slots, all disjoint) so coloring puts them ALL in one color.
     const int N = W; // exactly one full wide batch
     const std::uint32_t bodyCount = static_cast<std::uint32_t>(2 * N);
-    const std::int32_t dummyIndex = static_cast<std::int32_t>(bodyCount);
 
     std::vector<ContactConstraint> ccs;
     std::vector<std::uint32_t> refs, dynSlots;
@@ -783,9 +781,9 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
         dynSlots.push_back(bA); dynSlots.push_back(bB);
     }
 
-    // Seed a BodyStateStore (+1 dummy slot) with known velocities.
+    // Seed a BodyStateStore (no dummy slot -- null-index handles read-only/padding).
     auto seedSoA = [&](BodyStateStore& bs) {
-        bs.Resize(bodyCount + 1u);
+        bs.Resize(bodyCount);
         for (std::uint32_t b = 0; b < bodyCount; ++b)
         {
             bs[b].vx = 0.5f * static_cast<float>(b) - 1.0f;
@@ -804,7 +802,7 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
     {
         std::vector<ContactConstraint> wccs = ccs;   // local copy (impulses mutate)
         std::vector<ContactConstraintSimd> batches =
-            ContactConstraintSimd::Build(wccs.data(), refs.data(), N, dummyIndex);
+            ContactConstraintSimd::Build(wccs.data(), refs.data(), N);
         REQUIRE(batches.size() == 1u);
         RunLaneWide(batches, bsWide, substeps, h, maxBiasVel, threshold, dynSlots);
     }
@@ -820,7 +818,7 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
         {
             std::uint32_t one = static_cast<std::uint32_t>(i);
             std::vector<ContactConstraintSimd> b1 =
-                ContactConstraintSimd::Build(nccs.data(), &one, 1, dummyIndex);
+                ContactConstraintSimd::Build(nccs.data(), &one, 1);
             REQUIRE(b1.size() == 1u);
             batches.push_back(b1[0]);
         }
@@ -869,16 +867,16 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
     //            "clamp read-only/padding index to 0" would clobber),
     //   lane 1 = a read-only-B contact (B kinematic) whose A is a different dynamic,
     //   lanes 2..W-1 = PADDING.
-    // With the dummy slot at world.Count(), padding + the read-only B's WRITE-BACK
-    // never touch slot 0. We solve the batch and assert body 0's velocity equals
-    // the scalar-oracle value (a corruption would zero/stale it).
+    // Padding lanes pack the null index (-1) and are skipped by the scatter; the
+    // read-only B (dynB=0) is never scattered. So neither can touch slot 0. We
+    // solve the batch and assert body 0's velocity equals the scalar-oracle value
+    // (a corruption would zero/stale it).
     constexpr int W = ContactConstraintSimd::kWidth;
     if (W < 2) { SUCCEED("scalar backend: single lane, no padding to corrupt"); return; }
 
     // Bodies: slot 0 (dyn A of lane0), slot 1 (dyn B of lane0), slot 2 (dyn A of
-    // lane1), slot 3 (kinematic B of lane1, invMassB=0). dummy = slot 4.
+    // lane1), slot 3 (kinematic B of lane1, invMassB=0). No dummy slot anymore.
     const std::uint32_t bodyCount = 4u;
-    const std::int32_t dummyIndex = static_cast<std::int32_t>(bodyCount);
 
     std::vector<ContactConstraint> ccs;
     ccs.push_back(MakePreparedContact(0u, 1u, 1.0f));            // lane 0: dyn-dyn, A = slot 0
@@ -889,7 +887,7 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
     std::vector<std::uint32_t> dynSlots = { 0u, 1u, 2u };       // slot 3 is kinematic (read-only)
 
     auto seedSoA = [&](BodyStateStore& bs) {
-        bs.Resize(bodyCount + 1u);
+        bs.Resize(bodyCount);
         bs[0].vx = 3.0f;  bs[0].vy = 50.0f; bs[0].w = 0.1f;     // body 0: a distinctive velocity
         bs[1].vx = -1.0f; bs[1].vy = -5.0f; bs[1].w = 0.0f;
         bs[2].vx = 2.0f;  bs[2].vy = 30.0f; bs[2].w = 0.05f;
@@ -905,7 +903,7 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
     {
         std::vector<ContactConstraint> wccs = ccs;
         std::vector<ContactConstraintSimd> batches =
-            ContactConstraintSimd::Build(wccs.data(), refs.data(), 2, dummyIndex);
+            ContactConstraintSimd::Build(wccs.data(), refs.data(), 2);
         REQUIRE(batches.size() == 1u);
         REQUIRE(batches[0].count == 2);     // 2 live lanes, the rest padding
         RunLaneWide(batches, bsWide, substeps, h, maxBiasVel, threshold, dynSlots);
@@ -940,6 +938,66 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
     CHECK(bsWide[3].vx == Approx(7.0f));
     CHECK(bsWide[3].vy == Approx(0.0f));
     CHECK(bsWide[3].w  == Approx(0.0f));
+}
+
+// ===========================================================================
+// Null-index branch (Task 3, Gap 2.2) -- a read-only B packed as kNullBodyIndex
+// (-1) injects a shared ZERO identity row in the gather (no real-body memory
+// touch) instead of reading a dummy slot. This must be EQUIVALENT to a contact
+// against a real, read-only (invMassB==0), zero-velocity body: both feed vB==0
+// into A's solve and never scatter B, so body A's post-solve state must be
+// BIT-IDENTICAL across the two. This is the contract that lets the solver drop
+// the scatter-safe dummy tail (Resize(solverCount), no +1) without changing any
+// float. Tag [physics][simd].
+// ===========================================================================
+TEST_CASE("PhysicsSimd: null-index B equals a zero-velocity read-only body",
+          "[physics][simd]")
+{
+    const int substeps = 4;
+    const float h = (1.0f / 60.0f) / static_cast<float>(substeps);
+    const float maxBiasVel = 4.0f, threshold = 1.0f;
+
+    // Solve ONE contact (dynamic A = slot 0 vs a read-only B) and return A's row.
+    //   nullB == true : B is a tile span (bodyBIsBody=false) -> packed bodyIndexB
+    //                   == kNullBodyIndex (-1) -> gathered as the zero identity.
+    //   nullB == false: B is a REAL body (slot 1), invMassB==0 (read-only),
+    //                   seeded at rest -> packed bodyIndexB == 1, gathered zero.
+    auto runA = [&](bool nullB) -> BodyState
+    {
+        ContactConstraint cc = MakePreparedContact(0u, 1u, 1.0f);
+        cc.invMassB = Real(0); cc.invInertiaB = Real(0);   // B is read-only in both
+        if (nullB) { cc.bodyBIsBody = false; cc.bodyB = kInvalidSlot; }
+
+        std::vector<ContactConstraint> ccs = { cc };
+        std::uint32_t ref = 0u;
+        std::vector<ContactConstraintSimd> batches =
+            ContactConstraintSimd::Build(ccs.data(), &ref, 1);
+        REQUIRE(batches.size() == 1u);
+
+        // Pin the sentinel wiring: a span packs -1; a real read-only body keeps
+        // its real slot (its zero row is gathered, never scattered).
+        if (nullB) { CHECK(batches[0].bodyIndexB[0] == kNullBodyIndex); }
+        else       { CHECK(batches[0].bodyIndexB[0] == 1); }
+        CHECK(batches[0].dynB[0] == Approx(0.0f));         // read-only either way
+
+        BodyStateStore bs; bs.Resize(2u);                  // NO +1 dummy tail
+        bs[0].vx = 3.0f; bs[0].vy = 40.0f; bs[0].w = 0.1f; // body A start
+        bs[1].vx = 0.0f; bs[1].vy = 0.0f;  bs[1].w = 0.0f; // body B at rest (REAL path)
+        std::vector<std::uint32_t> dynSlots = { 0u };      // only A integrates dp/dq
+        RunLaneWide(batches, bs, substeps, h, maxBiasVel, threshold, dynSlots);
+        return bs[0];
+    };
+
+    const BodyState nb = runA(true);
+    const BodyState rb = runA(false);
+
+    // BIT-IDENTICAL: the -1 identity injection equals a real zero-velocity B.
+    CHECK(nb.vx == rb.vx);
+    CHECK(nb.vy == rb.vy);
+    CHECK(nb.w  == rb.w);
+    // And A genuinely solved (it moved off its initial fall velocity), so the
+    // match is a real result, not a trivial no-op.
+    CHECK(nb.vy != Approx(40.0f));
 }
 
 // ===========================================================================
