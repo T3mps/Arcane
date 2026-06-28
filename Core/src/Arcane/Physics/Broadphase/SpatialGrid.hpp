@@ -7,9 +7,10 @@
 // DETERMINISM: cells visited row-major; output sorted+unique; no fp in the cell
 // index math beyond the floor. PRESENTATION-FREE + C++20 (glm+std+Physics only).
 #include <cstdint>
-#include <functional>
 #include <unordered_map>
 #include <vector>
+
+#include <Arcane/Util/FunctionRef.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Broadphase/Broadphase.hpp> // Aabb2
 
@@ -46,8 +47,8 @@ public:
     // path may depend on it). The ids vector is never empty for a live cell
     // (Remove drops a cell once it empties).
     void ForEachCell(
-        const std::function<void(int cx, int cy,
-                                 const std::vector<std::uint32_t>& ids)>& fn) const;
+        FunctionRef<void(int cx, int cy,
+                         const std::vector<std::uint32_t>& ids)> fn) const;
 
 private:
     static std::uint64_t Key(int cx, int cy)

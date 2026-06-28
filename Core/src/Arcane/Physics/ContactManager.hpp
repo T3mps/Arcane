@@ -57,6 +57,7 @@
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Broadphase/Broadphase.hpp>
+#include <Arcane/Util/FunctionRef.hpp>
 
 namespace Arcane
 {
@@ -192,8 +193,7 @@ namespace Arcane
             // Read-only; for debug draw / inspection.  Iteration order is
             // unordered (unordered_map traversal).
             void ForEachBegunPair(
-                const std::function<void(std::uint32_t a,
-                                         std::uint32_t b)>& fn) const;
+                FunctionRef<void(std::uint32_t a, std::uint32_t b)> fn) const;
 
         private:
             // pair key -> pair. Reused across steps (no per-step alloc).

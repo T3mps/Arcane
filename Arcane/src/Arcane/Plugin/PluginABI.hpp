@@ -13,16 +13,19 @@ namespace Astra { class TypeContext; class IWorkScheduler; class BinaryWriter; c
 namespace Arcane
 {
     class Runtime;  // defined in Arcane.dll; the plugin holds it opaquely via EngineContext
+    struct ITaskExecutor;  // <Arcane/Jobs/TaskExecutor.hpp>; same enki pool, worker-index face
 
     // Bump on ANY change to EngineContext layout or the entry-point set/signatures.
     // v2 (2026-06-20): added the ImGui cross-DLL handoff fields below + GamePlugin_DrawUI.
-    inline constexpr uint32_t kGamePluginABIVersion = 2;
+    // v3 (2026-06-26): added taskExecutor (the ITaskExecutor face of the engine scheduler).
+    inline constexpr uint32_t kGamePluginABIVersion = 3;
 
     struct EngineContext
     {
         uint32_t               abiVersion;     // == kGamePluginABIVersion at the host
         Astra::TypeContext*    typeContext;    // plugin calls Astra::SetTypeContext(this) FIRST
         Astra::IWorkScheduler* workScheduler;  // the one engine enkiTS adapter (shared instance)
+        Arcane::ITaskExecutor* taskExecutor;   // SAME enki pool, worker-index ParallelFor (physics/general)
         Arcane::Runtime*       engine;         // registry, schedulers, snapshot/restore, render ctx
 
         // ImGui cross-DLL handoff (v2). ImGui's globals (GImGui) and heap do not

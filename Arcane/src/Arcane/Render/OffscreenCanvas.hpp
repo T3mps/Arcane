@@ -14,13 +14,13 @@
 // thumbnails, ...).
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Util/FunctionRef.hpp>
 
 #include <nvrhi/nvrhi.h>
 
 #include <glm/glm.hpp>
 
 #include <cstdint>
-#include <functional>
 #include <memory>
 
 namespace Arcane
@@ -46,7 +46,7 @@ namespace Arcane
         // tonemaps into the output texture, and submits the command list. The
         // output texture is shader-readable when this returns. NVRHI manages
         // all framebuffer transitions; no manual barriers.
-        virtual void Draw(const std::function<void(Batcher2D&)>& fn,
+        virtual void Draw(FunctionRef<void(Batcher2D&)> fn,
                           glm::vec4 clear) = 0;
 
         // The output texture as an ImTextureID (ImU64), ready for

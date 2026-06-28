@@ -62,10 +62,11 @@
 // namespace Arcane::Physics, Core style.
 
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
+
+#include <Arcane/Util/FunctionRef.hpp>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
@@ -690,7 +691,7 @@ namespace Arcane
             // order. ForEachContactConstraint's visit count equals
             // ActiveContactCount().
             void ForEachContactConstraint(
-                const std::function<void(const ContactConstraint&)>& fn) const
+                FunctionRef<void(const ContactConstraint&)> fn) const
             {
                 for (const ContactConstraint& cc : m_contactConstraints)
                 {
@@ -881,8 +882,8 @@ namespace Arcane
             // unordered iteration (unordered_map traversal -- acceptable for a
             // debug overlay).  Forwards to ContactManager::ForEachBegunPair.
             void ForEachContact(
-                const std::function<void(std::uint32_t a,
-                                         std::uint32_t b)>& fn) const;
+                FunctionRef<void(std::uint32_t a,
+                                 std::uint32_t b)> fn) const;
 
             // Island ROOT of slot i (debug/inspection, Phase A).
             // Phase A: reads m_islandId -- the persistent island id IS the root
@@ -953,7 +954,7 @@ namespace Arcane
             // Iterated ascending island-id (deterministic). Const callback (sleep
             // mutates bodies through the slot accessors, not the island record).
             void ForEachIsland(
-                const std::function<void(const std::vector<std::uint32_t>&)>& fn) const
+                FunctionRef<void(const std::vector<std::uint32_t>&)> fn) const
             {
                 for (const Island::Island& isl : m_islands)
                 {

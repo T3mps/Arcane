@@ -4,6 +4,7 @@
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
+#include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
 
 #include <Astra/Registry/Registry.hpp>
@@ -109,6 +110,7 @@ namespace Arcane
     RunLoop&          Runtime::Loop()       noexcept { return *m_impl->loop; }
     Astra::TypeContext*    Runtime::TypeContext()   noexcept { return m_impl->context; }
     Astra::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
+    ITaskExecutor*         Runtime::TaskExecutor()  noexcept { return m_impl->jobs.TaskExecutor(); }
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
     Assets& Runtime::AssetsFacade() noexcept { return *m_impl->assets; }
     Audio::AudioDevice& Runtime::AudioSystem() noexcept { return m_impl->audio; }

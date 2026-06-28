@@ -42,13 +42,13 @@ TEST_CASE("PlaygroundGame runs and survives a reload", "[hotreload]")
     Arcane::PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
     REQUIRE(host.Load());
 
-    // ABI v2: the plugin reports the current ABI version and the host resolved
-    // the new DrawUI entry point (called by the host between ImGui Begin/Render).
+    // ABI v3: the plugin reports the current ABI version; the DrawUI entry point
+    // (v2) was resolved, and EngineContext::taskExecutor was populated (v3).
     const Arcane::PluginVTable* vt = host.Vtable();
     REQUIRE(vt != nullptr);
     REQUIRE(vt->ABIVersion != nullptr);
     CHECK(vt->ABIVersion() == Arcane::kGamePluginABIVersion);
-    CHECK(Arcane::kGamePluginABIVersion == 2u);
+    CHECK(Arcane::kGamePluginABIVersion == 3u);
     CHECK(vt->DrawUI != nullptr);
 
     const glm::vec2 before = MoonWorldPos(rt);

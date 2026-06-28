@@ -7,6 +7,7 @@
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Jobs/TaskExecutor.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -30,6 +31,8 @@ TEST_CASE("Runtime boots a usable substrate", "[runtime]")
     REQUIRE(rt.WorkScheduler()->WorkerCount() >= 1);
     REQUIRE(rt.AudioSystem().IsInitialized());
     CHECK(rt.AssetsFacade().Stats().count == 0);
+    REQUIRE(rt.TaskExecutor() != nullptr);
+    REQUIRE(rt.TaskExecutor()->WorkerCount() >= 1);
 
     rt.Components()->RegisterComponent<Counter>();
     auto& reg = rt.Registry();

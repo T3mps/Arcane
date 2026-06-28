@@ -23,6 +23,7 @@ namespace Astra { class Registry; class ComponentRegistry; class TypeContext; cl
 namespace Arcane
 {
     class Assets;
+    struct ITaskExecutor;
     class Batcher2D;
     class ShaderLibrary;
     namespace Audio { class AudioDevice; }
@@ -49,6 +50,7 @@ namespace Arcane
         RunLoop&                Loop()          noexcept;
         Astra::TypeContext*     TypeContext()   noexcept;
         Astra::IWorkScheduler*  WorkScheduler() noexcept;
+        ITaskExecutor*          TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
         std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
         Assets&                 AssetsFacade() noexcept;
         Audio::AudioDevice&     AudioSystem() noexcept;
