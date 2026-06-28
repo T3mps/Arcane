@@ -39,6 +39,7 @@
 // Arcane::Physics, Core style.
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
@@ -123,6 +124,42 @@ namespace Arcane
             // Incremental pair maintenance. Default: full recompute (== Pairs). DynamicTree
             // overrides with a move-buffer + persistent pair set.
             virtual int UpdatePairs(std::vector<BroadphasePair>& out) { return Pairs(out); }
+
+            // ---- Seams for parallel broadphase pair maintenance (Phase D2, Task 2) ----
+            //
+            // DynamicTree overrides all three. Implementations that do NOT support
+            // incremental pair sets get serial-fallback defaults that are correct but
+            // perform a full recompute (EvictTouchedAndCollectMoved yields nothing;
+            // QueryProxyPairs is a no-op; MergeAndEmit ignores perWorker and calls Pairs).
+
+            // STEP 1 seam: evict stale pairs + snapshot the moved-proxy ids.
+            // Clears m_moved / m_removed after the snapshot.
+            // Base default: movedOut is empty -- no incremental state, nothing to do.
+            virtual void EvictTouchedAndCollectMoved(std::vector<std::uint32_t>& movedOut)
+            {
+                movedOut.clear();
+            }
+
+            // STEP 2 seam: fat-descent + tight-filter for ONE proxy id.
+            // Appends canonical (lo<<32|hi) keys to out. Read-only (const).
+            // Uses the caller-supplied stack (NOT any shared member) so callers
+            // can provide per-worker scratch in Task 3.
+            // Base default: no-op (no tree to query).
+            virtual void QueryProxyPairs(std::uint32_t id,
+                                         std::vector<std::uint32_t>& stack,
+                                         std::vector<std::uint64_t>& out) const
+            {
+                (void)id; (void)stack; (void)out;
+            }
+
+            // STEP 3 seam: merge per-worker key buffers into the persistent pair set,
+            // then emit sorted BroadphasePair output.
+            // Base default: ignore perWorker, fall back to full Pairs() recompute.
+            virtual int MergeAndEmit(std::span<const std::vector<std::uint64_t>> perWorker,
+                                     std::vector<BroadphasePair>& out)
+            {
+                (void)perWorker; return Pairs(out);
+            }
         };
 
     } // namespace Physics

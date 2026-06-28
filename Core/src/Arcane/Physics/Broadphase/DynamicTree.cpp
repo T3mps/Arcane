@@ -349,25 +349,20 @@ namespace Arcane
         }
 
         // --------------------------------------------------------------------
-        // UpdatePairs: incremental pair-set maintenance (Phase 2, Task 4).
+        // UpdatePairs seam: EvictTouchedAndCollectMoved (Phase D2, Task 2).
         //
-        // Three-step algorithm:
-        //   1. Evict: remove from m_pairSet every cached pair that touches a
-        //      moved or removed proxy (stale -- tight boxes may have changed).
-        //   2. Re-query: for each LIVE moved proxy, descend the tree on its FAT
-        //      box (to find candidates), then filter by tight-box overlap and
-        //      insert canonical (lo<<32|hi) keys into m_pairSet.
-        //   3. Emit: build sorted BroadphasePair vector from m_pairSet.
+        // STEP 1 of the three-seam decomposition. Evicts all cached pairs in
+        // m_pairSet that touch any moved or removed proxy, then snapshots the
+        // set of moved ids into movedOut and clears m_moved / m_removed.
         //
-        // Correctness invariant (oracle-gated):
-        //   UpdatePairs() == Pairs() == brute-force after every mutation.
+        // The snapshot-then-clear ordering is safe: the caller (UpdatePairs
+        // serial wrapper, or PhysicsWorld in Task 3) iterates movedOut for the
+        // STEP 2 re-query, which does not touch m_moved or m_removed.
         // --------------------------------------------------------------------
-        int DynamicTree::UpdatePairs(std::vector<BroadphasePair>& out)
+        void DynamicTree::EvictTouchedAndCollectMoved(
+            std::vector<std::uint32_t>& movedOut)
         {
-            // ----------------------------------------------------------------
-            // STEP 1: evict all cached pairs touching any moved or removed proxy.
             // Cannot erase while iterating unordered_set -- collect keys first.
-            // ----------------------------------------------------------------
             if (!m_moved.empty() || !m_removed.empty())
             {
                 m_toErase.clear();
@@ -387,64 +382,100 @@ namespace Arcane
                 }
             }
 
-            // ----------------------------------------------------------------
-            // STEP 2: re-add current tight pairs for each LIVE moved proxy.
-            // Descend the tree on the proxy's FAT box (broad candidate set),
-            // then filter by tight-box overlap (exact membership).
-            // ----------------------------------------------------------------
-            for (const std::uint32_t a : m_moved)
+            // Snapshot m_moved into movedOut, then clear both move-buffer sets.
+            movedOut.clear();
+            movedOut.reserve(m_moved.size());
+            for (auto id : m_moved)
             {
-                const std::uint32_t leafA = LeafOf(a);
-                if (leafA == kNull)
-                {
-                    continue; // was removed between mark and flush (shouldn't
-                               // happen with correct move/remove bookkeeping, but
-                               // be safe).
-                }
+                movedOut.push_back(id);
+            }
+            m_moved.clear();
+            m_removed.clear();
+        }
 
-                const Aabb2 fatA   = m_nodes[leafA].fat;
-                const Aabb2 tightA = m_nodes[leafA].tight;
+        // --------------------------------------------------------------------
+        // UpdatePairs seam: QueryProxyPairs (Phase D2, Task 2).
+        //
+        // STEP 2 for ONE proxy id. Descends the tree on the proxy's FAT box
+        // (broad candidate set), then filters by tight-box overlap and appends
+        // canonical (lo<<32|hi) keys to out.
+        //
+        // const: read-only view of the tree. Uses the caller-supplied stack
+        // (NOT m_stack) so the serial wrapper can pass m_stack and Task 3 can
+        // pass per-worker scratch without contention.
+        //
+        // If the proxy's leaf is absent (LeafOf returns kNull), returns
+        // immediately with no output appended -- matches the original STEP 2
+        // guard for ids removed between mark and flush.
+        // --------------------------------------------------------------------
+        void DynamicTree::QueryProxyPairs(std::uint32_t id,
+                                          std::vector<std::uint32_t>& stack,
+                                          std::vector<std::uint64_t>& out) const
+        {
+            const std::uint32_t leafA = LeafOf(id);
+            if (leafA == kNull)
+            {
+                return; // was removed between mark and flush -- append nothing.
+            }
 
-                if (m_root == kNull)
+            const Aabb2 fatA   = m_nodes[leafA].fat;
+            const Aabb2 tightA = m_nodes[leafA].tight;
+
+            if (m_root == kNull)
+            {
+                return;
+            }
+
+            stack.clear();
+            stack.push_back(m_root);
+            while (!stack.empty())
+            {
+                const std::uint32_t ni = stack.back();
+                stack.pop_back();
+                const Node& n = m_nodes[ni];
+
+                if (!FatOverlap(n.fat, fatA))
                 {
                     continue;
                 }
-
-                m_stack.clear();
-                m_stack.push_back(m_root);
-                while (!m_stack.empty())
+                if (!n.IsLeaf())
                 {
-                    const std::uint32_t ni = m_stack.back();
-                    m_stack.pop_back();
-                    const Node& n = m_nodes[ni];
+                    stack.push_back(n.left);
+                    stack.push_back(n.right);
+                }
+                else if (n.id != id && AabbOverlap(n.tight, tightA))
+                {
+                    const std::uint32_t lo = (id < n.id) ? id : n.id;
+                    const std::uint32_t hi = (id < n.id) ? n.id : id;
+                    const std::uint64_t key =
+                        (static_cast<std::uint64_t>(lo) << 32) |
+                        static_cast<std::uint64_t>(hi);
+                    out.push_back(key);
+                }
+            }
+        }
 
-                    if (!FatOverlap(n.fat, fatA))
-                    {
-                        continue;
-                    }
-                    if (!n.IsLeaf())
-                    {
-                        m_stack.push_back(n.left);
-                        m_stack.push_back(n.right);
-                    }
-                    else if (n.id != a && AabbOverlap(n.tight, tightA))
-                    {
-                        const std::uint32_t lo = (a < n.id) ? a : n.id;
-                        const std::uint32_t hi = (a < n.id) ? n.id : a;
-                        const std::uint64_t key =
-                            (static_cast<std::uint64_t>(lo) << 32) |
-                            static_cast<std::uint64_t>(hi);
-                        m_pairSet.insert(key);
-                    }
+        // --------------------------------------------------------------------
+        // UpdatePairs seam: MergeAndEmit (Phase D2, Task 2).
+        //
+        // STEP 3 of the three-seam decomposition. Inserts all keys from the
+        // per-worker buffers into m_pairSet (Task 3 supplies one buffer per
+        // worker; the serial wrapper supplies a single-element span), then
+        // emits the full m_pairSet as a sorted BroadphasePair vector.
+        // --------------------------------------------------------------------
+        int DynamicTree::MergeAndEmit(
+            std::span<const std::vector<std::uint64_t>> perWorker,
+            std::vector<BroadphasePair>& out)
+        {
+            for (const auto& buf : perWorker)
+            {
+                for (const std::uint64_t key : buf)
+                {
+                    m_pairSet.insert(key);
                 }
             }
 
-            m_moved.clear();
-            m_removed.clear();
-
-            // ----------------------------------------------------------------
-            // STEP 3: emit sorted.
-            // ----------------------------------------------------------------
+            // Emit sorted.
             out.clear();
             out.reserve(m_pairSet.size());
             for (const std::uint64_t key : m_pairSet)
@@ -455,6 +486,26 @@ namespace Arcane
             }
             std::sort(out.begin(), out.end());
             return static_cast<int>(out.size());
+        }
+
+        // --------------------------------------------------------------------
+        // UpdatePairs: incremental pair-set maintenance (Phase 2, Task 4).
+        // Rewritten as a serial wrapper over the three seams (Phase D2, Task 2).
+        //
+        // Correctness invariant (oracle-gated):
+        //   UpdatePairs() == Pairs() == brute-force after every mutation.
+        // --------------------------------------------------------------------
+        int DynamicTree::UpdatePairs(std::vector<BroadphasePair>& out)
+        {
+            EvictTouchedAndCollectMoved(m_movedSerial);
+            m_findSerial.clear();
+            for (const std::uint32_t id : m_movedSerial)
+            {
+                QueryProxyPairs(id, m_stack, m_findSerial);
+            }
+            return MergeAndEmit(
+                std::span<const std::vector<std::uint64_t>>(&m_findSerial, 1),
+                out);
         }
 
         // ----------------------------------------------------------------

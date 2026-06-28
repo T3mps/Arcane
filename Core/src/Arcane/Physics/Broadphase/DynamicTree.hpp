@@ -74,7 +74,18 @@ namespace Arcane
             // Incremental pair maintenance: move-buffer path (Phase 2, Task 4).
             // Maintains m_pairSet in sync with each Update/Remove, then emits
             // sorted. Oracle-verified == Pairs() after every mutation.
+            // Rewritten in Phase D2 Task 2 as a serial wrapper over the three seams.
             int  UpdatePairs(std::vector<BroadphasePair>& out) override;
+
+            // ---- Phase D2 Task 2 seam overrides --------------------------------
+            // See IBroadphase for the contracts. DynamicTree provides the incremental
+            // implementations; the serial wrapper UpdatePairs calls them in order.
+            void EvictTouchedAndCollectMoved(std::vector<std::uint32_t>& movedOut) override;
+            void QueryProxyPairs(std::uint32_t id,
+                                 std::vector<std::uint32_t>& stack,
+                                 std::vector<std::uint64_t>& out) const override;
+            int  MergeAndEmit(std::span<const std::vector<std::uint64_t>> perWorker,
+                              std::vector<BroadphasePair>& out) override;
 
             // ---- read-only debug-visualization accessor (Slice A) ------------
             //
@@ -157,6 +168,12 @@ namespace Arcane
             std::unordered_set<std::uint32_t> m_removed;
             std::unordered_set<std::uint64_t> m_pairSet;
             std::vector<std::uint64_t>        m_toErase; // UpdatePairs step-1 evict scratch (pooled; capacity preserved)
+
+            // Reuse buffers for the serial UpdatePairs wrapper (Phase D2 Task 2).
+            // m_movedSerial: snapshot of m_moved produced by EvictTouchedAndCollectMoved.
+            // m_findSerial:  single-worker key accumulator fed to QueryProxyPairs.
+            std::vector<std::uint32_t>        m_movedSerial;
+            std::vector<std::uint64_t>        m_findSerial;
 
             // Map an id to its leaf slot (kNull if absent).
             [[nodiscard]] std::uint32_t LeafOf(std::uint32_t id) const noexcept;
