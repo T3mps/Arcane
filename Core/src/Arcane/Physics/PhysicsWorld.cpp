@@ -2339,14 +2339,39 @@ namespace Arcane
             //  kinematic-kinematic, kinematic-vs-static-body; tiles stay out).
             //
             // (a) mover<->mover: the Phase-2 incremental fixture-pair set (sorted
-            //     fa < fb). UpdatePairs ALWAYS emits the full current pair set. Each
-            //     pair both wakes any sleeping dynamic touched by an awake mover
-            //     (WakeMoverPair -- the rule the retired GenerateContacts ran) and
-            //     ensures a persistent contact (TryCreateContact). The wake MUST
-            //     precede the manifold update pass so a freshly woken body's contact
-            //     is recomputed + emitted this Step (mirrors the old ordering, where
-            //     GenerateContacts woke + emitted in one pass).
-            m_fixtureBroadphase->UpdatePairs(m_cpPairs);
+            //     fa < fb). Phase D2 Task 3: parallel broadphase pair-finding.
+            //     Serial seams: EvictTouchedAndCollectMoved (snapshot moved ids,
+            //     evict stale pairs) and MergeAndEmit (union per-worker key sets
+            //     into the persistent pair set, emit sorted pairs) bracket a
+            //     per-proxy QueryProxyPairs ParallelFor. Each worker uses its OWN
+            //     stack and key buffer (disjoint write) so the tree descent is
+            //     read-only under parallelism. MergeAndEmit + the sorted output
+            //     are order-independent -> byte-identical at any worker count.
+            //
+            //     The serial UpdatePairs wrapper (tests/oracle) is unchanged.
+            {
+                auto* bp   = m_fixtureBroadphase.get();
+                auto* exec = Executor();   // always non-null (serial fallback)
+
+                bp->EvictTouchedAndCollectMoved(m_bpMovedScratch);
+
+                const auto W = static_cast<std::size_t>(exec->WorkerCount());
+                if (m_bpFindScratch.size()  < W) m_bpFindScratch.resize(W);
+                if (m_bpStackScratch.size() < W) m_bpStackScratch.resize(W);
+                for (auto& s : m_bpFindScratch) s.clear(); // per-step clear; capacity retained
+
+                exec->ParallelFor(m_bpMovedScratch.size(), kBroadphaseGrain,
+                    [&](std::size_t b, std::size_t e, std::uint32_t w) {
+                        for (std::size_t k = b; k < e; ++k)
+                            bp->QueryProxyPairs(m_bpMovedScratch[k],
+                                                m_bpStackScratch[w],
+                                                m_bpFindScratch[w]);
+                    });
+
+                bp->MergeAndEmit(
+                    std::span<const std::vector<std::uint64_t>>(m_bpFindScratch.data(), W),
+                    m_cpPairs);
+            }
             for (const BroadphasePair& p : m_cpPairs)
             {
                 WakeMoverPair(p.a, p.b);

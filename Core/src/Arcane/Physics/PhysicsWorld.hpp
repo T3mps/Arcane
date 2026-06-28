@@ -1375,6 +1375,20 @@ namespace Arcane
             ITaskExecutor*         m_executor = nullptr;   // injected; null -> m_serialExecutor
             mutable SerialTaskExecutor m_serialExecutor;   // owned deterministic fallback
 
+            // ---- broadphase per-worker scratch (Phase D2, Task 3) ----------
+            //
+            // Reused across steps (resize-to-WorkerCount on growth; clear per step).
+            // Zero steady-state alloc after the first step that has N workers.
+            //   m_bpMovedScratch  : snapshot of moved proxy ids from EvictTouchedAndCollectMoved.
+            //   m_bpFindScratch[w]: per-worker canonical key accumulator for QueryProxyPairs.
+            //   m_bpStackScratch[w]: per-worker descent stack for QueryProxyPairs.
+            // The serial UpdatePairs wrapper (tests/oracle) is unchanged; only
+            // UpdateContacts is switched to the parallel orchestration.
+            static constexpr std::size_t kBroadphaseGrain = 64;
+            std::vector<std::uint32_t>              m_bpMovedScratch;
+            std::vector<std::vector<std::uint64_t>> m_bpFindScratch;   // per-worker key buffers
+            std::vector<std::vector<std::uint32_t>> m_bpStackScratch;  // per-worker descent stacks
+
             // ---- joints (P2.5) ---------------------------------------------
             //
             // The world OWNS the joint objects (ports the Lua self.joints list).
