@@ -7,7 +7,7 @@
 // world<->solver bridge.
 //
 // SCOPE (Task 1): only the SoA struct + its two sync helpers exist yet -- the
-// solver does NOT consume BodyStateSoA (that is a later task). These tests pin
+// solver does NOT consume BodyStateStore (that is a later task). These tests pin
 // the sync contract:
 //   * SyncIn copies awake-dynamic world velocities into the packed arrays and
 //     zeroes the TGS position deltas.
@@ -31,7 +31,7 @@
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Solver/BodyStateSoA.hpp>
+#include <Arcane/Physics/Solver/BodyState.hpp>
 #include <Arcane/Physics/Solver/ContactColoring.hpp>
 #include <Arcane/Physics/Solver/ContactConstraintSimd.hpp>
 #include <Arcane/Physics/Solver/Solver.hpp>
@@ -63,7 +63,7 @@ namespace
     }
 } // namespace
 
-TEST_CASE("PhysicsSimd: BodyStateSoA SyncIn/SyncOut round-trips world velocities",
+TEST_CASE("PhysicsSimd: BodyStateStore SyncIn/SyncOut round-trips world velocities",
           "[physics]")
 {
     PhysicsWorld w;
@@ -91,33 +91,33 @@ TEST_CASE("PhysicsSimd: BodyStateSoA SyncIn/SyncOut round-trips world velocities
     REQUIRE(w.VelSlot(s.index) == Vec2(Real(0), Real(0)));
 
     // ---- SyncIn: world velocities -> packed SoA; dp/dq zeroed --------------
-    BodyStateSoA soa;
+    BodyStateStore soa;
     soa.Resize(w.Count());            // caller sizes to world slot count
     // Pre-poison the position deltas so we can prove SyncIn zeroes them.
-    soa.dpx[a.index] = Real(99);
-    soa.dpy[a.index] = Real(99);
-    soa.dq[a.index]  = Real(99);
+    soa[a.index].dpx = 99.f;
+    soa[a.index].dpy = 99.f;
+    soa[a.index].dq  = 99.f;
     soa.SyncIn(w);
 
-    CHECK(soa.vx[a.index] == Approx(vaIn.x));
-    CHECK(soa.vy[a.index] == Approx(vaIn.y));
-    CHECK(soa.w[a.index]  == Approx(waIn));
-    CHECK(soa.vx[b.index] == Approx(vbIn.x));
-    CHECK(soa.vy[b.index] == Approx(vbIn.y));
-    CHECK(soa.w[b.index]  == Approx(wbIn));
+    CHECK(soa[a.index].vx == Approx(vaIn.x));
+    CHECK(soa[a.index].vy == Approx(vaIn.y));
+    CHECK(soa[a.index].w  == Approx(waIn));
+    CHECK(soa[b.index].vx == Approx(vbIn.x));
+    CHECK(soa[b.index].vy == Approx(vbIn.y));
+    CHECK(soa[b.index].w  == Approx(wbIn));
 
     // dp/dq for synced slots are zeroed by SyncIn (TGS delta accumulator).
-    CHECK(soa.dpx[a.index] == Approx(0.0f));
-    CHECK(soa.dpy[a.index] == Approx(0.0f));
-    CHECK(soa.dq[a.index]  == Approx(0.0f));
+    CHECK(soa[a.index].dpx == Approx(0.0f));
+    CHECK(soa[a.index].dpy == Approx(0.0f));
+    CHECK(soa[a.index].dq  == Approx(0.0f));
 
     // ---- mutate the packed velocities, then SyncOut -----------------------
     const Vec2 vaOut(Real(100), Real(-200));
     const Vec2 vbOut(Real(-1), Real(0.5));
     const Real waOut = Real(-9);
     const Real wbOut = Real(42);
-    soa.vx[a.index] = vaOut.x; soa.vy[a.index] = vaOut.y; soa.w[a.index] = waOut;
-    soa.vx[b.index] = vbOut.x; soa.vy[b.index] = vbOut.y; soa.w[b.index] = wbOut;
+    soa[a.index].vx = static_cast<float>(vaOut.x); soa[a.index].vy = static_cast<float>(vaOut.y); soa[a.index].w = static_cast<float>(waOut);
+    soa[b.index].vx = static_cast<float>(vbOut.x); soa[b.index].vy = static_cast<float>(vbOut.y); soa[b.index].w = static_cast<float>(wbOut);
 
     soa.SyncOut(w);
 
@@ -619,13 +619,13 @@ namespace
     inline Real XDot(const Vec2& a, const Vec2& b) { return a.x * b.x + a.y * b.y; }
 
     // A self-contained WIDTH-1 SCALAR reference for ONE contact, reading/writing a
-    // BodyStateSoA -- a verbatim transcription of SoftStep.cpp's WarmStart /
+    // BodyStateStore -- a verbatim transcription of SoftStep.cpp's WarmStart /
     // SolveContacts / ApplyRestitution math (plain float, no Simd wrapper). This is
     // the oracle the lane-wide passes are compared against. A is always dynamic;
     // dynB gates the B-side write. All contacts here use 1 point (pointCount==1).
     struct ScalarRef
     {
-        BodyStateSoA& bs;
+        BodyStateStore& bs;
         Real h, invH, maxBiasVel, threshold;
 
         void WarmStart(ContactConstraint& cc)
@@ -633,8 +633,8 @@ namespace
             const Vec2 n = cc.normal;
             const Vec2 tangent(-n.y, n.x);
             const bool dynB = cc.bodyBIsBody && cc.invMassB > Real(0);
-            Vec2 vA(bs.vx[cc.bodyA], bs.vy[cc.bodyA]); Real wA = bs.w[cc.bodyA];
-            Vec2 vB(bs.vx[cc.bodyB], bs.vy[cc.bodyB]); Real wB = bs.w[cc.bodyB];
+            Vec2 vA(bs[cc.bodyA].vx, bs[cc.bodyA].vy); Real wA = bs[cc.bodyA].w;
+            Vec2 vB(bs[cc.bodyB].vx, bs[cc.bodyB].vy); Real wB = bs[cc.bodyB].w;
             for (int p = 0; p < cc.pointCount; ++p)
             {
                 const ContactConstraintPoint& cp = cc.points[p];
@@ -642,8 +642,8 @@ namespace
                 vA += P * cc.invMassA; wA += cc.invInertiaA * XCrossRP(cp.anchorA, P);
                 if (dynB) { vB -= P * cc.invMassB; wB -= cc.invInertiaB * XCrossRP(cp.anchorB, P); }
             }
-            bs.vx[cc.bodyA] = static_cast<float>(vA.x); bs.vy[cc.bodyA] = static_cast<float>(vA.y); bs.w[cc.bodyA] = static_cast<float>(wA);
-            if (dynB) { bs.vx[cc.bodyB] = static_cast<float>(vB.x); bs.vy[cc.bodyB] = static_cast<float>(vB.y); bs.w[cc.bodyB] = static_cast<float>(wB); }
+            bs[cc.bodyA].vx = static_cast<float>(vA.x); bs[cc.bodyA].vy = static_cast<float>(vA.y); bs[cc.bodyA].w = static_cast<float>(wA);
+            if (dynB) { bs[cc.bodyB].vx = static_cast<float>(vB.x); bs[cc.bodyB].vy = static_cast<float>(vB.y); bs[cc.bodyB].w = static_cast<float>(wB); }
         }
 
         void Solve(ContactConstraint& cc, bool useBias)
@@ -652,10 +652,10 @@ namespace
             const Vec2 tangent(-n.y, n.x);
             const bool dynB = cc.bodyBIsBody && cc.invMassB > Real(0);
             const Real iMa = cc.invMassA, iIa = cc.invInertiaA, iMb = cc.invMassB, iIb = cc.invInertiaB;
-            Vec2 vA(bs.vx[cc.bodyA], bs.vy[cc.bodyA]); Real wA = bs.w[cc.bodyA];
-            Vec2 vB(bs.vx[cc.bodyB], bs.vy[cc.bodyB]); Real wB = bs.w[cc.bodyB];
-            const Vec2 dpA(bs.dpx[cc.bodyA], bs.dpy[cc.bodyA]); const Real drA = bs.dq[cc.bodyA];
-            const Vec2 dpB(bs.dpx[cc.bodyB], bs.dpy[cc.bodyB]); const Real drB = bs.dq[cc.bodyB];
+            Vec2 vA(bs[cc.bodyA].vx, bs[cc.bodyA].vy); Real wA = bs[cc.bodyA].w;
+            Vec2 vB(bs[cc.bodyB].vx, bs[cc.bodyB].vy); Real wB = bs[cc.bodyB].w;
+            const Vec2 dpA(bs[cc.bodyA].dpx, bs[cc.bodyA].dpy); const Real drA = bs[cc.bodyA].dq;
+            const Vec2 dpB(bs[cc.bodyB].dpx, bs[cc.bodyB].dpy); const Real drB = bs[cc.bodyB].dq;
             for (int p = 0; p < cc.pointCount; ++p)
             {
                 ContactConstraintPoint& cp = cc.points[p];
@@ -688,8 +688,8 @@ namespace
                 vA += P * iMa; wA += iIa * XCrossRP(rA, P);
                 if (dynB) { vB -= P * iMb; wB -= iIb * XCrossRP(rB, P); }
             }
-            bs.vx[cc.bodyA] = static_cast<float>(vA.x); bs.vy[cc.bodyA] = static_cast<float>(vA.y); bs.w[cc.bodyA] = static_cast<float>(wA);
-            if (dynB) { bs.vx[cc.bodyB] = static_cast<float>(vB.x); bs.vy[cc.bodyB] = static_cast<float>(vB.y); bs.w[cc.bodyB] = static_cast<float>(wB); }
+            bs[cc.bodyA].vx = static_cast<float>(vA.x); bs[cc.bodyA].vy = static_cast<float>(vA.y); bs[cc.bodyA].w = static_cast<float>(wA);
+            if (dynB) { bs[cc.bodyB].vx = static_cast<float>(vB.x); bs[cc.bodyB].vy = static_cast<float>(vB.y); bs[cc.bodyB].w = static_cast<float>(wB); }
         }
 
         void Restitution(ContactConstraint& cc)
@@ -697,8 +697,8 @@ namespace
             if (cc.restitution <= Real(0)) { return; }
             const Vec2 n = cc.normal;
             const bool dynB = cc.bodyBIsBody && cc.invMassB > Real(0);
-            Vec2 vA(bs.vx[cc.bodyA], bs.vy[cc.bodyA]); Real wA = bs.w[cc.bodyA];
-            Vec2 vB(bs.vx[cc.bodyB], bs.vy[cc.bodyB]); Real wB = bs.w[cc.bodyB];
+            Vec2 vA(bs[cc.bodyA].vx, bs[cc.bodyA].vy); Real wA = bs[cc.bodyA].w;
+            Vec2 vB(bs[cc.bodyB].vx, bs[cc.bodyB].vy); Real wB = bs[cc.bodyB].w;
             for (int p = 0; p < cc.pointCount; ++p)
             {
                 ContactConstraintPoint& cp = cc.points[p];
@@ -713,8 +713,8 @@ namespace
                 vA += P * cc.invMassA; wA += cc.invInertiaA * XCrossRP(rA, P);
                 if (dynB) { vB -= P * cc.invMassB; wB -= cc.invInertiaB * XCrossRP(rB, P); }
             }
-            bs.vx[cc.bodyA] = static_cast<float>(vA.x); bs.vy[cc.bodyA] = static_cast<float>(vA.y); bs.w[cc.bodyA] = static_cast<float>(wA);
-            if (dynB) { bs.vx[cc.bodyB] = static_cast<float>(vB.x); bs.vy[cc.bodyB] = static_cast<float>(vB.y); bs.w[cc.bodyB] = static_cast<float>(wB); }
+            bs[cc.bodyA].vx = static_cast<float>(vA.x); bs[cc.bodyA].vy = static_cast<float>(vA.y); bs[cc.bodyA].w = static_cast<float>(wA);
+            if (dynB) { bs[cc.bodyB].vx = static_cast<float>(vB.x); bs[cc.bodyB].vy = static_cast<float>(vB.y); bs[cc.bodyB].w = static_cast<float>(wB); }
         }
     };
 
@@ -744,7 +744,7 @@ namespace
     }
 
     // Run the full substep solve on `batches` over `bs` (lane-wide path).
-    void RunLaneWide(std::vector<ContactConstraintSimd>& batches, BodyStateSoA& bs,
+    void RunLaneWide(std::vector<ContactConstraintSimd>& batches, BodyStateStore& bs,
                      int substeps, float h, float maxBiasVel, float threshold,
                      const std::vector<std::uint32_t>& dynSlots)
     {
@@ -753,12 +753,12 @@ namespace
         // between the bias + relax passes (the TGS separation re-eval).
         for (int s = 0; s < substeps; ++s)
         {
-            SimdSolve::WarmStart(batches, bs);
-            SimdSolve::SolveNormalAndFriction(batches, bs, h, /*useBias=*/true, maxBiasVel);
-            for (std::uint32_t i : dynSlots) { bs.dpx[i] += bs.vx[i] * h; bs.dpy[i] += bs.vy[i] * h; bs.dq[i] += bs.w[i] * h; }
-            SimdSolve::SolveNormalAndFriction(batches, bs, h, /*useBias=*/false, maxBiasVel);
+            SimdSolve::WarmStart(batches, bs.data());
+            SimdSolve::SolveNormalAndFriction(batches, bs.data(), h, /*useBias=*/true, maxBiasVel);
+            for (std::uint32_t i : dynSlots) { bs[i].dpx += bs[i].vx * h; bs[i].dpy += bs[i].vy * h; bs[i].dq += bs[i].w * h; }
+            SimdSolve::SolveNormalAndFriction(batches, bs.data(), h, /*useBias=*/false, maxBiasVel);
         }
-        SimdSolve::ApplyRestitution(batches, bs, threshold);
+        SimdSolve::ApplyRestitution(batches, bs.data(), threshold);
     }
 } // namespace
 
@@ -783,14 +783,14 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
         dynSlots.push_back(bA); dynSlots.push_back(bB);
     }
 
-    // Seed a BodyStateSoA (+1 dummy slot) with known velocities.
-    auto seedSoA = [&](BodyStateSoA& bs) {
+    // Seed a BodyStateStore (+1 dummy slot) with known velocities.
+    auto seedSoA = [&](BodyStateStore& bs) {
         bs.Resize(bodyCount + 1u);
         for (std::uint32_t b = 0; b < bodyCount; ++b)
         {
-            bs.vx[b] = 0.5f * static_cast<float>(b) - 1.0f;
-            bs.vy[b] = (b % 2 == 0) ? 40.0f : -10.0f;   // A's fall onto B's
-            bs.w[b]  = 0.01f * static_cast<float>(b);
+            bs[b].vx = 0.5f * static_cast<float>(b) - 1.0f;
+            bs[b].vy = (b % 2 == 0) ? 40.0f : -10.0f;   // A's fall onto B's
+            bs[b].w  = 0.01f * static_cast<float>(b);
         }
     };
 
@@ -800,7 +800,7 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
     const float threshold = 1.0f;
 
     // ---- Path A: lane-wide, ONE wide batch (W lanes) -----------------------
-    BodyStateSoA bsWide; seedSoA(bsWide);
+    BodyStateStore bsWide; seedSoA(bsWide);
     {
         std::vector<ContactConstraint> wccs = ccs;   // local copy (impulses mutate)
         std::vector<ContactConstraintSimd> batches =
@@ -812,7 +812,7 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
     // ---- Path B: lane-wide, NARROW -- N batches of 1 live lane + padding ----
     // Same SimdSolve passes, different packing width per batch. Lane-width
     // invariance => bit-identical to Path A.
-    BodyStateSoA bsNarrow; seedSoA(bsNarrow);
+    BodyStateStore bsNarrow; seedSoA(bsNarrow);
     {
         std::vector<ContactConstraint> nccs = ccs;
         std::vector<ContactConstraintSimd> batches;
@@ -830,13 +830,13 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
     // BIT-IDENTICAL: packing width does not change the result (the core invariant).
     for (std::uint32_t b = 0; b < bodyCount; ++b)
     {
-        CHECK(bsWide.vx[b] == bsNarrow.vx[b]);
-        CHECK(bsWide.vy[b] == bsNarrow.vy[b]);
-        CHECK(bsWide.w[b]  == bsNarrow.w[b]);
+        CHECK(bsWide[b].vx == bsNarrow[b].vx);
+        CHECK(bsWide[b].vy == bsNarrow[b].vy);
+        CHECK(bsWide[b].w  == bsNarrow[b].w);
     }
 
     // ---- Path C: width-1 SCALAR oracle (plain float, no Simd wrapper) -------
-    BodyStateSoA bsScalar; seedSoA(bsScalar);
+    BodyStateStore bsScalar; seedSoA(bsScalar);
     {
         std::vector<ContactConstraint> sccs = ccs;
         ScalarRef ref{ bsScalar, Real(h), Real(1.0 / h), Real(maxBiasVel), Real(threshold) };
@@ -844,7 +844,7 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
         {
             for (auto& cc : sccs) { ref.WarmStart(cc); }
             for (auto& cc : sccs) { ref.Solve(cc, /*useBias=*/true); }
-            for (std::uint32_t i : dynSlots) { bsScalar.dpx[i] += bsScalar.vx[i] * h; bsScalar.dpy[i] += bsScalar.vy[i] * h; bsScalar.dq[i] += bsScalar.w[i] * h; }
+            for (std::uint32_t i : dynSlots) { bsScalar[i].dpx += bsScalar[i].vx * h; bsScalar[i].dpy += bsScalar[i].vy * h; bsScalar[i].dq += bsScalar[i].w * h; }
             for (auto& cc : sccs) { ref.Solve(cc, /*useBias=*/false); }
         }
         for (auto& cc : sccs) { ref.Restitution(cc); }
@@ -855,9 +855,9 @@ TEST_CASE("PhysicsSimd: lane-wide solve is packing-width invariant + matches sca
     // rounding differs only at the ~1e-6 ulp scale for these magnitudes.
     for (std::uint32_t b = 0; b < bodyCount; ++b)
     {
-        CHECK(bsWide.vx[b] == Approx(bsScalar.vx[b]).margin(1e-5));
-        CHECK(bsWide.vy[b] == Approx(bsScalar.vy[b]).margin(1e-5));
-        CHECK(bsWide.w[b]  == Approx(bsScalar.w[b]).margin(1e-5));
+        CHECK(bsWide[b].vx == Approx(bsScalar[b].vx).margin(1e-5));
+        CHECK(bsWide[b].vy == Approx(bsScalar[b].vy).margin(1e-5));
+        CHECK(bsWide[b].w  == Approx(bsScalar[b].w).margin(1e-5));
     }
 }
 
@@ -888,12 +888,12 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
     std::vector<std::uint32_t> refs = { 0u, 1u };
     std::vector<std::uint32_t> dynSlots = { 0u, 1u, 2u };       // slot 3 is kinematic (read-only)
 
-    auto seedSoA = [&](BodyStateSoA& bs) {
+    auto seedSoA = [&](BodyStateStore& bs) {
         bs.Resize(bodyCount + 1u);
-        bs.vx[0] = 3.0f;  bs.vy[0] = 50.0f; bs.w[0] = 0.1f;     // body 0: a distinctive velocity
-        bs.vx[1] = -1.0f; bs.vy[1] = -5.0f; bs.w[1] = 0.0f;
-        bs.vx[2] = 2.0f;  bs.vy[2] = 30.0f; bs.w[2] = 0.05f;
-        bs.vx[3] = 7.0f;  bs.vy[3] = 0.0f;  bs.w[3] = 0.0f;     // kinematic plate moving +x
+        bs[0].vx = 3.0f;  bs[0].vy = 50.0f; bs[0].w = 0.1f;     // body 0: a distinctive velocity
+        bs[1].vx = -1.0f; bs[1].vy = -5.0f; bs[1].w = 0.0f;
+        bs[2].vx = 2.0f;  bs[2].vy = 30.0f; bs[2].w = 0.05f;
+        bs[3].vx = 7.0f;  bs[3].vy = 0.0f;  bs[3].w = 0.0f;     // kinematic plate moving +x
     };
 
     const int substeps = 4;
@@ -901,7 +901,7 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
     const float maxBiasVel = 4.0f, threshold = 1.0f;
 
     // Lane-wide path (the batch has W lanes: 2 live + W-2 padding).
-    BodyStateSoA bsWide; seedSoA(bsWide);
+    BodyStateStore bsWide; seedSoA(bsWide);
     {
         std::vector<ContactConstraint> wccs = ccs;
         std::vector<ContactConstraintSimd> batches =
@@ -912,7 +912,7 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
     }
 
     // Scalar oracle (no lanes, no padding -> cannot corrupt by construction).
-    BodyStateSoA bsScalar; seedSoA(bsScalar);
+    BodyStateStore bsScalar; seedSoA(bsScalar);
     {
         std::vector<ContactConstraint> sccs = ccs;
         ScalarRef ref{ bsScalar, Real(h), Real(1.0 / h), Real(maxBiasVel), Real(threshold) };
@@ -920,7 +920,7 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
         {
             for (auto& cc : sccs) { ref.WarmStart(cc); }
             for (auto& cc : sccs) { ref.Solve(cc, true); }
-            for (std::uint32_t i : dynSlots) { bsScalar.dpx[i] += bsScalar.vx[i] * h; bsScalar.dpy[i] += bsScalar.vy[i] * h; bsScalar.dq[i] += bsScalar.w[i] * h; }
+            for (std::uint32_t i : dynSlots) { bsScalar[i].dpx += bsScalar[i].vx * h; bsScalar[i].dpy += bsScalar[i].vy * h; bsScalar[i].dq += bsScalar[i].w * h; }
             for (auto& cc : sccs) { ref.Solve(cc, false); }
         }
         for (auto& cc : sccs) { ref.Restitution(cc); }
@@ -928,18 +928,18 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
 
     // Body 0 (slot 0) is NOT corrupted: its solved velocity matches the oracle.
     // A padding/read-only lane clobbering slot 0 would make these diverge wildly.
-    CHECK(bsWide.vx[0] == Approx(bsScalar.vx[0]).margin(1e-5));
-    CHECK(bsWide.vy[0] == Approx(bsScalar.vy[0]).margin(1e-5));
-    CHECK(bsWide.w[0]  == Approx(bsScalar.w[0]).margin(1e-5));
+    CHECK(bsWide[0].vx == Approx(bsScalar[0].vx).margin(1e-5));
+    CHECK(bsWide[0].vy == Approx(bsScalar[0].vy).margin(1e-5));
+    CHECK(bsWide[0].w  == Approx(bsScalar[0].w).margin(1e-5));
     // And it genuinely moved (the contact solve changed it -> a real, not trivial,
     // velocity that corruption could destroy).
-    CHECK(bsWide.vy[0] != Approx(50.0f));
+    CHECK(bsWide[0].vy != Approx(50.0f));
 
     // The kinematic plate (slot 3, read-only B) was NOT mutated by the solve
     // (its velocity is preserved through the read-only-B write-back).
-    CHECK(bsWide.vx[3] == Approx(7.0f));
-    CHECK(bsWide.vy[3] == Approx(0.0f));
-    CHECK(bsWide.w[3]  == Approx(0.0f));
+    CHECK(bsWide[3].vx == Approx(7.0f));
+    CHECK(bsWide[3].vy == Approx(0.0f));
+    CHECK(bsWide[3].w  == Approx(0.0f));
 }
 
 // ===========================================================================
@@ -948,7 +948,7 @@ TEST_CASE("PhysicsSimd: padding + read-only-B lanes cannot corrupt body slot 0",
 // Coloring spills a constraint when one DYNAMIC endpoint already occupies all
 // kColorCount colors (a hub dynamic body sharing a dynamic endpoint with >
 // kColorCount contacts). Those overflow refs are solved SEQUENTIALLY, scalar,
-// over the same BodyStateSoA -- they must NOT be dropped (or the hub would sink
+// over the same BodyStateStore -- they must NOT be dropped (or the hub would sink
 // /explode). We build a central dynamic disk surrounded by a dense ring of many
 // dynamic disks all overlapping it (so the hub is a dynamic endpoint in > 12
 // dynamic-dynamic contacts -> guaranteed overflow), drop it onto a floor under

@@ -21,6 +21,7 @@ ARCANE_SIMD_INLINE i32w iota()            noexcept { return i32w{ _mm256_setr_ep
 // -> bit-identical (no rounding). The contact-solver builds its gather/scatter
 // index vector from a plain int32_t[width] array via this op.
 ARCANE_SIMD_INLINE i32w iload(const int32_t* p) noexcept { assert((reinterpret_cast<std::uintptr_t>(p) & 31u) == 0); return i32w{ _mm256_load_si256(reinterpret_cast<const __m256i*>(p)) }; }
+ARCANE_SIMD_INLINE void istore(int32_t* p, i32w v) noexcept { assert((reinterpret_cast<std::uintptr_t>(p) & 31u) == 0); _mm256_store_si256(reinterpret_cast<__m256i*>(p), v.v); }
 
 ARCANE_SIMD_INLINE f32w load(const float* p)    noexcept { assert((reinterpret_cast<std::uintptr_t>(p) & 31u) == 0); return f32w{ _mm256_load_ps(p) }; }
 ARCANE_SIMD_INLINE void store(float* p, f32w a)  noexcept { assert((reinterpret_cast<std::uintptr_t>(p) & 31u) == 0); _mm256_store_ps(p, a.v); }

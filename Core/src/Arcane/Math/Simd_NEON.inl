@@ -24,6 +24,7 @@ ARCANE_SIMD_INLINE i32w iota()            noexcept { const int32_t k[4] = {0,1,2
 // but the solver's index arrays are alignas(32) regardless). Exact load ->
 // bit-identical. Mirrors the AVX2/scalar iload contract.
 ARCANE_SIMD_INLINE i32w iload(const int32_t* p) noexcept { return i32w{ vld1q_s32(p) }; }
+ARCANE_SIMD_INLINE void istore(int32_t* p, i32w v) noexcept { vst1q_s32(p, v.v); }
 
 ARCANE_SIMD_INLINE f32w load(const float* p)      noexcept { return f32w{ vld1q_f32(p) }; }
 ARCANE_SIMD_INLINE void store(float* p, f32w a)   noexcept { vst1q_f32(p, a.v); }

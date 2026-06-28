@@ -1,14 +1,14 @@
 #pragma once
 
-// BodyStateSoA: solver-local packed body state for the SIMD constraint solver.
+// BodyState.hpp: 32-byte AoS body-state row for the SIMD constraint solver.
 //
 // The lane-wide (graph-colored, SoA) solve gathers/scatters body velocities by
 // the constraint's body-index lanes. The world stores velocity as a per-
 // component Vec2 SoA (m_velX/m_velY/m_angVel) that is NOT gather-friendly, so
-// per Step we mirror a PACKED copy of the body state into the parallel float
-// arrays below, indexed BY SOLVERINDEX -- a DENSE per-step index space (Phase C,
-// Task 2), NOT the sparse world slot. The solver sizes them to solverCount+1
-// where solverCount = AwakeCount() + KinematicCount():
+// per Step we mirror a PACKED copy of the body state into the AoS rows below,
+// indexed BY SOLVERINDEX -- a DENSE per-step index space (Phase C, Task 2),
+// NOT the sparse world slot. The solver sizes them to solverCount+1 where
+// solverCount = AwakeCount() + KinematicCount():
 //   * awake dynamics occupy [0, AwakeCount())              at AwakeIndexOf(slot)
 //   * kinematics    occupy [AwakeCount(), solverCount)     at AwakeCount()+KinematicIndexOf(slot)
 //   * statics / spans / padding map to the shared zero DUMMY tail at solverCount.
@@ -17,8 +17,11 @@
 // SCATTER-SAFE DUMMY note. The packed scratch is dense (no per-world-slot holes),
 // so the gathers stay cache-local (the WIN -- not gather elimination).
 //
-// SCALAR CHOICE: these arrays are `float` (NOT Real) deliberately -- they feed
-// the SIMD f32w path directly. Vec2/Real/std::uint32_t come from PhysicsTypes.
+// LAYOUT: one 32-byte AoS row per solver slot (8 floats: vx/vy/w/dpx/dpy/dq +
+// 2 padding floats). alignas(32) places rows on cache-line boundaries.
+//
+// SCALAR CHOICE: fields are `float` (NOT Real) deliberately -- they feed the
+// SIMD f32w path directly. Vec2/Real/std::uint32_t come from PhysicsTypes.
 //
 // SCOPE: the struct + its sync bridge. SoftStep::Solve consumes the DENSE
 // SyncInCompacted/SyncOutCompacted methods (solverIndex-indexed -- the lane-wide
@@ -42,26 +45,43 @@ namespace Arcane
     {
         class PhysicsWorld;
 
-        // Solver-local packed body state, indexed BY SOLVERINDEX -- a DENSE per-step
-        // index space (Phase C, Task 2), NOT the sparse world slot. The solver sizes
-        // it to solverCount+1 (= AwakeCount()+KinematicCount()+1); the extra tail slot
-        // is the SCATTER-SAFE DUMMY padding + static/span B lanes target so an unmasked
-        // scatter never clobbers a real body. The lane-wide solve gathers/scatters
-        // these by the constraint's (solverIndex) body-index lanes; the world Vec2 SoA
-        // is not gather-friendly, so we mirror a DENSE packed copy per Step.
-        struct BodyStateSoA
+        // Solver-local packed body-state row, indexed BY SOLVERINDEX -- a DENSE
+        // per-step index space (Phase C, Task 2), NOT the sparse world slot. Eight
+        // floats: velocity (vx,vy,w), TGS position/angle delta (dpx,dpy,dq), and two
+        // padding floats to reach 32 bytes (one full cache line, 32-byte aligned).
+        // alignas(32) ensures each row starts on a 32-byte boundary and sizeof==32.
+        struct alignas(32) BodyState
         {
-            std::vector<float> vx, vy, w;     // velocity (lin x/y, ang)
-            std::vector<float> dpx, dpy, dq;  // accumulated position/angle delta (TGS)
+            float vx, vy, w;      // linear + angular velocity
+            float dpx, dpy, dq;  // accumulated position/angle delta (TGS)
+            float pad0, pad1;    // padding: sizeof(BodyState) == 32
+        };
+        static_assert(sizeof(BodyState) == 32, "BodyState must be 32 bytes");
+        static_assert(alignof(BodyState) == 32, "BodyState must be 32-byte aligned");
 
+        // Container for the solver's AoS body-state scratch. Sized to solverCount+1
+        // per Solve (the extra slot is the SCATTER-SAFE DUMMY padding + static/span B
+        // lanes target). MSVC's std::allocator honors 32-byte over-alignment for
+        // BodyState (C++17 over-aligned new), so the default vector is fine.
+        //
+        // Declared here, sync defs in SoftStep.cpp (needs PhysicsWorld accessors).
+        class BodyStateStore
+        {
+        public:
+            // Resize to n zero-initialized rows. Caller always passes solverCount+1.
             void Resize(std::uint32_t n)
             {
-                vx.assign(n, 0.f); vy.assign(n, 0.f); w.assign(n, 0.f);
-                dpx.assign(n, 0.f); dpy.assign(n, 0.f); dq.assign(n, 0.f);
+                m_states.assign(static_cast<std::size_t>(n), BodyState{});
             }
 
-            // Declared here, defined in SoftStep.cpp (needs the PhysicsWorld
-            // accessors).
+            BodyState* data() noexcept { return m_states.data(); }
+            const BodyState* data() const noexcept { return m_states.data(); }
+            std::size_t size() const noexcept { return m_states.size(); }
+
+            BodyState& operator[](std::size_t i) { return m_states[i]; }
+            const BodyState& operator[](std::size_t i) const { return m_states[i]; }
+
+            // Declared here, defined in SoftStep.cpp (needs PhysicsWorld accessors).
             //
             // SyncInCompacted (Phase C, Task 2): fill the DENSE scratch -- awake
             // dynamics at AwakeIndexOf(slot) (vel mirrored, dp/dq zeroed), kinematics
@@ -74,9 +94,9 @@ namespace Arcane
             // by re-deriving AwakeIndexOf(slot) per awake slot.
             //
             // SyncIn (legacy, world-slot-indexed): the original sparse fill -- world
-            // vel -> vx/vy/w by WORLD SLOT; dp/dq zeroed for awake dynamics. NO LONGER
-            // on the solver hot path (SyncInCompacted replaced it in Solve), but kept
-            // for the standalone SyncIn/SyncOut round-trip contract test which pins the
+            // vel -> row by WORLD SLOT; dp/dq zeroed for awake dynamics. NO LONGER on
+            // the solver hot path (SyncInCompacted replaced it in Solve), but kept for
+            // the standalone SyncIn/SyncOut round-trip contract test which pins the
             // world-slot bridge in isolation. Caller Resize()s to world.Count() first.
             void SyncIn(const PhysicsWorld& world);          // legacy world-slot fill
             void SyncInCompacted(const PhysicsWorld& world); // dense fill (solverIndex)
@@ -84,6 +104,10 @@ namespace Arcane
             // Dense write-back (Phase C, Task 2): awake dynamics' vel at
             // AwakeIndexOf(slot) -> world (kinematics read-only -> never written).
             void SyncOutCompacted(PhysicsWorld& world) const;
+
+        private:
+            std::vector<BodyState> m_states;
         };
+
     } // namespace Physics
 } // namespace Arcane

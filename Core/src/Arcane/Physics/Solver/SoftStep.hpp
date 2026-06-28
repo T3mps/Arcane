@@ -32,7 +32,7 @@
 //   3. ApplyRestitution (once): add restitution impulse for points whose
 //      approach speed exceeded the threshold.
 // IMPLEMENTATION: each contact pass (b/c/e + restitution) runs LANE-WIDE over a
-// per-step graph-colored Structure-of-Arrays (BodyStateSoA + ContactConstraintSimd,
+// per-step graph-colored AoS+SoA (BodyStateStore + ContactConstraintSimd,
 // the SimdSolve passes) plus a width-1 scalar Overflow* pass for the un-colorable
 // bucket; the integrate passes (a/d) iterate the SoA scalar. Joints stay scalar
 // against the world (velocities bridged SoA<->world only around the joint passes).
@@ -62,7 +62,7 @@
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Solver/Solver.hpp>
-#include <Arcane/Physics/Solver/BodyStateSoA.hpp>        // SIMD solve body state
+#include <Arcane/Physics/Solver/BodyState.hpp>            // SIMD solve body state
 #include <Arcane/Physics/Solver/ContactColoring.hpp>     // kColorCount (color bucket count)
 #include <Arcane/Physics/Solver/ContactConstraintSimd.hpp> // SoA batches + lane solve
 
@@ -82,8 +82,8 @@ namespace Arcane
             // ---- ISolver entry (the single per-Step driver) ----------------
             //
             // Runs the full TGS Soft pipeline as a LANE-WIDE COLORED-SoA solve:
-            //   sync world velocities -> BodyStateSoA (sized count+1, the +1 = the
-            //     scatter-safe dummy slot) ; PrepareContacts/PrepareJoints (scalar)
+            //   sync world velocities -> BodyStateStore AoS rows (sized count+1, the +1 =
+            //     the scatter-safe dummy slot) ; PrepareContacts/PrepareJoints (scalar)
             //   -> bucket the touching contacts by their PERSISTENT contact color
             //      (assigned incrementally at create/destroy -- no per-step recolor)
             //   -> Build one ContactConstraintSimd batch list per color
@@ -145,19 +145,19 @@ namespace Arcane
             // ---- SIMD lane-wide contact-solve helpers (Part 1) -------------
             //
             // The contact solve is the hot path; Solve() runs it lane-wide over a
-            // graph-colored SoA (BodyStateSoA + ContactConstraintSimd) via the
+            // graph-colored AoS+SoA (BodyStateStore + ContactConstraintSimd) via the
             // SimdSolve passes. These helpers integrate velocity/position over the
-            // SoA (scalar O(n)), bridge velocities to/from the world for the scalar
+            // AoS (scalar O(n)), bridge velocities to/from the world for the scalar
             // joint passes, and solve the un-colorable overflow bucket scalar (the
             // width-1 sequential twin of the SimdSolve passes -- they share one
-            // BodyStateSoA so they MUST stay numerically in lockstep).
+            // BodyStateStore so they MUST stay numerically in lockstep).
 
             // Integrate awake-dynamic velocities (gravity + linear damping) over
-            // the BodyStateSoA for one sub-step (the SoA-resident counterpart of
+            // the BodyStateStore AoS rows for one sub-step (the AoS-resident counterpart of
             // IntegrateVelocities; same predicate + math).
             void IntegrateVelocitiesSoA(SolverContext& ctx, Real h);
 
-            // Accumulate dp/dq += v*h over the BodyStateSoA for one sub-step.
+            // Accumulate dp/dq += v*h over the BodyStateStore AoS rows for one sub-step.
             void IntegratePositionsSoA(SolverContext& ctx, Real h);
 
             // Commit the SoA dp/dq onto the world position/angle (compound-COM
@@ -173,7 +173,7 @@ namespace Arcane
             void SyncVelFromWorld(SolverContext& ctx);
 
             // Solve the overflow (un-colorable) refs SEQUENTIALLY, width-1 scalar,
-            // over the BodyStateSoA -- one constraint at a time so they are scatter-
+            // over the BodyStateStore AoS rows -- one constraint at a time so they are scatter-
             // safe even though they may share bodies. The WIDTH-1 SEQUENTIAL twin of
             // the lane-wide SimdSolve::WarmStart/SolveNormalAndFriction/ApplyRestitution
             // passes (ContactConstraintSimd.hpp), reading/writing the SAME SoA -- the
@@ -184,11 +184,12 @@ namespace Arcane
 
             // ---- SIMD solve state (reused across steps) --------------------
             //
-            // m_bodyState: packed velocity + TGS dp/dq, indexed by world slot, sized
-            //   to world.Count()+1 (the extra slot is the SCATTER-SAFE DUMMY -- see
+            // m_bodyState: AoS packed velocity + TGS dp/dq (BodyStateStore: 32-byte
+            //   aligned rows), indexed by dense solverIndex (Phase C, Task 2), sized
+            //   to solverCount+1 (the extra slot is the SCATTER-SAFE DUMMY -- see
             //   ContactConstraintSimd::Build). The lane-wide solve gathers/scatters
-            //   through it; world<->SoA sync happens at the Step boundary + around
-            //   joint passes.
+            //   through it via .data(); world<->AoS sync happens at the Step boundary
+            //   + around joint passes.
             // m_colorRefs/m_overflowRefs: per-step bucketing of the emitted
             //   constraints by their PERSISTENT contact color (Phase C, Task 5; the
             //   per-step greedy recolor + its m_edges/m_coloring scratch are gone).
@@ -199,7 +200,7 @@ namespace Arcane
             //   that found no free color at create, OR a span) -> the scalar tail.
             // m_colorBatches: per-color SoA batch lists built from m_colorRefs[k],
             //   kept per color so the overflow scalar pass composes after.
-            BodyStateSoA                    m_bodyState;
+            BodyStateStore                  m_bodyState;
             std::array<std::vector<std::uint32_t>, kColorCount> m_colorRefs;
             std::vector<std::uint32_t>      m_overflowRefs;
             std::vector<std::vector<ContactConstraintSimd>> m_colorBatches;

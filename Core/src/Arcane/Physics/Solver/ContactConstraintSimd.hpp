@@ -77,7 +77,7 @@
 #include <vector>
 
 #include <Arcane/Math/Simd.hpp>                  // Arcane::Simd::f32w::width + ops
-#include <Arcane/Physics/Solver/BodyStateSoA.hpp> // gather/scatter target (T5 solve)
+#include <Arcane/Physics/Solver/BodyState.hpp>   // gather/scatter target (T5 solve -> AoS)
 #include <Arcane/Physics/Solver/Solver.hpp>       // ContactConstraint / ...Point
 
 namespace Arcane
@@ -127,7 +127,7 @@ namespace Arcane
             alignas(32) float invMassB[kWidth];     // body B inverse mass
             alignas(32) float invInertiaB[kWidth];  // body B inverse inertia
 
-            // Body index lanes -> i32w gather/scatter of BodyStateSoA velocities.
+            // Body index lanes -> i32w gather/scatter of BodyState rows (AoS).
             alignas(32) std::int32_t bodyIndexA[kWidth];   // A world slot
             // B world slot, OR 0 when dynB==0 (read-only B: static/kinematic/span)
             // so the unconditional T5 gather stays in-range; the value is
@@ -166,7 +166,7 @@ namespace Arcane
             // A padding lane, or a read-only-B lane (static/kinematic/span), must
             // NOT scatter to a real dynamic body's slot or it could clobber that
             // body's freshly-solved velocity with a stale value. So the caller
-            // sizes BodyStateSoA to solverCount+1 and passes dummyIndex =
+            // sizes BodyStateStore to solverCount+1 and passes dummyIndex =
             // solverCount: a zeroed throwaway slot that ONLY padding + static/span B
             // lanes target. The gather/scatter then run unconditionally and only the
             // dummy slot ever takes a redundant write -- no real body is corrupted.
@@ -415,8 +415,8 @@ namespace Arcane
         // from SoftStep.cpp, per lane, over Arcane::Simd.
         // ====================================================================
         //
-        // Each pass takes the per-color batch vector + the solver's BodyStateSoA
-        // and processes ALL kWidth lanes of every batch (padding/read-only-B lanes
+        // Each pass takes the per-color batch vector + the solver's BodyStateStore
+        // (AoS rows, accessed via .data()) and processes ALL kWidth lanes of every batch (padding/read-only-B lanes
         // are masked no-ops by construction -- zero inv-mass and the dummy slot).
         // Graph coloring guarantees no two LIVE lanes in a batch share a dynamic
         // body, so the gather -> math -> scatter is hazard-free; the only redundant
@@ -425,7 +425,7 @@ namespace Arcane
         // LOCKSTEP: this SimdSolve trio (WarmStart / SolveNormalAndFriction /
         // ApplyRestitution) must match the scalar overflow trio Overflow{WarmStart/
         // Solve/Restitution} in SoftStep.cpp lane-for-scalar. The colored batches and
-        // the overflow constraints share ONE BodyStateSoA and compose into ONE
+        // the overflow constraints share ONE BodyStateStore and compose into ONE
         // velocity store within a single substep, so the lane-wide math here and the
         // width-1 sequential overflow math MUST stay numerically identical (they are
         // the same TGS normal+friction+restitution step at two widths). The plain-
@@ -463,16 +463,54 @@ namespace Arcane
                 return cmp_gt(load(maskArr), setzero());
             }
 
-            // Gather a body-state array (vx/vy/w/dpx/dpy/dq) by an i32w slot index.
-            ARCANE_SIMD_INLINE f32w GatherBody(const std::vector<float>& arr,
-                                               i32w idx) noexcept
+            // Gathered body-state from the AoS store: one f32w per field.
+            struct BodyStateW { f32w vx, vy, w, dpx, dpy, dq; };
+
+            // Naive per-lane scalar gather of all 6 velocity/delta fields from
+            // the AoS BodyState rows. idx holds the dense solverIndex per lane.
+            // We store idx to an aligned scratch, loop over lanes, load each row,
+            // then pack the 6 fields back into f32w via aligned load. The lanes are
+            // independent (graph-colored), so the order is irrelevant.
+            ARCANE_SIMD_INLINE BodyStateW GatherBodies(const BodyState* states, i32w idx) noexcept
             {
-                return gather(arr.data(), idx);
+                constexpr int W = ContactConstraintSimd::kWidth;
+                alignas(32) std::int32_t idxBuf[W];
+                istore(idxBuf, idx);
+                alignas(32) float tvx[W], tvy[W], tw[W], tdpx[W], tdpy[W], tdq[W];
+                for (int L = 0; L < W; ++L)
+                {
+                    const BodyState& s = states[idxBuf[L]];
+                    tvx[L]  = s.vx;  tvy[L]  = s.vy;  tw[L]  = s.w;
+                    tdpx[L] = s.dpx; tdpy[L] = s.dpy; tdq[L] = s.dq;
+                }
+                BodyStateW r;
+                r.vx  = load(tvx);  r.vy  = load(tvy);  r.w  = load(tw);
+                r.dpx = load(tdpx); r.dpy = load(tdpy); r.dq = load(tdq);
+                return r;
             }
-            ARCANE_SIMD_INLINE void ScatterBody(std::vector<float>& arr, i32w idx,
-                                                f32w v) noexcept
+
+            // Scatter velocity (vx, vy, w) back to the AoS rows. Only writes lanes
+            // where write mask is true (skip-on-false: non-dynamic B / dummy lanes
+            // never update a real row). Uses a store-to-temp / scalar write-back so
+            // no actual scatter instruction is needed.
+            ARCANE_SIMD_INLINE void ScatterVel(BodyState* states, i32w idx,
+                                               f32w vx, f32w vy, f32w w, b32w write) noexcept
             {
-                scatter(arr.data(), idx, v);
+                constexpr int W = ContactConstraintSimd::kWidth;
+                alignas(32) std::int32_t idxBuf[W];
+                istore(idxBuf, idx);
+                alignas(32) float tvx[W], tvy[W], tw_[W], wm[W];
+                store(tvx, vx); store(tvy, vy); store(tw_, w);
+                store(wm, select(write, splat(1.0f), setzero()));
+                for (int L = 0; L < W; ++L)
+                {
+                    if (wm[L] != 0.0f)
+                    {
+                        states[idxBuf[L]].vx = tvx[L];
+                        states[idxBuf[L]].vy = tvy[L];
+                        states[idxBuf[L]].w  = tw_[L];
+                    }
+                }
             }
 
             // ---- WarmStart: apply accumulated n*nImp + t*tImp to body vels -----
@@ -481,9 +519,10 @@ namespace Arcane
 
             // Range overload: process batches [begin, end). Loop body unchanged.
             inline void WarmStart(std::vector<ContactConstraintSimd>& batches,
-                                  BodyStateSoA& bs,
+                                  BodyState* states,
                                   std::size_t begin, std::size_t end)
             {
+                const b32w allTrue = cmp_gt(splat(1.0f), setzero());
                 for (std::size_t i = begin; i < end; ++i)
                 {
                     ContactConstraintSimd& cc = batches[i];
@@ -501,10 +540,10 @@ namespace Arcane
                     const f32w iMb = load(cc.invMassB);
                     const f32w iIb = load(cc.invInertiaB);
 
-                    f32w vAx = GatherBody(bs.vx, ia), vAy = GatherBody(bs.vy, ia);
-                    f32w wA  = GatherBody(bs.w,  ia);
-                    f32w vBx = GatherBody(bs.vx, ib), vBy = GatherBody(bs.vy, ib);
-                    f32w wB  = GatherBody(bs.w,  ib);
+                    const BodyStateW sA = GatherBodies(states, ia);
+                    const BodyStateW sB = GatherBodies(states, ib);
+                    f32w vAx = sA.vx, vAy = sA.vy, wA = sA.w;
+                    f32w vBx = sB.vx, vBy = sB.vy, wB = sB.w;
 
                     for (int p = 0; p < 2; ++p)
                     {
@@ -529,20 +568,15 @@ namespace Arcane
                         wB  = wB  - iIb * (rBx * Py - rBy * Px);
                     }
 
-                    ScatterBody(bs.vx, ia, vAx);
-                    ScatterBody(bs.vy, ia, vAy);
-                    ScatterBody(bs.w,  ia, wA);
-                    // B writes only where dynB; non-dyn lanes write back the
-                    // unchanged gathered value (-> the dummy slot, harmless).
-                    ScatterBody(bs.vx, ib, select(dyn, vBx, GatherBody(bs.vx, ib)));
-                    ScatterBody(bs.vy, ib, select(dyn, vBy, GatherBody(bs.vy, ib)));
-                    ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
+                    // A is always dynamic (unconditional scatter); B only where dynB.
+                    ScatterVel(states, ia, vAx, vAy, wA, allTrue);
+                    ScatterVel(states, ib, vBx, vBy, wB, dyn);
                 }
             }
             inline void WarmStart(std::vector<ContactConstraintSimd>& batches,
-                                  BodyStateSoA& bs)
+                                  BodyState* states)
             {
-                WarmStart(batches, bs, 0, batches.size());
+                WarmStart(batches, states, 0, batches.size());
             }
 
             // ---- Normal + friction solve --------------------------------------
@@ -552,7 +586,7 @@ namespace Arcane
 
             // Range overload: process batches [begin, end). Loop body unchanged.
             inline void SolveNormalAndFriction(std::vector<ContactConstraintSimd>& batches,
-                                               BodyStateSoA& bs, float h, bool useBias,
+                                               BodyState* states, float h, bool useBias,
                                                float maxBiasVel,
                                                std::size_t begin, std::size_t end)
             {
@@ -560,6 +594,7 @@ namespace Arcane
                 const f32w vMaxNeg = splat(-maxBiasVel);
                 const f32w one = splat(1.0f);
                 const f32w zero = setzero();
+                const b32w allTrue = cmp_gt(splat(1.0f), setzero());
 
                 for (std::size_t i = begin; i < end; ++i)
                 {
@@ -583,15 +618,13 @@ namespace Arcane
                     const f32w ccImpScale = load(cc.impulseScale);
                     const f32w ccFriction = load(cc.friction);
 
-                    f32w vAx = GatherBody(bs.vx, ia), vAy = GatherBody(bs.vy, ia);
-                    f32w wA  = GatherBody(bs.w,  ia);
-                    f32w vBx = GatherBody(bs.vx, ib), vBy = GatherBody(bs.vy, ib);
-                    f32w wB  = GatherBody(bs.w,  ib);
+                    const BodyStateW sA = GatherBodies(states, ia);
+                    const BodyStateW sB = GatherBodies(states, ib);
+                    f32w vAx = sA.vx, vAy = sA.vy, wA = sA.w;
+                    f32w vBx = sB.vx, vBy = sB.vy, wB = sB.w;
 
-                    const f32w dpAx = GatherBody(bs.dpx, ia), dpAy = GatherBody(bs.dpy, ia);
-                    const f32w drA  = GatherBody(bs.dq,  ia);
-                    const f32w dpBx = GatherBody(bs.dpx, ib), dpBy = GatherBody(bs.dpy, ib);
-                    const f32w drB  = GatherBody(bs.dq,  ib);
+                    const f32w dpAx = sA.dpx, dpAy = sA.dpy, drA = sA.dq;
+                    const f32w dpBx = sB.dpx, dpBy = sB.dpy, drB = sB.dq;
 
                     // ---- normal solve (per point) -----------------------------
                     for (int p = 0; p < 2; ++p)
@@ -690,19 +723,16 @@ namespace Arcane
                         wB  = wB  - iIb * (rBx * Py - rBy * Px);
                     }
 
-                    ScatterBody(bs.vx, ia, vAx);
-                    ScatterBody(bs.vy, ia, vAy);
-                    ScatterBody(bs.w,  ia, wA);
-                    ScatterBody(bs.vx, ib, select(dyn, vBx, GatherBody(bs.vx, ib)));
-                    ScatterBody(bs.vy, ib, select(dyn, vBy, GatherBody(bs.vy, ib)));
-                    ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
+                    // A is always dynamic (unconditional scatter); B only where dynB.
+                    ScatterVel(states, ia, vAx, vAy, wA, allTrue);
+                    ScatterVel(states, ib, vBx, vBy, wB, dyn);
                 }
             }
             inline void SolveNormalAndFriction(std::vector<ContactConstraintSimd>& batches,
-                                               BodyStateSoA& bs, float h, bool useBias,
+                                               BodyState* states, float h, bool useBias,
                                                float maxBiasVel)
             {
-                SolveNormalAndFriction(batches, bs, h, useBias, maxBiasVel, 0, batches.size());
+                SolveNormalAndFriction(batches, states, h, useBias, maxBiasVel, 0, batches.size());
             }
 
             // ---- Restitution ---------------------------------------------------
@@ -714,11 +744,12 @@ namespace Arcane
 
             // Range overload: process batches [begin, end). Loop body unchanged.
             inline void ApplyRestitution(std::vector<ContactConstraintSimd>& batches,
-                                         BodyStateSoA& bs, float threshold,
+                                         BodyState* states, float threshold,
                                          std::size_t begin, std::size_t end)
             {
                 const f32w negThresh = splat(-threshold);
                 const f32w zero = setzero();
+                const b32w allTrue = cmp_gt(splat(1.0f), setzero());
 
                 for (std::size_t i = begin; i < end; ++i)
                 {
@@ -743,10 +774,10 @@ namespace Arcane
                     const f32w iMb = load(cc.invMassB);
                     const f32w iIb = load(cc.invInertiaB);
 
-                    f32w vAx = GatherBody(bs.vx, ia), vAy = GatherBody(bs.vy, ia);
-                    f32w wA  = GatherBody(bs.w,  ia);
-                    f32w vBx = GatherBody(bs.vx, ib), vBy = GatherBody(bs.vy, ib);
-                    f32w wB  = GatherBody(bs.w,  ib);
+                    const BodyStateW sA = GatherBodies(states, ia);
+                    const BodyStateW sB = GatherBodies(states, ib);
+                    f32w vAx = sA.vx, vAy = sA.vy, wA = sA.w;
+                    f32w vBx = sB.vx, vBy = sB.vy, wB = sB.w;
 
                     for (int p = 0; p < 2; ++p)
                     {
@@ -789,18 +820,15 @@ namespace Arcane
                         wB  = wB  - iIb * (rBx * Py - rBy * Px);
                     }
 
-                    ScatterBody(bs.vx, ia, vAx);
-                    ScatterBody(bs.vy, ia, vAy);
-                    ScatterBody(bs.w,  ia, wA);
-                    ScatterBody(bs.vx, ib, select(dyn, vBx, GatherBody(bs.vx, ib)));
-                    ScatterBody(bs.vy, ib, select(dyn, vBy, GatherBody(bs.vy, ib)));
-                    ScatterBody(bs.w,  ib, select(dyn, wB,  GatherBody(bs.w,  ib)));
+                    // A is always dynamic (unconditional scatter); B only where dynB.
+                    ScatterVel(states, ia, vAx, vAy, wA, allTrue);
+                    ScatterVel(states, ib, vBx, vBy, wB, dyn);
                 }
             }
             inline void ApplyRestitution(std::vector<ContactConstraintSimd>& batches,
-                                         BodyStateSoA& bs, float threshold)
+                                         BodyState* states, float threshold)
             {
-                ApplyRestitution(batches, bs, threshold, 0, batches.size());
+                ApplyRestitution(batches, states, threshold, 0, batches.size());
             }
 
             // ---- Store accumulated impulses back onto ctx.contacts (Hazard 3) --

@@ -18,6 +18,7 @@ ARCANE_SIMD_INLINE i32w iota()              noexcept { return i32w{ 0 }; } // la
 // AVX2/NEON iload contract: build the gather/scatter index vector from a plain
 // int32_t array. The scalar array need not be aligned (it is a plain deref).
 ARCANE_SIMD_INLINE i32w iload(const int32_t* p) noexcept { return i32w{ *p }; }
+ARCANE_SIMD_INLINE void istore(int32_t* p, i32w v) noexcept { *p = v.v; }
 
 ARCANE_SIMD_INLINE f32w load(const float* p)    noexcept { return f32w{ *p }; }
 ARCANE_SIMD_INLINE void store(float* p, f32w a) noexcept { *p = a.v; }

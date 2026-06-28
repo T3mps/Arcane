@@ -17,7 +17,7 @@
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/Joints/Joint.hpp>    // Joint (Prepare/SolveVelocity)
 #include <Arcane/Physics/Solver/SoftCoeffs.hpp>   // shared MakeSoft + SoftCoeffs
-#include <Arcane/Physics/Solver/BodyStateSoA.hpp> // SyncIn/SyncOut defs (SIMD solver Task 1)
+#include <Arcane/Physics/Solver/BodyState.hpp>    // BodyStateStore sync defs
 #include <Arcane/Jobs/TaskExecutor.hpp>            // ITaskExecutor::ParallelFor (Phase D1)
 
 namespace Arcane
@@ -64,8 +64,8 @@ namespace Arcane
         }
 
         // ===================================================================
-        // BodyStateSoA world<->solver sync (SIMD constraint-solver Task 1;
-        // dense re-home Phase C, Task 2)
+        // BodyStateStore world<->solver sync (SIMD constraint-solver Task 1;
+        // AoS re-layout Task 2; dense re-home Phase C, Task 2)
         // ===================================================================
         //
         // TWO INDEX SPACES live here. The SOLVER hot path uses the DENSE pair
@@ -89,7 +89,7 @@ namespace Arcane
         // SyncIn additionally copies all Alive non-dynamic (Static/Kinematic) slots
         // so the solver's B-endpoint velocity reads see current values.
 
-        void BodyStateSoA::SyncIn(const PhysicsWorld& world)
+        void BodyStateStore::SyncIn(const PhysicsWorld& world)
         {
             // Two-pass design (Phase B, Task 3):
             //
@@ -99,19 +99,19 @@ namespace Arcane
             world.ForEachAwake([&](std::uint32_t i)
             {
                 const Vec2 v = world.VelSlot(i);
-                vx[i] = v.x;
-                vy[i] = v.y;
-                w[i]  = world.AngVelSlot(i);
-                dpx[i] = 0.f;
-                dpy[i] = 0.f;
-                dq[i]  = 0.f;
+                m_states[i].vx  = v.x;
+                m_states[i].vy  = v.y;
+                m_states[i].w   = world.AngVelSlot(i);
+                m_states[i].dpx = 0.f;
+                m_states[i].dpy = 0.f;
+                m_states[i].dq  = 0.f;
             });
 
             // (b) Static / kinematic slots are gathered as contact B-endpoints, so
-            //     their velocity MUST stay correct in the SoA every step (statics = 0;
+            //     their velocity MUST stay correct in the AoS every step (statics = 0;
             //     kinematics = their set velocity). This also handles the recycled-slot
             //     hole: a slot that was a moving Dynamic, removed, then recycled as a
-            //     Static would keep a stale non-zero velocity in the SoA if SyncIn
+            //     Static would keep a stale non-zero velocity in the AoS if SyncIn
             //     never copies it. Non-dynamics do not integrate, so dp/dq stay zero
             //     (they arrive zero from the caller's Resize; we never touch them).
             //
@@ -128,26 +128,26 @@ namespace Arcane
                     continue; // dead or dynamic (handled by ForEachAwake above)
                 }
                 const Vec2 v = world.VelSlot(i);
-                vx[i] = v.x;
-                vy[i] = v.y;
-                w[i]  = world.AngVelSlot(i);
+                m_states[i].vx = v.x;
+                m_states[i].vy = v.y;
+                m_states[i].w  = world.AngVelSlot(i);
                 // dp/dq intentionally left at zero (non-dynamics never integrate).
             }
         }
 
-        void BodyStateSoA::SyncOut(PhysicsWorld& world) const
+        void BodyStateStore::SyncOut(PhysicsWorld& world) const
         {
             // Phase B, Task 3: iterate the awake-set directly -- it IS the gate.
             // Only awake dynamics were SyncIn'd and integrated; only they get written
             // back. Non-dynamics and sleeping dynamics are never disturbed.
             world.ForEachAwake([&](std::uint32_t i)
             {
-                world.SetVelSlot(i, Vec2(vx[i], vy[i]));
-                world.SetAngVelSlot(i, w[i]);
+                world.SetVelSlot(i, Vec2(m_states[i].vx, m_states[i].vy));
+                world.SetAngVelSlot(i, m_states[i].w);
             });
         }
 
-        void BodyStateSoA::SyncInCompacted(const PhysicsWorld& world)
+        void BodyStateStore::SyncInCompacted(const PhysicsWorld& world)
         {
             // DENSE fill (Phase C, Task 2). The caller Resize()d to solverCount+1, so
             // every row -- including the dummy tail at solverCount -- starts at zero.
@@ -159,12 +159,12 @@ namespace Arcane
             {
                 const std::uint32_t i = world.AwakeIndexOf(s);
                 const Vec2 v = world.VelSlot(s);
-                vx[i] = v.x;
-                vy[i] = v.y;
-                w[i]  = world.AngVelSlot(s);
-                dpx[i] = 0.f;
-                dpy[i] = 0.f;
-                dq[i]  = 0.f;
+                m_states[i].vx  = v.x;
+                m_states[i].vy  = v.y;
+                m_states[i].w   = world.AngVelSlot(s);
+                m_states[i].dpx = 0.f;
+                m_states[i].dpy = 0.f;
+                m_states[i].dq  = 0.f;
             });
 
             // (b) Kinematics -> dense row awakeCount + KinematicIndexOf(slot) in
@@ -181,14 +181,14 @@ namespace Arcane
             {
                 const std::uint32_t i = awakeCount + world.KinematicIndexOf(s);
                 const Vec2 v = world.VelSlot(s);
-                vx[i] = v.x;
-                vy[i] = v.y;
-                w[i]  = world.AngVelSlot(s);
+                m_states[i].vx = v.x;
+                m_states[i].vy = v.y;
+                m_states[i].w  = world.AngVelSlot(s);
                 // dp/dq intentionally left at zero (kinematics never integrate).
             });
         }
 
-        void BodyStateSoA::SyncOutCompacted(PhysicsWorld& world) const
+        void BodyStateStore::SyncOutCompacted(PhysicsWorld& world) const
         {
             // DENSE write-back (Phase C, Task 2). Read each awake dynamic's velocity
             // from its dense row AwakeIndexOf(slot) and push it to the world. Only
@@ -197,8 +197,8 @@ namespace Arcane
             world.ForEachAwake([&](std::uint32_t s)
             {
                 const std::uint32_t i = world.AwakeIndexOf(s);
-                world.SetVelSlot(s, Vec2(vx[i], vy[i]));
-                world.SetAngVelSlot(s, w[i]);
+                world.SetVelSlot(s, Vec2(m_states[i].vx, m_states[i].vy));
+                world.SetAngVelSlot(s, m_states[i].w);
             });
         }
 
@@ -345,18 +345,18 @@ namespace Arcane
                             continue; // pinned dynamic -- never integrates
                         }
                         const std::uint32_t i = w.AwakeIndexOf(s);
-                        float vx = m_bodyState.vx[i] + static_cast<float>(g.x * h);
-                        float vy = m_bodyState.vy[i] + static_cast<float>(g.y * h);
-                        float wv = m_bodyState.w[i];
+                        float vx = m_bodyState[i].vx + static_cast<float>(g.x * h);
+                        float vy = m_bodyState[i].vy + static_cast<float>(g.y * h);
+                        float wv = m_bodyState[i].w;
                         const Real d = w.LinDampSlot(s);
                         if (d > Real(0))
                         {
                             const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
                             vx *= f; vy *= f; wv *= f;
                         }
-                        m_bodyState.vx[i] = vx;
-                        m_bodyState.vy[i] = vy;
-                        m_bodyState.w[i]  = wv;
+                        m_bodyState[i].vx = vx;
+                        m_bodyState[i].vy = vy;
+                        m_bodyState[i].w  = wv;
                     }
                 });
         }
@@ -378,9 +378,9 @@ namespace Arcane
                     {
                         const std::uint32_t s = aw[j];
                         const std::uint32_t i = w.AwakeIndexOf(s);
-                        m_bodyState.dpx[i] += m_bodyState.vx[i] * fh;
-                        m_bodyState.dpy[i] += m_bodyState.vy[i] * fh;
-                        m_bodyState.dq[i]  += m_bodyState.w[i]  * fh;
+                        m_bodyState[i].dpx += m_bodyState[i].vx * fh;
+                        m_bodyState[i].dpy += m_bodyState[i].vy * fh;
+                        m_bodyState[i].dq  += m_bodyState[i].w  * fh;
                     }
                 });
         }
@@ -406,9 +406,9 @@ namespace Arcane
             {
                 const std::uint32_t s = aw[j];
                 const std::uint32_t i = w.AwakeIndexOf(s);
-                const Vec2 dp(static_cast<Real>(m_bodyState.dpx[i]),
-                              static_cast<Real>(m_bodyState.dpy[i]));
-                const Real dr = static_cast<Real>(m_bodyState.dq[i]);
+                const Vec2 dp(static_cast<Real>(m_bodyState[i].dpx),
+                              static_cast<Real>(m_bodyState[i].dpy));
+                const Real dr = static_cast<Real>(m_bodyState[i].dq);
                 const Vec2 p0 = w.PosSlot(s);
                 const Real a0 = w.GetAngle(w.HandleOf(s));
                 const Vec2 lc = w.LocalCenterSlot(s);
@@ -430,9 +430,9 @@ namespace Arcane
             w.ForEachAwake([&](std::uint32_t s)
             {
                 const std::uint32_t i = w.AwakeIndexOf(s);
-                w.SetVelSlot(s, Vec2(static_cast<Real>(m_bodyState.vx[i]),
-                                     static_cast<Real>(m_bodyState.vy[i])));
-                w.SetAngVelSlot(s, static_cast<Real>(m_bodyState.w[i]));
+                w.SetVelSlot(s, Vec2(static_cast<Real>(m_bodyState[i].vx),
+                                     static_cast<Real>(m_bodyState[i].vy)));
+                w.SetAngVelSlot(s, static_cast<Real>(m_bodyState[i].w));
             });
         }
 
@@ -446,9 +446,9 @@ namespace Arcane
             {
                 const std::uint32_t i = w.AwakeIndexOf(s);
                 const Vec2 v = w.VelSlot(s);
-                m_bodyState.vx[i] = static_cast<float>(v.x);
-                m_bodyState.vy[i] = static_cast<float>(v.y);
-                m_bodyState.w[i]  = static_cast<float>(w.AngVelSlot(s));
+                m_bodyState[i].vx = static_cast<float>(v.x);
+                m_bodyState[i].vy = static_cast<float>(v.y);
+                m_bodyState[i].w  = static_cast<float>(w.AngVelSlot(s));
             });
         }
 
@@ -460,7 +460,7 @@ namespace Arcane
         // create -- a hub body in > kColorCount contacts -- OR a transient span with
         // no pool home). They CANNOT solve lane-wide (an overflow hub shares a body
         // with a colored contact), so we solve them one-at-a-time, scalar, over the
-        // SAME BodyStateSoA -- sequential => no scatter conflict. They read/write the
+        // SAME BodyStateStore -- sequential => no scatter conflict. They read/write the
         // SoA velocity + dp/dq (so overflow composes with the colored result in the
         // same velocity store). One contact per call iter.
         //
@@ -547,10 +547,10 @@ namespace Arcane
                 const Vec2 n = cc.normal;
                 const Vec2 tangent(-n.y, n.x);
 
-                Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
-                Real wA = m_bodyState.w[ob.ia];
+                Vec2 vA(m_bodyState[ob.ia].vx, m_bodyState[ob.ia].vy);
+                Real wA = m_bodyState[ob.ia].w;
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.bIsBody) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+                if (ob.bIsBody) { vB = Vec2(m_bodyState[ob.ib].vx, m_bodyState[ob.ib].vy); wB = m_bodyState[ob.ib].w; }
 
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
@@ -561,14 +561,14 @@ namespace Arcane
                     if (ob.dynB) { vB -= P * ob.iMb; wB -= ob.iIb * CrossRP(cp.anchorB, P); }
                 }
 
-                m_bodyState.vx[ob.ia] = static_cast<float>(vA.x);
-                m_bodyState.vy[ob.ia] = static_cast<float>(vA.y);
-                m_bodyState.w[ob.ia]  = static_cast<float>(wA);
+                m_bodyState[ob.ia].vx = static_cast<float>(vA.x);
+                m_bodyState[ob.ia].vy = static_cast<float>(vA.y);
+                m_bodyState[ob.ia].w  = static_cast<float>(wA);
                 if (ob.dynB)
                 {
-                    m_bodyState.vx[ob.ib] = static_cast<float>(vB.x);
-                    m_bodyState.vy[ob.ib] = static_cast<float>(vB.y);
-                    m_bodyState.w[ob.ib]  = static_cast<float>(wB);
+                    m_bodyState[ob.ib].vx = static_cast<float>(vB.x);
+                    m_bodyState[ob.ib].vy = static_cast<float>(vB.y);
+                    m_bodyState[ob.ib].w  = static_cast<float>(wB);
                 }
             }
         }
@@ -588,15 +588,15 @@ namespace Arcane
                 const Vec2 n = cc.normal;
                 const Vec2 tangent(-n.y, n.x);
 
-                Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
-                Real wA = m_bodyState.w[ob.ia];
+                Vec2 vA(m_bodyState[ob.ia].vx, m_bodyState[ob.ia].vy);
+                Real wA = m_bodyState[ob.ia].w;
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.bIsBody) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+                if (ob.bIsBody) { vB = Vec2(m_bodyState[ob.ib].vx, m_bodyState[ob.ib].vy); wB = m_bodyState[ob.ib].w; }
 
-                const Vec2 dpA(m_bodyState.dpx[ob.ia], m_bodyState.dpy[ob.ia]);
-                const Real drA = m_bodyState.dq[ob.ia];
+                const Vec2 dpA(m_bodyState[ob.ia].dpx, m_bodyState[ob.ia].dpy);
+                const Real drA = m_bodyState[ob.ia].dq;
                 Vec2 dpB(Real(0), Real(0)); Real drB = Real(0);
-                if (ob.dynB) { dpB = Vec2(m_bodyState.dpx[ob.ib], m_bodyState.dpy[ob.ib]); drB = m_bodyState.dq[ob.ib]; }
+                if (ob.dynB) { dpB = Vec2(m_bodyState[ob.ib].dpx, m_bodyState[ob.ib].dpy); drB = m_bodyState[ob.ib].dq; }
 
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
@@ -639,14 +639,14 @@ namespace Arcane
                     if (ob.dynB) { vB -= P * ob.iMb; wB -= ob.iIb * CrossRP(rB, P); }
                 }
 
-                m_bodyState.vx[ob.ia] = static_cast<float>(vA.x);
-                m_bodyState.vy[ob.ia] = static_cast<float>(vA.y);
-                m_bodyState.w[ob.ia]  = static_cast<float>(wA);
+                m_bodyState[ob.ia].vx = static_cast<float>(vA.x);
+                m_bodyState[ob.ia].vy = static_cast<float>(vA.y);
+                m_bodyState[ob.ia].w  = static_cast<float>(wA);
                 if (ob.dynB)
                 {
-                    m_bodyState.vx[ob.ib] = static_cast<float>(vB.x);
-                    m_bodyState.vy[ob.ib] = static_cast<float>(vB.y);
-                    m_bodyState.w[ob.ib]  = static_cast<float>(wB);
+                    m_bodyState[ob.ib].vx = static_cast<float>(vB.x);
+                    m_bodyState[ob.ib].vy = static_cast<float>(vB.y);
+                    m_bodyState[ob.ib].w  = static_cast<float>(wB);
                 }
             }
         }
@@ -664,10 +664,10 @@ namespace Arcane
                 const OverflowBodies ob = OverflowSetup(cc, w, awakeCount, solverCount);
                 const Vec2 n = cc.normal;
 
-                Vec2 vA(m_bodyState.vx[ob.ia], m_bodyState.vy[ob.ia]);
-                Real wA = m_bodyState.w[ob.ia];
+                Vec2 vA(m_bodyState[ob.ia].vx, m_bodyState[ob.ia].vy);
+                Real wA = m_bodyState[ob.ia].w;
                 Vec2 vB(Real(0), Real(0)); Real wB = Real(0);
-                if (ob.bIsBody) { vB = Vec2(m_bodyState.vx[ob.ib], m_bodyState.vy[ob.ib]); wB = m_bodyState.w[ob.ib]; }
+                if (ob.bIsBody) { vB = Vec2(m_bodyState[ob.ib].vx, m_bodyState[ob.ib].vy); wB = m_bodyState[ob.ib].w; }
 
                 for (int p = 0; p < cc.pointCount; ++p)
                 {
@@ -686,14 +686,14 @@ namespace Arcane
                     if (ob.dynB) { vB -= P * ob.iMb; wB -= ob.iIb * CrossRP(rB, P); }
                 }
 
-                m_bodyState.vx[ob.ia] = static_cast<float>(vA.x);
-                m_bodyState.vy[ob.ia] = static_cast<float>(vA.y);
-                m_bodyState.w[ob.ia]  = static_cast<float>(wA);
+                m_bodyState[ob.ia].vx = static_cast<float>(vA.x);
+                m_bodyState[ob.ia].vy = static_cast<float>(vA.y);
+                m_bodyState[ob.ia].w  = static_cast<float>(wA);
                 if (ob.dynB)
                 {
-                    m_bodyState.vx[ob.ib] = static_cast<float>(vB.x);
-                    m_bodyState.vy[ob.ib] = static_cast<float>(vB.y);
-                    m_bodyState.w[ob.ib]  = static_cast<float>(wB);
+                    m_bodyState[ob.ib].vx = static_cast<float>(vB.x);
+                    m_bodyState[ob.ib].vy = static_cast<float>(vB.y);
+                    m_bodyState[ob.ib].w  = static_cast<float>(wB);
                 }
             }
         }
@@ -833,7 +833,7 @@ namespace Arcane
                 {
                     ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
                         [&](std::size_t b, std::size_t e, std::uint32_t)
-                        { SimdSolve::WarmStart(batches, m_bodyState, b, e); });
+                        { SimdSolve::WarmStart(batches, m_bodyState.data(), b, e); });
                 }
                 OverflowWarmStart(ctx);
 
@@ -844,7 +844,7 @@ namespace Arcane
                 {
                     ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
                         [&](std::size_t b, std::size_t e, std::uint32_t)
-                        { SimdSolve::SolveNormalAndFriction(batches, m_bodyState, static_cast<float>(h), /*useBias=*/true, maxBiasVel, b, e); });
+                        { SimdSolve::SolveNormalAndFriction(batches, m_bodyState.data(), static_cast<float>(h), /*useBias=*/true, maxBiasVel, b, e); });
                 }
                 OverflowSolve(ctx, h, /*useBias=*/true);
 
@@ -857,7 +857,7 @@ namespace Arcane
                 {
                     ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
                         [&](std::size_t b, std::size_t e, std::uint32_t)
-                        { SimdSolve::SolveNormalAndFriction(batches, m_bodyState, static_cast<float>(h), /*useBias=*/false, maxBiasVel, b, e); });
+                        { SimdSolve::SolveNormalAndFriction(batches, m_bodyState.data(), static_cast<float>(h), /*useBias=*/false, maxBiasVel, b, e); });
                 }
                 OverflowSolve(ctx, h, /*useBias=*/false);
             }
@@ -867,7 +867,7 @@ namespace Arcane
             {
                 ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
                     [&](std::size_t b, std::size_t e, std::uint32_t)
-                    { SimdSolve::ApplyRestitution(batches, m_bodyState, threshold, b, e); });
+                    { SimdSolve::ApplyRestitution(batches, m_bodyState.data(), threshold, b, e); });
             }
             OverflowRestitution(ctx);
 

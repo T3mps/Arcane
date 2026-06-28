@@ -3,6 +3,7 @@
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <cstdint>
+#include <Arcane/Physics/Solver/BodyState.hpp>
 
 using namespace Arcane::Physics;
 
@@ -106,4 +107,12 @@ TEST_CASE("solver thread-count invariance: serial == enki(1) == enki(N)", "[phys
     REQUIRE(a.size() == b.size());
     REQUIRE(a == b);
     REQUIRE(a == c);
+}
+
+TEST_CASE("BodyState is a 32-byte 32-aligned AoS row", "[physics][solvermt]")
+{
+    STATIC_REQUIRE(sizeof(Arcane::Physics::BodyState) == 32);
+    STATIC_REQUIRE(alignof(Arcane::Physics::BodyState) == 32);
+    Arcane::Physics::BodyStateStore s; s.Resize(33);
+    REQUIRE(reinterpret_cast<std::uintptr_t>(s.data()) % 32u == 0u);  // aligned storage
 }
