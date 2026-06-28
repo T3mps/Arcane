@@ -125,6 +125,7 @@ namespace Arcane
             if (current.handle)
             {
                 if (current.vt.Shutdown) current.vt.Shutdown();
+                runtime.ResetAudio();
                 runtime.ClearSystems();
                 // MUST reset the registry BEFORE DLClose: the ComponentRegistry's component
                 // descriptors (defaultConstruct, destruct, moveConstruct, etc.) were last set by
@@ -168,6 +169,7 @@ namespace Arcane
             {
                 // Init may have registered systems / created entities before failing; clear
                 // them while the DLL is still mapped (their descriptors point into it).
+                m_impl->runtime.ResetAudio();
                 m_impl->runtime.ClearSystems();
                 m_impl->runtime.ResetRegistry();
                 Detail::DLClose(img.handle);
@@ -249,6 +251,7 @@ namespace Arcane
         if (next.handle)
         {
             if (initRan && next.vt.Shutdown) next.vt.Shutdown();
+            m_impl->runtime.ResetAudio();
             m_impl->runtime.ResetRegistry();
             Detail::DLClose(next.handle);
         }

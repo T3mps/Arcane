@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Runtime.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
@@ -26,6 +28,8 @@ TEST_CASE("Runtime boots a usable substrate", "[runtime]")
     REQUIRE(rt.TypeContext() != nullptr);
     REQUIRE(rt.WorkScheduler() != nullptr);
     REQUIRE(rt.WorkScheduler()->WorkerCount() >= 1);
+    REQUIRE(rt.AudioSystem().IsInitialized());
+    CHECK(rt.AssetsFacade().Stats().count == 0);
 
     rt.Components()->RegisterComponent<Counter>();
     auto& reg = rt.Registry();
@@ -34,6 +38,18 @@ TEST_CASE("Runtime boots a usable substrate", "[runtime]")
     int seen = 0;
     reg.CreateView<Counter>().ForEach([&](Astra::Entity, Counter&) { ++seen; });
     CHECK(seen == 8);
+}
+
+TEST_CASE("Runtime resets audio without disturbing the engine substrate", "[runtime][audio]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    REQUIRE(rt.AudioSystem().IsInitialized());
+
+    rt.ResetAudio();
+
+    CHECK(rt.AudioSystem().IsInitialized());
+    CHECK(rt.WorkScheduler() != nullptr);
+    CHECK(rt.Registry().IsEmpty());
 }
 
 TEST_CASE("Runtime snapshot/restore preserves state AND the scheduler", "[runtime]")
