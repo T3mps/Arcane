@@ -65,6 +65,7 @@
 #include <Arcane/Physics/Solver/BodyState.hpp>            // SIMD solve body state
 #include <Arcane/Physics/Solver/ContactColoring.hpp>     // kColorCount (color bucket count)
 #include <Arcane/Physics/Solver/ContactConstraintSimd.hpp> // SoA batches + lane solve
+#include <Arcane/Physics/Solver/SolverStages.hpp>         // SolverStage/SolverBlock + region driver
 
 namespace Arcane
 {
@@ -155,11 +156,29 @@ namespace Arcane
 
             // Integrate awake-dynamic velocities (gravity + linear damping) over
             // the BodyStateStore AoS rows for one sub-step (the AoS-resident counterpart of
-            // IntegrateVelocities; same predicate + math).
+            // IntegrateVelocities; same predicate + math). Now a thin SERIAL delegator
+            // to the [begin,end) range helper below (kept so nothing external breaks;
+            // the solver region drives the range helper directly via a stage block).
             void IntegrateVelocitiesSoA(SolverContext& ctx, Real h);
 
             // Accumulate dp/dq += v*h over the BodyStateStore AoS rows for one sub-step.
             void IntegratePositionsSoA(SolverContext& ctx, Real h);
+
+            // Range helpers (Gap 1.1): the per-body loop bodies of the two integrate
+            // passes, callable over AwakeBodies()[begin,end). A solver-region body
+            // stage runs a sub-range; the SoA-method wrappers above run the full range
+            // serially. Per-body writes are to disjoint dense rows (AwakeIndexOf is a
+            // bijection), so any partition is scatter-safe + byte-identical.
+            void IntegrateVelocitiesRange(SolverContext& ctx, Real h, std::size_t begin, std::size_t end);
+            void IntegratePositionsRange(SolverContext& ctx, Real h, std::size_t begin, std::size_t end);
+
+            // Build the flat per-step stage/block list into m_stages/m_blocks (reused
+            // scratch; resize-not-realloc). One stage per non-empty color for each
+            // colored type + one stage each for the two body types, blocks partitioned
+            // per spec 5.2 (contacts min ~4 batches, bodies min ~32, target
+            // ~4*sizingWorkers). Resets every stage's completionCount/syncIndex and
+            // every block's syncIndex. Returns the active (non-empty) color count C.
+            int BuildStages(std::uint32_t awakeCount, std::uint32_t sizingWorkers);
 
             // Commit the SoA dp/dq onto the world position/angle (compound-COM
             // commit: integrate the COM along its inertial path, then reconstruct
@@ -206,6 +225,18 @@ namespace Arcane
             std::array<std::vector<std::uint32_t>, kColorCount> m_colorRefs;
             std::vector<std::uint32_t>      m_overflowRefs;
             std::vector<std::vector<ContactConstraintSimd>> m_colorBatches;
+
+            // Gap 1.1 (solver-MT scaling): the flat per-step stage list + its block
+            // pool, reused across steps (resize-not-realloc -> zero steady-state
+            // alloc). m_stages holds one SolverStage per non-empty color per colored
+            // type + the two body stages; each stage's `blocks` points into a
+            // contiguous slice of m_blocks. SolverWorker walks m_stages in D1's exact
+            // substep order, so the stage runner is byte-identical to the per-color
+            // ParallelFor it replaces. SolverStage/SolverBlock carry std::atomic
+            // control words (claim/completion), copied relaxed only during the single-
+            // threaded rebuild (see SolverStages.hpp).
+            std::vector<SolverStage>        m_stages;
+            std::vector<SolverBlock>        m_blocks;
         };
 
     } // namespace Physics

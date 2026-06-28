@@ -26,15 +26,6 @@ namespace Arcane
     {
         namespace
         {
-            // Minimum batch size for ParallelFor over per-color SIMD batches (Phase D1).
-            // Keeps very small colors on one worker; avoids sync overhead outweighing gain.
-            static constexpr std::size_t kSolverColorGrain = 8;
-
-            // Minimum awake-body chunk for ParallelFor over the integrate loops (Phase D1 Task 4).
-            // Per-body writes are disjoint (each slot unique); 256 bodies per chunk keeps
-            // dispatch overhead small relative to the O(n) integrate work.
-            static constexpr std::size_t kSolverBodyGrain = 256;
-
             // 2D cross products (port of the Lua applyAt / contact math).
             //   scalar(w) x vec(r) -> vec : (-w*r.y, w*r.x)
             //   vec(r)    x vec(p) -> scalar : r.x*p.y - r.y*p.x
@@ -324,68 +315,77 @@ namespace Arcane
         // (SyncVelTo/FromWorld). The integrate loops stay scalar O(n) (not the hot
         // path); the WIN is the lane-wide colored contact solve.
 
-        void SoftStep::IntegrateVelocitiesSoA(SolverContext& ctx, Real h)
+        void SoftStep::IntegrateVelocitiesRange(SolverContext& ctx, Real h,
+                                                std::size_t begin, std::size_t end)
         {
             // Phase B, Task 3: iterate the awake-set directly -- the set guarantees
             // Alive + Dynamic + Awake. Only the InvMassSlot<=0 guard is retained
             // (a degenerate zero-invMass dynamic is valid; it never integrates).
             // Phase C, Task 2: index m_bodyState by the DENSE solverIndex
             // AwakeIndexOf(slot), NOT the world slot.
-            // Phase D1, Task 4: iterate over the INDEXABLE AwakeBodies() vector via
-            // ParallelFor. Per-body writes are disjoint (each awake slot is unique),
-            // so this is scatter-safe and byte-identical at any worker count.
+            // Phase D1, Task 4: iterate over the INDEXABLE AwakeBodies() vector.
+            // Gap 1.1: this is the [begin,end) loop body a solver-region body stage
+            // block runs. Per-body writes are disjoint (each awake slot is unique),
+            // so any partition is scatter-safe and byte-identical at any worker count.
             PhysicsWorld& w = *ctx.world;
             const Vec2 g = ctx.gravity;
             const std::vector<std::uint32_t>& aw = w.AwakeBodies();
-            ctx.executor->ParallelFor(aw.size(), kSolverBodyGrain,
-                [&](std::size_t bgn, std::size_t end, std::uint32_t)
+            for (std::size_t j = begin; j < end; ++j)
+            {
+                const std::uint32_t s = aw[j];
+                if (w.InvMassSlot(s) <= Real(0))
                 {
-                    for (std::size_t j = bgn; j < end; ++j)
-                    {
-                        const std::uint32_t s = aw[j];
-                        if (w.InvMassSlot(s) <= Real(0))
-                        {
-                            continue; // pinned dynamic -- never integrates
-                        }
-                        const std::uint32_t i = w.AwakeIndexOf(s);
-                        float vx = m_bodyState[i].vx + static_cast<float>(g.x * h);
-                        float vy = m_bodyState[i].vy + static_cast<float>(g.y * h);
-                        float wv = m_bodyState[i].w;
-                        const Real d = w.LinDampSlot(s);
-                        if (d > Real(0))
-                        {
-                            const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
-                            vx *= f; vy *= f; wv *= f;
-                        }
-                        m_bodyState[i].vx = vx;
-                        m_bodyState[i].vy = vy;
-                        m_bodyState[i].w  = wv;
-                    }
-                });
+                    continue; // pinned dynamic -- never integrates
+                }
+                const std::uint32_t i = w.AwakeIndexOf(s);
+                float vx = m_bodyState[i].vx + static_cast<float>(g.x * h);
+                float vy = m_bodyState[i].vy + static_cast<float>(g.y * h);
+                float wv = m_bodyState[i].w;
+                const Real d = w.LinDampSlot(s);
+                if (d > Real(0))
+                {
+                    const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
+                    vx *= f; vy *= f; wv *= f;
+                }
+                m_bodyState[i].vx = vx;
+                m_bodyState[i].vy = vy;
+                m_bodyState[i].w  = wv;
+            }
         }
 
-        void SoftStep::IntegratePositionsSoA(SolverContext& ctx, Real h)
+        void SoftStep::IntegratePositionsRange(SolverContext& ctx, Real h,
+                                               std::size_t begin, std::size_t end)
         {
             // Phase B, Task 3: iterate the awake-set directly -- Alive+Dynamic+Awake
             // is guaranteed. dp/dq += v*h for the TGS separation re-evaluation.
             // Phase C, Task 2: index by the DENSE solverIndex AwakeIndexOf(slot).
-            // Phase D1, Task 4: ParallelFor over AwakeBodies(). Each body writes to
-            // its own dense row (AwakeIndexOf is a bijection), so writes are disjoint.
+            // Gap 1.1: the [begin,end) loop body a solver-region body stage block
+            // runs. Each body writes its own dense row (AwakeIndexOf is a bijection),
+            // so writes are disjoint -> any partition is byte-identical.
             PhysicsWorld& w = *ctx.world;
             const float fh = static_cast<float>(h);
             const std::vector<std::uint32_t>& aw = w.AwakeBodies();
-            ctx.executor->ParallelFor(aw.size(), kSolverBodyGrain,
-                [&](std::size_t bgn, std::size_t end, std::uint32_t)
-                {
-                    for (std::size_t j = bgn; j < end; ++j)
-                    {
-                        const std::uint32_t s = aw[j];
-                        const std::uint32_t i = w.AwakeIndexOf(s);
-                        m_bodyState[i].dpx += m_bodyState[i].vx * fh;
-                        m_bodyState[i].dpy += m_bodyState[i].vy * fh;
-                        m_bodyState[i].dq  += m_bodyState[i].w  * fh;
-                    }
-                });
+            for (std::size_t j = begin; j < end; ++j)
+            {
+                const std::uint32_t s = aw[j];
+                const std::uint32_t i = w.AwakeIndexOf(s);
+                m_bodyState[i].dpx += m_bodyState[i].vx * fh;
+                m_bodyState[i].dpy += m_bodyState[i].vy * fh;
+                m_bodyState[i].dq  += m_bodyState[i].w  * fh;
+            }
+        }
+
+        void SoftStep::IntegrateVelocitiesSoA(SolverContext& ctx, Real h)
+        {
+            // Thin SERIAL full-range delegator (Gap 1.1). The solver region drives
+            // IntegrateVelocitiesRange directly via a body stage; this wrapper is kept
+            // so the public phase name still resolves to the same work.
+            IntegrateVelocitiesRange(ctx, h, 0, ctx.world->AwakeBodies().size());
+        }
+
+        void SoftStep::IntegratePositionsSoA(SolverContext& ctx, Real h)
+        {
+            IntegratePositionsRange(ctx, h, 0, ctx.world->AwakeBodies().size());
         }
 
         void SoftStep::FinalizePositionsSoA(SolverContext& ctx)
@@ -727,6 +727,116 @@ namespace Arcane
         }
 
         // ===================================================================
+        // Stage-list build (Gap 1.1) -- the flat per-step SolverStage/SolverBlock
+        // list the persistent worker region walks (replaces the per-color ParallelFor
+        // dispatch storm). Reused scratch (m_stages/m_blocks): resize-not-realloc ->
+        // zero steady-state alloc.
+        // ===================================================================
+
+        int SoftStep::BuildStages(std::uint32_t awakeCount, std::uint32_t sizingWorkers)
+        {
+            // Box2D b2ComputeBlockCount sizing: contacts min ~4 wide-constraints
+            // (SIMD batches), bodies min ~32, target ~= blocksPerWorker * workerCount.
+            constexpr int kContactMinBlock = 4;   // SIMD batches per contact block
+            constexpr int kBodyMinBlock    = 32;  // awake bodies per body block
+            const int target = 4 * static_cast<int>(sizingWorkers > 0u ? sizingWorkers : 1u);
+
+            // Active (non-empty) colors in ASCENDING index order. The old per-color
+            // loop walked colors 0..kColorCount-1 (empty ones no-op); colors are
+            // Gauss-Seidel-ordered (adjacent colors share bodies), so preserving the
+            // ascending order is required for byte-identity.
+            int activeIdx[kColorCount];
+            int C = 0;
+            for (int k = 0; k < kColorCount; ++k)
+            {
+                if (!m_colorBatches[static_cast<std::size_t>(k)].empty())
+                {
+                    activeIdx[C++] = k;
+                }
+            }
+
+            const int bodyItems  = static_cast<int>(awakeCount);
+            const int bodyBlocks = ComputeBlockCount(bodyItems, kBodyMinBlock, target);
+
+            // Total stages = 2 body (integrateVel + integratePos) + 5 colored phases
+            // (warmStart/solve/relax/restitution/storeImpulses) x C active colors.
+            const int stageCount = 2 + 5 * C;
+
+            // Total blocks = integrateVel + integratePos (bodyBlocks each) + each
+            // colored stage's per-color block count, x5 colored phases.
+            int totalBlocks = 2 * bodyBlocks;
+            for (int c = 0; c < C; ++c)
+            {
+                const int batches = static_cast<int>(
+                    m_colorBatches[static_cast<std::size_t>(activeIdx[c])].size());
+                totalBlocks += 5 * ComputeBlockCount(batches, kContactMinBlock, target);
+            }
+
+            // Reuse scratch (grows only on a new high-water; SolverStage/SolverBlock
+            // carry a relaxed copy ctor so resize/realloc is well-formed -- copies
+            // happen only here, single-threaded, never inside the region).
+            m_blocks.resize(static_cast<std::size_t>(totalBlocks));
+            m_stages.resize(static_cast<std::size_t>(stageCount));
+
+            SolverBlock* const blockBase = m_blocks.data();
+            int blockOffset = 0;
+
+            auto setupStage = [&](int stageIdx, StageType type, int colorIndex,
+                                  int itemCount, int minBlock)
+            {
+                SolverStage& st = m_stages[static_cast<std::size_t>(stageIdx)];
+                st.type = type;
+                st.colorIndex = colorIndex;
+                st.completionCount.store(0, std::memory_order_relaxed);
+                st.syncIndex = 0;
+                const int bc = ComputeBlockCount(itemCount, minBlock, target);
+                st.blockCount = bc;
+                st.blocks = (bc > 0) ? (blockBase + blockOffset) : nullptr;
+                if (bc > 0)
+                {
+                    PartitionBlocks(st.blocks, bc, itemCount);
+                    blockOffset += bc;
+                }
+            };
+
+            // Lay out the stages in the order SolverWorker walks (see SolverStages.hpp).
+            setupStage(0, StageType::IntegrateVelocities, 0, bodyItems, kBodyMinBlock);
+            for (int c = 0; c < C; ++c)
+            {
+                const int color = activeIdx[c];
+                const int batches = static_cast<int>(m_colorBatches[static_cast<std::size_t>(color)].size());
+                setupStage(1 + c, StageType::WarmStart, color, batches, kContactMinBlock);
+            }
+            for (int c = 0; c < C; ++c)
+            {
+                const int color = activeIdx[c];
+                const int batches = static_cast<int>(m_colorBatches[static_cast<std::size_t>(color)].size());
+                setupStage(1 + C + c, StageType::Solve, color, batches, kContactMinBlock);
+            }
+            setupStage(1 + 2 * C, StageType::IntegratePositions, 0, bodyItems, kBodyMinBlock);
+            for (int c = 0; c < C; ++c)
+            {
+                const int color = activeIdx[c];
+                const int batches = static_cast<int>(m_colorBatches[static_cast<std::size_t>(color)].size());
+                setupStage(2 + 2 * C + c, StageType::Relax, color, batches, kContactMinBlock);
+            }
+            for (int c = 0; c < C; ++c)
+            {
+                const int color = activeIdx[c];
+                const int batches = static_cast<int>(m_colorBatches[static_cast<std::size_t>(color)].size());
+                setupStage(2 + 3 * C + c, StageType::Restitution, color, batches, kContactMinBlock);
+            }
+            for (int c = 0; c < C; ++c)
+            {
+                const int color = activeIdx[c];
+                const int batches = static_cast<int>(m_colorBatches[static_cast<std::size_t>(color)].size());
+                setupStage(2 + 4 * C + c, StageType::StoreImpulses, color, batches, kContactMinBlock);
+            }
+
+            return C;
+        }
+
+        // ===================================================================
         // Whole-Step driver (lane-wide colored SoA contact solve, Part 1)
         // ===================================================================
 
@@ -846,71 +956,60 @@ namespace Arcane
                     kNotKinematic);
             }
 
-            // 5) Sub-step loop. Stage order matches the scalar driver (Box2D v3
-            //    b2SolverStage sequence): integrate-vel -> warm-start -> solve(bias)
-            //    -> integrate-pos -> relax(no-bias). Joints solve scalar against the
-            //    world; bridge velocities SoA<->world only around the joint passes
-            //    (skipped entirely when there are no joints -> pure-SoA hot path).
-            for (int s = 0; s < substeps; ++s)
+            // 5) Build the flat per-step stage list (Gap 1.1) and run the WHOLE
+            //    substep loop inside ONE worker region -- replacing the ~190 per-color
+            //    ParallelFor dispatches/step (the D1 dispatch storm) with one stage
+            //    walk + atomic stage-sync barriers. THIS task drives the region
+            //    SERIALLY via the main worker (SolverWorker(sc, /*workerIndex=*/0));
+            //    real ParallelFor(workerCount) + thieves arrive in Gap 1.2. The
+            //    stage walk reproduces D1's EXACT order per substep --
+            //      integrate-vel -> warm-start[colors] -> (overflow) -> [joints] ->
+            //      solve[colors](bias) -> (overflow) -> integrate-pos -> [joints] ->
+            //      relax[colors] -> (overflow)
+            //    then ONCE: restitution[colors] -> (overflow) -> store[colors] -- so
+            //    the result is BYTE-IDENTICAL to the per-color loop it replaces (within
+            //    a color the batches are body-disjoint -> block partition is order-
+            //    independent; color boundaries are hard barriers -> Gauss-Seidel order
+            //    preserved). Overflow + joints run MAIN-SERIAL inline between stages
+            //    (the existing scalar methods, bound as FunctionRef lambdas below).
+            const int activeColors = BuildStages(awakeCount, /*sizingWorkers=*/1u);
+
+            SolverStageContext sc;
+            sc.solver            = this;
+            sc.ctx               = &ctx;
+            sc.stages            = m_stages.data();
+            sc.stageCount        = static_cast<int>(m_stages.size());
+            sc.substepCount      = substeps;
+            sc.activeColorStages = activeColors;
+            sc.stageSync.store(0, std::memory_order_relaxed);
+            sc.colorBatches      = &m_colorBatches;
+            sc.colorRefs         = m_colorRefs.data();
+            sc.bodyState         = m_bodyState.data();
+            sc.h                 = static_cast<float>(h);
+            sc.maxBiasVel        = maxBiasVel;
+            sc.threshold         = threshold;
+
+            // Bind the body-integrate range + the main-serial overflow/joint passes as
+            // non-escaping lambdas (FunctionRef views -- they MUST outlive SolverWorker,
+            // which they do: locals of this scope). The joint bridge no-ops when there
+            // are no joints (keeps the pure-SoA hot path branch-free of joint work).
+            auto integrateVelFn = [&](std::size_t b, std::size_t e) { IntegrateVelocitiesRange(ctx, h, b, e); };
+            auto integratePosFn = [&](std::size_t b, std::size_t e) { IntegratePositionsRange(ctx, h, b, e); };
+            auto overflowWarmStartFn   = [&]() { OverflowWarmStart(ctx); };
+            auto overflowSolveFn       = [&](bool useBias) { OverflowSolve(ctx, h, useBias); };
+            auto overflowRestitutionFn = [&]() { OverflowRestitution(ctx); };
+            auto jointBridgeFn = [&]()
             {
-                IntegrateVelocitiesSoA(ctx, h);
-
-                // Warm start (per sub-step -- v3 stage order): all colors + overflow.
-                // Phase D1: outer color loop stays serial (Gauss-Seidel); within each
-                // color, batches are disjoint-body -> ParallelFor is scatter-safe.
-                for (auto& batches : m_colorBatches)
-                {
-                    ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
-                        [&](std::size_t b, std::size_t e, std::uint32_t)
-                        { SimdSolve::WarmStart(batches, m_bodyState.data(), b, e); });
-                }
-                OverflowWarmStart(ctx);
-
                 if (hasJoints) { SyncVelToWorld(ctx); SolveJoints(ctx); SyncVelFromWorld(ctx); }
+            };
+            sc.integrateVel        = integrateVelFn;
+            sc.integratePos        = integratePosFn;
+            sc.overflowWarmStart   = overflowWarmStartFn;
+            sc.overflowSolve       = overflowSolveFn;
+            sc.overflowRestitution = overflowRestitutionFn;
+            sc.jointBridge         = jointBridgeFn;
 
-                // Biased solve: all colors + overflow.
-                for (auto& batches : m_colorBatches)
-                {
-                    ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
-                        [&](std::size_t b, std::size_t e, std::uint32_t)
-                        { SimdSolve::SolveNormalAndFriction(batches, m_bodyState.data(), static_cast<float>(h), /*useBias=*/true, maxBiasVel, b, e); });
-                }
-                OverflowSolve(ctx, h, /*useBias=*/true);
-
-                IntegratePositionsSoA(ctx, h);
-
-                if (hasJoints) { SyncVelToWorld(ctx); SolveJoints(ctx); SyncVelFromWorld(ctx); }
-
-                // Relax (no bias): all colors + overflow.
-                for (auto& batches : m_colorBatches)
-                {
-                    ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
-                        [&](std::size_t b, std::size_t e, std::uint32_t)
-                        { SimdSolve::SolveNormalAndFriction(batches, m_bodyState.data(), static_cast<float>(h), /*useBias=*/false, maxBiasVel, b, e); });
-                }
-                OverflowSolve(ctx, h, /*useBias=*/false);
-            }
-
-            // 6) Restitution (once): all colors + overflow.
-            for (auto& batches : m_colorBatches)
-            {
-                ctx.executor->ParallelFor(batches.size(), kSolverColorGrain,
-                    [&](std::size_t b, std::size_t e, std::uint32_t)
-                    { SimdSolve::ApplyRestitution(batches, m_bodyState.data(), threshold, b, e); });
-            }
-            OverflowRestitution(ctx);
-
-            // 7) Store the converged impulses back onto ctx.contacts so the world's
-            //    stage-3b pool write-back persists warm-start (HAZARD 3). Overflow
-            //    constraints already carry their accumulated impulses on
-            //    ctx.contacts (the scalar overflow path wrote them in place); only
-            //    the colored batches need this copy-back.
-            for (std::size_t k = 0; k < static_cast<std::size_t>(kColorCount); ++k)
-            {
-                const std::vector<std::uint32_t>& color = m_colorRefs[k];
-                if (color.empty()) { continue; }
-                SimdSolve::StoreImpulses(m_colorBatches[k], ctx.contacts, color.data());
-            }
+            SolverWorker(sc, /*workerIndex=*/0);
 
             // 8) Push final velocities to the world (DENSE write-back), then commit
             //    positions (compound-COM) from the SoA dp/dq.

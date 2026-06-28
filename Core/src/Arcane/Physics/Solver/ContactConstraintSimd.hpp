@@ -993,11 +993,18 @@ namespace Arcane
             // so the world's stage-3b pool write-back persists warm-start. Keyed by
             // the color's refs (same order Build packed them: lane L of batch b is
             // global index b*kWidth+L = refs index, EXCLUDING padding lanes).
+            // Range overload: store impulses for batches [begin, end). The ref index
+            // is the GLOBAL batch index (b*W + L), so a sub-range still reads the
+            // correct refs slot (refs is the whole color's ref array). Loop body
+            // unchanged from the full overload below -- this lets the StoreImpulses
+            // stage (Gap 1.1) block-partition a color's batch list like the other
+            // colored passes.
             inline void StoreImpulses(const std::vector<ContactConstraintSimd>& batches,
-                                      ContactConstraint* ccs, const std::uint32_t* refs)
+                                      ContactConstraint* ccs, const std::uint32_t* refs,
+                                      std::size_t begin, std::size_t end)
             {
                 constexpr int W = ContactConstraintSimd::kWidth;
-                for (std::size_t b = 0; b < batches.size(); ++b)
+                for (std::size_t b = begin; b < end; ++b)
                 {
                     const ContactConstraintSimd& batch = batches[b];
                     for (int L = 0; L < batch.count; ++L)   // live lanes only
@@ -1013,6 +1020,11 @@ namespace Arcane
                         }
                     }
                 }
+            }
+            inline void StoreImpulses(const std::vector<ContactConstraintSimd>& batches,
+                                      ContactConstraint* ccs, const std::uint32_t* refs)
+            {
+                StoreImpulses(batches, ccs, refs, 0, batches.size());
             }
         } // namespace SimdSolve
 

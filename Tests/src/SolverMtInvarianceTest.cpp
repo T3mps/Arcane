@@ -2,8 +2,10 @@
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
+#include <array>
 #include <cstdint>
 #include <Arcane/Physics/Solver/BodyState.hpp>
+#include <Arcane/Physics/Solver/SolverStages.hpp>
 
 using namespace Arcane::Physics;
 
@@ -115,4 +117,20 @@ TEST_CASE("BodyState is a 32-byte 32-aligned AoS row", "[physics][solvermt]")
     STATIC_REQUIRE(alignof(Arcane::Physics::BodyState) == 32);
     Arcane::Physics::BodyStateStore s; s.Resize(33);
     REQUIRE(reinterpret_cast<std::uintptr_t>(s.data()) % 32u == 0u);  // aligned storage
+}
+
+// Stage-coverage unit test for the ring-CAS claim loop (Gap 1.1). Exercises the
+// block-claim protocol in isolation via the test-only ExecuteStageForTest shim:
+// a single (serial main) caller must claim + run EVERY block exactly once and
+// drive the stage's completionCount up to blockCount.
+TEST_CASE("ExecuteStage visits every block exactly once (serial main)", "[physics][solvermt]")
+{
+    using namespace Arcane::Physics;
+    std::array<SolverBlock, 5> blk{};            // 5 blocks
+    for (int i = 0; i < 5; ++i) { blk[i].begin = i; blk[i].end = i + 1; blk[i].syncIndex.store(0); }
+    SolverStage st{}; st.type = StageType::IntegrateVelocities; st.blocks = blk.data(); st.blockCount = 5;
+    std::array<int, 5> hits{};
+    ExecuteStageForTest(st, /*prevSync*/0, /*curSync*/1, [&](int b) { hits[b]++; });
+    for (int h : hits) REQUIRE(h == 1);          // each block run once
+    REQUIRE(st.completionCount.load() == 5);
 }
