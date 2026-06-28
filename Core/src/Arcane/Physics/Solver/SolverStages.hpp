@@ -161,10 +161,8 @@ namespace Arcane
         // and to know when to exit.
         struct SolverStageContext
         {
-            SoftStep*      solver = nullptr;   // forward-declared; carried for reference
             SolverContext* ctx = nullptr;
             SolverStage*   stages = nullptr;   // -> m_stages.data()
-            int            stageCount = 0;
             int            substepCount = 0;
             int            activeColorStages = 0; // non-empty colors per colored phase
             std::atomic<std::uint32_t> stageSync{ 0 };
@@ -288,7 +286,7 @@ namespace Arcane
 
             int executed = 0;
             int visited = 0;
-            int blockIndex = (blockCount > 0) ? (startIndex % blockCount) : 0;
+            int blockIndex = startIndex % blockCount;
             while (visited < blockCount)
             {
                 int expected = prevSync;

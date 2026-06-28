@@ -73,9 +73,9 @@ namespace Arcane
         // index they write/read. These defs live here (not the header) because they
         // need the PhysicsWorld slot accessors.
         //
-        // CONTRACT (legacy SyncIn): the caller Resize()s the SoA to world.Count()+1
-        // (which zeroes every array; the "+1" tail is the scatter-safe dummy slot)
-        // before SyncIn. SyncIn then OVERWRITES only the slots that satisfy the
+        // CONTRACT (legacy SyncIn): the caller Resize()s the SoA to world.Count()
+        // (no +1 dummy tail -- the scatter-safe dummy slot was removed; test-only
+        // path) before SyncIn. SyncIn then OVERWRITES only the slots that satisfy the
         // awake-dynamic predicate. Non-matching slots (statics, kinematics, asleep/
         // dead dynamics) are LEFT AS-IS (zero after the caller's Resize). For matched
         // slots SyncIn also zeroes the TGS position-delta accumulators (dp/dq).
@@ -723,8 +723,9 @@ namespace Arcane
 
         int SoftStep::BuildStages(std::uint32_t awakeCount, std::uint32_t sizingWorkers)
         {
-            // Box2D b2ComputeBlockCount sizing: contacts min ~4 wide-constraints
-            // (SIMD batches), bodies min ~32, target ~= blocksPerWorker * workerCount.
+            // Box2D b2ComputeBlockCount sizing: contacts min ~8 SIMD batches per block
+            // (tuned 4->8 to reduce ring-CAS overhead), bodies min ~32, target ~=
+            // blocksPerWorker * workerCount.
             constexpr int kContactMinBlock = 8;   // SIMD batches per contact block
             constexpr int kBodyMinBlock    = 32;  // awake bodies per body block
             const int target = 4 * static_cast<int>(sizingWorkers > 0u ? sizingWorkers : 1u);
@@ -834,11 +835,13 @@ namespace Arcane
             PhysicsWorld& w = *ctx.world;
 
             // Phase C, Task 2: the body-state scratch is now DENSE, sized by the
-            // per-step solver index space (awake dynamics + kinematics + 1 dummy),
-            // NOT the sparse world slot count. awakeCount = the awake-dynamic count
+            // per-step solver index space (awake dynamics + kinematics), NOT the
+            // sparse world slot count. awakeCount = the awake-dynamic count
             // (solverIndex [0, awakeCount)); solverCount = awakeCount + kinematicCount
-            // (kinematics occupy [awakeCount, solverCount)); the dummy tail is at
-            // solverCount (statics/spans/padding gather/scatter through it).
+            // (kinematics occupy [awakeCount, solverCount)). No dummy tail: statics,
+            // overflow spans, and padding lanes use null-index (-1), which the gather
+            // resolves to the shared kIdentityRow zero state (no real-body memory touch)
+            // and the scatter skips entirely.
             const std::uint32_t awakeCount  = w.AwakeCount();
             const std::uint32_t solverCount = awakeCount + w.KinematicCount();
 
@@ -968,10 +971,8 @@ namespace Arcane
             const int activeColors = BuildStages(awakeCount, workerCount);
 
             SolverStageContext sc;
-            sc.solver            = this;
             sc.ctx               = &ctx;
             sc.stages            = m_stages.data();
-            sc.stageCount        = static_cast<int>(m_stages.size());
             sc.substepCount      = substeps;
             sc.activeColorStages = activeColors;
             sc.stageSync.store(0, std::memory_order_relaxed);

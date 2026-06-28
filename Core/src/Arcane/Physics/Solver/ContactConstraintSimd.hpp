@@ -513,7 +513,7 @@ namespace Arcane
             // The scalar (oracle) + NEON + fallback paths use a plain per-lane read.
 
             // Per-lane row pointers with the null-index identity select. Fills p[W]
-            // (idx >= 0 -> &states[idx]; -1 -> &kIdentityRow) and returns ix[] too.
+            // (idx >= 0 -> &states[idx]; -1 -> &kIdentityRow).
             ARCANE_SIMD_INLINE void GatherRowPtrs(const BodyState* states, i32w idx,
                                                   const BodyState** p) noexcept
             {
@@ -536,6 +536,8 @@ namespace Arcane
 #if defined(__AVX2__) && !defined(ARCANE_SIMD_SCALAR)
                 // Eight aligned 256-bit row loads, then an 8x8 AoS->SoA transpose
                 // (_mm256_unpacklo/hi_ps + _mm256_shuffle_ps + _mm256_permute2f128_ps).
+                // Lane 0 is representative: other lanes are 32-aligned by construction
+                // (states[] is alignas(32) stride-32; kIdentityRow is alignas(32)).
                 assert((reinterpret_cast<std::uintptr_t>(p[0]) & 31u) == 0u);
                 const __m256 r0 = _mm256_load_ps(reinterpret_cast<const float*>(p[0]));
                 const __m256 r1 = _mm256_load_ps(reinterpret_cast<const float*>(p[1]));
@@ -604,6 +606,9 @@ namespace Arcane
                 // Load the low __m128 (vx,vy,w,dpx) of each row; build 256-bit lane
                 // pairs (lanes 0-3 | 4-7), then unpack + shuffle to vx/vy/w. No
                 // permute2f128 needed (insertf128 already placed the high lanes).
+                // Lane 0 is representative: other lanes are 32-aligned by construction
+                // (states[] is alignas(32) stride-32; kIdentityRow is alignas(32)),
+                // so all lanes satisfy the 16-byte requirement checked here.
                 assert((reinterpret_cast<std::uintptr_t>(p[0]) & 15u) == 0u);
                 const __m128 m0 = _mm_load_ps(reinterpret_cast<const float*>(p[0]));
                 const __m128 m1 = _mm_load_ps(reinterpret_cast<const float*>(p[1]));

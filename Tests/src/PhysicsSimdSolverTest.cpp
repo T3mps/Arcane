@@ -1,10 +1,10 @@
-// Physics SIMD solver: solver-local body-state SoA (Task 1) -- ROUND-TRIP test.
+// Physics SIMD solver: solver-local body-state store (Task 1) -- ROUND-TRIP test.
 //
 // The SIMD constraint-solver initiative mirrors the world's per-component Vec2
-// SoA into a packed `float` body-state SoA (BodyStateSoA), indexed by world
-// slot, so the lane-wide solve can gather/scatter body velocities by body-index
-// lanes. This TU validates the FIRST de-risking piece: the SyncIn/SyncOut
-// world<->solver bridge.
+// fields into dense AoS rows (BodyState: 32-byte 32-aligned struct) stored by
+// solver index (not world slot), so the lane-wide solve can gather/scatter body
+// velocities by solverIndex lanes. This TU validates the FIRST de-risking piece:
+// the SyncIn/SyncOut world<->solver bridge.
 //
 // SCOPE (Task 1): only the SoA struct + its two sync helpers exist yet -- the
 // solver does NOT consume BodyStateStore (that is a later task). These tests pin

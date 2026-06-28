@@ -112,6 +112,10 @@ TEST_CASE("solver thread-count invariance: serial == enki(1) == enki(N)", "[phys
 
     INFO("workers=" << many.TaskExecutor()->WorkerCount());
     REQUIRE(many.TaskExecutor()->WorkerCount() >= 1);
+    if (many.TaskExecutor()->WorkerCount() <= 1u)
+    {
+        WARN("single worker: MT thief path not exercised this run");
+    }
     REQUIRE(a.size() == b.size());
     REQUIRE(a == b);
     REQUIRE(a == c);
