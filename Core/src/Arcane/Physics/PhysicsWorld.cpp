@@ -14,9 +14,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <chrono>   // THROWAWAY (ARCANE_NPPROF): narrowphase phase breakdown
-#include <cstdio>   // THROWAWAY (ARCANE_NPPROF/STEPPROF)
-#include <cstdlib>  // THROWAWAY (ARCANE_NPPROF): getenv
 
 #include <Arcane/Physics/Body.hpp>
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
@@ -1893,33 +1890,6 @@ namespace Arcane
                     m_touchedEventPairs.end());
                 m_contacts.Step(*this, m_touchedEventPairs);
             }
-
-#if ARCANE_STEPPROF
-            // THROWAWAY: per-300-step Step phase breakdown (narrowphase MT measure).
-            {
-                static std::uint64_t s_stepCount = 0;
-                ++s_stepCount;
-                if (s_stepCount % 300 == 0 && s_stepCount <= 1800)
-                {
-                    using P = StepProf::Phase;
-                    auto& tbl = StepProf::Table();
-                    auto msAvg = [&](P ph) -> double {
-                        const auto& a = tbl[static_cast<std::size_t>(ph)];
-                        return a.calls ? static_cast<double>(a.ns) / 1e6 / static_cast<double>(a.calls) : 0.0;
-                    };
-                    double total = 0.0;
-                    for (const auto& a : tbl)
-                        total += a.calls ? static_cast<double>(a.ns) / 1e6 / static_cast<double>(a.calls) : 0.0;
-                    std::printf("[PROF] step=%llu total=%.2fms stage1=%.2f narrow=%.2f emit=%.2f solve=%.2f wswb=%.2f bullet=%.2f sleep=%.2f events=%.2f awake=%u contacts=%zu\n",
-                        static_cast<unsigned long long>(s_stepCount), total,
-                        msAvg(P::Stage1Snapshot), msAvg(P::Narrowphase), msAvg(P::EmitConstraints),
-                        msAvg(P::Solve), msAvg(P::WarmStartWriteback), msAvg(P::Bullet),
-                        msAvg(P::IslandSleep), msAvg(P::Events), AwakeCount(), DebugContactCount());
-                    std::fflush(stdout);
-                    StepProf::Reset();
-                }
-            }
-#endif
         }
 
         // ----------------------------------------------------------------
@@ -2519,11 +2489,6 @@ namespace Arcane
             // -> zero steady-state allocation after the first few steps.
             m_pendingMerges.clear();
 
-            // THROWAWAY (ARCANE_NPPROF): narrowphase phase breakdown.
-            static const bool kNpProf = std::getenv("ARCANE_NPPROF") != nullptr;
-            static std::uint64_t s_npStep = 0, s_nsCreate = 0, s_nsUpdate = 0, s_nsMerge = 0;
-            const auto npT0 = std::chrono::high_resolution_clock::now();
-
             // ---- 1. CREATE: a contact for every fixture-pair in the EVENT UNION --
             // (solver-relevant pairs + the event-only tail: sensors,
             //  kinematic-kinematic, kinematic-vs-static-body; tiles stay out).
@@ -2816,8 +2781,6 @@ namespace Arcane
                 }
             }
 
-            const auto npT1 = std::chrono::high_resolution_clock::now(); // THROWAWAY: end create
-
             // ---- 2. UPDATE + DESTROY: Box2D b2Collide -- gather, parallel collide
             //         (flag only), serial apply. ------------------------------------
             // Seam 0: gather the stable live-contact id list (Box2D contactSims).
@@ -2886,8 +2849,6 @@ namespace Arcane
                 });
             }
 
-            const auto npT2 = std::chrono::high_resolution_clock::now(); // THROWAWAY: end update
-
             // ---- apply queued island merges in a canonical order ----------------
             // Sort by (min,max) body slot (mirrors the m_touchedEventPairs sort) so
             // the merge sequence is run-twice-identical regardless of pool emission
@@ -2905,28 +2866,6 @@ namespace Arcane
                     ia != ib)
                 {
                     MergeIslands(ia, ib);
-                }
-            }
-
-            // THROWAWAY (ARCANE_NPPROF): dump narrowphase create/update/merge split.
-            if (kNpProf)
-            {
-                const auto npT3 = std::chrono::high_resolution_clock::now();
-                auto ns = [](auto a, auto b) {
-                    return static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count());
-                };
-                s_nsCreate += ns(npT0, npT1);
-                s_nsUpdate += ns(npT1, npT2);
-                s_nsMerge  += ns(npT2, npT3);
-                if (++s_npStep % 300 == 0)
-                {
-                    const double d = 300.0 * 1e6;
-                    std::printf("[NPPROF] step=%llu awake=%u contacts=%zu | create=%.3fms update=%.3fms merge=%.3fms\n",
-                        static_cast<unsigned long long>(s_npStep), AwakeCount(),
-                        DebugContactCount(), s_nsCreate / d, s_nsUpdate / d, s_nsMerge / d);
-                    std::fflush(stdout);
-                    s_nsCreate = s_nsUpdate = s_nsMerge = 0;
                 }
             }
         }
