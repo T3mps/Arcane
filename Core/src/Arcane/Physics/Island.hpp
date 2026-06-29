@@ -86,14 +86,16 @@ namespace Arcane
             // over a few steps. Processed in ascending island-id order (determinism).
             inline constexpr std::uint32_t kMaxSplitsPerStep = 1u;
 
-            // ---- sleep thresholds (ports the Lua magic numbers verbatim) -----
-
-            // Linear speed^2 below which a body counts as idle (Lua line 426:
-            // velX^2 + velY^2 < 4, i.e. |v| < 2 world units/s).
-            inline constexpr Real kSleepLinVel2 = Real(4);
-
-            // |angVel| below which a body counts as idle (Lua line 427).
-            inline constexpr Real kSleepAngVel = Real(0.05);
+            // ---- sleep threshold --------------------------------------------
+            //
+            // The per-body VELOCITY gate is no longer a pair of separate Lua-ported
+            // constants. UpdateSleep now uses Box2D v3's combined, extent-weighted
+            // test: a body is idle when |v| + |w|*maxExtent < its per-body
+            // sleepThreshold (PhysicsWorld::SleepThresholdSlot, defaulted from
+            // WorldDef::sleepThreshold). The old kSleepLinVel2 (=4) / kSleepAngVel
+            // (=0.05) gates were too strict + body-size-unaware for the gravity-900
+            // world and never let a slowly-rolling pile sleep (see the never-settle
+            // findings doc). Only the TIME gate remains a constant here.
 
             // Idle time a body (and every island member) must accumulate before
             // the island sleeps (Lua lines 437/442: sleepT > 0.5 seconds).

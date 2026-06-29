@@ -145,6 +145,9 @@ namespace Arcane
             Real restitution    = Real(0);     // bounciness (solver, P2.2)
             Real friction       = Real(0.4);   // Lua default 0.4 (line 233)
             Real linearDamping  = Real(0);     // per-step velocity decay
+            // Per-body sleep speed gate (px/s). < 0 inherits WorldDef::sleepThreshold.
+            // A body is idle when |v| + |w|*maxExtent < sleepThreshold (Box2D v3).
+            Real sleepThreshold = Real(-1);
             bool fixedRotation  = false;       // invInertia forced to 0
             bool bullet         = false;       // CCD clamp (P3); stored now
 
@@ -220,6 +223,16 @@ namespace Arcane
             Real          contactDampingRatio  = Real(10);
             Real          restitutionThreshold = Real(20);  // Lua REST_VEL = 20
             Real          contactPushMaxVelocity = Real(300);
+
+            // Sleep speed gate (px/s): a body is idle when its combined speed
+            // |v| + |w|*maxExtent < sleepThreshold (Box2D v3 b2FinalizeBodiesTask).
+            // Box2D b2DefaultBodyDef is 0.05 m/s (~4.5 px/s at the sandbox's ~90 px/m).
+            // Set to 8 empirically: the gravity-900 soft solver's residual jitter floor
+            // for a settled pile is ~7 px/s (measured on the scene-8 no-whisk repro;
+            // 6 fails to sleep, 7 sleeps, 8 = +1 margin -- see the never-settle findings
+            // doc). Per-body override via BodyDef::sleepThreshold (>= 0). The maxExtent
+            // weighting handles body size; gravity scaling is left to this constant.
+            Real          sleepThreshold = Real(8);
 
             // ---- solver selection (P2.3 A/B cross-check) --------------------
             //
@@ -431,6 +444,14 @@ namespace Arcane
             // On a Dynamic body this WAKES it (clears the sleep timer) -- ports
             // setVelocity (PhysicsWorld.lua:98-104, line 102).
             void SetVelocity(BodyHandle h, Vec2 v);
+
+            // Set angular velocity (Kinematic + Dynamic accept it; Static ignores).
+            // Mirrors SetVelocity: a Dynamic body is WAKED (sleep timer cleared).
+            void SetAngularVelocity(BodyHandle h, Real w);
+
+            // Resolve a body handle to its SoA slot index (the handle's index field).
+            // Callers must hold a valid handle; returns the raw index unconditionally.
+            [[nodiscard]] std::uint32_t SlotOf(BodyHandle h) const noexcept { return h.index; }
 
             // ---- dynamics accessors (P2.1; Dynamic-only effects) ------------
 
@@ -933,6 +954,11 @@ namespace Arcane
             // per-body call cost vanishes in an optimized build.
             [[nodiscard]] Real SleepTimerSlot(std::uint32_t i) const noexcept { return m_sleepTimer[i]; }
             void SetSleepTimerSlot(std::uint32_t i, Real t) noexcept { m_sleepTimer[i] = t; }
+            // Box2D-faithful sleep test inputs (Island::UpdateSleep): maxExtent is
+            // the body's COM->farthest-point distance; sleepThreshold is the per-body
+            // speed gate (a body is idle when |v| + |w|*maxExtent < sleepThreshold).
+            [[nodiscard]] Real MaxExtentSlot(std::uint32_t i) const noexcept { return m_maxExtent[i]; }
+            [[nodiscard]] Real SleepThresholdSlot(std::uint32_t i) const noexcept { return m_sleepThreshold[i]; }
             // WARNING (Phase B awake-set invariant): this writes ONLY the m_awake
             // flag -- it does NOT maintain the awake-set (m_awakeBodies). The sleep
             // seam pairs SetAwakeSlot(i,false) with RemoveFromAwakeSet(i) in
@@ -1090,6 +1116,9 @@ namespace Arcane
             [[nodiscard]] Real ContactDampingRatio() const noexcept { return m_contactDampingRatio; }
             [[nodiscard]] Real RestitutionThreshold() const noexcept { return m_restitutionThreshold; }
             [[nodiscard]] Real ContactPushMaxVelocity() const noexcept { return m_contactPushMaxVelocity; }
+            // World default sleep gate (px/s); AddBody copies it onto a body whose
+            // BodyDef::sleepThreshold is < 0 (the inherit sentinel).
+            [[nodiscard]] Real SleepThresholdDefault() const noexcept { return m_sleepThresholdDefault; }
 
             // Baumgarte velocity-iteration count (Lua w.velIters; SoftStep
             // ignores it). Read by the Baumgarte solver in its Solve().
@@ -1236,6 +1265,11 @@ namespace Arcane
             // so a mass override set at AddBody is preserved through AddFixture.
             void RecomputeBodyMass(std::uint32_t bodySlot);
 
+            // Recompute the cached COM->farthest-fixture-point distance (+radius)
+            // used by the sleep velocity test (Box2D sim->maxExtent). Call after the
+            // body's COM (m_localCenter) is finalized -- AddBody + RecomputeBodyMass.
+            void RecomputeMaxExtent(std::uint32_t bodySlot);
+
             // Allocate and populate a fixture slot for `bodySlot` from `def`,
             // link it into m_bodyFixtures, and return the slot index.  Does NOT
             // call RecomputeBodyMass -- callers do that themselves (AddFixture
@@ -1265,6 +1299,8 @@ namespace Arcane
             std::vector<Real>          m_rest, m_fric;        // solver params (P2.2)
             std::vector<Real>          m_linDamp;             // velocity decay
             std::vector<Real>          m_sleepTimer;          // island sleep (P2.4)
+            std::vector<Real>          m_maxExtent;           // body COM->farthest-point dist (+radius); sleep test
+            std::vector<Real>          m_sleepThreshold;      // per-body sleep speed gate (px/s); see WorldDef/BodyDef
             std::vector<std::uint8_t>  m_awake;               // 1 = awake (integrates this step; P2.4 sleep clears to 0)
             std::vector<std::uint8_t>  m_bullet;              // CCD clamp (P3)
 
@@ -1352,6 +1388,7 @@ namespace Arcane
             Real          m_contactDampingRatio  = Real(10);
             Real          m_restitutionThreshold = Real(20);
             Real          m_contactPushMaxVelocity = Real(300);
+            Real          m_sleepThresholdDefault  = Real(8);   // WorldDef::sleepThreshold
 
             // Baumgarte-only velocity iterations (copied from WorldDef.velIters).
             std::uint32_t m_velIters = 8u;

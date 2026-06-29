@@ -132,6 +132,7 @@ namespace Arcane
             , m_contactDampingRatio(def.contactDampingRatio)
             , m_restitutionThreshold(def.restitutionThreshold)
             , m_contactPushMaxVelocity(def.contactPushMaxVelocity)
+            , m_sleepThresholdDefault(def.sleepThreshold)
             , m_velIters(def.velIters > 0u ? def.velIters : 1u)
             , m_solver(MakeSolver(def))
         {
@@ -192,6 +193,8 @@ namespace Arcane
             m_fric.resize(next, Real(0));
             m_linDamp.resize(next, Real(0));
             m_sleepTimer.resize(next, Real(0));
+            m_maxExtent.resize(next, Real(0));
+            m_sleepThreshold.resize(next, m_sleepThresholdDefault);
             m_awake.resize(next, std::uint8_t(1));
             m_bullet.resize(next, std::uint8_t(0));
             // Phase A: new per-body island id column. A never-touched tail slot
@@ -272,6 +275,7 @@ namespace Arcane
                 m_bodyInertia[bodySlot]= Real(0);
                 m_localCenterX[bodySlot] = Real(0);
                 m_localCenterY[bodySlot] = Real(0);
+                m_maxExtent[bodySlot]    = Real(0);
                 return;
             }
 
@@ -344,6 +348,7 @@ namespace Arcane
                 m_bodyInertia[bodySlot]  = Real(0);
                 m_localCenterX[bodySlot] = Real(0);
                 m_localCenterY[bodySlot] = Real(0);
+                m_maxExtent[bodySlot]    = Real(0);
                 return;
             }
 
@@ -391,6 +396,41 @@ namespace Arcane
             m_invInertia[bodySlot] = (fixedRot || totalInertia <= Real(0))
                                          ? Real(0)
                                          : Real(1) / totalInertia;
+
+            // COM is now final -> refresh the cached sleep-test extent.
+            RecomputeMaxExtent(bodySlot);
+        }
+
+        void PhysicsWorld::RecomputeMaxExtent(std::uint32_t bodySlot)
+        {
+            // maxExtent = max over fixtures of ( max over core verts of
+            // |vert_bodyLocal - COM| + shape.radius ). Body-local frame; COM is
+            // m_localCenter. This is Box2D's sim->maxExtent, used by the sleep
+            // velocity test ( |v| + |w|*maxExtent ). 0 for a body with no fixtures.
+            Real maxExt = Real(0);
+            const Real comX = m_localCenterX[bodySlot];
+            const Real comY = m_localCenterY[bodySlot];
+            for (const std::uint32_t fi : m_bodyFixtures[bodySlot])
+            {
+                if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                {
+                    continue; // dead slot (defensive)
+                }
+                const Shape& s = m_fxShape[fi];
+                const Real la  = m_fxLocalAngle[fi];
+                const Real lc  = std::cos(la), ls = std::sin(la);
+                const Real lpx = m_fxLocalPosX[fi], lpy = m_fxLocalPosY[fi];
+                for (const Vec2& v : s.verts)
+                {
+                    // Core vert in body-local frame: localPos + R(localAngle)*v.
+                    const Real px = lpx + lc * v.x - ls * v.y;
+                    const Real py = lpy + ls * v.x + lc * v.y;
+                    const Real dx = px - comX, dy = py - comY;
+                    const Real d  = std::sqrt(dx * dx + dy * dy) + s.radius;
+                    if (d > maxExt) { maxExt = d; }
+                }
+            }
+            m_maxExtent[bodySlot] = maxExt;
         }
 
         // ----------------------------------------------------------------
@@ -883,6 +923,10 @@ namespace Arcane
             m_fric[idx]       = def.friction;
             m_linDamp[idx]    = def.linearDamping;
             m_sleepTimer[idx] = Real(0);
+            // Per-body sleep gate: explicit BodyDef override (>= 0) or inherit world.
+            m_sleepThreshold[idx] = (def.sleepThreshold >= Real(0))
+                                        ? def.sleepThreshold
+                                        : m_sleepThresholdDefault;
             m_awake[idx]      = 1;
             m_bullet[idx]     = def.bullet ? std::uint8_t(1) : std::uint8_t(0);
 
@@ -1056,6 +1100,10 @@ namespace Arcane
                     m_localCenterY[idx] = Real(0);
                 }
             }
+
+            // COM + the auto-fixture are now in place -> cache the sleep-test extent
+            // (Box2D sim->maxExtent). A later AddFixture re-runs this via RecomputeBodyMass.
+            RecomputeMaxExtent(idx);
 
             return BodyHandle{ idx, m_gen[idx] };
         }
@@ -1319,6 +1367,29 @@ namespace Arcane
                     m_sleepTimer[i] = Real(0);
                     AddToAwakeSet(i); // Phase B: kInvalidIsland safety net (WakeIsland also adds, but may not run for isolated body)
                     WakeIsland(i); // wake the whole island, not just this body
+                }
+            }
+        }
+
+        void PhysicsWorld::SetAngularVelocity(BodyHandle h, Real w)
+        {
+            if (!IsValid(h))
+            {
+                return;
+            }
+            const std::uint32_t i = h.index;
+            const BodyType bt = static_cast<BodyType>(m_btype[i]);
+            // Mirror SetVelocity: Kinematic + Dynamic accept it; Static ignores.
+            // Setting a Dynamic body's angular velocity WAKES it (and its island).
+            if (bt == BodyType::Kinematic || bt == BodyType::Dynamic)
+            {
+                m_angVel[i] = w;
+                if (bt == BodyType::Dynamic)
+                {
+                    m_awake[i]      = 1;
+                    m_sleepTimer[i] = Real(0);
+                    AddToAwakeSet(i);
+                    WakeIsland(i);
                 }
             }
         }
@@ -2195,8 +2266,12 @@ namespace Arcane
             // is non-idle and still wakes. (Static wakers never reach here -- this
             // loop is the mover-mover broadphase.)
             auto moverIsMoving = [&](std::uint32_t s) -> bool {
-                const Real v2 = m_velX[s] * m_velX[s] + m_velY[s] * m_velY[s];
-                return v2 > Island::kSleepLinVel2 || std::fabs(m_angVel[s]) > Island::kSleepAngVel;
+                // Same combined test as Island::UpdateSleep: a mover "is moving"
+                // (and thus wakes a sleeping neighbour) iff it is NOT idle, i.e.
+                // |v| + |w|*maxExtent >= its sleepThreshold. Keeps the wake + sleep
+                // predicates consistent at the threshold margin.
+                const Real lin = std::sqrt(m_velX[s] * m_velX[s] + m_velY[s] * m_velY[s]);
+                return (lin + std::fabs(m_angVel[s]) * m_maxExtent[s]) >= m_sleepThreshold[s];
             };
             // Wake a sleeping dynamic touched by an awake mover (a static/kinematic
             // counterpart reports awake; a dynamic counterpart must itself be awake).

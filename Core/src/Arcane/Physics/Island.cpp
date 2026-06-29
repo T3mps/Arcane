@@ -62,8 +62,14 @@ namespace Arcane
                 }
 
                 // ---- per-body idle-timer update (awake dynamics) ----------------
-                // Idle: linear speed^2 < kSleepLinVel2 AND |angVel| < kSleepAngVel
-                // -> accumulate dt; otherwise reset to 0 (UNCHANGED thresholds).
+                // Box2D v3 b2FinalizeBodiesTask: a body is idle when its combined
+                // linear+angular speed |v| + |w|*maxExtent is below its per-body
+                // sleepThreshold. The angular term is weighted by the body's
+                // farthest-point extent, so a slow roll counts as the (small) speed
+                // of its surface -- this is what finally lets a circle with a tiny
+                // residual roll (the never-settle blocker class) sleep, where the
+                // old separate |w| < 0.05 gate vetoed a whole island forever.
+                // Otherwise reset to 0.
                 for (std::uint32_t i = 0; i < count; ++i)
                 {
                     if (!world.Alive(i) ||
@@ -73,9 +79,10 @@ namespace Arcane
                         continue;
                     }
                     const Vec2 v  = world.VelSlot(i);
-                    const Real v2 = v.x * v.x + v.y * v.y;
                     const Real wv = world.AngVelSlot(i);
-                    if (v2 < kSleepLinVel2 && std::fabs(wv) < kSleepAngVel)
+                    const Real sleepVel = std::sqrt(v.x * v.x + v.y * v.y)
+                                        + std::fabs(wv) * world.MaxExtentSlot(i);
+                    if (sleepVel < world.SleepThresholdSlot(i))
                     {
                         world.SetSleepTimerSlot(i, world.SleepTimerSlot(i) + dt);
                     }
