@@ -66,6 +66,7 @@
 #include <optional>
 #include <vector>
 
+#include <Arcane/Util/BitSet.hpp>
 #include <Arcane/Util/FunctionRef.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 
@@ -1344,6 +1345,13 @@ namespace Arcane
             std::vector<BroadphasePair>     m_pendingMerges;
             std::vector<std::uint32_t>      m_splitCandidates;
 
+            // Narrowphase-MT scratch (gather -> parallel collide+flag -> serial apply).
+            // m_npContacts: the gathered stable live-contact id list (Box2D's
+            // contactSims gather). m_npStateBits: one BitSet per worker, each Resize'd
+            // to the pool id capacity per step (Box2D's per-worker contactStateBitSet).
+            std::vector<std::uint32_t> m_npContacts;
+            std::vector<Arcane::BitSet> m_npStateBits;
+
             std::uint32_t              m_count = 0; // high-water slot count
             std::vector<std::uint32_t> m_free;      // recycled slot stack
 
@@ -1516,6 +1524,13 @@ namespace Arcane
             // asleep -- it never wakes a recompute on its own). Mirrors the awake
             // gate GenerateContacts uses to skip work.
             [[nodiscard]] bool BothAsleep(const Contact& c) const noexcept;
+
+            // Recompute one contact's manifold + classify its state change for the
+            // MT serial tail. Reads stable body transforms + the contact; writes ONLY
+            // c.manifold / c.touching / c.npState (no pool/color/island mutation).
+            // moveDt = the step dt; threshSq = the speculative-margin speed^2 gate.
+            void UpdateOneContact(std::uint32_t id, Contact& c,
+                                  Real moveDt, Real threshSq) noexcept;
 
             // ---- the persistent solver feed (Phase 3, Task 4) ----------------
             //

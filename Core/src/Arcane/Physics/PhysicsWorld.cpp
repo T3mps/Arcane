@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <chrono>   // THROWAWAY (ARCANE_NPPROF): narrowphase phase breakdown
+#include <cstdio>   // THROWAWAY (ARCANE_NPPROF/STEPPROF)
+#include <cstdlib>  // THROWAWAY (ARCANE_NPPROF): getenv
 
 #include <Arcane/Physics/Body.hpp>
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
@@ -1890,6 +1893,33 @@ namespace Arcane
                     m_touchedEventPairs.end());
                 m_contacts.Step(*this, m_touchedEventPairs);
             }
+
+#if ARCANE_STEPPROF
+            // THROWAWAY: per-300-step Step phase breakdown (narrowphase MT measure).
+            {
+                static std::uint64_t s_stepCount = 0;
+                ++s_stepCount;
+                if (s_stepCount % 300 == 0 && s_stepCount <= 1800)
+                {
+                    using P = StepProf::Phase;
+                    auto& tbl = StepProf::Table();
+                    auto msAvg = [&](P ph) -> double {
+                        const auto& a = tbl[static_cast<std::size_t>(ph)];
+                        return a.calls ? static_cast<double>(a.ns) / 1e6 / static_cast<double>(a.calls) : 0.0;
+                    };
+                    double total = 0.0;
+                    for (const auto& a : tbl)
+                        total += a.calls ? static_cast<double>(a.ns) / 1e6 / static_cast<double>(a.calls) : 0.0;
+                    std::printf("[PROF] step=%llu total=%.2fms stage1=%.2f narrow=%.2f emit=%.2f solve=%.2f wswb=%.2f bullet=%.2f sleep=%.2f events=%.2f awake=%u contacts=%zu\n",
+                        static_cast<unsigned long long>(s_stepCount), total,
+                        msAvg(P::Stage1Snapshot), msAvg(P::Narrowphase), msAvg(P::EmitConstraints),
+                        msAvg(P::Solve), msAvg(P::WarmStartWriteback), msAvg(P::Bullet),
+                        msAvg(P::IslandSleep), msAvg(P::Events), AwakeCount(), DebugContactCount());
+                    std::fflush(stdout);
+                    StepProf::Reset();
+                }
+            }
+#endif
         }
 
         // ----------------------------------------------------------------
@@ -2402,12 +2432,97 @@ namespace Arcane
             // body slots + manifold persist) -- mirrors EnsurePair's contract.
         }
 
+        void PhysicsWorld::UpdateOneContact(std::uint32_t id, Contact& c,
+                                            Real moveDt, Real threshSq) noexcept
+        {
+            (void)id;
+            c.npState = 0;
+
+            // Stale-handle: a removed/recycled fixture or dead body -> flag destroy.
+            if (!FixtureSlotLive(c.a) || (c.bIsBody && !FixtureSlotLive(c.b)))
+            {
+                c.npState |= kNpDestroy;
+                return;
+            }
+
+            // Velocity-scaled speculative margin (CCD) over the two bodies.
+            const Real speedSqA = m_velX[c.bodyA] * m_velX[c.bodyA] +
+                                  m_velY[c.bodyA] * m_velY[c.bodyA];
+            const Real speedSqB = m_velX[c.bodyB] * m_velX[c.bodyB] +
+                                  m_velY[c.bodyB] * m_velY[c.bodyB];
+            const Real maxSpeedSq = std::max(speedSqA, speedSqB);
+            const Real margin = (maxSpeedSq > threshSq)
+                                    ? std::sqrt(maxSpeedSq) * moveDt
+                                    : kSkin;
+
+            // Fat-box separation (widened by the speculative margin) -> flag destroy.
+            const Real extra = std::max(Real(0), margin - DynamicTree::kMargin);
+            if (!FatBoxesOverlap(c, extra))
+            {
+                c.npState |= kNpDestroy;
+                return;
+            }
+
+            // Both asleep (and not an event-only pair) -> keep cached manifold, no work.
+            const bool eventOnly = c.eventRelevant && !c.solverRelevant;
+            if (BothAsleep(c) && !eventOnly)
+            {
+                return;
+            }
+
+            // Warm-start carry-forward snapshot, then recompute the manifold.
+            const Manifold oldManifold = c.manifold;
+            const Transform xfA = ComposeFixtureXf(
+                Vec2(m_posX[c.bodyA], m_posY[c.bodyA]), m_angle[c.bodyA],
+                Vec2(m_fxLocalPosX[c.a.index], m_fxLocalPosY[c.a.index]),
+                m_fxLocalAngle[c.a.index]);
+            const Transform xfB = ComposeFixtureXf(
+                Vec2(m_posX[c.bodyB], m_posY[c.bodyB]), m_angle[c.bodyB],
+                Vec2(m_fxLocalPosX[c.b.index], m_fxLocalPosY[c.b.index]),
+                m_fxLocalAngle[c.b.index]);
+            c.manifold = Collide(m_fxShape[c.a.index], xfA,
+                                 m_fxShape[c.b.index], xfB, margin);
+
+            const bool wasTouching = c.touching;
+            c.touching = (c.manifold.pointCount > 0);
+
+            // Classify the dyn-dyn touch transition (island edge) -> flag for the tail.
+            if (c.bIsBody && c.bodyB != kInvalidSlot &&
+                TypeSlot(c.bodyA) == BodyType::Dynamic &&
+                TypeSlot(c.bodyB) == BodyType::Dynamic)
+            {
+                if (!wasTouching && c.touching)      { c.npState |= kNpStarted; }
+                else if (wasTouching && !c.touching) { c.npState |= kNpStopped; }
+            }
+
+            // Warm-start: copy impulses forward by feature id (<=2x2 fixed loop).
+            for (int np = 0; np < c.manifold.pointCount; ++np)
+            {
+                ManifoldPoint& nm = c.manifold.points[np];
+                for (int op = 0; op < oldManifold.pointCount; ++op)
+                {
+                    const ManifoldPoint& om = oldManifold.points[op];
+                    if (om.id == nm.id)
+                    {
+                        nm.normalImpulse  = om.normalImpulse;
+                        nm.tangentImpulse = om.tangentImpulse;
+                        break;
+                    }
+                }
+            }
+        }
+
         void PhysicsWorld::UpdateContacts(Real dt)
         {
             // Phase A per-step island merge scratch: reset here so the apply pass
             // below only sees pairs collected THIS step. clear() keeps capacity
             // -> zero steady-state allocation after the first few steps.
             m_pendingMerges.clear();
+
+            // THROWAWAY (ARCANE_NPPROF): narrowphase phase breakdown.
+            static const bool kNpProf = std::getenv("ARCANE_NPPROF") != nullptr;
+            static std::uint64_t s_npStep = 0, s_nsCreate = 0, s_nsUpdate = 0, s_nsMerge = 0;
+            const auto npT0 = std::chrono::high_resolution_clock::now();
 
             // ---- 1. CREATE: a contact for every fixture-pair in the EVENT UNION --
             // (solver-relevant pairs + the event-only tail: sensors,
@@ -2701,18 +2816,14 @@ namespace Arcane
                 }
             }
 
-            // ---- 2. UPDATE + DESTROY: one deterministic pass (ascending id) -----
+            const auto npT1 = std::chrono::high_resolution_clock::now(); // THROWAWAY: end create
+
+            // ---- 2. UPDATE + DESTROY: recompute (helper) then apply (ascending id) --
             m_contactPool.ForEach([&](std::uint32_t id, Contact& c)
             {
-                // Stale-handle reap: a removed/recycled fixture (gen bumped) or a
-                // dead body kills the contact (Task 5 makes removal immediate; here
-                // the update pass catches it the next step, which the tests allow).
-                if (!FixtureSlotLive(c.a) || (c.bIsBody && !FixtureSlotLive(c.b)))
+                UpdateOneContact(id, c, moveDt, threshSq);
+                if (c.npState & kNpDestroy)
                 {
-                    // A destroyed contact may fracture the island. For a touching
-                    // dynamic-dynamic pair BOTH bodies share one island id (the merge
-                    // united them), so marking either slot's island flags the whole pile
-                    // for the deferred split-rebuild.
                     if (c.bIsBody && c.touching &&
                         c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
                         c.bodyA < m_islandId.size() &&
@@ -2722,159 +2833,23 @@ namespace Arcane
                     {
                         MarkSplitCandidate(IslandOf(c.bodyA));
                     }
-                    ReleaseContactColor(id); // free the color while c still holds it (stale-handle reap)
+                    ReleaseContactColor(id);
                     m_contactPool.Destroy(id);
                     return;
                 }
-                // Per-pair speculative margin: max(kSkin, sqrt(maxSpeedSq)*dt) over
-                // the two bodies -- the exact velocity-scaled CCD margin the retired
-                // GenerateContacts fed to Collide. Computed HERE (before the fat-box
-                // gate) so the destroy test can widen by it: a fast mover closing on
-                // a wall is up to `margin` away yet must keep its contact this Step.
-                const Real speedSqA = m_velX[c.bodyA] * m_velX[c.bodyA] +
-                                      m_velY[c.bodyA] * m_velY[c.bodyA];
-                const Real speedSqB = m_velX[c.bodyB] * m_velX[c.bodyB] +
-                                      m_velY[c.bodyB] * m_velY[c.bodyB];
-                const Real maxSpeedSq = std::max(speedSqA, speedSqB);
-                const Real margin = (maxSpeedSq > threshSq)
-                                        ? std::sqrt(maxSpeedSq) * moveDt
-                                        : kSkin;
-
-                // Fat-box separation: the contact owns its destruction. Widen the
-                // gate by the speculative margin (minus the fixed tree skin already
-                // baked into each fat box) so a fast approaching mover is not reaped
-                // before Collide can report its speculative manifold. A slow/resting
-                // pair has margin == kSkin << kMargin, so extra == 0 and the gate is
-                // the plain fat-box test (settled-persistence behavior UNCHANGED).
-                const Real extra = std::max(Real(0),
-                                            margin - DynamicTree::kMargin);
-                if (!FatBoxesOverlap(c, extra))
+                if (c.npState & kNpStarted)
                 {
-                    // Separation may fracture the island (same guard as stale-handle).
-                    if (c.bIsBody && c.touching &&
-                        c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
-                        c.bodyA < m_islandId.size() &&
-                        TypeSlot(c.bodyA) == BodyType::Dynamic &&
-                        c.bodyB < m_islandId.size() &&
-                        TypeSlot(c.bodyB) == BodyType::Dynamic)
-                    {
-                        MarkSplitCandidate(IslandOf(c.bodyA));
-                    }
-                    ReleaseContactColor(id); // free the color while c still holds it (fat-box separation)
-                    m_contactPool.Destroy(id);
-                    return;
+                    const std::uint32_t lo = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
+                    const std::uint32_t hi = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
+                    m_pendingMerges.push_back(BroadphasePair{ lo, hi });
                 }
-                // Both asleep -> reuse the cached manifold (no recompute).
-                // A body moved while still asleep (e.g. SetPosition, which moves
-                // the proxy but does NOT set m_awake) keeps a stale cached manifold,
-                // but it is never consumed while asleep (the awake-gate in
-                // EmitContactConstraints produces no constraint for an asleep
-                // dynamic body) and is recomputed on wake -- benign.
-                //
-                // EVENT EXCEPTION (Phase 4, Task 2): BothAsleep treats a
-                // static/kinematic body as "asleep" (it never integrates), so a
-                // kinematic-static / kinematic-kinematic contact would NEVER refresh
-                // `touching` and a moving kinematic's events would be missed. Un-skip
-                // the recompute for an EVENT-ONLY contact (event-relevant but NOT
-                // solver-relevant). That set is exactly the pairs the event machine
-                // needs fresh touch-state for that the solver does not feed:
-                // kinematic-static, kinematic-kinematic, and dynamic-sensor pairs
-                // (all have solverRelevant == false). Recomputing them is
-                // SOLVER-NEUTRAL: EmitContactConstraints emits nothing for a
-                // !solverRelevant contact, and the recompute writes only the cached
-                // manifold/touching -- no sim state. Crucially the skip behavior of
-                // every SOLVER-relevant contact (which governs the byte-identical
-                // solver feed) is UNCHANGED. The dynamic-kinematic SOLVER case is
-                // unaffected -- WakeMoverPair wakes its sleeping dynamic, so
-                // BothAsleep is already false for it.
-                const bool eventOnly = c.eventRelevant && !c.solverRelevant;
-                if (BothAsleep(c) && !eventOnly)
+                else if (c.npState & kNpStopped)
                 {
-                    return;
-                }
-                // WARM-START CARRY-FORWARD (warm-start-on-Contact). The recompute
-                // below REPLACES c.manifold wholesale, which would wipe the
-                // accumulated impulses the solver wrote onto last step's manifold
-                // points. Box2D-v3 keeps warm-start alive across the per-step
-                // manifold rebuild by MATCHING the new points to the old ones by
-                // feature id and copying the impulses forward. Snapshot the old
-                // points' (id, normalImpulse, tangentImpulse) BEFORE the overwrite;
-                // after, each NEW point inherits the impulses of the OLD point with
-                // the SAME id (no match -> stays 0, i.e. a fresh feature cold-
-                // starts). Without this the persistent-Contact warm-start would be
-                // no better than a cold start every step (stacks would jitter).
-                // (The BothAsleep early-return above SKIPS the recompute, so the
-                // manifold -- and its impulses -- persist there for free.)
-                const Manifold oldManifold = c.manifold;
-
-                // Recompute the manifold ONCE this step, mirroring the retired
-                // GenerateContacts transform composition (ComposeFixtureXf) + the
-                // velocity-scaled speculative margin computed above.
-                const Transform xfA = ComposeFixtureXf(
-                    Vec2(m_posX[c.bodyA], m_posY[c.bodyA]), m_angle[c.bodyA],
-                    Vec2(m_fxLocalPosX[c.a.index], m_fxLocalPosY[c.a.index]),
-                    m_fxLocalAngle[c.a.index]);
-                const Transform xfB = ComposeFixtureXf(
-                    Vec2(m_posX[c.bodyB], m_posY[c.bodyB]), m_angle[c.bodyB],
-                    Vec2(m_fxLocalPosX[c.b.index], m_fxLocalPosY[c.b.index]),
-                    m_fxLocalAngle[c.b.index]);
-                c.manifold = Collide(m_fxShape[c.a.index], xfA,
-                                     m_fxShape[c.b.index], xfB, margin);
-                // Snapshot the previous touch-state BEFORE the overwrite so the
-                // island registry can react to false->true (merge) / true->false
-                // (split) edges. The snapshot is the last committed value from
-                // the previous Step (or false for a brand-new contact).
-                const bool wasTouching = c.touching;
-                c.touching = (c.manifold.pointCount > 0);
-
-                // Phase A island maintenance. Only DYNAMIC-DYNAMIC pairs are island
-                // edges (statics/kinematics anchor; a tile span has c.bIsBody ==
-                // false and never reaches this pass). Collect begin/end EDGES here;
-                // merges are APPLIED after the pass in a canonical order
-                // (determinism), and splits are deferred + quota-limited (Task 3
-                // consumes the split-candidate marks -- SplitIsland is still a stub).
-                if (c.bIsBody &&
-                    c.bodyB != kInvalidSlot &&
-                    TypeSlot(c.bodyA) == BodyType::Dynamic &&
-                    TypeSlot(c.bodyB) == BodyType::Dynamic)
-                {
-                    if (!wasTouching && c.touching)
-                    {
-                        // false->true: queue a merge of the two bodies' islands.
-                        // Canonicalise to (min,max) slot so the later std::sort
-                        // produces a run-twice-identical sequence regardless of
-                        // which body is A and which is B in the Contact record.
-                        const std::uint32_t lo = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
-                        const std::uint32_t hi = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
-                        m_pendingMerges.push_back(BroadphasePair{ lo, hi });
-                    }
-                    else if (wasTouching && !c.touching)
-                    {
-                        // true->false: the island may have fractured.
-                        // Mark as a split candidate so Task 3 can rebuild it.
-                        // SplitIsland is a stub until Task 3 -> harmless now.
-                        MarkSplitCandidate(IslandOf(c.bodyA));
-                    }
-                }
-
-                // Copy warm-start impulses forward by matching feature id (small
-                // fixed loop: at most 2 new x 2 old points). A new point with no
-                // old id-match keeps its default 0 (cold start).
-                for (int np = 0; np < c.manifold.pointCount; ++np)
-                {
-                    ManifoldPoint& nm = c.manifold.points[np];
-                    for (int op = 0; op < oldManifold.pointCount; ++op)
-                    {
-                        const ManifoldPoint& om = oldManifold.points[op];
-                        if (om.id == nm.id)
-                        {
-                            nm.normalImpulse  = om.normalImpulse;
-                            nm.tangentImpulse = om.tangentImpulse;
-                            break;
-                        }
-                    }
+                    MarkSplitCandidate(IslandOf(c.bodyA));
                 }
             });
+
+            const auto npT2 = std::chrono::high_resolution_clock::now(); // THROWAWAY: end update
 
             // ---- apply queued island merges in a canonical order ----------------
             // Sort by (min,max) body slot (mirrors the m_touchedEventPairs sort) so
@@ -2893,6 +2868,28 @@ namespace Arcane
                     ia != ib)
                 {
                     MergeIslands(ia, ib);
+                }
+            }
+
+            // THROWAWAY (ARCANE_NPPROF): dump narrowphase create/update/merge split.
+            if (kNpProf)
+            {
+                const auto npT3 = std::chrono::high_resolution_clock::now();
+                auto ns = [](auto a, auto b) {
+                    return static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count());
+                };
+                s_nsCreate += ns(npT0, npT1);
+                s_nsUpdate += ns(npT1, npT2);
+                s_nsMerge  += ns(npT2, npT3);
+                if (++s_npStep % 300 == 0)
+                {
+                    const double d = 300.0 * 1e6;
+                    std::printf("[NPPROF] step=%llu awake=%u contacts=%zu | create=%.3fms update=%.3fms merge=%.3fms\n",
+                        static_cast<unsigned long long>(s_npStep), AwakeCount(),
+                        DebugContactCount(), s_nsCreate / d, s_nsUpdate / d, s_nsMerge / d);
+                    std::fflush(stdout);
+                    s_nsCreate = s_nsUpdate = s_nsMerge = 0;
                 }
             }
         }
