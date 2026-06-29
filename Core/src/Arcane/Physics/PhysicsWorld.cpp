@@ -2578,7 +2578,7 @@ namespace Arcane
                 query.max = Vec2(box.max.x + pad, box.max.y + pad);
                 // Fills BOTH m_genSpans (tile spans, processed transiently below) and
                 // m_genStatics (static bodies, pooled). Step-only scratch.
-                StaticCandidates(query, m_genSpans, m_genStatics);
+                StaticCandidates(query, m_genSpans, m_genStatics, m_staticGridScratch);
 
                 const std::vector<std::uint32_t>* fxListA = nullptr;
                 if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())

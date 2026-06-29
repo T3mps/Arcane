@@ -113,7 +113,8 @@ TEST_CASE("StaticCandidates static-body set unchanged by grid reroute", "[physic
     // Reference: brute-force overlap of the query box against every static slot.
     Aabb2 q; q.min = Vec2(-60, -20); q.max = Vec2(60, 20);
     std::vector<Aabb2> spans; std::vector<std::uint32_t> statics;
-    w.StaticCandidates(q, spans, statics);
+    std::vector<std::uint32_t> gridScratch;
+    w.StaticCandidates(q, spans, statics, gridScratch);
     // Only the first static (centered at 0,0, half 50x10) overlaps q.
     REQUIRE(statics.size() == 1);
 }
@@ -168,12 +169,13 @@ TEST_CASE("StaticCandidates drops a static after RemoveBody", "[physics][grid]")
 
     Aabb2 q; q.min = Vec2(-60, -20); q.max = Vec2(60, 20);
     std::vector<Aabb2> spans; std::vector<std::uint32_t> statics;
-    w.StaticCandidates(q, spans, statics);
+    std::vector<std::uint32_t> gridScratch;
+    w.StaticCandidates(q, spans, statics, gridScratch);
     REQUIRE(statics.size() == 1);          // present before removal
 
     w.RemoveBody(s);
     statics.clear(); spans.clear();
-    w.StaticCandidates(q, spans, statics);
+    w.StaticCandidates(q, spans, statics, gridScratch);
     REQUIRE(statics.empty());              // gone after removal
 }
 
@@ -189,7 +191,8 @@ TEST_CASE("AddFixture grows a static's grid AABB", "[physics][grid]")
     // A region far to the +x side, NOT covered by the small primary fixture.
     Aabb2 farRegion; farRegion.min = Vec2(180, -10); farRegion.max = Vec2(220, 10);
     std::vector<Aabb2> spans; std::vector<std::uint32_t> statics;
-    w.StaticCandidates(farRegion, spans, statics);
+    std::vector<std::uint32_t> gridScratch;
+    w.StaticCandidates(farRegion, spans, statics, gridScratch);
     REQUIRE(statics.empty());              // not reachable yet
 
     // Add a second fixture offset far to +x so the body's union AABB now covers farRegion.
@@ -198,7 +201,7 @@ TEST_CASE("AddFixture grows a static's grid AABB", "[physics][grid]")
     w.AddFixture(s, fd);
 
     statics.clear(); spans.clear();
-    w.StaticCandidates(farRegion, spans, statics);
+    w.StaticCandidates(farRegion, spans, statics, gridScratch);
     REQUIRE(statics.size() == 1);          // now findable at the grown AABB
 }
 

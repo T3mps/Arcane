@@ -36,7 +36,7 @@ namespace Arcane
                 // The body's world AABB at (x,y) drives the candidate query.
                 const Transform xf{ p, Real(0) };
                 const Aabb2 box = s.ComputeAABB(xf);
-                m_world->StaticCandidates(box, m_spans, m_statics);
+                m_world->StaticCandidates(box, m_spans, m_statics, m_staticGridScratch);
 
                 bool hit    = false;
                 Vec2 bn{ Real(0), Real(0) };

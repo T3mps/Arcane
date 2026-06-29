@@ -106,7 +106,8 @@ namespace
 
         std::vector<Aabb2>         spans;
         std::vector<std::uint32_t> statics;
-        w.StaticCandidates(box, spans, statics);
+        std::vector<std::uint32_t> gridScratch;
+        w.StaticCandidates(box, spans, statics, gridScratch);
 
         const Vec2 segA(pos.x - halfLen, pos.y);
         const Vec2 segB(pos.x + halfLen, pos.y);

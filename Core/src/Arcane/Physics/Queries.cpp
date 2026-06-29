@@ -355,7 +355,7 @@ namespace Arcane
             swept.max = Vec2(std::max(a.max.x, b.max.x) + Real(2),
                              std::max(a.max.y, b.max.y) + Real(2));
 
-            StaticCandidates(swept, m_scratchSpans, m_scratchStatics);
+            StaticCandidates(swept, m_scratchSpans, m_scratchStatics, m_staticGridScratch);
 
             bool         haveBest = false;
             ShapeCastHit best{};
@@ -536,7 +536,8 @@ namespace Arcane
 
         void PhysicsWorld::StaticCandidates(const Aabb2& box,
                                             std::vector<Aabb2>& spansOut,
-                                            std::vector<std::uint32_t>& staticsOut) const
+                                            std::vector<std::uint32_t>& staticsOut,
+                                            std::vector<std::uint32_t>& gridScratch) const
         {
             // Merged tile spans (TileGrid) + overlapping static-body slots.
             // Static-body lookup now goes through m_staticGrid (sorted slot-id
@@ -549,8 +550,8 @@ namespace Arcane
                 m_tileGrid->Query(box, spansOut);
             }
             staticsOut.clear();
-            m_staticGrid.QueryAABB(box, m_staticGridScratch);
-            for (std::uint32_t idx : m_staticGridScratch)
+            m_staticGrid.QueryAABB(box, gridScratch);
+            for (std::uint32_t idx : gridScratch)
                 if (m_alive[idx] && AabbOverlap(box, SlotAabb(idx)))
                     staticsOut.push_back(idx);
         }

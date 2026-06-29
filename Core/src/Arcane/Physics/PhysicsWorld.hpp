@@ -1136,8 +1136,12 @@ namespace Arcane
             // _staticCandidates. Both vectors are cleared then filled. With no
             // TileGrid spansOut is empty. (Wired for P1.9/P1.10; the P1.8 event
             // tests use plain bodies and need no tile spans.)
+            // gridScratch: caller-supplied scratch for SpatialGrid::QueryAABB (was the
+            // shared mutable m_staticGridScratch; now caller-owned so the query is
+            // re-entrant for the parallel create-phase detect).
             void StaticCandidates(const Aabb2& box, std::vector<Aabb2>& spansOut,
-                                  std::vector<std::uint32_t>& staticsOut) const;
+                                  std::vector<std::uint32_t>& staticsOut,
+                                  std::vector<std::uint32_t>& gridScratch) const;
 
             // First-class tile residency: dynamic/kinematic body slots register
             // their world AABB cell-occupancy, refreshed when their position

@@ -128,6 +128,9 @@ namespace Arcane
             // called from inside a contact callback).
             std::vector<Aabb2>         m_spans;
             std::vector<std::uint32_t> m_statics;
+            // Scratch for SpatialGrid::QueryAABB inside StaticCandidates
+            // (caller-supplied since the narrowphase-MT refactor; see task 1).
+            std::vector<std::uint32_t> m_staticGridScratch;
             // 4 corners of a span / static-AABB expanded to a poly for
             // CapsulePoly (the Lua aabbPoly write into _polyScratch).
             std::array<Vec2, 4>        m_polyScratch{};
