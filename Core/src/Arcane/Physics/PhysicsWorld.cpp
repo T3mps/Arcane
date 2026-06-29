@@ -2818,36 +2818,73 @@ namespace Arcane
 
             const auto npT1 = std::chrono::high_resolution_clock::now(); // THROWAWAY: end create
 
-            // ---- 2. UPDATE + DESTROY: recompute (helper) then apply (ascending id) --
-            m_contactPool.ForEach([&](std::uint32_t id, Contact& c)
-            {
-                UpdateOneContact(id, c, moveDt, threshSq);
-                if (c.npState & kNpDestroy)
+            // ---- 2. UPDATE + DESTROY: Box2D b2Collide -- gather, parallel collide
+            //         (flag only), serial apply. ------------------------------------
+            // Seam 0: gather the stable live-contact id list (Box2D contactSims).
+            m_npContacts.clear();
+            m_contactPool.ForEach([&](std::uint32_t id, Contact&) {
+                m_npContacts.push_back(id);
+            });
+
+            // Seam 1: parallel collide. Each worker recomputes its range's manifolds
+            // and sets a bit (keyed on pool id) in its OWN BitSet -- no structural
+            // mutation. minRange=64 (Box2D's grain); below it, runs serial on worker 0.
+            const std::uint32_t workers = Executor()->WorkerCount();
+            if (m_npStateBits.size() < workers) { m_npStateBits.resize(workers); }
+            const std::size_t idCap = m_contactPool.Capacity();
+            for (std::uint32_t w = 0; w < workers; ++w) {
+                m_npStateBits[w].Resize(idCap);
+                m_npStateBits[w].ClearAll();
+            }
+            Executor()->ParallelFor(m_npContacts.size(), /*minRange=*/64,
+                [&](std::size_t begin, std::size_t end, std::uint32_t worker)
                 {
-                    if (c.bIsBody && c.touching &&
-                        c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
-                        c.bodyA < m_islandId.size() &&
-                        TypeSlot(c.bodyA) == BodyType::Dynamic &&
-                        c.bodyB < m_islandId.size() &&
-                        TypeSlot(c.bodyB) == BodyType::Dynamic)
+                    Arcane::BitSet& bits = m_npStateBits[worker];
+                    for (std::size_t k = begin; k < end; ++k)
+                    {
+                        const std::uint32_t id = m_npContacts[k];
+                        Contact& c = m_contactPool.Get(id);
+                        UpdateOneContact(id, c, moveDt, threshSq);
+                        if (c.npState != 0) { bits.Set(id); }
+                    }
+                });
+
+            // Seam 2: serial apply. OR-reduce into bits[0], walk ascending (CTZ),
+            // apply destroy / merge-edge / split per npState (ascending id == serial).
+            if (workers > 0)
+            {
+                for (std::uint32_t w = 1; w < workers; ++w) {
+                    m_npStateBits[0].InPlaceUnion(m_npStateBits[w]);
+                }
+                m_npStateBits[0].ForEachSetBit([&](std::uint32_t id)
+                {
+                    Contact& c = m_contactPool.Get(id);
+                    if (c.npState & kNpDestroy)
+                    {
+                        if (c.bIsBody && c.touching &&
+                            c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
+                            c.bodyA < m_islandId.size() &&
+                            TypeSlot(c.bodyA) == BodyType::Dynamic &&
+                            c.bodyB < m_islandId.size() &&
+                            TypeSlot(c.bodyB) == BodyType::Dynamic)
+                        {
+                            MarkSplitCandidate(IslandOf(c.bodyA));
+                        }
+                        ReleaseContactColor(id);
+                        m_contactPool.Destroy(id);
+                    }
+                    else if (c.npState & kNpStarted)
+                    {
+                        const std::uint32_t lo = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
+                        const std::uint32_t hi = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
+                        m_pendingMerges.push_back(BroadphasePair{ lo, hi });
+                    }
+                    else if (c.npState & kNpStopped)
                     {
                         MarkSplitCandidate(IslandOf(c.bodyA));
                     }
-                    ReleaseContactColor(id);
-                    m_contactPool.Destroy(id);
-                    return;
-                }
-                if (c.npState & kNpStarted)
-                {
-                    const std::uint32_t lo = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
-                    const std::uint32_t hi = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
-                    m_pendingMerges.push_back(BroadphasePair{ lo, hi });
-                }
-                else if (c.npState & kNpStopped)
-                {
-                    MarkSplitCandidate(IslandOf(c.bodyA));
-                }
-            });
+                });
+            }
 
             const auto npT2 = std::chrono::high_resolution_clock::now(); // THROWAWAY: end update
 
