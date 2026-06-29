@@ -205,10 +205,12 @@ namespace Arcane
             PhysicsWorld& w = *ctx.world;
 
             // High contact hertz that, with the small sub-step, appears rigid --
-            // but never out-running the sub-step solve rate (Box2D v3 clamps to
-            // 0.25 * substepCount / dt == 0.25 / h).
+            // but never out-running the sub-step solve rate. Box2D v3
+            // (physics_world.c) clamps to 0.125 * inv_h == 0.125 / h. No behavioral
+            // change at the default 4 substeps (min(30, 0.125*240) == 30, same as the
+            // old 0.25/h cap); correct for any future sub-4 substep count.
             const Real h = ctx.subDt;
-            const Real maxHertz = (h > Real(0)) ? (Real(0.25) / h) : w.ContactHertz();
+            const Real maxHertz = (h > Real(0)) ? (Real(0.125) / h) : w.ContactHertz();
             const Real contactHertz = std::min(w.ContactHertz(), maxHertz);
             const SoftCoeffs contactSoft = MakeSoft(contactHertz, w.ContactDampingRatio(), h);
 

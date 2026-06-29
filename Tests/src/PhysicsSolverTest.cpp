@@ -28,10 +28,11 @@
 // massratio pen ~0.14). The defaults trade a hair of resting overlap for the
 // cheaper 4-substep step; a caller wanting crisper contacts raises
 // substepCount/contactHertz on the WorldDef. kLinearSlop itself is the
-// asymptotic floor, NOT the per-frame transient bound. NOTE: at substepCount=4
-// the contact-hertz clamp (0.25*substepCount/dt == 60) means hertz=30 is the
-// soft regime; pushing hertz to the clamp (60) at only 4 substeps destabilizes
-// the 100:1 mass ratio -- the safe high-stiffness config is subs=8/hertz=60.
+// asymptotic floor, NOT the per-frame transient bound. NOTE: the contact-hertz
+// clamp is 0.125/h == 0.125*substepCount/dt (Box2D v3); at substepCount=4 that is
+// 30 Hz, so the default hertz=30 sits exactly at the clamp. 60 Hz contacts (the
+// subs=8/hertz=60 high-stiffness regime) need >=8 substeps; at only 4 substeps
+// they destabilize the 100:1 mass ratio.
 //
 // PRESENTATION-FREE + C++20-clean.
 
