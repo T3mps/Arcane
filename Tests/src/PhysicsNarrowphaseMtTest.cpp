@@ -70,7 +70,7 @@ namespace
             else if (i % 3 == 1)
             {
                 // Box -- fixedRotation because AABB shapes are axis-aligned.
-                d.shape        = MakeAabb(Real(8), Real(8));
+                d.shape         = MakeAabb(Real(8), Real(8));
                 d.fixedRotation = true;
             }
             else
@@ -85,17 +85,76 @@ namespace
         return handles;
     }
 
-    // Build the scene, inject `exec`, step 200 frames at 1/60 s, and return a
-    // flat vector of (pos.x, pos.y, angle) per dynamic-body handle.
+    // Build a create-heavy scene: 140 dynamic bodies rain onto a row of 12
+    // static blocks, continuously forming new dynamic-vs-static contact pairs
+    // every step.  Wider spread + more bodies than BuildChurn emphasises the
+    // parallel CREATE detect path (Task 4 guard).  Returns handles of the
+    // dynamic bodies for capture.
+    std::vector<BodyHandle> BuildCreateHeavy(PhysicsWorld& w)
+    {
+        // Row of 12 static blocks -- the landing field.
+        // Blocks span x in [-330, 330], y=280 (gravity +Y, so fall down).
+        for (int s = 0; s < 12; ++s)
+        {
+            BodyDef st;
+            st.type     = BodyType::Static;
+            st.position = Vec2(Real(-330 + s * 60), Real(280));
+            st.shape    = MakeAabb(Real(26), Real(12));
+            w.AddBody(st);
+        }
+
+        // LCG for deterministic spawn positions (different seed from BuildChurn).
+        std::uint32_t seed = 99991u;
+        auto rnd = [&](Real a, Real b) -> Real
+        {
+            seed = seed * 1664525u + 1013904223u;
+            return a + (b - a) * Real((seed >> 8) & 0xFFFF) / Real(65535);
+        };
+
+        std::vector<BodyHandle> handles;
+        handles.reserve(140);
+
+        for (int j = 0; j < 140; ++j)
+        {
+            BodyDef d;
+            d.type     = BodyType::Dynamic;
+            d.density  = Real(1);
+            d.friction = Real(0.4);
+            d.position = Vec2(rnd(Real(-330), Real(330)),
+                              rnd(Real(-260), Real(220)));
+
+            if (j % 3 == 0)
+            {
+                d.shape = MakeCircle(rnd(Real(6), Real(11)));
+            }
+            else if (j % 3 == 1)
+            {
+                d.shape         = MakeAabb(Real(8), Real(8));
+                d.fixedRotation = true;
+            }
+            else
+            {
+                d.shape = MakeCapsule(Real(10), Real(5));
+            }
+
+            handles.push_back(w.AddBody(d));
+        }
+
+        return handles;
+    }
+
+    // Build the scene via `build`, inject `exec`, step 200 frames at 1/60 s,
+    // and return a flat vector of (pos.x, pos.y, angle) per dynamic-body handle.
     // This is the byte-identity oracle: same scene, different executor.
-    std::vector<Real> RunCapture(Arcane::ITaskExecutor* exec)
+    template<typename Builder>
+    std::vector<Real> RunCapture(Arcane::ITaskExecutor* exec, Builder&& build)
     {
         WorldDef wd;
         wd.gravityY = Real(400);
         PhysicsWorld w(wd);
         w.SetExecutor(exec);
 
-        const std::vector<BodyHandle> handles = BuildChurn(w);
+        const std::vector<BodyHandle> handles = build(w);
 
         for (int k = 0; k < 200; ++k)
         {
@@ -133,9 +192,37 @@ TEST_CASE("Narrowphase MT == serial: state bit-identical", "[physics][mt]")
     }
 
     // Capture with three executor configurations.
-    const std::vector<Real> a = RunCapture(&serial);
-    const std::vector<Real> b = RunCapture(one.TaskExecutor());
-    const std::vector<Real> c = RunCapture(manyEx);
+    const std::vector<Real> a = RunCapture(&serial,             BuildChurn);
+    const std::vector<Real> b = RunCapture(one.TaskExecutor(),  BuildChurn);
+    const std::vector<Real> c = RunCapture(manyEx,              BuildChurn);
+
+    // Sizes must match before element-wise comparison.
+    REQUIRE(a.size() == b.size());
+    REQUIRE(a.size() == c.size());
+
+    // Exact (bit-for-bit) equality -- byte-identity is the contract.
+    REQUIRE(a == b);
+    REQUIRE(a == c);
+}
+
+TEST_CASE("Narrowphase create MT == serial: state bit-identical", "[physics][mt]")
+{
+    Arcane::SerialTaskExecutor serial;
+    Arcane::JobSystem           one(1);
+    Arcane::JobSystem           many(0); // 0 = all cores
+
+    auto* manyEx = many.TaskExecutor();
+
+    INFO("workers (many) = " << manyEx->WorkerCount());
+    if (manyEx->WorkerCount() <= 1u)
+    {
+        WARN("single worker: MT thief path not exercised this run");
+    }
+
+    // Capture with three executor configurations (serial / 1-worker / all-cores).
+    const std::vector<Real> a = RunCapture(&serial,             BuildCreateHeavy);
+    const std::vector<Real> b = RunCapture(one.TaskExecutor(),  BuildCreateHeavy);
+    const std::vector<Real> c = RunCapture(manyEx,              BuildCreateHeavy);
 
     // Sizes must match before element-wise comparison.
     REQUIRE(a.size() == b.size());
