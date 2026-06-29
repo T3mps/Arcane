@@ -47,6 +47,13 @@ namespace Arcane
         // 32-bit bitmask), so 0xFF can never collide with a real color index.
         inline constexpr std::uint8_t kInvalidColor = 0xFFu;
 
+        // Transient per-step narrowphase state-change flags (Box2D simFlags
+        // equivalent). Set in the MT collide pass, consumed+cleared in the serial
+        // tail. NOT serialized (transient). 0 = no change this step.
+        inline constexpr std::uint8_t kNpDestroy = 1u; // stale handle OR fat-box separated
+        inline constexpr std::uint8_t kNpStarted = 2u; // false->true touching
+        inline constexpr std::uint8_t kNpStopped = 4u; // true->false touching
+
         // ----------------------------------------------------------------
         // Contact: one persistent contact per solver-relevant overlapping
         // fixture-pair. Survives across steps; the manifold is recomputed at
@@ -62,6 +69,8 @@ namespace Arcane
             bool          bIsBody = true; // false => B is a tile-span virtual fixture
             Manifold      manifold{};     // last computed (pointCount 0 => not touching)
             bool          touching = false;
+            // Transient narrowphase MT state-change flags (kNp*); reset each step.
+            std::uint8_t  npState = 0;
             // SOLVER vs EVENT relevance (collision-rebuild Phase 4, Task 1). The
             // pool now holds the EVENT union -- sensors + kinematic-kinematic +
             // kinematic-vs-static-body in addition to the solver-relevant pairs.
@@ -151,6 +160,9 @@ namespace Arcane
                 return m_pool[id];
             }
             std::size_t Count() const { return m_live; }
+            // Id-slot capacity (max valid id + 1). Bit sets keyed on contact id are
+            // sized to this (Box2D's contactIdCapacity). NOT the live count.
+            std::size_t Capacity() const noexcept { return m_pool.size(); }
 
             // Visit live contacts in ascending id order (deterministic). A const
             // overload (Phase 3 Task 3 walks the pool read-only).
