@@ -8,13 +8,13 @@
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
-#include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
 #include <Arcane/Render/Device.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include <PluginHost.hpp>
 
 #include <glm/glm.hpp>
 
@@ -39,7 +39,7 @@ namespace
         // Inject the process-wide shared TypeContext so the test exe, Arcane.dll,
         // and the plugin all resolve component TypeIDs from the same slot table.
         Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
-        Arcane::PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
+        PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
         REQUIRE(host.Load());   // plugin registers scene components + systems under the shared ctx
 
         // ABI v3: the plugin loaded under a v3 EngineContext (imgui fields null here --

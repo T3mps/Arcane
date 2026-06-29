@@ -5,11 +5,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/Device.hpp>   // RenderErrorCount()
 
 #include "Helpers/TestTypeContext.hpp"
 #include "../plugins/HotReloadShared.hpp"   // the SAME Pulse type the plugin uses
+#include <PluginHost.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -37,7 +37,7 @@ TEST_CASE("PluginHost loads a plugin and runs it across the ABI", "[hotreload]")
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     rt.Components()->RegisterComponent<Pulse>();   // engine sees the type so views resolve
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
     REQUIRE(host.Load());
     REQUIRE(host.IsLoaded());
 
@@ -56,7 +56,7 @@ TEST_CASE("Hot swap V1->V2 preserves state AND runs the new code", "[hotreload]"
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     rt.Components()->RegisterComponent<Pulse>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
     REQUIRE(host.Load());
     StepK(rt, *host.Vtable(), 5);
     REQUIRE(ReadPulse(rt) == 5);
@@ -86,7 +86,7 @@ TEST_CASE("ABI mismatch rolls back to last-good; session survives", "[hotreload]
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     rt.Components()->RegisterComponent<Pulse>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
     REQUIRE(host.Load());
     StepK(rt, *host.Vtable(), 3);
     REQUIRE(ReadPulse(rt) == 3);

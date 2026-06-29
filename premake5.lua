@@ -422,6 +422,9 @@ project "ArcaneTests"
         -- LoomConfig (the typed Loom CLI result over Arcane::Cli) compiles into the
         -- test exe so [loom] round-trips Parse without loading the Loom binary.
         "%{wks.location}/Loom/src/LoomConfig.cpp",
+        "%{wks.location}/Loom/src/Module.cpp",
+        "%{wks.location}/Loom/src/Plugin.cpp",
+        "%{wks.location}/Loom/src/PluginHost.cpp",
     }
 
     includedirs {

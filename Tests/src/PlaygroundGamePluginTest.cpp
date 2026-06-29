@@ -4,12 +4,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/Device.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include <PluginHost.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -39,7 +39,7 @@ TEST_CASE("PlaygroundGame runs and survives a reload", "[hotreload]")
     // Scene component types are registered by the plugin's Init (ReRegisterComponent);
     // the shared TypeContext makes the test module's TypeID<WorldTransform> agree.
 
-    Arcane::PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
+    PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
     REQUIRE(host.Load());
 
     // ABI v3: the plugin reports the current ABI version; the DrawUI entry point
