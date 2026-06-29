@@ -3,8 +3,8 @@
 // Runs the SAME churning mixed-shape pile with a 1-worker (serial) executor
 // and a K-worker (all-cores) executor; asserts that final body position +
 // angle are bit-for-bit identical. At this task (Task 4) the narrowphase
-// update pass is still serial — both runs exercise the existing D1 solver-MT
-// and D2 broadphase-MT paths — so the test establishes the baseline contract
+// update pass is still serial -- both runs exercise the existing D1 solver-MT
+// and D2 broadphase-MT paths -- so the test establishes the baseline contract
 // and will guard Task 5's narrowphase parallelisation once it lands.
 //
 // Executor-injection pattern mirrors SolverMtInvarianceTest exactly.
@@ -26,7 +26,7 @@ namespace
     // Build a churning mixed pile: a static floor + 120 dynamic bodies of
     // mixed shape (circle / box / capsule), spawned in a spread-out region
     // above the floor.  The variety of shapes and spawn heights ensures that
-    // every step creates, destroys, and updates many contacts — exercising all
+    // every step creates, destroys, and updates many contacts -- exercising all
     // narrowphase state paths (new / existing / lost).  Returns the handles of
     // the dynamic bodies so their final state can be read back via
     // Position(h) / GetAngle(h).
@@ -64,18 +64,18 @@ namespace
 
             if (i % 3 == 0)
             {
-                // Circle — can freely rotate.
+                // Circle -- can freely rotate.
                 d.shape = MakeCircle(rnd(Real(6), Real(12)));
             }
             else if (i % 3 == 1)
             {
-                // Box — fixedRotation because AABB shapes are axis-aligned.
+                // Box -- fixedRotation because AABB shapes are axis-aligned.
                 d.shape        = MakeAabb(Real(8), Real(8));
                 d.fixedRotation = true;
             }
             else
             {
-                // Capsule — can freely rotate.
+                // Capsule -- can freely rotate.
                 d.shape = MakeCapsule(Real(10), Real(5));
             }
 
@@ -141,7 +141,7 @@ TEST_CASE("Narrowphase MT == serial: state bit-identical", "[physics][mt]")
     REQUIRE(a.size() == b.size());
     REQUIRE(a.size() == c.size());
 
-    // Exact (bit-for-bit) equality — byte-identity is the contract.
+    // Exact (bit-for-bit) equality -- byte-identity is the contract.
     REQUIRE(a == b);
     REQUIRE(a == c);
 }
