@@ -2554,15 +2554,25 @@ namespace Arcane
             // Step (spans are not pooled; they are virtual/transient fixtures).
             m_spanContacts.clear();
             m_spanCenters.clear();
+            m_newPairs.clear();
             const Real moveDt = dt > Real(0) ? dt : Real(0);
             const Real threshSq = (moveDt > Real(0))
                                       ? (kSkin / moveDt) * (kSkin / moveDt)
                                       : Real(0);
-            ForEachAwake([&](std::uint32_t i)
+            // ---- DETECT (serial, awake-visit order) ----------------------------
+            // Indexed loop over m_awakeBodies so the visit order is the same as
+            // ForEachAwake (k=0..AwakeCount()-1).  The span loop is VERBATIM (it
+            // pushes m_spanContacts/m_spanCenters in k-ascending order, unchanged).
+            // The static-loop now EMITS NewPairRecord{k,fiA,fiB} instead of calling
+            // TryCreateContact inline; the serial create pass below replays them in
+            // (k ascending, push-order) order -- identical to the old inline order.
+            const std::uint32_t awakeCount = AwakeCount();
+            for (std::uint32_t k = 0; k < awakeCount; ++k)
             {
+                const std::uint32_t i = AwakeBodies()[k];
                 if (m_sensor[i] != 0)
                 {
-                    return; // sensor dynamic body: skip (no static contacts)
+                    continue; // sensor dynamic body: skip (no static contacts)
                 }
                 // Same query pad as the legacy GenerateContacts: max(2, specMargin),
                 // where specMargin = max(kSkin, |v|*dt) so the candidate set is
@@ -2663,9 +2673,14 @@ namespace Arcane
 
                 if (fxListA == nullptr)
                 {
-                    return; // no fixtures -> no fixture-pair contact to persist
+                    continue; // no fixtures -> no fixture-pair contact to persist
                 }
 
+                // ---- static fixture pairs: EMIT records (do NOT create here) ---
+                // Records are pushed in (k ascending, nested s/fiA/fiB) order --
+                // identical to the old inline TryCreateContact call order so the
+                // serial create pass below reproduces the same EnsurePair id
+                // allocation + AssignContactColor sequence exactly.
                 for (std::size_t s = 0; s < m_genStatics.size(); ++s)
                 {
                     const std::uint32_t idx = m_genStatics[s];
@@ -2694,17 +2709,24 @@ namespace Arcane
                             {
                                 continue;
                             }
-                            // TryCreateContact applies the same filters + orientation
-                            // (dynamic A; static B never reorders since B is not
-                            // dynamic). The fat-box update-pass owns destruction, so
-                            // we ensure the pair whenever it is a static CANDIDATE
-                            // (broadphase-adjacent); a non-overlapping pair is reaped
-                            // by FatBoxesOverlap on the same / a later step.
-                            TryCreateContact(fiA, fiB);
+                            m_newPairs.push_back(NewPairRecord{ k, fiA, fiB });
                         }
                     }
                 }
-            }); // end ForEachAwake (b)
+            } // end detect loop (b)
+            // ---- CREATE (serial, (awakeIndex, push-order)) ---------------------
+            // m_newPairs is already in (k ascending, nested s/fiA/fiB) order because
+            // the detect loop is serial and k-ascending -- identical to the old inline
+            // TryCreateContact call order.  TryCreateContact applies the same filters
+            // + orientation (dynamic A; static B never reorders since B is not
+            // dynamic).  The fat-box update-pass owns destruction, so we ensure the
+            // pair whenever it is a static CANDIDATE (broadphase-adjacent); a
+            // non-overlapping pair is reaped by FatBoxesOverlap on the same / a
+            // later step.
+            for (const NewPairRecord& rec : m_newPairs)
+            {
+                TryCreateContact(rec.fiA, rec.fiB);
+            }
 
             // (c) KINEMATIC<->static-BODY (Phase 4, Task 1): event-relevant but NOT
             //     solver-relevant. Static bodies are NOT in the mover broadphase and

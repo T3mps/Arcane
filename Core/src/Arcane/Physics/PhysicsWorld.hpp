@@ -1671,6 +1671,20 @@ namespace Arcane
             std::vector<Contact> m_spanContacts;
             std::vector<Vec2>    m_spanCenters; // span geometric center, parallel to m_spanContacts
 
+            // ---- Create-phase MT: deferred new-pair records (narrowphase-MT G2) --
+            //
+            // The detect pass (stage-2b indexed loop) emits one record per fixture
+            // pair candidate instead of calling TryCreateContact inline.  The serial
+            // create tail replays TryCreateContact in (awakeIndex ascending,
+            // push-order) order -- reproducing the serial ForEachAwake create order
+            // exactly, so the order-dependent AssignContactColor + the EnsurePair id
+            // allocation are byte-identical.  awakeIndex = the index into
+            // m_awakeBodies (NOT the body slot), which is the ForEachAwake visit
+            // order.  Task 4 will make the detect loop parallel; this Task keeps it
+            // serial so byte-identity can be verified first.
+            struct NewPairRecord { std::uint32_t awakeIndex; std::uint32_t fiA; std::uint32_t fiB; };
+            std::vector<NewPairRecord> m_newPairs;
+
             // ---- EmitContactConstraints sort scratch (Phase 3, Task 4) -------
             //
             // The canonical-sort scratch consumed by EmitContactConstraints every
