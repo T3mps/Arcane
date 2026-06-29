@@ -1434,6 +1434,10 @@ namespace Arcane
             // The serial UpdatePairs wrapper (tests/oracle) is unchanged; only
             // UpdateContacts is switched to the parallel orchestration.
             static constexpr std::size_t kBroadphaseGrain = 64;
+            // Grain for the create-phase parallel detect (stage-2b ParallelFor).
+            // Below kCreateGrain awake bodies the ParallelFor degrades to serial on
+            // worker 0 -> byte-identical to the pre-MT path with zero overhead.
+            static constexpr std::size_t kCreateGrain      = 16;
             std::vector<std::uint32_t>              m_bpMovedScratch;
             // false-sharing of adjacent inner-vector control blocks is DEFERRED (Task 4 measured this stage DRAM/latency-bound, so it is masked; pad each per-worker entry to 64B if it ever dominates).
             std::vector<std::vector<std::uint64_t>> m_bpFindScratch;   // per-worker key buffers
@@ -1684,6 +1688,19 @@ namespace Arcane
             // serial so byte-identity can be verified first.
             struct NewPairRecord { std::uint32_t awakeIndex; std::uint32_t fiA; std::uint32_t fiB; };
             std::vector<NewPairRecord> m_newPairs;
+
+            // Create-phase MT per-worker scratch (sized to WorkerCount() each step,
+            // grow-only). Each worker uses ONLY its own [w] entry -> contention-free.
+            // SpanEntry tags each transient span contact with the awakeIndex of the
+            // body that produced it, so the serial tail can stable_sort back to
+            // ForEachAwake order (k ascending, within-k push order preserved because
+            // each k is handled by exactly one worker and ranges are disjoint).
+            struct SpanEntry { std::uint32_t awakeIndex; Contact c; Vec2 center; };
+            std::vector<std::vector<Aabb2>>         m_genSpansW;    // per-worker StaticCandidates spans out
+            std::vector<std::vector<std::uint32_t>> m_genStaticsW;  // per-worker statics out
+            std::vector<std::vector<std::uint32_t>> m_gridScratchW; // per-worker QueryAABB scratch
+            std::vector<std::vector<SpanEntry>>     m_spanEntriesW; // per-worker span contacts (awakeIndex-tagged)
+            std::vector<std::vector<NewPairRecord>> m_newPairsW;    // per-worker new-pair records
 
             // ---- EmitContactConstraints sort scratch (Phase 3, Task 4) -------
             //

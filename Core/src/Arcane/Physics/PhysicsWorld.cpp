@@ -2559,170 +2559,180 @@ namespace Arcane
             const Real threshSq = (moveDt > Real(0))
                                       ? (kSkin / moveDt) * (kSkin / moveDt)
                                       : Real(0);
-            // ---- DETECT (serial, awake-visit order) ----------------------------
-            // Indexed loop over m_awakeBodies so the visit order is the same as
-            // ForEachAwake (k=0..AwakeCount()-1).  The span loop is VERBATIM (it
-            // pushes m_spanContacts/m_spanCenters in k-ascending order, unchanged).
-            // The static-loop now EMITS NewPairRecord{k,fiA,fiB} instead of calling
-            // TryCreateContact inline; the serial create pass below replays them in
-            // (k ascending, push-order) order -- identical to the old inline order.
+            // ---- DETECT (parallel; writes ONLY per-worker scratch) ----------------
+            // Each worker handles a disjoint range of m_awakeBodies[begin..end).
+            // The parallel section is STRUCTURALLY MUTATION-FREE: no TryCreateContact,
+            // no m_spanContacts/m_spanCenters writes, no m_newPairs writes, no pool or
+            // color mutation.  Every write targets only m_spanEntriesW[worker] or
+            // m_newPairsW[worker] -- the caller's own [worker] entry.
+            //
+            // The serial tail (after ParallelFor) concatenates the per-worker buffers,
+            // stable_sorts by awakeIndex (reproducing ForEachAwake / k-ascending order;
+            // within-k push order is preserved because each k is processed by exactly
+            // one worker and ranges are disjoint), then appends spans and calls
+            // TryCreateContact per record.  AssignContactColor runs here, serially,
+            // so the persistent coloring sequence is byte-identical to the serial path.
             const std::uint32_t awakeCount = AwakeCount();
-            for (std::uint32_t k = 0; k < awakeCount; ++k)
+            const std::uint32_t cWorkers   = Executor()->WorkerCount();
+            if (m_genSpansW.size()    < cWorkers) { m_genSpansW.resize(cWorkers); }
+            if (m_genStaticsW.size()  < cWorkers) { m_genStaticsW.resize(cWorkers); }
+            if (m_gridScratchW.size() < cWorkers) { m_gridScratchW.resize(cWorkers); }
+            if (m_spanEntriesW.size() < cWorkers) { m_spanEntriesW.resize(cWorkers); }
+            if (m_newPairsW.size()    < cWorkers) { m_newPairsW.resize(cWorkers); }
+            for (std::uint32_t w = 0; w < cWorkers; ++w)
             {
-                const std::uint32_t i = AwakeBodies()[k];
-                if (m_sensor[i] != 0)
+                m_spanEntriesW[w].clear();
+                m_newPairsW[w].clear();
+            }
+            Executor()->ParallelFor(awakeCount, /*minRange=*/kCreateGrain,
+                [&](std::size_t begin, std::size_t end, std::uint32_t worker)
                 {
-                    continue; // sensor dynamic body: skip (no static contacts)
-                }
-                // Same query pad as the legacy GenerateContacts: max(2, specMargin),
-                // where specMargin = max(kSkin, |v|*dt) so the candidate set is
-                // identical (the velocity-scaled speculative margin, P3.1).
-                const Real speedSqA   = m_velX[i] * m_velX[i] + m_velY[i] * m_velY[i];
-                const Real specMargin = (speedSqA > threshSq)
-                                            ? std::sqrt(speedSqA) * moveDt
-                                            : kSkin;
-                const Aabb box = SlotAabb(i);
-                const Real pad = std::max(Real(2), specMargin);
-                Aabb2 query;
-                query.min = Vec2(box.min.x - pad, box.min.y - pad);
-                query.max = Vec2(box.max.x + pad, box.max.y + pad);
-                // Fills BOTH m_genSpans (tile spans, processed transiently below) and
-                // m_genStatics (static bodies, pooled). Step-only scratch.
-                StaticCandidates(query, m_genSpans, m_genStatics, m_staticGridScratch);
-
-                const std::vector<std::uint32_t>* fxListA = nullptr;
-                if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
-                {
-                    fxListA = &m_bodyFixtures[i];
-                }
-
-                // ---- tile spans (transient virtual fixtures) -- Task 4 ----------
-                // Mirror the legacy GenerateContacts span loop EXACTLY: build the
-                // span shape (half-extents from the merged rect) + its transform at
-                // the span center, collide each non-sensor dynamic fixture of A vs
-                // the span, and stash a transient Contact carrying the manifold +
-                // bIsBody=false + bodyB=kInvalidSlot + fixA = the dynamic fixture
-                // slot (fixB = kInvalidSlot). The span geometric center is stashed
-                // in the parallel m_spanCenters so EmitContactConstraints reproduces
-                // the same anchorB the legacy emit lambda used for spans.
-                for (std::size_t s = 0; s < m_genSpans.size(); ++s)
-                {
-                    const Aabb2& span = m_genSpans[s];
-                    const Vec2 spanCenter = (span.min + span.max) * Real(0.5);
-                    const Vec2 he = (span.max - span.min) * Real(0.5);
-                    const Shape spanShape = MakeAabb(he.x, he.y);
-                    const Transform xfB{ spanCenter, Real(0) };
-
-                    if (fxListA != nullptr)
+                    std::vector<Aabb2>&         spans   = m_genSpansW[worker];
+                    std::vector<std::uint32_t>& statics = m_genStaticsW[worker];
+                    std::vector<std::uint32_t>& grid    = m_gridScratchW[worker];
+                    std::vector<SpanEntry>&     spanOut = m_spanEntriesW[worker];
+                    std::vector<NewPairRecord>& pairOut = m_newPairsW[worker];
+                    for (std::size_t kk = begin; kk < end; ++kk)
                     {
-                        for (const std::uint32_t fi : *fxListA)
+                        const std::uint32_t k = static_cast<std::uint32_t>(kk);
+                        const std::uint32_t i = AwakeBodies()[k];
+                        if (m_sensor[i] != 0) { continue; }
+                        // Same query pad as the legacy GenerateContacts: max(2, specMargin),
+                        // where specMargin = max(kSkin, |v|*dt) so the candidate set is
+                        // identical (the velocity-scaled speculative margin, P3.1).
+                        const Real speedSqA   = m_velX[i] * m_velX[i] + m_velY[i] * m_velY[i];
+                        const Real specMargin = (speedSqA > threshSq)
+                                                    ? std::sqrt(speedSqA) * moveDt : kSkin;
+                        const Aabb box = SlotAabb(i);
+                        const Real pad = std::max(Real(2), specMargin);
+                        Aabb2 query;
+                        query.min = Vec2(box.min.x - pad, box.min.y - pad);
+                        query.max = Vec2(box.max.x + pad, box.max.y + pad);
+                        // Fills BOTH spans (tile spans, processed transiently below) and
+                        // statics (static bodies, pooled). Uses per-worker grid scratch.
+                        StaticCandidates(query, spans, statics, grid);
+
+                        const std::vector<std::uint32_t>* fxListA = nullptr;
+                        if (i < m_bodyFixtures.size() && !m_bodyFixtures[i].empty())
                         {
-                            if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                            fxListA = &m_bodyFixtures[i];
+                        }
+
+                        // ---- tile spans: push SpanEntry{k, c, spanCenter} into spanOut
+                        // (no m_spanContacts/m_spanCenters writes here -- per-worker only)
+                        for (std::size_t s = 0; s < spans.size(); ++s)
+                        {
+                            const Aabb2& span = spans[s];
+                            const Vec2 spanCenter = (span.min + span.max) * Real(0.5);
+                            const Vec2 he = (span.max - span.min) * Real(0.5);
+                            const Shape spanShape = MakeAabb(he.x, he.y);
+                            const Transform xfB{ spanCenter, Real(0) };
+
+                            if (fxListA != nullptr)
                             {
-                                continue;
+                                for (const std::uint32_t fi : *fxListA)
+                                {
+                                    if (fi >= m_fxCount || m_fxGen[fi] == 0u)
+                                    {
+                                        continue;
+                                    }
+                                    if (m_fxSensor[fi] != 0u)
+                                    {
+                                        continue; // sensor fixture: no constraint
+                                    }
+                                    const Transform xfA = ComposeFixtureXf(
+                                        Vec2(m_posX[i], m_posY[i]), m_angle[i],
+                                        Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
+                                        m_fxLocalAngle[fi]);
+                                    const Manifold mfld = Collide(m_fxShape[fi], xfA,
+                                                                  spanShape, xfB, specMargin);
+                                    if (mfld.pointCount <= 0)
+                                    {
+                                        continue; // not touching -> no transient contact
+                                    }
+                                    Contact c;
+                                    c.a        = FixtureHandle{ fi, m_fxGen[fi] };
+                                    c.b        = FixtureHandle{}; // span has no fixture slot
+                                    c.bodyA    = i;
+                                    c.bodyB    = kInvalidSlot;
+                                    c.bIsBody  = false;
+                                    c.manifold = mfld;
+                                    c.touching = true;
+                                    spanOut.push_back(SpanEntry{ k, c, spanCenter });
+                                }
                             }
-                            if (m_fxSensor[fi] != 0u)
+                            else
                             {
-                                continue; // sensor fixture: no constraint
+                                // Legacy single-shape fallback (a dynamic body with no live
+                                // fixtures -- AddBody always makes one, so this is defensive).
+                                const Transform xfA{ Vec2(m_posX[i], m_posY[i]), m_angle[i] };
+                                const Manifold mfld = Collide(m_shape[i], xfA,
+                                                              spanShape, xfB, specMargin);
+                                if (mfld.pointCount <= 0)
+                                {
+                                    continue;
+                                }
+                                Contact c;
+                                c.a        = FixtureHandle{}; // no fixture slot
+                                c.b        = FixtureHandle{};
+                                c.bodyA    = i;
+                                c.bodyB    = kInvalidSlot;
+                                c.bIsBody  = false;
+                                c.manifold = mfld;
+                                c.touching = true;
+                                spanOut.push_back(SpanEntry{ k, c, spanCenter });
                             }
-                            const Transform xfA = ComposeFixtureXf(
-                                Vec2(m_posX[i], m_posY[i]), m_angle[i],
-                                Vec2(m_fxLocalPosX[fi], m_fxLocalPosY[fi]),
-                                m_fxLocalAngle[fi]);
-                            const Manifold mfld = Collide(m_fxShape[fi], xfA,
-                                                          spanShape, xfB, specMargin);
-                            if (mfld.pointCount <= 0)
+                        }
+
+                        if (fxListA == nullptr) { continue; }
+
+                        // ---- static fixture pairs: EMIT records into pairOut --------
+                        // (no m_newPairs.push_back / TryCreateContact here -- per-worker only)
+                        for (std::size_t s = 0; s < statics.size(); ++s)
+                        {
+                            const std::uint32_t idx = statics[s];
+                            if (idx >= m_count || m_alive[idx] == 0 || m_sensor[idx] != 0) { continue; }
+                            const std::vector<std::uint32_t>* fxListB = nullptr;
+                            if (idx < m_bodyFixtures.size() && !m_bodyFixtures[idx].empty())
                             {
-                                continue; // not touching -> no transient contact
+                                fxListB = &m_bodyFixtures[idx];
                             }
-                            Contact c;
-                            c.a        = FixtureHandle{ fi, m_fxGen[fi] };
-                            c.b        = FixtureHandle{}; // span has no fixture slot
-                            c.bodyA    = i;
-                            c.bodyB    = kInvalidSlot;
-                            c.bIsBody  = false;
-                            c.manifold = mfld;
-                            c.touching = true;
-                            m_spanContacts.push_back(c);
-                            m_spanCenters.push_back(spanCenter);
+                            if (fxListB == nullptr) { continue; }
+                            for (const std::uint32_t fiA : *fxListA)
+                            {
+                                if (fiA >= m_fxCount || m_fxGen[fiA] == 0u || m_fxSensor[fiA] != 0u) { continue; }
+                                for (const std::uint32_t fiB : *fxListB)
+                                {
+                                    if (fiB >= m_fxCount || m_fxGen[fiB] == 0u || m_fxSensor[fiB] != 0u) { continue; }
+                                    pairOut.push_back(NewPairRecord{ k, fiA, fiB });
+                                }
+                            }
                         }
                     }
-                    else
-                    {
-                        // Legacy single-shape fallback (a dynamic body with no live
-                        // fixtures -- AddBody always makes one, so this is defensive).
-                        const Transform xfA{ Vec2(m_posX[i], m_posY[i]), m_angle[i] };
-                        const Manifold mfld = Collide(m_shape[i], xfA,
-                                                      spanShape, xfB, specMargin);
-                        if (mfld.pointCount <= 0)
-                        {
-                            continue;
-                        }
-                        Contact c;
-                        c.a        = FixtureHandle{}; // no fixture slot
-                        c.b        = FixtureHandle{};
-                        c.bodyA    = i;
-                        c.bodyB    = kInvalidSlot;
-                        c.bIsBody  = false;
-                        c.manifold = mfld;
-                        c.touching = true;
-                        m_spanContacts.push_back(c);
-                        m_spanCenters.push_back(spanCenter);
-                    }
-                }
-
-                if (fxListA == nullptr)
+                });
+            // ---- SERIAL APPLY: order by awakeIndex, reproduce ForEachAwake order ---
+            // Spans: concatenate all per-worker entries + stable_sort by awakeIndex ->
+            // append to m_spanContacts/m_spanCenters in the same order the serial loop
+            // produced them (k ascending, within-k span-s ascending).
+            {
+                std::vector<SpanEntry> allSpans;
+                for (std::uint32_t w = 0; w < cWorkers; ++w)
+                    allSpans.insert(allSpans.end(), m_spanEntriesW[w].begin(), m_spanEntriesW[w].end());
+                std::stable_sort(allSpans.begin(), allSpans.end(),
+                    [](const SpanEntry& a, const SpanEntry& b) { return a.awakeIndex < b.awakeIndex; });
+                for (const SpanEntry& e : allSpans)
                 {
-                    continue; // no fixtures -> no fixture-pair contact to persist
+                    m_spanContacts.push_back(e.c);
+                    m_spanCenters.push_back(e.center);
                 }
-
-                // ---- static fixture pairs: EMIT records (do NOT create here) ---
-                // Records are pushed in (k ascending, nested s/fiA/fiB) order --
-                // identical to the old inline TryCreateContact call order so the
-                // serial create pass below reproduces the same EnsurePair id
-                // allocation + AssignContactColor sequence exactly.
-                for (std::size_t s = 0; s < m_genStatics.size(); ++s)
-                {
-                    const std::uint32_t idx = m_genStatics[s];
-                    if (idx >= m_count || m_alive[idx] == 0 || m_sensor[idx] != 0)
-                    {
-                        continue;
-                    }
-                    const std::vector<std::uint32_t>* fxListB = nullptr;
-                    if (idx < m_bodyFixtures.size() && !m_bodyFixtures[idx].empty())
-                    {
-                        fxListB = &m_bodyFixtures[idx];
-                    }
-                    if (fxListB == nullptr)
-                    {
-                        continue; // static body with no fixtures: no real fixture slot
-                    }
-                    for (const std::uint32_t fiA : *fxListA)
-                    {
-                        if (fiA >= m_fxCount || m_fxGen[fiA] == 0u || m_fxSensor[fiA] != 0u)
-                        {
-                            continue;
-                        }
-                        for (const std::uint32_t fiB : *fxListB)
-                        {
-                            if (fiB >= m_fxCount || m_fxGen[fiB] == 0u || m_fxSensor[fiB] != 0u)
-                            {
-                                continue;
-                            }
-                            m_newPairs.push_back(NewPairRecord{ k, fiA, fiB });
-                        }
-                    }
-                }
-            } // end detect loop (b)
-            // ---- CREATE (serial, (awakeIndex, push-order)) ---------------------
-            // m_newPairs is already in (k ascending, nested s/fiA/fiB) order because
-            // the detect loop is serial and k-ascending -- identical to the old inline
-            // TryCreateContact call order.  TryCreateContact applies the same filters
-            // + orientation (dynamic A; static B never reorders since B is not
-            // dynamic).  The fat-box update-pass owns destruction, so we ensure the
-            // pair whenever it is a static CANDIDATE (broadphase-adjacent); a
-            // non-overlapping pair is reaped by FatBoxesOverlap on the same / a
-            // later step.
+            }
+            // New pairs: same merge + sort -> TryCreateContact each (AssignContactColor
+            // runs here, serially, preserving the order-dependent color assignment).
+            m_newPairs.clear();
+            for (std::uint32_t w = 0; w < cWorkers; ++w)
+                m_newPairs.insert(m_newPairs.end(), m_newPairsW[w].begin(), m_newPairsW[w].end());
+            std::stable_sort(m_newPairs.begin(), m_newPairs.end(),
+                [](const NewPairRecord& a, const NewPairRecord& b) { return a.awakeIndex < b.awakeIndex; });
             for (const NewPairRecord& rec : m_newPairs)
             {
                 TryCreateContact(rec.fiA, rec.fiB);
