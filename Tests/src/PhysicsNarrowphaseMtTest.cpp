@@ -121,17 +121,21 @@ TEST_CASE("Narrowphase MT == serial: state bit-identical", "[physics][mt]")
     Arcane::JobSystem           one(1);
     Arcane::JobSystem           many(0); // 0 = all cores
 
-    // Capture with three executor configurations.
-    const std::vector<Real> a = RunCapture(&serial);
-    const std::vector<Real> b = RunCapture(one.TaskExecutor());
-    const std::vector<Real> c = RunCapture(many.TaskExecutor());
+    auto* manyEx = many.TaskExecutor();
 
-    INFO("workers (many) = " << many.TaskExecutor()->WorkerCount());
-    REQUIRE(many.TaskExecutor()->WorkerCount() >= 1u);
-    if (many.TaskExecutor()->WorkerCount() <= 1u)
+    // Surface the worker-count signal before any capture run so that a
+    // single-core machine's "MT path not truly exercised" warning appears
+    // in the run preamble rather than after a misleading green comparison.
+    INFO("workers (many) = " << manyEx->WorkerCount());
+    if (manyEx->WorkerCount() <= 1u)
     {
         WARN("single worker: MT thief path not exercised this run");
     }
+
+    // Capture with three executor configurations.
+    const std::vector<Real> a = RunCapture(&serial);
+    const std::vector<Real> b = RunCapture(one.TaskExecutor());
+    const std::vector<Real> c = RunCapture(manyEx);
 
     // Sizes must match before element-wise comparison.
     REQUIRE(a.size() == b.size());
