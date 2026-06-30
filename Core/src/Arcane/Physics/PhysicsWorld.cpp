@@ -3428,68 +3428,63 @@ namespace Arcane
 
         void PhysicsWorld::SplitIsland(std::uint32_t islandId)
         {
-            // Re-derive the connected components of one candidate island using a
-            // FRESH local union-find over its CURRENT member bodies joined by
-            // their touching dynamic-dynamic pool contacts. Bodies that no longer
-            // share any touching contact fall into separate components; a body
-            // with no touching contact becomes its own 1-body island. O(island).
-            // Walk the pool ascending-id (deterministic). Clears the flag.
+            // Re-derive the connected components of one candidate island. Bodies
+            // joined by a touching dyn-dyn contact share a component; the FIRST
+            // component reuses islandId, others get fresh ids. The contact walk is
+            // scoped to the island's OWN contacts via per-body adjacency
+            // (m_bodyContacts) -> O(islandBodies + islandEdges), replacing the old
+            // O(poolSize x islandSize) whole-pool scan. Byte-identical components.
             if (islandId == Island::kInvalidIsland || islandId >= m_islands.size())
             {
                 return;
             }
             m_islands[islandId].splitCandidate = false;
 
-            // Snapshot the members (the rebuild reassigns m_islandId + may reuse
-            // this island id for the largest/first component).
+            // Snapshot members (the rebuild reassigns m_islandId + may reuse this id).
             std::vector<std::uint32_t> members = m_islands[islandId].bodies;
-            if (members.size() <= 1)
+            const std::uint32_t n = static_cast<std::uint32_t>(members.size());
+            if (n <= 1)
             {
                 return; // 0 or 1 member: nothing to fracture
             }
 
-            // Local UF keyed by a body's position WITHIN `members` (a small dense
-            // index space, not the global slot id) so the parent array is tiny.
-            const std::uint32_t n = static_cast<std::uint32_t>(members.size());
+            // O(1) member-slot -> local index. Scratch is all-sentinel on entry.
+            for (std::uint32_t i = 0; i < n; ++i)
+            {
+                m_splitLocalIndex[members[i]] = i;
+            }
+
             std::vector<std::uint32_t> parent(n);
             for (std::uint32_t i = 0; i < n; ++i) { parent[i] = i; }
-
-            auto localOf = [&](std::uint32_t slot) -> std::uint32_t
-            {
-                for (std::uint32_t i = 0; i < n; ++i)
-                {
-                    if (members[i] == slot) { return i; }
-                }
-                return 0xFFFFFFFFu; // not a member of this island
-            };
             auto find = [&](std::uint32_t x) -> std::uint32_t
             {
                 while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
                 return x;
             };
 
-            // Union members joined by a touching dynamic-dynamic pool contact.
-            // ForEach is ascending-id (deterministic). A contact whose bodies are
-            // not BOTH in `members` is skipped (cannot happen for an intact island
-            // but is cheap to guard).
-            m_contactPool.ForEach([&](std::uint32_t /*id*/, const Contact& c)
+            // Union members joined by a TOUCHING dyn-dyn contact, walking only the
+            // island's own contacts. Each edge is visited from both endpoints; the
+            // union is idempotent and connected components are union-order-invariant,
+            // so the resulting partition is identical to the old whole-pool walk.
+            for (std::uint32_t i = 0; i < n; ++i)
             {
-                if (!c.bIsBody || !c.touching) { return; }
-                if (c.bodyA == kInvalidSlot || c.bodyB == kInvalidSlot) { return; }
-                if (TypeSlot(c.bodyA) != BodyType::Dynamic ||
-                    TypeSlot(c.bodyB) != BodyType::Dynamic) { return; }
-                const std::uint32_t la = localOf(c.bodyA);
-                const std::uint32_t lb = localOf(c.bodyB);
-                if (la == 0xFFFFFFFFu || lb == 0xFFFFFFFFu) { return; }
-                parent[find(la)] = find(lb);
-            });
+                const std::uint32_t slot = members[i];
+                for (const std::uint32_t cid : m_bodyContacts[slot])
+                {
+                    const Contact& c = m_contactPool.Get(cid);
+                    if (!c.touching) { continue; }
+                    const std::uint32_t other = (c.bodyA == slot) ? c.bodyB : c.bodyA;
+                    if (other >= m_splitLocalIndex.size()) { continue; }
+                    const std::uint32_t j = m_splitLocalIndex[other];
+                    if (j == kSplitLocalNone) { continue; } // other body not in island
+                    parent[find(i)] = find(j);
+                }
+            }
 
-            // Group members by their local root. The FIRST component encountered
-            // reuses `islandId` (keeps the id sticky); every other distinct root
-            // gets a fresh island id. Reset this island's member list first.
-            // SAFETY: AllocIsland() may emplace_back and REALLOCATE m_islands.
-            // We do NOT hold any Island& reference across an AllocIsland call --
-            // we only index m_islands[isl] freshly by id after each alloc.
+            // Group by local root; FIRST component reuses islandId, others alloc a
+            // fresh id. UNCHANGED from the original (byte-identical id assignment).
+            // SAFETY: AllocIsland() may emplace_back + REALLOCATE m_islands -- never
+            // hold an Island& across it; index m_islands[isl] freshly by id.
             m_islands[islandId].bodies.clear();
             std::vector<std::uint32_t> rootLocal;   // distinct local roots, first-seen order
             std::vector<std::uint32_t> rootIsland;  // parallel island id per root
@@ -3504,8 +3499,6 @@ namespace Arcane
                 std::uint32_t isl;
                 if (ri == 0xFFFFFFFFu)
                 {
-                    // First member of a new component: the FIRST component reuses
-                    // islandId; subsequent components allocate fresh ids.
                     isl = rootLocal.empty() ? islandId : AllocIsland();
                     rootLocal.push_back(r);
                     rootIsland.push_back(isl);
@@ -3519,6 +3512,12 @@ namespace Arcane
                 m_islands[isl].bodies.push_back(slot);
             }
 
+            // Reset only the touched scratch entries -> keep O(island), all-sentinel
+            // between calls.
+            for (std::uint32_t i = 0; i < n; ++i)
+            {
+                m_splitLocalIndex[members[i]] = kSplitLocalNone;
+            }
         }
 
         // ---- per-body contact adjacency helpers (G1 island-split linkage) -------

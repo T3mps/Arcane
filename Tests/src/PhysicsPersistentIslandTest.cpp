@@ -220,3 +220,56 @@ TEST_CASE("PhysicsPersistentIsland: merge+split+sleep is deterministic across tw
         REQUIRE(r1[i] == r2[i]); // island ids reproduce run-to-run
     }
 }
+
+// Multi-component fracture: a connected chain that loses TWO internal links
+// must split into THREE distinct islands, each internally connected. Guards
+// the SplitIsland rewrite (per-body-adjacency walk) against the whole-pool scan
+// it replaces -- byte-identical connected-component grouping.
+TEST_CASE("PhysicsPersistentIsland: chain fractures into three islands",
+          "[physics][island]")
+{
+    WorldDef wd;
+    wd.gravityY = Real(400);
+    PhysicsWorld w(wd);
+
+    AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
+
+    // Six boxes in a gravity-pressed vertical stack settle into ONE island, then
+    // fracture into THREE components. Index assignment puts the must-stay-together
+    // pair {0,1} at the BOTTOM (gravity presses them -> robustly touching through
+    // the fling) and the two flung boxes {2,4} at the TOP, where nothing obstructs
+    // them -- mirroring the proven "separate a chain by flinging the top box"
+    // pattern. Stack levels (bottom->top): b0, b1, b3, b5, b2, b4.
+    const Real hw = Real(5), hh = Real(5);
+    const Real gap = Real(0.5);
+    const Real pitch = Real(2) * hh + gap; // per-level rise; boxes drop `gap` to touch
+    auto atLevel = [&](int level) { return Vec2(Real(0), -hh - pitch * Real(level)); };
+    std::vector<BodyHandle> b(6);
+    b[0] = AddBox(w, atLevel(0), hw, hh); // bottom of the {0,1} pair
+    b[1] = AddBox(w, atLevel(1), hw, hh); // on b0 (gravity-pressed)
+    b[3] = AddBox(w, atLevel(2), hw, hh);
+    b[5] = AddBox(w, atLevel(3), hw, hh);
+    b[2] = AddBox(w, atLevel(4), hw, hh); // near the top -> flung clear
+    b[4] = AddBox(w, atLevel(5), hw, hh); // top -> nothing above it
+    for (int k = 0; k < 80; ++k) { w.Step(kStep); }
+    // All in one island once settled + merged (the whole stack is connected).
+    for (int i = 1; i < 6; ++i)
+    {
+        REQUIRE(w.IslandRootOf(b[0].index) == w.IslandRootOf(b[i].index));
+    }
+
+    // Fling the two top boxes up + in OPPOSITE directions so they leave the stack
+    // cleanly: the b5-2 and 2-4 links break, leaving the bottom pile {0,1,3,5}
+    // plus the two flung boxes -- MULTIPLE disconnected components, forcing
+    // repeated AllocIsland in split.
+    w.SetVelocity(b[2], Vec2(Real(600), Real(-2500)));
+    w.SetVelocity(b[4], Vec2(Real(-600), Real(-2500)));
+    for (int k = 0; k < 60; ++k) { w.Step(kStep); } // quota=1/step -> let splits resolve
+
+    // {0,1} stay together (gravity-pressed bottom of the pile) and are distinct
+    // from the flung boxes. Distinct components must have distinct island roots;
+    // same component shares a root.
+    CHECK(w.IslandRootOf(b[0].index) == w.IslandRootOf(b[1].index));
+    CHECK(w.IslandRootOf(b[0].index) != w.IslandRootOf(b[2].index));
+    CHECK(w.IslandRootOf(b[2].index) != w.IslandRootOf(b[4].index));
+}
