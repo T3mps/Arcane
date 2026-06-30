@@ -272,4 +272,5 @@ TEST_CASE("PhysicsPersistentIsland: chain fractures into three islands",
     CHECK(w.IslandRootOf(b[0].index) == w.IslandRootOf(b[1].index));
     CHECK(w.IslandRootOf(b[0].index) != w.IslandRootOf(b[2].index));
     CHECK(w.IslandRootOf(b[2].index) != w.IslandRootOf(b[4].index));
+    CHECK(w.IslandRootOf(b[0].index) != w.IslandRootOf(b[4].index));
 }

@@ -3449,6 +3449,8 @@ namespace Arcane
             }
 
             // O(1) member-slot -> local index. Scratch is all-sentinel on entry.
+            // members are live island body slots (< m_count) and EnsureCapacity
+            // sizes m_splitLocalIndex >= m_count, so this write is always in-bounds.
             for (std::uint32_t i = 0; i < n; ++i)
             {
                 m_splitLocalIndex[members[i]] = i;
