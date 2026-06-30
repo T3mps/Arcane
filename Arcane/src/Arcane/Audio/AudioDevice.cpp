@@ -371,6 +371,9 @@ namespace Arcane::Audio
 		if (!m_impl || !m_impl->initialized)
 			return;
 
+		// Main-thread-only, like the rest of the table-mutating API (see header).
+		m_impl->AssertMainThread();
+
 		m_impl->StopAllVoices();
 		m_impl->DestroyAllBuses();
 		m_impl->ResetPools();
