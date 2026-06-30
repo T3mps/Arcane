@@ -56,6 +56,18 @@ namespace
 
         return path;
     }
+
+    // A present-but-non-decodable file: GetBytes returns the bytes (non-empty), so
+    // LoadSound reaches the decoder, which rejects them -> exercises the load-failure
+    // path (slot freed, invalid handle returned).
+    std::filesystem::path WriteGarbageFile()
+    {
+        const auto path = std::filesystem::temp_directory_path() / "arcane_audio_garbage.bin";
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        const char junk[] = "not-a-wav: garbage bytes that no miniaudio decoder accepts";
+        out.write(junk, static_cast<std::streamsize>(sizeof(junk)));
+        return path;
+    }
 }
 
 TEST_CASE("AudioDevice null backend lifecycle and controls", "[audio]")
@@ -133,4 +145,159 @@ TEST_CASE("AudioDevice null backend sound bus voice handles", "[audio]")
 
     audio.Stop(streamedVoice);
     audio.UnloadSound(streamed);
+}
+
+TEST_CASE("AudioDevice keeps two simultaneous voices valid (stable-address pools)", "[audio]")
+{
+    using namespace Arcane::Audio;
+
+    AudioDevice audio;
+    auto assets = Arcane::Assets::Create(nullptr);
+    AudioDeviceDesc deviceDesc;
+    deviceDesc.enableDevice = false;
+    REQUIRE(audio.Init(assets.get(), deviceDesc));
+
+    const auto wav = WriteSilentWav();
+    SoundHandle sound = audio.LoadSound(wav);
+    REQUIRE(audio.IsValid(sound));
+
+    PlayDesc playDesc;
+    playDesc.startPaused = true;
+
+    VoiceHandle v1 = audio.Play(sound, playDesc);
+    REQUIRE(audio.IsValid(v1));
+
+    // The 2nd voice allocation is the exact trigger for CRITICAL 1: a growable
+    // std::vector would reallocate here and move every VoiceSlot, dangling the
+    // engine's wired data-source pointers. With std::deque the first voice keeps
+    // its address, so v1 stays valid and controllable after the later allocations.
+    VoiceHandle v2 = audio.Play(sound, playDesc);
+    REQUIRE(audio.IsValid(v2));
+    CHECK(audio.IsValid(v1));
+    CHECK(v1 != v2);
+
+    VoiceHandle v3 = audio.Play(sound, playDesc);
+    REQUIRE(audio.IsValid(v3));
+    CHECK(audio.IsValid(v1));
+    CHECK(audio.IsValid(v2));
+
+    // All three remain independently queryable/controllable post-realloc.
+    audio.SetVolume(v1, 0.2f);
+    audio.SetVolume(v2, 0.4f);
+    audio.SetVolume(v3, 0.6f);
+    audio.SetPaused(v1, false);
+    audio.SetPaused(v1, true);
+
+    audio.Stop(v1);
+    audio.Stop(v2);
+    audio.Stop(v3);
+    CHECK_FALSE(audio.IsValid(v1));
+    CHECK_FALSE(audio.IsValid(v2));
+    CHECK_FALSE(audio.IsValid(v3));
+}
+
+TEST_CASE("AudioDevice supports multiple buses and a parent/child hierarchy", "[audio]")
+{
+    using namespace Arcane::Audio;
+
+    AudioDevice audio;
+    auto assets = Arcane::Assets::Create(nullptr);
+    AudioDeviceDesc deviceDesc;
+    deviceDesc.enableDevice = false;
+    REQUIRE(audio.Init(assets.get(), deviceDesc));
+
+    BusDesc musicDesc;
+    musicDesc.name = "Music";
+    BusHandle busA = audio.CreateBus(musicDesc);
+    REQUIRE(audio.IsValid(busA));
+
+    // 2nd bus: same stable-address concern as voices (CreateBus wires &parent.group).
+    BusDesc sfxDesc;
+    sfxDesc.name = "SFX";
+    BusHandle busB = audio.CreateBus(sfxDesc);
+    REQUIRE(audio.IsValid(busB));
+    CHECK(audio.IsValid(busA));
+    CHECK(busA != busB);
+
+    // Child bus routed to busB as its parent.
+    BusDesc childDesc;
+    childDesc.name = "Footsteps";
+    childDesc.parent = busB;
+    BusHandle busChild = audio.CreateBus(childDesc);
+    REQUIRE(audio.IsValid(busChild));
+    CHECK(audio.IsValid(busB));
+
+    audio.SetBusVolume(busA, 0.5f);
+    audio.SetBusVolume(busChild, 0.7f);
+
+    // Destroying the parent cascades to its child; the unrelated bus survives.
+    audio.DestroyBus(busB);
+    CHECK_FALSE(audio.IsValid(busB));
+    CHECK_FALSE(audio.IsValid(busChild));
+    CHECK(audio.IsValid(busA));
+
+    audio.DestroyBus(busA);
+    CHECK_FALSE(audio.IsValid(busA));
+}
+
+TEST_CASE("AudioDevice bumps generation so a freed-then-reused voice handle is stale", "[audio]")
+{
+    using namespace Arcane::Audio;
+
+    AudioDevice audio;
+    auto assets = Arcane::Assets::Create(nullptr);
+    AudioDeviceDesc deviceDesc;
+    deviceDesc.enableDevice = false;
+    REQUIRE(audio.Init(assets.get(), deviceDesc));
+
+    const auto wav = WriteSilentWav();
+    SoundHandle sound = audio.LoadSound(wav);
+    REQUIRE(audio.IsValid(sound));
+
+    PlayDesc playDesc;
+    playDesc.startPaused = true;
+
+    VoiceHandle first = audio.Play(sound, playDesc);
+    REQUIRE(audio.IsValid(first));
+
+    audio.Stop(first);
+    CHECK_FALSE(audio.IsValid(first));
+
+    // The free-list hands back the same slot index with a bumped generation, so the
+    // new handle validates but the stale one must not (the handle-reuse guard).
+    VoiceHandle reused = audio.Play(sound, playDesc);
+    REQUIRE(audio.IsValid(reused));
+    CHECK(reused.index == first.index);
+    CHECK(reused.generation != first.generation);
+    CHECK_FALSE(audio.IsValid(first));
+
+    audio.Stop(reused);
+}
+
+TEST_CASE("AudioDevice load failure returns an invalid handle without crashing", "[audio]")
+{
+    using namespace Arcane::Audio;
+
+    AudioDevice audio;
+    auto assets = Arcane::Assets::Create(nullptr);
+    AudioDeviceDesc deviceDesc;
+    deviceDesc.enableDevice = false;
+    REQUIRE(audio.Init(assets.get(), deviceDesc));
+
+    // Missing file: Assets::GetBytes returns null -> invalid handle.
+    SoundHandle missing = audio.LoadSound(
+        std::filesystem::temp_directory_path() / "arcane_audio_nonexistent.wav");
+    CHECK_FALSE(audio.IsValid(missing));
+
+    // Present-but-garbage bytes: decoder init fails -> slot freed, invalid handle.
+    const auto garbage = WriteGarbageFile();
+    SoundHandle bad = audio.LoadSound(garbage);
+    CHECK_FALSE(audio.IsValid(bad));
+
+    // The device stays healthy: a valid load right after the failures still works
+    // (and reuses the slot the failed load freed).
+    const auto wav = WriteSilentWav();
+    SoundHandle good = audio.LoadSound(wav);
+    CHECK(audio.IsValid(good));
+    audio.UnloadSound(good);
 }

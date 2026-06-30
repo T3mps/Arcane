@@ -5,9 +5,12 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
 
+#include <cassert>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace Arcane::Audio
@@ -52,6 +55,12 @@ namespace Arcane::Audio
 		ma_audio_buffer buffer{};
 		bool decoderInitialized = false;
 		bool bufferInitialized = false;
+
+		// StreamFromDisk: the decoder reads lazily from these source bytes for the
+		// voice's ENTIRE lifetime, so the voice owns its own reference rather than
+		// trusting the SoundSlot to outlive it. Cleared in FreeVoiceSlotOnly (after
+		// ma_decoder_uninit in FreeVoice has released the decoder that reads it).
+		std::shared_ptr<const std::vector<std::uint8_t>> sourceBytes;
 	};
 
 	struct AudioDevice::Impl
@@ -60,13 +69,35 @@ namespace Arcane::Audio
 		bool initialized = false;
 		Assets* assets = nullptr;
 
+		// Thread that called Init -- the only thread allowed to mutate the tables.
+		// See the THREADING CONTRACT comment in AudioDevice.hpp.
+		std::thread::id mainThreadId{};
+
+		// Bus and voice slots hold miniaudio objects (ma_sound_group / ma_sound /
+		// ma_decoder / ma_audio_buffer) that the engine's node graph references BY
+		// ADDRESS (Play wires &voiceSlot.buffer as the sound's data source; CreateBus
+		// captures &parent.group). std::deque NEVER relocates existing elements on
+		// push_back, so those addresses stay stable as the pools grow -- a std::vector
+		// here would reallocate on the 2nd alloc and dangle every wired pointer (UAF on
+		// the audio thread). Random-access by index (the handle scheme) is preserved.
+		// SoundSlot stays a vector: it holds only a shared_ptr + a std::vector<byte>,
+		// both of which keep their heap pointers across a move, and nothing wires the
+		// engine graph to a SoundSlot address.
 		std::vector<SoundSlot> sounds;
-		std::vector<BusSlot> buses;
-		std::vector<VoiceSlot> voices;
+		std::deque<BusSlot> buses;
+		std::deque<VoiceSlot> voices;
 
 		std::vector<std::uint32_t> freeSounds;
 		std::vector<std::uint32_t> freeBuses;
 		std::vector<std::uint32_t> freeVoices;
+
+		// Debug-only guard for the main-thread-only contract. assert() compiles out
+		// when NDEBUG is defined (Release/Dist), so this costs nothing there.
+		void AssertMainThread() const noexcept
+		{
+			assert(std::this_thread::get_id() == mainThreadId &&
+			       "AudioDevice: table-mutating method called off the init/main thread");
+		}
 
 		void ResetPools()
 		{
@@ -243,6 +274,7 @@ namespace Arcane::Audio
 			slot.bus = kInvalidBus;
 			slot.decoderInitialized = false;
 			slot.bufferInitialized = false;
+			slot.sourceBytes.reset();   // release the streaming voice's owned bytes
 			++slot.generation;
 
 			freeVoices.push_back(h.index);
@@ -327,6 +359,7 @@ namespace Arcane::Audio
 
 		m_impl->initialized = true;
 		m_impl->assets = assets;
+		m_impl->mainThreadId = std::this_thread::get_id();   // pins the main-thread contract
 
 		m_impl->ResetPools();
 
@@ -356,6 +389,8 @@ namespace Arcane::Audio
 	{
 		if (!IsInitialized() || !m_impl->assets || path.empty())
 			return kInvalidSound;
+
+		m_impl->AssertMainThread();
 
 		auto bytes = m_impl->assets->GetBytes(path);
 		if (!bytes)
@@ -437,6 +472,8 @@ namespace Arcane::Audio
 		if (!IsValid(handle))
 			return;
 
+		m_impl->AssertMainThread();
+
 		StopSound(handle);
 		m_impl->FreeSoundSlot(handle);
 	}
@@ -450,6 +487,8 @@ namespace Arcane::Audio
 	{
 		if (!IsInitialized())
 			return kInvalidBus;
+
+		m_impl->AssertMainThread();
 
 		ma_sound_group* parentGroup = nullptr;
 		if (desc.parent != kInvalidBus)
@@ -484,6 +523,8 @@ namespace Arcane::Audio
 		if (!IsValid(bus))
 			return;
 
+		m_impl->AssertMainThread();
+
 		StopBus(bus);
 
 		std::vector<BusHandle> children;
@@ -510,6 +551,8 @@ namespace Arcane::Audio
 		if (!IsInitialized() || !IsValid(sound))
 			return kInvalidVoice;
 
+		m_impl->AssertMainThread();
+
 		const SoundSlot& soundSlot = m_impl->sounds[sound.index];
 
 		ma_sound_group* group = nullptr;
@@ -524,12 +567,16 @@ namespace Arcane::Audio
 		const VoiceHandle voice = m_impl->AllocVoice();
 		VoiceSlot& voiceSlot = m_impl->voices[voice.index];
 
-		ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION;
-		const std::string path = soundSlot.path.string();
+		const ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION;
 
 		ma_result result = MA_SUCCESS;
 		if (soundSlot.mode == SoundLoadMode::DecodeToMemory)
 		{
+			// INVARIANT: voiceSlot.buffer references the SoundSlot's decodedPcm storage
+			// directly (no copy). Every voice playing this sound MUST be stopped before
+			// the PCM buffer is freed -- UnloadSound enforces this by calling StopSound
+			// (which Stops/FreeVoices all voices whose source == this sound) before
+			// FreeSoundSlot clears decodedPcm. Do not free a SoundSlot with live voices.
 			ma_audio_buffer_config bufferConfig = ma_audio_buffer_config_init(
 				soundSlot.format,
 				soundSlot.channels,
@@ -550,10 +597,15 @@ namespace Arcane::Audio
 		}
 		else
 		{
+			// StreamFromDisk: the voice OWNS its own reference to the source bytes for
+			// its lifetime (cleared in FreeVoiceSlotOnly). The decoder reads from these
+			// lazily, so the voice must not depend on the SoundSlot outliving it.
+			voiceSlot.sourceBytes = soundSlot.bytes;
+
 			ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_f32, 0, 0);
 			result = ma_decoder_init_memory(
-				soundSlot.bytes->data(),
-				soundSlot.bytes->size(),
+				voiceSlot.sourceBytes->data(),
+				voiceSlot.sourceBytes->size(),
 				&decoderConfig,
 				&voiceSlot.decoder);
 			if (result == MA_SUCCESS)
@@ -570,6 +622,7 @@ namespace Arcane::Audio
 
 		if (result != MA_SUCCESS)
 		{
+			const std::string path = soundSlot.path.string();
 			ARC_WARN("AudioDevice: sound init failed for '{}': {}",
 			         path, ma_result_description(result));
 			if (voiceSlot.bufferInitialized)
@@ -594,7 +647,7 @@ namespace Arcane::Audio
 			if (startResult != MA_SUCCESS)
 			{
 				ARC_WARN("AudioDevice: ma_sound_start failed for '{}': {}",
-				         path, ma_result_description(startResult));
+				         soundSlot.path.string(), ma_result_description(startResult));
 				m_impl->FreeVoice(voice);
 				return kInvalidVoice;
 			}
@@ -607,6 +660,8 @@ namespace Arcane::Audio
 	{
 		if (!IsValid(voice))
 			return;
+
+		m_impl->AssertMainThread();
 
 		m_impl->FreeVoice(voice);
 	}
@@ -691,6 +746,8 @@ namespace Arcane::Audio
 		if (!IsValid(sound))
 			return;
 
+		m_impl->AssertMainThread();
+
 		std::vector<VoiceHandle> voices;
 		for (std::uint32_t i = 1; i < m_impl->voices.size(); ++i)
 		{
@@ -707,6 +764,8 @@ namespace Arcane::Audio
 	{
 		if (!IsValid(bus))
 			return;
+
+		m_impl->AssertMainThread();
 
 		std::vector<VoiceHandle> voices;
 		for (std::uint32_t i = 1; i < m_impl->voices.size(); ++i)

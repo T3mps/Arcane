@@ -51,7 +51,7 @@ namespace Arcane
         nvrhi::IDevice* device  = nullptr;
         ShaderLibrary*  shaders = nullptr;
 
-        explicit Impl(Astra::TypeContext* external) : jobs(), sched(jobs.WorkScheduler())
+        explicit Impl(Astra::TypeContext* external, bool enableAudioDevice) : jobs(), sched(jobs.WorkScheduler())
         {
             if (external) { context = external; }
             else { ownedContext = std::make_unique<Astra::TypeContext>(); context = ownedContext.get(); }
@@ -66,6 +66,15 @@ namespace Arcane
             schedulers = std::make_unique<SystemSchedulers>(sched);
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
+            // Headless gating for the real OS audio device. There is no headless signal
+            // reachable here: the host-owned render device is wired via SetRenderResources
+            // AFTER construction (always null now), and neither this ctor nor LoomConfig
+            // carried a headless flag. So the host states its intent through a ctor flag --
+            // enableAudioDevice (default false). Tests, servers, tools, and the scripted
+            // "Loom --frames N" GPU-verify leave it false and get the noDevice null backend;
+            // an interactive host passes true. AudioDeviceDesc::enableDevice defaults false
+            // for the same reason, so a real device is always opt-in.
+            audioDesc.enableDevice = enableAudioDevice;
             assets = Assets::Create(nullptr);
             InitAudio();
         }
@@ -101,8 +110,8 @@ namespace Arcane
         }
     };
 
-    Runtime::Runtime(Astra::TypeContext* externalContext)
-        : m_impl(std::make_unique<Impl>(externalContext)) {}
+    Runtime::Runtime(Astra::TypeContext* externalContext, bool enableAudioDevice)
+        : m_impl(std::make_unique<Impl>(externalContext, enableAudioDevice)) {}
     Runtime::~Runtime() = default;   // do not reset the module slot: a later Runtime re-installs
 
     Astra::Registry&  Runtime::Registry()   noexcept { return *m_impl->registry; }

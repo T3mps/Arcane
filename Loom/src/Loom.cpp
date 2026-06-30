@@ -53,7 +53,10 @@ bool Loom::Init()
     // and the test TUs that reflect these types are never unloaded, so their thunks -- not the
     // plugin's -- own the MetaRegistry entries.)
     m_typeContext = new Astra::TypeContext();
-    m_runtime.emplace(m_typeContext);
+    // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
+    // until quit). The scripted "Loom --frames N" GPU-verify is headless -> false ->
+    // miniaudio's null backend (no real device grabbed on a CI box).
+    m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
 
     // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
     // Runtime so a plugin can build its own engine render objects (e.g. the
