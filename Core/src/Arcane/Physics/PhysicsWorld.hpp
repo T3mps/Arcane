@@ -942,6 +942,13 @@ namespace Arcane
             // Rebuild one candidate island into 1+ connected components (fresh local
             // UF over its members' current touching pool contacts); clears the flag.
             void          SplitIsland(std::uint32_t islandId);
+            // Remove contact `id` from both endpoints' m_bodyContacts (dyn-dyn
+            // only; no-op for non-dyn-dyn or already-absent). Reads c BEFORE any
+            // pool Destroy frees it.
+            void DetachContactAdjacency(std::uint32_t id, const Contact& c) noexcept;
+            // The canonical pooled-contact teardown: detach adjacency + release
+            // the persistent color (while c still holds it) + pool.Destroy.
+            void ReleaseAndDestroyContact(std::uint32_t id, const Contact& c) noexcept;
             // Wake every member of the body's island (set awake, reset timer).
             void          WakeIsland(std::uint32_t slot) noexcept;
 
@@ -1060,6 +1067,12 @@ namespace Arcane
             {
                 return m_contactPool.Count();
             }
+
+            // Test invariant: true iff m_bodyContacts exactly mirrors the live
+            // dyn-dyn body contacts (every such contact's id appears once in BOTH
+            // endpoints' lists, and every id in every list is a live dyn-dyn body
+            // contact incident to that slot, with no duplicates).
+            [[nodiscard]] bool DebugValidateBodyContacts() const;
 
             // Test/inspection hook (collision-rebuild Phase 4, Task 1): true iff the
             // persistent pool holds a contact whose body SLOTS match the unordered
@@ -1225,6 +1238,15 @@ namespace Arcane
             // Setup-time alloc only (AddFixture / DropFixture / RemoveBody).
             std::vector<std::vector<std::uint32_t>> m_bodyFixtures;
 
+            // Per-body dyn-dyn contact adjacency (keyed by body SoA slot), the
+            // Box2D b2ContactEdge analogue used by SplitIsland to walk only an
+            // island's own contacts. Holds the POOL IDS of each dynamic body's
+            // dyn-dyn body contacts (both endpoints carry the id). Maintained ONLY
+            // at contact create + destroy; merge/split/sleep/wake never touch it
+            // (body slots are stable -- only m_islandId changes). Mirrors the
+            // m_bodyFixtures vector-of-vectors lifecycle.
+            std::vector<std::vector<std::uint32_t>> m_bodyContacts;
+
             // Per-body localCenter (COM in body-local frame, aggregated over
             // fixtures).  STORED but not yet consumed by integration/solver (T5).
             // Default (0,0) for bodies with no fixtures or Static/Kinematic.
@@ -1348,6 +1370,12 @@ namespace Arcane
             // m_splitCandidates: island ids to rebuild this Step (quota-limited).
             std::vector<BroadphasePair>     m_pendingMerges;
             std::vector<std::uint32_t>      m_splitCandidates;
+
+            // SplitIsland scratch: member body slot -> local DSU index, O(1).
+            // All-sentinel; SplitIsland writes only its members then resets them,
+            // so the tail stays sentinel. Sized in EnsureCapacity.
+            static constexpr std::uint32_t kSplitLocalNone = 0xFFFFFFFFu;
+            std::vector<std::uint32_t>      m_splitLocalIndex;
 
             // Narrowphase-MT scratch (gather -> parallel collide+flag -> serial apply).
             // m_npContacts: the gathered stable live-contact id list (Box2D's

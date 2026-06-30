@@ -160,6 +160,11 @@ namespace Arcane
                 return m_pool[id];
             }
             std::size_t Count() const { return m_live; }
+            // True iff id is a live (non-recycled) contact slot. Used by the
+            // per-body adjacency validator (DebugValidateBodyContacts) to guard
+            // against stale ids in m_bodyContacts without asserting.
+            [[nodiscard]] bool Alive(std::uint32_t id) const noexcept
+            { return id < m_alive.size() && m_alive[id] != 0; }
             // Id-slot capacity (max valid id + 1). Bit sets keyed on contact id are
             // sized to this (Box2D's contactIdCapacity). NOT the live count.
             std::size_t Capacity() const noexcept { return m_pool.size(); }
