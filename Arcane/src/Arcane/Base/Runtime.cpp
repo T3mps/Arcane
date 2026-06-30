@@ -1,5 +1,8 @@
 #include <Arcane/Base/Runtime.hpp>
 
+#include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Audio/AudioDevice.hpp>
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
@@ -23,6 +26,9 @@ namespace Arcane
         std::unique_ptr<RunLoop>                    loop;
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
         InputSnapshot                               input{};   // latest host-supplied snapshot; plugins read via Input()
+        std::unique_ptr<Assets>                     assets;
+        Audio::AudioDeviceDesc                      audioDesc{};
+        Audio::AudioDevice                          audio;
 
         // 2D camera the plugin drives (SetCamera) and the render bridge reads
         // (SetRenderContext writes it into RenderContext2D). Defaults to the
@@ -59,6 +65,39 @@ namespace Arcane
             registry   = std::make_unique<Astra::Registry>(components, cfg);
             schedulers = std::make_unique<SystemSchedulers>(sched);
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
+
+            assets = Assets::Create(nullptr);
+            InitAudio();
+        }
+
+        ~Impl()
+        {
+            audio.Shutdown();
+        }
+
+        void InitAudio() noexcept
+        {
+            if (!assets)
+                return;
+
+            if (audio.Init(assets.get(), audioDesc))
+                return;
+
+            if (audioDesc.enableDevice)
+            {
+                ARC_WARN("Runtime: audio device init failed; falling back to null backend");
+                audioDesc.enableDevice = false;
+                if (audio.Init(assets.get(), audioDesc))
+                    return;
+            }
+
+            ARC_WARN("Runtime: audio subsystem is unavailable");
+        }
+
+        void ResetAudio() noexcept
+        {
+            audio.Shutdown();
+            InitAudio();
         }
     };
 
@@ -73,6 +112,8 @@ namespace Arcane
     Astra::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
     ITaskExecutor*         Runtime::TaskExecutor()  noexcept { return m_impl->jobs.TaskExecutor(); }
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
+    Assets& Runtime::AssetsFacade() noexcept { return *m_impl->assets; }
+    Audio::AudioDevice& Runtime::AudioSystem() noexcept { return m_impl->audio; }
 
     void Runtime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_impl->input = snap; }
     const InputSnapshot& Runtime::Input() const noexcept { return m_impl->input; }
@@ -148,5 +189,10 @@ namespace Arcane
         m_impl->schedulers->fixedUpdate.Clear();
         m_impl->schedulers->update.Clear();
         m_impl->schedulers->render.Clear();
+    }
+
+    void Runtime::ResetAudio() noexcept
+    {
+        m_impl->ResetAudio();
     }
 }

@@ -22,9 +22,11 @@ namespace Astra { class Registry; class ComponentRegistry; class TypeContext; cl
 
 namespace Arcane
 {
+    class Assets;
     struct ITaskExecutor;
     class Batcher2D;
     class ShaderLibrary;
+    namespace Audio { class AudioDevice; }
 
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -50,6 +52,8 @@ namespace Arcane
         Astra::IWorkScheduler*  WorkScheduler() noexcept;
         ITaskExecutor*          TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
         std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
+        Assets&                 AssetsFacade() noexcept;
+        Audio::AudioDevice&     AudioSystem() noexcept;
 
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
         // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
@@ -109,6 +113,7 @@ namespace Arcane
         void ResetRegistry();
 
         void ClearSystems();                                      // Clear() all three phase schedulers
+        void ResetAudio() noexcept;                               // Drop plugin-created audio handles on reload
 
     private:
         struct Impl;

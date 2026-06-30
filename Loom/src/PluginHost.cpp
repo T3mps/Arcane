@@ -106,6 +106,12 @@ struct PluginHost::Impl
         const Arcane::PluginVTable& vt = img.plugin->VTable();
         if (callShutdown && vt.Shutdown)
             vt.Shutdown();
+        // Drop plugin-created audio handles before clearing systems/registry, the
+        // same window in which we tear down plugin-owned ECS state. The Loom
+        // refactor unified all teardown paths (unload, init-failure, reload-of-
+        // previous, reload-failure) through TeardownImage, so this single call
+        // covers what the audio PR originally hooked at three separate sites.
+        runtime.ResetAudio();
         runtime.ClearSystems();
         // Reset while the module is still loaded: registered component destructors
         // may point into plugin code.

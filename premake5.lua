@@ -178,6 +178,7 @@ project "Arcane"
         "%{IncludeDir.SDL3}",
         "%{IncludeDir.glm}",
         "%{IncludeDir.stb}",
+        "%{IncludeDir.miniaudio}",
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.freetype}",
         "%{IncludeDir.imgui}",
