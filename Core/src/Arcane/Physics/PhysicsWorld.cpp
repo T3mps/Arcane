@@ -2554,7 +2554,8 @@ namespace Arcane
             // Step (spans are not pooled; they are virtual/transient fixtures).
             m_spanContacts.clear();
             m_spanCenters.clear();
-            m_newPairs.clear();
+            // (m_newPairs is rebuilt by the serial merge below, which clears it
+            //  right before the per-worker concat -- no top-of-stage clear needed.)
             const Real moveDt = dt > Real(0) ? dt : Real(0);
             const Real threshSq = (moveDt > Real(0))
                                       ? (kSkin / moveDt) * (kSkin / moveDt)
@@ -2715,12 +2716,12 @@ namespace Arcane
             // append to m_spanContacts/m_spanCenters in the same order the serial loop
             // produced them (k ascending, within-k span-s ascending).
             {
-                std::vector<SpanEntry> allSpans;
+                m_allSpans.clear(); // reuse the member buffer (zero steady-state alloc)
                 for (std::uint32_t w = 0; w < cWorkers; ++w)
-                    allSpans.insert(allSpans.end(), m_spanEntriesW[w].begin(), m_spanEntriesW[w].end());
-                std::stable_sort(allSpans.begin(), allSpans.end(),
+                    m_allSpans.insert(m_allSpans.end(), m_spanEntriesW[w].begin(), m_spanEntriesW[w].end());
+                std::stable_sort(m_allSpans.begin(), m_allSpans.end(),
                     [](const SpanEntry& a, const SpanEntry& b) { return a.awakeIndex < b.awakeIndex; });
-                for (const SpanEntry& e : allSpans)
+                for (const SpanEntry& e : m_allSpans)
                 {
                     m_spanContacts.push_back(e.c);
                     m_spanCenters.push_back(e.center);

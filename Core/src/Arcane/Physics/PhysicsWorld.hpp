@@ -1597,16 +1597,6 @@ namespace Arcane
             mutable std::vector<Aabb2>         m_scratchSpans;
             mutable std::vector<std::uint32_t> m_scratchStatics;
 
-            // ---- contact-gen scratch (Step-only; zero steady-state alloc) ---
-            //
-            // Reused by UpdateContacts each Step: the dynamic body's near-AABB
-            // span/static candidate lists (StaticCandidates output, consumed by the
-            // span pass + the mover<->static-body create pass). Distinct from the
-            // query scratch above (UpdateContacts runs inside Step's solver stage,
-            // not from a query/callback site).
-            std::vector<Aabb2>          m_genSpans;
-            std::vector<std::uint32_t>  m_genStatics;
-
             // ---- persistent contact pool (collision-rebuild Phase 3, Task 2/4) --
             //
             // The durable fixture-pair contact pool, POPULATED each Step by
@@ -1701,6 +1691,11 @@ namespace Arcane
             std::vector<std::vector<std::uint32_t>> m_gridScratchW; // per-worker QueryAABB scratch
             std::vector<std::vector<SpanEntry>>     m_spanEntriesW; // per-worker span contacts (awakeIndex-tagged)
             std::vector<std::vector<NewPairRecord>> m_newPairsW;    // per-worker new-pair records
+            // Serial span-merge buffer: the per-worker m_spanEntriesW are concatenated
+            // here + stable_sorted by awakeIndex before being appended to m_spanContacts
+            // (the span-side sibling of m_newPairs). Member-promoted so it reuses its
+            // capacity each Step -- zero steady-state alloc, matching the pair-merge path.
+            std::vector<SpanEntry>                  m_allSpans;
 
             // ---- EmitContactConstraints sort scratch (Phase 3, Task 4) -------
             //
