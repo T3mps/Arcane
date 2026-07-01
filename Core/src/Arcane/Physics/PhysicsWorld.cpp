@@ -2927,6 +2927,22 @@ namespace Arcane
                     ib != Island::kInvalidIsland &&
                     ia != ib)
                 {
+                    // Uniform-awake invariant (Box2D "island is uniformly awake"):
+                    // a begin-touch always involves at least one moving/awake body,
+                    // so the merged island MUST end awake. If the two sides differ in
+                    // awake state, wake the SLEEPING side's island BEFORE the merge.
+                    // Otherwise MergeIslands would graft an already-sleeping singleton
+                    // (a body that slept early resting purely on tile spans, which the
+                    // WakeMoverPair moverIsMoving gate declined to wake) into the awake
+                    // island, leaving a mixed awake/asleep island whose touching
+                    // contact trips the no-sleeping-dynamic assert in
+                    // EmitContactConstraints. Per-body awake flags mean this is robust
+                    // to earlier merges this step (WakeIsland resolves the CURRENT
+                    // island of the sleeping slot).
+                    if (m_awake[pr.a] != m_awake[pr.b])
+                    {
+                        WakeIsland(m_awake[pr.a] == 0 ? pr.a : pr.b);
+                    }
                     MergeIslands(ia, ib);
                 }
             }
