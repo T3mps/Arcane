@@ -16,8 +16,6 @@
 #include <vector>
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Solver/Solver.hpp> // JointConstraint
-#include <Arcane/Physics/Joints/Joint.hpp>  // Joint (BodyA/BodyB slots)
 
 namespace Arcane
 {
@@ -25,10 +23,7 @@ namespace Arcane
     {
         namespace Island
         {
-            void UpdateSleep(PhysicsWorld& world,
-                             const JointConstraint* joints,
-                             std::uint32_t jointCount,
-                             Real dt)
+            void UpdateSleep(PhysicsWorld& world, Real dt)
             {
                 const std::uint32_t count = world.Count();
                 if (count == 0)
@@ -36,30 +31,12 @@ namespace Arcane
                     return;
                 }
 
-                // ---- joint-attached dynamics reset their sleep timer ------------
-                // Jointed dynamic bodies never sleep so target joints keep authority
-                // (ports the original behavior verbatim). The solver Prepared each
-                // joint earlier this Step, so BodyA()/BodyB() are resolved slots.
-                for (std::uint32_t k = 0; k < jointCount; ++k)
-                {
-                    const Joint* j = joints[k].joint;
-                    if (j == nullptr)
-                    {
-                        continue;
-                    }
-                    const std::uint32_t a = j->BodyA();
-                    const std::uint32_t b = j->BodyB();
-                    if (a != kInvalidSlot && a < count &&
-                        world.Alive(a) && world.TypeSlot(a) == BodyType::Dynamic)
-                    {
-                        world.SetSleepTimerSlot(a, Real(0));
-                    }
-                    if (b != kInvalidSlot && b < count &&
-                        world.Alive(b) && world.TypeSlot(b) == BodyType::Dynamic)
-                    {
-                        world.SetSleepTimerSlot(b, Real(0));
-                    }
-                }
+                // NOTE: jointed dynamics are NO LONGER pinned awake. A joint is now
+                // an ISLAND EDGE (AddJoint merges the endpoints' islands; SplitIsland
+                // unions joint edges), so a jointed construct accumulates idle time
+                // like any other island and sleeps AS A UNIT via island membership.
+                // The solver skips a joint whose Dynamic endpoints are all asleep
+                // (m_jointConstraints rebuild), so a sleeping construct is frozen.
 
                 // ---- per-body idle-timer update (awake dynamics) ----------------
                 // Box2D v3 b2FinalizeBodiesTask: a body is idle when its combined

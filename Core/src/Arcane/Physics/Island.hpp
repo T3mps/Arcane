@@ -46,7 +46,6 @@ namespace Arcane
     namespace Physics
     {
         class PhysicsWorld;        // the SoA owner; Island reads/writes through it
-        struct JointConstraint;    // Solver/Solver.hpp -- joint edges (P2.5)
 
         namespace Island
         {
@@ -107,20 +106,17 @@ namespace Arcane
             //
             // Phase A: iterates the PERSISTENT island registry (members already
             // known -- no per-step union-find rebuild, no O(n^2) global scan).
-            // Resets the sleep timer of joint-attached dynamics (jointed bodies
-            // never sleep so target joints keep authority), advances each awake
-            // dynamic's idle timer by `dt`, then for each island sleeps it AS A
-            // UNIT iff every awake-dynamic member is past kSleepTime (clearing
-            // awake + zeroing linear & angular velocity).
+            // Advances each awake dynamic's idle timer by `dt`, then for each island
+            // sleeps it AS A UNIT iff every awake-dynamic member is past kSleepTime
+            // (clearing awake + zeroing linear & angular velocity).
             //
-            // `joints`/`jointCount` is the joint constraint list (nullptr/0 if no
-            // joints). `dt` is the full Step timestep. No-op when the world has no
-            // dynamics. Thresholds + whole-island-unit + exact-freeze are UNCHANGED
-            // from the global-UF version this replaces.
-            void UpdateSleep(PhysicsWorld& world,
-                             const JointConstraint* joints,
-                             std::uint32_t jointCount,
-                             Real dt);
+            // Jointed dynamics are NOT pinned awake here: a joint is an ISLAND EDGE
+            // (AddJoint merges islands; SplitIsland unions joint edges), so a jointed
+            // construct sleeps as a unit via island membership. `dt` is the full Step
+            // timestep. No-op when the world has no dynamics. Thresholds +
+            // whole-island-unit + exact-freeze are UNCHANGED from the global-UF
+            // version this replaces.
+            void UpdateSleep(PhysicsWorld& world, Real dt);
 
         } // namespace Island
     } // namespace Physics

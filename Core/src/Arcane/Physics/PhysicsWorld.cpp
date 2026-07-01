@@ -1216,9 +1216,23 @@ namespace Arcane
                 const Joint* j = m_joints[i].get();
                 const BodyHandle ha = j->HandleA();
                 const BodyHandle hb = j->HandleB();
-                if ((ha.generation != 0u && ha.index == idx) ||
-                    (hb.generation != 0u && hb.index == idx))
+                const bool aIsIdx = (ha.generation != 0u && ha.index == idx);
+                const bool bIsIdx = (hb.generation != 0u && hb.index == idx);
+                if (aIsIdx || bIsIdx)
                 {
+                    // If this joint bridged two Dynamic bodies, dropping idx removes
+                    // the joint's island edge: wake + mark the SURVIVING endpoint's
+                    // island a split candidate so it re-derives its components
+                    // (mirrors the contact-removal pattern). idx already left its own
+                    // island above (m_islandId[idx] == kInvalidIsland here).
+                    const BodyHandle other = aIsIdx ? hb : ha;
+                    if (other.generation != 0u && other.index < m_count &&
+                        TypeSlot(idx) == BodyType::Dynamic &&
+                        TypeSlot(other.index) == BodyType::Dynamic)
+                    {
+                        WakeIsland(other.index);
+                        MarkSplitCandidate(IslandOf(other.index));
+                    }
                     m_joints.erase(m_joints.begin() + static_cast<std::ptrdiff_t>(i));
                 }
             }
@@ -1270,6 +1284,30 @@ namespace Arcane
             // (ports addJoint's def.a:wake() / def.b:wake()).
             Wake(def.a);
             Wake(def.b);
+
+            // Union the two bodies' islands so a jointed dynamic construct sleeps
+            // as ONE unit (Box2D treats a joint as an island edge). Only DYNAMIC
+            // bodies are island members, so a joint to a static/kinematic anchor
+            // unions nothing. Resolve the def's body HANDLES to slots directly:
+            // BodyA()/BodyB() are not resolved until the joint's first Prepare, but
+            // the handle indices are stable from construction. Both bodies were just
+            // woken above, so the merged island is uniformly awake.
+            const BodyHandle ha = def.a;
+            const BodyHandle hb = def.b;
+            if (ha.generation != 0u && hb.generation != 0u &&
+                ha.index < m_count && hb.index < m_count &&
+                TypeSlot(ha.index) == BodyType::Dynamic &&
+                TypeSlot(hb.index) == BodyType::Dynamic)
+            {
+                const std::uint32_t ia = IslandOf(ha.index);
+                const std::uint32_t ib = IslandOf(hb.index);
+                if (ia != ib &&
+                    ia != Island::kInvalidIsland &&
+                    ib != Island::kInvalidIsland)
+                {
+                    MergeIslands(ia, ib);
+                }
+            }
             return raw;
         }
 
@@ -1283,6 +1321,21 @@ namespace Arcane
             {
                 if (m_joints[i].get() == j)
                 {
+                    // If this joint bridged two Dynamic bodies, its island edge is
+                    // gone: wake the island + mark it a split candidate so the
+                    // deferred pass re-derives its connected components (mirrors the
+                    // contact-removal pattern in DestroyContactsForBody). Both
+                    // endpoints share the island, so marking/waking one covers both.
+                    const BodyHandle ha = j->HandleA();
+                    const BodyHandle hb = j->HandleB();
+                    if (ha.generation != 0u && hb.generation != 0u &&
+                        ha.index < m_count && hb.index < m_count &&
+                        TypeSlot(ha.index) == BodyType::Dynamic &&
+                        TypeSlot(hb.index) == BodyType::Dynamic)
+                    {
+                        WakeIsland(ha.index);
+                        MarkSplitCandidate(IslandOf(ha.index));
+                    }
                     m_joints.erase(m_joints.begin() + static_cast<std::ptrdiff_t>(i));
                     return;
                 }
@@ -1727,8 +1780,32 @@ namespace Arcane
             m_jointConstraints.clear();
             for (std::size_t i = 0; i < m_joints.size(); ++i)
             {
+                Joint* jt = m_joints[i].get();
+                if (jt == nullptr) { continue; }
+                // Skip a joint whose Dynamic endpoints are ALL asleep: the solver's
+                // global joint passes must not integrate a sleeping construct (the
+                // perf win + the sleeping-frozen contract, mirroring the contact
+                // awake-gate). Since a jointed dynamic pair shares one island (Step 1)
+                // and islands sleep/wake atomically, this never mixes awake+asleep
+                // endpoints. A joint anchored to a static/kinematic body is driven by
+                // its one Dynamic endpoint. A woken island re-enters its joints next
+                // Step (this array is rebuilt every Step).
+                const BodyHandle ha = jt->HandleA();
+                const BodyHandle hb = jt->HandleB();
+                bool anyAwakeDynamic = false;
+                if (ha.generation != 0u && ha.index < m_count &&
+                    TypeSlot(ha.index) == BodyType::Dynamic && AwakeSlot(ha.index))
+                {
+                    anyAwakeDynamic = true;
+                }
+                if (hb.generation != 0u && hb.index < m_count &&
+                    TypeSlot(hb.index) == BodyType::Dynamic && AwakeSlot(hb.index))
+                {
+                    anyAwakeDynamic = true;
+                }
+                if (!anyAwakeDynamic) { continue; }
                 JointConstraint jc;
-                jc.joint = m_joints[i].get();
+                jc.joint = jt;
                 m_jointConstraints.push_back(jc);
             }
 
@@ -1835,11 +1912,7 @@ namespace Arcane
                     }
                 }
 
-                Island::UpdateSleep(
-                    *this,
-                    m_jointConstraints.empty() ? nullptr : m_jointConstraints.data(),
-                    static_cast<std::uint32_t>(m_jointConstraints.size()),
-                    dt);
+                Island::UpdateSleep(*this, dt);
             }
 
             // ---- stage 6: events + gating + deferred flush -------------------
@@ -3513,6 +3586,32 @@ namespace Arcane
                     if (j == kSplitLocalNone) { continue; } // other body not in island
                     parent[find(i)] = find(j);
                 }
+            }
+
+            // Union members joined by a JOINT edge too (Box2D treats a joint as an
+            // island edge). A jointed dynamic pair stays in ONE component even when
+            // it shares no touching contact -- so removing a contact never wrongly
+            // splits a still-jointed pair. Iterate m_joints in index order
+            // (deterministic); only a dyn-dyn joint whose BOTH endpoints are members
+            // of THIS island (m_splitLocalIndex != kSplitLocalNone) unions. Resolve
+            // via the stable HANDLE slots (Prepare-independent -- a joint whose
+            // bodies are all asleep is not Prepared this Step, so BodyA()/BodyB()
+            // may be stale).
+            for (const std::unique_ptr<Joint>& jp : m_joints)
+            {
+                const Joint* jt = jp.get();
+                if (jt == nullptr) { continue; }
+                const BodyHandle ha = jt->HandleA();
+                const BodyHandle hb = jt->HandleB();
+                if (ha.generation == 0u || hb.generation == 0u) { continue; } // static-anchor / missing-body joint
+                const std::uint32_t sa = ha.index;
+                const std::uint32_t sb = hb.index;
+                if (sa >= m_splitLocalIndex.size() || sb >= m_splitLocalIndex.size()) { continue; }
+                if (TypeSlot(sa) != BodyType::Dynamic || TypeSlot(sb) != BodyType::Dynamic) { continue; }
+                const std::uint32_t la = m_splitLocalIndex[sa];
+                const std::uint32_t lb = m_splitLocalIndex[sb];
+                if (la == kSplitLocalNone || lb == kSplitLocalNone) { continue; } // not both in this island
+                parent[find(la)] = find(lb);
             }
 
             // Group by local root; FIRST component reuses islandId, others alloc a
