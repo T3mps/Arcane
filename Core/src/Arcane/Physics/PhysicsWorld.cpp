@@ -2314,6 +2314,13 @@ namespace Arcane
             {
                 return;
             }
+            // Collision filter (Box2D rule): collide iff each side's category is in the
+            // other's mask. A filtered-out pair never enters the pool -> no solve, no event.
+            if (((m_fxFilterCat[fa] & m_fxFilterMask[fb]) == 0u) ||
+                ((m_fxFilterCat[fb] & m_fxFilterMask[fa]) == 0u))
+            {
+                return;
+            }
             // PHASE 4, Task 1: the sensor skip + the `!da && !db` skip are REMOVED
             // from creation -- a mover<->mover overlapping fixture-pair now ALWAYS
             // creates a contact (sensors + kinematic-kinematic INCLUDED), so the
