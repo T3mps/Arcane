@@ -2406,7 +2406,9 @@ namespace Arcane
                 // SplitIsland can walk only this island's contacts. aDyn/bDyn are
                 // the ORIENTED dyn flags (m_btype[ia]/m_btype[ib]); bodyA is
                 // canonical-dynamic, so this fires exactly for dyn-dyn pairs.
-                if (aDyn && bDyn)
+                // Gate on solverRelevant: a sensor dyn-dyn pair must NOT become
+                // an island edge (sensors fire events but must not merge islands).
+                if (aDyn && bDyn && solverRelevant)
                 {
                     m_bodyContacts[ia].push_back(r.id);
                     m_bodyContacts[ib].push_back(r.id);
@@ -2471,7 +2473,10 @@ namespace Arcane
             c.touching = (c.manifold.pointCount > 0);
 
             // Classify the dyn-dyn touch transition (island edge) -> flag for the tail.
-            if (c.bIsBody && c.bodyB != kInvalidSlot &&
+            // Gate on c.solverRelevant: sensor dyn-dyn pairs must never trigger a
+            // merge (kNpStarted) or split (kNpStopped) -- they fire events but must
+            // not couple rigid islands.
+            if (c.solverRelevant && c.bIsBody && c.bodyB != kInvalidSlot &&
                 TypeSlot(c.bodyA) == BodyType::Dynamic &&
                 TypeSlot(c.bodyB) == BodyType::Dynamic)
             {
@@ -2871,7 +2876,11 @@ namespace Arcane
                     Contact& c = m_contactPool.Get(id);
                     if (c.npState & kNpDestroy)
                     {
-                        if (c.bIsBody && c.touching &&
+                        // Defensive: only schedule a split for solver-relevant
+                        // contacts (island edges). A sensor dyn-dyn contact was
+                        // never an island edge, so destroying it cannot fracture
+                        // an island -- skip the MarkSplitCandidate call.
+                        if (c.solverRelevant && c.bIsBody && c.touching &&
                             c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
                             c.bodyA < m_islandId.size() &&
                             TypeSlot(c.bodyA) == BodyType::Dynamic &&
