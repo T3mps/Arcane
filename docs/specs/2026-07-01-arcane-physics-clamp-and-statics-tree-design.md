@@ -97,7 +97,10 @@ simply unused — that is fine (it is exactly what the bench measured at ~3×).
 - `Queries.cpp:553` — `m_staticGrid.QueryAABB(box, gridScratch)` → `m_staticTree.QueryAABB(box, gridScratch)`
   (same `int QueryAABB(const Aabb2&, std::vector<uint32_t>&)` signature + sorted-candidate contract).
 - `m_staticGridScratch` and `m_staticList` are unchanged (`m_staticList` is a separate flat list used
-  elsewhere, e.g. `PhysicsWorld.cpp:2853`; leave it).
+  elsewhere, e.g. `PhysicsWorld.cpp:2853`; leave it). **Whether the tree should subsume `m_staticList`**
+  — removing the flat list, e.g. making that full-static iteration query the tree instead — is a
+  **DEFERRED, benchmark-driven decision** (measure whether that path is hot before touching it; don't
+  assume). This workstream keeps `m_staticList` in place, parallel to the tree, exactly as today.
 
 `DynamicTree.hpp` is already included by `PhysicsWorld.hpp`. The `StaticCandidates` narrowing
 (tight `AabbOverlap` re-test) is unchanged, so the emitted static-candidate set is identical to today.
@@ -126,7 +129,8 @@ Both parts target `[physics]` **byte-identical** (A3's re-baseline exception app
   pair-find (threads C/D) — separate future workstreams.
 - No new unit system (Arcane already == Box2D units; §2 only confirms it).
 - No retirement of `m_residencyGrid` (the occupancy index) — untouched here.
-- No change to `m_staticList` or the `StaticCandidates` narrowing logic.
+- No change to `m_staticList` or the `StaticCandidates` narrowing logic. Whether the tree should
+  eventually subsume `m_staticList` is a **deferred, benchmark-driven** question (§4) — not settled here.
 
 ## 7. Risks
 
