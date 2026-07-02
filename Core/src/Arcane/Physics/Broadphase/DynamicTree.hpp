@@ -149,8 +149,10 @@ namespace Arcane
             std::vector<std::uint32_t> m_leafOfId;
 
             // Reused scratch (no per-call heap).
-            // m_stack: descent scratch (mutable: reused by const Pairs/QueryAABB
-            // and by UpdatePairs).
+            // m_stack: descent scratch for the SERIAL const Pairs() and the
+            // serial UpdatePairs wrapper. QueryAABB does NOT use it -- QueryAABB
+            // uses a thread_local stack instead, so it stays re-entrant when the
+            // parallel create-phase queries the static tree from many workers.
             mutable std::vector<std::uint32_t> m_stack;
 
             // Move-buffer state (Phase 2, Task 4 -- incremental pair set).

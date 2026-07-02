@@ -268,12 +268,21 @@ namespace Arcane
                 return 0;
             }
 
-            m_stack.clear();
-            m_stack.push_back(m_root);
-            while (!m_stack.empty())
+            // Descent scratch: a THREAD-LOCAL stack, NOT the shared mutable
+            // m_stack member, so QueryAABB is re-entrant across worker threads.
+            // PhysicsWorld::StaticCandidates queries the static tree from every
+            // worker in the parallel create-phase (Executor()->ParallelFor); a
+            // shared m_stack would race and corrupt the descent (SpatialGrid's
+            // QueryAABB was likewise re-entrant, touching only caller scratch).
+            // thread_local is reused per-thread, so there is no per-call heap in
+            // steady state, and the output is unchanged (sorted true-overlap set).
+            thread_local std::vector<std::uint32_t> stack;
+            stack.clear();
+            stack.push_back(m_root);
+            while (!stack.empty())
             {
-                const std::uint32_t ni = m_stack.back();
-                m_stack.pop_back();
+                const std::uint32_t ni = stack.back();
+                stack.pop_back();
                 const Node& n = m_nodes[ni];
                 if (!FatOverlap(n.fat, box))
                 {
@@ -281,8 +290,8 @@ namespace Arcane
                 }
                 if (!n.IsLeaf())
                 {
-                    m_stack.push_back(n.left);
-                    m_stack.push_back(n.right);
+                    stack.push_back(n.left);
+                    stack.push_back(n.right);
                 }
                 else if (AabbOverlap(n.tight, box)) // narrow against tight box
                 {

@@ -540,17 +540,17 @@ namespace Arcane
                                             std::vector<std::uint32_t>& gridScratch) const
         {
             // Merged tile spans (TileGrid) + overlapping static-body slots.
-            // Static-body lookup now goes through m_staticGrid (sorted slot-id
-            // order, ascending) instead of the O(dynamics*statics) m_staticList
-            // scan that recomputed each static AABB per query. Ports _staticCandidates.
-            // With no TileGrid spansOut is empty.
+            // Static-body lookup now goes through m_staticTree (a DynamicTree;
+            // sorted slot-id order, ascending) instead of the O(dynamics*statics)
+            // m_staticList scan that recomputed each static AABB per query. Ports
+            // _staticCandidates. With no TileGrid spansOut is empty.
             spansOut.clear();
             if (m_tileGrid)
             {
                 m_tileGrid->Query(box, spansOut);
             }
             staticsOut.clear();
-            m_staticGrid.QueryAABB(box, gridScratch);
+            m_staticTree.QueryAABB(box, gridScratch);
             for (std::uint32_t idx : gridScratch)
                 if (m_alive[idx] && AabbOverlap(box, SlotAabb(idx)))
                     staticsOut.push_back(idx);

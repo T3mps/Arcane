@@ -54,15 +54,19 @@ TEST_CASE("Debug accessors enumerate broadphase + contacts", "[physics][debugviz
         });
     REQUIRE(leaves >= 1);
 
-    // (b) static grid has >=1 occupied cell.
-    std::size_t cells = 0;
-    w.StaticGrid().ForEachCell(
-        [&](int, int, const std::vector<std::uint32_t>& ids)
+    // (b) static tree yields one leaf per static body (one static added above),
+    // each leaf's fat box enclosing its tight box (mirrors the mover-tree walk).
+    std::size_t staticLeaves = 0;
+    w.StaticTree().ForEachLeaf(
+        [&](std::uint32_t, const Aabb2& tight, const Aabb2& fat)
         {
-            REQUIRE(!ids.empty());
-            ++cells;
+            ++staticLeaves;
+            REQUIRE(fat.min.x <= tight.min.x);
+            REQUIRE(fat.max.x >= tight.max.x);
+            REQUIRE(fat.min.y <= tight.min.y);
+            REQUIRE(fat.max.y >= tight.max.y);
         });
-    REQUIRE(cells >= 1);
+    REQUIRE(staticLeaves == 1);   // exactly the one static body added above
 
     // (c) ForEachContactConstraint count == ActiveContactCount, and kind is set.
     std::size_t n = 0;

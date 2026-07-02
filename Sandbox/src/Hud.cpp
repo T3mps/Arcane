@@ -546,7 +546,7 @@ namespace Arcane::Sandbox
             // manifolds" is ADDED ALONGSIDE the legacy "Contacts" center-to-center
             // line above -- both can be on at once.
             ImGui::Checkbox("Fixture tree", &dbg.drawFixtureTree);
-            ImGui::Checkbox("Static grid", &dbg.drawStaticGrid);
+            ImGui::Checkbox("Static tree", &dbg.drawStaticGrid);
             ImGui::Checkbox("Residency grid", &dbg.drawResidencyGrid);
             ImGui::Checkbox("Contact manifolds", &dbg.drawManifolds);
 

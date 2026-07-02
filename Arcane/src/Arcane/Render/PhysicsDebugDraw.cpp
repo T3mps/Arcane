@@ -26,7 +26,7 @@
 
 #include <Arcane/Physics/Broadphase/Broadphase.hpp>       // BroadphasePair, Aabb2
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>      // FixtureBroadphaseTree / ForEachLeaf
-#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>      // StaticGrid / ResidencyGrid / ForEachCell
+#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>      // ResidencyGrid / ForEachCell
 #include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseKind + NarrowphaseTrace
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
@@ -488,23 +488,21 @@ namespace Arcane
             }
         }
 
-        // ---- Slice A: static-body SpatialGrid (occupied cells) ---------------
+        // ---- Slice A: static-body DynamicTree (leaves) -----------------------
         //
-        // Outline each occupied cell. Cell world AABB:
-        //   min = Origin + (cx, cy) * TileSize,  max = min + (TileSize, TileSize).
+        // Statics live on a DynamicTree (one per-body leaf). They never move, so
+        // each leaf's FAT box is just its MARGIN-grown static AABB; outline it in
+        // the cool-blue static tint. Mirrors the mover-tree leaf overlay above,
+        // but statics only need the fat box (no tight/pair links). StaticTree()
+        // returns the concrete tree by reference (statics always use the tree).
+        // The opts.drawStaticGrid flag name is retained (renaming ripples to the
+        // Sandbox HUD); it now toggles the static-tree overlay.
         if (opts.drawStaticGrid)
         {
-            const Physics::SpatialGrid& grid = world.StaticGrid();
-            const float ts = static_cast<float>(grid.TileSize());
-            const Physics::Vec2 gorg = grid.Origin();
-            grid.ForEachCell(
-                [&](int cx, int cy, const std::vector<std::uint32_t>&)
+            world.StaticTree().ForEachLeaf(
+                [&](std::uint32_t, const Aabb2& /*tight*/, const Aabb2& fat)
                 {
-                    Aabb2 cell;
-                    cell.min = Physics::Vec2(gorg.x + static_cast<float>(cx) * ts,
-                                             gorg.y + static_cast<float>(cy) * ts);
-                    cell.max = Physics::Vec2(cell.min.x + ts, cell.min.y + ts);
-                    DrawAabbOutline(batcher, cell, off, zoom, thick, kColStaticGrid);
+                    DrawAabbOutline(batcher, fat, off, zoom, thick, kColStaticGrid);
                 });
         }
 

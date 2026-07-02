@@ -121,6 +121,43 @@ TEST_CASE("StaticCandidates static-body set unchanged by grid reroute", "[physic
     REQUIRE(statics.size() == 1);
 }
 
+// Behavior-preservation oracle for the static-index swap (SpatialGrid ->
+// DynamicTree). Pins that StaticCandidates returns EXACTLY the brute-force
+// static-overlap set. This passes today against the grid and must STILL pass
+// after the tree swap -- the invariant is the same either way (a refactor
+// guarded by an oracle, not a red->green feature).
+TEST_CASE("StaticCandidates set is stable across many statics (tree-backed)", "[physics][grid]")
+{
+    PhysicsWorld w;
+    std::mt19937 rng(0xABCDEF);
+    std::uniform_real_distribution<float> pos(-400.0f, 400.0f);
+    std::vector<BodyHandle> handles;
+    for (int i = 0; i < 200; ++i) {
+        BodyDef d; d.type = BodyType::Static;
+        d.position = Vec2(Real(pos(rng)), Real(pos(rng)));
+        d.shape = MakeAabb(Real(6), Real(6));
+        handles.push_back(w.AddBody(d));
+    }
+    // Brute-force oracle: statics whose slot-AABB overlaps the query.
+    auto brute = [&](const Aabb2& q) {
+        std::vector<std::uint32_t> out;
+        for (std::uint32_t i = 0; i < w.Count(); ++i)
+            if (w.Alive(i) && w.TypeSlot(i) == BodyType::Static && AabbOverlap(w.SlotAabb(i), q))
+                out.push_back(i);
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    std::uniform_real_distribution<float> qc(-400.0f, 400.0f);
+    for (int t = 0; t < 100; ++t) {
+        const float cx = qc(rng), cy = qc(rng);
+        Aabb2 q; q.min = Vec2(Real(cx-20), Real(cy-20)); q.max = Vec2(Real(cx+20), Real(cy+20));
+        std::vector<Aabb2> spans; std::vector<std::uint32_t> statics, scratch;
+        w.StaticCandidates(q, spans, statics, scratch);
+        std::sort(statics.begin(), statics.end());
+        REQUIRE(statics == brute(q));   // exact set, before AND after the tree swap
+    }
+}
+
 TEST_CASE("Residents(region) returns bodies in a tile region", "[physics][grid][residency]")
 {
     PhysicsWorld w;
@@ -161,7 +198,7 @@ TEST_CASE("Residency tracks a body across a per-step position commit", "[physics
 }
 
 // G1: RemoveBody must evict a static from the grid (StaticCandidates stops
-// returning it). Guards the m_staticGrid.Remove lockstep in RemoveBody.
+// returning it). Guards the m_staticTree.Remove lockstep in RemoveBody.
 TEST_CASE("StaticCandidates drops a static after RemoveBody", "[physics][grid]")
 {
     PhysicsWorld w;

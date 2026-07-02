@@ -91,7 +91,7 @@ namespace Arcane
         // ---- Slice A broadphase + manifold overlays (default OFF) -----------
         //
         // These consume the read-only debug-visualization accessors on
-        // PhysicsWorld (FixtureBroadphaseTree / StaticGrid / ResidencyGrid /
+        // PhysicsWorld (FixtureBroadphaseTree / StaticTree / ResidencyGrid /
         // ForEachContactConstraint).  All default off, so behavior is unchanged
         // until a caller (the Sandbox HUD) opts in.
 
@@ -100,7 +100,8 @@ namespace Arcane
         // when the world's mover broadphase is not a DynamicTree (null tree).
         bool drawFixtureTree = false;
 
-        // Static-body SpatialGrid: a tinted outline of every occupied cell.
+        // Static-body DynamicTree: a tinted outline of every static leaf's fat
+        // box. Flag name retained (renaming ripples to the Sandbox HUD).
         bool drawStaticGrid = false;
 
         // Dynamic/kinematic residency SpatialGrid: occupied cells in a distinct

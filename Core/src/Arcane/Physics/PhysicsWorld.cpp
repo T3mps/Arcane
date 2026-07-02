@@ -502,9 +502,9 @@ namespace Arcane
 
             // A fixture added to a STATIC body grows its union AABB; movers
             // self-correct via the per-step broadphase Update, but statics never
-            // re-register, so refresh the static grid here.
+            // re-register, so refresh the static tree here.
             if (static_cast<BodyType>(m_btype[bodySlot]) == BodyType::Static)
-                m_staticGrid.Move(bodySlot, SlotAabb(bodySlot));
+                m_staticTree.Update(bodySlot, SlotAabb(bodySlot));
 
             // Register the new fixture in the per-fixture mover broadphase
             // (Phase 2, Task 1). AddFixtureProxy skips Static bodies.
@@ -557,9 +557,9 @@ namespace Arcane
 
             // Symmetric with AddFixture: dropping a fixture from a STATIC shrinks
             // its union AABB. Statics never re-register via Step, so refresh the
-            // static grid here to keep its AABB tight (movers self-correct each step).
+            // static tree here to keep its AABB tight (movers self-correct each step).
             if (static_cast<BodyType>(m_btype[bodySlot]) == BodyType::Static)
-                m_staticGrid.Move(bodySlot, SlotAabb(bodySlot));
+                m_staticTree.Update(bodySlot, SlotAabb(bodySlot));
         }
 
         bool PhysicsWorld::IsValid(FixtureHandle fh) const noexcept
@@ -1013,7 +1013,7 @@ namespace Arcane
                 // is empty at this point (a fresh slot, or cleared by RemoveBody on
                 // recycle), and the back-compat fixture created later in AddBody has
                 // the SAME shape, so the registered AABB stays consistent.
-                m_staticGrid.Insert(idx, SlotAabb(idx));
+                m_staticTree.Update(idx, SlotAabb(idx));
             }
             else
             {
@@ -1074,7 +1074,7 @@ namespace Arcane
 
                 // Register the auto-fixture in the per-fixture mover broadphase
                 // (Phase 2, Task 1). AddFixtureProxy skips Static bodies.
-                // Static fixtures are not registered here (covered by m_staticGrid).
+                // Static fixtures are not registered here (covered by m_staticTree).
                 AddFixtureProxy(autoFi);
 
                 // Populate the body-mass accessors consistently with the legacy
@@ -1138,7 +1138,7 @@ namespace Arcane
                         break;
                     }
                 }
-                m_staticGrid.Remove(idx);
+                m_staticTree.Remove(idx);
             }
             else
             {
@@ -1562,10 +1562,10 @@ namespace Arcane
             const std::uint32_t i = h.index;
             m_angle[i] = angle;
             // A non-circle body's world AABB is rotation-aware. Statics never
-            // re-register via Step, so refresh the static grid; movers refresh
+            // re-register via Step, so refresh the static tree; movers refresh
             // their per-fixture proxies + residency immediately (mirrors SetPosition).
             if (static_cast<BodyType>(m_btype[i]) == BodyType::Static)
-                m_staticGrid.Move(i, SlotAabb(i));
+                m_staticTree.Update(i, SlotAabb(i));
             else
                 UpdateMoverProxies(i);
         }

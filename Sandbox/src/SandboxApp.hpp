@@ -103,7 +103,7 @@ namespace Arcane::Sandbox
         // off so a fresh build looks exactly as before; the HUD toggles them and
         // the render system copies them into PhysicsDebugDrawOptions each frame.
         bool  drawFixtureTree    = false;  // mover DynamicTree leaves + pairs
-        bool  drawStaticGrid     = false;  // static-body SpatialGrid cells
+        bool  drawStaticGrid     = false;  // static-body DynamicTree leaves
         bool  drawResidencyGrid  = false;  // dynamic/kinematic residency cells
         bool  drawManifolds      = false;  // per-point contact manifolds + normals
     };
