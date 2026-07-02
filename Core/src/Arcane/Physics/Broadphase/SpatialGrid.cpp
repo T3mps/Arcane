@@ -7,6 +7,14 @@ namespace {
     // = ~4.2M units) so all legitimate content is under it; anything larger is
     // garbage input (non-finite -> huge, or escaped coords) -> treat as empty.
     constexpr int kMaxCellsPerAxis = 1 << 16;
+    // Total-cell budget: kMaxCellsPerAxis alone is a PER-AXIS bound, so a box
+    // spanning e.g. ~30000 cells on EACH axis (under the per-axis budget AND
+    // under the raw-magnitude bound) still authorizes ~9e8 total cell visits --
+    // and a box at the per-axis budget on both axes authorizes ~4.3e9. 1<<22
+    // (~4.2M) is generous: at tile 64 that's a ~131k x 131k-unit solid square,
+    // far beyond any legitimate content, while still catching the pathological
+    // cases above.
+    constexpr long long kMaxCellsTotal = 1LL << 22;
 }
 
 namespace Arcane { namespace Physics {
@@ -48,6 +56,10 @@ bool SpatialGrid::SaneBox(const Aabb2& b) const
     const long long spanY = static_cast<long long>(y1) - static_cast<long long>(y0);
     if (spanX < 0 || spanY < 0) return false;                 // wrapped -> garbage
     if (spanX > kMaxCellsPerAxis || spanY > kMaxCellsPerAxis) return false;
+    // Total-cell budget: catches a box under BOTH per-axis bounds individually
+    // but whose product (the cell loop's actual iteration count) is still
+    // pathological. Already 64-bit (spanX/spanY), so no overflow risk here.
+    if ((spanX + 1) * (spanY + 1) > kMaxCellsTotal) return false;
     return true;
 }
 

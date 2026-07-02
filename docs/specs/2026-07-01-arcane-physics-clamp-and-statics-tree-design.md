@@ -152,3 +152,45 @@ Both parts target `[physics]` **byte-identical** (A3's re-baseline exception app
 - **Tree-for-statics semantics:** `DynamicTree::Update` is upsert (no separate Insert); ensure the
   AddBody path uses `Update` for the first registration (it does by contract). Static bodies with
   `AddFixture` growth must `Update` the grown AABB (mirrors the existing `m_staticGrid.Move`).
+
+## 8. Errata (post-implementation)
+
+Recorded after Part A + Part B landed (`29b07395`, `c3b68af3`, `82a8ab99`) so this spec does not
+mislead future readers. None of these are behavior regressions -- the landed code differs from
+what this doc / its implementation plan (`7aefa32c`) specified, each for a concrete reason
+discovered during implementation.
+
+- **A2's guard needed a magnitude pre-check, not just the span check.** The verbatim span-only
+  `SaneBox` guard described in A2 was ineffective on MSVC: for a huge-but-finite box (e.g.
+  +-1e30), `cvttss2si` saturates BOTH overflow directions to the SAME sentinel (`INT_MIN`), so
+  `x1 - x0 == 0` and the huge box passed the span check unnoticed. The landed guard
+  (`SpatialGrid::SaneBox`, `SpatialGrid.cpp`) adds a raw-coordinate-magnitude pre-check
+  (`|coord - origin| > kMaxCellsPerAxis * tileSize`) BEFORE `CellRange` runs, so the float -> int
+  cast never sees an out-of-range value.
+- **`AngularVelocity(BodyHandle)` was not an existing method.** The implementation plan assumed a
+  symmetric read-only getter already existed (mirroring `Velocity()`); it did not. It was added
+  alongside the clamp as part of Task 1 (`29b07395`).
+- **The angular-clamp test needed a dynamic circle, not a dynamic AABB.** The plan's sketch used a
+  dynamic `MakeAabb` body without `fixedRotation`; a dynamic axis-aligned box is asserted
+  `fixedRotation` in Debug ("dynamic AABB shapes must be fixedRotation", `PhysicsWorld.cpp:979`),
+  which also zeroes `invInertia` and makes the spin untestable. The landed test
+  (`PhysicsVelocityClampTest.cpp`) uses a dynamic circle (rotation allowed by default) instead.
+- **Unanticipated: moving statics onto the tree exposed a latent MT data race.** Part B's swap made
+  the static-candidate query (`StaticCandidates`, called from every worker of the parallel
+  create-phase `ParallelFor`) descend `DynamicTree::QueryAABB`, which used a shared `mutable
+  m_stack`. `SpatialGrid::QueryAABB` (the index it replaced) was already re-entrant (caller-owned
+  scratch only), so the swap SIGSEGV'd the MT invariance suite. Fixed with a `thread_local`
+  descent stack inside `QueryAABB` (`82a8ab99`); output is unchanged (sorted, identical set).
+  Serial `Pairs()` / `UpdatePairs` still use the shared `m_stack` (single-threaded call sites).
+- **Known Box2D-parity gaps, noted for the parity-program ledger (not fixed here, out of scope for
+  this workstream):**
+  - (a) Arcane's integrate loop (`SoftStep::IntegrateVelocitiesRange`) walks the awake DYNAMIC set
+    only, so kinematic bodies and pinned dynamics (`invMass == 0`) are never speed-clamped --
+    unlike Box2D, which clamps its whole awake set (`solver.c:79-122`). This is rooted in the
+    pre-existing awake-set architecture (kinematics and pinned dynamics never enter the
+    awake-dynamic iteration at all), not a gap introduced by the clamp.
+  - (b) Pre-existing gravity/damping ordering divergence: Arcane computes
+    `v = (v + g*h) * damping`; Box2D applies damping to the OLD `v` and adds the UNDAMPED
+    gravity/force delta afterward (`v = delta + damping * v`, `solver.c:102-106`). Pre-existing
+    (not introduced by this workstream); noted here only because A1 touches the same integrate
+    site.

@@ -2719,7 +2719,8 @@ namespace Arcane
                         query.min = Vec2(box.min.x - pad, box.min.y - pad);
                         query.max = Vec2(box.max.x + pad, box.max.y + pad);
                         // Fills BOTH spans (tile spans, processed transiently below) and
-                        // statics (static bodies, pooled). Uses per-worker grid scratch.
+                        // statics (static bodies, pooled). Uses per-worker static-tree
+                        // query scratch.
                         StaticCandidates(query, spans, statics, grid);
 
                         const std::vector<std::uint32_t>* fxListA = nullptr;

@@ -1161,9 +1161,9 @@ namespace Arcane
             // _staticCandidates. Both vectors are cleared then filled. With no
             // TileGrid spansOut is empty. (Wired for P1.9/P1.10; the P1.8 event
             // tests use plain bodies and need no tile spans.)
-            // gridScratch: caller-supplied scratch for SpatialGrid::QueryAABB (was the
-            // shared mutable m_staticGridScratch; now caller-owned so the query is
-            // re-entrant for the parallel create-phase detect).
+            // gridScratch: caller-supplied scratch for DynamicTree::QueryAABB against
+            // m_staticTree (was the shared mutable m_staticGridScratch; now caller-owned
+            // so the query is re-entrant for the parallel create-phase detect).
             void StaticCandidates(const Aabb2& box, std::vector<Aabb2>& spansOut,
                                   std::vector<std::uint32_t>& staticsOut,
                                   std::vector<std::uint32_t>& gridScratch) const;
@@ -1416,10 +1416,11 @@ namespace Arcane
             // is simply unused. Behavior-preserving: QueryAABB returns the same
             // sorted, tight-narrowed candidate set as the old grid.
             DynamicTree m_staticTree;
-            // Dedicated query scratch for the grid lookup inside StaticCandidates.
-            // MUST NOT reuse m_scratchStatics: ShapeCast calls
-            // StaticCandidates(..., m_scratchStatics) as the OUTPUT, so reusing it
-            // for the grid query would alias and corrupt the result.
+            // Dedicated query scratch for the static-tree lookup inside StaticCandidates
+            // (DynamicTree::QueryAABB against m_staticTree). MUST NOT reuse
+            // m_scratchStatics: ShapeCast calls StaticCandidates(..., m_scratchStatics)
+            // as the OUTPUT, so reusing it for the static-tree query would alias and
+            // corrupt the result.
             mutable std::vector<std::uint32_t> m_staticGridScratch;
 
             // Dynamic + kinematic body tile-residency index (Phase 1, Task 5).

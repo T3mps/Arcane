@@ -307,3 +307,25 @@ TEST_CASE("SpatialGrid survives an absurdly large AABB", "[physics][grid]")
     const int n = g.QueryAABB(huge, out);
     REQUIRE(n == 0);                   // treated as empty (out-of-budget)
 }
+
+// The per-axis budget (kMaxCellsPerAxis == 1<<16) does not bound the TOTAL cell
+// count: a box spanning ~30000 cells on EACH axis is well under the per-axis
+// span budget AND under the raw-magnitude bound (kMaxCellsPerAxis * tileSize ==
+// 65536*32 ~= 2.1M, vs 480000 here) -- but (30000+1)^2 ~= 9e8 total cells, which
+// must still be rejected by a total-cell budget.
+TEST_CASE("SpatialGrid rejects a box whose TOTAL cell count blows the budget", "[physics][grid]")
+{
+    SpatialGrid g(32.0f);
+    Aabb2 huge; huge.min = Vec2(Real(-480000), Real(-480000)); huge.max = Vec2(Real(480000), Real(480000));
+    g.Insert(1u, huge);                 // must not attempt ~9e8 cells
+    std::vector<std::uint32_t> out;
+    const int n = g.QueryAABB(huge, out);
+    REQUIRE(n == 0);                    // treated as empty (out-of-budget)
+    REQUIRE(out.empty());
+
+    // A small valid box still works afterwards (grid is not corrupted).
+    Aabb2 ok; ok.min = Vec2(0,0); ok.max = Vec2(10,10);
+    g.Insert(2u, ok);
+    g.QueryAABB(ok, out);
+    REQUIRE(std::find(out.begin(), out.end(), 2u) != out.end());
+}

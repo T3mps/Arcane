@@ -10,6 +10,8 @@
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
 
 #include <algorithm>
+#include <cassert>
+#include <cmath>
 #include <vector>
 
 namespace Arcane
@@ -203,6 +205,15 @@ namespace Arcane
         // --------------------------------------------------------------------
         void DynamicTree::Update(std::uint32_t id, const Aabb2& box)
         {
+            // A non-finite (NaN/Inf) AABB poisons ancestor fat boxes via Refit's
+            // unions (NaN comparisons are false, so FatOverlap silently fails and
+            // OTHER proxies -- not just this one -- become unqueryable). Box2D
+            // asserts box validity for the same reason (b2AABB_IsValid). Loud in
+            // Debug is the point: dropping the insert instead would desync the
+            // tree from the body's SlotAabb, which is worse than a hard stop.
+            assert(std::isfinite(box.min.x) && std::isfinite(box.min.y) &&
+                   std::isfinite(box.max.x) && std::isfinite(box.max.y) &&
+                   "DynamicTree::Update: AABB must be finite");
             std::uint32_t leaf = LeafOf(id);
             if (leaf != kNull)
             {
