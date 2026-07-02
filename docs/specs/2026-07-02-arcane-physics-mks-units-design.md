@@ -61,8 +61,8 @@ Every "Box2D v3" value below is verified against the vendored source.
 | `WorldDef.hashCellSize` | 64 | **1.0** | Arcane-specific grid tuning (~2-4x typical body) |
 | `SpatialHash` default cellSize | 64 | **1.0** | Arcane-specific |
 | residency grid tile (`m_residencyGrid`) | 64 | **1.0** (TODO wire to map tile size remains) | Arcane-specific |
-| `CharacterController::kMaxSubstep` | 8 (px) | **0.1** | Arcane-specific retune (max depenetration step) |
-| `CharacterController::kDepenetrationSkin` | 0.05 | **0.02** (= kSkin) | Arcane-specific retune |
+| `CharacterController::kMaxSubstep` | 8 (px) | **0.1** (lands in P4, see §4) | Arcane-specific retune (max depenetration step) |
+| `CharacterController::kDepenetrationSkin` | 0.05 | **0.02** (= kSkin; lands in P4) | Arcane-specific retune |
 
 **Known scale landmines (Phase 1 fixes + sweeps for more):**
 - `pad = max(2, specMargin)` hardcoded 2-px floor in the contact pad (PhysicsWorld.cpp:2714-2717).
@@ -83,14 +83,31 @@ are unit-free and unchanged. `m_maxExtent` is computed from geometry and auto-sc
 User-selected over flag-day (full-MKS rewrite of all ~40 test files WAS selected over pinning
 forever — the pins below are temporary scaffolding, not the end state).
 
-**Phase 1 — flip + pin (one merge, suite green with identical counts).**
-Land the Section-3 table in Core. In the same branch, a mechanical pass over every existing
-physics/sandbox test file writes the OLD values explicitly into each `WorldDef`/`BodyDef` that
-today inherits a flipped default, each tagged with a greppable marker:
-`wd.sleepThreshold = 8; // PX-PIN: remove when this file converts to MKS`.
-Sandbox app code gets the same pinning in its WorldDef setup (keeps the app behaving until
-Phase 6). `grep -c PX-PIN` is the burn-down meter. Behavior is unchanged by construction —
-verified by identical suite counts.
+**Phase 1 — flip + pin (one merge, three stages with distinct acceptance).**
+Planning surfaced that the Section-3 table splits into two classes: *runtime* WorldDef defaults
+(pinnable per-test) and *compile-time* constants (kSkin, DynamicTree::kMargin, residency tile,
+CharacterController, the pad floor — NOT pinnable; flipping them perturbs even pinned px-scale
+tests, and they must flip BEFORE any cluster converts, else meter-scale clusters would derive
+baselines under absurd constants like an 8-meter tree margin). Phase 1 therefore lands as three
+sequential stages in one branch:
+- **Stage i — PX-PIN pass (no-op scaffolding).** Mechanical pass over every existing
+  physics/sandbox test file and the sandbox WorldDef setup: each site that today inherits a
+  runtime default that will flip gets the OLD value written explicitly, tagged
+  `// PX-PIN: remove when this file converts to MKS`. `grep -c PX-PIN` is the burn-down meter.
+  Acceptance: suite green with IDENTICAL counts (no-op by construction).
+- **Stage ii — runtime WorldDef default flips** (gravity (0,+10), sleepThreshold 0.05,
+  restitutionThreshold 1.0, contactPushMaxVelocity 3.0, hashCellSize 1.0) + a new defaults test
+  asserting the Box2D v3 values with vendored cites. Acceptance: suite green with identical
+  counts plus the new test (everything is pinned).
+- **Stage iii — compile-time constant flips** (kSkin 0.02, kMargin 0.05, residency tile 1.0,
+  pad floor 2 -> kMargin) + the length-literal audit. The CharacterController retunes
+  (kMaxSubstep, kDepenetrationSkin) move to **P4** with their test cluster: their blast radius is
+  CC-only, and flipping kMaxSubstep to 0.1 under px-scale CC tests would break (a 64-unit slide
+  through 0.1-unit substeps), not shift. Acceptance:
+  suite GREEN required; byte-identical counts NOT expected — px-scale tests may shift
+  (pair-discovery timing, speculative window, depenetration granularity). Every re-baselined
+  assertion carries a written justification naming the constant that moved it; any outright
+  test FAILURE stops the stage for investigation.
 
 **Phases 2-5 — per-cluster MKS conversion (one merge each).** Each phase rescales its cluster's
 content to meters (bodies 0.1-10 m, g=10, m/s velocities), deletes its PX-PINs, re-derives
