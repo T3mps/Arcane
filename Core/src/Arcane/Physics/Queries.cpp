@@ -336,11 +336,11 @@ namespace Arcane
                 return std::nullopt; // no travel (ports the Cast.lua guard)
             }
 
-            // Swept AABB for candidate collection. Pad = DynamicTree::kMargin
-            // (the B2_AABB_MARGIN candidate-discovery role, MKS P1.iii; was a
-            // px-tuned +/-2 ported from Cast.lua lines 40-43). Sufficient by
-            // construction: a cast hit requires surface distance < kShapeCastTol
-            // (= 0.05 = kMargin), so obstacles beyond the pad cannot hit.
+            // Swept AABB for candidate collection. Pad = kShapeCastTol -- the
+            // cast's own hit criterion (MKS P1.iii; was a px-tuned +/-2 ported
+            // from Cast.lua lines 40-43). Sufficient by construction: a hit
+            // requires surface distance < kShapeCastTol, so pad >= kShapeCastTol
+            // guarantees candidate culling cannot drop a reachable obstacle.
             //
             // T7 Part B/C: the moving shape is carried at `movingAngle` (default 0
             // keeps every existing caller byte-identical). ComputeAABB is
@@ -352,10 +352,10 @@ namespace Arcane
             const Aabb2 a = shape.ComputeAABB(xf0);
             const Aabb2 b = shape.ComputeAABB(xf1);
             Aabb2 swept;
-            swept.min = Vec2(std::min(a.min.x, b.min.x) - DynamicTree::kMargin,
-                             std::min(a.min.y, b.min.y) - DynamicTree::kMargin);
-            swept.max = Vec2(std::max(a.max.x, b.max.x) + DynamicTree::kMargin,
-                             std::max(a.max.y, b.max.y) + DynamicTree::kMargin);
+            swept.min = Vec2(std::min(a.min.x, b.min.x) - kShapeCastTol,
+                             std::min(a.min.y, b.min.y) - kShapeCastTol);
+            swept.max = Vec2(std::max(a.max.x, b.max.x) + kShapeCastTol,
+                             std::max(a.max.y, b.max.y) + kShapeCastTol);
 
             StaticCandidates(swept, m_scratchSpans, m_scratchStatics, m_staticGridScratch);
 
