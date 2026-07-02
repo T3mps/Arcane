@@ -96,6 +96,13 @@ simply unused — that is fine (it is exactly what the bench measured at ~3×).
 - `PhysicsWorld.cpp:1140` — `m_staticGrid.Remove(idx)` → `m_staticTree.Remove(idx)`.
 - `Queries.cpp:553` — `m_staticGrid.QueryAABB(box, gridScratch)` → `m_staticTree.QueryAABB(box, gridScratch)`
   (same `int QueryAABB(const Aabb2&, std::vector<uint32_t>&)` signature + sorted-candidate contract).
+- **Accessor + debug-viz ripple:** the public `StaticGrid()` (`PhysicsWorld.hpp:709`, returns
+  `const SpatialGrid&`) becomes `StaticTree()` (`const DynamicTree&`). Its consumers migrate from
+  grid-cells to tree-leaves — `PhysicsDebugDraw.cpp` static overlay (`ForEachCell` → `ForEachLeaf`,
+  mirroring the existing mover-tree overlay), the Sandbox HUD label, and `PhysicsDebugAccessorsTest.cpp`.
+  These land in the SAME commit as the index swap (they will not compile otherwise). It spans
+  Core + Arcane.dll + Sandbox + Tests — larger than the physics-only touch-points, but a necessary
+  consequence of the index type change.
 - `m_staticGridScratch` and `m_staticList` are unchanged (`m_staticList` is a separate flat list used
   elsewhere, e.g. `PhysicsWorld.cpp:2853`; leave it). **Whether the tree should subsume `m_staticList`**
   — removing the flat list, e.g. making that full-static iteration query the tree instead — is a
@@ -139,6 +146,9 @@ Both parts target `[physics]` **byte-identical** (A3's re-baseline exception app
 - **Second integrate site:** if a wide/SIMD body-integrate exists beyond
   `IntegrateVelocitiesRange`, the clamp must be replicated there identically or ST==MT parity
   breaks — the implementer confirms this explicitly.
+- **Debug-viz consumers:** swapping the static index type breaks `StaticGrid()` and its consumers
+  (debug overlay, HUD label, `PhysicsDebugAccessorsTest`) — they migrate to the tree in the same
+  commit as the swap (they will not compile otherwise). Spans Core + Arcane.dll + Sandbox + Tests.
 - **Tree-for-statics semantics:** `DynamicTree::Update` is upsert (no separate Insert); ensure the
   AddBody path uses `Update` for the first registration (it does by contract). Static bodies with
   `AddFixture` growth must `Update` the grown AABB (mirrors the existing `m_staticGrid.Move`).
