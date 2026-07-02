@@ -188,7 +188,7 @@ namespace Arcane
         struct WorldDef
         {
             BroadphaseKind             broadphase  = BroadphaseKind::Tree;
-            Real                       hashCellSize = Real(64); // for Hash
+            Real                       hashCellSize = Real(1);  // MKS grid tuning: ~2-4x a typical 0.25-0.5 m body
             const IPassabilitySource*  passability = nullptr;   // optional tile statics
             Real                       tileCellSize = Real(1);
             Vec2                       tileOrigin{ Real(0), Real(0) };
@@ -196,11 +196,12 @@ namespace Arcane
             // ---- dynamics config (P2.1) -------------------------------------
             //
             // Global gravity (world units / s^2), applied to awake Dynamic
-            // bodies in Step's velocity-integrate stage (ports the Lua
-            // gravityX/gravityY, default 0). The top-down overworld runs at
-            // gravity 0; the dynamics tests set e.g. gravityY = 400.
+            // bodies in Step's velocity-integrate stage. Box2D v3 default gravity
+            // (types.c:12-13, (0,-10) y-up). Arcane is y-down, so the default is
+            // +10. Zero-g worlds (e.g. the top-down overworld) must say so
+            // explicitly by setting gravityY = 0.
             Real gravityX = Real(0);
-            Real gravityY = Real(0);
+            Real gravityY = Real(10);
 
             // ---- Soft Step solver config (P2.2; Box2D v3 TGS Soft) ----------
             //
@@ -222,8 +223,10 @@ namespace Arcane
             std::uint32_t substepCount         = 4u;
             Real          contactHertz         = Real(30);
             Real          contactDampingRatio  = Real(10);
-            Real          restitutionThreshold = Real(20);  // Lua REST_VEL = 20
-            Real          contactPushMaxVelocity = Real(300);
+            // Box2D v3 b2DefaultWorldDef.restitutionThreshold (types.c:15): 1 m/s.
+            Real          restitutionThreshold = Real(1);
+            // Box2D v3 b2DefaultWorldDef.maxContactPushSpeed (types.c:16): 3 m/s.
+            Real          contactPushMaxVelocity = Real(3);
 
             // Box2D v3 max linear speed clamp (b2WorldDef::maximumLinearSpeed,
             // types.c:21 default 400 * lengthUnitsPerMeter). Bodies faster than
@@ -231,15 +234,14 @@ namespace Arcane
             // prevents runaway escape. Angular uses kMaxRotation * invDt.
             Real          maxLinearVelocity  = Real(400);
 
-            // Sleep speed gate (px/s): a body is idle when its combined speed
+            // Sleep speed gate (m/s): a body is idle when its combined speed
             // |v| + |w|*maxExtent < sleepThreshold (Box2D v3 b2FinalizeBodiesTask).
-            // Box2D b2DefaultBodyDef is 0.05 m/s (~4.5 px/s at the sandbox's ~90 px/m).
-            // Set to 8 empirically: the gravity-900 soft solver's residual jitter floor
-            // for a settled pile is ~7 px/s (measured on the scene-8 no-whisk repro;
-            // 6 fails to sleep, 7 sleeps, 8 = +1 margin -- see the never-settle findings
-            // doc). Per-body override via BodyDef::sleepThreshold (>= 0). The maxExtent
-            // weighting handles body size; gravity scaling is left to this constant.
-            Real          sleepThreshold = Real(8);
+            // Box2D v3 sleep threshold (types.c:34, BodyDef-level in b2): 0.05 m/s.
+            // Supersedes the px-era empirical 8 (2026-06-28 spec) -- root cause was
+            // scale, not threshold; now that the sim runs in meters the vendored
+            // 0.05 m/s applies directly. Per-body override via BodyDef::sleepThreshold
+            // (>= 0). The maxExtent weighting handles body size.
+            Real          sleepThreshold = Real(0.05);
 
             // ---- solver selection (P2.3 A/B cross-check) --------------------
             //
@@ -1437,16 +1439,16 @@ namespace Arcane
             // ---- dynamics config (P2.1 + P2.2) -----------------------------
             // Global gravity applied to awake Dynamic bodies in Step.
             Real m_gravityX = Real(0);
-            Real m_gravityY = Real(0);
+            Real m_gravityY = Real(10);   // Box2D v3 default (types.c:13, y-down)
 
             // Soft Step config (copied from WorldDef; read by the solver).
             std::uint32_t m_substepCount         = 4u;
             Real          m_contactHertz         = Real(30);
             Real          m_contactDampingRatio  = Real(10);
-            Real          m_restitutionThreshold = Real(20);
-            Real          m_contactPushMaxVelocity = Real(300);
+            Real          m_restitutionThreshold = Real(1);     // Box2D v3 (types.c:15)
+            Real          m_contactPushMaxVelocity = Real(3);   // Box2D v3 (types.c:16)
             Real          m_maxLinearVelocity = Real(400);
-            Real          m_sleepThresholdDefault  = Real(8);   // WorldDef::sleepThreshold
+            Real          m_sleepThresholdDefault  = Real(0.05); // WorldDef::sleepThreshold (Box2D v3, types.c:34)
 
             // Baumgarte-only velocity iterations (copied from WorldDef.velIters).
             std::uint32_t m_velIters = 8u;
