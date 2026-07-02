@@ -203,7 +203,19 @@ TEST_CASE("Interaction: LMB press on a body grabs it and dragging moves it towar
 
     // Drag toward a new cursor point well to the right + up. Each tick drives the
     // body's velocity toward the cursor; the PhysicsSystem step then integrates it.
-    const glm::vec2 target{600.0f, 200.0f};
+    //
+    // Distance chosen to respect WorldDef::maxLinearVelocity = 400 u/s (the Box2D
+    // v3 default the integrate step now clamps every body to -- see the
+    // solver.c-parity block in SoftStep.cpp) with comfortable margin: over 30
+    // ticks @ 1/60s the body can cover at most 400 * 0.5 = 200 units, so a 316 u
+    // drag (the original target) can never land inside a tight radius -- it always
+    // stalls ~116 u short. 130 u over the same 30 ticks needs an average speed of
+    // only 130 / 0.5 = 260 u/s, well under the 400 u/s cap, leaving most of the
+    // window free to converge onto the cursor. (Sandbox content-scale
+    // normalization to meters -- so the default cap is expressed in a unit system
+    // that matches the sandbox's ~90 px/m -- is a queued separate workstream; this
+    // test just respects the current px-scale default.)
+    const glm::vec2 target{420.0f, 250.0f};
     float prevDist = glm::length(target - bodyPos);
     for (int i = 0; i < 30; ++i)
     {
@@ -218,7 +230,10 @@ TEST_CASE("Interaction: LMB press on a body grabs it and dragging moves it towar
     const Phys::Vec2 p = res->world->Position(it.GrabbedHandleForTest());
     const float endDist = glm::length(target - glm::vec2(p.x, p.y));
     CHECK(endDist < prevDist);       // closed distance to the cursor
-    CHECK(endDist < 60.0f);          // ... and ended up near it (mouse-spring)
+    // ... and ended up near it (mouse-spring). Threshold scaled down from the
+    // original 60.0f/316 u (~19% of the drag distance) to ~19% of the new 130 u
+    // distance, matching the same relative closeness under the 400 u/s cap.
+    CHECK(endDist < 25.0f);
 }
 
 // ---------------------------------------------------------------------------

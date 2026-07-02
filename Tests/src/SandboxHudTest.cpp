@@ -452,6 +452,50 @@ namespace
             });
         return out;
     }
+
+    // Wake every dynamic body, then let the caller step once more so
+    // EmitContactConstraints (PhysicsWorld.cpp) re-emits their contacts.
+    //
+    // Two compounding engine changes moved this scene's settle goalposts since
+    // these tests were authored (907d05df, 2026-06-24):
+    //
+    //  1. 29b07395 (Box2D v3 max-linear-velocity clamp, WorldDef::maxLinearVelocity
+    //     = 400 u/s) caps how fast scene 0's dynamics can fall. Verified via a
+    //     direct diagnostic run: at the original 90-step settle every dynamic
+    //     that hasn't yet landed is falling at EXACTLY the 400 u/s clamp (not
+    //     mid-bounce, not resting) -- 90 steps (1.5s) is no longer enough time
+    //     for this scene's "1.9x LARGER SCALE" drop height (Scenes.cpp
+    //     BuildPlayground) to land at the new capped fall speed. A direct
+    //     DebugCollide between every dynamic and every static/dynamic pair at
+    //     90 steps returns pointCount == 0 for ALL of them: nothing has reached
+    //     the floor at all yet, so ForEachContactConstraint legitimately has
+    //     nothing to emit regardless of sleep.
+    //
+    //  2. 9026d3ba (Box2D-faithful combined sleep test, the never-settle fix)
+    //     means that ONCE the scene actually lands (confirmed empirically at
+    //     200 steps: all 5 dynamics resting, velocity 0), it then genuinely
+    //     SLEEPS. EmitContactConstraints has an awake-gate (PhysicsWorld.cpp)
+    //     that excludes a sleeping dynamic's contacts from
+    //     ForEachContactConstraint, so a fully-settled (and by then asleep)
+    //     scene still publishes zero live contact constraints --
+    //     FirstDynamicContactBody would otherwise return kInvalidBody even
+    //     after everything has landed.
+    //
+    // Production never hits either gap: the drag path calls world.Wake(m_grabbed)
+    // every tick (Interaction.cpp:277), and a live user just waits as long as it
+    // takes to see bodies land. These tests bypass the grab and set the subject
+    // directly on a settled body, so each test (a) settles for long enough
+    // (200 steps) that the scene has actually landed, then (b) wakes it
+    // explicitly -- mirroring the production wake-on-grab, just called by hand.
+    void WakeAllDynamics(Phys::PhysicsWorld& world)
+    {
+        for (std::uint32_t i = 0; i < world.Count(); ++i)
+        {
+            if (!world.Alive(i)) continue;
+            if (world.TypeSlot(i) != Phys::BodyType::Dynamic) continue;
+            world.Wake(world.HandleOf(i));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +505,14 @@ namespace
 TEST_CASE("Inspector: grabbing a body sets/persists/clears the subject", "[sandbox]")
 {
     Fixture f;
-    for (int i = 0; i < 90; ++i) f.Step();   // settle so contacts exist
+    // 200 steps (~3.3s): scene 0's 5 dynamics need this long to actually REACH the
+    // floor now -- see WakeAllDynamics for why 90 (the original settle count) is no
+    // longer enough. By 200 steps every dynamic has landed and (per 9026d3ba) gone
+    // to sleep; wake them back up below so the settled contacts are live again.
+    for (int i = 0; i < 200; ++i) f.Step();
+
+    WakeAllDynamics(f.Physics());
+    f.Step();   // one more tick with the island awake: EmitContactConstraints runs
 
     CHECK_FALSE(f.app.HasSubject());
 
@@ -490,7 +541,12 @@ TEST_CASE("Inspector: grabbing a body sets/persists/clears the subject", "[sandb
 TEST_CASE("Inspector: subject enumerates its contacts and publishes the resource", "[sandbox]")
 {
     Fixture f;
-    for (int i = 0; i < 90; ++i) f.Step();   // settle: dynamics rest on the floor
+    for (int i = 0; i < 200; ++i) f.Step();   // settle: dynamics land + rest on the floor
+
+    // Wake the now-sleeping scene (see WakeAllDynamics) + step once so contacts
+    // are re-emitted for the pick below.
+    WakeAllDynamics(f.Physics());
+    f.Step();
 
     const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
     REQUIRE(body != Phys::kInvalidBody);
@@ -520,7 +576,12 @@ TEST_CASE("Inspector: subject enumerates its contacts and publishes the resource
 TEST_CASE("Inspector: selection defaults to the deepest contact", "[sandbox]")
 {
     Fixture f;
-    for (int i = 0; i < 90; ++i) f.Step();
+    for (int i = 0; i < 200; ++i) f.Step();   // settle: dynamics land + rest (see WakeAllDynamics)
+
+    // Wake the now-sleeping scene (see WakeAllDynamics) + step once so contacts
+    // are re-emitted for the pick below.
+    WakeAllDynamics(f.Physics());
+    f.Step();
 
     const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
     REQUIRE(body != Phys::kInvalidBody);
@@ -571,7 +632,12 @@ TEST_CASE("Inspector: selection defaults to the deepest contact", "[sandbox]")
 TEST_CASE("Inspector: step index clamps to the selected contact's count", "[sandbox]")
 {
     Fixture f;
-    for (int i = 0; i < 90; ++i) f.Step();
+    for (int i = 0; i < 200; ++i) f.Step();   // settle: dynamics land + rest (see WakeAllDynamics)
+
+    // Wake the now-sleeping scene (see WakeAllDynamics) + step once so contacts
+    // are re-emitted for the pick below.
+    WakeAllDynamics(f.Physics());
+    f.Step();
 
     const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
     REQUIRE(body != Phys::kInvalidBody);
@@ -599,7 +665,12 @@ TEST_CASE("Inspector: step index clamps to the selected contact's count", "[sand
 TEST_CASE("Inspector: a grab through FixedUpdate sets the subject; empty grab keeps it", "[sandbox]")
 {
     Fixture f;
-    for (int i = 0; i < 90; ++i) f.Step();
+    for (int i = 0; i < 200; ++i) f.Step();   // settle: dynamics land + rest (see WakeAllDynamics)
+
+    // Wake the now-sleeping scene (see WakeAllDynamics) + step once so contacts
+    // are re-emitted for the pick below.
+    WakeAllDynamics(f.Physics());
+    f.Step();
 
     // Find a live dynamic body and its world position so we can click ON it.
     const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
@@ -635,7 +706,12 @@ TEST_CASE("Inspector: a grab through FixedUpdate sets the subject; empty grab ke
 TEST_CASE("Inspector: headless inset is null and the HUD draws safely", "[sandbox]")
 {
     Fixture f;
-    for (int i = 0; i < 90; ++i) f.Step();
+    for (int i = 0; i < 200; ++i) f.Step();   // settle: dynamics land + rest (see WakeAllDynamics)
+
+    // Wake the now-sleeping scene (see WakeAllDynamics) + step once so contacts
+    // are re-emitted for the pick below.
+    WakeAllDynamics(f.Physics());
+    f.Step();
 
     const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
     REQUIRE(body != Phys::kInvalidBody);
