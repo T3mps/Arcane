@@ -2,6 +2,8 @@
 // tight AABB filter, QueryAABB returns EXACTLY the brute-force overlap set,
 // sorted + unique. The grid only narrows; correctness is gated by the oracle.
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <random>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
@@ -239,4 +241,32 @@ TEST_CASE("Residents empty region returns no bodies", "[physics][grid][residency
     const int n = w.Residents(empty, residents);
     REQUIRE(n == 0);
     REQUIRE(residents.empty());
+}
+
+TEST_CASE("SpatialGrid survives a non-finite AABB", "[physics][grid]")
+{
+    SpatialGrid g(32.0f);
+    const float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    Aabb2 bad; bad.min = Vec2(Real(nan), Real(0)); bad.max = Vec2(Real(inf), Real(10));
+    g.Insert(1u, bad);                 // must not hang / OOM / crash
+    std::vector<std::uint32_t> out;
+    const int n = g.QueryAABB(bad, out);   // must not hang / OOM / crash
+    REQUIRE(n == 0);
+    REQUIRE(out.empty());
+    // A valid id nearby still works (grid is not corrupted).
+    Aabb2 ok; ok.min = Vec2(0,0); ok.max = Vec2(10,10);
+    g.Insert(2u, ok);
+    g.QueryAABB(ok, out);
+    REQUIRE(std::find(out.begin(), out.end(), 2u) != out.end());
+}
+
+TEST_CASE("SpatialGrid survives an absurdly large AABB", "[physics][grid]")
+{
+    SpatialGrid g(32.0f);
+    Aabb2 huge; huge.min = Vec2(Real(-1e30), Real(-1e30)); huge.max = Vec2(Real(1e30), Real(1e30));
+    g.Insert(1u, huge);                // must not attempt ~1e56 cells
+    std::vector<std::uint32_t> out;
+    const int n = g.QueryAABB(huge, out);
+    REQUIRE(n == 0);                   // treated as empty (out-of-budget)
 }

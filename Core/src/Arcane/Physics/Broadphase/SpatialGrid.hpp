@@ -55,6 +55,9 @@ private:
     { return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(cx)) << 32)
            |  static_cast<std::uint64_t>(static_cast<std::uint32_t>(cy)); }
     void CellRange(const Aabb2& box, int& x0, int& y0, int& x1, int& y1) const;
+    // Rejects non-finite boxes and boxes whose cell span would blow the cell
+    // budget (escaped coords / garbage input) -- callers treat these as empty.
+    bool SaneBox(const Aabb2& b) const;
 
     Real m_tileSize;
     Vec2 m_origin;

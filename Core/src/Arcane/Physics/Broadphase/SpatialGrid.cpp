@@ -2,6 +2,13 @@
 #include <algorithm>
 #include <cmath>
 
+namespace {
+    // Max cells per axis a single box may span. Generous (a 64-unit cell x 65536
+    // = ~4.2M units) so all legitimate content is under it; anything larger is
+    // garbage input (non-finite -> huge, or escaped coords) -> treat as empty.
+    constexpr int kMaxCellsPerAxis = 1 << 16;
+}
+
 namespace Arcane { namespace Physics {
 
 SpatialGrid::SpatialGrid(Real tileSize, Vec2 origin)
@@ -19,8 +26,34 @@ void SpatialGrid::CellRange(const Aabb2& box, int& x0, int& y0, int& x1, int& y1
     CellCoord(box.max, x1, y1);
 }
 
+bool SpatialGrid::SaneBox(const Aabb2& b) const
+{
+    if (!std::isfinite(b.min.x) || !std::isfinite(b.min.y) ||
+        !std::isfinite(b.max.x) || !std::isfinite(b.max.y))
+        return false;
+    // Reject raw coordinates whose (coord - origin)/tileSize would overflow an
+    // int BEFORE calling CellRange: casting an out-of-int-range float is UB,
+    // and on this toolchain (MSVC / SSE2 cvttss2si) BOTH overflow directions
+    // saturate to the SAME sentinel (INT_MIN), so a huge-but-finite box (e.g.
+    // +-1e30) can make x0 == x1 and slip past a span check done after the
+    // cast. Bounding the raw magnitude here keeps CellRange's cast in-range.
+    const Real bound = static_cast<Real>(kMaxCellsPerAxis) * m_tileSize;
+    if (std::abs(b.min.x - m_origin.x) > bound || std::abs(b.min.y - m_origin.y) > bound ||
+        std::abs(b.max.x - m_origin.x) > bound || std::abs(b.max.y - m_origin.y) > bound)
+        return false;
+    int x0, y0, x1, y1; CellRange(b, x0, y0, x1, y1);
+    // Guard against a span so large the cell loop would never finish. Compute in
+    // 64-bit to avoid int overflow in the subtraction.
+    const long long spanX = static_cast<long long>(x1) - static_cast<long long>(x0);
+    const long long spanY = static_cast<long long>(y1) - static_cast<long long>(y0);
+    if (spanX < 0 || spanY < 0) return false;                 // wrapped -> garbage
+    if (spanX > kMaxCellsPerAxis || spanY > kMaxCellsPerAxis) return false;
+    return true;
+}
+
 void SpatialGrid::Insert(std::uint32_t id, const Aabb2& box)
 {
+    if (!SaneBox(box)) { Remove(id); return; } // drop garbage; don't register
     Remove(id); // self-heal: drop any prior registration so re-Insert is safe
                 // (idempotent; Remove is a no-op for a fresh id).
     int x0, y0, x1, y1; CellRange(box, x0, y0, x1, y1);
@@ -77,6 +110,7 @@ void SpatialGrid::ForEachCell(
 int SpatialGrid::QueryAABB(const Aabb2& box, std::vector<std::uint32_t>& out) const
 {
     out.clear();
+    if (!SaneBox(box)) return 0;
     int x0, y0, x1, y1; CellRange(box, x0, y0, x1, y1);
     for (int cy = y0; cy <= y1; ++cy)
         for (int cx = x0; cx <= x1; ++cx)
