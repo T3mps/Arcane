@@ -6,7 +6,7 @@
 // broadphase behind IBroadphase (the DEFAULT is DynamicTree).
 //
 // Faithful ports of the Lua algorithm:
-//   * Uniform grid of cellSize (default 64). Buckets keyed kx*0x40000 + ky.
+//   * Uniform grid of cellSize (default 1.0 m, MKS). Buckets keyed kx*0x40000 + ky.
 //   * Per-id range tracking {kx0,ky0,kx1,ky1}; update skips re-bucketing when
 //     the cell range is unchanged (the Lua's update-skip-if-same-range).
 //   * remove clears the id from its bucket range exactly.
@@ -42,8 +42,13 @@ namespace Arcane
         class SpatialHash final : public IBroadphase
         {
         public:
-            // cellSize default 64 (SpatialHash.new(cellSize or 64)).
-            explicit SpatialHash(Real cellSize = Real(64));
+            // cellSize default 1.0 m (MKS). Mirrors WorldDef::hashCellSize (the
+            // value the world actually passes via MakeBroadphase); this argless
+            // default is dormant on every live/test path but is aligned so a
+            // future argless construction cannot silently mean a 64 m cell. Was
+            // 64 px, ported from SpatialHash.new(cellSize or 64); flipped for MKS
+            // units (spec 2026-07-02 s3, matching WorldDef::hashCellSize -> 1.0).
+            explicit SpatialHash(Real cellSize = Real(1));
 
             void Update(std::uint32_t id, const Aabb2& box) override;
             void Remove(std::uint32_t id) override;
@@ -66,8 +71,8 @@ namespace Arcane
             };
 
             // Bucket key (the Lua bkey: kx*0x40000 + ky).
-            // Collision-free while |ky| < 0x20000 (131072 cells on Y; at
-            // cellSize=64 that is +/-8.4M world units).
+            // Collision-free while |ky| < 0x20000 (131072 cells on Y; at the
+            // 1.0 m default cell that is +/-131072 m ~= +/-131 km).
             [[nodiscard]] static std::int64_t BucketKey(std::int32_t kx,
                                                         std::int32_t ky) noexcept
             {
@@ -80,7 +85,7 @@ namespace Arcane
 
             void RemoveFromBuckets(std::uint32_t id, const CellRange& r);
 
-            Real m_cellSize = Real(64);
+            Real m_cellSize = Real(1);  // MKS default; see the ctor comment.
 
             // bucket key -> ids in that cell. unordered_map iteration order is
             // NOT used for output (pairs() iterates ids ascending via m_entries

@@ -3,17 +3,19 @@
 #include <cmath>
 
 namespace {
-    // Max cells per axis a single box may span. Generous (a 64-unit cell x 65536
-    // = ~4.2M units) so all legitimate content is under it; anything larger is
-    // garbage input (non-finite -> huge, or escaped coords) -> treat as empty.
+    // Max cells per axis a single box may span. The bound is a cell COUNT, not a
+    // length, so it is scale-relative -- but read at the MKS 1 m residency tile it
+    // is a ~65 km per-axis magnitude bound (65536 cells x 1 m). All legitimate
+    // content is far under it; anything larger is garbage input (non-finite ->
+    // huge, or escaped coords) -> treat as empty.
     constexpr int kMaxCellsPerAxis = 1 << 16;
     // Total-cell budget: kMaxCellsPerAxis alone is a PER-AXIS bound, so a box
     // spanning e.g. ~30000 cells on EACH axis (under the per-axis budget AND
     // under the raw-magnitude bound) still authorizes ~9e8 total cell visits --
     // and a box at the per-axis budget on both axes authorizes ~4.3e9. 1<<22
-    // (~4.2M) is generous: at tile 64 that's a ~131k x 131k-unit solid square,
-    // far beyond any legitimate content, while still catching the pathological
-    // cases above.
+    // (~4.2M) cells is generous: at the MKS 1 m tile that is a ~2 km x 2 km
+    // (sqrt(4.2M) ~= 2048 tiles/axis) solid square, far beyond any legitimate
+    // content, while still catching the pathological cases above.
     constexpr long long kMaxCellsTotal = 1LL << 22;
 }
 
