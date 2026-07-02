@@ -225,6 +225,12 @@ namespace Arcane
             Real          restitutionThreshold = Real(20);  // Lua REST_VEL = 20
             Real          contactPushMaxVelocity = Real(300);
 
+            // Box2D v3 max linear speed clamp (b2WorldDef::maximumLinearSpeed,
+            // types.c:21 default 400 * lengthUnitsPerMeter). Bodies faster than
+            // this are scaled down each velocity-integrate -- the safety net that
+            // prevents runaway escape. Angular uses kMaxRotation * invDt.
+            Real          maxLinearVelocity  = Real(400);
+
             // Sleep speed gate (px/s): a body is idle when its combined speed
             // |v| + |w|*maxExtent < sleepThreshold (Box2D v3 b2FinalizeBodiesTask).
             // Box2D b2DefaultBodyDef is 0.05 m/s (~4.5 px/s at the sandbox's ~90 px/m).
@@ -449,6 +455,11 @@ namespace Arcane
             // Set angular velocity (Kinematic + Dynamic accept it; Static ignores).
             // Mirrors SetVelocity: a Dynamic body is WAKED (sleep timer cleared).
             void SetAngularVelocity(BodyHandle h, Real w);
+
+            // Angular velocity getter (radians/s); mirrors Velocity(). Reads the
+            // world SoA that Step syncs back, so post-Step callers observe the
+            // solved (and clamped) rate. Invalid handle -> 0.
+            [[nodiscard]] Real AngularVelocity(BodyHandle h) const noexcept;
 
             // Resolve a body handle to its SoA slot index (the handle's index field).
             // Callers must hold a valid handle; returns the raw index unconditionally.
@@ -1130,6 +1141,7 @@ namespace Arcane
             [[nodiscard]] Real ContactDampingRatio() const noexcept { return m_contactDampingRatio; }
             [[nodiscard]] Real RestitutionThreshold() const noexcept { return m_restitutionThreshold; }
             [[nodiscard]] Real ContactPushMaxVelocity() const noexcept { return m_contactPushMaxVelocity; }
+            [[nodiscard]] Real MaxLinearVelocity() const noexcept { return m_maxLinearVelocity; }
             // World default sleep gate (px/s); AddBody copies it onto a body whose
             // BodyDef::sleepThreshold is < 0 (the inherit sentinel).
             [[nodiscard]] Real SleepThresholdDefault() const noexcept { return m_sleepThresholdDefault; }
@@ -1428,6 +1440,7 @@ namespace Arcane
             Real          m_contactDampingRatio  = Real(10);
             Real          m_restitutionThreshold = Real(20);
             Real          m_contactPushMaxVelocity = Real(300);
+            Real          m_maxLinearVelocity = Real(400);
             Real          m_sleepThresholdDefault  = Real(8);   // WorldDef::sleepThreshold
 
             // Baumgarte-only velocity iterations (copied from WorldDef.velIters).

@@ -144,6 +144,10 @@ namespace Arcane
         // the position-correction / contact code in later tasks.
         inline constexpr Real kLinearSlop = Real(0.005);
 
+        // Box2D v3 B2_MAX_ROTATION: max rotation per FULL step (quarter turn).
+        // constants.h:33 -> 0.25f * B2_PI. Arcane units == Box2D units.
+        inline constexpr Real kMaxRotation = Real(0.25) * Real(3.14159265358979323846);
+
         // Collision skin / polygon radius: a thin shell grown around shapes
         // so contacts are detected just before geometric touch, keeping the
         // solver stable. Used by manifold generation in later tasks.

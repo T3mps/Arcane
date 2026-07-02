@@ -349,6 +349,26 @@ namespace Arcane
                     const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
                     vx *= f; vy *= f; wv *= f;
                 }
+                // Clamp to max linear speed (Box2D v3 b2IntegrateVelocitiesTask,
+                // solver.c:108-114). Arcane units == Box2D units.
+                const float maxLin   = static_cast<float>(w.MaxLinearVelocity());
+                const float maxLinSq = maxLin * maxLin;
+                if (vx * vx + vy * vy > maxLinSq)
+                {
+                    const float ratio = maxLin / std::sqrt(vx * vx + vy * vy);
+                    vx *= ratio; vy *= ratio;
+                }
+                // Clamp to max angular speed = kMaxRotation * invDt (full-step
+                // inverse), solver.c:75,116-122. Arcane exposes no allowFastRotation
+                // opt-out (all bodies == Box2D default allowFastRotation=false), so
+                // the clamp is unconditional.
+                const float maxAng   = static_cast<float>(kMaxRotation * ctx.invDt);
+                const float maxAngSq = maxAng * maxAng;
+                if (wv * wv > maxAngSq)
+                {
+                    const float ratio = maxAng / std::abs(wv);
+                    wv *= ratio;
+                }
                 m_bodyState[i].vx = vx;
                 m_bodyState[i].vy = vy;
                 m_bodyState[i].w  = wv;

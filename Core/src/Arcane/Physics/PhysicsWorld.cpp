@@ -132,6 +132,7 @@ namespace Arcane
             , m_contactDampingRatio(def.contactDampingRatio)
             , m_restitutionThreshold(def.restitutionThreshold)
             , m_contactPushMaxVelocity(def.contactPushMaxVelocity)
+            , m_maxLinearVelocity(def.maxLinearVelocity)
             , m_sleepThresholdDefault(def.sleepThreshold)
             , m_velIters(def.velIters > 0u ? def.velIters : 1u)
             , m_solver(MakeSolver(def))
@@ -1403,6 +1404,15 @@ namespace Arcane
                 return Vec2(Real(0), Real(0));
             }
             return Vec2(m_velX[h.index], m_velY[h.index]);
+        }
+
+        Real PhysicsWorld::AngularVelocity(BodyHandle h) const noexcept
+        {
+            if (!IsValid(h))
+            {
+                return Real(0);
+            }
+            return m_angVel[h.index];
         }
 
         void PhysicsWorld::SetVelocity(BodyHandle h, Vec2 v)
