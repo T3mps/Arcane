@@ -171,6 +171,11 @@ TEST_CASE("PhysicsIslandWakeMerge: tile-span pile with sleep keeps islands unifo
     // resting purely on the tile span DO sleep and become singleton sleeping
     // islands -- the precondition the narrowphase-MT span suite disabled sleep to
     // avoid. Do NOT set sleepThreshold to 0.
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     const int kBodies = 140;

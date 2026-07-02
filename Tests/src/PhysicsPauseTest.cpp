@@ -21,8 +21,15 @@ namespace
         RegisterSceneComponents(reg);
         RegisterPhysicsComponents(reg);
 
+        Physics::WorldDef wd;
+        wd.gravityX               = Physics::Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Physics::Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Physics::Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Physics::Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Physics::Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Physics::Real(64);  // PX-PIN: remove when this file converts to MKS
         reg.SetResource(PhysicsResource{
-            std::make_unique<Physics::PhysicsWorld>(Physics::WorldDef{}), {} });
+            std::make_unique<Physics::PhysicsWorld>(wd), {} });
         auto add = [&](glm::vec2 pos, glm::vec2 half, Physics::BodyType t) {
             Astra::Entity e = reg.CreateEntity();
             LocalTransform lt; lt.position = pos;

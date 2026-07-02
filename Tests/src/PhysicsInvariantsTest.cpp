@@ -128,6 +128,11 @@ TEST_CASE("physics-invariant: rest penetration stays bounded near the slop",
 {
     WorldDef wd;
     wd.gravityY = kGravity;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     const Real floorTop = Real(300);
@@ -202,6 +207,12 @@ TEST_CASE("physics-invariant: fast + rotating bodies do not tunnel a thin wall",
     // (a) FAST circle.
     {
         WorldDef wd; // gravity 0
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         makeWorldWithWall(w);
 
@@ -222,6 +233,12 @@ TEST_CASE("physics-invariant: fast + rotating bodies do not tunnel a thin wall",
     //     contact must still catch it.
     {
         WorldDef wd; // gravity 0
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         makeWorldWithWall(w);
 
@@ -252,6 +269,11 @@ TEST_CASE("physics-invariant: dropped scene kinetic energy stays bounded",
 {
     WorldDef wd;
     wd.gravityY = kGravity;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     const Real floorTop = Real(300);
@@ -306,6 +328,11 @@ TEST_CASE("physics-invariant: a colliding scene is run-twice deterministic",
     {
         WorldDef wd;
         wd.gravityY = kGravity;
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
         const Real floorTop = Real(300);
@@ -368,6 +395,10 @@ TEST_CASE("physics-invariant: broadphase strategy does not change the result",
         wd.gravityY   = kGravity;
         wd.broadphase = kind;
         wd.hashCellSize = Real(64);
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
         const Real floorTop = Real(300);
@@ -528,6 +559,11 @@ TEST_CASE("physics-invariant: a deeply-overlapping round body recovers cleanly",
 {
     WorldDef wd;
     wd.gravityY = kGravity;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // A static box centred at the origin, half-extent 40 (span [-40,40]^2). Use
@@ -625,6 +661,11 @@ TEST_CASE("physics-invariant: warm-start is live and the contact set stays bound
 {
     WorldDef wd;
     wd.gravityY = kGravity;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     const Real floorTop = Real(300);

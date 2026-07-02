@@ -116,7 +116,14 @@ TEST_CASE("physics-v2 T7 (b): contact Begin fires only when the body is rotated"
 {
     auto buildWorld = [](Real boxAngle) -> int
     {
-        PhysicsWorld w;
+        WorldDef wd;
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        PhysicsWorld w(wd);
 
         BodyDef circ;
         circ.type     = BodyType::Static;
@@ -164,7 +171,14 @@ TEST_CASE("physics-v2 T7 (c): raycast vs a rotated capsule hits rotated extent",
 {
     auto castT = [](Real capAngle) -> Real
     {
-        PhysicsWorld w;
+        WorldDef wd;
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        PhysicsWorld w(wd);
         BodyDef bd;
         bd.type     = BodyType::Kinematic;
         bd.position = Vec2(Real(0), Real(0));
@@ -200,7 +214,14 @@ TEST_CASE("physics-v2 T7 (d): OverlapShape sees a body only when rotated",
 {
     auto overlaps = [](Real bodyAngle) -> int
     {
-        PhysicsWorld w;
+        WorldDef wd;
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        PhysicsWorld w(wd);
         BodyDef bd;
         bd.type     = BodyType::Static;
         bd.position = Vec2(Real(0), Real(0));
@@ -231,7 +252,14 @@ TEST_CASE("physics-v2 T7 (d): OverlapShape sees a body only when rotated",
 TEST_CASE("physics-v2 T7 (e): OverlapShape sees a compound body via fixture[1]",
           "[physics][PhysicsQueryRotation]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type     = BodyType::Static;
@@ -281,7 +309,14 @@ TEST_CASE("physics-v2 T7 (e): OverlapShape sees a compound body via fixture[1]",
 TEST_CASE("physics-v2 T7 (f): BulletSweep clamps a rotated bullet at its extent",
           "[physics][PhysicsQueryRotation]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef wall;
     wall.type     = BodyType::Static;

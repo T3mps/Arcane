@@ -59,6 +59,11 @@ TEST_CASE("Collision filter: disjoint category/mask pair never creates a contact
     // broadphase path). WorldDef default gravityX/Y = 0; set Y to 200.
     WorldDef wd;
     wd.gravityY = Real(200);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Place A above B, overlapping (radius=10 each, centers 8 apart -> overlap).
@@ -96,7 +101,14 @@ TEST_CASE("Collision filter: disjoint category/mask pair never creates a contact
 TEST_CASE("Collision filter: compatible non-default filters allow contact creation",
           "[physics][filter]")
 {
-    PhysicsWorld w; // default: no gravity
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // default: no gravity
 
     // Overlapping circles (centers 8 apart, radius 10 each -> overlap).
     BodyHandle bA = AddFiltered(w, Vec2(Real(0), Real(0)), Real(10), 0x0002u, 0x0006u);
@@ -117,7 +129,14 @@ TEST_CASE("Collision filter: compatible non-default filters allow contact creati
 TEST_CASE("Collision filter: default category/mask (cat=1 mask=all) collide",
           "[physics][filter]")
 {
-    PhysicsWorld w; // default: no gravity
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // default: no gravity
 
     // Two overlapping dynamics with default filters (BodyDef defaults cat=1 mask=all).
     BodyDef d;

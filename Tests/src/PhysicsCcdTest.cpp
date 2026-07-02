@@ -100,6 +100,12 @@ TEST_CASE("PhysicsCcd: a fast dynamic body does not tunnel a thin static wall "
           "(speculative)", "[physics][ccd]")
 {
     WorldDef wd; // gravity 0 -- the body moves purely on its set velocity
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     AddWall(w);
 
@@ -132,7 +138,14 @@ TEST_CASE("PhysicsCcd: a fast dynamic body does not tunnel a thin static wall "
 TEST_CASE("PhysicsCcd: an unflagged kinematic fast body tunnels a thin wall "
           "(expected baseline)", "[physics][ccd]")
 {
-    PhysicsWorld w; // no gravity needed
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // no gravity needed
     AddWall(w);
 
     BodyDef bd;
@@ -160,7 +173,14 @@ TEST_CASE("PhysicsCcd: an unflagged kinematic fast body tunnels a thin wall "
 TEST_CASE("PhysicsCcd: a bullet kinematic body clamps to TOI against a thin wall",
           "[physics][ccd]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     AddWall(w);
 
     BodyDef bd;
@@ -190,6 +210,11 @@ TEST_CASE("PhysicsCcd: a bullet dynamic body does not tunnel a thin wall",
           "[physics][ccd]")
 {
     WorldDef wd; // gravity 0
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     AddWall(w);
 
@@ -223,6 +248,12 @@ TEST_CASE("PhysicsCcd: a CCD scene is deterministic (run twice -> identical)",
     auto run = [](std::vector<Vec2>& out)
     {
         WorldDef wd;
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         AddWall(w);
 

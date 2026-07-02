@@ -130,6 +130,11 @@ namespace
         def.passability  = &src;
         def.tileCellSize = Real(16);
         def.tileOrigin   = Vec2(Real(0), Real(0));
+        def.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        def.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        def.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        def.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        def.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
         return def;
     }
 

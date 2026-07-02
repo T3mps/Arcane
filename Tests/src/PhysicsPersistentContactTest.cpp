@@ -16,7 +16,14 @@ using namespace Arcane::Physics;
 
 TEST_CASE("Persistent contact survives across steps + destroys on separation", "[physics]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
     d.type = BodyType::Static;  d.position = Vec2(0, 100);  w.AddBody(d);
     d.type = BodyType::Dynamic; d.position = Vec2(0, 81);   BodyHandle dyn = w.AddBody(d); // overlapping
@@ -36,7 +43,14 @@ TEST_CASE("Persistent contact survives across steps + destroys on separation", "
 
 TEST_CASE("Persistent contact destroyed when a body is removed", "[physics]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
     d.type = BodyType::Static;  d.position = Vec2(0, 100);  BodyHandle s = w.AddBody(d);
     d.type = BodyType::Dynamic; d.position = Vec2(0, 81);   w.AddBody(d);
@@ -179,6 +193,11 @@ TEST_CASE("Persistent contact walk == GenerateContacts constraint set", "[physic
 {
     WorldDef wd;
     wd.gravityY = Real(400);                             // downward (+y), settles the stack onto the floor
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     BuildOracleScene(w);                                 // static floor + a 3-box stack + a circle (body-only)
 
@@ -254,6 +273,11 @@ TEST_CASE("Tile-span solver feed: a dynamic body rests on a merged span (no tunn
     wd.passability   = &grid;
     wd.tileCellSize  = kCellSize;
     wd.tileOrigin    = Vec2(Real(0), Real(0));
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // A dynamic box (half-extent 5 -> 10x10) starting ABOVE the span, centered over
@@ -312,7 +336,14 @@ TEST_CASE("Tile-span solver feed: a dynamic body rests on a merged span (no tunn
 // hands back the n-th fixture handle.
 TEST_CASE("DropFixture destroys that fixture's persistent contacts", "[physics]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
     d.type = BodyType::Static;  d.position = Vec2(0, 100); w.AddBody(d);
     d.type = BodyType::Dynamic; d.position = Vec2(0, 81);  BodyHandle dyn = w.AddBody(d);
@@ -333,7 +364,14 @@ TEST_CASE("DropFixture destroys that fixture's persistent contacts", "[physics]"
 // the existing stepped removal test does.
 TEST_CASE("RemoveBody destroys that body's persistent contacts immediately", "[physics]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
     d.type = BodyType::Static;  d.position = Vec2(0, 100); BodyHandle s = w.AddBody(d);
     d.type = BodyType::Dynamic; d.position = Vec2(0, 81);  w.AddBody(d);
@@ -361,7 +399,14 @@ TEST_CASE("RemoveBody destroys that body's persistent contacts immediately", "[p
 TEST_CASE("Contact pool expands to the event union (sensors + kinematic); solver feed unchanged",
           "[physics]")
 {
-    PhysicsWorld w; // no gravity: bodies stay put for the single-step overlap check
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // no gravity: bodies stay put for the single-step overlap check
 
     // (a) A dynamic body whose ONLY fixture is a SENSOR, overlapping a second
     //     dynamic body. Body-level isSensor (the auto-fixture inherits it, so

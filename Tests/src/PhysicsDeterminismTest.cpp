@@ -172,6 +172,10 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         wdef.broadphase  = BroadphaseKind::Tree;
         wdef.solverKind  = solverKind;
         wdef.hashCellSize = Real(64);
+        wdef.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wdef.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wdef.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wdef.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
 
         PhysicsWorld w(wdef);
 

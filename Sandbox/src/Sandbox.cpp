@@ -54,6 +54,11 @@ namespace
         if (reg.GetResource<Arcane::PhysicsResource>()) return;
         Arcane::Physics::WorldDef wd;
         wd.gravityY = kGravityY;
+        wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
         auto world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
         // Phase D1: wire executor (g_ctx is always valid here; LoadState is called after Init).
         world->SetExecutor(g_ctx ? g_ctx->taskExecutor : nullptr);

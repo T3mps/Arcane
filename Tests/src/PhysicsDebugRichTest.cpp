@@ -84,6 +84,12 @@ namespace
 TEST_CASE("PhysicsDebug rich: velocity vector emitted only when enabled", "[render]")
 {
     WorldDef wd;  // gravity 0
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     BodyHandle h;
     OneMovingBox(w, h);
@@ -116,6 +122,12 @@ TEST_CASE("PhysicsDebug rich: velocity vector emitted only when enabled", "[rend
 TEST_CASE("PhysicsDebug rich: orientation tick + COM marker gated by flags", "[render]")
 {
     WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     BodyHandle h;
     OneMovingBox(w, h);
@@ -148,6 +160,12 @@ TEST_CASE("PhysicsDebug rich: orientation tick + COM marker gated by flags", "[r
 TEST_CASE("PhysicsDebug rich: a resting body draws no velocity ray", "[render]")
 {
     WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // A static body never moves -> with drawVelocities on it must still emit

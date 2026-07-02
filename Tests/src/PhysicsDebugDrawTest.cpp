@@ -54,6 +54,11 @@ namespace
         // and the island/sleep pass runs.
         WorldDef wdef;
         wdef.gravityY = Real(400);   // pixels / s^2 (same as other physics tests)
+        wdef.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wdef.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wdef.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wdef.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wdef.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
 
         PhysicsWorld world(wdef);
 

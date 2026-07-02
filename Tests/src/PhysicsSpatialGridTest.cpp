@@ -103,7 +103,14 @@ TEST_CASE("SpatialGrid query == brute-force after tight filter", "[physics][grid
 
 TEST_CASE("StaticCandidates static-body set unchanged by grid reroute", "[physics][grid]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     auto addStatic = [&](Real cx, Real cy, Real hw, Real hh) {
         BodyDef d; d.type = BodyType::Static; d.position = Vec2(cx, cy);
         d.shape = MakeAabb(hw, hh); return w.AddBody(d);
@@ -128,7 +135,14 @@ TEST_CASE("StaticCandidates static-body set unchanged by grid reroute", "[physic
 // guarded by an oracle, not a red->green feature).
 TEST_CASE("StaticCandidates set is stable across many statics (tree-backed)", "[physics][grid]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     std::mt19937 rng(0xABCDEF);
     std::uniform_real_distribution<float> pos(-400.0f, 400.0f);
     std::vector<BodyHandle> handles;
@@ -160,7 +174,14 @@ TEST_CASE("StaticCandidates set is stable across many statics (tree-backed)", "[
 
 TEST_CASE("Residents(region) returns bodies in a tile region", "[physics][grid][residency]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.shape = MakeCircle(Real(8));
     d.position = Vec2(10, 10);   BodyHandle a = w.AddBody(d);
     d.position = Vec2(300, 300); BodyHandle b = w.AddBody(d);
@@ -176,7 +197,14 @@ TEST_CASE("Residents(region) returns bodies in a tile region", "[physics][grid][
 
 TEST_CASE("Residency tracks a body across a per-step position commit", "[physics][grid][residency]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Kinematic; d.shape = MakeCircle(Real(8));
     d.position = Vec2(10, 10);
     BodyHandle a = w.AddBody(d);
@@ -201,7 +229,14 @@ TEST_CASE("Residency tracks a body across a per-step position commit", "[physics
 // returning it). Guards the m_staticTree.Remove lockstep in RemoveBody.
 TEST_CASE("StaticCandidates drops a static after RemoveBody", "[physics][grid]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Static; d.position = Vec2(0, 0);
     d.shape = MakeAabb(Real(50), Real(10));
     BodyHandle s = w.AddBody(d);
@@ -222,7 +257,14 @@ TEST_CASE("StaticCandidates drops a static after RemoveBody", "[physics][grid]")
 // new (wider) region. Guards the AddFixture static-grid Move.
 TEST_CASE("AddFixture grows a static's grid AABB", "[physics][grid]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Static; d.position = Vec2(0, 0);
     d.shape = MakeAabb(Real(10), Real(10));   // small primary fixture near origin
     BodyHandle s = w.AddBody(d);
@@ -251,7 +293,14 @@ TEST_CASE("AddFixture grows a static's grid AABB", "[physics][grid]")
 // Starting at x=10, final x ~ 310, which is well outside the (0..64) origin tile.
 TEST_CASE("Residency tracks a dynamic body via the solver commit", "[physics][grid][residency]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.shape = MakeCircle(Real(8));
     d.fixedRotation = true; d.position = Vec2(10, 10);
     BodyHandle a = w.AddBody(d);
@@ -269,7 +318,14 @@ TEST_CASE("Residency tracks a dynamic body via the solver commit", "[physics][gr
 // G5: Residents on an unoccupied region returns empty.
 TEST_CASE("Residents empty region returns no bodies", "[physics][grid][residency]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.shape = MakeCircle(Real(8));
     d.position = Vec2(10, 10); w.AddBody(d);
 

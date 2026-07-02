@@ -49,7 +49,14 @@ namespace
 
 TEST_CASE("Per-fixture broadphase pairs == brute-force (compound scene)", "[physics][fxbroadphase]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, Real hw, Real hh, BodyType t) {
         BodyDef d; d.type = t; d.position = Vec2(x, y); d.fixedRotation = true;
         d.shape = MakeAabb(hw, hh); return w.AddBody(d);
@@ -81,7 +88,14 @@ TEST_CASE("Per-fixture broadphase pairs == brute-force (compound scene)", "[phys
 //   (b) Pairs()==brute (the dropped fixture's pairs are GONE) after the Step.
 TEST_CASE("DropFixture removes proxy from fixture broadphase", "[physics][fxbroadphase]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, Real hw, Real hh, BodyType t) {
         BodyDef d; d.type = t; d.position = Vec2(x, y); d.fixedRotation = true;
         d.shape = MakeAabb(hw, hh); return w.AddBody(d);
@@ -135,7 +149,14 @@ TEST_CASE("DropFixture removes proxy from fixture broadphase", "[physics][fxbroa
 //   (b) live mover-fixture count dropped by A's fixture count (1).
 TEST_CASE("RemoveBody removes all fixture proxies from broadphase", "[physics][fxbroadphase]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, Real hw, Real hh, BodyType t) {
         BodyDef d; d.type = t; d.position = Vec2(x, y); d.fixedRotation = true;
         d.shape = MakeAabb(hw, hh); return w.AddBody(d);
@@ -181,7 +202,14 @@ TEST_CASE("RemoveBody removes all fixture proxies from broadphase", "[physics][f
 // deterministic teleport that also snaps prev, avoiding lerp smear.
 TEST_CASE("Fixture broadphase pair removed after bodies separate (move)", "[physics][fxbroadphase]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, Real hw, Real hh, BodyType t) {
         BodyDef d; d.type = t; d.position = Vec2(x, y); d.fixedRotation = true;
         d.shape = MakeAabb(hw, hh); return w.AddBody(d);
@@ -278,7 +306,14 @@ TEST_CASE("DynamicTree incremental pairs == full == brute-force", "[physics][fxb
 // in FixtureBroadphase().Pairs() before any Step.
 TEST_CASE("SetAngle immediately refreshes mover fixture proxies (no Step)", "[physics][fxbroadphase]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     // Thin long box: half-extents 40 x 4, kinematic so it can rotate.
     BodyDef defThin;

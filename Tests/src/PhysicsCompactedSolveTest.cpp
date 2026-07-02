@@ -38,7 +38,13 @@ TEST_CASE("PhysicsCompacted: kinematic-set tracks live kinematic slots", "[physi
             REQUIRE((seen[i] != 0u) == kin);
         }
     };
-    WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+    WorldDef wd; wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
     const BodyHandle k0 = AddKinematic(w, Vec2(Real(-30), Real(-10)), Real(5), Real(5));
     const BodyHandle d0 = AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
@@ -68,7 +74,13 @@ TEST_CASE("PhysicsCompacted: kinematic-set tracks live kinematic slots", "[physi
 TEST_CASE("PhysicsCompacted: solve settles identically + deterministically", "[physics][phasec]")
 {
     auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
-        WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+        WorldDef wd; wd.gravityY = Real(400);
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        PhysicsWorld w(wd);
         AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
         // include a kinematic plate pushing a dynamic so a kinematic B-endpoint is exercised
         BodyDef kd; kd.type=BodyType::Kinematic; kd.position=Vec2(Real(0),Real(-8)); kd.shape=MakeAabb(Real(60),Real(2));
@@ -102,7 +114,13 @@ TEST_CASE("PhysicsCompacted: solve settles identically + deterministically", "[p
 // goldens), per the engine's re-baseline-numerics-on-purpose rule.
 TEST_CASE("PhysicsCompacted: persistent contact coloring is valid", "[physics][phasec]")
 {
-    WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+    WorldDef wd; wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
     for (int i = 0; i < 30; ++i) AddBox(w, Vec2(Real(-40) + Real(3)*static_cast<Real>(i%20), Real(-20) - Real(9)*static_cast<Real>(i/20)), Real(4), Real(4));
     for (int k = 0; k < 60; ++k) w.Step(kStep);
@@ -116,7 +134,13 @@ TEST_CASE("PhysicsCompacted: persistent contact coloring is valid", "[physics][p
 TEST_CASE("PhysicsCompacted: incremental coloring is deterministic across two runs (create/destroy churn)", "[physics][phasec]")
 {
     auto run = [](std::vector<Vec2>& pos) {
-        WorldDef wd; wd.gravityY = Real(400); PhysicsWorld w(wd);
+        WorldDef wd; wd.gravityY = Real(400);
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        PhysicsWorld w(wd);
         AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
         std::vector<BodyHandle> b;
         for (int i = 0; i < 16; ++i) b.push_back(AddBox(w, Vec2(Real(-20) + Real(3)*static_cast<Real>(i), Real(-20)), Real(4), Real(4)));

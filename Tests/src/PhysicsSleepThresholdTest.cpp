@@ -18,7 +18,14 @@ namespace { constexpr Real kStep = Real(1) / Real(60); }
 
 TEST_CASE("PhysicsSleep: maxExtent equals circle radius for a centered circle", "[physics][sleep]")
 {
-    WorldDef wd; PhysicsWorld w(wd);
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.position = Vec2(Real(0), Real(0));
     d.shape = MakeCircle(Real(10)); d.density = Real(1);
     const BodyHandle b = w.AddBody(d);
@@ -28,7 +35,14 @@ TEST_CASE("PhysicsSleep: maxExtent equals circle radius for a centered circle", 
 
 TEST_CASE("PhysicsSleep: maxExtent equals box half-diagonal for an AABB", "[physics][sleep]")
 {
-    WorldDef wd; PhysicsWorld w(wd);
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.position = Vec2(Real(0), Real(0));
     d.shape = MakeAabb(Real(3), Real(4)); d.density = Real(1); d.fixedRotation = true;
     const BodyHandle b = w.AddBody(d);
@@ -39,7 +53,13 @@ TEST_CASE("PhysicsSleep: maxExtent equals box half-diagonal for an AABB", "[phys
 
 TEST_CASE("PhysicsSleep: per-body sleepThreshold override beats the world default", "[physics][sleep]")
 {
-    WorldDef wd; wd.sleepThreshold = Real(5); PhysicsWorld w(wd);
+    WorldDef wd; wd.sleepThreshold = Real(5);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.position = Vec2(Real(0), Real(0));
     d.shape = MakeCircle(Real(10)); d.density = Real(1);
     const BodyHandle inherit = w.AddBody(d);
@@ -55,7 +75,12 @@ TEST_CASE("PhysicsSleep: per-body sleepThreshold override beats the world defaul
 // counts 0.08*10 = 0.8 px/s < 5 -> idle -> sleeps.
 TEST_CASE("PhysicsSleep: a slowly-rolling body sleeps (combined test)", "[physics][sleep]")
 {
-    WorldDef wd; wd.gravityY = Real(0); wd.sleepThreshold = Real(5); PhysicsWorld w(wd);
+    WorldDef wd; wd.gravityY = Real(0); wd.sleepThreshold = Real(5);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.position = Vec2(Real(0), Real(0));
     d.shape = MakeCircle(Real(10)); d.density = Real(1); // NOT fixedRotation -> can roll
     const BodyHandle b = w.AddBody(d);
@@ -67,7 +92,12 @@ TEST_CASE("PhysicsSleep: a slowly-rolling body sleeps (combined test)", "[physic
 // Counter-guard: a body genuinely spinning fast must NOT sleep.
 TEST_CASE("PhysicsSleep: a fast-spinning body never sleeps", "[physics][sleep]")
 {
-    WorldDef wd; wd.gravityY = Real(0); wd.sleepThreshold = Real(5); PhysicsWorld w(wd);
+    WorldDef wd; wd.gravityY = Real(0); wd.sleepThreshold = Real(5);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.position = Vec2(Real(0), Real(0));
     d.shape = MakeCircle(Real(10)); d.density = Real(1);
     const BodyHandle b = w.AddBody(d);

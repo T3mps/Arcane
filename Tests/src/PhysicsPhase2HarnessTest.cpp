@@ -135,6 +135,10 @@ namespace Arcane { namespace Physics { namespace Phase2Harness {
         def.solverKind = solverKind;
         // SpatialHash cell: large enough to be sensible for this scene scale.
         def.hashCellSize = Real(64);
+        def.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        def.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        def.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        def.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
 
         PhysicsWorld w(def);
 

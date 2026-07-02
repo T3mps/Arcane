@@ -86,6 +86,11 @@ TEST_CASE("PhysicsIsland: resting body sleeps then stays frozen", "[physics][isl
 {
     WorldDef wd;
     wd.gravityY = Real(400); // +Y down
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Floor top at y = 0.
@@ -121,6 +126,11 @@ TEST_CASE("PhysicsIsland: impulse wakes a sleeping body", "[physics][island]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
@@ -150,6 +160,11 @@ TEST_CASE("PhysicsIsland: new contact wakes a sleeping body", "[physics][island]
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
@@ -195,6 +210,11 @@ TEST_CASE("PhysicsIsland: stack sleeps as a unit, disturbance wakes a member", "
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
@@ -273,6 +293,11 @@ TEST_CASE("PhysicsIsland: IslandRootOf returns the same root for all members of 
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Floor: top surface at y = 0.
@@ -338,6 +363,11 @@ TEST_CASE("PhysicsIsland: settle + sleep is deterministic across two runs", "[ph
     auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
         WorldDef wd;
         wd.gravityY = Real(400);
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
         AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));

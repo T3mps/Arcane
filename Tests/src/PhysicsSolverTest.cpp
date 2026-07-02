@@ -114,6 +114,11 @@ TEST_CASE("PhysicsSolver: ball rests on floor", "[physics][solver]")
 {
     WorldDef wd;
     wd.gravityY = Real(400); // +Y down
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Floor top at y = 0 (center y = 5, hh = 5).
@@ -150,6 +155,11 @@ TEST_CASE("PhysicsSolver: box stack settles", "[physics][solver]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Floor top at y = 0.
@@ -215,6 +225,11 @@ TEST_CASE("PhysicsSolver: high mass-ratio stable", "[physics][solver]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
@@ -247,6 +262,11 @@ TEST_CASE("PhysicsSolver: energy bounded", "[physics][solver]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
@@ -290,6 +310,11 @@ TEST_CASE("PhysicsSolver: restitution rebounds", "[physics][solver]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
@@ -345,6 +370,11 @@ TEST_CASE("PhysicsSolver: friction stops a sliding box", "[physics][solver]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5), /*friction=*/Real(0.8));
@@ -382,7 +412,14 @@ TEST_CASE("PhysicsSolver: friction stops a sliding box", "[physics][solver]")
 
 TEST_CASE("PhysicsSolver: kinematic pushes dynamic", "[physics][solver]")
 {
-    PhysicsWorld w; // gravity 0 -- isolate the push
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // gravity 0 -- isolate the push
 
     const Real hw = Real(2), hh = Real(2);
     // Kinematic plate moving +x toward the dynamic box.
@@ -423,6 +460,11 @@ TEST_CASE("PhysicsSolver: deterministic dynamic scene", "[physics][solver]")
     {
         WorldDef wd;
         wd.gravityY = Real(400);
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
         AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
@@ -482,6 +524,11 @@ TEST_CASE("PhysicsSolver: warm-start continuity keeps a stack settled", "[physic
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
@@ -550,6 +597,11 @@ TEST_CASE("PhysicsSolver: warm-start dropped on body removal", "[physics][solver
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
@@ -603,6 +655,11 @@ TEST_CASE("PhysicsSolver: warm-start continuity -- settled stack stays put N -> 
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Floor top surface at y = 0 (center +5, hh 5).

@@ -70,6 +70,11 @@ namespace
         // Physics world resource: gravity +Y down.
         Arcane::Physics::WorldDef wd;
         wd.gravityY = kGravityY;
+        wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
         reg.SetResource(Arcane::PhysicsResource{
             std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
             {}
@@ -303,6 +308,11 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     // Physics world (no gravity needed; we only test fixture count + write-back).
     Arcane::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
+    wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
     reg.SetResource(Arcane::PhysicsResource{
         std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
         {}
@@ -406,6 +416,11 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     // Physics world (zero gravity; we're testing fixture metadata, not dynamics).
     Arcane::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
+    wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
     reg.SetResource(Arcane::PhysicsResource{
         std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
         {}

@@ -22,7 +22,14 @@ using namespace Arcane::Physics;
 
 TEST_CASE("Debug accessors enumerate broadphase + contacts", "[physics][debugviz]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, BodyType t)
     {
         BodyDef d;
@@ -88,7 +95,14 @@ TEST_CASE("Debug accessors enumerate broadphase + contacts", "[physics][debugviz
 // trace tags SatPolygon and records >= 1 candidate axis.
 TEST_CASE("DebugCollide reproduces the manifold + records a trace", "[physics][debugviz]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef d; d.type=BodyType::Dynamic; d.fixedRotation=true; d.shape=MakeAabb(Real(10),Real(10));
     d.position=Vec2(0,0);  BodyHandle a = w.AddBody(d);
     d.position=Vec2(15,0); BodyHandle b = w.AddBody(d); // overlapping boxes -> SAT/EPA

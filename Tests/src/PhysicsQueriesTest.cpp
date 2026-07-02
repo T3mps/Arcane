@@ -64,6 +64,12 @@ namespace
         def.passability  = &src;
         def.tileCellSize = kCellSize;
         def.tileOrigin   = Vec2(Real(0), Real(0));
+        def.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        def.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        def.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        def.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        def.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        def.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         return def;
     }
 }
@@ -156,7 +162,14 @@ TEST_CASE("Raycast: a diagonal wall cell is hit on the correct cell",
 TEST_CASE("Raycast: AABB body slab hit is exact", "[physics][queries][raycast]")
 {
     // No passability source -> no cell pass; only the body test runs.
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type     = BodyType::Static;
@@ -232,7 +245,14 @@ TEST_CASE("Raycast: a farther body loses to a nearer wall (nearest wins, "
 TEST_CASE("Raycast: a diagonal ray through a circle center hits at exactly r",
           "[physics][queries][raycast]")
 {
-    PhysicsWorld w; // no cells; body test only
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // no cells; body test only
 
     const Real r = Real(10);
     const Vec2 center(Real(100), Real(100));
@@ -333,7 +353,14 @@ TEST_CASE("LineOfSight: degenerate segment has no sight", "[physics][queries][lo
 TEST_CASE("ShapeCast: a swept circle stops a radius short of where a ray hits",
           "[physics][queries][shapecast]")
 {
-    PhysicsWorld w; // no cells; cast against a static body
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // no cells; cast against a static body
 
     // A static wall AABB the cast moves toward: spans x[100,120], y[-50,50].
     BodyDef bd;
@@ -369,7 +396,14 @@ TEST_CASE("ShapeCast: a swept circle stops a radius short of where a ray hits",
 
 TEST_CASE("ShapeCast: a clear cast misses", "[physics][queries][shapecast]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     // A static body well off the cast's path.
     BodyDef bd;
@@ -387,7 +421,14 @@ TEST_CASE("ShapeCast: a clear cast misses", "[physics][queries][shapecast]")
 TEST_CASE("ShapeCast: degenerate (zero-length) delta returns none",
           "[physics][queries][shapecast]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef bd;
     bd.type     = BodyType::Static;
     bd.position = Vec2(Real(10), Real(0));
@@ -403,7 +444,14 @@ TEST_CASE("ShapeCast: degenerate (zero-length) delta returns none",
 TEST_CASE("ShapeCast: movers are obstacles only with opts.movers",
           "[physics][queries][shapecast]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     // A KINEMATIC body in the cast path -- a mover, not a static.
     BodyDef bd;
@@ -430,7 +478,14 @@ TEST_CASE("ShapeCast: movers are obstacles only with opts.movers",
 TEST_CASE("ShapeCast: opts.exclude skips the caster's own body",
           "[physics][queries][shapecast]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     // The "caster" body overlapping the start, plus a wall down the path.
     BodyDef self;
@@ -464,7 +519,14 @@ TEST_CASE("ShapeCast: opts.exclude skips the caster's own body",
 TEST_CASE("OverlapShape: returns exactly the overlapping bodies",
           "[physics][queries][overlap]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     // Body A: overlaps the query. Body B: also overlaps. Body C: far away.
     BodyDef a;
@@ -501,7 +563,14 @@ TEST_CASE("OverlapShape: returns exactly the overlapping bodies",
 TEST_CASE("OverlapShape: a non-overlapping query returns empty",
           "[physics][queries][overlap]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef a;
     a.type     = BodyType::Static;
@@ -525,7 +594,14 @@ TEST_CASE("OverlapShape: a non-overlapping query returns empty",
 TEST_CASE("QueryAABB: includes overlapping, excludes non-overlapping",
           "[physics][queries][aabb]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef in;
     in.type     = BodyType::Kinematic;
@@ -556,7 +632,14 @@ TEST_CASE("OverlapShape: a sensor body overlapping the query shape IS returned",
     // OverlapShape's documented contract: sensor bodies ARE included (unlike
     // ShapeCast, which skips sensors). This test locks that contract so any
     // future refactor that accidentally silences sensors will fail here.
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     // A non-sensor body well outside the query (should not appear).
     BodyDef far;

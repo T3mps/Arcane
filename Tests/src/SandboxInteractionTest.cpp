@@ -82,6 +82,11 @@ namespace
 
             Phys::WorldDef wd;
             wd.gravityY = kGravityY;
+            wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
+            wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
+            wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
+            wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
+            wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
             reg.SetResource(Arcane::PhysicsResource{
                 std::make_unique<Phys::PhysicsWorld>(wd), {}
             });

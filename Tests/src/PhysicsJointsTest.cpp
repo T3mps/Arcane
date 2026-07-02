@@ -78,6 +78,11 @@ namespace
         WorldDef wd;
         wd.gravityY   = Real(400); // +Y down
         wd.solverKind = kind;
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         return wd;
     }
 } // namespace
@@ -157,6 +162,11 @@ TEST_CASE("PhysicsJoints: mouse joint drags to target + removeJoint detaches",
 {
     WorldDef wd;
     wd.gravityY = Real(0); // the harness used gravityScale=0 for the mouse chip
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyHandle chip = AddDynamicCircle(w, Vec2(Real(500), Real(100)), Real(5), Real(0));
@@ -273,6 +283,12 @@ TEST_CASE("PhysicsJoints: prismatic constrains to its axis", "[physics][joints]"
 TEST_CASE("PhysicsJoints: motor drives relative angular velocity", "[physics][joints]")
 {
     WorldDef wd; // no gravity -- isolate the angular drive
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
@@ -317,6 +333,12 @@ TEST_CASE("PhysicsJoints: motor drives relative angular velocity", "[physics][jo
 TEST_CASE("PhysicsJoints: motor respects the torque clamp", "[physics][joints]")
 {
     WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));

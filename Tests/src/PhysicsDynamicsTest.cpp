@@ -66,6 +66,11 @@ TEST_CASE("PhysicsDynamics: free-fall matches sub-stepped semi-implicit Euler", 
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     const Vec2 pos0(Real(10), Real(-5));
@@ -115,6 +120,11 @@ TEST_CASE("PhysicsDynamics: DrawPosition lerps the fall", "[physics][dynamics]")
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyHandle h = AddFallingBody(w);
@@ -142,6 +152,11 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
 
     WorldDef wd;
     wd.gravityY = g;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
 
     // Damped body.
     PhysicsWorld wDamp(wd);
@@ -201,7 +216,14 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
 
 TEST_CASE("PhysicsDynamics: ApplyImpulse adds impulse/mass and wakes", "[physics][dynamics]")
 {
-    PhysicsWorld w; // gravity 0
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // gravity 0
 
     BodyDef def;
     def.type    = BodyType::Dynamic;
@@ -240,6 +262,11 @@ TEST_CASE("PhysicsDynamics: static + kinematic ignore gravity", "[physics][dynam
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef sdef;
@@ -276,7 +303,14 @@ TEST_CASE("PhysicsDynamics: static + kinematic ignore gravity", "[physics][dynam
 
 TEST_CASE("PhysicsDynamics: mass override sets invMass", "[physics][dynamics]")
 {
-    PhysicsWorld w; // gravity 0
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // gravity 0
 
     BodyDef def;
     def.type    = BodyType::Dynamic;
@@ -301,6 +335,10 @@ TEST_CASE("PhysicsDynamics: run-twice determinism", "[physics][dynamics]")
         WorldDef wd;
         wd.gravityX = Real(50);
         wd.gravityY = Real(400);
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
         BodyDef def;

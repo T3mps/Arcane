@@ -155,6 +155,11 @@ namespace
     {
         WorldDef wd;
         wd.gravityY = Real(400);
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
         // Pivot: half-width 8, top surface at y = 0 (center at y = +5,
@@ -204,6 +209,12 @@ TEST_CASE("physics-v2 compound-COM (a): heavy side tips down about the COM", "[p
     // fixture. offset=20, densities 1:9 -> comX = 20 * 9/10 = 18 (bb.expectedComX).
     {
         WorldDef wd;
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         Barbell bb = MakeBarbell(w, Vec2(Real(0), Real(0)));
         const Vec2 lc = w.GetLocalCenter(bb.body);
@@ -260,6 +271,12 @@ TEST_CASE("physics-v2 compound-COM (a): heavy side tips down about the COM", "[p
 TEST_CASE("physics-v2 compound-COM (b): free spin keeps the COM fixed", "[physics]")
 {
     WorldDef wd; // gravity 0
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     const Vec2 startPos(Real(7), Real(-4));
@@ -329,6 +346,12 @@ TEST_CASE("physics-v2 compound-COM (b): free spin keeps the COM fixed", "[physic
 TEST_CASE("physics-v2 compound-COM (e): impulse at a point torques about the COM", "[physics]")
 {
     WorldDef wd; // gravity 0
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     Barbell bb = MakeBarbell(w, Vec2(Real(0), Real(0)));
 
@@ -390,6 +413,11 @@ TEST_CASE("physics-v2 compound-COM (d): single-fixture body is byte-identical", 
 {
     WorldDef wd;
     wd.gravityY = Real(400);
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     const std::uint32_t substeps = wd.substepCount; // 4
     PhysicsWorld w(wd);
 

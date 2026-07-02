@@ -11,14 +11,28 @@ using namespace Arcane::Physics;
 
 TEST_CASE("PhysicsWorld accepts an executor and steps with it (serial default)", "[physics][solvermt]")
 {
-    PhysicsWorld w{};
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     Arcane::SerialTaskExecutor serial;
     w.SetExecutor(&serial);                 // explicit serial
     REQUIRE(w.Executor() == &serial);       // always-non-null invariant: returns the injected executor
     w.Step(1.0f / 60.0f);                   // must not crash; serial path unchanged
     SUCCEED("stepped with an injected executor");
 
-    PhysicsWorld w2{};
+    WorldDef wd2;
+    wd2.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd2.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd2.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd2.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd2.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd2.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w2(wd2);
     w2.SetExecutor(nullptr);                // null -> falls back to the world's serial default
     REQUIRE(w2.Executor() != nullptr);      // always-non-null invariant: serial fallback, never null
     w2.Step(1.0f / 60.0f);
@@ -46,6 +60,11 @@ namespace
     {
         WorldDef wd;
         wd.gravityY = Real(400);
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         w.SetExecutor(exec);
 

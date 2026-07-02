@@ -63,7 +63,14 @@ namespace
 
 TEST_CASE("PhysicsWorld: handle validity + kinematic integration", "[physics][world]")
 {
-    PhysicsWorld w; // no passability source -> plain Cartesian coords
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd); // no passability source -> plain Cartesian coords
 
     BodyDef def;
     def.type     = BodyType::Kinematic;
@@ -85,7 +92,14 @@ TEST_CASE("PhysicsWorld: handle validity + kinematic integration", "[physics][wo
 
 TEST_CASE("PhysicsWorld: statics never integrate", "[physics][world]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef kdef;
     kdef.type     = BodyType::Kinematic;
@@ -107,7 +121,14 @@ TEST_CASE("PhysicsWorld: statics never integrate", "[physics][world]")
 
 TEST_CASE("PhysicsWorld: QueryAABB sees both body kinds", "[physics][world]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef kdef;
     kdef.type     = BodyType::Kinematic;
@@ -129,7 +150,14 @@ TEST_CASE("PhysicsWorld: QueryAABB sees both body kinds", "[physics][world]")
 TEST_CASE("PhysicsWorld: removal invalidates handle + slot reuse bumps generation",
           "[physics][world]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef sdef;
     sdef.type     = BodyType::Static;
@@ -159,7 +187,14 @@ TEST_CASE("PhysicsWorld: determinism -- identical input -> identical state",
 {
     auto run = []() -> double
     {
-        PhysicsWorld w;
+        WorldDef wd;
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        PhysicsWorld w(wd);
         BodyDef def;
         def.type     = BodyType::Kinematic;
         def.position = Vec2(Real(0), Real(0));
@@ -183,7 +218,14 @@ TEST_CASE("PhysicsWorld: determinism -- identical input -> identical state",
 
 TEST_CASE("PhysicsWorld: Body view forwards to the world", "[physics][world]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     BodyDef def;
     def.type     = BodyType::Kinematic;
     def.position = Vec2(Real(10), Real(20));
@@ -206,7 +248,14 @@ TEST_CASE("PhysicsWorld: Body view forwards to the world", "[physics][world]")
 TEST_CASE("ContactManager: begin/stay/end/sensor events fire deterministically",
           "[physics][contacts]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     Capture cap;
     w.OnContact([&cap](const ContactEvent& ev) { cap(ev); });
 
@@ -249,7 +298,14 @@ TEST_CASE("ContactManager: begin/stay/end/sensor events fire deterministically",
 TEST_CASE("ContactManager: static sensor overlap carries sensor flag + handles",
           "[physics][contacts]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef ad;
     ad.type     = BodyType::Kinematic;
@@ -284,7 +340,14 @@ TEST_CASE("ContactManager: static sensor overlap carries sensor flag + handles",
 TEST_CASE("Event gating: per-body mute drops + re-arm emits fresh begin",
           "[physics][contacts][gating]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     Capture cap;
     w.OnContact([&cap](const ContactEvent& ev) { cap(ev); });
 
@@ -324,7 +387,14 @@ TEST_CASE("Event gating: per-body mute drops + re-arm emits fresh begin",
 TEST_CASE("Event gating: world gate drops everything + re-arms overlapping",
           "[physics][contacts][gating]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
     Capture cap;
     w.OnContact([&cap](const ContactEvent& ev) { cap(ev); });
 

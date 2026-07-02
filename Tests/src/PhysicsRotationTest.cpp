@@ -68,6 +68,11 @@ namespace
     {
         WorldDef wd;
         wd.gravityY = Real(400); // match the dynamics/solver tests
+        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         return PhysicsWorld(wd);
     }
 
@@ -236,7 +241,14 @@ TEST_CASE("physics-v2 T5 (b): rotated box contact resolves penetration",
 TEST_CASE("physics-v2 T5 (c): fixedRotation body does not rotate under off-center impulse",
           "[physics]")
 {
-    PhysicsWorld world;  // no gravity needed
+    WorldDef wd;  // no gravity needed
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld world(wd);
 
     BodyDef bd;
     bd.type          = BodyType::Dynamic;

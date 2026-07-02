@@ -79,7 +79,14 @@ namespace
 // ============================================================================
 TEST_CASE("physics: Fixture compound mass/COM/inertia (two offset circles)", "[physics]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type        = BodyType::Dynamic;
@@ -148,7 +155,14 @@ TEST_CASE("physics: Fixture compound mass/COM/inertia (two offset circles)", "[p
 // ============================================================================
 TEST_CASE("physics: Fixture world transform (body angle pi/2, localPos (5,0))", "[physics]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type     = BodyType::Static; // use Static so no dynamics interference
@@ -189,7 +203,14 @@ TEST_CASE("physics: Fixture world transform (body angle pi/2, localPos (5,0))", 
 // ============================================================================
 TEST_CASE("physics: Fixture back-compat AddBody creates exactly 1 fixture", "[physics]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type    = BodyType::Dynamic;
@@ -223,7 +244,14 @@ TEST_CASE("physics: Fixture back-compat AddBody creates exactly 1 fixture", "[ph
 // ============================================================================
 TEST_CASE("physics: Fixture stale handle after DropFixture", "[physics]")
 {
-    PhysicsWorld w;
+    WorldDef wd;
+    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    PhysicsWorld w(wd);
 
     // Create a body (back-compat creates 1 fixture for us, but we want to test
     // explicit AddFixture / DropFixture, so let's add an extra one).

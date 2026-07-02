@@ -86,6 +86,11 @@ TEST_CASE("Sandbox: compound scene authors no body sprites (outline-unify)", "[s
     Arcane::PhysicsResource physRes;
     Arcane::Physics::WorldDef wd;
     wd.gravityY = Arcane::Physics::Real(900);
+    wd.gravityX               = Arcane::Physics::Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Arcane::Physics::Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Arcane::Physics::Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Arcane::Physics::Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Arcane::Physics::Real(64);  // PX-PIN: remove when this file converts to MKS
     physRes.world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
@@ -114,6 +119,11 @@ TEST_CASE("Sandbox: compound bodies render as collider outlines (DrawPhysicsDebu
     Arcane::PhysicsResource physRes;
     Arcane::Physics::WorldDef wd;
     wd.gravityY = Arcane::Physics::Real(900);
+    wd.gravityX               = Arcane::Physics::Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Arcane::Physics::Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Arcane::Physics::Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Arcane::Physics::Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Arcane::Physics::Real(64);  // PX-PIN: remove when this file converts to MKS
     physRes.world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
@@ -180,6 +190,11 @@ TEST_CASE("Sandbox: stress scene builds kStressBodyCount bodies (volume/variety/
     Arcane::PhysicsResource physRes;
     Phys::WorldDef wd;
     wd.gravityY = Phys::Real(900);
+    wd.gravityX               = Phys::Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Phys::Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Phys::Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Phys::Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Phys::Real(64);  // PX-PIN: remove when this file converts to MKS
     physRes.world = std::make_unique<Phys::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
@@ -237,6 +252,11 @@ TEST_CASE("Sandbox: stress scene stays bounded after 30 steps (calibrated subset
     Arcane::PhysicsResource physRes;
     Phys::WorldDef wd;
     wd.gravityY = Phys::Real(900);
+    wd.gravityX               = Phys::Real(0);   // PX-PIN: remove when this file converts to MKS
+    wd.sleepThreshold         = Phys::Real(8);   // PX-PIN: remove when this file converts to MKS
+    wd.restitutionThreshold   = Phys::Real(20);  // PX-PIN: remove when this file converts to MKS
+    wd.contactPushMaxVelocity = Phys::Real(300); // PX-PIN: remove when this file converts to MKS
+    wd.hashCellSize           = Phys::Real(64);  // PX-PIN: remove when this file converts to MKS
     physRes.world = std::make_unique<Phys::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
