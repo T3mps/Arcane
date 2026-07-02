@@ -148,10 +148,9 @@ namespace Arcane
         // constants.h:33 -> 0.25f * B2_PI. Arcane units == Box2D units.
         inline constexpr Real kMaxRotation = Real(0.25) * Real(3.14159265358979323846);
 
-        // Collision skin / polygon radius: a thin shell grown around shapes
-        // so contacts are detected just before geometric touch, keeping the
-        // solver stable. Used by manifold generation in later tasks.
-        inline constexpr Real kSkin = Real(0.01);
+        // Box2D v3 B2_SPECULATIVE_DISTANCE (constants.h:38): 4 * linear slop.
+        // Collision skin / speculative contact distance, in meters.
+        inline constexpr Real kSkin = Real(4) * kLinearSlop; // = 0.02
 
     } // namespace Physics
 } // namespace Arcane

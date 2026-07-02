@@ -246,7 +246,10 @@ TEST_CASE("DynamicTree incremental pairs == full == brute-force", "[physics][fxb
 {
     std::mt19937 rng(0xBADC0DE);
     std::uniform_real_distribution<float> pos(-300.f, 300.f), ext(4.f, 40.f);
-    std::uniform_real_distribution<float> nudge(-3.f, 3.f); // within fat margin (kMargin=8)
+    // re-baselined: kMargin 8->0.05 (MKS P1.iii) -- nudges must stay within the
+    // fat margin to keep exercising the no-reinsert tight-membership path (the
+    // declared riskiest case); +/-3 would now always force a reinsert.
+    std::uniform_real_distribution<float> nudge(-0.02f, 0.02f); // within fat margin (kMargin=0.05)
     DynamicTree tree;
     std::vector<std::pair<std::uint32_t, Aabb2>> live;
 

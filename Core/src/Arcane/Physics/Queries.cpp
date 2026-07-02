@@ -336,9 +336,11 @@ namespace Arcane
                 return std::nullopt; // no travel (ports the Cast.lua guard)
             }
 
-            // Swept AABB for candidate collection (+/-2 pad, ports lines 40-43).
-            // +/-2 world-unit skin: broadphase margin for float-error at AABB
-            // edges + endpoint-cell overlap (Lua used 0.5-tile slack).
+            // Swept AABB for candidate collection. Pad = DynamicTree::kMargin
+            // (the B2_AABB_MARGIN candidate-discovery role, MKS P1.iii; was a
+            // px-tuned +/-2 ported from Cast.lua lines 40-43). Sufficient by
+            // construction: a cast hit requires surface distance < kShapeCastTol
+            // (= 0.05 = kMargin), so obstacles beyond the pad cannot hit.
             //
             // T7 Part B/C: the moving shape is carried at `movingAngle` (default 0
             // keeps every existing caller byte-identical). ComputeAABB is
@@ -350,10 +352,10 @@ namespace Arcane
             const Aabb2 a = shape.ComputeAABB(xf0);
             const Aabb2 b = shape.ComputeAABB(xf1);
             Aabb2 swept;
-            swept.min = Vec2(std::min(a.min.x, b.min.x) - Real(2),
-                             std::min(a.min.y, b.min.y) - Real(2));
-            swept.max = Vec2(std::max(a.max.x, b.max.x) + Real(2),
-                             std::max(a.max.y, b.max.y) + Real(2));
+            swept.min = Vec2(std::min(a.min.x, b.min.x) - DynamicTree::kMargin,
+                             std::min(a.min.y, b.min.y) - DynamicTree::kMargin);
+            swept.max = Vec2(std::max(a.max.x, b.max.x) + DynamicTree::kMargin,
+                             std::max(a.max.y, b.max.y) + DynamicTree::kMargin);
 
             StaticCandidates(swept, m_scratchSpans, m_scratchStatics, m_staticGridScratch);
 

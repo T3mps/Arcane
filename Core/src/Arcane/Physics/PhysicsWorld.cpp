@@ -2707,14 +2707,14 @@ namespace Arcane
                         const std::uint32_t k = static_cast<std::uint32_t>(kk);
                         const std::uint32_t i = AwakeBodies()[k];
                         if (m_sensor[i] != 0) { continue; }
-                        // Same query pad as the legacy GenerateContacts: max(2, specMargin),
-                        // where specMargin = max(kSkin, |v|*dt) so the candidate set is
-                        // identical (the velocity-scaled speculative margin, P3.1).
+                        // Query pad: max(fat-AABB margin, velocity-scaled speculative
+                        // margin). The floor is DynamicTree::kMargin -- the same role
+                        // Box2D's B2_AABB_MARGIN plays in pair discovery (constants.h:44).
                         const Real speedSqA   = m_velX[i] * m_velX[i] + m_velY[i] * m_velY[i];
                         const Real specMargin = (speedSqA > threshSq)
                                                     ? std::sqrt(speedSqA) * moveDt : kSkin;
                         const Aabb box = SlotAabb(i);
-                        const Real pad = std::max(Real(2), specMargin);
+                        const Real pad = std::max(DynamicTree::kMargin, specMargin);
                         Aabb2 query;
                         query.min = Vec2(box.min.x - pad, box.min.y - pad);
                         query.max = Vec2(box.max.x + pad, box.max.y + pad);

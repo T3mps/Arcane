@@ -59,9 +59,9 @@ namespace Arcane
         class DynamicTree final : public IBroadphase
         {
         public:
-            // Fat-box margin (AABBTree.lua MARGIN = 8). Grown around the tight
-            // box so coherent motion rarely triggers a reinsert.
-            static constexpr Real kMargin = Real(8);
+            // Box2D v3 B2_AABB_MARGIN (constants.h:44): 0.05 m fat-AABB margin.
+            // (v3.1.1 value -- older Box2D used 0.1.)
+            static constexpr Real kMargin = Real(0.05);
 
             DynamicTree() = default;
 

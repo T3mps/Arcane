@@ -5,6 +5,7 @@
 #include <catch2/catch_approx.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
+#include <Arcane/Physics/Broadphase/DynamicTree.hpp>
 
 using namespace Arcane::Physics;
 using Catch::Approx;
@@ -27,4 +28,13 @@ TEST_CASE("BodyDef.sleepThreshold defaults to inherit", "[physics][mks]")
 {
     BodyDef bd;
     CHECK(bd.sleepThreshold == Real(-1)); // inherit WorldDef (Arcane architecture; value carries)
+}
+
+TEST_CASE("Engine length constants are Box2D v3 MKS", "[physics][mks]")
+{
+    CHECK(kLinearSlop == Approx(Real(0.005)));          // constants.h:23 (unchanged)
+    CHECK(kSkin == Approx(Real(0.02)));                 // constants.h:38 B2_SPECULATIVE_DISTANCE = 4*slop
+    CHECK(kSkin == Approx(Real(4) * kLinearSlop));      // the RELATION, not just the value
+    CHECK(DynamicTree::kMargin == Approx(Real(0.05))); // constants.h:44 B2_AABB_MARGIN (v3.1.1)
+    CHECK(kMaxRotation == Approx(Real(0.25) * kPi));    // constants.h:33 (unchanged)
 }
