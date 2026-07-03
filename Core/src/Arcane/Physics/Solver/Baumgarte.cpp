@@ -23,6 +23,20 @@ namespace Arcane
         namespace
         {
             // Lua SequentialImpulse constants (lines 7-10).
+            //
+            // PX-ERA LOCALS (MKS P1 audit, deferred-to-P2): kSlop (a LENGTH, px
+            // penetration tolerance) and kRestVel (a VELOCITY, px approach-speed
+            // threshold) intentionally DISAGREE with the MKS engine defaults that
+            // flipped in P1 stage ii -- e.g. WorldDef::restitutionThreshold is now
+            // 1.0 m/s (Box2D v3, types.c:15) while kRestVel stays 20, and Box2D's
+            // slop is 0.005 m (constants.h:23) while kSlop stays 0.5. That is safe
+            // ONLY because Baumgarte is a test-selected PGS oracle (WorldDef::
+            // solverKind; the live default is SoftStep, which reads its thresholds
+            // from WorldDef) and its P2 test cluster is still authored at px scale.
+            // P2 MUST flip these locals when that cluster converts to meters.
+            // FOOT-GUN: a test flipping wd.restitutionThreshold alone silently
+            // no-ops under this solver -- Baumgarte never reads it; it uses
+            // kRestVel below.
             constexpr Real          kBeta      = Real(0.2);  // positional-correction factor
             constexpr Real          kSlop      = Real(0.5);  // penetration tolerance
             constexpr Real          kRestVel   = Real(20);   // restitution above this approach speed
