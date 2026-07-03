@@ -19,7 +19,8 @@
 //     box, only the tight box is updated (no reinsert) -- the Lua's coherent-
 //     motion trick. Otherwise remove + reinsert with a fresh fat box.
 //   * NO tree rotations (the Lua skips them; adequate at our scales).
-//   * MARGIN = 8 (named constant, ported verbatim).
+//   * MARGIN ported as the named kMargin constant (value now Box2D v3
+//     B2_AABB_MARGIN = 0.05, MKS; the Lua's px-era value was 8).
 //
 // MODERNIZE: nodes are POOLED in an index-based free-list (the Lua used GC
 // tables). Node references are pool indices, not pointers, so there is zero

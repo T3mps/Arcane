@@ -84,7 +84,8 @@ namespace Arcane
             static constexpr int kMaxPasses = 8;
             // Resolve to a hair outside the surface (Lua SKIN). Named
             // kDepenetrationSkin to distinguish from Arcane::Physics::kSkin
-            // (the global broadphase skin = 0.01; different purpose/value).
+            // (the global speculative skin, 4*kLinearSlop = 0.02 since the MKS
+            // flip; different purpose/value).
             static constexpr Real kDepenetrationSkin = Real(0.05);
 
             // `world` and `body` must outlive the controller. The body is the
