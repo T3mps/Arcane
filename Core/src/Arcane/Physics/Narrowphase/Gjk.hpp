@@ -154,9 +154,11 @@ namespace Arcane
         };
 
         // ----------------------------------------------------------------
+        // MKS-DEFER(P4): re-couple to kLinearSlop (Box2D distance.c:611-614
+        // uses linearSlop-scale termination) when the Queries cluster converts.
         // Conservative-advancement constants (Cast.lua:11-12, verbatim).
         // ----------------------------------------------------------------
-        inline constexpr Real kShapeCastTol = Real(0.05);
+        inline constexpr Real kShapeCastTol     = Real(0.05);
         inline constexpr int  kShapeCastMaxIter = 32;
 
         // ----------------------------------------------------------------

@@ -97,7 +97,7 @@ namespace Arcane
 
             // Mouse: target + force clamp.
             Vec2 target{ Real(0), Real(0) };
-            Real maxForce = Real(1e9);
+            Real maxForce = Real(1e9); // MKS-DEFER(P5): rescale -- at MKS mass*g is ~1-1e3 N, 1e9 is a px-era "infinite" clamp
 
             // Wheel suspension spring (b2WheelJoint). frequencyHz <= 0 -> a rigid
             // axis constraint (no suspension travel). dampingRatio is the spring's

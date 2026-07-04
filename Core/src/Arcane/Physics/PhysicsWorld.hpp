@@ -1432,7 +1432,7 @@ namespace Arcane
             // (SetPosition/MovePosition/kinematic-integrate/BulletSweep/CommitSlotPosition),
             // Remove on RemoveBody. Tile size = a coarse default until the map's
             // tile size is wired in (see the TODO).
-            SpatialGrid m_residencyGrid{ Real(1) }; // MKS tile; TODO(Phase 2): wire to the map's real tile size
+            SpatialGrid m_residencyGrid{ Real(1) }; // MKS tile; TODO(map-integration): wire to the map's real tile size
 
             bool m_eventsEnabled = true;
 

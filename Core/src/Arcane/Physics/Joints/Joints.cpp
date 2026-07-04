@@ -455,7 +455,7 @@ namespace Arcane
             }
             case JointKind::Mouse:
             {
-                const Real maxForce = def.maxForce > Real(0) ? def.maxForce : Real(1e9);
+                const Real maxForce = def.maxForce > Real(0) ? def.maxForce : Real(1e9); // MKS-DEFER(P5): rescale -- at MKS mass*g is ~1-1e3 N, 1e9 is a px-era "infinite" clamp
                 return std::make_unique<MouseJoint>(def.b, def.target, maxForce);
             }
             case JointKind::Wheel:

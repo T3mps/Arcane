@@ -75,17 +75,19 @@ namespace Arcane
         class CharacterController
         {
         public:
-            // The capsule march step (px). Discrete substeps <= this length
-            // stand in for the true swept test (Lua MAX_SUBSTEP).
+            // MKS-DEFER(P4): 8 px -> 0.1 m when the CC test cluster converts
+            // (spec sec 3; it IS a length -- kMaxPasses is the iteration count).
+            // The capsule march step. Discrete substeps <= this length stand in
+            // for the true swept test (Lua MAX_SUBSTEP).
             static constexpr Real kMaxSubstep = Real(8);
             // Max depenetration passes per substep. Corner regions resolve
             // against 2+ span normals; alternating push-out needs headroom to
             // converge (Lua MAX_PASSES).
             static constexpr int kMaxPasses = 8;
-            // Resolve to a hair outside the surface (Lua SKIN). Named
-            // kDepenetrationSkin to distinguish from Arcane::Physics::kSkin
-            // (the global speculative skin, 4*kLinearSlop = 0.02 since the MKS
-            // flip; different purpose/value).
+            // MKS-DEFER(P4): 0.05 px-era -> kSkin (0.02) when the CC test
+            // cluster converts (spec sec 3). Resolve to a hair outside the surface
+            // (Lua SKIN). Distinct from Arcane::Physics::kSkin (speculative
+            // skin) in purpose; P4 aligns the value.
             static constexpr Real kDepenetrationSkin = Real(0.05);
 
             // `world` and `body` must outlive the controller. The body is the
