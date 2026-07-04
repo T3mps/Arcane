@@ -117,7 +117,7 @@ namespace
 // kLinearSlop (0.005); a free-resting contact lands very close to it. A loaded
 // stack carries more residual (the lower contacts bear the weight above), so
 // the documented settled budget is ~0.18 for a stack (see PhysicsSolverTest /
-// PhysicsBaumgarteTest, which use 0.21 as the stack budget). We assert that
+// PhysicsSolverBudgetTest, which use 0.21 as the stack budget). We assert that
 // SOLVER-APPROPRIATE bound here: the invariant is "rest penetration stays
 // bounded near slop", not "literally < kLinearSlop" (no soft solver achieves
 // the latter under load). A regression that let the stack sink would blow past
@@ -165,7 +165,7 @@ TEST_CASE("physics-invariant: rest penetration stays bounded near the slop",
 
     // Rest penetration bound: the SoftStep solver drives overlap toward
     // kLinearSlop; a loaded stack settles within the documented stack budget
-    // (~0.18; PhysicsSolverTest/PhysicsBaumgarteTest use 0.21). We assert the
+    // (~0.18; PhysicsSolverTest/PhysicsSolverBudgetTest use 0.21). We assert the
     // overlap stays within that solver-appropriate bound at every contact.
     const Real kStackPenBound = Real(0.21); // matches PhysicsSolverTest's stack budget
     CHECK(BoxOverlap(a0, fb) <= kStackPenBound);

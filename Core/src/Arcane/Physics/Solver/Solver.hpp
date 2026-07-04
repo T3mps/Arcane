@@ -6,13 +6,13 @@
 // swappable `solver` seam (PhysicsWorld.lua:181 `solver = SequentialImpulse`,
 // called once per Step at line 389 `self.solver.solve(self, contacts, nC,
 // joints, dt)`). The C++ engine keeps that single-entry seam: ISolver exposes
-// ONE Solve(SolverContext&) entry that owns the whole per-Step pipeline. Two
-// implementations live behind it (the A/B cross-check, P2.3):
-//   * SoftStep   -- the Box2D-v3 TGS Soft modernization centerpiece (P2.2).
-//   * Baumgarte  -- the retained PGS oracle, a faithful port of the Lua
-//                   SequentialImpulse (P2.3). The world picks one via
-//                   WorldDef::solverKind; running BOTH over the same scenes
-//                   guards against solver-specific bugs.
+// ONE Solve(SolverContext&) entry that owns the whole per-Step pipeline. One
+// implementation lives behind it today:
+//   * SoftStep   -- the Box2D-v3 TGS Soft modernization centerpiece (P2.2),
+//                   the world's only solver. The P2.3 Baumgarte PGS A/B oracle
+//                   was retired 2026-07-03 (MKS P2); the seam stays so a future
+//                   solver (an XPBD experiment, say) drops in behind ISolver
+//                   without touching the world.
 //
 // HISTORY (P2.1 -> P2.3): the P2.1 scaffolding split the monolithic solve into
 // six Box2D-v3 sub-step phases (PrepareContacts/PrepareJoints/SolveVelocity/
@@ -27,9 +27,8 @@
 // INTEGRATION OWNERSHIP: since P2.2 the world's Step no longer integrates
 // dynamic velocity/position inline (the old stage-1/stage-4 dynamic branches are
 // gone). The installed solver OWNS dynamic integration: SoftStep folds it into
-// its sub-step loop (gravity/damping per sub-step, position per sub-step);
-// Baumgarte does a single full-dt integrate-velocities -> SI solve -> integrate-
-// positions. Both consume the SAME world-generated raw ContactConstraint array
+// its sub-step loop (gravity/damping per sub-step, position per sub-step). It
+// consumes the world-generated raw ContactConstraint array
 // (GenerateContacts is solver-AGNOSTIC: it produces geometry only -- normal,
 // per-point {anchorA/B, baseSeparation, id}, friction, restitution, the cached
 // invMass/invInertia of A + B -- NOT solver-specific solved data). Each solver
@@ -138,11 +137,9 @@ namespace Arcane
             Real restitution = Real(0);
 
             // Soft coefficients (b2MakeSoft from contact hertz/dampingRatio/h).
-            // SOFTSTEP-ONLY: filled by SoftStep::Prepare; the Baumgarte oracle
-            // ignores them (it derives its own Baumgarte positional bias from
-            // BETA/SLOP). GenerateContacts leaves them at the neutral defaults
-            // (massScale=1, biasRate=impulseScale=0) so they are solver-agnostic
-            // until a solver overwrites them.
+            // Filled by SoftStep::Prepare. GenerateContacts leaves them at the
+            // neutral defaults (massScale=1, biasRate=impulseScale=0) so they are
+            // solver-agnostic until a solver overwrites them.
             Real biasRate     = Real(0);
             Real massScale    = Real(1);
             Real impulseScale = Real(0);
@@ -225,20 +222,19 @@ namespace Arcane
         };
 
         // ----------------------------------------------------------------
-        // ISolver: the swappable constraint-solver contract (slimmed in P2.3).
+        // ISolver: the swappable constraint-solver contract.
         // ----------------------------------------------------------------
         //
         // ONE entry: Solve(ctx) runs the installed solver's WHOLE per-Step
         // pipeline (it owns dynamic integration + the constraint solve -- see the
-        // INTEGRATION OWNERSHIP note up top). Warm-start persistence is solver-
-        // specific: Baumgarte keeps its own m_cache; SoftStep stores the converged
+        // INTEGRATION OWNERSHIP note up top). SoftStep stores the converged
         // impulses on the persistent Contact (the world seeds + writes them back),
         // so it keeps no cache at all (WarmStartCacheSize() returns 0). The
-        // world holds a std::unique_ptr<ISolver> chosen by WorldDef::solverKind
-        // and calls Solve once per Step; it does NOT drive a phase sequence (the
-        // six P2.1 phase pure-virtuals were demoted to SoftStep-private helpers
-        // for the P2.3 A/B seam). Two impls: SoftStep (Box2D-v3 TGS Soft) and
-        // Baumgarte (the retained Lua-SequentialImpulse PGS oracle).
+        // world holds a std::unique_ptr<ISolver> and calls Solve once per Step; it
+        // does NOT drive a phase sequence (the six P2.1 phase pure-virtuals were
+        // demoted to SoftStep-private helpers when the seam was slimmed). The one
+        // impl today is SoftStep (Box2D-v3 TGS Soft); the seam stays for a future
+        // solver.
         class ISolver
         {
         public:
@@ -274,8 +270,8 @@ namespace Arcane
             // future coloring change (raising kColorCount, a different spill rule)
             // that stops the scene overflowing fails LOUD instead of silently no
             // longer exercising the overflow code. Default 0: a solver with no
-            // overflow concept (Baumgarte's scalar PGS colors nothing, spills
-            // nothing) inherits this and reports 0.
+            // overflow concept (a scalar PGS colors nothing, spills nothing)
+            // inherits this and reports 0.
             [[nodiscard]] virtual std::size_t LastOverflowCount() const noexcept
             {
                 return 0;

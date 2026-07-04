@@ -10,7 +10,7 @@
 //
 //   What P2.6 covered (PhysicsPhase2HarnessTest.cpp):
 //     * Gravity + impulses + kinematic stirrer + 1 DistanceJoint, 240 steps.
-//     * Run-twice identical hash (SoftStep + Baumgarte, per-solver self-check).
+//     * Run-twice identical hash (SoftStep self-check).
 //     * Cross-broadphase (Tree/Hash/Sap) identical hashes.
 //     * Hash formula: floor(x*1000) + floor(y*1000)*7 over 4 dynamic balls.
 //
@@ -29,8 +29,7 @@
 //       covers the rotation-aware contact generation, not just joints/CCD.
 //     * Anti-tunnel sub-assert: proves the CCD path is actually exercised (the
 //       bullet body does NOT pass through the thin wall).
-//     * Per-solver self-consistency: SoftStep and Baumgarte each run-twice
-//       identical (cross-solver equality is NOT asserted).
+//     * Determinism: SoftStep run-twice identical.
 //
 // =============================================================================
 // SCENE (single rich scene exercising the full Step pipeline)
@@ -60,8 +59,6 @@
 // ASSERTS:
 //   1. Anti-tunnel: bullet bodies did NOT pass through the thin wall (CCD gate).
 //   2. Run-twice identical (SoftStep): same hash both runs; hash != 0.
-//   3. Run-twice identical (Baumgarte): same hash both runs; hash != 0.
-//      (SoftStep != Baumgarte is expected and NOT asserted.)
 //
 // PRESENTATION-FREE + C++20-clean. namespace Arcane::Physics helpers.
 // Mirror structure + doc-comment style of PhysicsPhase2HarnessTest.cpp.
@@ -160,17 +157,14 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
     // written to it so the caller can assert the anti-tunnel invariant.
     //
     // Params:
-    //   solverKind  -- which constraint solver to install.
     //   outBullets  -- optional: receives final bullet body positions.
     // -------------------------------------------------------------------------
-    static std::uint64_t RunScene(SolverKind solverKind,
-                                  BulletResult* outBullets = nullptr)
+    static std::uint64_t RunScene(BulletResult* outBullets = nullptr)
     {
         // ---- World -----------------------------------------------------------
         WorldDef wdef;
         wdef.gravityY    = Real(300);           // matching the P2.6 harness
         wdef.broadphase  = BroadphaseKind::Tree;
-        wdef.solverKind  = solverKind;
         wdef.hashCellSize = Real(64);
         wdef.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
         wdef.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
@@ -480,7 +474,7 @@ TEST_CASE("P3.4 full-pipeline determinism: bullet bodies do not tunnel (CCD gate
           "[physics][determinism]")
 {
     BulletResult bullets{};
-    RunScene(SolverKind::SoftStep, &bullets);
+    RunScene(&bullets);
 
     // Bullet-kinematic: BulletSweep clamps to TOI → centre at or before near face.
     // A half-tunnel (centre at wall centre x=350) or full tunnel (x>351) both fail.
@@ -501,24 +495,9 @@ TEST_CASE("P3.4 full-pipeline determinism: bullet bodies do not tunnel (CCD gate
 TEST_CASE("P3.4 full-pipeline determinism: run-twice identical (SoftStep)",
           "[physics][determinism]")
 {
-    const std::uint64_t h1 = RunScene(SolverKind::SoftStep);
-    const std::uint64_t h2 = RunScene(SolverKind::SoftStep);
+    const std::uint64_t h1 = RunScene();
+    const std::uint64_t h2 = RunScene();
     REQUIRE(h1 == h2);
     // Sanity: hash must be non-zero (the scene exercised non-trivial state).
-    REQUIRE(h1 != 0u);
-}
-
-// ---------------------------------------------------------------------------
-// 3. Per-solver self-consistency: Baumgarte run twice -> identical.
-//    (SoftStep != Baumgarte is expected; we assert each is self-consistent,
-//    not that both algorithms produce the same trajectory. Same caveat as P2.6.)
-// ---------------------------------------------------------------------------
-
-TEST_CASE("P3.4 full-pipeline determinism: run-twice identical (Baumgarte)",
-          "[physics][determinism]")
-{
-    const std::uint64_t h1 = RunScene(SolverKind::Baumgarte);
-    const std::uint64_t h2 = RunScene(SolverKind::Baumgarte);
-    REQUIRE(h1 == h2);
     REQUIRE(h1 != 0u);
 }

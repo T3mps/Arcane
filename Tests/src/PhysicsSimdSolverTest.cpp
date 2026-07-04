@@ -1025,7 +1025,6 @@ TEST_CASE("PhysicsSimd: overflow (un-colorable hub) contacts settle + bounded",
 {
     WorldDef wd;
     wd.gravityY   = Real(400);
-    wd.solverKind = SolverKind::SoftStep;
     wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
     wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
     wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS

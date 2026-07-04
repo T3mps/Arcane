@@ -11,7 +11,7 @@
 // ----------------------------------------|------------|-----------------------------
 // == dynamics (gravity / rest / bounce /  |            |
 //    friction / push) ==                  | ~686-754   | PhysicsSolverTest.cpp
-//                                         |            | PhysicsBaumgarteTest.cpp (A/B oracle)
+//                                         |            | PhysicsSolverBudgetTest.cpp (SoftStep budgets)
 // == islands + sleeping ==                | ~756-777   | PhysicsIslandTest.cpp
 // == joints (M3) ==                       | ~779-817   | PhysicsJointsTest.cpp
 // == M4: determinism replay               |            |
@@ -73,13 +73,9 @@
 //     over the 4 dynamic balls, steps 1..240.
 //
 // ASSERTS:
-//   1. Run-twice determinism: RunScene twice (same solver) -> identical hash.
+//   1. Run-twice determinism: RunScene twice -> identical hash.
 //   2. Cross-broadphase: Tree, Hash, Sap all produce the same hash (sorted-pairs
 //      contract -- broadphase strategy must NOT affect dynamic trajectories).
-//   3. Per-solver self-consistency: SoftStep run-twice identical; Baumgarte
-//      run-twice identical. They may (and likely do) produce DIFFERENT hashes
-//      from each other (different solver algorithms -> different trajectories).
-//      We do NOT assert SoftStep == Baumgarte.
 //
 // PRESENTATION-FREE + C++20-clean. namespace Arcane::Physics helpers.
 
@@ -121,9 +117,8 @@ namespace Arcane { namespace Physics { namespace Phase2Harness {
     //
     // Params:
     //   bp         -- which mover broadphase to install (cross-broadphase gate).
-    //   solverKind -- which constraint solver to install (per-solver self-check).
     // -------------------------------------------------------------------------
-    static std::uint64_t RunScene(BroadphaseKind bp, SolverKind solverKind)
+    static std::uint64_t RunScene(BroadphaseKind bp)
     {
         constexpr int  kSteps = 240;
         constexpr Real kDt    = Real(1) / Real(60);
@@ -132,7 +127,6 @@ namespace Arcane { namespace Physics { namespace Phase2Harness {
         WorldDef def;
         def.gravityY   = Real(300);   // matches the harness gravityY = 300
         def.broadphase = bp;
-        def.solverKind = solverKind;
         // SpatialHash cell: large enough to be sensible for this scene scale.
         def.hashCellSize = Real(64);
         def.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
@@ -227,29 +221,15 @@ using namespace Arcane::Physics::Phase2Harness;
 TEST_CASE("Phase-2 harness: dynamics determinism replay -- run-twice identical (SoftStep)",
           "[physics][determinism]")
 {
-    const std::uint64_t h1 = RunScene(BroadphaseKind::Tree, SolverKind::SoftStep);
-    const std::uint64_t h2 = RunScene(BroadphaseKind::Tree, SolverKind::SoftStep);
+    const std::uint64_t h1 = RunScene(BroadphaseKind::Tree);
+    const std::uint64_t h2 = RunScene(BroadphaseKind::Tree);
     REQUIRE(h1 == h2);
     // Sanity: the hash must be non-zero (the scene exercised non-trivial positions).
     REQUIRE(h1 != 0u);
 }
 
 // ---------------------------------------------------------------------------
-// 2. Per-solver self-consistency: Baumgarte run twice -> identical.
-//    (SoftStep != Baumgarte is expected; we assert each is self-consistent.)
-// ---------------------------------------------------------------------------
-
-TEST_CASE("Phase-2 harness: dynamics determinism replay -- run-twice identical (Baumgarte)",
-          "[physics][determinism]")
-{
-    const std::uint64_t h1 = RunScene(BroadphaseKind::Tree, SolverKind::Baumgarte);
-    const std::uint64_t h2 = RunScene(BroadphaseKind::Tree, SolverKind::Baumgarte);
-    REQUIRE(h1 == h2);
-    REQUIRE(h1 != 0u);
-}
-
-// ---------------------------------------------------------------------------
-// 3. Cross-broadphase determinism (SoftStep solver).
+// 2. Cross-broadphase determinism (SoftStep solver).
 //    Tree / Hash / Sap all produce the identical hash -- the sorted-pairs +
 //    sorted-contacts contract guarantees broadphase choice does not affect
 //    dynamic body trajectories.
@@ -258,25 +238,25 @@ TEST_CASE("Phase-2 harness: dynamics determinism replay -- run-twice identical (
 TEST_CASE("Phase-2 harness: dynamics determinism -- Tree and Hash identical (SoftStep)",
           "[physics][determinism]")
 {
-    const std::uint64_t hTree = RunScene(BroadphaseKind::Tree, SolverKind::SoftStep);
-    const std::uint64_t hHash = RunScene(BroadphaseKind::Hash, SolverKind::SoftStep);
+    const std::uint64_t hTree = RunScene(BroadphaseKind::Tree);
+    const std::uint64_t hHash = RunScene(BroadphaseKind::Hash);
     REQUIRE(hTree == hHash);
 }
 
 TEST_CASE("Phase-2 harness: dynamics determinism -- Tree and Sap identical (SoftStep)",
           "[physics][determinism]")
 {
-    const std::uint64_t hTree = RunScene(BroadphaseKind::Tree, SolverKind::SoftStep);
-    const std::uint64_t hSap  = RunScene(BroadphaseKind::Sap,  SolverKind::SoftStep);
+    const std::uint64_t hTree = RunScene(BroadphaseKind::Tree);
+    const std::uint64_t hSap  = RunScene(BroadphaseKind::Sap);
     REQUIRE(hTree == hSap);
 }
 
 TEST_CASE("Phase-2 harness: dynamics determinism -- all three broadphases agree (SoftStep)",
           "[physics][determinism]")
 {
-    const std::uint64_t hTree = RunScene(BroadphaseKind::Tree, SolverKind::SoftStep);
-    const std::uint64_t hHash = RunScene(BroadphaseKind::Hash, SolverKind::SoftStep);
-    const std::uint64_t hSap  = RunScene(BroadphaseKind::Sap,  SolverKind::SoftStep);
+    const std::uint64_t hTree = RunScene(BroadphaseKind::Tree);
+    const std::uint64_t hHash = RunScene(BroadphaseKind::Hash);
+    const std::uint64_t hSap  = RunScene(BroadphaseKind::Sap);
     REQUIRE(hTree == hHash);
     REQUIRE(hTree == hSap);
     REQUIRE(hHash == hSap);

@@ -26,8 +26,8 @@
 //   * Motor    : drives the relative angular velocity to motorSpeed (within the
 //                maxMotorTorque clamp); reaches ~motorSpeed at steady state.
 //   * determinism: a jointed scene run-twice is identical.
-// Core joints run under SoftStep (the default); key ones cross-check under
-// Baumgarte.
+// Core joints run under SoftStep -- THE solver (the P2.3 Baumgarte A/B oracle
+// was retired 2026-07-03, MKS P2).
 //
 // PRESENTATION-FREE + C++20-clean.
 
@@ -73,11 +73,10 @@ namespace
         return w.AddBody(def);
     }
 
-    WorldDef GravityWorld(SolverKind kind)
+    WorldDef GravityWorld()
     {
         WorldDef wd;
         wd.gravityY   = Real(400); // +Y down
-        wd.solverKind = kind;
         wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
         wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
         wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
@@ -94,8 +93,8 @@ namespace
 
 TEST_CASE("PhysicsJoints: revolute pendulum settles below anchor", "[physics][joints]")
 {
-    auto run = [](SolverKind kind) {
-        PhysicsWorld w(GravityWorld(kind));
+    auto run = []() {
+        PhysicsWorld w(GravityWorld());
         BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(100), Real(50)));
         BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(140), Real(50)));
 
@@ -116,8 +115,7 @@ TEST_CASE("PhysicsJoints: revolute pendulum settles below anchor", "[physics][jo
         CHECK(std::fabs(p.x - Real(100)) < Real(3));
         CHECK(std::fabs(p.y - Real(90)) < Real(3));
     };
-    run(SolverKind::SoftStep);
-    run(SolverKind::Baumgarte);
+    run();
 }
 
 // ---------------------------------------------------------------------------
@@ -127,8 +125,8 @@ TEST_CASE("PhysicsJoints: revolute pendulum settles below anchor", "[physics][jo
 
 TEST_CASE("PhysicsJoints: distance joint holds separation", "[physics][joints]")
 {
-    auto run = [](SolverKind kind) {
-        PhysicsWorld w(GravityWorld(kind));
+    auto run = []() {
+        PhysicsWorld w(GravityWorld());
         BodyHandle hub = AddStaticAnchor(w, Vec2(Real(300), Real(50)));
         BodyHandle sat = AddDynamicCircle(w, Vec2(Real(300), Real(110)));
 
@@ -148,8 +146,7 @@ TEST_CASE("PhysicsJoints: distance joint holds separation", "[physics][joints]")
                                  (p.y - Real(50)) * (p.y - Real(50)));
         CHECK(std::fabs(d - Real(60)) < Real(2));
     };
-    run(SolverKind::SoftStep);
-    run(SolverKind::Baumgarte);
+    run();
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +202,7 @@ TEST_CASE("PhysicsJoints: mouse joint drags to target + removeJoint detaches",
 
 TEST_CASE("PhysicsJoints: weld keeps two bodies rigid", "[physics][joints]")
 {
-    PhysicsWorld w(GravityWorld(SolverKind::SoftStep));
+    PhysicsWorld w(GravityWorld());
 
     // A static anchor + a dynamic body welded to it: the dynamic body must not
     // fall (the weld is rigid against the static).
@@ -242,7 +239,7 @@ TEST_CASE("PhysicsJoints: weld keeps two bodies rigid", "[physics][joints]")
 
 TEST_CASE("PhysicsJoints: prismatic constrains to its axis", "[physics][joints]")
 {
-    PhysicsWorld w(GravityWorld(SolverKind::SoftStep));
+    PhysicsWorld w(GravityWorld());
 
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
     // Dynamic body offset along +X from the anchor; axis is +X (horizontal).
@@ -373,7 +370,7 @@ TEST_CASE("PhysicsJoints: motor respects the torque clamp", "[physics][joints]")
 
 TEST_CASE("PhysicsJoints: wheel suspension holds the axis + springs", "[physics][joints]")
 {
-    PhysicsWorld w(GravityWorld(SolverKind::SoftStep));
+    PhysicsWorld w(GravityWorld());
 
     // A static chassis attach point + a dynamic wheel hanging below it. The
     // suspension anchor is at the WHEEL CENTER (the axle, the b2WheelJoint
@@ -433,7 +430,7 @@ TEST_CASE("PhysicsJoints: wheel suspension holds the axis + springs", "[physics]
 
 TEST_CASE("PhysicsJoints: RemoveBody drops referencing joints", "[physics][joints]")
 {
-    PhysicsWorld w(GravityWorld(SolverKind::SoftStep));
+    PhysicsWorld w(GravityWorld());
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
     BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(40), Real(0)));
 
@@ -467,7 +464,7 @@ TEST_CASE("PhysicsJoints: RemoveBody drops referencing joints", "[physics][joint
 TEST_CASE("PhysicsJoints: jointed scene is deterministic", "[physics][joints]")
 {
     auto runOnce = []() -> Vec2 {
-        PhysicsWorld w(GravityWorld(SolverKind::SoftStep));
+        PhysicsWorld w(GravityWorld());
         BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(100), Real(50)));
         BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(140), Real(50)));
         JointDef jd;

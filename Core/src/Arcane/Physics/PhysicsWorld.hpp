@@ -104,22 +104,6 @@ namespace Arcane
         };
 
         // ----------------------------------------------------------------
-        // SolverKind: which constraint solver the world installs (P2.3 A/B).
-        // ----------------------------------------------------------------
-        //
-        // SoftStep (default) is the Box2D-v3 TGS Soft modernization centerpiece
-        // (P2.2). Baumgarte is the retained PGS oracle -- a faithful port of the
-        // Lua SequentialImpulse (P2.3). Both implement ISolver and satisfy the
-        // same stability invariants on the same scenes (the A/B cross-check);
-        // running both guards against solver-specific bugs. Parallel to
-        // BroadphaseKind: the world picks one in its constructor.
-        enum class SolverKind : std::uint8_t
-        {
-            SoftStep  = 0, // Box2D-v3 TGS Soft (default)
-            Baumgarte = 1, // Lua SequentialImpulse PGS oracle (A/B cross-check)
-        };
-
-        // ----------------------------------------------------------------
         // BodyDef: parameters for AddBody (ports the Lua addBody opts).
         // ----------------------------------------------------------------
         struct BodyDef
@@ -242,18 +226,6 @@ namespace Arcane
             // 0.05 m/s applies directly. Per-body override via BodyDef::sleepThreshold
             // (>= 0). The maxExtent weighting handles body size.
             Real          sleepThreshold = Real(0.05);
-
-            // ---- solver selection (P2.3 A/B cross-check) --------------------
-            //
-            // Which ISolver the world installs (parallel to `broadphase`).
-            // SoftStep (default) is the P2.2 TGS Soft solver; Baumgarte is the
-            // P2.3 retained PGS oracle (Lua SequentialImpulse port). Both satisfy
-            // the same stability invariants on the same scenes.
-            SolverKind    solverKind = SolverKind::SoftStep;
-
-            // Baumgarte-only: velocity iterations per Step (the Lua w.velIters,
-            // default 8). Ignored by SoftStep (which iterates by substepCount).
-            std::uint32_t velIters = 8u;
         };
 
         class Body; // forward decl (Body.hpp); ergonomic view over a handle.
@@ -1038,10 +1010,10 @@ namespace Arcane
                 return Vec2(m_gravityX, m_gravityY);
             }
             // Solver warm-start cache size (inspection/test hook). Routes through
-            // the installed ISolver. Meaningful ONLY for a solver that keeps a
-            // keyed cache (Baumgarte); SoftStep relocated warm-start onto the
-            // persistent Contact's manifold points and reports 0 (the ISolver
-            // default override).
+            // the installed ISolver. SoftStep keeps NO keyed cache -- it relocated
+            // warm-start onto the persistent Contact's manifold points and reports
+            // 0 (the ISolver default override). Retained as a seam for a future
+            // solver that might keep a cache.
             [[nodiscard]] std::size_t SolverWarmStartCacheSize() const noexcept
             {
                 return m_solver ? m_solver->WarmStartCacheSize() : std::size_t(0);
@@ -1049,8 +1021,7 @@ namespace Arcane
 
             // Solver overflow (un-colorable spill) count from the last Step
             // (inspection/test hook). Routes through the installed ISolver. Meaningful
-            // ONLY for a coloring solver that spills past kColorCount (SoftStep);
-            // Baumgarte colors nothing and reports 0 (the ISolver default). EXISTS so
+            // for a coloring solver that spills past kColorCount (SoftStep). EXISTS so
             // the overflow-settle test can directly PROVE the scalar overflow path was
             // exercised instead of assuming it "by construction".
             [[nodiscard]] std::size_t SolverOverflowCount() const noexcept
@@ -1147,10 +1118,6 @@ namespace Arcane
             // World default sleep gate (px/s); AddBody copies it onto a body whose
             // BodyDef::sleepThreshold is < 0 (the inherit sentinel).
             [[nodiscard]] Real SleepThresholdDefault() const noexcept { return m_sleepThresholdDefault; }
-
-            // Baumgarte velocity-iteration count (Lua w.velIters; SoftStep
-            // ignores it). Read by the Baumgarte solver in its Solve().
-            [[nodiscard]] std::uint32_t VelIters() const noexcept { return m_velIters; }
 
             // World-space tight AABB of slot i. Exposed here (not just private)
             // so ContactManager can use it for the AABB pre-filter on the
@@ -1450,16 +1417,13 @@ namespace Arcane
             Real          m_maxLinearVelocity = Real(400);
             Real          m_sleepThresholdDefault  = Real(0.05); // WorldDef::sleepThreshold (Box2D v3, types.c:34)
 
-            // Baumgarte-only velocity iterations (copied from WorldDef.velIters).
-            std::uint32_t m_velIters = 8u;
-
             // ---- contacts --------------------------------------------------
             ContactManager m_contacts;
 
-            // ---- solver (P2.2 SoftStep / P2.3 Baumgarte; A/B via solverKind) -
+            // ---- solver (SoftStep; the ISolver seam) ------------------------
             //
-            // The installed constraint solver (polymorphic since P2.3 -- the
-            // world holds an ISolver* chosen by WorldDef::solverKind) + the
+            // The installed constraint solver (held polymorphically via ISolver*
+            // so a future solver drops in without touching the world) + the
             // WORLD-OWNED ContactConstraint pool. GenerateContacts (Part A) fills
             // m_contactConstraints with SOLVER-AGNOSTIC raw geometry; the solver
             // reads it and computes its own effective masses / bias. The pool

@@ -21,8 +21,7 @@
 #include <Arcane/Physics/Broadphase/SweepAndPrune.hpp>
 #include <Arcane/Physics/Narrowphase/GeometryKernel.hpp> // AabbOverlap (QueryAABB)
 #include <Arcane/Physics/Narrowphase/Collide.hpp>        // Collide (rotation-aware fixture-pair narrowphase: contacts T5, events/overlap T7)
-#include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl
-#include <Arcane/Physics/Solver/Baumgarte.hpp>           // Baumgarte oracle impl (A/B)
+#include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl (THE solver)
 #include <Arcane/Physics/Solver/ContactColoring.hpp>     // kColorCount (persistent incremental coloring, Phase C Task 4)
 #include <Arcane/Physics/Island.hpp>                     // island sleep pass (stage 4)
 #include <Arcane/Physics/Joints/Joints.hpp>              // joint set + MakeJoint factory (P2.5)
@@ -109,17 +108,12 @@ namespace Arcane
 
             std::unique_ptr<ISolver> MakeSolver(const WorldDef& def)
             {
-                // P2.3 A/B seam: pick the installed solver by WorldDef::solverKind
-                // (default SoftStep -- the P2.2 TGS Soft solver; Baumgarte is the
-                // retained PGS oracle that runs the same scenes for cross-check).
-                switch (def.solverKind)
-                {
-                case SolverKind::Baumgarte:
-                    return std::make_unique<Baumgarte>();
-                case SolverKind::SoftStep:
-                default:
-                    return std::make_unique<SoftStep>();
-                }
+                // SoftStep is THE solver -- the P2.2 TGS Soft (Box2D-v3) impl.
+                // The P2.3 Baumgarte A/B oracle was retired 2026-07-03 (MKS P2):
+                // nothing selected it in production and SoftStep's own coverage
+                // exceeds it. The ISolver seam stays for a future solver.
+                (void)def;
+                return std::make_unique<SoftStep>();
             }
         } // namespace
 
@@ -134,7 +128,6 @@ namespace Arcane
             , m_contactPushMaxVelocity(def.contactPushMaxVelocity)
             , m_maxLinearVelocity(def.maxLinearVelocity)
             , m_sleepThresholdDefault(def.sleepThreshold)
-            , m_velIters(def.velIters > 0u ? def.velIters : 1u)
             , m_solver(MakeSolver(def))
         {
             // Optional tile statics: own a TileGrid over the passability seam if
@@ -1853,11 +1846,6 @@ namespace Arcane
             // Contact then carries these into next step's emit (UpdateContacts
             // copies them across the manifold recompute by feature id). Decoupled:
             // the solver never touches the pool; only the world does the round-trip.
-            // Baumgarte keeps its own cache and ignores sourceContactId, so this is
-            // a no-op for it (its constraints still carry the field; Get() is only
-            // reached for SoftStep-emitted pool contacts -- the same constraints
-            // either way -- and writing the manifold impulses is harmless for a
-            // solver that does not read them back).
             {
                 ARCANE_STEPPROF_SCOPE(WarmStartWriteback);
                 for (const ContactConstraint& cc : m_contactConstraints)

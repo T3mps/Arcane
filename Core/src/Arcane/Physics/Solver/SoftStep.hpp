@@ -3,8 +3,8 @@
 // SoftStep: the Box2D-v3-class TGS Soft constraint solver (M6, Task P2.2).
 //
 // MODERNIZATION CENTERPIECE -- NOT a port. The Lua engine's solver
-// (SequentialImpulse.lua) is a Baumgarte sequential-impulse PGS solver; it is
-// retained SEPARATELY as the A/B cross-check oracle in P2.3. SoftStep is a
+// (SequentialImpulse.lua) was a Baumgarte sequential-impulse PGS solver; it was
+// ported as the P2.3 A/B cross-check oracle, since retired (MKS P2). SoftStep is a
 // from-scratch implementation of the Box2D v3 "Solver2D" / "TGS Soft"
 // algorithm (https://box2d.org/posts/2024/02/solver2d/,
 // https://box2d.org/posts/2024/08/releasing-box2d-3.0/). It is validated by
@@ -113,7 +113,7 @@ namespace Arcane
             // ISolver contract. (WarmStartCacheSize() is intentionally NOT
             // overridden: it falls back to ISolver's default 0 -- there is no cache
             // to report. The hook + PhysicsWorld::SolverWarmStartCacheSize remain
-            // for Baumgarte, which still keeps its own m_cache.)
+            // as a seam for a future solver that keeps its own cache.)
             void DropBody(std::uint32_t slot) override;
 
             // Un-colorable constraint count from the LAST Solve (test/inspection
