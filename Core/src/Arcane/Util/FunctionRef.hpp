@@ -6,6 +6,7 @@
 // owning std::function (or a future Delegate). C++26 std::function_ref-aligned:
 // this can be replaced by a using-alias when MSVC ships it.
 
+#include <cassert>       // assert (E01-3b empty-call guard)
 #include <memory>
 #include <type_traits>
 
@@ -38,7 +39,16 @@ namespace Arcane
         {
         }
 
-        R operator()(Args... a) const { return m_thunk(m_obj, static_cast<Args&&>(a)...); }
+        R operator()(Args... a) const
+        {
+            // E01-3b: calling through an empty (default-constructed / moved-from)
+            // FunctionRef dereferences a null thunk -- UB. Debug assert on the
+            // existing bool conversion; release path is unchanged (compiles out
+            // under NDEBUG). Callers must check operator bool if emptiness is
+            // reachable.
+            assert(static_cast<bool>(*this) && "FunctionRef::operator(): call through an empty FunctionRef");
+            return m_thunk(m_obj, static_cast<Args&&>(a)...);
+        }
 
         explicit operator bool() const noexcept { return m_thunk != nullptr; }
     };

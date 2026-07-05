@@ -62,6 +62,17 @@ TEST_CASE("FunctionRef supports void return + multiple args", "[functionref]")
     REQUIRE(out == "abab");
 }
 
+TEST_CASE("FunctionRef: operator() precondition is non-empty (E01-3b)", "[functionref]")
+{
+    // The valid call path is unchanged: a bound ref is non-empty, so the
+    // E01-3b guard's precondition holds and the call goes through.
+    FunctionRef<int(int, int)> ref = FreeAdd;
+    REQUIRE(static_cast<bool>(ref));
+    REQUIRE(ref(2, 3) == 5);
+    // Calling an empty FunctionRef trips the debug-only assert added for
+    // E01-3b (null-thunk call is UB); debug-only, not run as a death test.
+}
+
 TEST_CASE("FunctionRef binds a mutable lambda", "[functionref]")
 {
     int count = 0;

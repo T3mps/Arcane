@@ -7,6 +7,7 @@
 // Presentation-free + C++23-clean: std only.
 
 #include <bit>        // std::countr_zero
+#include <cassert>    // assert (E01-3a debug bounds guard)
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -35,6 +36,11 @@ namespace Arcane
 
         void Set(std::size_t i) noexcept
         {
+            // E01-3a: bounds guard. i must be < capacity (m_blockCount * 64);
+            // an out-of-range index is an OOB write into m_blocks (UB). Debug
+            // assert only -- the release path stays branch-free (assert compiles
+            // out under NDEBUG). Resize(bitCount) must precede any Set.
+            assert(i < m_blockCount * 64u && "BitSet::Set: index out of range (call Resize first)");
             m_blocks[i >> 6] |= (1ull << (i & 63u));
         }
 

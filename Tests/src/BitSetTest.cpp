@@ -22,6 +22,19 @@ TEST_CASE("BitSet: ClearAll empties", "[bitset]")
     REQUIRE(n == 0);
 }
 
+TEST_CASE("BitSet: Set at the highest valid index stays in range (E01-3a)", "[bitset]")
+{
+    // Valid bit range after Resize(64) is [0, 64). The highest valid index (63)
+    // must not trip the E01-3a bounds guard and must be walked back.
+    BitSet b; b.Resize(64);
+    b.Set(63);
+    std::vector<std::uint32_t> got;
+    b.ForEachSetBit([&](std::uint32_t i){ got.push_back(i); });
+    REQUIRE(got == std::vector<std::uint32_t>{63u});
+    // Set(64) here (index == capacity) would trip the debug-only assert added
+    // for E01-3a; that OOB-write guard is debug-only and not run as a death test.
+}
+
 TEST_CASE("BitSet: InPlaceUnion ORs, walks ascending across blocks", "[bitset]")
 {
     BitSet a; a.Resize(130); BitSet b; b.Resize(130);
