@@ -75,44 +75,65 @@ namespace Arcane::Scene
         return doc;
     }
 
+    // Returns false (never throws) on a malformed document. The engine is
+    // exception-free, so a hand-edited/corrupt scene file must degrade to a
+    // clean error result rather than let an nlohmann type_error escape. Structural
+    // problems (missing/typed-wrong "entities", non-object entries) fail the load;
+    // wrong-typed leaf fields are tolerated by the guarded ReflectionJsonReader,
+    // which leaves them at their defaults. The try/catch is a belt-and-suspenders
+    // backstop for any residual throw from deeper nlohmann access.
     inline bool LoadJson(Astra::Registry& reg, const nlohmann::json& doc)
     {
-        if (!doc.contains("entities")) return false;
-        const auto& entities = doc["entities"];
-
-        std::vector<Astra::Entity> created;
-        created.reserve(entities.size());
-
-        for (const auto& entry : entities)
+        try
         {
-            Astra::Entity e = reg.CreateEntity();
-            if (entry.contains("local"))
-            {
-                LocalTransform lt;
-                ReflectionJsonReader r(entry["local"]);
-                ForEachReflectedField<LocalTransform>(&lt, r);
-                reg.AddComponent<LocalTransform>(e, lt);
-                reg.AddComponent<WorldTransform>(e, WorldTransform{});
-            }
-            if (entry.contains("sprite"))
-            {
-                SpriteRenderer sr;
-                ReflectionJsonReader r(entry["sprite"]);
-                ForEachReflectedField<SpriteRenderer>(&sr, r);
-                reg.AddComponent<SpriteRenderer>(e, sr);
-            }
-            created.push_back(e);
-        }
+            if (!doc.is_object() || !doc.contains("entities")) return false;
+            const auto& entities = doc["entities"];
+            if (!entities.is_array()) return false;
 
-        for (size_t i = 0; i < entities.size(); ++i)
+            std::vector<Astra::Entity> created;
+            created.reserve(entities.size());
+
+            for (const auto& entry : entities)
+            {
+                if (!entry.is_object()) return false;
+
+                Astra::Entity e = reg.CreateEntity();
+                if (entry.contains("local") && entry["local"].is_object())
+                {
+                    LocalTransform lt;
+                    ReflectionJsonReader r(entry["local"]);
+                    ForEachReflectedField<LocalTransform>(&lt, r);
+                    reg.AddComponent<LocalTransform>(e, lt);
+                    reg.AddComponent<WorldTransform>(e, WorldTransform{});
+                }
+                if (entry.contains("sprite") && entry["sprite"].is_object())
+                {
+                    SpriteRenderer sr;
+                    ReflectionJsonReader r(entry["sprite"]);
+                    ForEachReflectedField<SpriteRenderer>(&sr, r);
+                    reg.AddComponent<SpriteRenderer>(e, sr);
+                }
+                created.push_back(e);
+            }
+
+            for (size_t i = 0; i < entities.size(); ++i)
+            {
+                const auto& entry = entities[i];
+                const auto pit = entry.find("parent");
+                if (pit == entry.end() || !pit->is_number_integer())
+                    continue;
+                const int parent = pit->get<int>();
+                if (parent >= 0 && parent < static_cast<int>(created.size()))
+                    reg.SetParent(created[i], created[static_cast<size_t>(parent)]);
+            }
+
+            if (!created.empty())
+                reg.SetResource<SceneRoot>(SceneRoot{created.front()});
+            return true;
+        }
+        catch (const nlohmann::json::exception&)
         {
-            const int parent = entities[i].value("parent", -1);
-            if (parent >= 0 && parent < static_cast<int>(created.size()))
-                reg.SetParent(created[i], created[static_cast<size_t>(parent)]);
+            return false;
         }
-
-        if (!created.empty())
-            reg.SetResource<SceneRoot>(SceneRoot{created.front()});
-        return true;
     }
 }

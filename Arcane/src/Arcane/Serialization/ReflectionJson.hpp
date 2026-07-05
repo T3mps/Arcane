@@ -47,18 +47,23 @@ namespace Arcane
             return false;
         }
 
+        // Reads a scalar field from JSON without ever throwing on a malformed
+        // document. The return value means "this field is a known scalar type"
+        // (so the visitor stops here); a node of the wrong JSON type is skipped,
+        // leaving the field at its default -- nlohmann's get<T> would otherwise
+        // throw type_error through the exception-free engine on hand-edited files.
         inline bool ReadScalar(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
         {
             const uint64_t h = f.typeHash;
-            if (h == Astra::TypeID<bool>::Hash())        { f.Set<bool>(inst,        in.get<bool>());        return true; }
-            if (h == Astra::TypeID<int>::Hash())         { f.Set<int>(inst,         in.get<int>());         return true; }
-            if (h == Astra::TypeID<int32_t>::Hash())     { f.Set<int32_t>(inst,     in.get<int32_t>());     return true; }
-            if (h == Astra::TypeID<uint32_t>::Hash())    { f.Set<uint32_t>(inst,    in.get<uint32_t>());    return true; }
-            if (h == Astra::TypeID<int64_t>::Hash())     { f.Set<int64_t>(inst,     in.get<int64_t>());     return true; }
-            if (h == Astra::TypeID<uint64_t>::Hash())    { f.Set<uint64_t>(inst,    in.get<uint64_t>());    return true; }
-            if (h == Astra::TypeID<float>::Hash())       { f.Set<float>(inst,       in.get<float>());       return true; }
-            if (h == Astra::TypeID<double>::Hash())      { f.Set<double>(inst,      in.get<double>());      return true; }
-            if (h == Astra::TypeID<std::string>::Hash()) { f.Set<std::string>(inst, in.get<std::string>()); return true; }
+            if (h == Astra::TypeID<bool>::Hash())        { if (in.is_boolean()) f.Set<bool>(inst,        in.get<bool>());        return true; }
+            if (h == Astra::TypeID<int>::Hash())         { if (in.is_number())  f.Set<int>(inst,         in.get<int>());         return true; }
+            if (h == Astra::TypeID<int32_t>::Hash())     { if (in.is_number())  f.Set<int32_t>(inst,     in.get<int32_t>());     return true; }
+            if (h == Astra::TypeID<uint32_t>::Hash())    { if (in.is_number())  f.Set<uint32_t>(inst,    in.get<uint32_t>());    return true; }
+            if (h == Astra::TypeID<int64_t>::Hash())     { if (in.is_number())  f.Set<int64_t>(inst,     in.get<int64_t>());     return true; }
+            if (h == Astra::TypeID<uint64_t>::Hash())    { if (in.is_number())  f.Set<uint64_t>(inst,    in.get<uint64_t>());    return true; }
+            if (h == Astra::TypeID<float>::Hash())       { if (in.is_number())  f.Set<float>(inst,       in.get<float>());       return true; }
+            if (h == Astra::TypeID<double>::Hash())      { if (in.is_number())  f.Set<double>(inst,      in.get<double>());      return true; }
+            if (h == Astra::TypeID<std::string>::Hash()) { if (in.is_string())  f.Set<std::string>(inst, in.get<std::string>()); return true; }
             return false;
         }
 
@@ -71,12 +76,23 @@ namespace Arcane
             return false;
         }
 
+        // True when the array element at [i] exists and is a number (guards the
+        // in[i].get<float>() reads below against short/wrong-typed arrays).
+        inline bool IsNumberAt(const nlohmann::json& in, std::size_t i)
+        {
+            return i < in.size() && in[i].is_number();
+        }
+
+        // Reads a glm vector field from a JSON array without throwing on a
+        // malformed document. Like ReadScalar, the return value means "this field
+        // is a known vector type"; a node that is not an array of enough numbers
+        // is skipped, leaving the field at its default.
         inline bool ReadGlm(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
         {
             const uint64_t h = f.typeHash;
-            if (h == Vec2Hash()) { f.Set<glm::vec2>(inst, glm::vec2(in[0].get<float>(), in[1].get<float>()));                                         return true; }
-            if (h == Vec3Hash()) { f.Set<glm::vec3>(inst, glm::vec3(in[0].get<float>(), in[1].get<float>(), in[2].get<float>()));                      return true; }
-            if (h == Vec4Hash()) { f.Set<glm::vec4>(inst, glm::vec4(in[0].get<float>(), in[1].get<float>(), in[2].get<float>(), in[3].get<float>()));  return true; }
+            if (h == Vec2Hash()) { if (in.is_array() && IsNumberAt(in, 0) && IsNumberAt(in, 1))                                    f.Set<glm::vec2>(inst, glm::vec2(in[0].get<float>(), in[1].get<float>()));                                        return true; }
+            if (h == Vec3Hash()) { if (in.is_array() && IsNumberAt(in, 0) && IsNumberAt(in, 1) && IsNumberAt(in, 2))               f.Set<glm::vec3>(inst, glm::vec3(in[0].get<float>(), in[1].get<float>(), in[2].get<float>()));                     return true; }
+            if (h == Vec4Hash()) { if (in.is_array() && IsNumberAt(in, 0) && IsNumberAt(in, 1) && IsNumberAt(in, 2) && IsNumberAt(in, 3)) f.Set<glm::vec4>(inst, glm::vec4(in[0].get<float>(), in[1].get<float>(), in[2].get<float>(), in[3].get<float>())); return true; }
             return false;
         }
 
@@ -114,7 +130,7 @@ namespace Arcane
                 return;
             }
             // Enum: emit the value's name via EnumInfo.
-            // MUST return unconditionally — even when no name is resolvable, an
+            // MUST return unconditionally -- even when no name is resolvable, an
             // enum field must never fall through to the nested-struct branch below
             // (GetMeta returns the enum's TypeMeta too, producing a garbage {} object).
             if (field.isEnum)
@@ -164,7 +180,7 @@ namespace Arcane
                 return;
 
             // Enum: read by name if the node is a string; silently skip otherwise.
-            // MUST return unconditionally — a non-string node for an enum field must
+            // MUST return unconditionally -- a non-string node for an enum field must
             // not fall through to the nested-struct branch (same GetMeta ambiguity).
             if (field.isEnum)
             {

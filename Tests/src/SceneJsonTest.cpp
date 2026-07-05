@@ -74,3 +74,69 @@ TEST_CASE("scene round-trips through JSON (typed roster)", "[json][scene]")
     });
     CHECK(foundChild);
 }
+
+TEST_CASE("scene JSON loader rejects malformed input without throwing", "[json][scene]")
+{
+    auto FreshReg = []
+    {
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        auto reg = std::make_unique<Astra::Registry>(components);
+        Arcane::RegisterSceneComponents(*reg);
+        return reg;
+    };
+
+    // The engine is exception-free: a hand-edited/corrupt scene file must come
+    // back as a clean `false`, never an nlohmann type_error thrown through the
+    // Result-typed loader. Each of these threw before the guards were added.
+
+    SECTION("entities is not an array")
+    {
+        auto reg = FreshReg();
+        const nlohmann::json doc = nlohmann::json::parse(R"({"entities": 42})");
+        bool result = true;
+        CHECK_NOTHROW(result = Arcane::Scene::LoadJson(*reg, doc));
+        CHECK_FALSE(result);
+    }
+
+    SECTION("an entity entry is not an object")
+    {
+        auto reg = FreshReg();
+        const nlohmann::json doc = nlohmann::json::parse(R"({"entities": [ 7 ]})");
+        bool result = true;
+        CHECK_NOTHROW(result = Arcane::Scene::LoadJson(*reg, doc));
+        CHECK_FALSE(result);
+    }
+
+    SECTION("top-level document is not an object")
+    {
+        auto reg = FreshReg();
+        const nlohmann::json doc = nlohmann::json::parse(R"([1, 2, 3])");
+        bool result = true;
+        CHECK_NOTHROW(result = Arcane::Scene::LoadJson(*reg, doc));
+        CHECK_FALSE(result);
+    }
+
+    SECTION("wrong-typed leaf fields and parent are tolerated, not thrown")
+    {
+        // position should be a [x,y] array and parent an int; here both are the
+        // wrong JSON type. The guarded readers skip them (leaving defaults) rather
+        // than throwing, so a structurally valid entry still loads successfully.
+        auto reg = FreshReg();
+        const nlohmann::json doc = nlohmann::json::parse(
+            R"({"entities": [ {"local": {"position": "oops"}, "parent": "root"} ]})");
+        bool result = false;
+        CHECK_NOTHROW(result = Arcane::Scene::LoadJson(*reg, doc));
+        CHECK(result);
+
+        // The corrupt position fell back to the default (0,0), no crash.
+        int count = 0;
+        auto view = reg->CreateView<Arcane::LocalTransform>();
+        view.ForEach([&](Astra::Entity, Arcane::LocalTransform& lt)
+        {
+            ++count;
+            CHECK(lt.position.x == Approx(0.0f));
+            CHECK(lt.position.y == Approx(0.0f));
+        });
+        CHECK(count == 1);
+    }
+}
