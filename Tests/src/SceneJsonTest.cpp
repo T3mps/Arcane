@@ -155,6 +155,109 @@ TEST_CASE("scene JSON loader rejects malformed input without throwing", "[json][
     }
 }
 
+// Review finding (Fix 1): WorldTransform's only field (matrix) is
+// Serializable(false), so SaveJson writes its component body as JSON null (the
+// writer visits zero fields). The roster must stay faithful: key present ->
+// component present. Before the fix, LoadJson's "!it.value().is_object()"
+// guard skipped null bodies outright, so a reloaded entity silently lost its
+// WorldTransform -- TransformPropagationSystem only WRITES an existing
+// WorldTransform (never creates one) and RenderSubmissionSystem requires it
+// to render, so the entity would neither propagate nor render after reload.
+TEST_CASE("scene round-trip preserves an all-Serializable(false) component (WorldTransform)", "[json][scene]")
+{
+    nlohmann::json doc;
+    {
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg(components);
+        Arcane::RegisterSceneComponents(reg);
+
+        Astra::Entity root = reg.CreateEntity();
+        reg.AddComponent<Arcane::LocalTransform>(root, Arcane::LocalTransform{});
+        reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+        reg.AddComponent<Arcane::SpriteRenderer>(root, Arcane::SpriteRenderer{});
+
+        Astra::Entity child = reg.CreateEntity();
+        reg.AddComponent<Arcane::LocalTransform>(child, Arcane::LocalTransform{});
+        reg.AddComponent<Arcane::WorldTransform>(child, Arcane::WorldTransform{});
+        reg.AddComponent<Arcane::SpriteRenderer>(child, Arcane::SpriteRenderer{});
+        reg.SetParent(child, root);
+
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+        doc = Arcane::Scene::SaveJson(reg);
+    }
+
+    // The all-non-serializable component still gets a roster key (as JSON
+    // null -- there are zero fields to write for it). Look the key up via
+    // GetMeta rather than hardcoding the string: TypeID<T>::Name() is
+    // compiler-derived and may be namespace-qualified.
+    const std::string worldName(Astra::GetMeta<Arcane::WorldTransform>()->typeName);
+    REQUIRE(doc["entities"].size() == 2);
+    for (const auto& entry : doc["entities"])
+    {
+        REQUIRE(entry["components"].contains(worldName));
+        CHECK(entry["components"][worldName].is_null());
+    }
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    REQUIRE(Arcane::Scene::LoadJson(reg, doc));
+
+    int total = 0;
+    int withWorld = 0;
+    reg.CreateView<Arcane::LocalTransform>().ForEach([&](Astra::Entity e, Arcane::LocalTransform&)
+    {
+        ++total;
+        if (reg.GetComponent<Arcane::WorldTransform>(e) != nullptr)
+            ++withWorld;
+    });
+    CHECK(total == 2);
+    CHECK(withWorld == 2);   // both entities kept their WorldTransform after reload
+}
+
+// Review finding (Fix 2): the reflection reader latches an error for a field
+// whose TYPE the JSON bridge cannot represent (E02-3 "unsupported field
+// type"), but AddComponentByTypeName previously ignored HasError() after
+// populating -- a scene JSON hitting such a field silently mis-loaded
+// (component added, but with the unsupported field never populated and no
+// signal that anything went wrong). LoadJson must now fail loud instead.
+namespace
+{
+    // Reflected + registered as a component (both fields are trivially
+    // copyable, so Astra's binary POD path can still serialize the whole
+    // struct), but "coord" is glm::ivec2 -- a type Detail::IsHandledType
+    // (ReflectionJson.hpp) has no branch for (only float vec2/vec3/vec4 are
+    // handled, and glm::ivec2 has no reflected TypeMeta of its own), so the
+    // reader latches an "unsupported field type" error while populating it.
+    struct BadField
+    {
+        int        id = 0;
+        glm::ivec2 coord{0, 0};
+    };
+}
+namespace { ASTRA_REFLECT_TYPE(BadField) ASTRA_REFLECT_FIELD(BadField, id) ASTRA_REFLECT_FIELD(BadField, coord) ASTRA_END_REFLECT_TYPE() }
+
+TEST_CASE("scene JSON load fails loud on a component with an unsupported field type", "[json][scene]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    components->RegisterComponent<BadField>();
+
+    const std::string badFieldName(Astra::GetMeta<BadField>()->typeName);
+    nlohmann::json entry;
+    entry["components"][badFieldName]["id"] = 7;
+    entry["parent"] = -1;
+    nlohmann::json doc;
+    doc["version"] = Arcane::Scene::kSceneJsonVersion;
+    doc["entities"] = nlohmann::json::array({ entry });
+
+    bool result = true;
+    CHECK_NOTHROW(result = Arcane::Scene::LoadJson(reg, doc));
+    CHECK_FALSE(result);   // the reader's latched error must fail the whole load
+}
+
 TEST_CASE("scene JSON carries a version and rejects a mismatch", "[json][scene]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();

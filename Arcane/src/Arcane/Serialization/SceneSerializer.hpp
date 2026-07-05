@@ -93,6 +93,14 @@ namespace Arcane::Scene
                 nlohmann::json cj;
                 ReflectionJsonWriter writer(cj);
                 desc->visitFields(instance, writer);   // writer READS; const_cast is safe
+                // writer.HasError() is intentionally not checked here: SAVE is
+                // best-effort (there is no error channel back to the scene-save
+                // caller today, and this path is exercised by tests, not yet by
+                // a shipping editor save button). The only field shape that used
+                // to cause silent DATA LOSS on the round trip -- an all-
+                // Serializable(false) component writing as JSON null -- is fixed
+                // at LOAD time (roster faithfulness, see LoadJson below), so an
+                // unchecked writer error here cannot resurrect that bug.
                 components[std::string(desc->meta->typeName)] = std::move(cj);
             }
             entry["components"] = std::move(components);
@@ -118,38 +126,51 @@ namespace Arcane::Scene
 
     namespace Detail
     {
+        // Outcome of AddComponentByTypeName. Skipped: the type could not be
+        // instantiated at all (not reflected / not registered as a component) --
+        // forward-compat, the caller tolerates this and the scene still loads.
+        // Added: instantiated and populated cleanly. Error: instantiated, but the
+        // reflection reader latched an unsupported-field-type diagnostic (E02-3)
+        // while populating it -- this must fail the whole load, not silently
+        // install a partially-populated component with no signal anything went
+        // wrong.
+        enum class AddComponentResult { Skipped, Added, Error };
+
         // Add-by-descriptor factory: instantiate a component by its reflected type
-        // name and populate it from JSON via the reflection reader. Returns false
-        // if the type is not reflected or not registered as a component (caller
-        // decides whether to skip). Never throws.
-        inline bool AddComponentByTypeName(Astra::Registry& reg, Astra::ComponentRegistry* creg,
+        // name and populate it from JSON via the reflection reader. Never throws.
+        inline AddComponentResult AddComponentByTypeName(Astra::Registry& reg, Astra::ComponentRegistry* creg,
                                            Astra::Entity e, const std::string& typeName,
                                            const nlohmann::json& fields)
         {
             const Astra::TypeMeta* meta = Astra::GetMetaByName(typeName);
-            if (!meta) return false;
+            if (!meta) return AddComponentResult::Skipped;
             const Astra::ComponentDescriptor* desc = creg->GetComponentDescriptorByHash(meta->typeHash);
-            if (!desc) return false;   // reflected but not registered as a component
+            if (!desc) return AddComponentResult::Skipped;   // reflected but not registered as a component
 
             const std::size_t bytes = desc->size ? desc->size : 1;
             const std::align_val_t align{ desc->alignment ? desc->alignment : 1 };
             void* buf = ::operator new(bytes, align);
             desc->DefaultConstruct(buf);
+            bool fieldError = false;
             if (desc->visitFields)
             {
                 ReflectionJsonReader reader(fields);
-                desc->visitFields(buf, reader);   // tolerant of missing/wrong-typed leaf data
+                desc->visitFields(buf, reader);   // tolerant of missing/wrong-typed leaf DATA;
+                                                   // latches HasError() only on an unsupported field TYPE
+                fieldError = reader.HasError();
             }
             reg.AddComponentByID(e, desc->id, buf, desc->size);
             desc->Destruct(buf);
             ::operator delete(buf, align);
-            return true;
+            return fieldError ? AddComponentResult::Error : AddComponentResult::Added;
         }
     }
 
     // Returns false (never throws) on a malformed document, a missing/mismatched
-    // schema version, or a structurally invalid entity list. Wrong-typed leaf
-    // fields are tolerated by the guarded ReflectionJsonReader (left at defaults).
+    // schema version, a structurally invalid entity list, or a component whose
+    // reflection reader latched an unsupported-field-type error (E02-3). Wrong-
+    // typed leaf DATA (as opposed to an unsupported field TYPE) is still tolerated
+    // by the guarded ReflectionJsonReader (left at defaults).
     inline bool LoadJson(Astra::Registry& reg, const nlohmann::json& doc)
     {
         try
@@ -178,11 +199,27 @@ namespace Arcane::Scene
                 const auto cit = entry.find("components");
                 if (cit != entry.end() && cit->is_object())
                 {
+                    // A component whose fields are ALL Serializable(false) (e.g.
+                    // WorldTransform) writes as JSON null in SaveJson -- the
+                    // writer visits zero fields. The roster must stay faithful
+                    // (key present => component present), so a null body still
+                    // gets a default-constructed component added (there is
+                    // nothing to populate either way). Any other non-object
+                    // shape matches neither the populated-object nor the
+                    // all-non-serializable-null case, so it is left skipped.
+                    static const nlohmann::json kEmptyFields = nlohmann::json::object();
                     for (auto it = cit->begin(); it != cit->end(); ++it)
                     {
-                        if (!it.value().is_object()) continue;
-                        Detail::AddComponentByTypeName(reg, creg, e, it.key(), it.value());
-                        // Unknown/unregistered types are skipped (cannot instantiate);
+                        const nlohmann::json* fields;
+                        if (it.value().is_object())      fields = &it.value();
+                        else if (it.value().is_null())   fields = &kEmptyFields;
+                        else                              continue;
+
+                        const Detail::AddComponentResult r =
+                            Detail::AddComponentByTypeName(reg, creg, e, it.key(), *fields);
+                        if (r == Detail::AddComponentResult::Error)
+                            return false;   // E02-3: unsupported field type latched -- fail loud
+                        // Skipped: unknown/unregistered types are tolerated;
                         // a structurally valid scene still loads.
                     }
                 }
