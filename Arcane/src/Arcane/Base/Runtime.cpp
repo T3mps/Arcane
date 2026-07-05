@@ -11,9 +11,33 @@
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Core/WorkScheduler.hpp>
+#include <Astra/Serialization/SerializationError.hpp>
 
 namespace Arcane
 {
+    namespace
+    {
+        // ASCII name for a SerializationError so a Save failure logs a readable
+        // cause rather than an opaque integer (the enum has no library to_string).
+        const char* SerializationErrorName(Astra::SerializationError e) noexcept
+        {
+            switch (e)
+            {
+                case Astra::SerializationError::None:               return "None";
+                case Astra::SerializationError::InvalidMagic:       return "InvalidMagic";
+                case Astra::SerializationError::UnsupportedVersion: return "UnsupportedVersion";
+                case Astra::SerializationError::CorruptedData:      return "CorruptedData";
+                case Astra::SerializationError::UnknownComponent:   return "UnknownComponent";
+                case Astra::SerializationError::SizeMismatch:       return "SizeMismatch";
+                case Astra::SerializationError::EndiannessMismatch: return "EndiannessMismatch";
+                case Astra::SerializationError::ChecksumMismatch:   return "ChecksumMismatch";
+                case Astra::SerializationError::IOError:            return "IOError";
+                case Astra::SerializationError::OutOfMemory:        return "OutOfMemory";
+            }
+            return "Unknown";
+        }
+    }
+
     struct Runtime::Impl
     {
         JobSystem                                   jobs;
@@ -174,7 +198,19 @@ namespace Arcane
     std::vector<std::byte> Runtime::SnapshotRegistry() const
     {
         auto r = m_impl->registry->Save();
-        return r.IsOk() ? std::move(*r.GetValue()) : std::vector<std::byte>{};
+        if (r.IsErr())
+        {
+            // A real Save failure must be named at its source: returning an empty
+            // snapshot silently would resurface much later as a generic "reload
+            // lost state" with the root cause erased. Log the SerializationError,
+            // then keep the empty-on-failure contract callers already rely on.
+            const Astra::SerializationError err =
+                r.GetError() ? *r.GetError() : Astra::SerializationError::None;
+            ARC_ERROR("Runtime: SnapshotRegistry: registry Save failed ({}); returning empty snapshot",
+                      SerializationErrorName(err));
+            return std::vector<std::byte>{};
+        }
+        return std::move(*r.GetValue());
     }
 
     bool Runtime::RestoreRegistry(std::span<const std::byte> bytes)
