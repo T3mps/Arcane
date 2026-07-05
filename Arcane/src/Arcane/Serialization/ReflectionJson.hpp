@@ -5,10 +5,18 @@
 // walking FieldInfo. Astra owns no JSON; this lives entirely in Arcane.
 //
 // Value dispatch: arithmetic/bool/string via typed accessors; enums by name via
-// EnumInfo (raw memory read for the underlying integer); glm::vec2/3/4 as JSON
-// arrays (POD-math fallback); nested reflected structs recurse via MetaRegistry.
-// Reader falls back to AliasName for renames; a missing key leaves the
-// default-constructed value (forward/back compatible).
+// EnumInfo (raw memory read for the underlying integer); glm::vec2/3/4, mat3/mat4
+// and quaternions as JSON number arrays (POD-math fallback); nested reflected
+// structs recurse via MetaRegistry. Reader falls back to AliasName for renames; a
+// missing key leaves the default-constructed value (forward/back compatible).
+//
+// No silent drops: a field whose TYPE the bridge cannot represent (containers,
+// raw pointers, an unreflected non-math struct) is NOT quietly skipped -- the
+// visitor latches an "unsupported field type" error the caller must inspect via
+// HasError()/Error(). This keeps the exception-free engine from losing data
+// without a diagnostic. Wrong-typed JSON *data* for a supported field type is
+// still tolerated on read (the field keeps its default), matching the
+// hand-edited-file contract the scene loader relies on.
 
 #include <Astra/Reflection/FieldVisitor.hpp>
 #include <Astra/Reflection/FieldInfo.hpp>
@@ -16,6 +24,7 @@
 #include <Astra/Core/TypeID.hpp>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <Json.hpp>
 
 #include <cstddef>
@@ -31,6 +40,18 @@ namespace Arcane
         inline uint64_t Vec2Hash() { static const uint64_t h = Astra::TypeID<glm::vec2>::Hash(); return h; }
         inline uint64_t Vec3Hash() { static const uint64_t h = Astra::TypeID<glm::vec3>::Hash(); return h; }
         inline uint64_t Vec4Hash() { static const uint64_t h = Astra::TypeID<glm::vec4>::Hash(); return h; }
+        inline uint64_t Mat3Hash() { static const uint64_t h = Astra::TypeID<glm::mat3>::Hash(); return h; }
+        inline uint64_t Mat4Hash() { static const uint64_t h = Astra::TypeID<glm::mat4>::Hash(); return h; }
+        inline uint64_t QuatHash() { static const uint64_t h = Astra::TypeID<glm::quat>::Hash(); return h; }
+
+        inline bool IsScalarHash(uint64_t h)
+        {
+            return h == Astra::TypeID<bool>::Hash()     || h == Astra::TypeID<int>::Hash()
+                || h == Astra::TypeID<int32_t>::Hash()  || h == Astra::TypeID<uint32_t>::Hash()
+                || h == Astra::TypeID<int64_t>::Hash()  || h == Astra::TypeID<uint64_t>::Hash()
+                || h == Astra::TypeID<float>::Hash()    || h == Astra::TypeID<double>::Hash()
+                || h == Astra::TypeID<std::string>::Hash();
+        }
 
         inline bool WriteScalar(const Astra::FieldInfo& f, void* inst, nlohmann::json& out)
         {
@@ -67,6 +88,9 @@ namespace Arcane
             return false;
         }
 
+        inline bool IsGlmVecHash(uint64_t h) { return h == Vec2Hash() || h == Vec3Hash() || h == Vec4Hash(); }
+        inline bool IsGlmMatHash(uint64_t h) { return h == Mat3Hash() || h == Mat4Hash(); }
+
         inline bool WriteGlm(const Astra::FieldInfo& f, void* inst, nlohmann::json& out)
         {
             const uint64_t h = f.typeHash;
@@ -83,6 +107,14 @@ namespace Arcane
             return i < in.size() && in[i].is_number();
         }
 
+        inline bool AllNumbers(const nlohmann::json& in, std::size_t n)
+        {
+            if (!in.is_array() || in.size() != n) return false;
+            for (std::size_t i = 0; i < n; ++i)
+                if (!in[i].is_number()) return false;
+            return true;
+        }
+
         // Reads a glm vector field from a JSON array without throwing on a
         // malformed document. Like ReadScalar, the return value means "this field
         // is a known vector type"; a node that is not an array of enough numbers
@@ -94,6 +126,96 @@ namespace Arcane
             if (h == Vec3Hash()) { if (in.is_array() && IsNumberAt(in, 0) && IsNumberAt(in, 1) && IsNumberAt(in, 2))               f.Set<glm::vec3>(inst, glm::vec3(in[0].get<float>(), in[1].get<float>(), in[2].get<float>()));                     return true; }
             if (h == Vec4Hash()) { if (in.is_array() && IsNumberAt(in, 0) && IsNumberAt(in, 1) && IsNumberAt(in, 2) && IsNumberAt(in, 3)) f.Set<glm::vec4>(inst, glm::vec4(in[0].get<float>(), in[1].get<float>(), in[2].get<float>(), in[3].get<float>())); return true; }
             return false;
+        }
+
+        // Matrices serialize as a flat column-major array (mat3 -> 9, mat4 -> 16):
+        // for each column c, each row r, push m[c][r]. glm is column-major so this
+        // is the natural memory order and reconstructs losslessly.
+        inline bool WriteMatrix(const Astra::FieldInfo& f, void* inst, nlohmann::json& out)
+        {
+            const uint64_t h = f.typeHash;
+            if (h == Mat3Hash())
+            {
+                const glm::mat3 m = f.Get<glm::mat3>(inst);
+                out = nlohmann::json::array();
+                for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) out.push_back(m[c][r]);
+                return true;
+            }
+            if (h == Mat4Hash())
+            {
+                const glm::mat4 m = f.Get<glm::mat4>(inst);
+                out = nlohmann::json::array();
+                for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) out.push_back(m[c][r]);
+                return true;
+            }
+            return false;
+        }
+
+        inline bool ReadMatrix(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
+        {
+            const uint64_t h = f.typeHash;
+            if (h == Mat3Hash())
+            {
+                if (AllNumbers(in, 9))
+                {
+                    glm::mat3 m(1.0f);
+                    std::size_t i = 0;
+                    for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) m[c][r] = in[i++].get<float>();
+                    f.Set<glm::mat3>(inst, m);
+                }
+                return true;
+            }
+            if (h == Mat4Hash())
+            {
+                if (AllNumbers(in, 16))
+                {
+                    glm::mat4 m(1.0f);
+                    std::size_t i = 0;
+                    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) m[c][r] = in[i++].get<float>();
+                    f.Set<glm::mat4>(inst, m);
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // Quaternions serialize as [x, y, z, w] (component order, not glm's memory
+        // layout) so the JSON is layout-agnostic. Reconstruct via glm::quat(w,x,y,z).
+        inline bool WriteQuat(const Astra::FieldInfo& f, void* inst, nlohmann::json& out)
+        {
+            if (f.typeHash == QuatHash())
+            {
+                const glm::quat q = f.Get<glm::quat>(inst);
+                out = {q.x, q.y, q.z, q.w};
+                return true;
+            }
+            return false;
+        }
+
+        inline bool ReadQuat(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
+        {
+            if (f.typeHash == QuatHash())
+            {
+                if (AllNumbers(in, 4))
+                    f.Set<glm::quat>(inst, glm::quat(in[3].get<float>(), in[0].get<float>(),
+                                                     in[1].get<float>(), in[2].get<float>()));
+                return true;
+            }
+            return false;
+        }
+
+        // A field TYPE the bridge can represent: any scalar, glm vec/mat/quat, an
+        // enum, or a nested reflected struct (GetMeta resolves both structs AND
+        // enums, but isEnum is checked first for clarity). Anything else is an
+        // unsupported field type -> fail loud rather than silently drop.
+        inline bool IsHandledType(const Astra::FieldInfo& f)
+        {
+            const uint64_t h = f.typeHash;
+            if (IsScalarHash(h) || IsGlmVecHash(h) || IsGlmMatHash(h) || h == QuatHash())
+                return true;
+            if (f.isEnum)
+                return true;
+            return Astra::GetMeta(h) != nullptr;   // nested reflected struct
         }
 
         // Read an enum's raw integer value from the instance using raw memory access.
@@ -113,6 +235,12 @@ namespace Arcane
             std::byte* ptr = static_cast<std::byte*>(inst) + f.offset;
             std::memcpy(ptr, &value, f.size <= 8 ? f.size : 8);
         }
+
+        // Builds a uniform "unsupported field type" diagnostic (ASCII only).
+        inline std::string UnsupportedFieldMessage(const Astra::FieldInfo& f)
+        {
+            return "unsupported field type for JSON: field '" + std::string(f.name) + "'";
+        }
     }
 
     class ReflectionJsonWriter : public Astra::IFieldVisitor
@@ -124,7 +252,9 @@ namespace Arcane
         {
             nlohmann::json value;
             if (Detail::WriteScalar(field, instance, value) ||
-                Detail::WriteGlm(field, instance, value))
+                Detail::WriteGlm(field, instance, value)    ||
+                Detail::WriteMatrix(field, instance, value) ||
+                Detail::WriteQuat(field, instance, value))
             {
                 m_out[std::string(field.name)] = std::move(value);
                 return;
@@ -154,15 +284,33 @@ namespace Arcane
                 for (const Astra::FieldInfo& nf : nested->fields)
                     if (nf.IsSerializable())
                         subWriter.Visit(nf, subInstance);
+                if (subWriter.HasError())   // propagate an unsupported sub-field up
+                {
+                    Fail(subWriter.Error());
+                    return;
+                }
                 m_out[std::string(field.name)] = std::move(sub);
+                return;
             }
-            // else: unsupported field type for JSON -> silently skipped.
+            // No branch matched: an unsupported field type would be silently
+            // dropped here. Fail loud instead so the loss carries a diagnostic.
+            Fail(Detail::UnsupportedFieldMessage(field));
         }
 
         bool IsWriting() const noexcept override { return true; }
 
+        ASTRA_NODISCARD bool HasError() const noexcept { return m_error; }
+        ASTRA_NODISCARD const std::string& Error() const noexcept { return m_errorMsg; }
+
     private:
+        void Fail(std::string msg)
+        {
+            if (!m_error) { m_error = true; m_errorMsg = std::move(msg); }
+        }
+
         nlohmann::json& m_out;
+        bool m_error = false;
+        std::string m_errorMsg;
     };
 
     class ReflectionJsonReader : public Astra::IFieldVisitor
@@ -172,11 +320,22 @@ namespace Arcane
 
         void Visit(const Astra::FieldInfo& field, void* instance) override
         {
+            // Classify by TYPE first so an unsupported field type is reported even
+            // when its key is absent -- a silently-dropped field must never pass
+            // for the forward-compat "missing key -> keep default" path below.
+            if (!Detail::IsHandledType(field))
+            {
+                Fail(Detail::UnsupportedFieldMessage(field));
+                return;
+            }
+
             const nlohmann::json* node = Find(field);
-            if (!node) return;   // missing -> keep default
+            if (!node) return;   // supported but missing -> keep default
 
             if (Detail::ReadScalar(field, instance, *node) ||
-                Detail::ReadGlm(field, instance, *node))
+                Detail::ReadGlm(field, instance, *node)    ||
+                Detail::ReadMatrix(field, instance, *node) ||
+                Detail::ReadQuat(field, instance, *node))
                 return;
 
             // Enum: read by name if the node is a string; silently skip otherwise.
@@ -200,12 +359,22 @@ namespace Arcane
                 for (const Astra::FieldInfo& nf : nested->fields)
                     if (nf.IsSerializable())
                         subReader.Visit(nf, subInstance);
+                if (subReader.HasError())   // propagate an unsupported sub-field up
+                    Fail(subReader.Error());
             }
         }
 
         bool IsWriting() const noexcept override { return false; }
 
+        ASTRA_NODISCARD bool HasError() const noexcept { return m_error; }
+        ASTRA_NODISCARD const std::string& Error() const noexcept { return m_errorMsg; }
+
     private:
+        void Fail(std::string msg)
+        {
+            if (!m_error) { m_error = true; m_errorMsg = std::move(msg); }
+        }
+
         // Try the current name, then any AliasName (former names).
         const nlohmann::json* Find(const Astra::FieldInfo& field) const
         {
@@ -225,5 +394,7 @@ namespace Arcane
         }
 
         const nlohmann::json& m_in;
+        bool m_error = false;
+        std::string m_errorMsg;
     };
 }

@@ -11,7 +11,11 @@
 #include <Astra/Reflection/Reflection.hpp>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <Json.hpp>
+
+#include <string>
+#include <vector>
 
 using Catch::Approx;
 
@@ -116,4 +120,118 @@ TEST_CASE("AliasName recovers a value written under the old field name", "[json]
     Arcane::ReflectionJsonReader reader(j);
     desc->visitFields(&v, reader);
     CHECK(v.amount == 55);
+}
+
+// E02-3: matrices and quaternions were previously silently dropped (written as
+// nothing, read as default). They now round-trip as flat JSON number arrays.
+namespace
+{
+    struct Xform
+    {
+        glm::mat3 m3{1.0f};
+        glm::mat4 m4{1.0f};
+        glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};   // (w, x, y, z)
+    };
+}
+
+ASTRA_REFLECT_TYPE(Xform)
+    ASTRA_REFLECT_FIELD(Xform, m3)
+    ASTRA_REFLECT_FIELD(Xform, m4)
+    ASTRA_REFLECT_FIELD(Xform, q)
+ASTRA_END_REFLECT_TYPE()
+
+TEST_CASE("mat3/mat4/quat fields round-trip through JSON", "[json][reflection]")
+{
+    Astra::ComponentRegistry creg;
+    creg.RegisterComponent<Xform>();
+    const auto* desc = creg.GetComponentDescriptor(Astra::TypeID<Xform>::Value());
+    REQUIRE(desc != nullptr);
+
+    Xform a;
+    for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) a.m3[c][r] = static_cast<float>(c * 3 + r + 1);
+    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) a.m4[c][r] = static_cast<float>(c * 4 + r + 1);
+    a.q = glm::quat(0.1f, 0.2f, 0.3f, 0.4f);   // (w, x, y, z)
+
+    nlohmann::json j;
+    Arcane::ReflectionJsonWriter writer(j);
+    desc->visitFields(&a, writer);
+    REQUIRE_FALSE(writer.HasError());               // no silent drop
+    CHECK(j["m3"].is_array());
+    CHECK(j["m3"].size() == 9);
+    CHECK(j["m4"].size() == 16);
+    CHECK(j["q"].size() == 4);
+    CHECK(j["q"][0].get<float>() == Approx(0.2f));   // x, y, z, w order
+
+    Xform b;
+    Arcane::ReflectionJsonReader reader(j);
+    desc->visitFields(&b, reader);
+    REQUIRE_FALSE(reader.HasError());
+    for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r)
+        CHECK(b.m3[c][r] == Approx(a.m3[c][r]));
+    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r)
+        CHECK(b.m4[c][r] == Approx(a.m4[c][r]));
+    CHECK(b.q.x == Approx(0.2f));
+    CHECK(b.q.y == Approx(0.3f));
+    CHECK(b.q.z == Approx(0.4f));
+    CHECK(b.q.w == Approx(0.1f));
+}
+
+// E02-3: a field whose TYPE the bridge cannot represent (a container here) must
+// fail loud with a clear diagnostic, not silently drop the field.
+namespace
+{
+    struct HasVector
+    {
+        int id = 0;
+        std::vector<int> data;
+    };
+}
+
+ASTRA_REFLECT_TYPE(HasVector)
+    ASTRA_REFLECT_FIELD(HasVector, id)
+    ASTRA_REFLECT_FIELD(HasVector, data)
+ASTRA_END_REFLECT_TYPE()
+
+// HasVector cannot be a binary-serializable component (the std::vector<int> field
+// has no trivially-copyable path), so drive the visitor straight over its reflected
+// TypeMeta -- reflection metadata, not component registration, is all the JSON
+// bridge needs.
+namespace
+{
+    template<typename Visitor>
+    void VisitMetaFields(const Astra::TypeMeta& meta, void* instance, Visitor& visitor)
+    {
+        for (const Astra::FieldInfo& f : meta.fields)
+            if (f.IsSerializable())
+                visitor.Visit(f, instance);
+    }
+}
+
+TEST_CASE("unsupported field type fails loud instead of silently dropping", "[json][reflection]")
+{
+    const Astra::TypeMeta* meta = Astra::GetMeta<HasVector>();
+    REQUIRE(meta != nullptr);
+
+    SECTION("writer latches an error naming the field")
+    {
+        HasVector a; a.id = 5; a.data = {1, 2, 3};
+        nlohmann::json j;
+        Arcane::ReflectionJsonWriter writer(j);
+        VisitMetaFields(*meta, &a, writer);
+        REQUIRE(writer.HasError());
+        CHECK(writer.Error().find("data") != std::string::npos);
+        CHECK(j["id"].get<int>() == 5);   // the supported field before it still wrote
+    }
+
+    SECTION("reader latches an error even when the key is absent")
+    {
+        // The unsupported TYPE must be reported regardless of whether the JSON
+        // carries the key -- otherwise a dropped field masquerades as forward-compat.
+        nlohmann::json j; j["id"] = 7;
+        HasVector out;
+        Arcane::ReflectionJsonReader reader(j);
+        VisitMetaFields(*meta, &out, reader);
+        REQUIRE(reader.HasError());
+        CHECK(reader.Error().find("data") != std::string::npos);
+    }
 }
