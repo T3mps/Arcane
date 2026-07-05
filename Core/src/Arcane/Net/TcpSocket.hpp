@@ -11,7 +11,7 @@
 #include <WS2tcpip.h>
 // Audit M-V5-10 networking (2026-06-03): mstcpip.h provides
 // `tcp_keepalive` + `SIO_KEEPALIVE_VALS` consumed by EnableTcpKeepAlive
-// below. Pull explicitly — WS2tcpip.h does NOT include it transitively
+// below. Pull explicitly -- WS2tcpip.h does NOT include it transitively
 // on the v143 Windows SDK.
 #include <mstcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -58,7 +58,7 @@ namespace Arcane
         // protocol.json's settings.max_connections_per_ip /
         // settings.max_connections_total at startup (see Auth/Account/
         // Combat main.cpp). A protocol.json without the keys uses these
-        // constants — no behavior change at default values.
+        // constants -- no behavior change at default values.
         //
         // Topology assumptions baked into the per-IP cap:
         //   - No reverse proxy or TLS-terminating front (Nginx, Envoy,
@@ -96,7 +96,7 @@ namespace Arcane
 
     // Audit M-V5-10 networking (2026-06-03): enable TCP keepalive on an
     // accepted client socket. Without this, half-open connections from
-    // crashed clients (TCP RST never delivered — wifi blackout, laptop
+    // crashed clients (TCP RST never delivered -- wifi blackout, laptop
     // suspend, process kill on a network with reverse-path filtering)
     // hold a connection-cap slot for the OS-default keepalive idle (2h
     // on Windows, 7200s on Linux). With H-V4-10's 16/IP cap, 16 stale
@@ -116,7 +116,7 @@ namespace Arcane
         BOOL on = TRUE;
         setsockopt(socket, SOL_SOCKET, SO_KEEPALIVE, (const char*)&on, sizeof(on));
         // SIO_KEEPALIVE_VALS lets us pick the idle + interval (in ms).
-        // Windows doesn't expose probeCount via this ioctl — the stack
+        // Windows doesn't expose probeCount via this ioctl -- the stack
         // uses TcpMaxDataRetransmissions from the registry (default 5).
         // probeCount is therefore advisory on Windows; the timing curve
         // is dominated by idleMs + N*intervalMs anyway.
@@ -238,7 +238,7 @@ namespace Arcane
 
     // Connect to a remote TCP endpoint. BLOCKS until the OS-level connect
     // timeout fires (~21s on Windows for an unresponsive remote host)
-    // — acceptable for loopback / fast-network paths, NOT acceptable for
+    // -- acceptable for loopback / fast-network paths, NOT acceptable for
     // ServiceClient which holds m_mutex across the call. Production
     // ServiceClient code uses ConnectSocketWithTimeout below.
     inline SocketType ConnectSocket(const std::string& host, uint16_t port)
@@ -263,8 +263,8 @@ namespace Arcane
 
     // Audit M-V5-9 networking (2026-06-03): connect with a bounded
     // timeout via non-blocking connect + select. The blocking
-    // ConnectSocket above holds for the OS-level SYN timeout — ~21s
-    // on Windows, ~127s with default tcp_syn_retries=6 on Linux —
+    // ConnectSocket above holds for the OS-level SYN timeout -- ~21s
+    // on Windows, ~127s with default tcp_syn_retries=6 on Linux --
     // when the remote silently drops SYNs (firewall blackhole,
     // saturated accept queue, dead but-not-disconnected peer).
     // ServiceClient holds m_mutex across this call, so the unbounded
@@ -277,11 +277,11 @@ namespace Arcane
     // Returns INVALID_SOCK on:
     //   - socket()/inet_pton failure
     //   - connect() returning an error that's not WSAEWOULDBLOCK /
-    //     EINPROGRESS (immediate refusal — connection refused is
+    //     EINPROGRESS (immediate refusal -- connection refused is
     //     fast on loopback so this branch fires routinely there)
     //   - select() timing out before the socket becomes writable
     //   - SO_ERROR != 0 after the socket becomes writable (asynchronous
-    //     connect failure — e.g., connection refused arriving after
+    //     connect failure -- e.g., connection refused arriving after
     //     the SYN-pending state)
     // On success, returns a connected socket in BLOCKING mode (we
     // restore the pre-call flags before returning so the caller's
@@ -363,7 +363,7 @@ namespace Arcane
                 return INVALID_SOCK;
             }
 
-            // Connect can fail asynchronously — the socket becomes
+            // Connect can fail asynchronously -- the socket becomes
             // writable but SO_ERROR carries the error code. Always
             // check; a writable result alone does NOT imply success.
             int soError = 0;
@@ -439,7 +439,7 @@ namespace Arcane
         }
 
         // Audit M-V4-5 networking (2026-06-03): std::stoull is a partial
-        // parse — it would happily return 12 from "12abc" and leave "abc"
+        // parse -- it would happily return 12 from "12abc" and leave "abc"
         // unconsumed. With the colon search above, that means a prefix
         // like "12abc:body" would be treated as length 12 with no error.
         // Capture the parsed-char count via the `pos` out-param and
@@ -456,6 +456,16 @@ namespace Arcane
         size_t bodyStart = colonPos + 1;
         size_t totalLen  = bodyStart + expectedLen + 1; // +1 for '\n'
         if (buffer.size() < totalLen) { r.needMoreData = true; return r; }
+
+        // Audit E01-3d networking: the length prefix promises exactly
+        // expectedLen body bytes followed by a '\n' terminator. Verify the
+        // terminator is actually present at that offset before consuming.
+        // buffer.size() >= totalLen guarantees the index is valid. A mismatch
+        // means the declared length disagrees with the on-wire framing (stream
+        // desync, or a crafted length that would slice the frame on the wrong
+        // boundary) -- flag it as an error instead of silently accepting a
+        // mis-terminated frame and resyncing mid-message.
+        if (buffer[bodyStart + expectedLen] != '\n') { r.error = true; return r; }
 
         r.body     = buffer.substr(bodyStart, expectedLen);
         r.consumed = totalLen;

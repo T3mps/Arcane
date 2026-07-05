@@ -83,6 +83,26 @@ TEST_CASE("framing: partial frame stays buffered, completes on append", "[wire]"
     REQUIRE(r2.body == "1|tok|{}");
 }
 
+TEST_CASE("framing: frame missing its '\\n' delimiter is a desync error (E01-3d)", "[wire]")
+{
+    // Length prefix promises 4 body bytes; the byte at the terminator offset is
+    // 'X', not '\n'. Before E01-3d this silently accepted body "body" and
+    // consumed on the wrong boundary; now it is flagged as a stream-desync error.
+    auto r = ExtractLengthFramed("4:bodyX");
+    REQUIRE(r.error);
+    REQUIRE_FALSE(r.needMoreData);
+}
+
+TEST_CASE("framing: correct '\\n' delimiter still parses after E01-3d", "[wire]")
+{
+    // Positive control: a well-terminated frame is unaffected by the delimiter check.
+    auto r = ExtractLengthFramed("4:body\n");
+    REQUIRE_FALSE(r.error);
+    REQUIRE_FALSE(r.needMoreData);
+    REQUIRE(r.body == "body");
+    REQUIRE(r.consumed == 7);
+}
+
 TEST_CASE("framing: length above maxBodySize is rejected", "[wire]")
 {
     auto r = ExtractLengthFramed("99:abc\n", /*maxBodySize=*/16);
