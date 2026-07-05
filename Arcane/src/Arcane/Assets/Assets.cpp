@@ -77,6 +77,18 @@ namespace Arcane
             {
             }
 
+            void SetDevice(nvrhi::IDevice* device) override
+            {
+                if (device == m_device)
+                    return;
+                m_device = device;
+                // Cached textures belong to the old device, and any failure
+                // memoized while the device was null (see GetTexture's guard)
+                // was not a real load failure -- drop both so a bound device
+                // gets a clean retry. Bytes/JSON caches are device-independent.
+                m_textures.Clear();
+            }
+
             nvrhi::TextureHandle GetTexture(
                 const std::filesystem::path& path) override
             {
@@ -88,6 +100,17 @@ namespace Arcane
                     if (m_textures.IsFailure(key))
                         return nullptr;
                     return m_textures.Get(key);
+                }
+
+                // No render device yet (headless, or GetTexture raced ahead of
+                // SetDevice/SetRenderResources): degrade to null instead of
+                // dereferencing a null m_device. Memoize the miss so a per-frame
+                // caller does not restart a warn storm; SetDevice clears it later.
+                if (!m_device)
+                {
+                    ARC_WARN("Assets: GetTexture before render device set");
+                    m_textures.PutFailure(key);
+                    return nullptr;
                 }
 
                 int w = 0, h = 0, comp = 0;

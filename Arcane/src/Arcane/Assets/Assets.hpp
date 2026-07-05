@@ -30,7 +30,16 @@ namespace Arcane
         static std::unique_ptr<Assets> Create(nvrhi::IDevice* device);
         virtual ~Assets() = default;
 
-        // Color texture (sRGB). Null on failure (logged once, memoized).
+        // Bind (or rebind) the render device used for texture uploads. The facade
+        // may be constructed device-less (headless / before the host creates its
+        // device); the host calls this once the device exists so GetTexture works.
+        // Passing a different (or first) device invalidates any cached textures --
+        // they are bound to the previous device -- and any device-less failures
+        // memoized before a device was available.
+        virtual void SetDevice(nvrhi::IDevice* device) = 0;
+
+        // Color texture (sRGB). Null on failure (logged once, memoized). Also
+        // null (no crash) when no render device has been set yet.
         virtual nvrhi::TextureHandle GetTexture(
             const std::filesystem::path& path) = 0;
 

@@ -113,6 +113,15 @@ namespace Arcane
             return best;
         }
 
+        // Drops every entry (objects + memoized failures) and resets the byte
+        // total. The recency tick is left monotonic. Used when the backing
+        // resource an entry depends on changes (e.g. the render device rebinds).
+        void Clear()
+        {
+            m_entries.clear();
+            m_totalBytes = 0;
+        }
+
         uint64_t TotalBytes() const { return m_totalBytes; }
         size_t Count() const { return m_entries.size(); }
 

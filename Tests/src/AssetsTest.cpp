@@ -43,6 +43,48 @@ namespace
     }
 }
 
+TEST_CASE("assets: GetTexture before a render device is set returns null (no crash)", "[assets]")
+{
+    // Facade built device-less (the headless / before-SetRenderResources path).
+    // GetTexture must degrade to null instead of dereferencing a null device.
+    auto assets = Arcane::Assets::Create(nullptr);
+    REQUIRE(assets != nullptr);
+
+    const auto png = WriteTestPng();          // a real, loadable PNG on disk...
+    CHECK(assets->GetTexture(png) == nullptr); // ...still null: no device to upload to
+    CHECK(assets->GetTexture(png) == nullptr); // memoized: second call also null, no retry
+
+    // A missing path is likewise null (and never reaches stbi_load).
+    CHECK(assets->GetTexture("does/not/exist.png") == nullptr);
+
+    std::remove(png.string().c_str());
+}
+
+TEST_CASE("assets: SetDevice binds a device to a device-less facade", "[gpu][d3d12][assets]")
+{
+    Arcane::RenderDeviceDesc desc;
+    desc.backend = Arcane::GraphicsBackend::D3D12;
+    auto device = Arcane::RenderDevice::Create(desc);
+    REQUIRE(device != nullptr);
+
+    // Created with NO device: GetTexture is null and the miss is memoized.
+    auto assets = Arcane::Assets::Create(nullptr);
+    REQUIRE(assets != nullptr);
+
+    const auto png = WriteTestPng();
+    CHECK(assets->GetTexture(png) == nullptr);
+
+    // Bind the device late (mirrors Runtime::SetRenderResources). SetDevice clears
+    // the device-less failure memo, so the same path now loads for real.
+    assets->SetDevice(device->Nvrhi());
+    nvrhi::TextureHandle tex = assets->GetTexture(png);
+    REQUIRE(tex != nullptr);
+    CHECK(tex->getDesc().width == 2);
+
+    CHECK(Arcane::RenderErrorCount() == 0);
+    std::remove(png.string().c_str());
+}
+
 TEST_CASE("assets: texture loads as sRGB and reads back byte-true", "[gpu][d3d12][assets]")
 {
     Arcane::RenderDeviceDesc desc;

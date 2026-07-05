@@ -151,6 +151,12 @@ namespace Arcane
     {
         m_impl->device  = device;
         m_impl->shaders = shaders;
+        // Bind the device into the Assets facade too: the facade is created
+        // device-less in the ctor (the host-owned device does not exist yet),
+        // so without this GetTexture would forever see a null device. SetDevice
+        // is a no-op when the device is unchanged.
+        if (m_impl->assets)
+            m_impl->assets->SetDevice(device);
     }
     nvrhi::IDevice* Runtime::Device()  const noexcept { return m_impl->device; }
     ShaderLibrary*  Runtime::Shaders() const noexcept { return m_impl->shaders; }
