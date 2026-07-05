@@ -16,13 +16,20 @@
 // selected it in production and SoftStep's own coverage exceeds it. The scenes +
 // SoftStep budgets survive here as the single-solver budget gate.
 //
+// MKS CONTENT (MKS P2): bodies 0.1-10 m, gravity is the engine default (+10
+// m/s^2, y-down) unless a case is a deliberate zero-g scene, velocities in
+// m/s. Scene geometry converts from the retired px-era original at a uniform
+// /10 (round-meter, not mechanical) mapping; densities (1 and 100) are
+// UNCHANGED -- the mass-ratio scenario is the whole point of that case.
+//
 // PENETRATION BUDGETS (SoftStep): Box2D-v3 soft contacts drive overlap toward
-// kLinearSlop (0.005); measured resting penetration is crisp. MEASURED (f32,
-// 60 Hz): ball pen ~0.02 (assert < 0.1), stack ~0.18 (< 0.21), massratio ~0.56
-// (< 0.7). All FINITE + non-exploding. The stack budget is 0.21 -- tightened
-// from 0.22 for the v2 Collide narrowphase (the T3 clip-manifold path reports
-// marginally different depths than the old SAT dispatch; 0.21 gives ~5% headroom
-// over measured 0.2003; behavioral invariants unchanged).
+// kLinearSlop (0.005). MEASURED (f32, 60 Hz) at MKS content: ball pen
+// ~0.00028 (assert < 0.001), stack ~0.00137 (< 0.003), massratio ~0.01415
+// (< 0.025). All FINITE + non-exploding; each bound carries ~1.5-2.2x
+// headroom over the measured value (see Budget() below for the per-case
+// justification against kSkin (0.02) / kLinearSlop (0.005)). The single/few-
+// body scenes here settle noticeably tighter than the kSkin-scale (~0.02)
+// ballpark the mass-ratio case actually lands in.
 //
 // CARTESIAN, +Y DOWN (gravity +Y), matching PhysicsSolverTest.cpp.
 //
@@ -47,16 +54,13 @@ namespace
 {
     constexpr Real kStep = Real(1) / Real(60);
 
-    // A WorldDef with +Y-down gravity (SoftStep is the only solver).
+    // A WorldDef with +Y-down gravity (SoftStep is the only solver). Everything
+    // besides gravityY inherits the MKS engine defaults (sleepThreshold 0.05,
+    // restitutionThreshold 1.0, contactPushMaxVelocity 3.0, hashCellSize 1.0).
     WorldDef MakeWorldDef(Real gravityY)
     {
         WorldDef wd;
-        wd.gravityY   = gravityY;
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        wd.gravityY = gravityY;
         return wd;
     }
 
@@ -115,8 +119,14 @@ namespace
     };
     PenBudget Budget()
     {
-        // SoftStep: crisp soft contacts (the PhysicsSolverTest budgets).
-        return PenBudget{ Real(0.1), Real(0.21), Real(0.7) };
+        // SoftStep: crisp soft contacts, re-baselined for MKS content (MKS P2).
+        // Measured (f32, 60 Hz): ball ~0.00028, stack ~0.00137, massratio
+        // ~0.01415. Bounds are ~1.5-3.6x measured (rounded to a clean value):
+        //   ball      0.001  -- well under kLinearSlop (0.005); ~3.6x measured
+        //   stack     0.003  -- well under kSkin (0.02); ~2.2x measured
+        //   massRatio 0.025  -- ~1.25x kSkin (0.02); ~1.8x measured, the
+        //                       100:1 load's real overlap approaches kSkin scale
+        return PenBudget{ Real(0.001), Real(0.003), Real(0.025) };
     }
 }
 
@@ -126,13 +136,15 @@ namespace
 
 TEST_CASE("PhysicsSolverBudget: ball rests on floor", "[physics][solver][budget]")
 {
-    PhysicsWorld w(MakeWorldDef(Real(400)));
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
+    PhysicsWorld w(MakeWorldDef(Real(10)));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(5), Real(0.5));
 
-    const Real r = Real(2);
-    BodyHandle ball = AddCircle(w, Vec2(Real(0), Real(-20)), r);
+    const Real r = Real(0.2);
+    BodyHandle ball = AddCircle(w, Vec2(Real(0), Real(-2)), r);
 
-    for (int k = 0; k < 240; ++k)
+    // Drop height ~1.8 m under g=10 -> t = sqrt(2*1.8/10) ~= 0.6 s ~= 36 steps
+    // to first contact; 480 steps (8 s) gives ample settle headroom.
+    for (int k = 0; k < 480; ++k)
     {
         w.Step(kStep);
     }
@@ -142,12 +154,12 @@ TEST_CASE("PhysicsSolverBudget: ball rests on floor", "[physics][solver][budget]
     const PenBudget budget = Budget();
 
     // Rests ON TOP of the floor (within the penetration budget).
-    REQUIRE(p.y == Approx(floorTop - r).margin(budget.ball + Real(0.1)));
+    REQUIRE(p.y == Approx(floorTop - r).margin(budget.ball + Real(0.01)));
     const Real penetration = (p.y + r) - floorTop;
     REQUIRE(penetration < budget.ball);
-    REQUIRE(penetration > Real(-0.5)); // not floating well above the floor
+    REQUIRE(penetration > Real(-0.05)); // not floating well above the floor
     REQUIRE(Speed(w, ball) < Real(1.0));
-    REQUIRE(p.x == Approx(Real(0)).margin(Real(0.5)));
+    REQUIRE(p.x == Approx(Real(0)).margin(Real(0.05)));
 }
 
 // ---------------------------------------------------------------------------
@@ -156,19 +168,22 @@ TEST_CASE("PhysicsSolverBudget: ball rests on floor", "[physics][solver][budget]
 
 TEST_CASE("PhysicsSolverBudget: box stack settles", "[physics][solver][budget]")
 {
-    PhysicsWorld w(MakeWorldDef(Real(400)));
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
+    PhysicsWorld w(MakeWorldDef(Real(10)));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(5), Real(0.5));
 
-    const Real hw = Real(2), hh = Real(2);
+    const Real hw = Real(0.2), hh = Real(0.2);
     const int N = 5;
     std::vector<BodyHandle> boxes;
     for (int i = 0; i < N; ++i)
     {
-        const Real y = -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1);
+        const Real y = -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1);
         boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
     }
 
-    for (int k = 0; k < 600; ++k)
+    // Cascading small-gap settle (analogous px case used 600 steps for a
+    // ~2-2.2 unit fall); MKS fall/settle timescale is ~2x px at equal round-
+    // meter mapping (g dropped 40x while lengths dropped 10x), so 1200 steps.
+    for (int k = 0; k < 1200; ++k)
     {
         w.Step(kStep);
     }
@@ -196,7 +211,7 @@ TEST_CASE("PhysicsSolverBudget: box stack settles", "[physics][solver][budget]")
     REQUIRE(maxPen   < budget.stack);   // bounded overlap (SoftStep-appropriate)
     for (int i = 0; i < N; ++i)
     {
-        REQUIRE(w.Position(boxes[i]).x == Approx(Real(0)).margin(Real(0.5)));
+        REQUIRE(w.Position(boxes[i]).x == Approx(Real(0)).margin(Real(0.05)));
         REQUIRE(std::isfinite(w.Position(boxes[i]).y));
     }
 }
@@ -210,14 +225,14 @@ TEST_CASE("PhysicsSolverBudget: box stack settles", "[physics][solver][budget]")
 
 TEST_CASE("PhysicsSolverBudget: high mass-ratio stable", "[physics][solver][budget]")
 {
-    PhysicsWorld w(MakeWorldDef(Real(400)));
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
+    PhysicsWorld w(MakeWorldDef(Real(10)));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(5), Real(0.5));
 
-    const Real hw = Real(2), hh = Real(2);
-    BodyHandle light = AddBox(w, Vec2(Real(0), Real(-2.1)), hw, hh, /*density=*/Real(1));
-    BodyHandle heavy = AddBox(w, Vec2(Real(0), Real(-6.3)), hw, hh, /*density=*/Real(100));
+    const Real hw = Real(0.2), hh = Real(0.2);
+    BodyHandle light = AddBox(w, Vec2(Real(0), Real(-0.21)), hw, hh, /*density=*/Real(1));
+    BodyHandle heavy = AddBox(w, Vec2(Real(0), Real(-0.63)), hw, hh, /*density=*/Real(100));
 
-    for (int k = 0; k < 600; ++k)
+    for (int k = 0; k < 1200; ++k)
     {
         w.Step(kStep);
     }
@@ -238,24 +253,24 @@ TEST_CASE("PhysicsSolverBudget: high mass-ratio stable", "[physics][solver][budg
 
 TEST_CASE("PhysicsSolverBudget: energy bounded", "[physics][solver][budget]")
 {
-    PhysicsWorld w(MakeWorldDef(Real(400)));
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
+    PhysicsWorld w(MakeWorldDef(Real(10)));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(5), Real(0.5));
 
-    const Real hw = Real(2), hh = Real(2);
+    const Real hw = Real(0.2), hh = Real(0.2);
     std::vector<BodyHandle> boxes;
     for (int i = 0; i < 4; ++i)
     {
-        boxes.push_back(AddBox(w, Vec2(Real(0), -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1)),
+        boxes.push_back(AddBox(w, Vec2(Real(0), -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1)),
                                hw, hh));
     }
 
-    for (int k = 0; k < 300; ++k)
+    for (int k = 0; k < 600; ++k)
     {
         w.Step(kStep);
     }
 
     Real peakKE = Real(0);
-    for (int k = 0; k < 600; ++k)
+    for (int k = 0; k < 1200; ++k)
     {
         w.Step(kStep);
         Real ke = Real(0);
@@ -267,7 +282,15 @@ TEST_CASE("PhysicsSolverBudget: energy bounded", "[physics][solver][budget]")
         peakKE = std::max(peakKE, ke);
         REQUIRE(std::isfinite(ke));
     }
-    REQUIRE(peakKE < Real(50.0)); // no energy-injection blow-up
+    // Re-baselined for MKS (MKS P2): measured peakKE == 0.0 exactly -- the
+    // stack fully settles and SLEEPS (sleepThreshold 0.05 m/s) during the
+    // 600-step pre-loop, so the tracked window sees no residual motion at
+    // all. A straight 1.5x-of-measured multiple is degenerate here (1.5*0);
+    // 0.01 J is the chosen floor -- far above float noise or legitimate
+    // settling jitter, far below what a real energy-injection bug would
+    // produce (box mass ~0.16 kg; 0.01 J implies ~0.35 m/s, itself well
+    // under the 2.0 m/s "settled" gate elsewhere in this file).
+    REQUIRE(peakKE < Real(0.01));
 }
 
 // ---------------------------------------------------------------------------
@@ -276,11 +299,11 @@ TEST_CASE("PhysicsSolverBudget: energy bounded", "[physics][solver][budget]")
 
 TEST_CASE("PhysicsSolverBudget: restitution rebounds", "[physics][solver][budget]")
 {
-    PhysicsWorld w(MakeWorldDef(Real(400)));
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
+    PhysicsWorld w(MakeWorldDef(Real(10)));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(5), Real(0.5));
 
-    const Real r = Real(2);
-    const Real startY = Real(-40);
+    const Real r = Real(0.2);
+    const Real startY = Real(-4);
     BodyHandle ball = AddCircle(w, Vec2(Real(0), startY), r,
                                 /*density=*/Real(1), /*friction=*/Real(0.1),
                                 /*restitution=*/Real(0.8));
@@ -290,11 +313,13 @@ TEST_CASE("PhysicsSolverBudget: restitution rebounds", "[physics][solver][budget
 
     Real apexY = startY;
     bool hitFloor = false;
-    for (int k = 0; k < 240; ++k)
+    // Drop height ~3.8 m under g=10 -> t ~= sqrt(2*3.8/10) ~= 0.87 s ~= 53
+    // steps to first contact; 480 steps (8 s) covers first bounce + apex.
+    for (int k = 0; k < 480; ++k)
     {
         w.Step(kStep);
         const Real y = w.Position(ball).y;
-        if ((y + r) > Real(-0.5))
+        if ((y + r) > Real(-0.05))
         {
             hitFloor = true;
         }
@@ -307,7 +332,7 @@ TEST_CASE("PhysicsSolverBudget: restitution rebounds", "[physics][solver][budget
     REQUIRE(hitFloor);
     const Real reboundHeight = std::abs(apexY - restY);
     REQUIRE(reboundHeight > Real(0.3) * dropHeight); // rebounds a good fraction
-    REQUIRE(reboundHeight < dropHeight + Real(1.0)); // no energy gain
+    REQUIRE(reboundHeight < dropHeight + Real(0.1)); // no energy gain
 }
 
 // ---------------------------------------------------------------------------
@@ -316,21 +341,24 @@ TEST_CASE("PhysicsSolverBudget: restitution rebounds", "[physics][solver][budget
 
 TEST_CASE("PhysicsSolverBudget: friction stops a sliding box", "[physics][solver][budget]")
 {
-    PhysicsWorld w(MakeWorldDef(Real(400)));
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5), /*friction=*/Real(0.8));
+    PhysicsWorld w(MakeWorldDef(Real(10)));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5), /*friction=*/Real(0.8));
 
-    const Real hw = Real(2), hh = Real(2);
-    BodyHandle box = AddBox(w, Vec2(Real(0), Real(-2)), hw, hh,
+    const Real hw = Real(0.2), hh = Real(0.2);
+    BodyHandle box = AddBox(w, Vec2(Real(0), Real(-0.2)), hw, hh,
                             /*density=*/Real(1), /*friction=*/Real(0.8));
 
     for (int k = 0; k < 60; ++k)
     {
         w.Step(kStep);
     }
-    w.SetVelocity(box, Vec2(Real(120), Real(0)));
+    w.SetVelocity(box, Vec2(Real(12), Real(0)));
 
+    // Friction-decel stop time scales ~4x vs px (v dropped 10x, g dropped 40x,
+    // so v/g dropped by 1/4 -> stop time x4): ~90 steps to stop; 2400 (40 s)
+    // preserves the px case's ~27x headroom ratio.
     Real maxX = w.Position(box).x;
-    for (int k = 0; k < 600; ++k)
+    for (int k = 0; k < 2400; ++k)
     {
         w.Step(kStep);
         maxX = std::max(maxX, w.Position(box).x);
@@ -338,7 +366,7 @@ TEST_CASE("PhysicsSolverBudget: friction stops a sliding box", "[physics][solver
 
     const PenBudget budget = Budget();
     REQUIRE(std::abs(w.Velocity(box).x) < Real(2.0)); // friction stopped it
-    REQUIRE(maxX > Real(2.0));                        // it DID slide
+    REQUIRE(maxX > hw);                                // it DID slide (past its own half-width)
     REQUIRE((w.Position(box).y + hh) - Real(0) < budget.ball); // did not sink
 }
 
@@ -348,26 +376,24 @@ TEST_CASE("PhysicsSolverBudget: friction stops a sliding box", "[physics][solver
 
 TEST_CASE("PhysicsSolverBudget: kinematic pushes dynamic", "[physics][solver][budget]")
 {
-    WorldDef wd; // gravity 0 -- isolate the push
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // zero-g scene: isolate the push from gravity (deliberate)
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
 
-    const Real hw = Real(2), hh = Real(2);
+    const Real hw = Real(0.2), hh = Real(0.2);
     BodyDef kdef;
     kdef.type     = BodyType::Kinematic;
-    kdef.position = Vec2(Real(-10), Real(0));
+    kdef.position = Vec2(Real(-1), Real(0));
     kdef.shape    = MakeAabb(hw, hh);
     BodyHandle plate = w.AddBody(kdef);
-    w.SetVelocity(plate, Vec2(Real(60), Real(0)));
+    w.SetVelocity(plate, Vec2(Real(6), Real(0)));
 
     BodyHandle box = AddBox(w, Vec2(Real(0), Real(0)), hw, hh);
 
     const Real boxX0 = w.Position(box).x;
+    // Zero-g, purely kinematic: distance/velocity ratio is scale-invariant
+    // under the uniform /10 mapping, so the px step count carries unchanged.
     for (int k = 0; k < 120; ++k)
     {
         w.Step(kStep);
@@ -375,10 +401,10 @@ TEST_CASE("PhysicsSolverBudget: kinematic pushes dynamic", "[physics][solver][bu
 
     const Real t = kStep * Real(120);
     // Kinematic kept its own trajectory (undeflected).
-    REQUIRE(w.Position(plate).x == Approx(Real(-10) + Real(60) * t).margin(Real(0.1)));
+    REQUIRE(w.Position(plate).x == Approx(Real(-1) + Real(6) * t).margin(Real(0.01)));
     REQUIRE(w.Position(plate).y == Approx(Real(0)).margin(Real(1e-3)));
     // Dynamic box was pushed forward (+x) and out of the way.
-    REQUIRE(w.Position(box).x > boxX0 + Real(2.0));
+    REQUIRE(w.Position(box).x > boxX0 + hw);
     REQUIRE(w.Position(box).x > w.Position(plate).x);
 }
 
@@ -390,16 +416,19 @@ TEST_CASE("PhysicsSolverBudget: deterministic across two runs", "[physics][solve
 {
     auto run = [](std::vector<Real>& trace)
     {
-        PhysicsWorld w(MakeWorldDef(Real(400)));
-        AddFloor(w, Vec2(Real(0), Real(5)), Real(50), Real(5));
+        PhysicsWorld w(MakeWorldDef(Real(10)));
+        AddFloor(w, Vec2(Real(0), Real(0.5)), Real(5), Real(0.5));
         std::vector<BodyHandle> boxes;
-        const Real hw = Real(2), hh = Real(2);
+        const Real hw = Real(0.2), hh = Real(0.2);
         for (int i = 0; i < 4; ++i)
         {
-            boxes.push_back(AddBox(w, Vec2(Real(0.0), -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1)),
+            boxes.push_back(AddBox(w, Vec2(Real(0.0), -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1)),
                                    hw, hh));
         }
-        w.ApplyImpulse(boxes[2], Vec2(Real(40), Real(0)));
+        // Impulse authored as mass * dv (protocol rule 3): box mass = density *
+        // 4*hw*hh = 1 * 4*0.2*0.2 = 0.16; target nudge dv = 2.5 m/s sideways.
+        const Real mass = Real(1) * Real(4) * hw * hh;
+        w.ApplyImpulse(boxes[2], mass * Vec2(Real(2.5), Real(0)));
 
         trace.clear();
         for (int k = 0; k < 200; ++k)
