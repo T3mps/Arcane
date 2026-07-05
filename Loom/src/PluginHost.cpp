@@ -244,6 +244,7 @@ bool PluginHost::Reload(bool restoreState)
     m_impl->DeleteFiles(next);
     m_impl->runtime.ClearSystems();
 
+    bool rolledBack = false;
     if (previous && !previous->dll.empty())
     {
         std::optional<Plugin> rollback = Plugin::Load(previous->dll);
@@ -257,11 +258,30 @@ bool PluginHost::Reload(bool restoreState)
                     ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
             }
             previous->plugin = std::move(*rollback);
+            rolledBack = true;
         }
     }
 
-    m_impl->current = std::move(previous);
-    ARC_ERROR("plugin reload failed (gen {}); rolled back to last-good", nextGen);
+    if (rolledBack)
+    {
+        m_impl->current = std::move(previous);
+        ARC_ERROR("plugin reload failed (gen {}); rolled back to last-good", nextGen);
+        return false;
+    }
+
+    // Double failure: the new image failed to load AND the last-good rollback
+    // also failed (or there was no last-good to roll back to). Do NOT install a
+    // half-assigned 'current' whose plugin optional is empty -- that reads as
+    // IsLoaded()==false / Vtable()==null while the host still believes a plugin
+    // is present, so the main loop's `if (vt)` guards silently freeze the sim
+    // (no FixedUpdate/Update/DrawUI) while still rendering, with only the generic
+    // reload-failed line logged. Surface an honest dead state instead: leave
+    // 'current' empty so IsLoaded()==false truthfully means "no plugin", clean up
+    // the abandoned last-good copies, and log the double failure explicitly.
+    if (previous)
+        m_impl->DeleteFiles(*previous);
+    m_impl->current.reset();
+    ARC_ERROR("plugin reload failed (gen {}); rollback to last-good ALSO failed -- no plugin loaded", nextGen);
     return false;
 }
 

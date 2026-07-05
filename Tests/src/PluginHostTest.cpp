@@ -103,3 +103,45 @@ TEST_CASE("ABI mismatch rolls back to last-good; session survives", "[hotreload]
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
 }
+
+TEST_CASE("Reload failure with no last-good yields an honest dead state", "[hotreload]")
+{
+    // The double-failure fix's reachable branch: a reload whose new image fails AND
+    // for which there is no last-good to roll back to (rolledBack == false). The host
+    // must surface an honest dead state -- IsLoaded()==false / Vtable()==null truly
+    // meaning "no plugin" -- rather than installing a half-assigned "loaded" image
+    // that would silently freeze the sim behind the main loop's `if (vt)` guards.
+    //
+    // NOTE: the OTHER double-failure sub-case (a real last-good whose plugin the
+    // teardown already emptied, then its temp copy fails to reload) is NOT cleanly
+    // reachable from the public fixture API: that temp copy is OS-locked while the
+    // module is loaded and is only unlocked mid-ForceReload (inside TeardownImage),
+    // where a test cannot intervene. Both sub-cases run the SAME fix code (the
+    // rolledBack gate -> reset current + honest ARC_ERROR), so this covers it.
+
+    // A dedicated bad-image source so we never clobber the shared V1 fixture.
+    std::filesystem::copy_file("HotReloadPluginBad.dll", "HotReloadBadSrc.dll",
+                               std::filesystem::copy_options::overwrite_existing);
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Pulse>();
+
+    PluginHost host(rt, std::filesystem::path("HotReloadBadSrc.dll"));
+    CHECK_FALSE(host.ForceReload());   // new image fails, no last-good -> double failure
+    CHECK_FALSE(host.IsLoaded());      // honest: no plugin
+    CHECK(host.Vtable() == nullptr);
+
+    // The session recovers cleanly from the dead state: a valid image still loads.
+    std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadBadSrc.dll",
+                               std::filesystem::copy_options::overwrite_existing);
+    REQUIRE(host.Load());
+    REQUIRE(host.IsLoaded());
+    REQUIRE(host.Vtable() != nullptr);
+    StepK(rt, *host.Vtable(), 3);
+    CHECK(ReadPulse(rt) == 3);
+    CHECK(Arcane::RenderErrorCount() == 0);
+    host.Unload();
+
+    std::error_code ec;
+    std::filesystem::remove("HotReloadBadSrc.dll", ec);
+}
