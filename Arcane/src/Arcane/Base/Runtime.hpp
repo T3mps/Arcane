@@ -10,6 +10,9 @@
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
 
+#include <Astra/Core/Result.hpp>
+#include <Astra/Serialization/SerializationError.hpp>
+
 #include <glm/glm.hpp>
 
 #include <cstddef>
@@ -102,7 +105,10 @@ namespace Arcane
         void* ImGuiUserData() const noexcept;
 
         // --- hot-reload support (plugin Save/LoadState + the host call these) ---
-        std::vector<std::byte> SnapshotRegistry() const;          // Registry::Save() -> bytes
+        // Registry::Save() -> framed snapshot bytes. Returns a Result so a Save
+        // failure surfaces as an actionable error at the call site rather than an
+        // empty-but-"ok" vector that masks data loss as a later reload failure.
+        Astra::Result<std::vector<std::byte>, Astra::SerializationError> SnapshotRegistry() const;
 
         // Swaps in a registry deserialized from bytes (3.3 Load keeps the workScheduler) and rebinds the
         // RunLoop. The SystemSchedulers are KEPT; the host clears + re-registers systems around a reload

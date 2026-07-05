@@ -194,7 +194,15 @@ extern "C"
         const uint64_t rootRaw = static_cast<uint64_t>(g_root);
         w(rootRaw);
 
-        const std::vector<std::byte> blob = g_ctx->engine->SnapshotRegistry();
+        auto snap = g_ctx->engine->SnapshotRegistry();
+        if (snap.IsErr())
+        {
+            // Snapshot failed: write a zero-length blob so LoadState fails cleanly
+            // (RestoreRegistry rejects an empty frame) instead of masking the loss.
+            w(static_cast<uint64_t>(0));
+            return;
+        }
+        const std::vector<std::byte>& blob = *snap.GetValue();
         w(static_cast<uint64_t>(blob.size()));
         w.WriteBytes(blob.data(), blob.size());
     }

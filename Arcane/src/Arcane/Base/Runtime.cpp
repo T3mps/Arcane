@@ -6,6 +6,7 @@
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
+#include <Arcane/Serialization/RegistrySnapshot.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Component/ComponentRegistry.hpp>
@@ -195,22 +196,21 @@ namespace Arcane
             RenderContext2D{batcher, m_impl->cameraOffset, m_impl->cameraZoom});
     }
 
-    std::vector<std::byte> Runtime::SnapshotRegistry() const
+    Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const
     {
-        auto r = m_impl->registry->Save();
-        if (r.IsErr())
+        // A real Save failure must be named at its source: an empty-but-"ok"
+        // snapshot would resurface much later as a generic "reload lost state"
+        // with the root cause erased. FinishSnapshot propagates the exact
+        // SerializationError; log it here so the hot-reload path names the cause.
+        auto snap = Serialization::FinishSnapshot(m_impl->registry->Save());
+        if (snap.IsErr())
         {
-            // A real Save failure must be named at its source: returning an empty
-            // snapshot silently would resurface much later as a generic "reload
-            // lost state" with the root cause erased. Log the SerializationError,
-            // then keep the empty-on-failure contract callers already rely on.
             const Astra::SerializationError err =
-                r.GetError() ? *r.GetError() : Astra::SerializationError::None;
-            ARC_ERROR("Runtime: SnapshotRegistry: registry Save failed ({}); returning empty snapshot",
+                snap.GetError() ? *snap.GetError() : Astra::SerializationError::None;
+            ARC_ERROR("Runtime: SnapshotRegistry: registry Save failed ({})",
                       SerializationErrorName(err));
-            return std::vector<std::byte>{};
         }
-        return std::move(*r.GetValue());
+        return snap;
     }
 
     bool Runtime::RestoreRegistry(std::span<const std::byte> bytes)

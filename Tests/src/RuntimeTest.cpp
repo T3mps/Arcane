@@ -8,6 +8,9 @@
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Arcane/Serialization/RegistrySnapshot.hpp>
+
+#include <Astra/Serialization/SerializationError.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -63,7 +66,9 @@ TEST_CASE("Runtime snapshot/restore preserves state AND the scheduler", "[runtim
     constexpr int kN = 2048;
     for (int i = 0; i < kN; ++i) reg.CreateEntityWith(Counter{7});
 
-    std::vector<std::byte> snap = rt.SnapshotRegistry();
+    auto snapResult = rt.SnapshotRegistry();
+    REQUIRE(snapResult.IsOk());
+    std::vector<std::byte>& snap = *snapResult.GetValue();
     REQUIRE(!snap.empty());
 
     // Mutate the live registry, then restore the snapshot.
@@ -105,4 +110,33 @@ TEST_CASE("Runtime ResetRegistry empties the registry but keeps the ComponentReg
     // The shared ComponentRegistry still knows Counter -> this must not crash and must land.
     rt.Registry().CreateEntityWith(Counter{1});
     CHECK(rt.Registry().Size() == 1);
+}
+
+// E02-4: a Save failure must surface as an actionable Result error, not an
+// empty-but-"ok" snapshot. Registry::Save() to memory is infallible, so the
+// propagation contract is proven through the pure FinishSnapshot seam and the
+// Runtime call site's success path.
+TEST_CASE("FinishSnapshot propagates a Save failure instead of masking it", "[runtime][serialization]")
+{
+    using SR = Arcane::Serialization::SnapshotResult;
+
+    auto failed = Arcane::Serialization::FinishSnapshot(SR::Err(Astra::SerializationError::IOError));
+    REQUIRE(failed.IsErr());
+    CHECK(*failed.GetError() == Astra::SerializationError::IOError);
+
+    std::vector<std::byte> bytes{std::byte{1}, std::byte{2}, std::byte{3}};
+    auto ok = Arcane::Serialization::FinishSnapshot(SR::Ok(bytes));
+    REQUIRE(ok.IsOk());
+    CHECK(ok.GetValue()->size() == 3);
+}
+
+TEST_CASE("Runtime SnapshotRegistry returns an actionable Result", "[runtime][serialization]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Counter>();
+    rt.Registry().CreateEntityWith(Counter{7});
+
+    auto snap = rt.SnapshotRegistry();
+    REQUIRE(snap.IsOk());
+    CHECK_FALSE(snap.GetValue()->empty());
 }
