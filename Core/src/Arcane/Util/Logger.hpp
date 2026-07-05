@@ -188,7 +188,7 @@ namespace Arcane
             auto logger = Get(LogCategory::Gacha);
             logger->info(
                 R"({{"event":"pull","player":"{}","banner":"{}","pull_num":{},"item_id":"{}","item_name":"{}","rarity":{},"pity":{},"guarantee":{},"featured":{},"won_5050":{}}})",
-                playerId, banner, pullNumber, itemId, itemName, rarity,
+                JsonEscape(playerId), JsonEscape(banner), pullNumber, JsonEscape(itemId), JsonEscape(itemName), rarity,
                 wasPity, wasGuarantee, wasFeatured, wonFiftyFifty
             );
         }
@@ -206,14 +206,14 @@ namespace Arcane
             {
                 logger->info(
                     R"({{"event":"{}","player":"{}","ip":"{}","success":{}}})",
-                    eventType, playerId, ip, success
+                    JsonEscape(eventType), JsonEscape(playerId), JsonEscape(ip), success
                 );
             }
             else
             {
                 logger->info(
                     R"({{"event":"{}","player":"{}","ip":"{}","success":{},"reason":"{}"}})",
-                    eventType, playerId, ip, success, reason
+                    JsonEscape(eventType), JsonEscape(playerId), JsonEscape(ip), success, JsonEscape(reason)
                 );
             }
         }
@@ -231,7 +231,7 @@ namespace Arcane
         // Audit M-V4-2 security (2026-06-03): optional `reason` so the
         // invalidate path can distinguish idle / expired / invalid /
         // forced-logout in the structured stream. Empty reason emits no
-        // "reason" field — backwards compatible with existing callers.
+        // "reason" field -- backwards compatible with existing callers.
         static void LogSessionEvent(
             const std::string& eventType,  // "created", "expired", "validated", "invalidated"
             const std::string& playerId,
@@ -250,14 +250,14 @@ namespace Arcane
             {
                 logger->debug(
                     R"({{"event":"session_{}","player":"{}","token_hash":"{}"}})",
-                    eventType, playerId, tokenHashPrefix
+                    JsonEscape(eventType), JsonEscape(playerId), JsonEscape(tokenHashPrefix)
                 );
             }
             else
             {
                 logger->debug(
                     R"({{"event":"session_{}","player":"{}","token_hash":"{}","reason":"{}"}})",
-                    eventType, playerId, tokenHashPrefix, reason
+                    JsonEscape(eventType), JsonEscape(playerId), JsonEscape(tokenHashPrefix), JsonEscape(reason)
                 );
             }
         }
@@ -271,15 +271,59 @@ namespace Arcane
             auto logger = Get(LogCategory::Net);
             if (reason.empty())
             {
-                logger->info(R"({{"event":"{}","ip":"{}"}})", eventType, ip);
+                logger->info(R"({{"event":"{}","ip":"{}"}})", JsonEscape(eventType), JsonEscape(ip));
             }
             else
             {
-                logger->info(R"({{"event":"{}","ip":"{}","reason":"{}"}})", eventType, ip, reason);
+                logger->info(R"({{"event":"{}","ip":"{}","reason":"{}"}})", JsonEscape(eventType), JsonEscape(ip), JsonEscape(reason));
             }
         }
 
     private:
+        // E01-4: minimal JSON string-value escaper. The structured-event
+        // methods above splice content-derived fields (player/item/banner ids
+        // and names, ip, reason) into hand-built JSON format strings; a raw
+        // '"', '\\' or control character in any of those would break the JSON
+        // and permit field/log injection into the analytics stream. Escape
+        // exactly the JSON string-value special characters (matching
+        // nlohmann/json dump() for ASCII: short forms for the common control
+        // chars, \u00XX for the rest, plus '"' and '\\'). Kept hand-rolled so
+        // this very widely-included header does not pull in the heavy
+        // nlohmann/json header. UTF-8 continuation bytes (>= 0x80) pass through
+        // unchanged, which is valid in a UTF-8 JSON document.
+        static std::string JsonEscape(const std::string& s)
+        {
+            std::string out;
+            out.reserve(s.size() + 8);
+            for (unsigned char c : s)
+            {
+                switch (c)
+                {
+                    case '"':  out += "\\\""; break;
+                    case '\\': out += "\\\\"; break;
+                    case '\b': out += "\\b";  break;
+                    case '\f': out += "\\f";  break;
+                    case '\n': out += "\\n";  break;
+                    case '\r': out += "\\r";  break;
+                    case '\t': out += "\\t";  break;
+                    default:
+                        if (c < 0x20)
+                        {
+                            static constexpr char kHex[] = "0123456789abcdef";
+                            out += "\\u00";
+                            out += kHex[(c >> 4) & 0x0F];
+                            out += kHex[c & 0x0F];
+                        }
+                        else
+                        {
+                            out += static_cast<char>(c);
+                        }
+                        break;
+                }
+            }
+            return out;
+        }
+
         static void CreateLogger(const std::string& name, const std::vector<spdlog::sink_ptr>& sinks)
         {
             auto logger = std::make_shared<spdlog::logger>(name, sinks.begin(), sinks.end());
