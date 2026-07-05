@@ -21,7 +21,7 @@ namespace Arcane
     // store it as a member variable rather than looking it up on every call.
 
     using MsgId = uint16_t;
-    inline constexpr MsgId kInvalidMsgId = 0;  // sentinel â€” never sent on the wire
+    inline constexpr MsgId kInvalidMsgId = 0;  // sentinel -- never sent on the wire
 
     // ============================================================================
     // JSON Type Alias
@@ -33,13 +33,13 @@ namespace Arcane
     // JSON Parse Helper (with error handling)
     // ============================================================================
 
-    // Lenient parse â€” returns an empty object on malformed input. Use only
+    // Lenient parse -- returns an empty object on malformed input. Use only
     // when downstream validation will catch every dangerous field (e.g.
     // Auth's username/password, read-only handlers that produce empty
     // responses). For mutating handlers that spend currency, edit party,
     // or otherwise change state, prefer ParseJsonStrict so a malformed
     // payload is rejected at the boundary instead of falling through to
-    // defaults â€” see audit M11 (2026-06-02).
+    // defaults -- see audit M11 (2026-06-02).
     inline Json ParseJsonSafe(const std::string& str)
     {
         try
@@ -52,7 +52,7 @@ namespace Arcane
         }
     }
 
-    // Strict parse â€” returns std::nullopt on malformed input. Mutating
+    // Strict parse -- returns std::nullopt on malformed input. Mutating
     // handlers (SetParty, AddCurrency, leveling, pulls, claim) must use
     // this and reject with an error response on nullopt. The audit M11
     // example: AddCurrency with malformed payload previously fell through
@@ -74,7 +74,7 @@ namespace Arcane
     // Protocol Loader
     // ============================================================================
     // Loads protocol.json at startup. All message IDs, auth requirements, and
-    // settings come from here â€” no compiled enum to keep in sync.
+    // settings come from here -- no compiled enum to keep in sync.
 
     class ProtocolLoader
     {
@@ -169,7 +169,7 @@ namespace Arcane
                 // Audit M-V5-6 networking (2026-06-04): optional keys.
                 // Default to the compile-time ServerConfig values when
                 // absent so existing protocol.json files keep working
-                // without modification. Casting through int is safe —
+                // without modification. Casting through int is safe --
                 // the ServerConfig constants are small (16, 2048).
                 m_settings.maxConnectionsPerIp = settings.value(
                     "max_connections_per_ip",
@@ -177,6 +177,14 @@ namespace Arcane
                 m_settings.maxConnectionsTotal = settings.value(
                     "max_connections_total",
                     static_cast<int>(ServerConfig::MAX_CONNECTIONS_TOTAL));
+
+                // E01-3c / reload semantics: Load REPLACES the protocol
+                // definition. Clear prior message/id/enum state so a reload
+                // does not merge into stale entries -- the loader is a process
+                // singleton that persists across reloads (and across tests).
+                m_messages.clear();
+                m_idToName.clear();
+                m_enums.clear();
 
                 if (j.contains("messages") && j["messages"].is_object())
                 {
@@ -189,6 +197,31 @@ namespace Arcane
                         msg.description = msgJson.value("description", "");
                         msg.requiresAuth = msgJson.value("requires_auth", false);
                         msg.debugOnly = msgJson.value("debug_only", false);
+
+                        // E01-3c: validate id BEFORE it is truncated into the
+                        // uint16 MsgId. Valid range is [1, 65535]: id 0 (also the
+                        // default for a missing "id") collides with kInvalidMsgId
+                        // which is never sent on the wire, and any id > 65535 would
+                        // silently wrap. A duplicate id would overwrite m_idToName
+                        // and misroute GetMessageName / auth lookups. All three are
+                        // authoring errors -- reject the whole load (return false,
+                        // matching the missing-settings signal) so startup fails
+                        // loud rather than misrouting messages later.
+                        if (msg.id <= 0 || msg.id > 65535)
+                        {
+                            LOG_PROTOCOL_ERROR(
+                                "Message '{}' has out-of-range id {} (valid range is 1..65535)",
+                                name, msg.id);
+                            return false;
+                        }
+                        auto dup = m_idToName.find(msg.id);
+                        if (dup != m_idToName.end())
+                        {
+                            LOG_PROTOCOL_ERROR(
+                                "Duplicate message id {} for '{}' (already used by '{}')",
+                                msg.id, name, dup->second);
+                            return false;
+                        }
 
                         m_messages[name] = msg;
                         m_idToName[msg.id] = name;
@@ -237,7 +270,7 @@ namespace Arcane
         // entry in protocol.json silently returns kInvalidMsgId, so the
         // handler ends up registered against id 0 and IsRegistered(type)
         // / Dispatch checks miss it. This helper resolves a name and
-        // throws on miss — handler ctors can call it during startup so
+        // throws on miss -- handler ctors can call it during startup so
         // the failure surfaces at boot instead of silently dropping
         // messages later. Wrap in a try at the call site if you want a
         // fatal log line instead of an exception escape.
@@ -246,7 +279,7 @@ namespace Arcane
             const MsgId id = Id(name);
             if (id == kInvalidMsgId)
                 throw std::logic_error("ProtocolLoader::IdOrThrow: unknown message name '" + name +
-                                       "' — protocol.json drift or typo");
+                                       "' -- protocol.json drift or typo");
             return id;
         }
 
