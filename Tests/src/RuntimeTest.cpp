@@ -203,3 +203,48 @@ TEST_CASE("Runtime snapshot/restore round-trips registered serializable resource
     CHECK(cam->x == Catch::Approx(10.0f));
     CHECK(cam->y == Catch::Approx(20.0f));
 }
+
+// Fix 4 (review): drive Runtime::RestoreRegistry's resources.IsErr() branch
+// end-to-end (the isolated corruption cases for ReadResourceSection itself
+// are covered in SerializationNegativeTest.cpp). A perfectly valid registry
+// blob paired with a corrupt resource-section tail must fail cleanly and
+// leave the live world completely untouched -- RestoreRegistry is documented
+// as transactional (load into a local registry first, only swap on full
+// success), so this proves the resource-section failure actually aborts the
+// swap rather than partially applying it.
+TEST_CASE("Runtime RestoreRegistry rejects a valid registry blob with a corrupt resource section", "[runtime][serialization]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Counter>();
+    rt.Registry().CreateEntityWith(Counter{42});
+
+    auto snap = rt.SnapshotRegistry();
+    REQUIRE(snap.IsOk());
+
+    // Split the valid frame, then re-frame the SAME valid registry blob with a
+    // deliberately corrupt resource section (count claims an entry that isn't
+    // there -> CorruptedData in ReadResourceSection).
+    auto frame = Arcane::Serialization::ParseSnapshot(*snap.GetValue());
+    REQUIRE(frame.IsOk());
+    const std::vector<std::byte> registryBlob(frame.GetValue()->registry.begin(),
+                                               frame.GetValue()->registry.end());
+
+    std::vector<std::byte> corruptSection;
+    Astra::BinaryWriter w(corruptSection);
+    w(static_cast<uint32_t>(1));   // count = 1, but no entry bytes follow
+
+    const std::vector<std::byte> bytes = Arcane::Serialization::FrameBytes(registryBlob, corruptSection);
+
+    CHECK_FALSE(rt.RestoreRegistry(bytes));
+
+    // World untouched: the live registry still has its original entity/value,
+    // proving RestoreRegistry did not swap in the (registry-valid-but-
+    // resource-corrupt) loaded registry.
+    int seen = 0;
+    rt.Registry().CreateView<Counter>().ForEach([&](Astra::Entity, Counter& c)
+    {
+        ++seen;
+        CHECK(c.value == 42);
+    });
+    CHECK(seen == 1);
+}
