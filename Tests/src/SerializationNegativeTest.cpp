@@ -164,6 +164,26 @@ TEST_CASE("ReadResourceSection handles corrupt sections and unknown types", "[se
         auto r = SR::ReadResourceSection(reg, b, set);
         CHECK(r.IsOk());
     }
+
+    // Review finding (Fix 3): LoadSceneRoot used to install whatever raw entity
+    // value the (well-framed) body carried, without checking it resolves in the
+    // target registry. A well-framed section carrying a bogus/dangling entity
+    // id must be rejected as corrupt data instead of silently installing an
+    // invalid SceneRoot.
+    SECTION("SceneRoot codec rejects a bogus entity that does not resolve -> CorruptedData")
+    {
+        std::vector<std::byte> b;
+        Astra::BinaryWriter w(b);
+        w(static_cast<uint32_t>(1));                                    // count = 1
+        w(Astra::TypeID<Arcane::SceneRoot>::Hash());                    // SceneRoot's real typeHash
+        w(static_cast<uint32_t>(sizeof(uint64_t)));                     // bodyLen = 8
+        w(static_cast<uint64_t>(0xDEADBEEFULL));                        // bogus entity raw value;
+                                                                         // reg has zero entities, so it
+                                                                         // cannot resolve to anything valid
+        auto r = SR::ReadResourceSection(reg, b, set);
+        REQUIRE(r.IsErr());
+        CHECK(*r.GetError() == Astra::SerializationError::CorruptedData);
+    }
 }
 
 // ---------------------------------------------------------------------------

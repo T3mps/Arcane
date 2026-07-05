@@ -34,8 +34,12 @@ namespace Arcane::Serialization
             uint64_t raw = 0;
             r(raw);
             if (r.HasError()) return false;
-            reg.SetResource<SceneRoot>(
-                SceneRoot{ Astra::Entity(static_cast<Astra::Entity::StorageType>(raw)) });
+
+            const Astra::Entity entity(static_cast<Astra::Entity::StorageType>(raw));
+            if (!reg.IsValid(entity))
+                return false;   // corrupt/dangling entity id -- do not install an invalid SceneRoot
+
+            reg.SetResource<SceneRoot>(SceneRoot{ entity });
             return true;
         }
     }
