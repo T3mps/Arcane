@@ -7,6 +7,7 @@
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
+#include <Arcane/Serialization/ResourceSerialization.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Component/ComponentRegistry.hpp>
@@ -202,25 +203,47 @@ namespace Arcane
         // snapshot would resurface much later as a generic "reload lost state"
         // with the root cause erased. FinishSnapshot propagates the exact
         // SerializationError; log it here so the hot-reload path names the cause.
-        auto snap = Serialization::FinishSnapshot(m_impl->registry->Save());
-        if (snap.IsErr())
+        auto save = Serialization::FinishSnapshot(m_impl->registry->Save());
+        if (save.IsErr())
         {
             const Astra::SerializationError err =
-                snap.GetError() ? *snap.GetError() : Astra::SerializationError::None;
+                save.GetError() ? *save.GetError() : Astra::SerializationError::None;
             ARC_ERROR("Runtime: SnapshotRegistry: registry Save failed ({})",
                       SerializationErrorName(err));
+            return save;
         }
-        return snap;
+
+        // Astra's Save drops all resources; frame the serializable-resource
+        // section (SceneRoot + any host/test-registered types) alongside the blob.
+        std::vector<std::byte> section =
+            Serialization::WriteResourceSection(*m_impl->registry, Serialization::SerializableResources());
+        return Serialization::SnapshotResult::Ok(
+            Serialization::FrameBytes(*save.GetValue(), section));
     }
 
     bool Runtime::RestoreRegistry(std::span<const std::byte> bytes)
     {
+        // Split the frame into the registry blob + resource section. Transactional:
+        // load into a local registry, apply resources, and only swap the live
+        // registry + rebind the loop on FULL success, so a corrupt frame leaves
+        // the running world untouched.
+        auto frame = Serialization::ParseSnapshot(bytes);
+        if (frame.IsErr())
+            return false;
+
         Astra::Registry::Config cfg;
         cfg.workScheduler = m_impl->sched;
-        auto r = Astra::Registry::Load(bytes, m_impl->components, cfg);   // 3.3 Config overload
+        auto r = Astra::Registry::Load(frame.GetValue()->registry, m_impl->components, cfg);   // 3.3 Config overload
         if (r.IsErr())
             return false;
-        m_impl->registry = std::move(*r.GetValue());
+        std::unique_ptr<Astra::Registry> loaded = std::move(*r.GetValue());
+
+        auto resources = Serialization::ReadResourceSection(
+            *loaded, frame.GetValue()->resources, Serialization::SerializableResources());
+        if (resources.IsErr())
+            return false;
+
+        m_impl->registry = std::move(loaded);
         m_impl->loop = std::make_unique<RunLoop>(*m_impl->registry, *m_impl->schedulers, m_impl->loopCfg);
         return true;
     }

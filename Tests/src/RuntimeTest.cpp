@@ -3,12 +3,15 @@
 // ComponentRegistry, a swappable Registry, schedulers, RunLoop, and the JobSystem.
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
+#include <Arcane/Serialization/ResourceSerialization.hpp>
 
 #include <Astra/Serialization/SerializationError.hpp>
 
@@ -18,6 +21,7 @@
 #include <Astra/Reflection/Reflection.hpp>
 
 #include <atomic>
+#include <utility>
 
 namespace { struct Counter { int value = 0; }; }
 namespace { ASTRA_REFLECT_TYPE(Counter) ASTRA_REFLECT_FIELD(Counter, value) ASTRA_END_REFLECT_TYPE() }
@@ -139,4 +143,63 @@ TEST_CASE("Runtime SnapshotRegistry returns an actionable Result", "[runtime][se
     auto snap = rt.SnapshotRegistry();
     REQUIRE(snap.IsOk());
     CHECK_FALSE(snap.GetValue()->empty());
+}
+
+// E02-1: a snapshot->restore round-trip must preserve registered serializable
+// resources, not just entities/components. SceneRoot is registered by default;
+// a second resource type is registered here to prove the seam handles a SET of
+// resources (not a SceneRoot special case).
+namespace
+{
+    struct CameraSnapshot { float zoom = 1.0f; float x = 0.0f; float y = 0.0f; };
+
+    bool SaveCamera(const Astra::Registry& reg, Astra::BinaryWriter& w)
+    {
+        const CameraSnapshot* c = reg.GetResource<CameraSnapshot>();
+        if (!c) return false;
+        w(c->zoom); w(c->x); w(c->y);
+        return true;
+    }
+    bool LoadCamera(Astra::Registry& reg, Astra::BinaryReader& r)
+    {
+        CameraSnapshot c;
+        r(c.zoom); r(c.x); r(c.y);
+        if (r.HasError()) return false;
+        reg.SetResource<CameraSnapshot>(std::move(c));
+        return true;
+    }
+}
+
+TEST_CASE("Runtime snapshot/restore round-trips registered serializable resources", "[runtime][serialization][scene]")
+{
+    // Register the extra resource codec into the process-wide set the engine
+    // snapshots with (idempotent -- safe if another test already registered it).
+    Arcane::Serialization::SerializableResources().Register(
+        Arcane::Serialization::ResourceCodec{
+            Astra::TypeID<CameraSnapshot>::Hash(), &SaveCamera, &LoadCamera });
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Astra::Entity root = rt.Registry().CreateEntity();
+    rt.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    rt.Registry().SetResource<CameraSnapshot>(CameraSnapshot{2.5f, 10.0f, 20.0f});
+
+    auto snap = rt.SnapshotRegistry();
+    REQUIRE(snap.IsOk());
+
+    // Clobber both resources on the live registry, then restore from the snapshot.
+    rt.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{Astra::Entity::Invalid()});
+    rt.Registry().SetResource<CameraSnapshot>(CameraSnapshot{});
+    REQUIRE(rt.RestoreRegistry(*snap.GetValue()));
+
+    // Both survived (RestoreRegistry swapped the registry, so re-fetch it).
+    const Arcane::SceneRoot* sr = rt.Registry().GetResource<Arcane::SceneRoot>();
+    REQUIRE(sr != nullptr);
+    CHECK(sr->entity == root);                 // entity id survived Save/Load
+    CHECK(rt.Registry().IsValid(sr->entity));  // and still resolves in the loaded registry
+
+    const CameraSnapshot* cam = rt.Registry().GetResource<CameraSnapshot>();
+    REQUIRE(cam != nullptr);
+    CHECK(cam->zoom == Catch::Approx(2.5f));
+    CHECK(cam->x == Catch::Approx(10.0f));
+    CHECK(cam->y == Catch::Approx(20.0f));
 }
