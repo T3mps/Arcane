@@ -38,6 +38,15 @@ namespace Arcane::Audio
 
 		[[nodiscard]] bool IsInitialized() const noexcept;
 
+		// Per-frame main-thread tick. Reclaims finished fire-and-forget voices
+		// (non-looping one-shots whose end-callback has flagged them) so their
+		// slots do not leak. On a headless (noDevice) engine there is no audio
+		// thread advancing playback, so a positive dtSeconds also read-and-discards
+		// that much audio time to let one-shots reach their end (and fire their
+		// callbacks); with a real device the device thread drives mixing and no
+		// pumping happens. Cheap to call every frame; safe with nothing playing.
+		void Update(double dtSeconds = 0.0) noexcept;
+
 		// --- Sounds (main-thread-only) ---
 		[[nodiscard]] SoundHandle LoadSound(const std::filesystem::path& path, const SoundLoadDesc& desc = {});
 		void UnloadSound(SoundHandle handle) noexcept;
@@ -54,6 +63,11 @@ namespace Arcane::Audio
 		void StopSound(SoundHandle sound) noexcept;
 		void StopBus(BusHandle bus) noexcept;
 		[[nodiscard]] bool IsValid(VoiceHandle voice) const noexcept;
+
+		// True while the voice is valid and still playing (not paused, not ended).
+		// A one-shot that has reached its end reads false even before Update reaps
+		// its slot.
+		[[nodiscard]] bool IsPlaying(VoiceHandle voice) const noexcept;
 
 		void SetVolume(VoiceHandle voice, float volume) noexcept;
 		void SetPitch(VoiceHandle voice, float pitch) noexcept;

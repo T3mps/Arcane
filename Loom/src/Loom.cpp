@@ -6,6 +6,7 @@
 
 #include "Loom.hpp"
 
+#include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -140,6 +141,9 @@ void Loom::MainLoop()
             m_runtime->Loop().Advance(simDt,
                 [&](double dt)          { if (vt) vt->FixedUpdate(dt); },
                 [&](double dt, double a){ if (vt) vt->Update(dt, a); });
+            // Reclaim finished fire-and-forget SFX voices each frame (and, on the
+            // headless null backend, advance audio time so one-shots actually end).
+            m_runtime->AudioSystem().Update(simDt);
             m_perf.Add(m_perf.accSim, t0, m_perf.Now());
         }
 

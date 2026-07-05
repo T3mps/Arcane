@@ -274,6 +274,48 @@ TEST_CASE("AudioDevice bumps generation so a freed-then-reused voice handle is s
     audio.Stop(reused);
 }
 
+TEST_CASE("AudioDevice reclaims finished one-shot voices; keeps looping ones", "[audio]")
+{
+    using namespace Arcane::Audio;
+
+    AudioDevice audio;
+    auto assets = Arcane::Assets::Create(nullptr);
+    AudioDeviceDesc deviceDesc;
+    deviceDesc.enableDevice = false;   // null backend: Update pumps audio time for us
+    REQUIRE(audio.Init(assets.get(), deviceDesc));
+
+    const auto wav = WriteSilentWav();   // 128 frames @ 8000 Hz ~= 16 ms
+    SoundHandle sound = audio.LoadSound(wav);
+    REQUIRE(audio.IsValid(sound));
+
+    // A non-looping one-shot, playing. Before the fix nothing ever reclaimed it,
+    // so the VoiceSlot stayed alive forever (the leak). Now Update advances the
+    // headless engine past the clip's end, the end-callback flags the slot, and
+    // the same Update reaps it.
+    PlayDesc oneShot;   // loop defaults to false, starts playing
+    VoiceHandle voice = audio.Play(sound, oneShot);
+    REQUIRE(audio.IsValid(voice));
+    CHECK(audio.IsPlaying(voice));
+
+    audio.Update(0.100);   // 100 ms >> 16 ms clip -> voice ends and is reclaimed
+    CHECK_FALSE(audio.IsValid(voice));
+
+    // A looping voice never ends, so it must never be auto-reaped.
+    PlayDesc loop;
+    loop.loop = true;
+    VoiceHandle loopVoice = audio.Play(sound, loop);
+    REQUIRE(audio.IsValid(loopVoice));
+
+    audio.Update(0.100);
+    CHECK(audio.IsValid(loopVoice));     // still alive after a long pump
+    CHECK(audio.IsPlaying(loopVoice));
+
+    audio.Stop(loopVoice);
+    CHECK_FALSE(audio.IsValid(loopVoice));
+
+    audio.UnloadSound(sound);
+}
+
 TEST_CASE("AudioDevice load failure returns an invalid handle without crashing", "[audio]")
 {
     using namespace Arcane::Audio;

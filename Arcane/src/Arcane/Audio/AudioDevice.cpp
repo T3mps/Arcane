@@ -5,6 +5,7 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
 
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <deque>
@@ -56,6 +57,15 @@ namespace Arcane::Audio
 		bool decoderInitialized = false;
 		bool bufferInitialized = false;
 
+		// Set by the miniaudio end-callback (audio thread) when a non-looping
+		// voice reaches its end; consumed by ReapEndedVoices on the main thread,
+		// which frees the slot. atomic so the cross-thread hand-off is a plain
+		// flag set -- the callback touches NOTHING else (no uninit, no tables).
+		// VoiceSlots live in a std::deque and are only ever default-constructed
+		// in place (emplace_back) and mutated field-by-field, so a non-movable
+		// atomic member is fine here (no slot is ever copied or moved).
+		std::atomic<bool> ended{false};
+
 		// StreamFromDisk: the decoder reads lazily from these source bytes for the
 		// voice's ENTIRE lifetime, so the voice owns its own reference rather than
 		// trusting the SoundSlot to outlive it. Cleared in FreeVoiceSlotOnly (after
@@ -67,6 +77,7 @@ namespace Arcane::Audio
 	{
 		ma_engine engine{};
 		bool initialized = false;
+		bool hasDevice = false;   // true only when a real OS device was opened (not the null backend)
 		Assets* assets = nullptr;
 
 		// Thread that called Init -- the only thread allowed to mutate the tables.
@@ -275,6 +286,7 @@ namespace Arcane::Audio
 			slot.decoderInitialized = false;
 			slot.bufferInitialized = false;
 			slot.sourceBytes.reset();   // release the streaming voice's owned bytes
+			slot.ended.store(false, std::memory_order_relaxed);   // fresh for the next allocation
 			++slot.generation;
 
 			freeVoices.push_back(h.index);
@@ -293,6 +305,59 @@ namespace Arcane::Audio
 			if (slot.decoderInitialized)
 				ma_decoder_uninit(&slot.decoder);
 			FreeVoiceSlotOnly(h);
+		}
+
+		// miniaudio end-callback. Fires on the AUDIO thread (or the pump thread in
+		// noDevice mode) when a non-looping voice reaches its end. CONTRACT: only
+		// set the thread-safe flag -- do NOT uninit the sound or touch any table
+		// here; reclamation happens on the main thread in ReapEndedVoices. userData
+		// is the owning VoiceSlot* (stable: slots live in a std::deque and the sound
+		// is uninit'd before its slot can be reused, so this pointer never dangles).
+		static void OnVoiceEnd(void* userData, ma_sound* /*sound*/)
+		{
+			auto* slot = static_cast<VoiceSlot*>(userData);
+			slot->ended.store(true, std::memory_order_release);
+		}
+
+		// Main-thread reclamation of voices the end-callback flagged as finished.
+		// Frees in ascending index order so slot reuse stays deterministic.
+		void ReapEndedVoices()
+		{
+			for (std::uint32_t i = 1; i < voices.size(); ++i)
+			{
+				VoiceSlot& slot = voices[i];
+				if (!slot.alive)
+					continue;
+				if (slot.ended.load(std::memory_order_acquire))
+					FreeVoice(VoiceHandle{ i, slot.generation });
+			}
+		}
+
+		// noDevice engines have no audio thread consuming frames, so playback only
+		// advances when the host ticks. Read-and-discard dtSeconds of audio so
+		// non-looping voices actually reach their end and fire OnVoiceEnd. The
+		// engine is f32; a small scratch buffer is read in chunks and thrown away.
+		void PumpHeadless(double dtSeconds)
+		{
+			const ma_uint32 sr = ma_engine_get_sample_rate(&engine);
+			const ma_uint32 ch = ma_engine_get_channels(&engine);
+			if (sr == 0 || ch == 0 || dtSeconds <= 0.0)
+				return;
+
+			ma_uint64 frames = static_cast<ma_uint64>(dtSeconds * static_cast<double>(sr) + 0.5);
+			if (frames == 0)
+				return;
+
+			constexpr ma_uint64 kChunkFrames = 512;
+			std::vector<float> scratch(static_cast<size_t>(ch) * kChunkFrames);
+			while (frames > 0)
+			{
+				const ma_uint64 want = frames < kChunkFrames ? frames : kChunkFrames;
+				ma_uint64 read = 0;
+				if (ma_engine_read_pcm_frames(&engine, scratch.data(), want, &read) != MA_SUCCESS || read == 0)
+					break;
+				frames -= read;
+			}
 		}
 
 		void StopAllVoices() noexcept
@@ -358,6 +423,7 @@ namespace Arcane::Audio
 		}
 
 		m_impl->initialized = true;
+		m_impl->hasDevice = desc.enableDevice;   // null backend => headless; Update pumps time
 		m_impl->assets = assets;
 		m_impl->mainThreadId = std::this_thread::get_id();   // pins the main-thread contract
 
@@ -556,6 +622,11 @@ namespace Arcane::Audio
 
 		m_impl->AssertMainThread();
 
+		// Reclaim any fire-and-forget voices that have finished since the last
+		// tick before allocating -- keeps the pool from growing unbounded even
+		// if the host never calls Update, and lets a freed slot be reused here.
+		m_impl->ReapEndedVoices();
+
 		const SoundSlot& soundSlot = m_impl->sounds[sound.index];
 
 		ma_sound_group* group = nullptr;
@@ -640,6 +711,17 @@ namespace Arcane::Audio
 		voiceSlot.bus = desc.bus;
 
 		ma_sound_set_looping(&voiceSlot.sound, desc.loop ? MA_TRUE : MA_FALSE);
+
+		// Fire-and-forget reclamation: a non-looping voice registers an end-callback
+		// that flags the slot when it finishes; ReapEndedVoices frees it on the main
+		// thread. Looping voices never end, so they get no callback (and must never
+		// be auto-reaped). ended is reset here in case the slot was recycled.
+		if (!desc.loop)
+		{
+			voiceSlot.ended.store(false, std::memory_order_release);
+			ma_sound_set_end_callback(&voiceSlot.sound, &Impl::OnVoiceEnd, &voiceSlot);
+		}
+
 		ma_sound_set_volume(&voiceSlot.sound, desc.volume);
 		ma_sound_set_pitch(&voiceSlot.sound, desc.pitch);
 		ma_sound_set_pan(&voiceSlot.sound, desc.pan);
@@ -667,11 +749,40 @@ namespace Arcane::Audio
 		m_impl->AssertMainThread();
 
 		m_impl->FreeVoice(voice);
+		// Opportunistic reclaim of any other finished one-shots (lazy reap path).
+		m_impl->ReapEndedVoices();
+	}
+
+	void AudioDevice::Update(double dtSeconds) noexcept
+	{
+		if (!IsInitialized())
+			return;
+
+		m_impl->AssertMainThread();
+
+		// Headless engines have no audio thread, so advance playback ourselves so
+		// one-shots reach their end and fire OnVoiceEnd. With a real device the
+		// device thread drives mixing -- pumping here would double-consume frames.
+		if (!m_impl->hasDevice)
+			m_impl->PumpHeadless(dtSeconds);
+
+		m_impl->ReapEndedVoices();
 	}
 
 	bool AudioDevice::IsValid(VoiceHandle voice) const noexcept
 	{
 		return m_impl && m_impl->IsValid(voice);
+	}
+
+	bool AudioDevice::IsPlaying(VoiceHandle voice) const noexcept
+	{
+		if (!IsValid(voice))
+			return false;
+
+		VoiceSlot& slot = m_impl->voices[voice.index];
+		if (slot.ended.load(std::memory_order_acquire))
+			return false;
+		return ma_sound_is_playing(&slot.sound) == MA_TRUE;
 	}
 
 	void AudioDevice::SetVolume(VoiceHandle voice, float volume) noexcept
