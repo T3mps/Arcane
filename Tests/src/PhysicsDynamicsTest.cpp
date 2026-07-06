@@ -45,6 +45,8 @@ using Catch::Approx;
 namespace
 {
     constexpr Real kStep = Real(1) / Real(60);
+    // kPi comes from Arcane::Physics::kPi (PhysicsTypes.hpp) via the using-
+    // namespace directive above -- do not redeclare it here (ambiguous symbol).
 
     // Build a world with gravity and one free-falling dynamic circle at origin.
     BodyHandle AddFallingBody(PhysicsWorld& w, Vec2 pos = Vec2(Real(0), Real(0)))
@@ -52,7 +54,7 @@ namespace
         BodyDef def;
         def.type     = BodyType::Dynamic;
         def.position = pos;
-        def.shape    = MakeCircle(Real(1));
+        def.shape    = MakeCircle(Real(0.5));
         def.density  = Real(1);
         return w.AddBody(def);
     }
@@ -64,19 +66,13 @@ namespace
 
 TEST_CASE("PhysicsDynamics: free-fall matches sub-stepped semi-implicit Euler", "[physics][dynamics]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) MKS -- Box2D v3 default, y-down
     PhysicsWorld w(wd);
 
-    const Vec2 pos0(Real(10), Real(-5));
+    const Vec2 pos0(Real(1), Real(-0.5));
     BodyHandle h = AddFallingBody(w, pos0);
 
-    const Real g  = Real(400);
+    const Real g  = Real(10);
     const Real dt = kStep;
     const Real N  = static_cast<Real>(wd.substepCount); // 4 by default
 
@@ -118,13 +114,7 @@ TEST_CASE("PhysicsDynamics: free-fall matches sub-stepped semi-implicit Euler", 
 
 TEST_CASE("PhysicsDynamics: DrawPosition lerps the fall", "[physics][dynamics]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) MKS
     PhysicsWorld w(wd);
 
     BodyHandle h = AddFallingBody(w);
@@ -146,23 +136,17 @@ TEST_CASE("PhysicsDynamics: DrawPosition lerps the fall", "[physics][dynamics]")
 
 TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics]")
 {
-    const Real g  = Real(400);
+    const Real g  = Real(10);
     const Real dt = kStep;
     const Real damp = Real(2);
 
-    WorldDef wd;
-    wd.gravityY = g;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) MKS, matching g above
 
     // Damped body.
     PhysicsWorld wDamp(wd);
     BodyDef ddef;
     ddef.type          = BodyType::Dynamic;
-    ddef.shape         = MakeCircle(Real(1));
+    ddef.shape         = MakeCircle(Real(0.5));
     ddef.linearDamping = damp;
     BodyHandle hd = wDamp.AddBody(ddef);
 
@@ -217,27 +201,27 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
 TEST_CASE("PhysicsDynamics: ApplyImpulse adds impulse/mass and wakes", "[physics][dynamics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
-    PhysicsWorld w(wd); // gravity 0
+    wd.gravityX = Real(0); // zero-g scene: isolate impulse response from gravity
+    wd.gravityY = Real(0);
+    PhysicsWorld w(wd);
 
     BodyDef def;
     def.type    = BodyType::Dynamic;
-    def.shape   = MakeCircle(Real(1));
+    def.shape   = MakeCircle(Real(0.5));
     def.density = Real(1);
     BodyHandle h = w.AddBody(def);
 
-    // mass = density * pi * r^2 = pi ; invMass = 1/pi.
-    const Real mass    = Real(3.14159265358979323846) * Real(1) * Real(1);
+    // mass = density * pi * r^2 = pi * 0.25 (r = 0.5); invMass = 1/mass.
+    const Real r       = Real(0.5);
+    const Real mass    = Real(1) * kPi * r * r;
     const Real invMass = Real(1) / mass;
 
     REQUIRE(w.Velocity(h).x == Approx(Real(0)));
 
-    const Vec2 impulse(Real(10), Real(-4));
+    // Author the impulse as mass * target delta-v (2, -1 m/s) rather than a
+    // magic impulse literal.
+    const Vec2 targetDv(Real(2), Real(-1));
+    const Vec2 impulse = mass * targetDv;
     w.ApplyImpulse(h, impulse);
 
     REQUIRE(w.Velocity(h).x == Approx(impulse.x * invMass).margin(Real(1e-4)));
@@ -249,7 +233,8 @@ TEST_CASE("PhysicsDynamics: ApplyImpulse adds impulse/mass and wakes", "[physics
     // Body at origin; apply at world point (0, 1) with a +x impulse -> negative
     // z torque (cross((0,1),(j,0)) = 0*0 - 1*j = -j). With invInertia > 0 this
     // changes the body's angle after a Step.
-    w.ApplyImpulse(h, Vec2(Real(5), Real(0)), Vec2(Real(0), Real(1)));
+    const Vec2 targetDv2(Real(1), Real(0)); // second impulse's target delta-v
+    w.ApplyImpulse(h, mass * targetDv2, Vec2(Real(0), Real(1)));
     w.Step(kStep);
     REQUIRE(w.GetAngle(h) != Approx(angBefore)); // rotated (invInertia > 0)
 }
@@ -260,13 +245,7 @@ TEST_CASE("PhysicsDynamics: ApplyImpulse adds impulse/mass and wakes", "[physics
 
 TEST_CASE("PhysicsDynamics: static + kinematic ignore gravity", "[physics][dynamics]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) MKS
     PhysicsWorld w(wd);
 
     BodyDef sdef;
@@ -278,7 +257,7 @@ TEST_CASE("PhysicsDynamics: static + kinematic ignore gravity", "[physics][dynam
     BodyDef kdef;
     kdef.type     = BodyType::Kinematic;
     kdef.position = Vec2(Real(5), Real(0));
-    kdef.shape    = MakeCircle(Real(1));
+    kdef.shape    = MakeCircle(Real(0.5));
     BodyHandle hk = w.AddBody(kdef);
     w.SetVelocity(hk, Vec2(Real(3), Real(0))); // pure horizontal kinematic motion
 
@@ -304,23 +283,21 @@ TEST_CASE("PhysicsDynamics: static + kinematic ignore gravity", "[physics][dynam
 TEST_CASE("PhysicsDynamics: mass override sets invMass", "[physics][dynamics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
-    PhysicsWorld w(wd); // gravity 0
+    wd.gravityX = Real(0); // zero-g scene: isolate mass-override response from gravity
+    wd.gravityY = Real(0);
+    PhysicsWorld w(wd);
 
     BodyDef def;
     def.type    = BodyType::Dynamic;
-    def.shape   = MakeCircle(Real(1));
+    def.shape   = MakeCircle(Real(0.5));
     def.density = Real(1);
     def.mass    = Real(2); // override: invMass should be 1/2 regardless of density
     BodyHandle h = w.AddBody(def);
 
-    // impulse of magnitude (mass) along x -> velocity exactly 1.
-    w.ApplyImpulse(h, Vec2(Real(2), Real(0)));
+    // impulse = mass * target delta-v (1 m/s along x) -> velocity exactly 1.
+    const Real mass = def.mass;
+    const Vec2 targetDv(Real(1), Real(0));
+    w.ApplyImpulse(h, mass * targetDv);
     REQUIRE(w.Velocity(h).x == Approx(Real(1)).margin(Real(1e-5)));
 }
 
@@ -333,22 +310,22 @@ TEST_CASE("PhysicsDynamics: run-twice determinism", "[physics][dynamics]")
     auto run = [](std::vector<Real>& trace)
     {
         WorldDef wd;
-        wd.gravityX = Real(50);
-        wd.gravityY = Real(400);
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        wd.gravityX = Real(2.5); // custom asymmetric gravity: both axes nonzero
+        wd.gravityY = Real(10);  // is the case's point (exercises the 2D integrate)
         PhysicsWorld w(wd);
 
         BodyDef def;
         def.type          = BodyType::Dynamic;
         def.position      = Vec2(Real(1), Real(2));
-        def.shape         = MakeCircle(Real(1));
+        def.shape         = MakeCircle(Real(0.5));
         def.density       = Real(1.5);
         def.linearDamping = Real(0.3);
         BodyHandle h = w.AddBody(def);
-        w.ApplyImpulse(h, Vec2(Real(7), Real(-3)));
+
+        // impulse = mass * target delta-v (3, -1 m/s); mass = density*pi*r^2.
+        const Real r    = Real(0.5);
+        const Real mass = def.density * kPi * r * r;
+        w.ApplyImpulse(h, mass * Vec2(Real(3), Real(-1)));
 
         trace.clear();
         for (int k = 0; k < 40; ++k)
