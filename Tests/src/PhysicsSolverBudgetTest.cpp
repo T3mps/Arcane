@@ -264,13 +264,17 @@ TEST_CASE("PhysicsSolverBudget: energy bounded", "[physics][solver][budget]")
                                hw, hh));
     }
 
-    for (int k = 0; k < 600; ++k)
-    {
-        w.Step(kStep);
-    }
-
+    // MKS P2 review fix (A7): track peakKE from step 0 so the window covers
+    // the real energy-injection risk -- the falling/settling transient --
+    // instead of the post-sleep steady state. Under MKS's tighter
+    // sleepThreshold (0.05 m/s) the stack fully settles and SLEEPS well
+    // before step 600, so the old pre-settle-then-measure split measured a
+    // window that was already asleep (peakKE == 0.0 exactly, a vacuous
+    // bound). isfinite coverage stays over the FULL 1800-step run -- not
+    // weakened; it now covers MORE of the run than before, since the old
+    // 600-step pre-loop had no isfinite check at all.
     Real peakKE = Real(0);
-    for (int k = 0; k < 1200; ++k)
+    for (int k = 0; k < 1800; ++k)
     {
         w.Step(kStep);
         Real ke = Real(0);
@@ -282,15 +286,18 @@ TEST_CASE("PhysicsSolverBudget: energy bounded", "[physics][solver][budget]")
         peakKE = std::max(peakKE, ke);
         REQUIRE(std::isfinite(ke));
     }
-    // Re-baselined for MKS (MKS P2): measured peakKE == 0.0 exactly -- the
-    // stack fully settles and SLEEPS (sleepThreshold 0.05 m/s) during the
-    // 600-step pre-loop, so the tracked window sees no residual motion at
-    // all. A straight 1.5x-of-measured multiple is degenerate here (1.5*0);
-    // 0.01 J is the chosen floor -- far above float noise or legitimate
-    // settling jitter, far below what a real energy-injection bug would
-    // produce (box mass ~0.16 kg; 0.01 J implies ~0.35 m/s, itself well
-    // under the 2.0 m/s "settled" gate elsewhere in this file).
-    REQUIRE(peakKE < Real(0.01));
+    // Re-derived (MKS P2 review, A7): measured peakKE ~= 8.0 at step 11
+    // (0.18 s in), NOT during any impact/settling instability -- this is
+    // this test's per-body sum of 0.5*|v|^2 (note: the formula above never
+    // multiplies by mass, a pre-existing quirk of this test left as-is; the
+    // quantity tracked is proportional to squared speed, not literal
+    // Joules). All 4 boxes share the same 0.01 m gap and so free-fall
+    // TOGETHER at identical velocity until box0 (the bottom box) makes its
+    // first floor contact: box0 falls ~0.206 m under g=10 -> v ~= 2.0 m/s
+    // at contact -> 4 boxes * 0.5 * 2.0^2 = 8.0. Nothing later in the
+    // 1800-step run exceeds this pre-contact free-fall peak (the stack
+    // settles and sleeps well after). Bound set at ~1.5x measured: 12.0.
+    REQUIRE(peakKE < Real(12.0));
 }
 
 // ---------------------------------------------------------------------------
@@ -311,10 +318,24 @@ TEST_CASE("PhysicsSolverBudget: restitution rebounds", "[physics][solver][budget
     const Real restY = -r;
     const Real dropHeight = std::abs(startY - restY);
 
-    Real apexY = startY;
+    // MKS P2 review fix (A7): apexY must start at the authored REST y, not
+    // startY. The update below is gated on hitFloor, so pre-contact steps
+    // never touch apexY; seeding it with startY (the old code) made
+    // "y < apexY" unsatisfiable forever (y never falls below its own drop
+    // origin after a lossy bounce), so reboundHeight == dropHeight
+    // identically and both bounds below were vacuously true. Seeding with
+    // restY lets the post-contact minimum (highest point of the rebound,
+    // since +Y is down) actually get tracked.
+    Real apexY = restY;
     bool hitFloor = false;
     // Drop height ~3.8 m under g=10 -> t ~= sqrt(2*3.8/10) ~= 0.87 s ~= 53
-    // steps to first contact; 480 steps (8 s) covers first bounce + apex.
+    // steps to first contact; impact speed ~= sqrt(2*10*3.8) ~= 8.72 m/s,
+    // comfortably above the MKS default restitutionThreshold (1.0 m/s), so
+    // restitution actually applies. First-bounce rebound apex (e=0.8 ->
+    // rebound speed ~= 0.8*8.72 = 6.97 m/s, time-to-apex ~= 0.70 s ~= 42
+    // steps) arrives well within 480 steps (8 s); the loop keeps running
+    // afterward, but later (smaller) bounces cannot lower the tracked
+    // minimum further, so the extra steps are harmless headroom.
     for (int k = 0; k < 480; ++k)
     {
         w.Step(kStep);
@@ -331,8 +352,18 @@ TEST_CASE("PhysicsSolverBudget: restitution rebounds", "[physics][solver][budget
 
     REQUIRE(hitFloor);
     const Real reboundHeight = std::abs(apexY - restY);
-    REQUIRE(reboundHeight > Real(0.3) * dropHeight); // rebounds a good fraction
-    REQUIRE(reboundHeight < dropHeight + Real(0.1)); // no energy gain
+    // Re-derived (MKS P2 review, A7): measured reboundHeight ~= 2.389 m at
+    // e=0.8, dropHeight=3.8 m (ratio ~= 0.63). Analytic single-bounce rebound
+    // is e^2 * dropHeight = 0.64 * 3.8 = 2.432 m; SoftStep's soft contact
+    // lands ~0.98 of analytic here (a prior e=0.6 probe measured ~0.94 of
+    // analytic, same "a bit lossier than rigid rebound" pattern). Bounds
+    // bracket the measured 2.389 m with real headroom on both sides:
+    //   lower 1.5 m (measured is ~1.6x above it) proves a REAL rebound,
+    //                far from the vacuous "> 0" the old tautology allowed
+    //   upper 3.0 m (measured is ~0.8x of it; 3.0 is ~21% under
+    //                dropHeight=3.8) proves energy was LOST
+    REQUIRE(reboundHeight > Real(1.5)); // real rebound, not floor noise
+    REQUIRE(reboundHeight < Real(3.0)); // energy was lost (well under dropHeight)
 }
 
 // ---------------------------------------------------------------------------
