@@ -590,8 +590,9 @@ TEST_CASE("PhysicsSolver: warm-start continuity keeps a stack settled", "[physic
     }
     // Bounded: a settled stack does not creep more than a hair over 1600 steps
     // (a warm-start leak / churn would let it drift or blow up). Re-baselined
-    // for MKS: kSkin-scale (0.02) rather than a fraction of the box
-    // half-extent (hh = 0.2, which is not the driving scale here).
+    // for MKS: 0.05 = 2.5x kSkin (0.02), an absolute drift ceiling rather than
+    // a fraction of the box half-extent (hh = 0.2, which is not the driving
+    // scale here).
     REQUIRE(maxDrift < Real(0.05));
 }
 
@@ -718,8 +719,9 @@ TEST_CASE("PhysicsSolver: warm-start continuity -- settled stack stays put N -> 
 
     // CONTINUITY: penetration at N+50 (and across the tail) did not grow beyond a
     // hair past step N. Warm-start held the stack; it did not sag step over
-    // step. Growth cushion (0.05) left as-is: it was already at
-    // sleepThreshold's scale in the px-era content, not a body-size-derived
-    // value, so it needs no rescale.
+    // step. Growth cushion (0.05) is an absolute length tripwire kept at the
+    // px-era value (measured tail growth at MKS: 0.0); as a length it sits at
+    // 2.5x kSkin (0.02) -- it is not derived from body size (hh = 0.2) or any
+    // velocity threshold. P3 sleep/settle may revisit with fresh measurements.
     REQUIRE(penPeakTail <= penAtN + Real(0.05));
 }

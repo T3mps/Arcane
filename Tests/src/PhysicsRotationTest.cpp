@@ -156,9 +156,9 @@ TEST_CASE("physics-v2 T5 (a): rotating box settles flat on floor", "[physics]")
                                     Real(0.6f)); // ~34 degrees (radians, unit-free)
 
     // Run 300 steps (5 s at 60 Hz). Re-derived per protocol rule 5: fall
-    // distance ~5 m (dropY 15 -> rest near floorTop-hh = 19) under g=10 ->
-    // t = sqrt(2*5/10) ~= 1.0 s to first contact, vs the px-era ~0.45 s
-    // (~2.2x slower); the original 150-step budget (2.5 s) doubled to keep
+    // distance ~4 m (dropY 15 -> rest near floorTop-hh = 19) under g=10 ->
+    // t = sqrt(2*4/10) ~= 0.89 s to first contact, vs the px-era ~0.45 s
+    // (~2.0x slower); the original 150-step budget (2.5 s) doubled to keep
     // the same settle-time cushion after first contact (verified empirically
     // sufficient for the residual-angle convergence below).
     for (int i = 0; i < 300; ++i)
