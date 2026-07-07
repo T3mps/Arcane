@@ -74,8 +74,8 @@ namespace
     };
 
     Barbell MakeBarbell(PhysicsWorld& w, Vec2 pos,
-                        Real radius     = Real(3),
-                        Real offset     = Real(20),
+                        Real radius     = Real(0.3),
+                        Real offset     = Real(2),
                         Real lightDens  = Real(1),
                         Real heavyDens  = Real(9))
     {
@@ -112,11 +112,11 @@ namespace
 //
 // Setup (Cartesian, +Y down):
 //   - A static floor pivot centered under the body ORIGIN (x = 0). Its
-//     half-width (8) supports the light fixture region around the origin; the
-//     heavy fixture at local +x = 20 OVERHANGS the pivot with no support
-//     beneath it (the pivot's right edge is at x = +8, the heavy fixture is at
-//     x = +20).
-//   - A barbell body whose COM is at local x ~ +18 (heavy toward +x), placed so
+//     half-width (0.8) supports the light fixture region around the origin; the
+//     heavy fixture at local +x = 2 OVERHANGS the pivot with no support
+//     beneath it (the pivot's right edge is at x = +0.8, the heavy fixture is at
+//     x = +2).
+//   - A barbell body whose COM is at local x ~ +1.8 (heavy toward +x), placed so
 //     the light fixture rests on the pivot.
 //   - Gravity +Y (down). Released from rest.
 //
@@ -153,37 +153,31 @@ namespace
 
     TipResult RunHeavyTip(int steps)
     {
-        WorldDef wd;
-        wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravity: MKS default (0, +10), y-down
         PhysicsWorld w(wd);
 
-        // Pivot: half-width 8, top surface at y = 0 (center at y = +5,
-        // half-height 5). Centered at x = 0 (under the body origin). The right
-        // edge (x = +8) is well short of the heavy fixture (x = +20), so the
+        // Pivot: half-width 0.8, top surface at y = 0 (center at y = +0.5,
+        // half-height 0.5). Centered at x = 0 (under the body origin). The right
+        // edge (x = +0.8) is well short of the heavy fixture (x = +2), so the
         // heavy side is cantilevered with no support.
         BodyDef floorBd;
         floorBd.type     = BodyType::Static;
-        floorBd.position = Vec2(Real(0), Real(5)); // top surface at y=0
-        floorBd.shape    = MakeAabb(Real(8), Real(5));
+        floorBd.position = Vec2(Real(0), Real(0.5)); // top surface at y=0
+        floorBd.shape    = MakeAabb(Real(0.8), Real(0.5));
         w.AddBody(floorBd);
 
-        // Barbell: light fixture (r=3) at origin, heavy fixture (r=3) at +x=20.
-        // Place the body so the light fixture rests just above the pivot top.
-        // Light fixture bottom = origin.y + r; want it at the floor top (y=0),
-        // so origin.y = -r = -3.
-        const Real radius = Real(3);
+        // Barbell: light fixture (r=0.3) at origin, heavy fixture (r=0.3) at
+        // +x=2. Place the body so the light fixture rests just above the pivot
+        // top. Light fixture bottom = origin.y + r; want it at the floor top
+        // (y=0), so origin.y = -r = -0.3.
+        const Real radius = Real(0.3);
         Barbell bb = MakeBarbell(w, Vec2(Real(0), Real(-radius)), radius,
-                                 /*offset=*/Real(20),
+                                 /*offset=*/Real(2),
                                  /*lightDens=*/Real(1),
                                  /*heavyDens=*/Real(9));
 
         // Fixture[0] is the light auto-fixture (local origin); fixture[1] is the
-        // heavy one (local +x = 20). Both start at world Y = origin.y under no
+        // heavy one (local +x = 2). Both start at world Y = origin.y under no
         // rotation.
         const FixtureHandle lightFh = w.GetBodyFixture(bb.body, 0u);
         const FixtureHandle heavyFh = w.GetBodyFixture(bb.body, 1u);
@@ -206,15 +200,11 @@ namespace
 TEST_CASE("physics-v2 compound-COM (a): heavy side tips down about the COM", "[physics]")
 {
     // Sanity: the aggregated local COM is clearly offset toward the heavy (+x)
-    // fixture. offset=20, densities 1:9 -> comX = 20 * 9/10 = 18 (bb.expectedComX).
+    // fixture. offset=2, densities 1:9 -> comX = 2 * 9/10 = 1.8 (bb.expectedComX).
     {
         WorldDef wd;
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        wd.gravityX = Real(0); // deliberate zero-g scene (isolates COM geometry)
+        wd.gravityY = Real(0);
         PhysicsWorld w(wd);
         Barbell bb = MakeBarbell(w, Vec2(Real(0), Real(0)));
         const Vec2 lc = w.GetLocalCenter(bb.body);
@@ -223,22 +213,32 @@ TEST_CASE("physics-v2 compound-COM (a): heavy side tips down about the COM", "[p
         CHECK(static_cast<double>(lc.x)
               == Approx(static_cast<double>(bb.expectedComX)).epsilon(0.02));
         CHECK(static_cast<double>(lc.y) == Approx(0.0).margin(1e-3));
-        CHECK(lc.x > Real(5)); // unambiguously off-origin toward the heavy side
+        // Unambiguously off-origin toward the heavy side: derived from the
+        // analytic bb.expectedComX itself (well below the full 1.8 offset, well
+        // above zero) rather than a bare magic literal.
+        CHECK(lc.x > bb.expectedComX * Real(0.25));
     }
 
-    // Measured trajectory (Debug, f32, 60 Hz, 4 substeps) -- the controlled tip
-    // window BEFORE the body tips past balance and free-falls:
+    // Measured trajectory (Debug, f32, 60 Hz, 4 substeps) below PREDATES the MKS
+    // conversion (px-era scale: offset=20, comX=18, g=400). The absolute numbers
+    // no longer apply, but the DIRECTIONAL signs it documents -- angle increases
+    // monotonically (heavy +x rotating toward +y/down), heavy fixture descends
+    // while light stays up on the pivot -- are scale-free and still hold:
     //   steps  3: angle 0.026  heavyY -2.47  lightY -3.00
     //   steps  6: angle 0.102  heavyY -0.96  lightY -2.99
     //   steps  9: angle 0.228  heavyY  1.53  lightY -2.98
-    //   steps 12: angle 0.409  heavyY  4.99  lightY -2.96   <- assertion point
+    //   steps 12: angle 0.409  heavyY  4.99  lightY -2.96   <- px-era assertion point
     //   steps 15: angle 0.658  heavyY  9.35  lightY -2.88
-    // The angle increases monotonically (heavy +x rotating toward +y/down) and
-    // the heavy fixture descends while the light fixture stays up on the pivot --
-    // a clean, well-separated tip TOWARD the heavy side. (Past ~20 steps the body
-    // has rotated past the balance point and free-falls; 12 steps is squarely in
-    // the controlled-tip regime, far from every threshold below.)
-    const TipResult r = RunHeavyTip(12);
+    // (Past ~20 px-era steps the body had rotated past the balance point and
+    // free-fell; 12 steps was squarely in the controlled-tip regime.)
+    //
+    // MKS re-baseline (protocol rule 5): gravity dropped 400 -> 10 (40x) while
+    // lengths dropped only 10x (offset 20->2, radius 3->0.3), and angular
+    // acceleration about the pivot ~ g/length, so the new scene tips ~4x slower
+    // in angular-acceleration terms -> ~2x the steps to reach an equivalent
+    // angle. steps=24 lands in the analogous controlled-tip window (verified:
+    // well past the initial torque ramp-up, well short of the free-fall runaway).
+    const TipResult r = RunHeavyTip(24);
 
     INFO("final angle = " << static_cast<double>(r.finalAngle)
          << " rad, heavy world Y: init " << static_cast<double>(r.heavyYInitial)
@@ -247,10 +247,12 @@ TEST_CASE("physics-v2 compound-COM (a): heavy side tips down about the COM", "[p
 
     // POSITIVE angle == heavy (+x) side rotating DOWN (+y) about the COM.
     CHECK(r.finalAngle > Real(0.05));
-    // Heavy fixture descended appreciably from its start...
-    CHECK(r.heavyYFinal > r.heavyYInitial + Real(1));
+    // Heavy fixture descended appreciably from its start (re-baselined from the
+    // px-era "+1": ~5% of the 2 m offset, same proportion as the original
+    // "+1 out of offset=20").
+    CHECK(r.heavyYFinal > r.heavyYInitial + Real(0.1));
     // ...and is now clearly BELOW the light fixture (which stayed on the pivot).
-    CHECK(r.heavyYFinal > r.lightYFinal + Real(1));
+    CHECK(r.heavyYFinal > r.lightYFinal + Real(0.1));
 }
 
 // ============================================================================
@@ -270,22 +272,19 @@ TEST_CASE("physics-v2 compound-COM (a): heavy side tips down about the COM", "[p
 // ============================================================================
 TEST_CASE("physics-v2 compound-COM (b): free spin keeps the COM fixed", "[physics]")
 {
-    WorldDef wd; // gravity 0
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd;
+    wd.gravityX = Real(0); // deliberate zero-g scene (pure inertial spin)
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
 
-    const Vec2 startPos(Real(7), Real(-4));
+    const Vec2 startPos(Real(0.7), Real(-0.4));
     Barbell bb = MakeBarbell(w, startPos);
     const std::uint32_t slot = bb.body.index;
 
     const Vec2 lc = w.GetLocalCenter(bb.body);
     const Real lcLen = std::sqrt(lc.x * lc.x + lc.y * lc.y);
-    REQUIRE(lcLen > Real(1)); // genuinely off-origin
+    // genuinely off-origin: same bb.expectedComX-derived threshold as case (a).
+    REQUIRE(lcLen > bb.expectedComX * Real(0.25));
 
     // Start-of-test world COM (must stay fixed for the whole run).
     const Real a0 = w.GetAngle(bb.body);
@@ -321,9 +320,13 @@ TEST_CASE("physics-v2 compound-COM (b): free spin keeps the COM fixed", "[physic
           == Approx(static_cast<double>(expectedAngle)).margin(1e-3));
 
     // And the origin has visibly MOVED (it orbited) even though the COM did not.
+    // "Visibly" re-derived from |lc| itself (was a flat px literal): a body that
+    // has genuinely orbited displaces by an appreciable fraction of the orbit
+    // radius, not just numerical noise.
     const Vec2 finalPos = w.Position(bb.body);
     CHECK(std::abs(static_cast<double>(finalPos.x - startPos.x))
-              + std::abs(static_cast<double>(finalPos.y - startPos.y)) > 1.0);
+              + std::abs(static_cast<double>(finalPos.y - startPos.y))
+          > static_cast<double>(lcLen * Real(0.1)));
 }
 
 // ============================================================================
@@ -345,13 +348,9 @@ TEST_CASE("physics-v2 compound-COM (b): free spin keeps the COM fixed", "[physic
 // ============================================================================
 TEST_CASE("physics-v2 compound-COM (e): impulse at a point torques about the COM", "[physics]")
 {
-    WorldDef wd; // gravity 0
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd;
+    wd.gravityX = Real(0); // deliberate zero-g scene (isolates the impulse response)
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
     Barbell bb = MakeBarbell(w, Vec2(Real(0), Real(0)));
 
@@ -359,10 +358,12 @@ TEST_CASE("physics-v2 compound-COM (e): impulse at a point torques about the COM
     const Real I    = w.GetBodyInertia(bb.body);
     const Real mass = w.GetBodyMass(bb.body);
     REQUIRE(I > Real(0));
-    REQUIRE(lc.x > Real(5)); // genuinely off-origin toward the heavy side
+    REQUIRE(lc.x > bb.expectedComX * Real(0.25)); // genuinely off-origin toward the heavy side
 
-    // Apply a downward impulse AT THE BODY ORIGIN (world (0,0)).
-    const Real J = Real(1000);
+    // Apply a downward impulse AT THE BODY ORIGIN (world (0,0)), authored as
+    // mass x target delta-v (named local) rather than a bare impulse literal.
+    const Real targetDv = Real(2); // m/s, well under the 400 m/s velocity cap
+    const Real J = mass * targetDv;
     w.ApplyImpulse(bb.body, Vec2(Real(0), J), Vec2(Real(0), Real(0)));
 
     const Real expectedAngVel = (-lc.x * J) / I;
@@ -378,7 +379,7 @@ TEST_CASE("physics-v2 compound-COM (e): impulse at a point torques about the COM
 
     // Linear part is unchanged by the fix: COM velocity = impulse / mass.
     CHECK(static_cast<double>(w.Velocity(bb.body).y)
-          == Approx(static_cast<double>(J / mass)).epsilon(1e-4));
+          == Approx(static_cast<double>(targetDv)).epsilon(1e-4));
 }
 
 // ============================================================================
@@ -411,13 +412,7 @@ TEST_CASE("physics-v2 compound-COM (c): heavy-tip scene is deterministic", "[phy
 // ============================================================================
 TEST_CASE("physics-v2 compound-COM (d): single-fixture body is byte-identical", "[physics]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity: MKS default (0, +10) -- drop the explicit 400 pin
     const std::uint32_t substeps = wd.substepCount; // 4
     PhysicsWorld w(wd);
 
@@ -438,14 +433,15 @@ TEST_CASE("physics-v2 compound-COM (d): single-fixture body is byte-identical", 
     // Closed-form OLD-path expectation for ONE Step (SoftStep, no damping, no
     // contacts): h = dt/substeps; each sub-step does v += g*h then deltaPos +=
     // v*h. Origin commits p0 + sum(deltaPos). With localCenter == 0 the new code
-    // reduces to exactly this.
+    // reduces to exactly this. g is read from wd.gravityY (the MKS default 10)
+    // instead of a hardcoded px-era literal.
     const Real h = kStep / static_cast<Real>(substeps);
     Real v = Real(0);
     Real dp = Real(0);
     for (std::uint32_t s = 0; s < substeps; ++s)
     {
-        v  += Real(400) * h; // gravity each sub-step
-        dp += v * h;         // accumulate COM (== origin) displacement
+        v  += wd.gravityY * h; // gravity each sub-step
+        dp += v * h;           // accumulate COM (== origin) displacement
     }
     const Real expectedY = Real(0) + dp;
 

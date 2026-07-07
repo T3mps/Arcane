@@ -44,17 +44,17 @@ using Catch::Approx;
 namespace
 {
     constexpr Real kStep    = Real(1) / Real(60);
-    constexpr Real kGravity = Real(400);
+    constexpr Real kGravity = Real(10); // MKS default gravity magnitude
 
     // Wide static AABB floor centered at x=0; `top` is the world Y of its top
-    // surface. Half-width 560 -> spans x[-560,560], so bodies near x=0 cannot
+    // surface. Half-width 5.6 -> spans x[-5.6,5.6], so bodies near x=0 cannot
     // roll off the edge.
-    BodyHandle AddFloor(PhysicsWorld& w, Real top, Real halfWidth = Real(560))
+    BodyHandle AddFloor(PhysicsWorld& w, Real top, Real halfWidth = Real(5.6))
     {
         BodyDef bd;
         bd.type     = BodyType::Static;
-        bd.position = Vec2(Real(0), top + Real(20));
-        bd.shape    = MakeAabb(halfWidth, Real(20));
+        bd.position = Vec2(Real(0), top + Real(0.2));
+        bd.shape    = MakeAabb(halfWidth, Real(0.2));
         bd.friction = Real(0.5);
         return w.AddBody(bd);
     }
@@ -77,16 +77,17 @@ namespace
              + Real(0.5) * w.GetBodyInertia(b) * (wv * wv);
     }
 
-    // EXACT sandbox "Compound bodies" body (Scenes.cpp makeLopsided): a light
-    // core circle (r18, density 0.5) at the body origin + a heavy circle (r22,
-    // density 4.0) at local (heavySign*40, 0). Dynamic, free to rotate, rest 0,
-    // friction 0.5. The aggregate COM sits at local x ~ +36.9*heavySign.
+    // EXACT sandbox "Compound bodies" body (Scenes.cpp makeLopsided), at MKS
+    // scale (/100 from the sandbox's ~100 px/m authoring): a light core circle
+    // (r0.18, density 0.5) at the body origin + a heavy circle (r0.22, density
+    // 4.0) at local (heavySign*0.4, 0). Dynamic, free to rotate, rest 0,
+    // friction 0.5. The aggregate COM sits at local x ~ +0.369*heavySign.
     BodyHandle MakeLopsided(PhysicsWorld& w, Vec2 pos, Real heavySign)
     {
         BodyDef bd;
         bd.type          = BodyType::Dynamic;
         bd.position      = pos;
-        bd.shape         = MakeCircle(Real(18));
+        bd.shape         = MakeCircle(Real(0.18));
         bd.density       = Real(0.5);
         bd.friction      = Real(0.5);
         bd.restitution   = Real(0);
@@ -94,8 +95,8 @@ namespace
         const BodyHandle bh = w.AddBody(bd);
 
         FixtureDef fd;
-        fd.shape       = MakeCircle(Real(22));
-        fd.localPos    = Vec2(heavySign * Real(40), Real(0));
+        fd.shape       = MakeCircle(Real(0.22));
+        fd.localPos    = Vec2(heavySign * Real(0.4), Real(0));
         fd.density     = Real(4.0);
         fd.friction    = Real(0.5);
         fd.restitution = Real(0);
@@ -129,29 +130,24 @@ TEST_CASE("compound-slide PROBE: two-fixture contacts have distinct warm-start i
 {
     WorldDef wd;
     wd.gravityY = kGravity;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    AddFloor(w, Real(620));
+    AddFloor(w, Real(6.2));
 
-    // A flat 2-circle body (both r=12) straddling so BOTH circles rest on the
-    // floor: fixture0 at origin, fixture1 at +40. Centers at y=620-12=608.
+    // A flat 2-circle body (both r=0.12) straddling so BOTH circles rest on the
+    // floor: fixture0 at origin, fixture1 at +0.4. Centers at y=6.2-0.12=6.08.
     BodyDef bd;
     bd.type          = BodyType::Dynamic;
-    bd.position      = Vec2(Real(-20), Real(608));
-    bd.shape         = MakeCircle(Real(12));
+    bd.position      = Vec2(Real(-0.2), Real(6.08));
+    bd.shape         = MakeCircle(Real(0.12));
     bd.density       = Real(1);
     bd.friction      = Real(0.5);
     bd.fixedRotation = true;   // keep it flat so both circles stay on the floor
     BodyHandle body  = w.AddBody(bd);
     {
         FixtureDef fd;
-        fd.shape    = MakeCircle(Real(12));
-        fd.localPos = Vec2(Real(40), Real(0));
+        fd.shape    = MakeCircle(Real(0.12));
+        fd.localPos = Vec2(Real(0.4), Real(0));
         fd.density  = Real(1);
         fd.friction = Real(0.5);
         w.AddFixture(body, fd);
@@ -208,18 +204,13 @@ TEST_CASE("compound-slide (A): dropped lopsided bodies settle to rest", "[physic
 {
     WorldDef wd;
     wd.gravityY = kGravity;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    AddFloor(w, Real(620));
-    // Spaced so the heavy lobes (centers -50 / +50, r22) do not overlap, and well
-    // inside the floor span so a rolling body cannot fall off the edge.
-    BodyHandle b0 = MakeLopsided(w, Vec2(-Real(90), Real(360)),  Real(1)); // tips right
-    BodyHandle b1 = MakeLopsided(w, Vec2( Real(90), Real(360)), -Real(1)); // tips left
+    AddFloor(w, Real(6.2));
+    // Spaced so the heavy lobes (centers -0.5/+0.5, r0.22) do not overlap, and
+    // well inside the floor span so a rolling body cannot fall off the edge.
+    BodyHandle b0 = MakeLopsided(w, Vec2(-Real(0.9), Real(3.6)),  Real(1)); // tips right
+    BodyHandle b1 = MakeLopsided(w, Vec2( Real(0.9), Real(3.6)), -Real(1)); // tips left
 
     Real impactPeak = Real(0);
     for (int i = 0; i < 90; ++i)   // fall + impact + initial tip
@@ -241,13 +232,16 @@ TEST_CASE("compound-slide (A): dropped lopsided bodies settle to rest", "[physic
          << ", late-max KE = " << static_cast<double>(lateMax)
          << ", final KE = " << static_cast<double>(finalKE));
 
-    // Energy never climbs back above the impact transient (no injection)...
+    // Energy never climbs back above the impact transient (no injection) --
+    // scale-free ratio, unchanged.
     CHECK(lateMax <= impactPeak * Real(1.05));
-    // ...and the pair dissipates essentially to rest.
+    // ...and the pair dissipates essentially to rest -- scale-free ratio, unchanged.
     CHECK(finalKE < impactPeak * Real(0.02));
     // Neither body tunnelled the floor or flew away (stayed in the play area).
-    CHECK(w.Position(b0).y < Real(700));
-    CHECK(w.Position(b1).y < Real(700));
+    // Re-baselined from the px-era "< 700" (floor top 620, 80 px margin) to the
+    // same proportion at MKS scale: floor top 6.2, 0.8 m margin -> < 7.
+    CHECK(w.Position(b0).y < Real(7));
+    CHECK(w.Position(b1).y < Real(7));
 }
 
 // ============================================================================
@@ -262,23 +256,18 @@ TEST_CASE("compound-slide (B): confined heap of compound bodies dissipates",
 {
     WorldDef wd;
     wd.gravityY = kGravity;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    AddFloor(w, Real(620));
-    AddWall(w, -Real(90), Real(500), Real(20), Real(140)); // left wall
-    AddWall(w,  Real(90), Real(500), Real(20), Real(140)); // right wall
+    AddFloor(w, Real(6.2));
+    AddWall(w, -Real(0.9), Real(5.0), Real(0.2), Real(1.4)); // left wall
+    AddWall(w,  Real(0.9), Real(5.0), Real(0.2), Real(1.4)); // right wall
 
     std::vector<BodyHandle> bodies;
     for (int i = 0; i < 6; ++i)
     {
         const Real sign = (i % 2 == 0) ? Real(1) : -Real(1);
-        const Real x    = Real(-20 + (i % 3) * 20);
-        const Real y    = Real(420 - 55 * i);
+        const Real x    = Real(-0.2 + (i % 3) * 0.2);
+        const Real y    = Real(4.2 - 0.55 * i);
         bodies.push_back(MakeLopsided(w, Vec2(x, y), sign));
     }
     auto totalKE = [&] {
@@ -298,9 +287,16 @@ TEST_CASE("compound-slide (B): confined heap of compound bodies dissipates",
     }
     INFO("confined-heap late-max KE = " << static_cast<double>(lateMax));
 
-    // The whole heap is at rest (tiny per-body residual at most).
-    CHECK(lateMax < Real(50));
-    // No body escaped the bowl / tunnelled the floor.
+    // The whole heap is at rest: measured lateMax == 0 (every body reached the
+    // MKS sleepThreshold default of 0.05 m/s and went fully to sleep -- the
+    // solver zeroes velocity on sleep). Re-baselined empirically for MKS
+    // (protocol rule 6) from the px-era "< 50": bound derived analytically as
+    // the worst-case linear residual KE for 6 lopsided bodies (mass ~0.66 each,
+    // light r0.18/d0.5 + heavy r0.22/d4.0) sitting AT the 0.05 m/s sleep gate --
+    // 6 * 0.5*0.66*0.05^2 ~ 0.0049 -- doubled for headroom (angular residual +
+    // margin over the analytic worst case; measured value is 0, well inside).
+    CHECK(lateMax < Real(0.01));
+    // No body escaped the bowl / tunnelled the floor (same re-baseline as (A)).
     for (BodyHandle b : bodies)
-        CHECK(w.Position(b).y < Real(700));
+        CHECK(w.Position(b).y < Real(7));
 }
