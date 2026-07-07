@@ -54,17 +54,13 @@ TEST_CASE("PhysicsPersistentIsland: fresh dynamic body is its own island; static
           "[physics][island]")
 {
     WorldDef wd;
-    wd.gravityY = Real(0); // no gravity -> bodies stay put, never touch
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0); // no gravity -> bodies stay put, never touch
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
 
-    const BodyHandle floor = AddFloor(w, Vec2(Real(0), Real(500)), Real(50), Real(5));
-    const BodyHandle b0    = AddBox(w, Vec2(Real(-200), Real(0)), Real(5), Real(5));
-    const BodyHandle b1    = AddBox(w, Vec2(Real(200),  Real(0)), Real(5), Real(5));
+    const BodyHandle floor = AddFloor(w, Vec2(Real(0), Real(50)), Real(5), Real(0.5));
+    const BodyHandle b0    = AddBox(w, Vec2(Real(-20), Real(0)), Real(0.5), Real(0.5));
+    const BodyHandle b1    = AddBox(w, Vec2(Real(20),  Real(0)), Real(0.5), Real(0.5));
 
     // Before any Step: each dynamic is its own island (assigned at AddBody).
     const std::uint32_t r0 = w.IslandRootOf(b0.index);
@@ -89,22 +85,16 @@ TEST_CASE("PhysicsPersistentIsland: fresh dynamic body is its own island; static
 TEST_CASE("PhysicsPersistentIsland: touching chain merges to one island",
           "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    const Real hw = Real(5), hh = Real(5);
-    const Real gap = Real(0.5);
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    const Real hw = Real(0.5), hh = Real(0.5);
+    const Real gap = Real(0.05);
     const BodyHandle b0 = AddBox(w, Vec2(Real(0), -hh),                              hw, hh);
     const BodyHandle b1 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)),         hw, hh);
     const BodyHandle b2 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)*Real(2)), hw, hh);
-    const BodyHandle far = AddBox(w, Vec2(Real(500), -hh), hw, hh);
+    const BodyHandle far = AddBox(w, Vec2(Real(50), -hh), hw, hh);
 
     // Settle into contact while still awake (mirrors PhysicsIslandTest case 5).
     for (int k = 0; k < 30; ++k) { w.Step(kStep); }
@@ -125,18 +115,12 @@ TEST_CASE("PhysicsPersistentIsland: touching chain merges to one island",
 TEST_CASE("PhysicsPersistentIsland: separating a chain splits the island (deferred)",
           "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    const Real hw = Real(5), hh = Real(5);
-    const Real gap = Real(0.5);
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    const Real hw = Real(0.5), hh = Real(0.5);
+    const Real gap = Real(0.05);
     const BodyHandle b0 = AddBox(w, Vec2(Real(0), -hh),                      hw, hh);
     const BodyHandle b1 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)), hw, hh);
 
@@ -146,7 +130,7 @@ TEST_CASE("PhysicsPersistentIsland: separating a chain splits the island (deferr
     REQUIRE(w.IslandRootOf(b0.index) == w.IslandRootOf(b1.index)); // merged
 
     // Fling the top box far up + sideways so its contact with b0 separates.
-    w.SetVelocity(b1, Vec2(Real(400), Real(-2000)));
+    w.SetVelocity(b1, Vec2(Real(4), Real(-20))); // m/s -- fast separation, far under the 400 cap
     // A few steps for the contact to drop + the deferred split to resolve
     // (quota = 1 per step, but only 1 candidate here, so it resolves quickly).
     for (int k = 0; k < 20; ++k) { w.Step(kStep); }
@@ -161,29 +145,28 @@ TEST_CASE("PhysicsPersistentIsland: separating a chain splits the island (deferr
 TEST_CASE("PhysicsPersistentIsland: impulse on one member wakes the whole island",
           "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    const Real hw = Real(4), hh = Real(4);
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    const Real hw = Real(0.4), hh = Real(0.4);
     const int N = 3;
     std::vector<BodyHandle> boxes;
     for (int i = 0; i < N; ++i)
     {
-        const Real y = -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1);
+        const Real y = -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1);
         boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
     }
     for (int k = 0; k < 700; ++k) { w.Step(kStep); }
     for (int i = 0; i < N; ++i) { REQUIRE_FALSE(w.IsAwake(boxes[i])); }
 
-    // Impulse the MIDDLE box -> the whole island wakes at once.
-    w.ApplyImpulse(boxes[1], Vec2(Real(0), Real(-8000)));
+    // Impulse the MIDDLE box -> the whole island wakes at once. Authored as
+    // mass x delta-v (rule 3): box mass = density * 4*hw*hh = 1*4*0.4*0.4 =
+    // 0.64 kg; targetDv = -20 m/s (well above sleepThreshold 0.05, well under
+    // the 400 m/s cap) is clearly enough to force a wake.
+    const Real boxMass = Real(1) * Real(4) * hw * hh;
+    const Real targetDv = Real(-20);
+    w.ApplyImpulse(boxes[1], Vec2(Real(0), boxMass * targetDv));
     for (int i = 0; i < N; ++i)
     {
         CHECK(w.IsAwake(boxes[i])); // every member awake (island wake)
@@ -200,26 +183,24 @@ TEST_CASE("PhysicsPersistentIsland: merge+split+sleep is deterministic across tw
     auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake,
                   std::vector<std::uint32_t>& roots)
     {
-        WorldDef wd;
-        wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
         PhysicsWorld w(wd);
 
-        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-        const Real hw = Real(4), hh = Real(4);
+        AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+        const Real hw = Real(0.4), hh = Real(0.4);
         std::vector<BodyHandle> boxes;
         for (int i = 0; i < 4; ++i)
         {
-            const Real y = -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1);
+            const Real y = -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1);
             boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
         }
         for (int k = 0; k < 200; ++k) { w.Step(kStep); }
-        // Disturb the top -> a split candidate forms, then re-settles.
-        w.ApplyImpulse(boxes[3], Vec2(Real(150), Real(-3000)));
+        // Disturb the top -> a split candidate forms, then re-settles. Authored
+        // as mass x delta-v (rule 3): box mass = 1*4*0.4*0.4 = 0.64 kg;
+        // targetDv = (2, -25) m/s -- an up+sideways kick well under the 400 cap.
+        const Real boxMass = Real(1) * Real(4) * hw * hh;
+        const Vec2 targetDv = Vec2(Real(2), Real(-25));
+        w.ApplyImpulse(boxes[3], boxMass * targetDv);
         for (int k = 0; k < 500; ++k) { w.Step(kStep); }
 
         pos.clear(); awake.clear(); roots.clear();
@@ -253,16 +234,10 @@ TEST_CASE("PhysicsPersistentIsland: merge+split+sleep is deterministic across tw
 TEST_CASE("PhysicsPersistentIsland: chain fractures into three islands",
           "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(40), Real(0.5));
 
     // Six boxes in a gravity-pressed vertical stack settle into ONE island, then
     // fracture into THREE components. Index assignment puts the must-stay-together
@@ -270,8 +245,8 @@ TEST_CASE("PhysicsPersistentIsland: chain fractures into three islands",
     // the fling) and the two flung boxes {2,4} at the TOP, where nothing obstructs
     // them -- mirroring the proven "separate a chain by flinging the top box"
     // pattern. Stack levels (bottom->top): b0, b1, b3, b5, b2, b4.
-    const Real hw = Real(5), hh = Real(5);
-    const Real gap = Real(0.5);
+    const Real hw = Real(0.5), hh = Real(0.5);
+    const Real gap = Real(0.05);
     const Real pitch = Real(2) * hh + gap; // per-level rise; boxes drop `gap` to touch
     auto atLevel = [&](int level) { return Vec2(Real(0), -hh - pitch * Real(level)); };
     std::vector<BodyHandle> b(6);
@@ -292,8 +267,8 @@ TEST_CASE("PhysicsPersistentIsland: chain fractures into three islands",
     // cleanly: the b5-2 and 2-4 links break, leaving the bottom pile {0,1,3,5}
     // plus the two flung boxes -- MULTIPLE disconnected components, forcing
     // repeated AllocIsland in split.
-    w.SetVelocity(b[2], Vec2(Real(600), Real(-2500)));
-    w.SetVelocity(b[4], Vec2(Real(-600), Real(-2500)));
+    w.SetVelocity(b[2], Vec2(Real(6), Real(-25)));
+    w.SetVelocity(b[4], Vec2(Real(-6), Real(-25)));
     for (int k = 0; k < 60; ++k) { w.Step(kStep); } // quota=1/step -> let splits resolve
 
     // {0,1} stay together (gravity-pressed bottom of the pile) and are distinct

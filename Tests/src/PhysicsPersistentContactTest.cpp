@@ -17,16 +17,12 @@ using namespace Arcane::Physics;
 TEST_CASE("Persistent contact survives across steps + destroys on separation", "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0); // zero-g: bodies stay put, no free-fall to complicate the overlap check
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
-    BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
-    d.type = BodyType::Static;  d.position = Vec2(0, 100);  w.AddBody(d);
-    d.type = BodyType::Dynamic; d.position = Vec2(0, 81);   BodyHandle dyn = w.AddBody(d); // overlapping
+    BodyDef d; d.shape = MakeAabb(Real(1), Real(1)); d.fixedRotation = true;
+    d.type = BodyType::Static;  d.position = Vec2(0, 10);  w.AddBody(d);
+    d.type = BodyType::Dynamic; d.position = Vec2(0, 8.1); BodyHandle dyn = w.AddBody(d); // overlapping
     w.Step(Real(1) / Real(60));
 
     REQUIRE(w.DebugContactCount() >= 1);                 // a contact exists for the overlapping pair
@@ -35,7 +31,7 @@ TEST_CASE("Persistent contact survives across steps + destroys on separation", "
     w.Step(Real(1) / Real(60));
     REQUIRE(w.DebugContactCount() == firstStepContacts); // persists (NOT recreated from scratch)
 
-    w.SetPosition(dyn, Vec2(10000, 10000));              // teleport far -> fat boxes separate
+    w.SetPosition(dyn, Vec2(1000, 1000));                // teleport far -> fat boxes separate
     w.Step(Real(1) / Real(60));
     w.Step(Real(1) / Real(60));
     REQUIRE(w.DebugContactCount() == 0);                 // contact destroyed
@@ -44,16 +40,12 @@ TEST_CASE("Persistent contact survives across steps + destroys on separation", "
 TEST_CASE("Persistent contact destroyed when a body is removed", "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0); // zero-g: bodies stay put
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
-    BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
-    d.type = BodyType::Static;  d.position = Vec2(0, 100);  BodyHandle s = w.AddBody(d);
-    d.type = BodyType::Dynamic; d.position = Vec2(0, 81);   w.AddBody(d);
+    BodyDef d; d.shape = MakeAabb(Real(1), Real(1)); d.fixedRotation = true;
+    d.type = BodyType::Static;  d.position = Vec2(0, 10);  BodyHandle s = w.AddBody(d);
+    d.type = BodyType::Dynamic; d.position = Vec2(0, 8.1); w.AddBody(d);
     w.Step(Real(1) / Real(60));
     REQUIRE(w.DebugContactCount() >= 1);
 
@@ -75,21 +67,26 @@ namespace
     // manifold has 2 points; the circle-on-box manifold has 1.
     void BuildOracleScene(PhysicsWorld& w)
     {
-        // Static floor (wide, thin slab) centered at y = 0; top surface at y = -5.
+        // Static floor (wide, thin slab) centered at y = 0; top surface at y = -0.5.
         BodyDef floor;
         floor.type     = BodyType::Static;
-        floor.shape    = MakeAabb(Real(50), Real(5));
-        floor.position = Vec2(Real(0), Real(0));      // top at y = -5
+        floor.shape    = MakeAabb(Real(5), Real(0.5));
+        floor.position = Vec2(Real(0), Real(0));      // top at y = -0.5
         floor.friction = Real(0.4);
         w.AddBody(floor);
 
-        // 3 dynamic boxes stacked ABOVE the floor (hw=hh=5 -> 10x10 each). They
-        // start lightly OVERLAPPING (centers 10 apart minus a 0.2 bite) so they are
-        // already touching at step 0 and only settle a hair under gravity into a
-        // stable resting stack -- a clean multi-point manifold per pair.
+        // 3 dynamic boxes stacked ABOVE the floor (hw=hh=0.5 -> 1x1 m each). They
+        // start lightly OVERLAPPING so they are already touching at step 0 and
+        // only settle a hair under gravity into a stable resting stack -- a clean
+        // multi-point manifold per pair.
+        // Seat depth re-derives from the slop constant, not by dividing the old
+        // px-era 0.2 bite by the /10 scale factor (MKS P2 protocol rule 4): each
+        // body sits 2*kLinearSlop (2*0.005 = 0.01 m) deeper than its no-overlap
+        // resting position, so the pitch between successive centers is
+        // 2*boxHalf - 0.01 = 1.0 - 0.01 = 0.99 m.
         // NOTE: a dynamic AABB shape must be fixedRotation (the engine asserts an
         // axis-aligned box can't rotate); the boxes stack flat so this is natural.
-        const Real boxHalf = Real(5);
+        const Real boxHalf = Real(0.5);
         BodyDef box;
         box.type          = BodyType::Dynamic;
         box.shape         = MakeAabb(boxHalf, boxHalf);
@@ -97,21 +94,22 @@ namespace
         box.friction      = Real(0.4);
         box.fixedRotation = true;
 
-        box.position = Vec2(Real(0), Real(-9.8));  // bottom box (rests on floor top at -5)
+        box.position = Vec2(Real(0), Real(-0.99));  // bottom box (rests on floor top at -0.5)
         w.AddBody(box);
-        box.position = Vec2(Real(0), Real(-19.6)); // middle box
+        box.position = Vec2(Real(0), Real(-1.98)); // middle box
         w.AddBody(box);
-        box.position = Vec2(Real(0), Real(-29.4)); // top box
+        box.position = Vec2(Real(0), Real(-2.97)); // top box
         w.AddBody(box);
 
-        // A dynamic circle (r=5) resting on the top box. Center 9.8 above the top
-        // box center so it sits just on top (light overlap, settles into contact).
+        // A dynamic circle (r=0.5) resting on the top box. Center 0.99 above the
+        // top box center (same 2*kLinearSlop seat) so it sits just on top (light
+        // overlap, settles into contact).
         BodyDef ball;
         ball.type     = BodyType::Dynamic;
-        ball.shape    = MakeCircle(Real(5));
+        ball.shape    = MakeCircle(Real(0.5));
         ball.density  = Real(1);
         ball.friction = Real(0.4);
-        ball.position = Vec2(Real(0), Real(-39.2));
+        ball.position = Vec2(Real(0), Real(-3.96));
         w.AddBody(ball);
     }
 
@@ -191,13 +189,7 @@ namespace
 // body-only (no tile spans -- spans are Task 4).
 TEST_CASE("Persistent contact walk == GenerateContacts constraint set", "[physics]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);                             // downward (+y), settles the stack onto the floor
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down -- settles the stack onto the floor
     PhysicsWorld w(wd);
     BuildOracleScene(w);                                 // static floor + a 3-box stack + a circle (body-only)
 
@@ -257,10 +249,10 @@ TEST_CASE("Tile-span solver feed: a dynamic body rests on a merged span (no tunn
 {
     constexpr int  kGridW    = 16;
     constexpr int  kGridH    = 16;
-    constexpr Real kCellSize = Real(20);
+    constexpr Real kCellSize = Real(1); // the MKS residency-tile scale (was 20 px)
 
     // A solid bottom-ish row at cy = 10 -> the span occupies world y in
-    // [200, 220]; its TOP face is at y = 200. (cols 4..8 -> a multi-cell merged
+    // [10, 11]; its TOP face is at y = 10. (cols 4..8 -> a multi-cell merged
     // run, exercising the merged-span path, not a single cell.)
     GridPassability grid(kGridW, kGridH);
     for (int cx = 4; cx <= 8; ++cx)
@@ -268,31 +260,25 @@ TEST_CASE("Tile-span solver feed: a dynamic body rests on a merged span (no tunn
         grid.SetSolid(cx, 10, true);
     }
 
-    WorldDef wd;
-    wd.gravityY      = Real(400);             // downward (+y)
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     wd.passability   = &grid;
     wd.tileCellSize  = kCellSize;
     wd.tileOrigin    = Vec2(Real(0), Real(0));
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    // A dynamic box (half-extent 5 -> 10x10) starting ABOVE the span, centered over
-    // the merged run (col 6 center x = 6*20+10 = 130), well clear at y = 150.
-    const Real boxHalf = Real(5);
+    // A dynamic box (half-extent 0.5 -> 1x1 m) starting ABOVE the span, centered
+    // over the merged run (col 6 center x = 6*1+0.5 = 6.5), well clear at y = 7.5.
+    const Real boxHalf = Real(0.5);
     BodyDef box;
     box.type          = BodyType::Dynamic;
     box.shape         = MakeAabb(boxHalf, boxHalf);
     box.density       = Real(1);
     box.friction      = Real(0.4);
     box.fixedRotation = true;
-    box.position      = Vec2(Real(130), Real(150)); // above the span top (200)
+    box.position      = Vec2(Real(6.5), Real(7.5)); // above the span top (10)
     BodyHandle b = w.AddBody(box);
 
-    const Real spanTopY = Real(10) * kCellSize; // 200
+    const Real spanTopY = Real(10) * kCellSize; // 10
 
     // Settle under gravity. The box falls, the span feed catches it, the solver
     // rests it on the span top. 200 steps is ample at dt = 1/60.
@@ -313,13 +299,13 @@ TEST_CASE("Tile-span solver feed: a dynamic body rests on a merged span (no tunn
     REQUIRE(sawSpanConstraint);
 
     // (2) NO TUNNEL: the box bottom (center + boxHalf) stays at/above the span top.
-    //     It must rest ~ON the surface (center ~ spanTopY - boxHalf = 195), and
+    //     It must rest ~ON the surface (center ~ spanTopY - boxHalf = 9.5), and
     //     crucially the center never ends up below the span top (would mean it sank
     //     into / through the span).
     REQUIRE(p.y < spanTopY);                          // center above the span top
-    REQUIRE(p.y == Catch::Approx(spanTopY - boxHalf).margin(Real(0.5))); // resting on it
+    REQUIRE(p.y == Catch::Approx(spanTopY - boxHalf).margin(Real(0.05))); // resting on it
     // It did not drift horizontally (the span is flat; no lateral force).
-    REQUIRE(p.x == Catch::Approx(Real(130)).margin(Real(0.5)));
+    REQUIRE(p.x == Catch::Approx(Real(6.5)).margin(Real(0.05)));
 
     // (3) Tile spans are TRANSIENT (virtual fixtures), so they are NOT in the
     //     persistent pool: the box rests on a span yet DebugContactCount (the pool)
@@ -337,16 +323,12 @@ TEST_CASE("Tile-span solver feed: a dynamic body rests on a merged span (no tunn
 TEST_CASE("DropFixture destroys that fixture's persistent contacts", "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0); // zero-g: bodies stay put
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
-    BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
-    d.type = BodyType::Static;  d.position = Vec2(0, 100); w.AddBody(d);
-    d.type = BodyType::Dynamic; d.position = Vec2(0, 81);  BodyHandle dyn = w.AddBody(d);
+    BodyDef d; d.shape = MakeAabb(Real(1), Real(1)); d.fixedRotation = true;
+    d.type = BodyType::Static;  d.position = Vec2(0, 10);  w.AddBody(d);
+    d.type = BodyType::Dynamic; d.position = Vec2(0, 8.1); BodyHandle dyn = w.AddBody(d);
     const FixtureHandle fx = w.GetBodyFixture(dyn, 0);
     w.Step(Real(1) / Real(60));
     REQUIRE(w.DebugContactCount() >= 1);
@@ -365,16 +347,12 @@ TEST_CASE("DropFixture destroys that fixture's persistent contacts", "[physics]"
 TEST_CASE("RemoveBody destroys that body's persistent contacts immediately", "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0); // zero-g: bodies stay put
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
-    BodyDef d; d.shape = MakeAabb(Real(10), Real(10)); d.fixedRotation = true;
-    d.type = BodyType::Static;  d.position = Vec2(0, 100); BodyHandle s = w.AddBody(d);
-    d.type = BodyType::Dynamic; d.position = Vec2(0, 81);  w.AddBody(d);
+    BodyDef d; d.shape = MakeAabb(Real(1), Real(1)); d.fixedRotation = true;
+    d.type = BodyType::Static;  d.position = Vec2(0, 10);  BodyHandle s = w.AddBody(d);
+    d.type = BodyType::Dynamic; d.position = Vec2(0, 8.1); w.AddBody(d);
     w.Step(Real(1) / Real(60));
     REQUIRE(w.DebugContactCount() >= 1);
 
@@ -400,20 +378,16 @@ TEST_CASE("Contact pool expands to the event union (sensors + kinematic); solver
           "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
-    PhysicsWorld w(wd); // no gravity: bodies stay put for the single-step overlap check
+    wd.gravityX = Real(0); // zero-g: bodies stay put for the single-step overlap check
+    wd.gravityY = Real(0);
+    PhysicsWorld w(wd);
 
     // (a) A dynamic body whose ONLY fixture is a SENSOR, overlapping a second
     //     dynamic body. Body-level isSensor (the auto-fixture inherits it, so
     //     m_fxSensor is set too). fixedRotation because a dynamic AABB must be.
     BodyDef sensorBody;
     sensorBody.type          = BodyType::Dynamic;
-    sensorBody.shape         = MakeAabb(Real(10), Real(10));
+    sensorBody.shape         = MakeAabb(Real(1), Real(1));
     sensorBody.fixedRotation = true;
     sensorBody.isSensor      = true;                 // sensor fixture, event-only
     sensorBody.position      = Vec2(Real(0), Real(0));
@@ -421,9 +395,9 @@ TEST_CASE("Contact pool expands to the event union (sensors + kinematic); solver
 
     BodyDef dynPartner;
     dynPartner.type          = BodyType::Dynamic;
-    dynPartner.shape         = MakeAabb(Real(10), Real(10));
+    dynPartner.shape         = MakeAabb(Real(1), Real(1));
     dynPartner.fixedRotation = true;
-    dynPartner.position      = Vec2(Real(5), Real(0)); // overlaps sensA
+    dynPartner.position      = Vec2(Real(0.5), Real(0)); // overlaps sensA
     const BodyHandle sensB = w.AddBody(dynPartner);
 
     // (b) A KINEMATIC body overlapping a STATIC body. Neither is dynamic, so
@@ -431,14 +405,14 @@ TEST_CASE("Contact pool expands to the event union (sensors + kinematic); solver
     //     it (kinematic-vs-static-body is event-relevant) but tags it event-only.
     BodyDef stat;
     stat.type     = BodyType::Static;
-    stat.shape    = MakeAabb(Real(10), Real(10));
-    stat.position = Vec2(Real(100), Real(0));
+    stat.shape    = MakeAabb(Real(1), Real(1));
+    stat.position = Vec2(Real(10), Real(0));
     const BodyHandle statS = w.AddBody(stat);
 
     BodyDef kin;
     kin.type     = BodyType::Kinematic;
-    kin.shape    = MakeAabb(Real(10), Real(10));
-    kin.position = Vec2(Real(105), Real(0));         // overlaps statS
+    kin.shape    = MakeAabb(Real(1), Real(1));
+    kin.position = Vec2(Real(10.5), Real(0));        // overlaps statS
     const BodyHandle kinK = w.AddBody(kin);
 
     // Capture the solver feed BEFORE the Step has no meaning (it is rebuilt each
