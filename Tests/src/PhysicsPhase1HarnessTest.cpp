@@ -121,20 +121,20 @@ namespace
     }
 
     // Build a WorldDef from the grid for the given broadphase strategy.
-    // cellSize 16, origin (0,0) -- matching the grid layout above.
+    // tileCellSize 1 m, origin (0,0) -- matching the grid layout above.
     WorldDef MakeDef(const IPassabilitySource& src, BroadphaseKind bp)
     {
         WorldDef def;
         def.broadphase   = bp;
-        def.hashCellSize = Real(32); // SpatialHash cell; large enough for the scene
+        def.hashCellSize = Real(2);  // SpatialHash cell = 2 * tileCellSize (2-cell relation)
         def.passability  = &src;
-        def.tileCellSize = Real(16);
+        def.tileCellSize = Real(1);  // MKS: 1 m tiles
         def.tileOrigin   = Vec2(Real(0), Real(0));
-        def.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        def.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        def.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        def.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        def.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        // Zero-g scene: the kinematic movers are driven purely by scripted
+        // velocities, so gravity is deliberately held at zero (an intentional
+        // scene statement, not a leftover px default).
+        def.gravityX = Real(0);
+        def.gravityY = Real(0);
         return def;
     }
 
@@ -153,7 +153,7 @@ namespace
     {
         constexpr int   kSteps = 240;
         constexpr Real  kDt    = Real(1) / Real(60);
-        constexpr Real  kCell  = Real(16);
+        constexpr Real  kCell  = Real(1); // MKS: 1 m tiles (matches tileCellSize)
 
         PhysicsWorld w(MakeDef(grid, bp));
 
@@ -161,22 +161,22 @@ namespace
         int eventCount = 0;
         w.OnContact([&eventCount](const ContactEvent&) { ++eventCount; });
 
-        // A single static obstacle body at cell (8,8) center = (136, 136).
+        // A single static obstacle body at cell (8,8) center = (8.5, 8.5).
         {
             BodyDef sd;
             sd.type     = BodyType::Static;
             sd.position = Vec2(Real(8) * kCell + kCell * Real(0.5),
                                Real(8) * kCell + kCell * Real(0.5));
-            sd.shape    = MakeAabb(Real(12), Real(12));
+            sd.shape    = MakeAabb(Real(0.75f), Real(0.75f));
             w.AddBody(sd);
         }
 
         // 4 kinematic movers, staggered.
-        // Starting positions: cell (i+2, 6) center for i in [1..4].
-        // i=1 -> cell (3,6) -> (3*16+8, 6*16+8) = (56, 104)
-        // i=2 -> cell (4,6) -> (72, 104)
-        // i=3 -> cell (5,6) -> (88, 104)
-        // i=4 -> cell (6,6) -> (104, 104)
+        // Starting positions: cell (i+3, 6) center for i in [0..3], kCell = 1 m.
+        // i=0 -> cell (3,6) -> (3*1+0.5, 6*1+0.5) = (3.5, 6.5)
+        // i=1 -> cell (4,6) -> (4.5, 6.5)
+        // i=2 -> cell (5,6) -> (5.5, 6.5)
+        // i=3 -> cell (6,6) -> (6.5, 6.5)
         BodyHandle movers[4];
         for (int i = 0; i < 4; ++i)
         {
@@ -184,7 +184,7 @@ namespace
             kd.type     = BodyType::Kinematic;
             kd.position = Vec2(static_cast<Real>(i + 3) * kCell + kCell * Real(0.5),
                                Real(6) * kCell + kCell * Real(0.5));
-            kd.shape    = MakeCircle(Real(6));
+            kd.shape    = MakeCircle(Real(0.4f));
             movers[i]   = w.AddBody(kd);
         }
 
@@ -194,19 +194,21 @@ namespace
         // Phase 1 (steps 61-120): mover 0 up,    1 right, 2 down, 3 left
         // Phase 2 (steps 121-180): mover 0 left,  1 down, 2 right, 3 up
         // Phase 3 (steps 181-240): mover 0 down,  1 left, 2 up,    3 right
+        // Scripted speed: 2.5 m/s = 40/16 cells-per-second preserved (px 40 over a
+        // 16 px cell -> MKS 2.5 m over a 1 m cell).
         const Vec2 kPhases[4][4] = {
             // Phase 0
-            { Vec2(Real(40), Real(0)),  Vec2(Real(0), Real(-40)),
-              Vec2(Real(-40), Real(0)), Vec2(Real(0), Real(40))  },
+            { Vec2(Real(2.5f), Real(0)),  Vec2(Real(0), Real(-2.5f)),
+              Vec2(Real(-2.5f), Real(0)), Vec2(Real(0), Real(2.5f))  },
             // Phase 1
-            { Vec2(Real(0), Real(-40)), Vec2(Real(40), Real(0)),
-              Vec2(Real(0), Real(40)),  Vec2(Real(-40), Real(0)) },
+            { Vec2(Real(0), Real(-2.5f)), Vec2(Real(2.5f), Real(0)),
+              Vec2(Real(0), Real(2.5f)),  Vec2(Real(-2.5f), Real(0)) },
             // Phase 2
-            { Vec2(Real(-40), Real(0)), Vec2(Real(0), Real(40)),
-              Vec2(Real(40), Real(0)),  Vec2(Real(0), Real(-40)) },
+            { Vec2(Real(-2.5f), Real(0)), Vec2(Real(0), Real(2.5f)),
+              Vec2(Real(2.5f), Real(0)),  Vec2(Real(0), Real(-2.5f)) },
             // Phase 3
-            { Vec2(Real(0), Real(40)),  Vec2(Real(-40), Real(0)),
-              Vec2(Real(0), Real(-40)), Vec2(Real(40), Real(0))  },
+            { Vec2(Real(0), Real(2.5f)),  Vec2(Real(-2.5f), Real(0)),
+              Vec2(Real(0), Real(-2.5f)), Vec2(Real(2.5f), Real(0))  },
         };
 
         std::uint64_t hash = 0;

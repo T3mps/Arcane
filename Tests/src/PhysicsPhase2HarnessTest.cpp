@@ -59,13 +59,13 @@
 // THIS FILE: Phase-2 dynamics determinism replay (P2.6 gate)
 // =============================================================================
 // Scene (mirrors harness scriptedRun main.lua:873-894, dynamic half):
-//   * gravityY = 300 (matching the harness).
-//   * Static floor: AABB at (150, 220) half-extents (220, 12) -- the harness floor.
-//   * 4 dynamic balls: circle r=8, restitution=0.3; positions staggered.
-//   * 1 kinematic stirrer: circle r=10, constant velocity (+X) -- harness `kin`.
-//   * Scripted impulses:
-//       step 60:  balls[0] (= harness bodies[1]) -> impulse (0, -300) upward.
-//       step 120: balls[2] (= harness bodies[3]) -> impulse (120, -100).
+//   * gravityY = 10 (MKS gravity, /10 of the harness gravityY = 300).
+//   * Static floor: AABB at (15, 22) half-extents (22, 1.2) -- the harness floor /10.
+//   * 4 dynamic balls: circle r=0.8, restitution=0.3; positions staggered.
+//   * 1 kinematic stirrer: circle r=1, constant velocity (+X) -- harness `kin`.
+//   * Scripted impulses (authored as mass * delta-v, protocol rule 3):
+//       step 60:  balls[0] (= harness bodies[1]) -> delta-v (0, -0.15) m/s upward.
+//       step 120: balls[2] (= harness bodies[3]) -> delta-v (0.06, -0.05) m/s.
 //   * 1 DistanceJoint between balls[1] and balls[2]: exercises the joint path in
 //     the replay (not in the harness; see NOTE above).
 //   * Hash formula (mirroring harness / Phase-1 HarnessTest verbatim):
@@ -125,38 +125,32 @@ namespace Arcane { namespace Physics { namespace Phase2Harness {
 
         // ---- World -----------------------------------------------------------
         WorldDef def;
-        def.gravityY   = Real(300);   // matches the harness gravityY = 300
+        def.gravityY   = Real(10);    // MKS gravity (y-down), /10 of harness 300
         def.broadphase = bp;
-        // SpatialHash cell: large enough to be sensible for this scene scale.
-        def.hashCellSize = Real(64);
-        def.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        def.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        def.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        def.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
 
         PhysicsWorld w(def);
 
-        // ---- Static floor (harness: addBody{ type="static", x=150, y=220,
-        //      shape = S.aabb(220, 12) }) -----------------------------------
+        // ---- Static floor (harness: x=150, y=220, aabb(220, 12); /10 to MKS) -
         {
             BodyDef fd;
             fd.type     = BodyType::Static;
-            fd.position = Vec2(Real(150), Real(220));
-            fd.shape    = MakeAabb(Real(220), Real(12));
+            fd.position = Vec2(Real(15), Real(22));
+            fd.shape    = MakeAabb(Real(22), Real(1.2f));
             w.AddBody(fd);
         }
 
-        // ---- 4 dynamic balls (harness: x = 60 + i*40, y = 40 + i*10,
-        //      circle r=8, restitution=0.3) ---------------------------------
-        // i=1 -> (100, 50), i=2 -> (140, 60), i=3 -> (180, 70), i=4 -> (220, 80)
+        // ---- 4 dynamic balls (harness: x = 60 + i*40, y = 40 + i*10; /10 to
+        //      MKS: x = 6 + i*4, y = 4 + i*1; circle r=0.8, restitution=0.3) --
+        // i=1 -> (10, 5), i=2 -> (14, 6), i=3 -> (18, 7), i=4 -> (22, 8)
+        const Real kBallR = Real(0.8f); // ball radius (reused for mass)
         BodyHandle balls[4];
         for (int i = 0; i < 4; ++i)
         {
             BodyDef bd;
             bd.type        = BodyType::Dynamic;
-            bd.position    = Vec2(Real(60) + Real(i + 1) * Real(40),
-                                  Real(40) + Real(i + 1) * Real(10));
-            bd.shape       = MakeCircle(Real(8));
+            bd.position    = Vec2(Real(6) + Real(i + 1) * Real(4),
+                                  Real(4) + Real(i + 1) * Real(1));
+            bd.shape       = MakeCircle(kBallR);
             bd.density     = Real(1);
             bd.restitution = Real(0.3f);
             bd.friction    = Real(0.4f);
@@ -164,37 +158,47 @@ namespace Arcane { namespace Physics { namespace Phase2Harness {
         }
 
         // ---- Kinematic stirrer (harness: kin, x=0, y=196, circle r=10,
-        //      velocity (50, 0)) --------------------------------------------
+        //      velocity (50, 0); /10 to MKS: y=19.6, r=1, velocity (5, 0)) ----
         {
             BodyDef kd;
             kd.type     = BodyType::Kinematic;
-            kd.position = Vec2(Real(0), Real(196));
-            kd.shape    = MakeCircle(Real(10));
+            kd.position = Vec2(Real(0), Real(19.6f));
+            kd.shape    = MakeCircle(Real(1));
             BodyHandle kin = w.AddBody(kd);
-            w.SetVelocity(kin, Vec2(Real(50), Real(0)));
+            w.SetVelocity(kin, Vec2(Real(5), Real(0)));
         }
 
         // ---- DistanceJoint between balls[1] and balls[2] --------------------
         // Exercises the joint path in the dynamics determinism replay.
-        // Length = creation separation (~40 px apart horizontally).
+        // Length = creation separation (~4 m apart horizontally).
         {
             JointDef jd;
             jd.kind   = JointKind::Distance;
             jd.a      = balls[1];
             jd.b      = balls[2];
-            jd.length = Real(40); // initial horizontal separation
+            jd.length = Real(4); // initial horizontal separation
             w.AddJoint(jd);
         }
 
         // ---- Scripted run (harness: steps 1..240) ---------------------------
+        // Impulses authored as mass * delta-v (protocol rule 3): balls share
+        // density 1 and radius kBallR, so mass = density*kPi*r*r. Target
+        // delta-v (m/s) is the px-era kick (impulse / px-mass pi*8*8 = 201)
+        // rescaled /10 with this scene's velocities:
+        //   step 60  balls[0]: 300 / 201 = 1.49 px/s -> 0.15 m/s upward
+        //   step 120 balls[2]: (120,-100)/201 = (0.60,-0.50) px/s -> (0.06,-0.05) m/s
+        const Real kBallMass = Real(1) * kPi * kBallR * kBallR;
+        const Vec2 kBall0KickDv(Real(0),     Real(-0.15f)); // step 60
+        const Vec2 kBall2KickDv(Real(0.06f), Real(-0.05f)); // step 120
+
         std::uint64_t hash = 0;
         for (int step = 1; step <= kSteps; ++step)
         {
             // Scripted impulses (harness lines 885-886).
             if (step == 60)
-                w.ApplyImpulse(balls[0], Vec2(Real(0), Real(-300)));
+                w.ApplyImpulse(balls[0], kBallMass * kBall0KickDv);
             if (step == 120)
-                w.ApplyImpulse(balls[2], Vec2(Real(120), Real(-100)));
+                w.ApplyImpulse(balls[2], kBallMass * kBall2KickDv);
 
             w.Step(kDt);
 

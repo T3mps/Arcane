@@ -35,11 +35,11 @@
 // SCENE (single rich scene exercising the full Step pipeline)
 // =============================================================================
 //
-// * gravityY = 300 (matching the P2.6 harness convention).
-// * Static floor: AABB at (200, 250) half-extents (300, 12).
-// * Thin static wall: AABB at (350, 100) half-extents (1, 80). "Thin" (2 units
-//   wide) — a bullet body fired right at it would tunnel without CCD.
-// * 3 dynamic bodies (d0, d1, d2): circle r=8, restitution=0.3, staggered.
+// * gravityY = 10 (MKS gravity, matching the P2.6 harness convention).
+// * Static floor: AABB at (20, 25) half-extents (30, 1.2).
+// * Thin static wall: AABB at (35, 10) half-extents (0.1, 8). "Thin" (0.2 m
+//   wide) -- a bullet body fired right at it would tunnel without CCD.
+// * 3 dynamic bodies (d0, d1, d2): circle r=0.8, restitution=0.3, staggered.
 //   Scripted impulses at step 60 and step 120.
 // * 1 kinematic mover: constant authored velocity (+X), hashed for position.
 // * 3 joints between dynamic bodies:
@@ -85,19 +85,21 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
     constexpr int  kSteps = 240;
 
     // Thin static wall geometry. Wall span: x[kWallX - kWallHW, kWallX + kWallHW].
-    constexpr Real kWallX  = Real(350);
-    constexpr Real kWallHW = Real(1);   // half-width  → wall 2 units wide
-    constexpr Real kWallHH = Real(80);  // half-height
-    constexpr Real kWallCY = Real(100); // wall centre y
+    constexpr Real kWallX  = Real(35);
+    constexpr Real kWallHW = Real(0.1f); // half-width -> wall 0.2 m wide
+    constexpr Real kWallHH = Real(8);    // half-height
+    constexpr Real kWallCY = Real(10);   // wall centre y
 
-    // Bullet bodies start here, aimed right at the wall.
-    constexpr Real kBulletStartX = Real(100);
-    // Speed: one-step displacement = kBulletSpeed * kDt >> wall width.
-    // kBulletSpeed * (1/60) = 300 units — clears the 2-unit wall many times.
-    constexpr Real kBulletSpeed = Real(300) / kDt;
+    // Bullet bodies start here (left of the wall), aimed right at it.
+    constexpr Real kBulletStartX = Real(10);
+    // Bullet speed: flat 150 m/s (probe-validated 2026-07-03), well under the
+    // 400 m/s velocity cap. One-step travel = kBulletSpeed * kDt = 2.5 m, far
+    // more than the 0.2 m wall thickness -- so the body genuinely tunnels
+    // without CCD, which is exactly what the anti-tunnel gate proves is caught.
+    constexpr Real kBulletSpeed = Real(150);
 
     // Probe radius for bullet bodies.
-    constexpr Real kProbeR = Real(2);
+    constexpr Real kProbeR = Real(0.2f);
 
     // Rotating polygon box (v2, T9). A Dynamic AABB shape asserts fixedRotation
     // (PhysicsWorld.cpp:690), so a freely-rotating box MUST be a MakePolygon.
@@ -163,22 +165,17 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
     {
         // ---- World -----------------------------------------------------------
         WorldDef wdef;
-        wdef.gravityY    = Real(300);           // matching the P2.6 harness
-        wdef.broadphase  = BroadphaseKind::Tree;
-        wdef.hashCellSize = Real(64);
-        wdef.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wdef.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wdef.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wdef.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
+        wdef.gravityY   = Real(10);              // MKS gravity (y-down)
+        wdef.broadphase = BroadphaseKind::Tree;  // pinned to Tree (deliberate scene choice)
 
         PhysicsWorld w(wdef);
 
-        // ---- Static floor (wide, centred at (200, 250)) ---------------------
+        // ---- Static floor (wide, centred at (20, 25)) ----------------------
         {
             BodyDef fd;
             fd.type     = BodyType::Static;
-            fd.position = Vec2(Real(200), Real(250));
-            fd.shape    = MakeAabb(Real(300), Real(12));
+            fd.position = Vec2(Real(20), Real(25));
+            fd.shape    = MakeAabb(Real(30), Real(1.2f));
             w.AddBody(fd);
         }
 
@@ -196,8 +193,8 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         {
             BodyDef ad;
             ad.type     = BodyType::Static;
-            ad.position = Vec2(Real(80), Real(50));
-            ad.shape    = MakeCircle(Real(3));
+            ad.position = Vec2(Real(8), Real(5));
+            ad.shape    = MakeCircle(Real(0.3f));
             revAnchor   = w.AddBody(ad);
         }
 
@@ -206,27 +203,28 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         {
             BodyDef ad;
             ad.type     = BodyType::Static;
-            ad.position = Vec2(Real(200), Real(80));
-            ad.shape    = MakeCircle(Real(3));
+            ad.position = Vec2(Real(20), Real(8));
+            ad.shape    = MakeCircle(Real(0.3f));
             railAnchor  = w.AddBody(ad);
         }
 
-        // ---- 3 dynamic bodies (d0, d1, d2): circle r=8, restitution=0.3 ----
+        // ---- 3 dynamic bodies (d0, d1, d2): circle r=0.8, restitution=0.3 ---
         // d0 hangs below revAnchor for the pendulum.
         // d1 and d2 are welded together; d2 also attached to the prismatic rail.
+        const Real kDynR = Real(0.8f); // dynamic-circle radius (reused for mass)
         BodyHandle dyn[3];
         {
             const Vec2 positions[3] = {
-                Vec2(Real(80),  Real(100)), // d0: below revAnchor
-                Vec2(Real(150), Real(60)),  // d1: weld partner A
-                Vec2(Real(200), Real(80)),  // d2: weld partner B + prismatic slider
+                Vec2(Real(8),  Real(10)), // d0: below revAnchor
+                Vec2(Real(15), Real(6)),  // d1: weld partner A
+                Vec2(Real(20), Real(8)),  // d2: weld partner B + prismatic slider
             };
             for (int i = 0; i < 3; ++i)
             {
                 BodyDef bd;
                 bd.type        = BodyType::Dynamic;
                 bd.position    = positions[i];
-                bd.shape       = MakeCircle(Real(8));
+                bd.shape       = MakeCircle(kDynR);
                 bd.density     = Real(1);
                 bd.restitution = Real(0.3f);
                 bd.friction    = Real(0.4f);
@@ -239,10 +237,10 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         {
             BodyDef kd;
             kd.type     = BodyType::Kinematic;
-            kd.position = Vec2(Real(0), Real(220));
-            kd.shape    = MakeCircle(Real(10));
+            kd.position = Vec2(Real(0), Real(22));
+            kd.shape    = MakeCircle(Real(1));
             kin = w.AddBody(kd);
-            w.SetVelocity(kin, Vec2(Real(60), Real(0)));
+            w.SetVelocity(kin, Vec2(Real(6), Real(0)));
         }
 
         // ---- Bullet kinematic: fires at the thin wall -----------------------
@@ -264,7 +262,7 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         {
             BodyDef bd;
             bd.type     = BodyType::Dynamic;
-            bd.position = Vec2(kBulletStartX, kWallCY + Real(6));
+            bd.position = Vec2(kBulletStartX, kWallCY + Real(0.6f));
             bd.shape    = MakeCircle(kProbeR);
             bd.density  = Real(1);
             bd.bullet   = true;
@@ -275,7 +273,7 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         // ---- Rotating polygon box (v2, T9): angled drop onto the floor ------
         // A Dynamic MakePolygon box (NOT MakeAabb -- a dynamic AABB asserts
         // fixedRotation) released at kBoxInitAngle above the static floor
-        // (floor centre y=250, half-height 12 -> top surface ~238). Gravity
+        // (floor centre y=25, half-height 1.2 -> top surface ~23.8). Gravity
         // pulls it down; the v2 rotation-aware narrowphase + compound-COM
         // contact solver rotate it toward flat as it settles (T5 behavior).
         // fixedRotation=false so its angle is free to evolve and is hashed.
@@ -283,8 +281,8 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         {
             BodyDef bd;
             bd.type          = BodyType::Dynamic;
-            bd.position      = Vec2(Real(200), Real(180)); // above the floor
-            bd.shape         = BoxPolygon(Real(10), Real(10));
+            bd.position      = Vec2(Real(20), Real(18)); // above the floor
+            bd.shape         = BoxPolygon(Real(1), Real(1));
             bd.density       = Real(1);
             bd.restitution   = Real(0.1f);
             bd.friction      = Real(0.4f);
@@ -307,8 +305,8 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         {
             BodyDef bd;
             bd.type     = BodyType::Static;
-            bd.position = Vec2(Real(60), Real(180)); // off to the side, clear of the floor stack
-            bd.shape    = MakeAabb(Real(20), Real(20));
+            bd.position = Vec2(Real(6), Real(18)); // off to the side, clear of the floor stack
+            bd.shape    = MakeAabb(Real(2), Real(2));
             deepBlock   = w.AddBody(bd);
         }
         (void)deepBlock;
@@ -316,8 +314,8 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         {
             BodyDef bd;
             bd.type        = BodyType::Dynamic;
-            bd.position    = Vec2(Real(60), Real(174)); // 6 above the block centre, DEEP inside
-            bd.shape       = MakeCircle(Real(5));
+            bd.position    = Vec2(Real(6), Real(17.4f)); // 0.6 above the block centre, DEEP inside
+            bd.shape       = MakeCircle(Real(0.5f));
             bd.density     = Real(1);
             bd.restitution = Real(0.1f);
             bd.friction    = Real(0.4f);
@@ -332,7 +330,7 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
             jd.kind   = JointKind::Revolute;
             jd.a      = revAnchor;
             jd.b      = dyn[0];
-            jd.anchor = Vec2(Real(80), Real(50)); // pivot at static anchor centre
+            jd.anchor = Vec2(Real(8), Real(5)); // pivot at static anchor centre
             w.AddJoint(jd);
         }
 
@@ -361,6 +359,18 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         }
 
         // ---- Scripted run (steps 1..kSteps) ---------------------------------
+        // Impulses authored as mass * delta-v (protocol rule 3): the dynamic
+        // circles share density 1 and radius kDynR, so mass = density*kPi*r*r.
+        // Target delta-v values (m/s) are the px-era kicks (impulse / px-mass
+        // pi*8*8 = 201) rescaled /10 with this scene's velocities:
+        //   d0 up  : 300  / 201 = 1.49 px/s -> 0.15 m/s
+        //   d2 +X  : 2000 / 201 = 9.95 px/s -> 1.0  m/s
+        //   d1 pair: (80,-120)/201 = (0.40,-0.60) px/s -> (0.04,-0.06) m/s
+        const Real kDynMass = Real(1) * kPi * kDynR * kDynR;
+        const Vec2 kD0KickDv(Real(0),     Real(-0.15f)); // step 60: kick d0 upward
+        const Vec2 kD2KickDv(Real(1),     Real(0));      // step 60: slide d2 along +X
+        const Vec2 kD1KickDv(Real(0.04f), Real(-0.06f)); // step 120: nudge weld pair
+
         std::uint64_t hash = 0;
         for (int step = 1; step <= kSteps; ++step)
         {
@@ -368,14 +378,14 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
             if (step == 60)
             {
                 // Kick d0 upward (pendulum gets energy).
-                w.ApplyImpulse(dyn[0], Vec2(Real(0),    Real(-300)));
+                w.ApplyImpulse(dyn[0], kDynMass * kD0KickDv);
                 // Kick d2 along the prismatic axis (+X) so it slides.
-                w.ApplyImpulse(dyn[2], Vec2(Real(2000), Real(0)));
+                w.ApplyImpulse(dyn[2], kDynMass * kD2KickDv);
             }
             if (step == 120)
             {
                 // Kick d1 to inject more motion into the weld pair.
-                w.ApplyImpulse(dyn[1], Vec2(Real(80), Real(-120)));
+                w.ApplyImpulse(dyn[1], kDynMass * kD1KickDv);
             }
 
             w.Step(kDt);
@@ -456,19 +466,19 @@ using namespace Arcane::Physics::P34Determinism;
 //    static wall. This is a focused sub-assert outside the hash loop so the
 //    test reader can see clearly what is being validated.
 //
-//    Wall near face: kWallX - kWallHW = 349.
-//    Without CCD, one-step displacement = kBulletSpeed * kDt = 300 units,
-//    landing the bullet at x ~ 400 — well past the wall.
+//    Wall near face: kWallX - kWallHW = 34.9.
+//    Without CCD, one-step displacement = kBulletSpeed * kDt = 2.5 m, landing
+//    the bullet well past the 0.2 m wall in a single step.
 //    With CCD (TOI clamp for kinematic; speculative margin for dynamic), the
 //    bullet centre stops at or before the near face. Because the bullet shape
-//    has radius kProbeR = 2, the actual stopped centre will be approximately
-//    kWallNearX - kProbeR (= 347); the <= kWallNearX bound has generous margin
-//    while still rejecting any half-tunnel (centre past x = 349 = wall centre
-//    would still be < kWallX = 350 but that corner is already excluded here).
+//    has radius kProbeR = 0.2, the analytic stopped centre is about
+//    kWallNearX - kProbeR (= 34.7); the <= kWallNearX bound has generous margin
+//    while still rejecting any half-tunnel (a centre past the near face x = 34.9
+//    is rejected here).
 // ---------------------------------------------------------------------------
 
-// Wall near face constant (near side of the 2-unit-wide wall).
-constexpr Real kWallNearX = kWallX - kWallHW; // = 349
+// Wall near face constant (near side of the 0.2 m wall).
+constexpr Real kWallNearX = kWallX - kWallHW; // = 34.9
 
 TEST_CASE("P3.4 full-pipeline determinism: bullet bodies do not tunnel (CCD gate)",
           "[physics][determinism]")
@@ -476,13 +486,13 @@ TEST_CASE("P3.4 full-pipeline determinism: bullet bodies do not tunnel (CCD gate
     BulletResult bullets{};
     RunScene(&bullets);
 
-    // Bullet-kinematic: BulletSweep clamps to TOI → centre at or before near face.
-    // A half-tunnel (centre at wall centre x=350) or full tunnel (x>351) both fail.
-    // Empirical stopped centre: x ≈ 346.7 (≈ kWallNearX - kProbeR, CCD skin margin).
+    // Bullet-kinematic: BulletSweep clamps to TOI -> centre at or before near face.
+    // A half-tunnel or full tunnel (centre past the near face) fails the gate.
+    // Empirical stopped centre: x ~ 34.70 (~ kWallNearX - kProbeR, CCD skin margin).
     REQUIRE(bullets.bulletKinPos.x <= kWallNearX);
 
-    // Bullet-dynamic: speculative contacts + GJK-TOI → same invariant.
-    // Empirical stopped centre: x ≈ 268.3 (zeroed on first contact step, held far back).
+    // Bullet-dynamic: speculative contacts + GJK-TOI -> same invariant.
+    // Empirical stopped centre: x ~ 34.70 (clamped at the near face, ~ kWallNearX - kProbeR).
     REQUIRE(bullets.bulletDynPos.x <= kWallNearX);
 }
 
