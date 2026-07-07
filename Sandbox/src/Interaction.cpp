@@ -50,7 +50,8 @@ namespace Arcane::Sandbox
         // pick affordance is a FIXED SCREEN-PX radius (kPickRadiusPx) converted to world
         // through the camera, so it does not shrink when zoomed out (spec P6): at zoom 1
         // this is 4/100 = 0.04 m; zoom out to 0.5 and it grows to 0.08 m of world.
-        const float worldR = kPickRadiusPx / (Camera::kPixelsPerMeter * camera.zoom);
+        // WorldToScreenScale() is the single px-per-meter seam (== kPixelsPerMeter * zoom).
+        const float worldR = kPickRadiusPx / camera.WorldToScreenScale();
         const Phys::Shape query = Phys::MakeCircle(Phys::Real(worldR));
         Phys::Transform xf;
         xf.position = Phys::Vec2(worldPt.x, worldPt.y);
@@ -331,9 +332,11 @@ namespace Arcane::Sandbox
         const glm::vec2 worldUnderCursor = camera.ScreenToWorld(cursor);  // OLD zoom/offset
         camera.zoom   = zoomNew;
         // Re-derive offset so WorldToScreen(worldUnderCursor) == cursor at the new
-        // zoom. Must mirror WorldToScreen exactly, including kPixelsPerMeter (world
-        // is meters, cursor is px) -- otherwise the fixed point drifts by 100x.
-        camera.offset = cursor - worldUnderCursor * (Camera::kPixelsPerMeter * zoomNew);
+        // zoom. Routed through WorldToScreenScale() (the single px-per-meter seam) so it
+        // mirrors WorldToScreen exactly, including kPixelsPerMeter (world is meters,
+        // cursor is px) -- inlining kPixelsPerMeter*zoom is how the fixed point drifted
+        // 100x. camera.zoom is already zoomNew here, so the helper reads the new scale.
+        camera.offset = cursor - worldUnderCursor * camera.WorldToScreenScale();
     }
 
     bool Interaction::SpawnPolygon(Phys::PhysicsWorld& world)

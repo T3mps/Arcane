@@ -96,7 +96,7 @@
 - Produces: `Camera::kPixelsPerMeter = 100.0f`; `WorldToScreen(w) = w * (kPixelsPerMeter * zoom) + offset`; `ScreenToWorld(s) = (s - offset) / (kPixelsPerMeter * zoom)`. At default `zoom=1, offset=(0,0)` the 12.8 x 7.2 m layout fills a 1280x720 canvas exactly as the px layout did. Task 3's HUD and Task 4's gates rely on this.
 
 - [ ] **Step 1 (TDD): rewrite SandboxCameraTest to pin the NEW form.**
-  - Case "round-trips": `offset=(100,50), zoom=2` -> `WorldToScreen({10,10}) == (10*100*2+100, 10*100*2+50) == (2100, 1050)`; inverse returns `(10,10)`.
+  - Case "round-trips": `offset=(100,50), zoom=2` -> `WorldToScreen({10,10}) == (10*100*2+100, 10*100*2+50) == (2100, 2050)`; inverse returns `(10,10)`.
   - Case "identity defaults": default camera -> `WorldToScreen(p) == p * 100.0f`; add the explicit framing assertion `WorldToScreen({12.8f, 7.2f}) == (1280, 720)`.
 - [ ] **Step 2: Run to verify RED.** `.\ArcaneTests.exe "[sandbox]"` — the two camera cases fail against the old 1:1 transform (expected).
 - [ ] **Step 3: Implement Camera.hpp.**

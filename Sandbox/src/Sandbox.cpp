@@ -160,10 +160,17 @@ extern "C"
 
         // Push the plugin-owned camera to the engine BEFORE render: SetRenderContext
         // (called by the host after this Update phase) writes it into RenderContext2D,
-        // so RenderSubmissionSystem + DrawPhysicsDebug apply the SAME world*zoom+offset
+        // so RenderSubmissionSystem + DrawPhysicsDebug apply the SAME world*scale+offset
         // transform (sprites + debug overlay pan/zoom together). Loom stays camera-agnostic.
+        //
+        // We push WorldToScreenScale() (== kPixelsPerMeter * zoom), NOT the raw zoom: the
+        // engine's `zoom` field means world->SCREEN scale (it is unit-agnostic), so the
+        // pixelsPerMeter fold must ride in here or the render path draws meter content at
+        // 1 px/m -- a thumbnail -- while the mouse (which goes through the full ppm camera)
+        // disagrees with the visual by 100x. This is the single seam that folds ppm into
+        // the render path; the mouse path folds it via WorldToScreen/ScreenToWorld.
         const Arcane::Sandbox::Camera& cam = g_app.Cam();
-        g_ctx->engine->SetCamera(cam.offset, cam.zoom);
+        g_ctx->engine->SetCamera(cam.offset, cam.WorldToScreenScale());
     }
 
     // ABI v2: the host calls this between ImGuiLayer BeginFrame and Render. Task 8 draws

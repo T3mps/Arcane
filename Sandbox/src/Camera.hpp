@@ -4,12 +4,21 @@
 // (glm::vec2 only) so it can be shared verbatim by the engine render bridge and
 // included directly by the CPU camera test.
 //
-// CANONICAL TRANSFORM (the SandboxCameraTest pins this exact form, and both
-// RenderSubmissionSystem and DrawPhysicsDebug apply it identically so sprites +
-// the physics-debug overlay pan/zoom TOGETHER):
+// CANONICAL TRANSFORM (the SandboxCameraTest pins this exact form):
 //
 //     screen = world * (kPixelsPerMeter * zoom) + offset
 //     world  = (screen - offset) / (kPixelsPerMeter * zoom)   (inverse)
+//
+// The engine render path is UNIT-AGNOSTIC: RenderSubmissionSystem,
+// DrawPhysicsDebug, the narrowphase world overlay, and PolygonDraftRenderSystem
+// all apply screen = world * ctx->zoom + ctx->cameraOffset with whatever scalar
+// the sandbox pushed through Runtime::SetCamera. So the sandbox pushes the
+// COMBINED world->screen scale WorldToScreenScale() (== kPixelsPerMeter * zoom),
+// NOT the raw zoom -- those consumers then fold pixelsPerMeter in EXACTLY like
+// WorldToScreen does, and sprites + the physics-debug overlay pan/zoom TOGETHER
+// at the true meter->pixel scale. (Pushing the raw zoom instead rendered meter
+// content at 1 px/m -- a ~13x7 px thumbnail -- while the mouse still used the
+// ppm transform, so mouse and visual disagreed by 100x.)
 //
 // World is METERS (MKS); the canvas is pixels. kPixelsPerMeter folds the unit
 // conversion into the single transform pair everything routes through -- so a
@@ -40,5 +49,11 @@ namespace Arcane::Sandbox
         {
             return (screen - offset) / (kPixelsPerMeter * zoom);
         }
+
+        // The full world->screen scale (px per world-meter at the current zoom).
+        // EVERY consumer of the transform that cannot call WorldToScreen directly
+        // (the engine SetCamera push, hand-rolled inverse solves) MUST use this --
+        // duplicating kPixelsPerMeter * zoom inline is how the 100x drift bugs happened.
+        float WorldToScreenScale() const noexcept { return kPixelsPerMeter * zoom; }
     };
 }

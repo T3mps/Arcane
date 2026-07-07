@@ -57,3 +57,26 @@ TEST_CASE("Sandbox camera identity defaults", "[sandbox]")
     CHECK(frame.x == Approx(1280.0f));
     CHECK(frame.y == Approx(720.0f));
 }
+
+TEST_CASE("Sandbox camera WorldToScreenScale is the single world->screen scale", "[sandbox]")
+{
+    // Default zoom 1: the scale is exactly kPixelsPerMeter (100 px per world-meter).
+    // This is the scalar SetCamera pushes to the engine so the unit-agnostic render
+    // path folds pixelsPerMeter in like WorldToScreen does (pushing raw zoom instead
+    // rendered meter content at 1 px/m while the mouse used the ppm transform -- 100x).
+    Arcane::Sandbox::Camera def;
+    CHECK(def.WorldToScreenScale() == Approx(100.0f));
+
+    // Zoom 2 doubles it (200 px/m).
+    Arcane::Sandbox::Camera cam;
+    cam.zoom = 2.0f;
+    CHECK(cam.WorldToScreenScale() == Approx(200.0f));
+
+    // Consistency: WorldToScreen(p) IS p * WorldToScreenScale() + offset -- exactly
+    // what the render consumers apply with the pushed scale.
+    cam.offset = {30.0f, -12.0f};
+    const glm::vec2 p{4.0f, 5.0f};
+    const glm::vec2 s = cam.WorldToScreen(p);
+    CHECK(s.x == Approx(p.x * cam.WorldToScreenScale() + cam.offset.x));
+    CHECK(s.y == Approx(p.y * cam.WorldToScreenScale() + cam.offset.y));
+}

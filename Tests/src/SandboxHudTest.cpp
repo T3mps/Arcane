@@ -255,6 +255,8 @@ TEST_CASE("Hud: rich-overlay debug flags round-trip through the options", "[sand
     f.app.DebugOptionsMut().drawVelocities    = false;
     f.app.DebugOptionsMut().drawComMarkers    = false;
     f.app.DebugOptionsMut().drawOrientations  = false;
+    // Arbitrary write-through/read-back probe values (does this field round-trip?),
+    // NOT slider-range-legal magnitudes -- the MKS COM/tick ranges are ~0.02-0.48 m.
     f.app.DebugOptionsMut().velocityScale     = 0.30f;
     f.app.DebugOptionsMut().comMarkerSize     = 9.0f;
     f.app.DebugOptionsMut().orientationTickLen = 24.0f;
