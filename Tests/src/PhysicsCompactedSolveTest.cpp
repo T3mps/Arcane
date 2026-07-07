@@ -38,22 +38,17 @@ TEST_CASE("PhysicsCompacted: kinematic-set tracks live kinematic slots", "[physi
             REQUIRE((seen[i] != 0u) == kin);
         }
     };
-    WorldDef wd; wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    const BodyHandle k0 = AddKinematic(w, Vec2(Real(-30), Real(-10)), Real(5), Real(5));
-    const BodyHandle d0 = AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
-    const BodyHandle k1 = AddKinematic(w, Vec2(Real(30), Real(-10)), Real(5), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    const BodyHandle k0 = AddKinematic(w, Vec2(Real(-3), Real(-1)), Real(0.5), Real(0.5));
+    const BodyHandle d0 = AddBox(w, Vec2(Real(0), Real(-2)), Real(0.5), Real(0.5));
+    const BodyHandle k1 = AddKinematic(w, Vec2(Real(3), Real(-1)), Real(0.5), Real(0.5));
     checkInvariant(w);
     for (int kk = 0; kk < 60; ++kk) w.Step(kStep);
     checkInvariant(w);
     w.RemoveBody(k0); checkInvariant(w);          // swap-remove from the kinematic-set
-    const BodyHandle k2 = AddKinematic(w, Vec2(Real(0), Real(-50)), Real(5), Real(5));
+    const BodyHandle k2 = AddKinematic(w, Vec2(Real(0), Real(-5)), Real(0.5), Real(0.5));
     checkInvariant(w);                             // recycle a slot as a fresh kinematic
     (void)d0; (void)k1; (void)k2;
 }
@@ -74,19 +69,14 @@ TEST_CASE("PhysicsCompacted: kinematic-set tracks live kinematic slots", "[physi
 TEST_CASE("PhysicsCompacted: solve settles identically + deterministically", "[physics][phasec]")
 {
     auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
-        WorldDef wd; wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
         PhysicsWorld w(wd);
-        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+        AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
         // include a kinematic plate pushing a dynamic so a kinematic B-endpoint is exercised
-        BodyDef kd; kd.type=BodyType::Kinematic; kd.position=Vec2(Real(0),Real(-8)); kd.shape=MakeAabb(Real(60),Real(2));
-        const BodyHandle k = w.AddBody(kd); w.SetVelocity(k, Vec2(Real(3), Real(0)));
+        BodyDef kd; kd.type=BodyType::Kinematic; kd.position=Vec2(Real(0),Real(-0.8)); kd.shape=MakeAabb(Real(6),Real(0.2));
+        const BodyHandle k = w.AddBody(kd); w.SetVelocity(k, Vec2(Real(0.3), Real(0)));
         std::vector<BodyHandle> boxes;
-        for (int i = 0; i < 5; ++i) boxes.push_back(AddBox(w, Vec2(Real(0), Real(-20) - Real(9)*static_cast<Real>(i)), Real(4), Real(4)));
+        for (int i = 0; i < 5; ++i) boxes.push_back(AddBox(w, Vec2(Real(0), Real(-2) - Real(0.9)*static_cast<Real>(i)), Real(0.4), Real(0.4)));
         for (int kk = 0; kk < 600; ++kk) w.Step(kStep);
         pos.clear(); awake.clear();
         for (const BodyHandle b : boxes) { pos.push_back(w.Position(b)); awake.push_back(w.IsAwake(b)?1:0); }
@@ -114,15 +104,10 @@ TEST_CASE("PhysicsCompacted: solve settles identically + deterministically", "[p
 // goldens), per the engine's re-baseline-numerics-on-purpose rule.
 TEST_CASE("PhysicsCompacted: persistent contact coloring is valid", "[physics][phasec]")
 {
-    WorldDef wd; wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
-    for (int i = 0; i < 30; ++i) AddBox(w, Vec2(Real(-40) + Real(3)*static_cast<Real>(i%20), Real(-20) - Real(9)*static_cast<Real>(i/20)), Real(4), Real(4));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(40), Real(0.5));
+    for (int i = 0; i < 30; ++i) AddBox(w, Vec2(Real(-4) + Real(0.3)*static_cast<Real>(i%20), Real(-2) - Real(0.9)*static_cast<Real>(i/20)), Real(0.4), Real(0.4));
     for (int k = 0; k < 60; ++k) w.Step(kStep);
     REQUIRE(w.ValidatePersistentColoring());     // no two same-color contacts share a dynamic body
     // The oracle must not trivially pass on an EMPTY coloring: a 30-box pile on a
@@ -134,20 +119,15 @@ TEST_CASE("PhysicsCompacted: persistent contact coloring is valid", "[physics][p
 TEST_CASE("PhysicsCompacted: incremental coloring is deterministic across two runs (create/destroy churn)", "[physics][phasec]")
 {
     auto run = [](std::vector<Vec2>& pos) {
-        WorldDef wd; wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
         PhysicsWorld w(wd);
-        AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
+        AddFloor(w, Vec2(Real(0), Real(0.5)), Real(40), Real(0.5));
         std::vector<BodyHandle> b;
-        for (int i = 0; i < 16; ++i) b.push_back(AddBox(w, Vec2(Real(-20) + Real(3)*static_cast<Real>(i), Real(-20)), Real(4), Real(4)));
+        for (int i = 0; i < 16; ++i) b.push_back(AddBox(w, Vec2(Real(-2) + Real(0.3)*static_cast<Real>(i), Real(-2)), Real(0.4), Real(0.4)));
         for (int k = 0; k < 120; ++k) w.Step(kStep);
         w.RemoveBody(b[4]); w.RemoveBody(b[9]);
         for (int k = 0; k < 60; ++k) w.Step(kStep);
-        b.push_back(AddBox(w, Vec2(Real(0), Real(-30)), Real(4), Real(4)));
+        b.push_back(AddBox(w, Vec2(Real(0), Real(-3)), Real(0.4), Real(0.4)));
         for (int k = 0; k < 200; ++k) w.Step(kStep);
         pos.clear(); for (std::size_t i = 0; i < b.size(); ++i) { if (i==4||i==9) continue; pos.push_back(w.Position(b[i])); }
     };

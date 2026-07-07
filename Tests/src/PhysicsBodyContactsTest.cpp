@@ -20,21 +20,15 @@ namespace
 
 TEST_CASE("Body-contact adjacency mirrors live dyn-dyn contacts", "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
     // Wide static floor (gravity +y -> bodies fall down onto it).
     {
         BodyDef fd;
         fd.type     = BodyType::Static;
-        fd.position = Vec2(Real(0), Real(200));
-        fd.shape    = MakeAabb(Real(300), Real(20));
+        fd.position = Vec2(Real(0), Real(20));
+        fd.shape    = MakeAabb(Real(30), Real(2));
         w.AddBody(fd);
     }
 
@@ -50,10 +44,10 @@ TEST_CASE("Body-contact adjacency mirrors live dyn-dyn contacts", "[physics][isl
         d.type     = BodyType::Dynamic;
         d.density  = Real(1);
         d.friction = Real(0.4);
-        d.position = Vec2(rnd(Real(-200), Real(200)), rnd(Real(-150), Real(150)));
-        if (i % 3 == 0)      { d.shape = MakeCircle(rnd(Real(6), Real(12))); }
-        else if (i % 3 == 1) { d.shape = MakeAabb(Real(8), Real(8)); d.fixedRotation = true; }
-        else                 { d.shape = MakeCapsule(Real(10), Real(5)); }
+        d.position = Vec2(rnd(Real(-20), Real(20)), rnd(Real(-15), Real(15)));
+        if (i % 3 == 0)      { d.shape = MakeCircle(rnd(Real(0.6), Real(1.2))); }
+        else if (i % 3 == 1) { d.shape = MakeAabb(Real(0.8), Real(0.8)); d.fixedRotation = true; }
+        else                 { d.shape = MakeCapsule(Real(1), Real(0.5)); }
         w.AddBody(d);
     }
 

@@ -66,18 +66,17 @@ namespace
 TEST_CASE("PhysicsSimd: BodyStateStore SyncIn/SyncOut round-trips world velocities",
           "[physics]")
 {
+    // MKS content (MKS P2): this case never calls w.Step(), so gravity is
+    // inert here -- use the WorldDef default (0, 10) m/s^2 rather than an
+    // explicit zero-g override (no scene reason to declare zero-g).
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Two awake dynamic bodies with known velocities + one static body.
+    // r = 1 m is already in the MKS happy range (0.1-10 m) -- kept as authored.
     const BodyHandle a = AddDynamicCircle(w, Vec2(Real(0), Real(0)), Real(1));
     const BodyHandle b = AddDynamicCircle(w, Vec2(Real(10), Real(0)), Real(1));
+    // Static box half-extents (20,1) m are already sane at MKS scale -- kept as authored.
     const BodyHandle s = AddStaticBox(w, Vec2(Real(0), Real(50)), Real(20), Real(1));
 
     // Seed known linear + angular velocities. SetVelocity wakes the dynamics
@@ -1023,32 +1022,28 @@ TEST_CASE("PhysicsSimd: null-index B equals a zero-velocity read-only body",
 TEST_CASE("PhysicsSimd: overflow (un-colorable hub) contacts settle + bounded",
           "[physics][simd]")
 {
+    // MKS content (MKS P2): gravity uses the WorldDef default (10 m/s^2, +Y down).
     WorldDef wd;
-    wd.gravityY   = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Static floor.
-    const Real floorTop = Real(300);
+    const Real floorTop = Real(3);
     {
         BodyDef bd;
         bd.type     = BodyType::Static;
-        bd.position = Vec2(Real(0), floorTop + Real(5));
-        bd.shape    = MakeAabb(Real(200), Real(5));
+        bd.position = Vec2(Real(0), floorTop + Real(0.5));
+        bd.shape    = MakeAabb(Real(20), Real(0.5));
         w.AddBody(bd);
     }
 
     // Central HUB dynamic disk resting just above the floor.
     BodyHandle hub;
+    const Real hubR = Real(1.2);
     {
         BodyDef bd;
         bd.type        = BodyType::Dynamic;
-        bd.position    = Vec2(Real(0), floorTop - Real(12));
-        bd.shape       = MakeCircle(Real(12));
+        bd.position    = Vec2(Real(0), floorTop - hubR);
+        bd.shape       = MakeCircle(hubR);
         bd.density     = Real(1);
         bd.friction    = Real(0.4f);
         bd.restitution = Real(0);
@@ -1065,11 +1060,11 @@ TEST_CASE("PhysicsSimd: overflow (un-colorable hub) contacts settle + bounded",
     {
         const Real ang = (Real(2) * Real(3.14159265358979323846)) * Real(i) / Real(kRing);
         // Place each small disk so it overlaps the hub's rim (centre ~ hub R).
-        const Real rr = Real(12);
+        const Real rr = hubR;
         BodyDef bd;
         bd.type        = BodyType::Dynamic;
-        bd.position    = Vec2(std::cos(ang) * rr, floorTop - Real(12) + std::sin(ang) * rr);
-        bd.shape       = MakeCircle(Real(3));
+        bd.position    = Vec2(std::cos(ang) * rr, floorTop - hubR + std::sin(ang) * rr);
+        bd.shape       = MakeCircle(Real(0.3));
         bd.density     = Real(1);
         bd.friction    = Real(0.4f);
         bd.restitution = Real(0);
@@ -1089,7 +1084,14 @@ TEST_CASE("PhysicsSimd: overflow (un-colorable hub) contacts settle + bounded",
     const Real kStep = Real(1) / Real(60);
     Real peakKE = Real(0);
     std::size_t peakOverflow = 0;
-    const Real keBound = Real(4) * Real(400) * Real(60); // generous (g * drop, x4)
+    // Re-baselined for MKS (measured f32 60 Hz on this exact content, peak
+    // specific KE ~26.8): the spawn config is a severe overlap cascade, not a
+    // free fall -- each ring disk overlaps the hub's rim by ~0.3 m (rr == hubR
+    // < hubR + ringR) AND overlaps its neighbors by ~0.225 m (chord ~0.375 m
+    // vs 2*ringR == 0.6 m), so the first few steps eject significant energy as
+    // the soft solver pushes the pile apart. Bound = ~1.5x measured headroom,
+    // still far under the WorldDef velocity-cap ceiling (0.5 * 400^2).
+    const Real keBound = Real(40);
     for (int s = 0; s < 240; ++s)
     {
         w.Step(kStep);
@@ -1113,9 +1115,18 @@ TEST_CASE("PhysicsSimd: overflow (un-colorable hub) contacts settle + bounded",
     INFO("overflow-hub peak overflow constraint count = " << peakOverflow);
 
     // The hub did not sink through the floor (overflow contacts held it up).
-    CHECK(w.Position(hub).y + Real(12) <= floorTop + Real(1));
+    // Rewritten from the authored radius/floorTop (was the magic-literal form
+    // `+ 12 <= floorTop + 1`): margin re-baselined to 0.1 m (measured hub rest
+    // 1.800 m + hubR 1.2 m = 3.000 m vs floorTop + 0.1 = 3.1 m -> ~0.1 m clear).
+    CHECK(w.Position(hub).y + hubR <= floorTop + Real(0.1));
     // The hub came to rest (the overflow solve dissipated its energy).
+    // Re-baselined for MKS (measured specific KE ~0.100 at s=240): the pile does
+    // not fully reach sleepThreshold-scale (0.05 m/s -> specific KE 0.00125)
+    // within this exact 240-step window (a congested 21-body cascade settles
+    // slower than a single body), but energy has dropped ~268x from the
+    // keBound-scale peak (~26.8) -- bound at ~2x measured confirms substantial,
+    // bounded dissipation without requiring full sleep in this window.
     const Vec2 vhf = w.Velocity(hub);
-    CHECK(Real(0.5) * (vhf.x * vhf.x + vhf.y * vhf.y) < Real(200));
+    CHECK(Real(0.5) * (vhf.x * vhf.x + vhf.y * vhf.y) < Real(0.2));
     INFO("overflow-hub peak per-mass KE = " << static_cast<double>(peakKE));
 }
