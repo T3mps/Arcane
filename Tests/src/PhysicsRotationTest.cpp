@@ -66,23 +66,17 @@ namespace
     // 4 substeps, default solver config.
     PhysicsWorld MakeGravityWorld()
     {
-        WorldDef wd;
-        wd.gravityY = Real(400); // match the dynamics/solver tests
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down (MKS default)
         return PhysicsWorld(wd);
     }
 
-    // Add a static AABB floor at `y` (top surface), width `w`, half-height 5.
-    BodyHandle AddFloor(PhysicsWorld& world, Real y, Real w = Real(200))
+    // Add a static AABB floor at `y` (top surface), width `w`, half-height 0.5.
+    BodyHandle AddFloor(PhysicsWorld& world, Real y, Real w = Real(20))
     {
         BodyDef bd;
         bd.type     = BodyType::Static;
-        bd.position = Vec2(Real(0), y + Real(5)); // center is 5 below surface
-        bd.shape    = MakeAabb(w, Real(5));
+        bd.position = Vec2(Real(0), y + Real(0.5f)); // center is 0.5 below surface
+        bd.shape    = MakeAabb(w, Real(0.5f));
         return world.AddBody(bd);
     }
 
@@ -127,17 +121,17 @@ namespace
 }
 
 // ============================================================================
-// (a) THE HEADLINE: box dropped at 45° settles flat after ~150 steps.
+// (a) THE HEADLINE: box dropped at 45 deg settles flat after ~300 steps.
 //
-// Setup:
-//   - Dynamic box-polygon, half-extents 10 x 10, initial angle 0.6 rad (~34°).
-//   - Released ~30 units above a wide static AABB floor.
-//   - Gravity downward. No initial velocity.
-//   - Run 150 steps (2.5 s).
+// Setup (MKS content, MKS P2):
+//   - Dynamic box-polygon, half-extents 1 x 1 m, initial angle 0.6 rad (~34 deg).
+//   - Released ~5 m above a wide static AABB floor.
+//   - Gravity downward (engine default, 10 m/s^2). No initial velocity.
+//   - Run 300 steps (5 s).
 //
 // Expected: the box falls, the angled contact faces generate a net torque
 // that rotates the box toward the nearest 0/90/180/270° orientation.
-// After 150 steps the residual |angle mod (pi/2)| < 0.05 rad (~3°).
+// After 300 steps the residual |angle mod (pi/2)| < 0.05 rad (~3 deg).
 //
 // IMPOSSIBLE with the old path (angle=0 feeds the manifold -> no corrective
 // torque from the rotated face -> angle never converges to 0).
@@ -146,30 +140,40 @@ TEST_CASE("physics-v2 T5 (a): rotating box settles flat on floor", "[physics]")
 {
     PhysicsWorld world = MakeGravityWorld();
 
-    // Floor: top surface at y = 200 (Y positive = down).
-    const Real floorTop = Real(200);
+    // Floor: top surface at y = 20 (Y positive = down). /10 from px 200.
+    const Real floorTop = Real(20);
     AddFloor(world, floorTop);
 
-    // Dynamic box: half-extents 10x10, released at y=150 (above the floor),
-    // initial angle 0.6 rad so it's clearly tilted.
-    const Real hw = Real(10);
-    const Real hh = Real(10);
+    // Dynamic box: half-extents 1x1, released at y=15 (above the floor),
+    // initial angle 0.6 rad so it's clearly tilted. hw/hh /10 from px 10;
+    // dropY /10 from px 150.
+    const Real hw = Real(1);
+    const Real hh = Real(1);
+    const Real dropY = Real(15);
     BodyHandle box = AddRotatingBox(world,
-                                    Vec2(Real(0), Real(150)),
+                                    Vec2(Real(0), dropY),
                                     hw, hh,
-                                    Real(0.6f)); // ~34 degrees
+                                    Real(0.6f)); // ~34 degrees (radians, unit-free)
 
-    // Run 150 steps (2.5 seconds at 60 Hz).
-    for (int i = 0; i < 150; ++i)
+    // Run 300 steps (5 s at 60 Hz). Re-derived per protocol rule 5: fall
+    // distance ~5 m (dropY 15 -> rest near floorTop-hh = 19) under g=10 ->
+    // t = sqrt(2*5/10) ~= 1.0 s to first contact, vs the px-era ~0.45 s
+    // (~2.2x slower); the original 150-step budget (2.5 s) doubled to keep
+    // the same settle-time cushion after first contact (verified empirically
+    // sufficient for the residual-angle convergence below).
+    for (int i = 0; i < 300; ++i)
     {
         world.Step(kStep);
     }
 
     // The box must have landed on the floor (position near the floor surface).
     const Vec2 finalPos = world.Position(box);
-    // Box center should be within ~30 units of the floor (settled, not fallen through).
-    CHECK(finalPos.y >= Real(150)); // fell downward (y increases)
-    CHECK(finalPos.y <= Real(230)); // didn't sink through or fly off
+    // Re-derived from authored constants (was the file's only magic-px
+    // window, [150, 230]): lower bound = dropY (fell downward, did not move
+    // up); upper bound = floorTop + 3*hh, mirroring the original ratio
+    // (30 = 3 * hh(10) px).
+    CHECK(finalPos.y >= dropY); // fell downward (y increases)
+    CHECK(finalPos.y <= floorTop + Real(3) * hh); // didn't sink through or fly off
 
     // THE KEY ASSERTION: angle converged to a multiple of pi/2 within 0.05 rad.
     const Real finalAngle  = world.GetAngle(box);
@@ -200,16 +204,17 @@ TEST_CASE("physics-v2 T5 (b): rotated box contact resolves penetration",
     // We intercept contacts via the OnContact listener.
     PhysicsWorld world = MakeGravityWorld();
 
-    // Floor at y=100.
-    const Real floorTop = Real(100);
+    // Floor at y=10. /10 from px 100.
+    const Real floorTop = Real(10);
     AddFloor(world, floorTop);
 
     // Box at angle ~0.5 rad, positioned so it overlaps the floor surface.
-    // Box half-extents 10x10.  Center at y=92 -> bottom corner at about y=102
-    // (slightly penetrating the floor top at y=100).
+    // Box half-extents 1x1 (/10 from px 10). Center at y=9.2 (/10 from px 92)
+    // -> bottom corner at about y=10.2 (slightly penetrating the floor top
+    // at y=10).
     BodyHandle box = AddRotatingBox(world,
-                                    Vec2(Real(0), Real(92)),
-                                    Real(10), Real(10),
+                                    Vec2(Real(0), Real(9.2f)),
+                                    Real(1), Real(1),
                                     Real(0.5f));
 
     // One step: contact generation runs; solver resolves; contact event fires.
@@ -225,12 +230,16 @@ TEST_CASE("physics-v2 T5 (b): rotated box contact resolves penetration",
     INFO("pos0.y = " << static_cast<double>(pos0.y)
          << ", pos1.y = " << static_cast<double>(pos1.y));
     // After one step with gravity AND a contact pushing up, the net y movement
-    // should be less than free-fall (gravity alone would increase y by ~400/(60*60) ≈ 0.11).
+    // should be less than free-fall (gravity alone would increase y by
+    // dtSub^2*g*N(N+1)/2 with N=4 substeps of dtSub=dt/4, g=10 -> 0.0017361 m).
     // A valid contact reduces or reverses the downward motion.
     const Real dy = pos1.y - pos0.y;
-    // Free-fall for 1 step at gravity 400: dy_freefall ~ 400*(1/60)^2/2 * subSteps...
-    // With contact the actual dy should be much less (solver pushes back).
-    CHECK(dy < Real(0.15f)); // less than free-fall (contact is doing work)
+    // Re-baselined for MKS (protocol rule 6): measured dy ~ -0.0389 (the
+    // contact pushes the box up, well past merely "less than free-fall");
+    // bound set at ~2x the analytic free-fall increment (0.0017361 m,
+    // matching the original file's own ~2.16x ratio of 0.15/0.0694 px), which
+    // the deeply negative measured value clears with wide margin.
+    CHECK(dy < Real(0.0035f)); // less than free-fall (contact is doing work)
 }
 
 // ============================================================================
@@ -241,29 +250,30 @@ TEST_CASE("physics-v2 T5 (b): rotated box contact resolves penetration",
 TEST_CASE("physics-v2 T5 (c): fixedRotation body does not rotate under off-center impulse",
           "[physics]")
 {
-    WorldDef wd;  // no gravity needed
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // zero-g scene: isolate rotation lock from gravity
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
     PhysicsWorld world(wd);
 
     BodyDef bd;
     bd.type          = BodyType::Dynamic;
     bd.position      = Vec2(Real(0), Real(0));
-    bd.shape         = MakeBoxPolygon(Real(10), Real(10));
+    bd.shape         = MakeBoxPolygon(Real(1), Real(1));
     bd.density       = Real(1);
     bd.fixedRotation = true;
     BodyHandle box = world.AddBody(bd);
 
-    // Apply a large off-center impulse (off the centroid, at world point (5, 5)).
-    // With invInertia=0 (fixedRotation) this must produce ONLY linear velocity.
-    // Box polygon 10x10 density 1: mass = area = 400, invMass = 1/400 = 0.0025.
-    // Impulse 1000 -> dV_x = 1000 * 0.0025 = 2.5 units/s.
-    // After 60 steps (1 s): dx = 2.5 * 1 = 2.5 units.
-    world.ApplyImpulse(box, Vec2(Real(1000), Real(0)), Vec2(Real(5), Real(5)));
+    // Apply a large off-center impulse (off the centroid, at world point
+    // (0.5, 0.5) -- half the box half-extent (1), matching the original
+    // px-era ratio (5 = hw(10)/2)). With invInertia=0 (fixedRotation) this
+    // must produce ONLY linear velocity.
+    // Box polygon 1x1 density 1: mass = density*4*hw*hh = 4; invMass = 0.25.
+    // Impulse authored as mass * target delta-v (rule 3): targetDv = 1 m/s ->
+    // dV_x = mass * targetDv * invMass = targetDv = 1 m/s.
+    // After 60 steps (1 s): dx = targetDv * 1 s = 1 m.
+    const Real mass = Real(1) * Real(4) * Real(1) * Real(1); // density * 4*hw*hh
+    const Real targetDv = Real(1); // m/s
+    world.ApplyImpulse(box, mass * Vec2(targetDv, Real(0)), Vec2(Real(0.5f), Real(0.5f)));
 
     // Run 60 steps (1 second at 60 Hz).
     for (int i = 0; i < 60; ++i)
@@ -276,9 +286,9 @@ TEST_CASE("physics-v2 T5 (c): fixedRotation body does not rotate under off-cente
     // THE KEY ASSERTION: fixedRotation keeps invInertia=0 -> no angular response.
     CHECK(std::fabs(finalAngle) < Real(1e-4f));
 
-    // Body should have translated in +x direction (impulse was (1000,0)).
+    // Body should have translated in +x direction (impulse targeted +x).
     const Vec2 finalPos = world.Position(box);
-    CHECK(finalPos.x > Real(1.0f)); // moved in the +x direction (expected ~2.5)
+    CHECK(finalPos.x > Real(0.5f)); // moved in the +x direction (expected ~1.0 m)
 }
 
 // ============================================================================
@@ -317,58 +327,69 @@ TEST_CASE("physics-v2 T5 (d): compound body (2 fixtures) contacts detected",
     // rotation settling question (which is covered by (a)).
     PhysicsWorld world = MakeGravityWorld();
 
-    // Floor at y=200.
-    const Real floorTop = Real(200);
+    // Floor at y=20. /10 from px 200.
+    const Real floorTop = Real(20);
     AddFloor(world, floorTop);
 
-    // Compound body: base body via AddBody (fixture 0 = box polygon 10x10),
-    // then AddFixture (fixture 1 = circle r=6 at local offset (18, 0)).
+    // Compound body: base body via AddBody (fixture 0 = box polygon 1x1,
+    // /10 from px 10x10), then AddFixture (fixture 1 = circle r=0.6 at local
+    // offset (1.8, 0.4), /10 from px r=6 @ (18, 4)).
     // Use fixedRotation = true so both fixtures land on the floor simultaneously
     // (no rotation complicates the detection check).
+    const Real hw = Real(1);
+    const Real hh = Real(1);
     BodyDef bd;
     bd.type          = BodyType::Dynamic;
-    bd.position      = Vec2(Real(0), Real(165)); // above the floor
-    bd.shape         = MakeBoxPolygon(Real(10), Real(10));
+    bd.position      = Vec2(Real(0), Real(16.5f)); // above the floor (/10 from px 165)
+    bd.shape         = MakeBoxPolygon(hw, hh);
     bd.density       = Real(1);
     bd.friction      = Real(0.4f);
     bd.restitution   = Real(0);
     bd.fixedRotation = true; // keep flat so both fixtures hit the floor
     const BodyHandle compBh = world.AddBody(bd);
 
-    // Second fixture: circle r=6 at local offset (18, 4).
-    // The circle bottom = body_y + 4 + 6 = body_y + 10, same as the box bottom
-    // (half-height 10). Both fixtures touch the floor simultaneously so each
-    // generates its own fixture-pair contact constraint against the floor.
+    // Second fixture: circle r=0.6 at local offset (1.8, 0.4).
+    // The circle bottom = body_y + 0.4 + 0.6 = body_y + 1.0, same as the box
+    // bottom (half-height 1.0). Both fixtures touch the floor simultaneously
+    // so each generates its own fixture-pair contact constraint against the
+    // floor.
+    const Real circleR = Real(0.6f);
     FixtureDef fd;
-    fd.shape      = MakeCircle(Real(6));
-    fd.localPos   = Vec2(Real(18), Real(4)); // circle bottom = box bottom (both at y+10)
+    fd.shape      = MakeCircle(circleR);
+    fd.localPos   = Vec2(Real(1.8f), Real(0.4f)); // circle bottom = box bottom (both at y+1.0)
     fd.localAngle = Real(0);
     fd.density    = Real(1);
     fd.friction   = Real(0.4f);
     fd.restitution= Real(0);
     world.AddFixture(compBh, fd);
 
-    // Run 120 steps (2 s) -- enough for the compound body to drop and settle.
-    for (int i = 0; i < 120; ++i)
+    // Run 240 steps (4 s) -- enough for the compound body to drop and settle.
+    // Re-derived per protocol rule 5: fall/settle budget doubles (~2x in
+    // meters, matching case (a)/(e)); 120 px steps -> 240.
+    for (int i = 0; i < 240; ++i)
     {
         world.Step(kStep);
     }
 
     // The compound body must have settled ON the floor (not tunneled through).
-    // The box fixture has bottom at body_y + 10. At rest on floor top = 200,
-    // body_y ~= 190.  The floor body center is at 205, top surface at 200.
+    // The box fixture has bottom at body_y + hh. At rest on floor top =
+    // floorTop, body_y ~= floorTop - hh.
     const Vec2 finalPos = world.Position(compBh);
     INFO("final y = " << static_cast<double>(finalPos.y));
 
-    // Body settled near the floor surface (not tunneled through, not floating).
-    // With the box half-height 10, the body center should be ~190 when settled.
-    CHECK(finalPos.y >= Real(170)); // settled, not floating far above
-    CHECK(finalPos.y <= Real(200)); // didn't tunnel through the floor
+    // Body settled near the floor surface (not tunneled through, not
+    // floating). Re-derived from authored constants (was magic px [170,
+    // 200]): lower bound = floorTop - 3*hh, mirroring case (a)'s ratio;
+    // upper bound = floorTop itself (didn't sink past the floor top).
+    CHECK(finalPos.y >= floorTop - Real(3) * hh); // settled, not floating far above
+    CHECK(finalPos.y <= floorTop); // didn't tunnel through the floor
 
     // Velocity should be near zero (body is at rest, not still falling).
+    // Re-baselined for MKS (protocol rule 6): measured vy = 0.0 (body slept);
+    // bound set at sleepThreshold (0.05), 2x headroom.
     const Vec2 finalVel = world.Velocity(compBh);
     INFO("final vy = " << static_cast<double>(finalVel.y));
-    CHECK(std::fabs(finalVel.y) < Real(5.0f)); // at rest or nearly so
+    CHECK(std::fabs(finalVel.y) < Real(0.1f)); // at rest or nearly so
 
     // PRIMARY compound-detection gate: assert >= 2 contact constraints were
     // generated -- one per fixture (box-floor + circle-floor). This directly
@@ -376,7 +397,7 @@ TEST_CASE("physics-v2 T5 (d): compound body (2 fixtures) contacts detected",
     // not just one per body. Scene has only the compound body + the floor, so
     // all constraints are attributable to those two fixtures.
     //
-    // After 120 steps the island sleep pass may have put the body to sleep
+    // After 240 steps the island sleep pass may have put the body to sleep
     // (awake gate in GenerateContacts -> 0 constraints). Wake the body and run
     // one more Step so GenerateContacts sees an awake body touching the floor.
     world.Wake(compBh);
@@ -386,10 +407,14 @@ TEST_CASE("physics-v2 T5 (d): compound body (2 fixtures) contacts detected",
     CHECK(nContacts >= 2);
 
     // Secondary: circle fixture world position is above the floor (not tunneled).
-    const Real circleWorldY = finalPos.y + Real(4); // localPos.y = 4
-    const Real circleBottomY = circleWorldY + Real(6); // r = 6
+    const Real circleWorldY = finalPos.y + Real(0.4f); // localPos.y = 0.4
+    const Real circleBottomY = circleWorldY + circleR; // r = 0.6
     INFO("circle bottom world y = " << static_cast<double>(circleBottomY));
-    CHECK(circleBottomY <= Real(202)); // within solver tolerance of the floor
+    // Re-baselined for MKS (protocol rule 6): measured overlap ~0.0000877 m
+    // (both fixtures rest at essentially the same tiny overlap); bound set
+    // at kLinearSlop (0.005), well under kSkin (0.02), ~57x headroom over
+    // measured.
+    CHECK(circleBottomY <= floorTop + Real(0.005f)); // within solver tolerance of the floor
 }
 
 // ============================================================================
@@ -400,13 +425,16 @@ TEST_CASE("physics-v2 T5 (e): rotating box settlement is deterministic", "[physi
 {
     auto RunOnce = [&]() -> std::pair<Vec2, Real>
     {
+        // Same content and step budget as case (a) (/10 lengths, 300 steps
+        // per protocol rule 5) -- this case re-runs that exact scenario
+        // twice to check bit-identity, so it must track (a) 1:1.
         PhysicsWorld world = MakeGravityWorld();
-        AddFloor(world, Real(200));
+        AddFloor(world, Real(20));
         BodyHandle box = AddRotatingBox(world,
-                                        Vec2(Real(0), Real(150)),
-                                        Real(10), Real(10),
+                                        Vec2(Real(0), Real(15)),
+                                        Real(1), Real(1),
                                         Real(0.6f));
-        for (int i = 0; i < 150; ++i)
+        for (int i = 0; i < 300; ++i)
         {
             world.Step(kStep);
         }
