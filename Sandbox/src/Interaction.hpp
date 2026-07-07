@@ -62,11 +62,11 @@ namespace Arcane::Sandbox
     //   `size`  = box half-extent | circle radius | capsule radius
     //             (ignored for Polygon -- geometry comes from the clicked points).
     //   `density` feeds the body mass (applies to every shape including the polygon hull).
-    // Defaults match the Task-7 hardcoded box (half-extent 22, density 1).
+    // Defaults match the Task-7 hardcoded box (half-extent 0.22 m, density 1).
     struct SpawnConfig
     {
         SpawnShape shape   = SpawnShape::Box;
-        float      size    = 22.0f;   // box half-extent | circle/capsule radius
+        float      size    = 0.22f;   // box half-extent | circle/capsule radius (meters)
         float      density = 1.0f;    // body density (mass scale)
     };
 
@@ -104,11 +104,11 @@ namespace Arcane::Sandbox
         static constexpr std::uint32_t kBackspaceKeycode = 0x00000008u;  // SDLK_BACKSPACE '\b'
         static constexpr std::uint32_t kEscKeycode       = 0x0000001Bu;  // SDLK_ESCAPE '\x1B'
 
-        // Mouse-spring: max speed (world units/s) the drag drives a grabbed body at,
-        // so a far cursor jump does not launch the body at an explosive velocity.
-        static constexpr float kDragMaxSpeed = 4000.0f;
+        // Mouse-spring: max speed (m/s) the drag drives a grabbed body at, so a far
+        // cursor jump does not launch the body at an explosive velocity (spec P6).
+        static constexpr float kDragMaxSpeed = 40.0f;
 
-        // Mouse-spring: max ACCELERATION (world units/s^2) the drag may impart. The
+        // Mouse-spring: max ACCELERATION (m/s^2) the drag may impart (spec P6). The
         // drive is a CAPPED impulse (mass * kDragMaxAccel * dt), NOT a velocity
         // override, so the contact solver can resist it: a dragged body stops
         // against obstacles instead of ramming through, and imparts only bounded
@@ -116,9 +116,9 @@ namespace Arcane::Sandbox
         // too far" came from the old override beating the solver). Mass-proportional
         // so the feel is consistent across body sizes; large enough to chase the
         // cursor responsively (reaches kDragMaxSpeed in ~6 frames), but finite so
-        // the drive stays a bounded force the solver resolves each step (~666 u/s
-        // of velocity change per frame vs the old override's instantaneous 4000).
-        static constexpr float kDragMaxAccel = 40000.0f;
+        // the drive stays a bounded force the solver resolves each step (~6.7 m/s
+        // of velocity change per frame vs an instantaneous snap to kDragMaxSpeed).
+        static constexpr float kDragMaxAccel = 400.0f;
 
         // Mouse-spring: max per-step ANGULAR-velocity change (rad/s) the drag may
         // impart. The grab pull is applied at the (off-center) grab point, so a
@@ -128,9 +128,11 @@ namespace Arcane::Sandbox
         // (lever 0) and fixedRotation bodies are unaffected (dOmega is already 0).
         static constexpr float kDragMaxAngVel = 8.0f;
 
-        // Pick radius (world units) for the cursor query shape -- a small circle at
-        // the cursor; the first dynamic body it overlaps is grabbed.
-        static constexpr float kPickRadius = 4.0f;
+        // screen-px pick affordance, converted to world through the camera each query
+        // so picking does not shrink when zoomed out (spec P6). 4 px preserves the
+        // exact zoom=1 apparent size the old 4-world-unit radius had (at 100 px/m,
+        // 4 px == 0.04 m world radius at zoom 1).
+        static constexpr float kPickRadiusPx = 4.0f;
 
         // ---- per-frame entry point -------------------------------------------------
         //
@@ -232,11 +234,14 @@ namespace Arcane::Sandbox
         }
 
     private:
-        // Pick the first DYNAMIC body whose shape overlaps a tiny circle at the cursor
+        // Pick the first DYNAMIC body whose shape overlaps a small circle at the cursor
         // world point. Returns kInvalidBody when the cursor is over empty space (or only
-        // over static/kinematic bodies, which are not grabbable). Uses OverlapShape.
+        // over static/kinematic bodies, which are not grabbable). Uses OverlapShape. The
+        // probe radius is kPickRadiusPx converted to world through the camera zoom, so
+        // the pick affordance is a fixed screen-px size that does not shrink zoomed out.
         Arcane::Physics::BodyHandle PickBodyAt(Arcane::Physics::PhysicsWorld& world,
-                                               glm::vec2 worldPt) const;
+                                               glm::vec2 worldPt,
+                                               const Camera& camera) const;
 
         // Previous-frame edge-detection state.
         std::uint8_t m_prevButtons = 0;

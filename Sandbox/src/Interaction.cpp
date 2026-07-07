@@ -43,10 +43,15 @@ namespace Arcane::Sandbox
     }
 
     Phys::BodyHandle Interaction::PickBodyAt(Phys::PhysicsWorld& world,
-                                             glm::vec2 worldPt) const
+                                             glm::vec2 worldPt,
+                                             const Camera& camera) const
     {
-        // Tiny query circle at the cursor; OverlapShape returns every body it touches.
-        const Phys::Shape query = Phys::MakeCircle(Phys::Real(kPickRadius));
+        // Query circle at the cursor; OverlapShape returns every body it touches. The
+        // pick affordance is a FIXED SCREEN-PX radius (kPickRadiusPx) converted to world
+        // through the camera, so it does not shrink when zoomed out (spec P6): at zoom 1
+        // this is 4/100 = 0.04 m; zoom out to 0.5 and it grows to 0.08 m of world.
+        const float worldR = kPickRadiusPx / (Camera::kPixelsPerMeter * camera.zoom);
+        const Phys::Shape query = Phys::MakeCircle(Phys::Real(worldR));
         Phys::Transform xf;
         xf.position = Phys::Vec2(worldPt.x, worldPt.y);
         xf.rotation = Phys::Real(0);
@@ -146,7 +151,7 @@ namespace Arcane::Sandbox
         // or (non-Polygon shapes only) spawn the selected primitive on empty space.
         if (lmbPress)
         {
-            const Phys::BodyHandle hit = PickBodyAt(world, cursorWorld);
+            const Phys::BodyHandle hit = PickBodyAt(world, cursorWorld, camera);
             const bool polygonShape    = (m_spawn.shape == SpawnShape::Polygon);
 
             if (polygonShape &&
@@ -325,7 +330,10 @@ namespace Arcane::Sandbox
         const glm::vec2 cursor(input.mouseX, input.mouseY);
         const glm::vec2 worldUnderCursor = camera.ScreenToWorld(cursor);  // OLD zoom/offset
         camera.zoom   = zoomNew;
-        camera.offset = cursor - worldUnderCursor * zoomNew;              // keep it fixed
+        // Re-derive offset so WorldToScreen(worldUnderCursor) == cursor at the new
+        // zoom. Must mirror WorldToScreen exactly, including kPixelsPerMeter (world
+        // is meters, cursor is px) -- otherwise the fixed point drifts by 100x.
+        camera.offset = cursor - worldUnderCursor * (Camera::kPixelsPerMeter * zoomNew);
     }
 
     bool Interaction::SpawnPolygon(Phys::PhysicsWorld& world)

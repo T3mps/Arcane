@@ -58,7 +58,7 @@ namespace
     namespace Sbx  = Arcane::Sandbox;
 
     constexpr float kDt       = 1.0f / 60.0f;
-    constexpr float kGravityY = 900.0f;
+    constexpr float kGravityY = 10.0f;   // MKS: +10 m/s^2 (matches the WorldDef default)
 
     // Mouse button bits (sdlButton - 1): LMB=bit0, RMB=bit1 (InputSnapshot.hpp).
     constexpr std::uint8_t kLMB = 0x1;
@@ -81,12 +81,8 @@ namespace
             Arcane::RegisterPhysicsComponents(reg);
 
             Phys::WorldDef wd;
-            wd.gravityY = kGravityY;
-            wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
-            wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
-            wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
-            wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
-            wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
+            wd.gravityY = kGravityY;   // MKS content inherits the WorldDef defaults for
+                                       // sleep/restitution/push/hash (P1 already MKS).
             reg.SetResource(Arcane::PhysicsResource{
                 std::make_unique<Phys::PhysicsWorld>(wd), {}
             });
@@ -141,6 +137,27 @@ namespace
         s.wantCaptureMouse = true;
         return s;
     }
+
+    // Feed a WORLD-space point (meters) through the camera to a screen-px cursor
+    // snapshot. Interaction converts the cursor screen px back to world via
+    // camera.ScreenToWorld, so authoring targets in meters and projecting keeps the
+    // cursor in the same unit system as the body positions (identity camera:
+    // screen = world * Camera::kPixelsPerMeter = world * 100).
+    Arcane::InputSnapshot SnapWorld(const Sbx::Camera& cam, glm::vec2 world,
+                                    std::uint8_t buttons)
+    {
+        const glm::vec2 s = cam.WorldToScreen(world);
+        return Snap(s.x, s.y, buttons);
+    }
+
+    // As SnapWorld, but with the ImGui capture flag set (see SnapCaptured).
+    Arcane::InputSnapshot SnapWorldCaptured(const Sbx::Camera& cam, glm::vec2 world,
+                                            std::uint8_t buttons)
+    {
+        Arcane::InputSnapshot s = SnapWorld(cam, world, buttons);
+        s.wantCaptureMouse = true;
+        return s;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -149,16 +166,16 @@ namespace
 TEST_CASE("Interaction: LMB press on empty space spawns a dynamic body at the cursor", "[sandbox]")
 {
     World w;
-    Sbx::Camera cam;                 // identity: screen == world
+    Sbx::Camera cam;                 // identity: screen = world * 100 (100 px/m)
     Sbx::Interaction it;
 
     // Establish a released-button baseline (no spurious press edge on frame 1).
     it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);
     const std::size_t before = w.BodyEntityCount();
 
-    // Press LMB over empty space at screen (400, 120) -> world (400, 120) at identity.
-    const glm::vec2 cursorPx{400.0f, 120.0f};
-    it.Tick(w.reg, w.Physics(), cam, Snap(cursorPx.x, cursorPx.y, kLMB), kDt);
+    // Press LMB over empty space at world (4.0, 1.2) m -> screen (400, 120) px.
+    const glm::vec2 cursorWorld{4.0f, 1.2f};
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, cursorWorld, kLMB), kDt);
 
     // A new body-entity exists (spawn creates the Astra entity synchronously).
     const std::size_t after = w.BodyEntityCount();
@@ -171,14 +188,15 @@ TEST_CASE("Interaction: LMB press on empty space spawns a dynamic body at the cu
     CHECK(w.Physics().Count() > bodiesBefore);
 
     // Find the spawned entity's body and confirm it sits near the cursor world point
-    // (one gravity step has only nudged it a sub-pixel from the spawn point).
+    // (one gravity step at g=10 nudges it ~1.4 mm from the spawn point). Tolerances
+    // are the px-era 1/5 px windows divided by 100 px/m -> 0.01/0.05 m.
     const auto* res = w.reg.GetResource<Arcane::PhysicsResource>();
     REQUIRE(res != nullptr);
     bool found = false;
     for (const auto& [entity, handle] : res->entityToBody)
     {
         const Phys::Vec2 p = res->world->Position(handle);
-        if (std::abs(p.x - cursorPx.x) < 1.0f && std::abs(p.y - cursorPx.y) < 5.0f)
+        if (std::abs(p.x - cursorWorld.x) < 0.01f && std::abs(p.y - cursorWorld.y) < 0.05f)
             found = true;
     }
     CHECK(found);
@@ -190,41 +208,37 @@ TEST_CASE("Interaction: LMB press on empty space spawns a dynamic body at the cu
 TEST_CASE("Interaction: LMB press on a body grabs it and dragging moves it toward the cursor", "[sandbox]")
 {
     World w;
-    Sbx::Camera cam;                 // identity
+    Sbx::Camera cam;                 // identity: screen = world * 100
     Sbx::Interaction it;
 
-    // Place a dynamic body at a known world point and materialize it as a live body.
-    const glm::vec2 bodyPos{300.0f, 300.0f};
-    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+    // Place a dynamic body at a known world point (meters) and materialize it.
+    const glm::vec2 bodyPos{3.0f, 3.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(0.2f, 0.2f),
                   Phys::BodyType::Dynamic, glm::vec4(1.0f));
     w.Step();                        // CREATE pass mints the body
 
     // Released baseline.
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, 0), kDt);
 
     // LMB-press with the cursor ON the body -> grab.
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, kLMB), kDt);
     CHECK(it.IsGrabbing());
 
-    // Drag toward a new cursor point well to the right + up. Each tick drives the
+    // Drag toward a new cursor world point up + to the right. Each tick drives the
     // body's velocity toward the cursor; the PhysicsSystem step then integrates it.
     //
-    // Distance chosen to respect WorldDef::maxLinearVelocity = 400 u/s (the Box2D
-    // v3 default the integrate step now clamps every body to -- see the
-    // solver.c-parity block in SoftStep.cpp) with comfortable margin: over 30
-    // ticks @ 1/60s the body can cover at most 400 * 0.5 = 200 units, so a 316 u
-    // drag (the original target) can never land inside a tight radius -- it always
-    // stalls ~116 u short. 130 u over the same 30 ticks needs an average speed of
-    // only 130 / 0.5 = 260 u/s, well under the 400 u/s cap, leaving most of the
-    // window free to converge onto the cursor. (Sandbox content-scale
-    // normalization to meters -- so the default cap is expressed in a unit system
-    // that matches the sandbox's ~90 px/m -- is a queued separate workstream; this
-    // test just respects the current px-scale default.)
-    const glm::vec2 target{420.0f, 250.0f};
+    // MKS drag: a 1.3 m drag (target (4.2, 2.5) m from (3.0, 3.0) m: sqrt(1.2^2 +
+    // 0.5^2) = 1.3 m) over 30 ticks @ 1/60 s = 0.5 s needs an average speed of only
+    // 1.3 / 0.5 = 2.6 m/s -- FAR under kDragMaxSpeed = 40 m/s (15x headroom) and
+    // nowhere near the WorldDef maxLinearVelocity = 400 m/s clamp. The px-era test
+    // fought that clamp (130 u over 0.5 s at 260 u/s against a 400 u/s cap = only
+    // 1.5x headroom, hence a loose ~19%-of-distance threshold); at MKS the cap does
+    // not bind, so the mouse-spring converges to within a few mm of the cursor.
+    const glm::vec2 target{4.2f, 2.5f};
     float prevDist = glm::length(target - bodyPos);
     for (int i = 0; i < 30; ++i)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(target.x, target.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, target, kLMB), kDt);
         w.Step();
     }
 
@@ -235,10 +249,12 @@ TEST_CASE("Interaction: LMB press on a body grabs it and dragging moves it towar
     const Phys::Vec2 p = res->world->Position(it.GrabbedHandleForTest());
     const float endDist = glm::length(target - glm::vec2(p.x, p.y));
     CHECK(endDist < prevDist);       // closed distance to the cursor
-    // ... and ended up near it (mouse-spring). Threshold scaled down from the
-    // original 60.0f/316 u (~19% of the drag distance) to ~19% of the new 130 u
-    // distance, matching the same relative closeness under the 400 u/s cap.
-    CHECK(endDist < 25.0f);
+    // Re-derived empirically for MKS (protocol rule 6, measure-then-bound): the drag
+    // converges to endDist ~ 0.00347 m of the cursor (0.27% of the 1.3 m drag -- vs
+    // the px-era ~19%, since kDragMaxSpeed = 40 m/s has 15x headroom over the 2.6 m/s
+    // this drag needs, so the velocity cap no longer binds). Bound 0.006 m ~ 1.7x the
+    // measured convergence -- driven by kDragMaxSpeed/kDragMaxAccel, not the cap.
+    CHECK(endDist < 0.006f);
 }
 
 // ---------------------------------------------------------------------------
@@ -250,22 +266,22 @@ TEST_CASE("Interaction: LMB release clears the grab and the body retains velocit
     Sbx::Camera cam;
     Sbx::Interaction it;
 
-    const glm::vec2 bodyPos{300.0f, 300.0f};
-    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+    const glm::vec2 bodyPos{3.0f, 3.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(0.2f, 0.2f),
                   Phys::BodyType::Dynamic, glm::vec4(1.0f));
     w.Step();
 
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, 0), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, kLMB), kDt);
     REQUIRE(it.IsGrabbing());
 
     // Drag right so the mouse-spring builds a rightward velocity (don't step physics
-    // here -- we want the drive velocity intact at the moment of release).
+    // here -- we want the drive velocity intact at the moment of release). 0.4 m/step.
     glm::vec2 cursor = bodyPos;
     for (int i = 0; i < 5; ++i)
     {
-        cursor.x += 40.0f;
-        it.Tick(w.reg, w.Physics(), cam, Snap(cursor.x, cursor.y, kLMB), kDt);
+        cursor.x += 0.4f;
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, cursor, kLMB), kDt);
     }
     const Phys::BodyHandle grabbed = it.GrabbedHandleForTest();
     REQUIRE(grabbed != Phys::kInvalidBody);
@@ -273,7 +289,7 @@ TEST_CASE("Interaction: LMB release clears the grab and the body retains velocit
     CHECK(velAtRelease.x > 0.0f);    // mouse-spring built rightward momentum
 
     // Release: grab clears, body is no longer driven.
-    it.Tick(w.reg, w.Physics(), cam, Snap(cursor.x, cursor.y, 0), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, cursor, 0), kDt);
     CHECK_FALSE(it.IsGrabbing());
     CHECK(it.GrabbedHandleForTest() == Phys::kInvalidBody);
 
@@ -292,30 +308,31 @@ TEST_CASE("Interaction: LMB release clears the grab and the body retains velocit
 // momentum into bodies it slid across (the reported "accelerate / pushed in too
 // far"). The fix drives the body with a CAPPED impulse the solver can resist, so
 // one frame can only change the velocity by at most kDragMaxAccel*dt. With the
-// cursor jumped 2000 units in a single tick the old code produced v.x == 4000
-// (the clamp); the bounded-force drag produces a far smaller ramped velocity.
+// cursor jumped 20 m in a single tick a velocity override would snap to
+// kDragMaxSpeed (40 m/s); the bounded-force drag produces a far smaller ramped
+// velocity (~kDragMaxAccel*dt = 400 * 1/60 ~ 6.7 m/s).
 // ---------------------------------------------------------------------------
 TEST_CASE("Interaction: a grabbed body accelerates under a bounded force", "[sandbox]")
 {
     World w;
-    Sbx::Camera cam;                 // identity
+    Sbx::Camera cam;                 // identity: screen = world * 100
     Sbx::Interaction it;
 
-    const glm::vec2 bodyPos{300.0f, 300.0f};
-    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+    const glm::vec2 bodyPos{3.0f, 3.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(0.2f, 0.2f),
                   Phys::BodyType::Dynamic, glm::vec4(1.0f));
     w.Step();                        // materialize the body
 
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);      // baseline
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);   // grab
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, 0), kDt);      // baseline
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, kLMB), kDt);   // grab
     REQUIRE(it.IsGrabbing());
 
-    // Jump the cursor 2000 units in ONE tick (no physics step in between).
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x + 2000.0f, bodyPos.y, kLMB), kDt);
+    // Jump the cursor 20 m in ONE tick (no physics step in between).
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, {bodyPos.x + 20.0f, bodyPos.y}, kLMB), kDt);
 
     // A single frame cannot fling the body to the drag's max speed: the impulse
     // is capped (kDragMaxAccel*dt), so the velocity ramps rather than snapping to
-    // kDragMaxSpeed (4000). The old SetVelocity override produced exactly 4000.
+    // kDragMaxSpeed (40 m/s). A velocity override would produce exactly 40.
     const Phys::Vec2 v = w.Physics().Velocity(it.GrabbedHandleForTest());
     INFO("one-frame drag velocity x = " << v.x);
     CHECK(std::abs(v.x) < Sbx::Interaction::kDragMaxSpeed * 0.5f);
@@ -335,23 +352,23 @@ TEST_CASE("Interaction: dragging a body grabbed off-center rotates it", "[sandbo
 
     // A CIRCLE -- free to rotate (Aabb dynamics are fixedRotation). No floor, so
     // the only torque source is the off-center drag (gravity acts at the COM).
-    const glm::vec2 bodyPos{300.0f, 300.0f};
-    Sbx::SpawnCircle(w.reg, w.root, bodyPos, 24.0f,
+    const glm::vec2 bodyPos{3.0f, 3.0f};
+    Sbx::SpawnCircle(w.reg, w.root, bodyPos, 0.24f,
                      Phys::BodyType::Dynamic, glm::vec4(1.0f), 1.0f);
     w.Step();                        // materialize the body
 
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);      // baseline
-    // Grab OFF-CENTER: the body's right side (+18 in x from the center).
-    const glm::vec2 grabPt{bodyPos.x + 18.0f, bodyPos.y};
-    it.Tick(w.reg, w.Physics(), cam, Snap(grabPt.x, grabPt.y, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, 0), kDt);      // baseline
+    // Grab OFF-CENTER: the body's right side (+0.18 m in x, inside the 0.24 m radius).
+    const glm::vec2 grabPt{bodyPos.x + 0.18f, bodyPos.y};
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, grabPt, kLMB), kDt);
     REQUIRE(it.IsGrabbing());
 
     // Pull the grabbed (right-side) point straight DOWN: r=+x, F=+y -> a CCW
     // torque about the COM. The body must visibly rotate (angle != 0).
-    const glm::vec2 target{grabPt.x, grabPt.y + 80.0f};
+    const glm::vec2 target{grabPt.x, grabPt.y + 0.8f};
     for (int i = 0; i < 24; ++i)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(target.x, target.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, target, kLMB), kDt);
         w.Step();
     }
 
@@ -359,6 +376,42 @@ TEST_CASE("Interaction: dragging a body grabbed off-center rotates it", "[sandbo
     REQUIRE(b != Phys::kInvalidBody);
     INFO("final angle = " << w.Physics().GetAngle(b));
     CHECK(std::abs(w.Physics().GetAngle(b)) > 0.1f);   // off-center drag rotated it
+}
+
+// ---------------------------------------------------------------------------
+// (g2) PICK AFFORDANCE anti-shrink: kPickRadiusPx is a FIXED SCREEN-PX radius the
+//      camera converts to world each query (worldR = kPickRadiusPx/(100*zoom)), so
+//      the affordance does NOT shrink in world space when you zoom out (spec P6).
+//      Same body + same cursor gap: it PICKS zoomed out (0.5) but not at zoom 1.
+// ---------------------------------------------------------------------------
+TEST_CASE("Interaction: pick radius is a screen-px affordance that grows when zoomed out", "[sandbox]")
+{
+    World w;
+
+    // A small body; the cursor sits 0.06 m past its surface -- inside the zoom-0.5
+    // world pick radius (4/(100*0.5) = 0.08 m) but OUTSIDE the zoom-1 radius
+    // (4/(100*1) = 0.04 m). Grabbing at 0.5 but not at 1 proves the affordance is
+    // screen-fixed (it grew in world space as we zoomed out), not world-fixed.
+    const glm::vec2 bodyPos{3.0f, 3.0f};
+    Sbx::SpawnCircle(w.reg, w.root, bodyPos, 0.2f,
+                     Phys::BodyType::Dynamic, glm::vec4(1.0f), 1.0f);
+    w.Step();
+    const glm::vec2 cursorWorld{bodyPos.x + 0.2f + 0.06f, bodyPos.y};   // 0.06 m past surface
+
+    // Zoomed OUT (0.5): world pick radius 0.08 m > 0.06 m gap -> grabs.
+    Sbx::Camera camOut; camOut.zoom = 0.5f;
+    Sbx::Interaction itOut;
+    itOut.Tick(w.reg, w.Physics(), camOut, SnapWorld(camOut, cursorWorld, 0), kDt);
+    itOut.Tick(w.reg, w.Physics(), camOut, SnapWorld(camOut, cursorWorld, kLMB), kDt);
+    CHECK(itOut.IsGrabbing());
+
+    // Zoom 1: world pick radius 0.04 m < 0.06 m gap -> the same click does NOT grab
+    // (a world-fixed 4-unit radius would have; the screen-px affordance shrank).
+    Sbx::Camera camIn;   // default zoom 1
+    Sbx::Interaction itIn;
+    itIn.Tick(w.reg, w.Physics(), camIn, SnapWorld(camIn, cursorWorld, 0), kDt);
+    itIn.Tick(w.reg, w.Physics(), camIn, SnapWorld(camIn, cursorWorld, kLMB), kDt);
+    CHECK_FALSE(itIn.IsGrabbing());
 }
 
 // ---------------------------------------------------------------------------
@@ -539,8 +592,9 @@ TEST_CASE("Interaction: ImGui mouse capture suppresses spawn (no click-through)"
     it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);   // released baseline
     const std::size_t before = w.BodyEntityCount();
 
-    // LMB press over empty space, but ImGui WANTS the mouse -> the press is the HUD's.
-    it.Tick(w.reg, w.Physics(), cam, SnapCaptured(400.0f, 120.0f, kLMB), kDt);
+    // LMB press over empty space (world (4.0, 1.2) m), but ImGui WANTS the mouse ->
+    // the press is the HUD's.
+    it.Tick(w.reg, w.Physics(), cam, SnapWorldCaptured(cam, {4.0f, 1.2f}, kLMB), kDt);
 
     CHECK(w.BodyEntityCount() == before);   // nothing spawned in the world behind the UI
 }
@@ -555,15 +609,15 @@ TEST_CASE("Interaction: ImGui mouse capture suppresses grab (no click-through)",
     Sbx::Camera cam;
     Sbx::Interaction it;
 
-    const glm::vec2 bodyPos{300.0f, 300.0f};
-    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+    const glm::vec2 bodyPos{3.0f, 3.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(0.2f, 0.2f),
                   Phys::BodyType::Dynamic, glm::vec4(1.0f));
     w.Step();
 
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);   // baseline
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, 0), kDt);   // baseline
 
     // LMB press ON the body, but ImGui WANTS the mouse -> no grab.
-    it.Tick(w.reg, w.Physics(), cam, SnapCaptured(bodyPos.x, bodyPos.y, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorldCaptured(cam, bodyPos, kLMB), kDt);
     CHECK_FALSE(it.IsGrabbing());
 }
 
@@ -599,7 +653,7 @@ TEST_CASE("Interaction: ImGui mouse capture suppresses pan (no click-through)", 
 TEST_CASE("Interaction: polygon mode collects clicked world points", "[sandbox]")
 {
     World w;
-    Sbx::Camera cam;                 // identity: screen == world
+    Sbx::Camera cam;                 // identity: screen = world * 100
     Sbx::Interaction it;
 
     it.SetPolygonMode(true);
@@ -609,11 +663,11 @@ TEST_CASE("Interaction: polygon mode collects clicked world points", "[sandbox]"
     const std::size_t bodiesBefore = w.BodyEntityCount();
 
     // Three separate clicks (release between each so each is a fresh press edge).
-    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    const glm::vec2 pts[3] = {{2.0f, 5.0f}, {4.0f, 5.0f}, {3.0f, 3.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);  // released
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);  // press -> add vert
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);  // released
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);  // press -> add vert
     }
 
     // Each click added a vertex at the cursor world point; NOTHING was spawned.
@@ -634,11 +688,11 @@ TEST_CASE("Interaction: SpawnPolygon adds a world-direct polygon body", "[sandbo
     Sbx::Interaction it;
 
     it.SetPolygonMode(true);
-    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    const glm::vec2 pts[3] = {{2.0f, 5.0f}, {4.0f, 5.0f}, {3.0f, 3.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 3);
 
@@ -659,11 +713,11 @@ TEST_CASE("Interaction: SpawnPolygon with fewer than 3 points does nothing", "[s
     Sbx::Interaction it;
 
     it.SetPolygonMode(true);
-    const glm::vec2 pts[2] = {{200.0f, 500.0f}, {400.0f, 500.0f}};
+    const glm::vec2 pts[2] = {{2.0f, 5.0f}, {4.0f, 5.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 2);
 
@@ -685,7 +739,7 @@ TEST_CASE("Interaction: ClearPolygonPoints empties the in-progress polygon", "[s
 
     it.SetPolygonMode(true);
     it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0),     kDt);
-    it.Tick(w.reg, w.Physics(), cam, Snap(100.0f, 100.0f, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, {1.0f, 1.0f}, kLMB), kDt);
     REQUIRE(it.PolygonPoints().size() == 1);
 
     it.ClearPolygonPoints();
@@ -703,16 +757,16 @@ TEST_CASE("Interaction: in Polygon mode the first click on a body grabs it (no v
     Sbx::Camera cam;
     Sbx::Interaction it;
 
-    const glm::vec2 bodyPos{300.0f, 300.0f};
-    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+    const glm::vec2 bodyPos{3.0f, 3.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(0.2f, 0.2f),
                   Phys::BodyType::Dynamic, glm::vec4(1.0f));
     w.Step();
 
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, 0), kDt);   // released
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, 0), kDt);   // released
     REQUIRE(it.PolygonPoints().empty());
 
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, kLMB), kDt);
     CHECK(it.IsGrabbing());                         // grabbed the body...
     CHECK(it.PolygonPoints().empty());              // ...and dropped NO vertex
 }
@@ -728,14 +782,14 @@ TEST_CASE("Interaction: in Polygon mode the first click on empty space places a 
     Sbx::Interaction it;
 
     // A body far from the click point, so the cursor is over empty space.
-    Sbx::SpawnBox(w.reg, w.root, glm::vec2(300.0f, 300.0f), glm::vec2(20.0f, 20.0f),
+    Sbx::SpawnBox(w.reg, w.root, glm::vec2(3.0f, 3.0f), glm::vec2(0.2f, 0.2f),
                   Phys::BodyType::Dynamic, glm::vec4(1.0f));
     w.Step();
 
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
-    const glm::vec2 empty{40.0f, 40.0f};
-    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, 0),    kDt);
-    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, kLMB), kDt);
+    const glm::vec2 empty{0.4f, 0.4f};
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, empty, 0),    kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, empty, kLMB), kDt);
 
     CHECK_FALSE(it.IsGrabbing());
     CHECK(it.PolygonPoints().size() == 1);
@@ -751,22 +805,22 @@ TEST_CASE("Interaction: with a polygon in progress, a click on a body adds a ver
     Sbx::Camera cam;
     Sbx::Interaction it;
 
-    const glm::vec2 bodyPos{300.0f, 300.0f};
-    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(20.0f, 20.0f),
+    const glm::vec2 bodyPos{3.0f, 3.0f};
+    Sbx::SpawnBox(w.reg, w.root, bodyPos, glm::vec2(0.2f, 0.2f),
                   Phys::BodyType::Dynamic, glm::vec4(1.0f));
     w.Step();
 
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
 
     // Start the polygon on empty space (first vertex).
-    const glm::vec2 empty{40.0f, 40.0f};
-    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, 0),    kDt);
-    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, kLMB), kDt);
+    const glm::vec2 empty{0.4f, 0.4f};
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, empty, 0),    kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, empty, kLMB), kDt);
     REQUIRE(it.PolygonPoints().size() == 1);
 
     // Release, then click ON the body: a point already exists -> it is a vertex.
-    it.Tick(w.reg, w.Physics(), cam, Snap(empty.x, empty.y, 0),        kDt);
-    it.Tick(w.reg, w.Physics(), cam, Snap(bodyPos.x, bodyPos.y, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, empty, 0),        kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, bodyPos, kLMB), kDt);
     CHECK_FALSE(it.IsGrabbing());
     CHECK(it.PolygonPoints().size() == 2);
 }
@@ -795,16 +849,16 @@ TEST_CASE("SpawnPolygon hulls a non-convex click order into one convex body", "[
     // MakePolygon would receive a self-intersecting / disordered vertex list.
     // The hull of these five points is the 4-vertex square (interior dropped).
     const glm::vec2 pts[5] = {
-        {  0.0f,   0.0f },   // corner
-        {400.0f,   0.0f },   // corner
-        {200.0f, 200.0f },   // interior point
-        {400.0f, 400.0f },   // corner
-        {  0.0f, 400.0f },   // corner
+        {0.0f, 0.0f},   // corner
+        {4.0f, 0.0f},   // corner
+        {2.0f, 2.0f},   // interior point
+        {4.0f, 4.0f},   // corner
+        {0.0f, 4.0f},   // corner
     };
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);   // released
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);   // press -> vertex
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);   // released
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);   // press -> vertex
     }
     REQUIRE(it.PolygonPoints().size() == 5);
 
@@ -829,14 +883,14 @@ TEST_CASE("SpawnPolygon rejects a collinear click set (keeps points)", "[sandbox
     // Three collinear points -> hull has only 2 (the two extreme endpoints).
     // SpawnPolygon must treat this as a no-op and leave the point list intact.
     const glm::vec2 pts[3] = {
-        {  0.0f,   0.0f },
-        {200.0f, 200.0f },
-        {400.0f, 400.0f },
+        {0.0f, 0.0f},
+        {2.0f, 2.0f},
+        {4.0f, 4.0f},
     };
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 3);
 
@@ -981,12 +1035,12 @@ TEST_CASE("Interaction: LMB press with Capsule shape spawns a capsule body", "[s
     Sbx::Interaction it;
 
     it.SpawnCfg().shape = Sbx::SpawnShape::Capsule;
-    it.SpawnCfg().size  = 20.0f;
+    it.SpawnCfg().size  = 0.2f;
 
     it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);   // baseline
     const std::size_t before = w.BodyEntityCount();
 
-    it.Tick(w.reg, w.Physics(), cam, Snap(400.0f, 200.0f, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, {4.0f, 2.0f}, kLMB), kDt);
     CHECK(w.BodyEntityCount() == before + 1);
 
     // It materializes on the next step.
@@ -1007,7 +1061,7 @@ TEST_CASE("Interaction: LMB press with Box shape still spawns a box body", "[san
 
     it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);
     const std::size_t before = w.BodyEntityCount();
-    it.Tick(w.reg, w.Physics(), cam, Snap(400.0f, 200.0f, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, {4.0f, 2.0f}, kLMB), kDt);
     CHECK(w.BodyEntityCount() == before + 1);
 }
 
@@ -1024,7 +1078,7 @@ TEST_CASE("Interaction: LMB press with Circle shape still spawns a circle body",
 
     it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0), kDt);
     const std::size_t before = w.BodyEntityCount();
-    it.Tick(w.reg, w.Physics(), cam, Snap(400.0f, 200.0f, kLMB), kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, {4.0f, 2.0f}, kLMB), kDt);
     CHECK(w.BodyEntityCount() == before + 1);
 }
 
@@ -1041,11 +1095,11 @@ TEST_CASE("Interaction: shape Polygon collects clicked vertices", "[sandbox]")
     CHECK(it.IsPolygonMode());
 
     const std::size_t before = w.BodyEntityCount();
-    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    const glm::vec2 pts[3] = {{2.0f, 5.0f}, {4.0f, 5.0f}, {3.0f, 3.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
 
     CHECK(it.PolygonPoints().size() == 3);
@@ -1064,11 +1118,11 @@ TEST_CASE("Interaction: Enter key with >= 3 polygon points spawns and clears", "
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
 
     // Collect 3 points.
-    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    const glm::vec2 pts[3] = {{2.0f, 5.0f}, {4.0f, 5.0f}, {3.0f, 3.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 3);
 
@@ -1095,11 +1149,11 @@ TEST_CASE("Interaction: Enter key with < 3 polygon points is a no-op", "[sandbox
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
 
     // Collect only 2 points.
-    const glm::vec2 pts[2] = {{200.0f, 500.0f}, {400.0f, 500.0f}};
+    const glm::vec2 pts[2] = {{2.0f, 5.0f}, {4.0f, 5.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 2);
 
@@ -1125,11 +1179,11 @@ TEST_CASE("Interaction: Backspace key pops the last polygon point", "[sandbox]")
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
 
     // Collect 3 points.
-    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    const glm::vec2 pts[3] = {{2.0f, 5.0f}, {4.0f, 5.0f}, {3.0f, 3.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 3);
 
@@ -1169,11 +1223,11 @@ TEST_CASE("Interaction: Esc key clears all polygon points", "[sandbox]")
 
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
 
-    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    const glm::vec2 pts[3] = {{2.0f, 5.0f}, {4.0f, 5.0f}, {3.0f, 3.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 3);
 
@@ -1201,11 +1255,11 @@ TEST_CASE("Interaction: held Esc key fires once (edge detection, not level)", "[
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
 
     // Add 3 points via separate click events (Esc key not held yet).
-    const glm::vec2 pts[3] = {{100.0f, 300.0f}, {300.0f, 300.0f}, {200.0f, 100.0f}};
+    const glm::vec2 pts[3] = {{1.0f, 3.0f}, {3.0f, 3.0f}, {2.0f, 1.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 3);
 
@@ -1230,9 +1284,9 @@ TEST_CASE("Interaction: held Esc key fires once (edge detection, not level)", "[
     // Verify the Backspace held-key case too: add a point, hold Backspace for 3 frames,
     // only the first frame should pop the point.
     it.Tick(w.reg, w.Physics(), cam, Snap(0.0f, 0.0f, 0),    kDt);   // Esc released (baseline)
-    it.Tick(w.reg, w.Physics(), cam, Snap(200.0f, 400.0f, kLMB), kDt);  // add 1 point
-    it.Tick(w.reg, w.Physics(), cam, Snap(300.0f, 400.0f, 0),    kDt);
-    it.Tick(w.reg, w.Physics(), cam, Snap(300.0f, 400.0f, kLMB), kDt);  // add 2nd point
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, {2.0f, 4.0f}, kLMB), kDt);  // add 1 point
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, {3.0f, 4.0f}, 0),    kDt);
+    it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, {3.0f, 4.0f}, kLMB), kDt);  // add 2nd point
     REQUIRE(it.PolygonPoints().size() == 2);
 
     Arcane::InputSnapshot bsSnap{};
@@ -1263,11 +1317,11 @@ TEST_CASE("Interaction: draft markers empty when shape is not Polygon", "[sandbo
 
     // Collect some points in Polygon mode.
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
-    const glm::vec2 pts[3] = {{100.0f, 200.0f}, {300.0f, 200.0f}, {200.0f, 100.0f}};
+    const glm::vec2 pts[3] = {{1.0f, 2.0f}, {3.0f, 2.0f}, {2.0f, 1.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 3);
 
@@ -1293,11 +1347,11 @@ TEST_CASE("Interaction: KP_Enter also spawns polygon when >= 3 points", "[sandbo
 
     it.SpawnCfg().shape = Sbx::SpawnShape::Polygon;
 
-    const glm::vec2 pts[3] = {{200.0f, 500.0f}, {400.0f, 500.0f}, {300.0f, 300.0f}};
+    const glm::vec2 pts[3] = {{2.0f, 5.0f}, {4.0f, 5.0f}, {3.0f, 3.0f}};
     for (const glm::vec2 p : pts)
     {
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, 0),    kDt);
-        it.Tick(w.reg, w.Physics(), cam, Snap(p.x, p.y, kLMB), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, 0), kDt);
+        it.Tick(w.reg, w.Physics(), cam, SnapWorld(cam, p, kLMB), kDt);
     }
     REQUIRE(it.PolygonPoints().size() == 3);
 

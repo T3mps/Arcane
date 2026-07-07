@@ -8,11 +8,13 @@
 // RenderSubmissionSystem and DrawPhysicsDebug apply it identically so sprites +
 // the physics-debug overlay pan/zoom TOGETHER):
 //
-//     screen = world * zoom + offset
-//     world  = (screen - offset) / zoom   (inverse)
+//     screen = world * (kPixelsPerMeter * zoom) + offset
+//     world  = (screen - offset) / (kPixelsPerMeter * zoom)   (inverse)
 //
-// world units == canvas pixels at zoom 1. Default offset (0,0) + zoom 1 is the
-// identity transform (every pre-camera caller is unchanged).
+// World is METERS (MKS); the canvas is pixels. kPixelsPerMeter folds the unit
+// conversion into the single transform pair everything routes through -- so a
+// 12.8 x 7.2 m layout fills a 1280x720 canvas at zoom 1, framing like the px
+// original did. Default offset (0,0) + zoom 1 maps meters -> px at 100 px/m.
 
 #include <glm/vec2.hpp>
 
@@ -20,19 +22,23 @@ namespace Arcane::Sandbox
 {
     struct Camera
     {
-        glm::vec2 offset{0.0f, 0.0f};   // screen-space translation (canvas px)
-        float     zoom = 1.0f;          // world->screen scale (1 == 1:1)
+        // World is METERS (MKS); the canvas is pixels. This is the single conversion
+        // seam between the two unit systems -- 100 px per meter.
+        static constexpr float kPixelsPerMeter = 100.0f;
 
-        // world -> screen: screen = world * zoom + offset.
+        glm::vec2 offset{0.0f, 0.0f};   // screen-space translation (canvas px)
+        float     zoom = 1.0f;          // additional world->screen scale (1 == 100 px/m)
+
+        // world -> screen: screen = world * (kPixelsPerMeter * zoom) + offset.
         glm::vec2 WorldToScreen(glm::vec2 world) const noexcept
         {
-            return world * zoom + offset;
+            return world * (kPixelsPerMeter * zoom) + offset;
         }
 
-        // screen -> world: world = (screen - offset) / zoom. Inverse of the above.
+        // screen -> world: world = (screen - offset) / (kPixelsPerMeter * zoom).
         glm::vec2 ScreenToWorld(glm::vec2 screen) const noexcept
         {
-            return (screen - offset) / zoom;
+            return (screen - offset) / (kPixelsPerMeter * zoom);
         }
     };
 }

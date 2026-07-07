@@ -285,29 +285,34 @@ TEST_CASE("Hud: spawn knobs select the spawned shape", "[sandbox]")
     Fixture f;
     f.Step();   // materialize the scene-0 bodies
 
-    // Select "circle" + a known size via the spawn knobs the HUD writes.
+    // Select "circle" + a known size (meters) via the spawn knobs the HUD writes.
     f.app.SpawnConfigMut().shape  = Sbx::SpawnShape::Circle;
-    f.app.SpawnConfigMut().size   = 30.0f;
+    f.app.SpawnConfigMut().size   = 0.3f;   // MKS: 0.3 m radius (was 30 px)
     CHECK(f.app.SpawnConfig().shape == Sbx::SpawnShape::Circle);
 
-    // Press LMB over empty space (top-left, away from the scene) -> spawn a circle.
+    // Press LMB over empty world space far from the ~13 x 8 m scene -> spawn a circle.
+    // The cursor is SCREEN px, so project the world target through the app camera
+    // (ppm=100): world (30,30) m -> screen (3000,3000) px at the default identity cam.
+    const glm::vec2 wt{30.0f, 30.0f};
+    const glm::vec2 sc = f.app.Cam().WorldToScreen(wt);
     Arcane::InputSnapshot release{};
-    release.mouseX = 60.0f; release.mouseY = 60.0f;
+    release.mouseX = sc.x; release.mouseY = sc.y;
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, release);   // released baseline (no edge)
 
     Arcane::InputSnapshot press{};
-    press.mouseX = 60.0f; press.mouseY = 60.0f; press.mouseButtons = 0x1;  // LMB
+    press.mouseX = sc.x; press.mouseY = sc.y; press.mouseButtons = 0x1;  // LMB
     const std::uint32_t before = f.Physics().Count();
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);     // spawn + step materializes it
 
-    // A new body exists and it is a Circle (the selected spawn shape).
+    // A new body exists and it is a Circle (the selected spawn shape), near the world
+    // target (one gravity step at g=10 nudges it ~1.4 mm). Tolerances are meters.
     REQUIRE(f.Physics().Count() > before);
     bool foundCircle = false;
     for (std::uint32_t i = 0; i < f.Physics().Count(); ++i)
     {
         if (!f.Physics().Alive(i)) continue;
         const Phys::Vec2 p = f.Physics().PosSlot(i);
-        if (std::abs(p.x - 60.0f) < 2.0f && std::abs(p.y - 60.0f) < 5.0f)
+        if (std::abs(p.x - wt.x) < 0.02f && std::abs(p.y - wt.y) < 0.05f)
         {
             if (f.Physics().ShapeSlot(i).kind == Phys::ShapeKind::Circle)
                 foundCircle = true;
@@ -676,20 +681,24 @@ TEST_CASE("Inspector: a grab through FixedUpdate sets the subject; empty grab ke
     const Phys::BodyHandle body = FirstDynamicContactBody(f.Physics());
     REQUIRE(body != Phys::kInvalidBody);
     const Phys::Vec2 bp = f.Physics().Position(body);
+    // The cursor is SCREEN px; project the body's WORLD position through the app
+    // camera (ppm=100) so the click lands ON the body.
+    const glm::vec2 bpScreen =
+        f.app.Cam().WorldToScreen({static_cast<float>(bp.x), static_cast<float>(bp.y)});
 
-    // Released baseline, then an LMB press ON the body (identity camera: screen == world).
-    Arcane::InputSnapshot rel{}; rel.mouseX = static_cast<float>(bp.x); rel.mouseY = static_cast<float>(bp.y);
+    // Released baseline, then an LMB press ON the body.
+    Arcane::InputSnapshot rel{}; rel.mouseX = bpScreen.x; rel.mouseY = bpScreen.y;
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
 
-    Arcane::InputSnapshot press{}; press.mouseX = static_cast<float>(bp.x);
-    press.mouseY = static_cast<float>(bp.y); press.mouseButtons = 0x1;   // LMB
+    Arcane::InputSnapshot press{}; press.mouseX = bpScreen.x;
+    press.mouseY = bpScreen.y; press.mouseButtons = 0x1;   // LMB
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);
 
     REQUIRE(f.app.HasSubject());                 // the grab set the subject
     const std::uint32_t subjBody = f.app.SubjectBody().index;
 
     // Release, then an LMB press on FAR EMPTY space: no body grabbed -> subject unchanged.
-    Arcane::InputSnapshot rel2{}; rel2.mouseX = static_cast<float>(bp.x); rel2.mouseY = static_cast<float>(bp.y);
+    Arcane::InputSnapshot rel2{}; rel2.mouseX = bpScreen.x; rel2.mouseY = bpScreen.y;
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel2);
     Arcane::InputSnapshot emptyPress{}; emptyPress.mouseX = -9000.0f; emptyPress.mouseY = -9000.0f;
     emptyPress.mouseButtons = 0x1;
@@ -757,10 +766,13 @@ TEST_CASE("Inspector: a subject touching nothing is crash-safe", "[sandbox]")
     f.app.SpawnConfigMut().size  = 0.5f;   // MKS: 0.5 m half-extent (was 10 px)
 
     // MKS: (50, -50) m -- far from the ~13 x 8 m scene 0 layout ("far away" is the
-    // only requirement; the still-1:1 camera maps screen->world identically here).
-    Arcane::InputSnapshot rel{};  rel.mouseX = 50.0f; rel.mouseY = -50.0f;
+    // only requirement). The cursor is SCREEN px, so project the world target through
+    // the app camera (ppm=100): world (50,-50) m -> screen (5000,-5000) px.
+    const glm::vec2 spawnWorld{50.0f, -50.0f};
+    const glm::vec2 spawnScreen = f.app.Cam().WorldToScreen(spawnWorld);
+    Arcane::InputSnapshot rel{};  rel.mouseX = spawnScreen.x; rel.mouseY = spawnScreen.y;
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
-    Arcane::InputSnapshot press{}; press.mouseX = 50.0f; press.mouseY = -50.0f; press.mouseButtons = 0x1;
+    Arcane::InputSnapshot press{}; press.mouseX = spawnScreen.x; press.mouseY = spawnScreen.y; press.mouseButtons = 0x1;
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);   // spawn + one mint step (paused: no fall)
 
     // Find the isolated body near the spawn point and make it the subject.
