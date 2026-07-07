@@ -440,7 +440,7 @@ namespace Arcane::Sandbox
             // Gravity: PhysicsWorld bakes gravity at construction (no runtime setter),
             // so a change rebuilds the current scene with a fresh world at the new value.
             float gravityY = app.GravityY();
-            if (ImGui::SliderFloat("Gravity Y", &gravityY, 0.0f, 2400.0f, "%.0f"))
+            if (ImGui::SliderFloat("Gravity Y", &gravityY, 0.0f, 30.0f, "%.1f"))
             {
                 app.SetGravityY(gravityY);
                 RequestReset(reg);   // mint a fresh world at the new gravity (deferred)
@@ -508,7 +508,7 @@ namespace Arcane::Sandbox
             }
             else
             {
-                ImGui::SliderFloat("Size", &cfg.size, 4.0f, 80.0f, "%.0f");
+                ImGui::SliderFloat("Size", &cfg.size, 0.04f, 0.8f, "%.2f");
                 ImGui::TextDisabled("Left-click empty space to spawn");
             }
         }
@@ -532,12 +532,12 @@ namespace Arcane::Sandbox
 
             ImGui::Checkbox("COM markers", &dbg.drawComMarkers);
             ImGui::BeginDisabled(!dbg.drawComMarkers);
-            ImGui::SliderFloat("COM size", &dbg.comMarkerSize, 2.0f, 16.0f, "%.0f");
+            ImGui::SliderFloat("COM size", &dbg.comMarkerSize, 0.02f, 0.16f, "%.2f");
             ImGui::EndDisabled();
 
             ImGui::Checkbox("Orientation ticks", &dbg.drawOrientations);
             ImGui::BeginDisabled(!dbg.drawOrientations);
-            ImGui::SliderFloat("Tick length", &dbg.orientationTickLen, 4.0f, 48.0f, "%.0f");
+            ImGui::SliderFloat("Tick length", &dbg.orientationTickLen, 0.04f, 0.48f, "%.2f");
             ImGui::EndDisabled();
 
             ImGui::Separator();

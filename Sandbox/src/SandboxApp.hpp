@@ -94,9 +94,9 @@ namespace Arcane::Sandbox
         bool  drawVelocities     = true;
         float velocityScale      = 0.15f;
         bool  drawComMarkers     = true;
-        float comMarkerSize      = 5.0f;
+        float comMarkerSize      = 0.05f;
         bool  drawOrientations   = true;
-        float orientationTickLen = 18.0f;
+        float orientationTickLen = 0.18f;
 
         // ---- Slice A broadphase + manifold overlays (default OFF) -----------
         // Visualize the physics broadphases + contact manifolds. All four default
@@ -256,7 +256,7 @@ namespace Arcane::Sandbox
             const PolygonDraftResource* draft = reg.GetResource<PolygonDraftResource>();
             if (!draft || draft->worldPoints.empty()) return;
 
-            constexpr float    kMarkerPx = 4.0f;
+            constexpr float    kMarkerPx = 4.0f;   // screen-space px by design, not a world unit (MKS P6)
             constexpr glm::vec4 kMarkerColor{1.0f, 0.85f, 0.2f, 1.0f};   // amber
             for (const glm::vec2 wp : draft->worldPoints)
             {
