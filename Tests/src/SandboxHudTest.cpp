@@ -52,7 +52,7 @@ namespace
     namespace Phys = Arcane::Physics;
     namespace Sbx  = Arcane::Sandbox;
 
-    constexpr float kGravityY = 900.0f;
+    constexpr float kGravityY = 10.0f;   // MKS: +10 m/s^2 (matches the WorldDef default)
 
     // ---------------------------------------------------------------------------
     // A throwaway headless ImGui frame guard: create a context, build a minimal
@@ -168,7 +168,10 @@ TEST_CASE("Hud: paused state gates the physics step", "[sandbox]")
 
     f.app.SetPaused(false);
     const float movedWhileRunning = std::abs(f.FirstDynamicYAfter(20));
-    CHECK(movedWhileRunning > 1.0f);   // gravity pulls it down once unpaused
+    // MKS re-baseline (was > 1.0f, an implicit px threshold): 20 free-fall steps at
+    // g = 10 drop the first dynamic ~0.6 m (v0*T + 0.5 g T^2, T = 20/60 s); 0.1 m
+    // cleanly separates "moved" from the frozen 0 m (< 0.01 m above) with wide margin.
+    CHECK(movedWhileRunning > 0.1f);   // gravity pulls it down once unpaused
 }
 
 // ---------------------------------------------------------------------------
@@ -456,35 +459,31 @@ namespace
     // Wake every dynamic body, then let the caller step once more so
     // EmitContactConstraints (PhysicsWorld.cpp) re-emits their contacts.
     //
-    // Two compounding engine changes moved this scene's settle goalposts since
-    // these tests were authored (907d05df, 2026-06-24):
+    // MKS re-derive (MKS P6): scene 0 (BuildPlayground) is now authored in meters
+    // (drops ~4.7-7.0 m under g = 10 m/s^2). Two facts set the settle count:
     //
-    //  1. 29b07395 (Box2D v3 max-linear-velocity clamp, WorldDef::maxLinearVelocity
-    //     = 400 u/s) caps how fast scene 0's dynamics can fall. Verified via a
-    //     direct diagnostic run: at the original 90-step settle every dynamic
-    //     that hasn't yet landed is falling at EXACTLY the 400 u/s clamp (not
-    //     mid-bounce, not resting) -- 90 steps (1.5s) is no longer enough time
-    //     for this scene's "1.9x LARGER SCALE" drop height (Scenes.cpp
-    //     BuildPlayground) to land at the new capped fall speed. A direct
-    //     DebugCollide between every dynamic and every static/dynamic pair at
-    //     90 steps returns pointCount == 0 for ALL of them: nothing has reached
-    //     the floor at all yet, so ForEachContactConstraint legitimately has
-    //     nothing to emit regardless of sleep.
+    //  1. FALL TIME. t = sqrt(2h/g): the deepest drop (~7.0 m) lands at
+    //     ~1.18 s ~ 71 steps; the shallowest (~4.7 m) at ~0.97 s ~ 58 steps.
+    //     At MKS the WorldDef::maxLinearVelocity = 400 (now honest m/s) clamp is
+    //     NEVER engaged -- peak fall speed is ~12 m/s, ~33x under the cap -- so,
+    //     unlike the px era, nothing is throttled; first contact is ~58-71 steps.
+    //     The 200-step settle below therefore lands + rests every dynamic with
+    //     ~2.8x headroom over first contact (probe precedent: a comparable
+    //     5-box/3-circle pile fully sleeps by ~338 steps, so 200 sits safely in
+    //     the landed-and-resting window). Empirically re-verified: after 200 steps
+    //     + wake + 1 step, FirstDynamicContactBody returns a valid body.
     //
-    //  2. 9026d3ba (Box2D-faithful combined sleep test, the never-settle fix)
-    //     means that ONCE the scene actually lands (confirmed empirically at
-    //     200 steps: all 5 dynamics resting, velocity 0), it then genuinely
-    //     SLEEPS. EmitContactConstraints has an awake-gate (PhysicsWorld.cpp)
-    //     that excludes a sleeping dynamic's contacts from
-    //     ForEachContactConstraint, so a fully-settled (and by then asleep)
-    //     scene still publishes zero live contact constraints --
-    //     FirstDynamicContactBody would otherwise return kInvalidBody even
-    //     after everything has landed.
+    //  2. SLEEP AWAKE-GATE (scale-independent, KEEP the wake). EmitContactConstraints
+    //     has an awake-gate (PhysicsWorld.cpp) that excludes a sleeping dynamic's
+    //     contacts from ForEachContactConstraint. Once the scene lands it genuinely
+    //     sleeps, so a settled scene publishes zero live contact constraints --
+    //     FirstDynamicContactBody would return kInvalidBody. The explicit
+    //     WakeAllDynamics + one extra Step() re-emits the resting contacts. This is
+    //     unchanged by the unit switch (the gate is on sleep state, not scale).
     //
-    // Production never hits either gap: the drag path calls world.Wake(m_grabbed)
-    // every tick (Interaction.cpp:277), and a live user just waits as long as it
-    // takes to see bodies land. These tests bypass the grab and set the subject
-    // directly on a settled body, so each test (a) settles for long enough
+    // Production never hits the gap: the drag path calls world.Wake(m_grabbed)
+    // every tick (Interaction.cpp:277). These tests bypass the grab and set the
+    // subject directly on a settled body, so each test (a) settles for long enough
     // (200 steps) that the scene has actually landed, then (b) wakes it
     // explicitly -- mirroring the production wake-on-grab, just called by hand.
     void WakeAllDynamics(Phys::PhysicsWorld& world)
@@ -505,10 +504,11 @@ namespace
 TEST_CASE("Inspector: grabbing a body sets/persists/clears the subject", "[sandbox]")
 {
     Fixture f;
-    // 200 steps (~3.3s): scene 0's 5 dynamics need this long to actually REACH the
-    // floor now -- see WakeAllDynamics for why 90 (the original settle count) is no
-    // longer enough. By 200 steps every dynamic has landed and (per 9026d3ba) gone
-    // to sleep; wake them back up below so the settled contacts are live again.
+    // 200 steps (~3.3 s): scene 0's 5 dynamics land by ~58-71 steps at MKS (drops
+    // ~4.7-7.0 m under g = 10, no velocity clamp) and then rest; 200 gives ~2.8x
+    // headroom over first contact -- see WakeAllDynamics for the full derivation.
+    // By 200 steps every dynamic has landed and may have gone to sleep; wake them
+    // back up below so the settled contacts are live again.
     for (int i = 0; i < 200; ++i) f.Step();
 
     WakeAllDynamics(f.Physics());
@@ -754,11 +754,13 @@ TEST_CASE("Inspector: a subject touching nothing is crash-safe", "[sandbox]")
     // does not fall into anything, and make it the subject.
     f.app.SetPaused(true);
     f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Box;
-    f.app.SpawnConfigMut().size  = 10.0f;
+    f.app.SpawnConfigMut().size  = 0.5f;   // MKS: 0.5 m half-extent (was 10 px)
 
-    Arcane::InputSnapshot rel{};  rel.mouseX = 5000.0f; rel.mouseY = -5000.0f;
+    // MKS: (50, -50) m -- far from the ~13 x 8 m scene 0 layout ("far away" is the
+    // only requirement; the still-1:1 camera maps screen->world identically here).
+    Arcane::InputSnapshot rel{};  rel.mouseX = 50.0f; rel.mouseY = -50.0f;
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
-    Arcane::InputSnapshot press{}; press.mouseX = 5000.0f; press.mouseY = -5000.0f; press.mouseButtons = 0x1;
+    Arcane::InputSnapshot press{}; press.mouseX = 50.0f; press.mouseY = -50.0f; press.mouseButtons = 0x1;
     f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);   // spawn + one mint step (paused: no fall)
 
     // Find the isolated body near the spawn point and make it the subject.
@@ -767,8 +769,8 @@ TEST_CASE("Inspector: a subject touching nothing is crash-safe", "[sandbox]")
     {
         if (!f.Physics().Alive(i)) continue;
         const Phys::Vec2 p = f.Physics().PosSlot(i);
-        if (std::abs(static_cast<float>(p.x) - 5000.0f) < 50.0f &&
-            std::abs(static_cast<float>(p.y) + 5000.0f) < 50.0f)
+        if (std::abs(static_cast<float>(p.x) - 50.0f) < 0.5f &&
+            std::abs(static_cast<float>(p.y) + 50.0f) < 0.5f)
         { isolated = f.Physics().HandleOf(i); break; }
     }
     REQUIRE(isolated != Phys::kInvalidBody);

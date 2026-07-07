@@ -84,13 +84,7 @@ TEST_CASE("Sandbox: compound scene authors no body sprites (outline-unify)", "[s
     // them on the first PhysicsSystem fixedUpdate; path-B builders create world
     // bodies directly), so install one before building.
     Arcane::PhysicsResource physRes;
-    Arcane::Physics::WorldDef wd;
-    wd.gravityY = Arcane::Physics::Real(900);
-    wd.gravityX               = Arcane::Physics::Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Arcane::Physics::Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Arcane::Physics::Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Arcane::Physics::Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Arcane::Physics::Real(64);  // PX-PIN: remove when this file converts to MKS
+    Arcane::Physics::WorldDef wd;   // MKS defaults (gravity +10, sleepThreshold 0.05, ...)
     physRes.world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
@@ -117,13 +111,7 @@ TEST_CASE("Sandbox: compound bodies render as collider outlines (DrawPhysicsDebu
     Arcane::RegisterPhysicsComponents(reg);
 
     Arcane::PhysicsResource physRes;
-    Arcane::Physics::WorldDef wd;
-    wd.gravityY = Arcane::Physics::Real(900);
-    wd.gravityX               = Arcane::Physics::Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Arcane::Physics::Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Arcane::Physics::Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Arcane::Physics::Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Arcane::Physics::Real(64);  // PX-PIN: remove when this file converts to MKS
+    Arcane::Physics::WorldDef wd;   // MKS defaults (gravity +10, sleepThreshold 0.05, ...)
     physRes.world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
@@ -160,21 +148,21 @@ TEST_CASE("Sandbox: compound bodies render as collider outlines (DrawPhysicsDebu
 // =============================================================================
 // Two DECOUPLED cases. The registered scene 8 / Loom perf showcase builds the
 // full kStressBodyCount (10000) churn -- but that procedural grid is 20 columns
-// wide, so 10000 bodies stack ~500 rows / ~41,000 px tall (top row y ~ -40,000).
-// That is fine for the perf scene, but it overshoots the 1k-scale spatial bound
-// the stability check uses, so the two concerns are split:
+// wide, so 10000 bodies stack ~500 rows / ~410 m tall (top row y ~ -404 m at MKS,
+// was ~ -40,000 px). That is fine for the perf scene, but it overshoots the
+// spatial bound the stability check uses, so the two concerns are split:
 //
 //   * VOLUME/VARIETY/AGITATORS run on the registered 10000-body scene (no
 //     stepping): the knob built the configured count, world-direct bodies exist,
 //     the kinematic whisk is present. (spec section 8, assertions a/c/d)
 //   * STABILITY runs on a calibrated subset (kStressStabilityBodyCount = 1200 =>
-//     60-row column, top y ~ -4040, comfortably inside kYMin = -5000) so that a
+//     60-row column, top y ~ -40.4 m, comfortably inside kYMin = -50 m) so that a
 //     position leaving the bound is a REAL instability (energy gain / escape),
 //     not just the spawn column being taller than the bound. (assertion b)
 //
 // (Investigated 2026-06-24: at 10000 bodies the original single-case "allBounded"
-// failed purely because 8,580 bodies START above -5000 at spawn -- the physics is
-// stable: nothing escapes the bowl in X, no NaN, speeds bounded by the whisk
+// failed purely because most bodies START above the bound at spawn -- the physics
+// is stable: nothing escapes the bowl in X, no NaN, speeds bounded by the whisk
 // drive, and the column falls DOWN into bounds. Calibration, not a defect.)
 // =============================================================================
 TEST_CASE("Sandbox: stress scene builds kStressBodyCount bodies (volume/variety/agitators)",
@@ -188,13 +176,7 @@ TEST_CASE("Sandbox: stress scene builds kStressBodyCount bodies (volume/variety/
     Arcane::RegisterPhysicsComponents(reg);
 
     Arcane::PhysicsResource physRes;
-    Phys::WorldDef wd;
-    wd.gravityY = Phys::Real(900);
-    wd.gravityX               = Phys::Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Phys::Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Phys::Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Phys::Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Phys::Real(64);  // PX-PIN: remove when this file converts to MKS
+    Phys::WorldDef wd;   // MKS defaults (gravity +10, sleepThreshold 0.05, ...)
     physRes.world = std::make_unique<Phys::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
@@ -250,13 +232,7 @@ TEST_CASE("Sandbox: stress scene stays bounded after 30 steps (calibrated subset
     Arcane::RegisterPhysicsComponents(reg);
 
     Arcane::PhysicsResource physRes;
-    Phys::WorldDef wd;
-    wd.gravityY = Phys::Real(900);
-    wd.gravityX               = Phys::Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Phys::Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Phys::Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Phys::Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Phys::Real(64);  // PX-PIN: remove when this file converts to MKS
+    Phys::WorldDef wd;   // MKS defaults (gravity +10, sleepThreshold 0.05, ...)
     physRes.world = std::make_unique<Phys::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
@@ -283,14 +259,16 @@ TEST_CASE("Sandbox: stress scene stays bounded after 30 steps (calibrated subset
         world.Step(Phys::Real(kDt));
 
     // (b) Stability: iterate every live slot; all positions must be finite and
-    //     within a generous arena bound. Arena inner X = [-220, 1500]; walls at
-    //     -220-50 = -270 to 1500+50 = 1550. The calibrated 1200-body column tops
-    //     out near y ~ -4040 at spawn and only falls DOWN, so the head room here
-    //     (-5000) is exceeded ONLY by a genuine runaway/escape.
-    constexpr float kXMin = -800.0f;
-    constexpr float kXMax = 2100.0f;
-    constexpr float kYMin = -5000.0f;  // bodies start above the floor, generous head room
-    constexpr float kYMax = 1500.0f;
+    //     within a generous arena bound (MKS, /100 of the old px bounds). Arena
+    //     inner X = [-2.2, 15.0] m; walls at -2.2-0.5 = -2.7 to 15.0+0.5 = 15.5 m.
+    //     kYMin re-derived for MKS: 1200 bodies / 20 cols = 60 rows x 0.82 m pitch,
+    //     spawn bottom = kFloorY - kPitch = 8.8 - 0.82 = 7.98 m, so the top row sits
+    //     at 7.98 - 59*0.82 ~ -40.4 m; the column only falls DOWN, so a -50 m floor
+    //     (~1.24x below the spawn top) is crossed ONLY by a genuine runaway/escape.
+    constexpr float kXMin = -8.0f;
+    constexpr float kXMax = 21.0f;
+    constexpr float kYMin = -50.0f;   // top spawn row ~ -40.4 m; headroom to -50 m
+    constexpr float kYMax = 15.0f;
 
     bool allBounded = true;
     for (std::uint32_t i = 0; i < world.Count(); ++i)

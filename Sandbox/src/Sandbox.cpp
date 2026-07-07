@@ -37,11 +37,12 @@
 
 namespace
 {
-    // Gravity for the sandbox world (+Y down, world unit == canvas px). Tuned higher
-    // than the physics-test default so bodies fall at a brisk, readable rate on screen.
+    // Gravity for the sandbox world (+Y down, world unit == METER; MKS). This matches
+    // the engine WorldDef default (g = +10 m/s^2); the sandbox keeps the named constant
+    // because the HUD gravity slider round-trips through it (Configure(kGravityY)).
     // (The fixed timestep itself is owned by SandboxApp now -- Task 8's sandbox-owned
     // physics step scales it by the HUD time-scale; see SandboxApp::FixedUpdate.)
-    constexpr float kGravityY = 900.0f;
+    constexpr float kGravityY = 10.0f;
 
     Arcane::EngineContext*       g_ctx = nullptr;
     Arcane::Sandbox::SandboxApp  g_app{};
@@ -53,12 +54,7 @@ namespace
     {
         if (reg.GetResource<Arcane::PhysicsResource>()) return;
         Arcane::Physics::WorldDef wd;
-        wd.gravityY = kGravityY;
-        wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
+        wd.gravityY = kGravityY;   // MKS: +10 m/s^2 (the WorldDef default; the rest inherit it)
         auto world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
         // Phase D1: wire executor (g_ctx is always valid here; LoadState is called after Init).
         world->SetExecutor(g_ctx ? g_ctx->taskExecutor : nullptr);

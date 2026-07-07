@@ -39,8 +39,9 @@
 //       DrawPhysicsDebug) draws EVERY world body's outline (rotation-aware), regardless of how
 //       the body was authored -- which is exactly the capability scenes 3/4/7/8 show off.
 //
-// Coordinate convention (matches the physics tests): +Y is DOWN, world unit == canvas pixel.
-// Floors sit low on screen and bodies drop onto them.
+// Coordinate convention (matches the physics tests): +Y is DOWN, world unit == METER
+// (MKS; the sandbox camera maps world->screen at 100 px/m). Floors sit low (larger +Y)
+// and bodies drop onto them. All geometry below is authored in meters (bodies 0.1-10 m).
 
 #include "Scenes.hpp"
 
@@ -217,8 +218,8 @@ namespace Arcane::Sandbox
         // LARGER SCALE (Item C): the default floor is wider + lower so the bigger
         // scenes have room to spread; the camera (next agent) zooms to fit.
         Astra::Entity MakeFloor(Astra::Registry& reg, Astra::Entity root,
-                                float centerX = 640.0f, float topY = 800.0f,
-                                float halfW = 880.0f, float halfH = 36.0f)
+                                float centerX = 6.4f, float topY = 8.0f,
+                                float halfW = 8.8f, float halfH = 0.36f)
         {
             return MakeBox(reg, root, glm::vec2(centerX, topY + halfH),
                            glm::vec2(halfW, halfH), Physics::BodyType::Static, kStatic);
@@ -332,63 +333,20 @@ namespace Arcane::Sandbox
             return w.AddBody(def);
         }
 
-        // World-direct KINEMATIC cross-spinner (path B). Two elongated polygon blades at 90
-        // degrees form a plus/cross. The cross is a single body; the perpendicular blade is an
-        // AddFixture (not a second AddBody) so both share one rigid body that spins as a unit.
-        // `omega` is the angular velocity (rad/s); sign gives CW vs CCW direction.
-        Physics::BodyHandle Spinner(Physics::PhysicsWorld& w, glm::vec2 pos, float omega)
-        {
-            // Blade geometry: a flat elongated box expressed as a 4-vert polygon so it
-            // can be rotated freely. Half-length 120, half-width 14.
-            constexpr float kBL = 120.0f;  // blade half-length
-            constexpr float kBW = 14.0f;   // blade half-width
-
-            // Primary blade (horizontal in body frame).
-            const std::vector<Physics::Vec2> blade0 = {
-                Physics::Vec2(-kBL, -kBW), Physics::Vec2( kBL, -kBW),
-                Physics::Vec2( kBL,  kBW), Physics::Vec2(-kBL,  kBW),
-            };
-            // Perpendicular blade (vertical in body frame) -- offset 90 degrees.
-            const std::vector<Physics::Vec2> blade1 = {
-                Physics::Vec2(-kBW, -kBL), Physics::Vec2( kBW, -kBL),
-                Physics::Vec2( kBW,  kBL), Physics::Vec2(-kBW,  kBL),
-            };
-
-            Physics::BodyDef def;
-            def.type     = Physics::BodyType::Kinematic;
-            def.position = Physics::Vec2(pos.x, pos.y);
-            def.shape    = Physics::MakePolygon(blade0);
-            def.friction = Physics::Real(0.3f);
-            // Kinematic: invMass/invInertia are 0 regardless of density; value is moot.
-            Physics::BodyHandle h = w.AddBody(def);
-
-            // Second blade as an additional fixture on the SAME kinematic body.
-            Physics::FixtureDef fd;
-            fd.shape       = Physics::MakePolygon(blade1);
-            fd.friction    = Physics::Real(0.3f);
-            fd.restitution = Physics::Real(0.0f);
-            w.AddFixture(h, fd);
-
-            // Spin forever at the given angular velocity (kinematic -> never pushed/damped).
-            w.SetAngVelSlot(h.index, Physics::Real(omega));
-
-            return h;
-        }
-
         // World-direct KINEMATIC balloon-whisk agitator. ONE kinematic body at `center`
         // built from kLoops teardrop "wire" loops radiating at equal angular increments
         // (like a real balloon-whisk cage), plus a small central hub circle. Each loop
         // is approximated by thin segment-box polygons whose verts are expressed in
         // BODY-LOCAL frame (relative to `center`). The whisk spins at `omega` rad/s.
-        // With radius=560 and omega=1.9 the tip speed is ~1064 px/s; at 60 Hz each
-        // wire advances ~17.7 px per step, below wire diameter 30 px -- no tunnelling.
+        // With radius=5.6 and omega=1.9 the tip speed is ~10.64 m/s; at 60 Hz each
+        // wire advances ~0.177 m per step, below wire diameter 0.30 m -- no tunnelling.
         Physics::BodyHandle Whisk(Physics::PhysicsWorld& w, glm::vec2 center,
                                   float radius, float omega)
         {
             constexpr int   kLoops    = 6;
-            constexpr float kWireHalf = 15.0f;  // half-thickness of each wire segment
+            constexpr float kWireHalf = 0.15f;  // half-thickness of each wire segment (m)
                                                 // (thicker -> pushes harder + tunnel-safe at high omega)
-                                                // tip speed 1064 px/s -> 17.7 px/step < diameter 30 px
+                                                // tip speed 10.64 m/s -> 0.177 m/step < diameter 0.30 m
 
             const float R    = radius;
             const float W    = R * 0.30f;       // teardrop loop half-width
@@ -407,7 +365,7 @@ namespace Arcane::Sandbox
             {
                 glm::vec2 d = Q - P;
                 const float len = std::sqrt(d.x * d.x + d.y * d.y);
-                if (len < 1.0f) return;   // degenerate -- skip
+                if (len < 0.01f) return;   // degenerate (< 1 cm) -- skip
                 d.x /= len; d.y /= len;
                 const glm::vec2 perp{ -d.y, d.x };
 
@@ -474,23 +432,23 @@ namespace Arcane::Sandbox
             // The next agent adds zoom, so the world geometry can spread well
             // past the 1280x720 canvas -- bigger reads better at zoom-to-fit.
             // Floor + 2 walls framing the arena.
-            MakeBox(reg, root, glm::vec2(640.0f, 820.0f), glm::vec2(760.0f, 36.0f),
+            MakeBox(reg, root, glm::vec2(6.4f, 8.2f), glm::vec2(7.6f, 0.36f),
                     Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(-80.0f, 560.0f), glm::vec2(36.0f, 300.0f),
+            MakeBox(reg, root, glm::vec2(-0.8f, 5.6f), glm::vec2(0.36f, 3.0f),
                     Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(1360.0f, 560.0f), glm::vec2(36.0f, 300.0f),
+            MakeBox(reg, root, glm::vec2(13.6f, 5.6f), glm::vec2(0.36f, 3.0f),
                     Physics::BodyType::Static, kStatic);
 
-            // 5 dynamics: 3 boxes + 2 circles (roughly 1.9x the old extents).
-            MakeBox(reg, root, glm::vec2(440.0f, 120.0f), glm::vec2(54.0f, 54.0f),
+            // 5 dynamics: 3 boxes + 2 circles (meter-scale variety preserved).
+            MakeBox(reg, root, glm::vec2(4.4f, 1.2f), glm::vec2(0.54f, 0.54f),
                     Physics::BodyType::Dynamic, kOrange);
-            MakeBox(reg, root, glm::vec2(640.0f, 40.0f),  glm::vec2(66.0f, 42.0f),
+            MakeBox(reg, root, glm::vec2(6.4f, 0.4f),  glm::vec2(0.66f, 0.42f),
                     Physics::BodyType::Dynamic, kBlue);
-            MakeBox(reg, root, glm::vec2(860.0f, 90.0f),  glm::vec2(46.0f, 46.0f),
+            MakeBox(reg, root, glm::vec2(8.6f, 0.9f),  glm::vec2(0.46f, 0.46f),
                     Physics::BodyType::Dynamic, kGreen);
-            MakeCircle(reg, root, glm::vec2(540.0f, 260.0f), 50.0f,
+            MakeCircle(reg, root, glm::vec2(5.4f, 2.6f), 0.50f,
                        Physics::BodyType::Dynamic, kGold);
-            MakeCircle(reg, root, glm::vec2(760.0f, 200.0f), 58.0f,
+            MakeCircle(reg, root, glm::vec2(7.6f, 2.0f), 0.58f,
                        Physics::BodyType::Dynamic, kMagenta);
         }
 
@@ -504,10 +462,10 @@ namespace Arcane::Sandbox
 
             // LARGER SCALE (Item C): a taller stack of bigger boxes.
             constexpr int   kCount   = 8;
-            constexpr float kHalf    = 52.0f;   // box half-extent
-            constexpr float kGap     = 3.0f;    // small seating gap between boxes
-            constexpr float kTopSurf = 800.0f;  // floor top (matches MakeFloor)
-            constexpr float kCenterX = 640.0f;
+            constexpr float kHalf    = 0.52f;   // box half-extent (m)
+            constexpr float kGap     = 0.03f;   // small seating gap between boxes (m)
+            constexpr float kTopSurf = 8.0f;    // floor top (matches MakeFloor)
+            constexpr float kCenterX = 6.4f;
 
             // Stack from the floor up; box i center sits (2*half + gap) above the one below.
             for (int i = 0; i < kCount; ++i)
@@ -529,16 +487,16 @@ namespace Arcane::Sandbox
 
             // LARGER SCALE (Item C): a taller, wider pyramid of bigger boxes.
             constexpr int   kRows    = 6;
-            constexpr float kHalf    = 46.0f;
-            constexpr float kSpacing = 2.0f * kHalf + 3.0f;  // column pitch
-            constexpr float kTopSurf = 800.0f;
-            constexpr float kCenterX = 640.0f;
+            constexpr float kHalf    = 0.46f;
+            constexpr float kSpacing = 2.0f * kHalf + 0.03f;  // column pitch (m)
+            constexpr float kTopSurf = 8.0f;
+            constexpr float kCenterX = 6.4f;
 
             // Row r (0 = bottom) has (kRows - r) boxes, centered, stacked upward.
             for (int r = 0; r < kRows; ++r)
             {
                 const int   count = kRows - r;
-                const float rowY  = kTopSurf - kHalf - r * (2.0f * kHalf + 2.0f);
+                const float rowY  = kTopSurf - kHalf - r * (2.0f * kHalf + 0.02f);
                 const float startX = kCenterX - (count - 1) * 0.5f * kSpacing;
                 for (int c = 0; c < count; ++c)
                 {
@@ -561,54 +519,54 @@ namespace Arcane::Sandbox
             Astra::Entity root = MakeRoot(reg);
             // A static "ceiling" anchor body (drawn as an outline by the overlay,
             // like every other body now). LARGER SCALE (Item C): wider + thicker.
-            MakeBox(reg, root, glm::vec2(640.0f, 90.0f), glm::vec2(560.0f, 18.0f),
+            MakeBox(reg, root, glm::vec2(6.4f, 0.9f), glm::vec2(5.6f, 0.18f),
                     Physics::BodyType::Static, kStatic);
 
             Physics::PhysicsWorld* w = World(reg);
             if (!w) return;
 
-            // LARGER SCALE (Item C): bigger bobs + longer drops + wider spacing.
-            constexpr float kBobR = 28.0f;
+            // Meter-scale bobs + drops + spacing (variety preserved).
+            constexpr float kBobR = 0.28f;
 
             // --- REVOLUTE pendulum: a static hub + a bob pinned at the hub, swinging. ------
-            const Physics::BodyHandle hub = WorldStaticBox(*w, glm::vec2(360.0f, 130.0f),
-                                                           glm::vec2(14.0f, 14.0f));
-            const Physics::BodyHandle bob = WorldCircle(*w, glm::vec2(360.0f, 360.0f), kBobR);
+            const Physics::BodyHandle hub = WorldStaticBox(*w, glm::vec2(3.6f, 1.3f),
+                                                           glm::vec2(0.14f, 0.14f));
+            const Physics::BodyHandle bob = WorldCircle(*w, glm::vec2(3.6f, 3.6f), kBobR);
             {
                 Physics::JointDef jd;
                 jd.kind   = Physics::JointKind::Revolute;
                 jd.a      = hub;
                 jd.b      = bob;
-                jd.anchor = Physics::Vec2(360.0f, 130.0f);
+                jd.anchor = Physics::Vec2(3.6f, 1.3f);
                 w->AddJoint(jd);
             }
 
             // --- DISTANCE link: a second bob hangs from the same hub at a fixed length. -----
-            const Physics::BodyHandle distBob = WorldCircle(*w, glm::vec2(520.0f, 340.0f), kBobR);
+            const Physics::BodyHandle distBob = WorldCircle(*w, glm::vec2(5.2f, 3.4f), kBobR);
             {
                 Physics::JointDef jd;
                 jd.kind   = Physics::JointKind::Distance;
                 jd.a      = hub;
                 jd.b      = distBob;
-                jd.length = Physics::Real(230);
+                jd.length = Physics::Real(2.3);
                 w->AddJoint(jd);
             }
 
             // --- WELD pair: a static post + a body rigidly welded to it (stays put). --------
-            const Physics::BodyHandle post   = WorldStaticBox(*w, glm::vec2(820.0f, 130.0f),
-                                                              glm::vec2(14.0f, 14.0f));
-            const Physics::BodyHandle welded = WorldCircle(*w, glm::vec2(890.0f, 130.0f), kBobR);
+            const Physics::BodyHandle post   = WorldStaticBox(*w, glm::vec2(8.2f, 1.3f),
+                                                              glm::vec2(0.14f, 0.14f));
+            const Physics::BodyHandle welded = WorldCircle(*w, glm::vec2(8.9f, 1.3f), kBobR);
             {
                 Physics::JointDef jd;
                 jd.kind   = Physics::JointKind::Weld;
                 jd.a      = post;
                 jd.b      = welded;
-                jd.anchor = Physics::Vec2(890.0f, 130.0f);
+                jd.anchor = Physics::Vec2(8.9f, 1.3f);
                 w->AddJoint(jd);
             }
 
             // --- PRISMATIC slider: a body constrained to a horizontal axis off the post. ----
-            const Physics::BodyHandle slider = WorldCircle(*w, glm::vec2(1000.0f, 130.0f), kBobR);
+            const Physics::BodyHandle slider = WorldCircle(*w, glm::vec2(10.0f, 1.3f), kBobR);
             {
                 Physics::JointDef jd;
                 jd.kind = Physics::JointKind::Prismatic;
@@ -618,7 +576,14 @@ namespace Arcane::Sandbox
                 w->AddJoint(jd);
             }
             // Nudge the slider along its axis so it visibly slides (no perp drift under gravity).
-            w->ApplyImpulse(slider, Physics::Vec2(8000.0f, 0.0f));
+            // Authored as mass * delta-v (protocol rule 3), NOT a /100 of the old px impulse:
+            // the px impulse (8000) on a ~2463-unit-mass bob implied dv ~ 3.3 px/s, which at
+            // meters is ~0.033 m/s -- invisible. kNudgeDv gives a clearly visible slide, well
+            // under the 400 m/s cap. WorldCircle uses density 1, so mass = 1 * pi * r^2.
+            constexpr Physics::Real kNudgeDv = Physics::Real(1.5);   // target slide speed (m/s)
+            const Physics::Real     kPi      = static_cast<Physics::Real>(std::numbers::pi);
+            const Physics::Real     bobMass  = Physics::Real(1) * kPi * kBobR * kBobR;  // density 1
+            w->ApplyImpulse(slider, Physics::Vec2(bobMass * kNudgeDv, Physics::Real(0)));
         }
 
         // =============================================================================
@@ -638,14 +603,14 @@ namespace Arcane::Sandbox
             // World-direct static floor (the real collision surface). LARGER SCALE
             // (Item C): a wide low floor the tilted polygons settle flat on. The
             // overlay draws it (and every body) as an outline.
-            WorldStaticBox(*w, glm::vec2(640.0f, 820.0f), glm::vec2(820.0f, 36.0f));
+            WorldStaticBox(*w, glm::vec2(6.4f, 8.2f), glm::vec2(8.2f, 0.36f));
 
             // A few tilted polygon boxes at staggered heights + release angles
-            // (bigger boxes + dropped from higher so the tumble reads at scale).
-            WorldPolygonBox(*w, glm::vec2(420.0f, 160.0f), glm::vec2(58.0f, 58.0f), 0.6f);
-            WorldPolygonBox(*w, glm::vec2(620.0f, 80.0f),  glm::vec2(70.0f, 42.0f), -0.9f);
-            WorldPolygonBox(*w, glm::vec2(820.0f, 200.0f), glm::vec2(52.0f, 52.0f), 1.2f);
-            WorldPolygonBox(*w, glm::vec2(640.0f, 320.0f), glm::vec2(80.0f, 34.0f), -0.4f);
+            // (angles in radians, unchanged; the tumble reads at meter scale).
+            WorldPolygonBox(*w, glm::vec2(4.2f, 1.6f), glm::vec2(0.58f, 0.58f), 0.6f);
+            WorldPolygonBox(*w, glm::vec2(6.2f, 0.8f), glm::vec2(0.70f, 0.42f), -0.9f);
+            WorldPolygonBox(*w, glm::vec2(8.2f, 2.0f), glm::vec2(0.52f, 0.52f), 1.2f);
+            WorldPolygonBox(*w, glm::vec2(6.4f, 3.2f), glm::vec2(0.80f, 0.34f), -0.4f);
         }
 
         // =============================================================================
@@ -661,29 +626,30 @@ namespace Arcane::Sandbox
 
             // A THIN tall static wall on the right -- the thing the bullet must not
             // tunnel. LARGER SCALE (Item C): taller wall, further away, still thin.
-            MakeBox(reg, root, glm::vec2(1120.0f, 660.0f), glm::vec2(9.0f, 150.0f),
+            MakeBox(reg, root, glm::vec2(11.2f, 6.6f), glm::vec2(0.09f, 1.5f),
                     Physics::BodyType::Static, kStatic);
 
             // The bullet: a fast box fired right at the wall. fixedRotation (Aabb) +
             // bullet=true (enables the GJK-TOI CCD clamp) + a high +X authored velocity.
             Astra::Entity e = reg.CreateEntity();
-            Arcane::LocalTransform lt; lt.position = glm::vec2(120.0f, 660.0f);
+            Arcane::LocalTransform lt; lt.position = glm::vec2(1.2f, 6.6f);
             reg.AddComponent<Arcane::LocalTransform>(e, lt);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
             rb.type          = Physics::BodyType::Dynamic;
             rb.fixedRotation = true;
-            rb.bullet        = true;                       // CCD: speculative + sweep clamp
-            rb.velocity      = glm::vec2(7000.0f, 0.0f);   // fast enough to tunnel without CCD
+            rb.bullet        = true;                     // CCD: speculative + sweep clamp
+            rb.velocity      = glm::vec2(70.0f, 0.0f);   // ~70 m/s: per-step travel 1.17 m >>
+                                                         // 0.18 m wall -> tunnels without CCD
             reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
             Arcane::Collider2D col;
             {
                 Arcane::Fixture fx;
                 fx.kind        = Physics::ShapeKind::Aabb;
-                fx.halfW       = 18.0f;
-                fx.halfH       = 18.0f;
+                fx.halfW       = 0.18f;
+                fx.halfH       = 0.18f;
                 fx.density     = 4.0f;     // heavy: keeps momentum into the wall
                 fx.friction    = 0.3f;
                 fx.restitution = 0.0f;
@@ -725,13 +691,13 @@ namespace Arcane::Sandbox
                     // LARGER SCALE (Item C): bigger lobes + a bigger COM offset.
                     Arcane::Fixture core;            // light central lobe at the origin
                     core.kind = Physics::ShapeKind::Circle;
-                    core.radius = 34.0f; core.density = 0.5f; core.friction = 0.5f;
+                    core.radius = 0.34f; core.density = 0.5f; core.friction = 0.5f;
                     col.fixtures.push_back(core);
 
                     Arcane::Fixture heavy;           // heavy lobe offset to one side
                     heavy.kind = Physics::ShapeKind::Circle;
-                    heavy.radius = 42.0f; heavy.density = 4.0f; heavy.friction = 0.5f;
-                    heavy.localPos = glm::vec2(heavySign * 74.0f, 0.0f);   // off-COM mass
+                    heavy.radius = 0.42f; heavy.density = 4.0f; heavy.friction = 0.5f;
+                    heavy.localPos = glm::vec2(heavySign * 0.74f, 0.0f);   // off-COM mass
                     col.fixtures.push_back(heavy);
                 }
                 reg.AddComponent<Arcane::Collider2D>(e, col);
@@ -745,8 +711,8 @@ namespace Arcane::Sandbox
                 (void)tint;
             };
 
-            makeLopsided(glm::vec2(460.0f, 240.0f),  1.0f, kOrange);  // tips right
-            makeLopsided(glm::vec2(840.0f, 180.0f), -1.0f, kMagenta); // tips left
+            makeLopsided(glm::vec2(4.6f, 2.4f),  1.0f, kOrange);  // tips right
+            makeLopsided(glm::vec2(8.4f, 1.8f), -1.0f, kMagenta); // tips left
         }
 
         // =============================================================================
@@ -761,29 +727,29 @@ namespace Arcane::Sandbox
 
             // Bowl floor + two tall side walls (Aabb statics). LARGER SCALE (Item C):
             // a wide deep bowl so the mixed pile has room to interact.
-            MakeBox(reg, root, glm::vec2(640.0f, 820.0f), glm::vec2(560.0f, 36.0f),
+            MakeBox(reg, root, glm::vec2(6.4f, 8.2f), glm::vec2(5.6f, 0.36f),
                     Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(120.0f, 680.0f), glm::vec2(36.0f, 180.0f),
+            MakeBox(reg, root, glm::vec2(1.2f, 6.8f), glm::vec2(0.36f, 1.8f),
                     Physics::BodyType::Static, kStatic);
-            MakeBox(reg, root, glm::vec2(1160.0f, 680.0f), glm::vec2(36.0f, 180.0f),
+            MakeBox(reg, root, glm::vec2(11.6f, 6.8f), glm::vec2(0.36f, 1.8f),
                     Physics::BodyType::Static, kStatic);
 
-            // Path-A round bodies (bigger circles + capsules).
-            MakeCircle(reg, root, glm::vec2(520.0f, 140.0f), 44.0f,
+            // Path-A round bodies (circles + capsules, meter-scale variety).
+            MakeCircle(reg, root, glm::vec2(5.2f, 1.4f), 0.44f,
                        Physics::BodyType::Dynamic, kGold);
-            MakeCircle(reg, root, glm::vec2(760.0f, 90.0f),  36.0f,
+            MakeCircle(reg, root, glm::vec2(7.6f, 0.9f), 0.36f,
                        Physics::BodyType::Dynamic, kBlue);
-            MakeCapsule(reg, root, glm::vec2(600.0f, 260.0f), 56.0f, 28.0f,
+            MakeCapsule(reg, root, glm::vec2(6.0f, 2.6f), 0.56f, 0.28f,
                         Physics::BodyType::Dynamic, kTeal);
-            MakeCapsule(reg, root, glm::vec2(820.0f, 320.0f), 44.0f, 24.0f,
+            MakeCapsule(reg, root, glm::vec2(8.2f, 3.2f), 0.44f, 0.24f,
                         Physics::BodyType::Dynamic, kGreen);
 
             // Path-B polygons (a tilted box + a triangle) sharing the same world.
             if (Physics::PhysicsWorld* w = World(reg))
             {
-                WorldStaticBox(*w, glm::vec2(640.0f, 820.0f), glm::vec2(560.0f, 36.0f));
-                WorldPolygonBox(*w, glm::vec2(580.0f, 400.0f), glm::vec2(54.0f, 40.0f), 0.5f);
-                WorldTriangle(*w, glm::vec2(720.0f, 460.0f), 54.0f);
+                WorldStaticBox(*w, glm::vec2(6.4f, 8.2f), glm::vec2(5.6f, 0.36f));
+                WorldPolygonBox(*w, glm::vec2(5.8f, 4.0f), glm::vec2(0.54f, 0.40f), 0.5f);
+                WorldTriangle(*w, glm::vec2(7.2f, 4.6f), 0.54f);
             }
         }
 
@@ -797,20 +763,20 @@ namespace Arcane::Sandbox
         // for the simpler box/circle/capsule bodies. Both paths share the same world
         // and render through the canonical DrawPhysicsDebug outline overlay.
         //
-        // BOWL SHAPE (scaled ~1.8x from the original 320-body arena):
-        //   Center x = 640. Inner width ~1720 px (left inner x=-220, right inner x=1500).
+        // BOWL SHAPE (meters, /100 of the old px arena):
+        //   Center x = 6.4 m. Inner width ~17.2 m (left inner x=-2.2, right inner x=15.0).
         //   Two angled bottom-corner fillets (45-deg static boxes) slide bodies toward
         //   center so the single whisk reaches all contents.
         //
         // WHISK: ONE kinematic balloon-whisk body (kStressWhiskCount=1), center at
-        //   (640, 360), radius 560, omega 1.9 rad/s.
-        //   Tip speed = 1.9 * 560 = 1064 px/s; per step at 60 Hz = 1064/60 ~ 17.7 px.
-        //   Wire half-thickness kWireHalf=15 -> diameter 30 px > 17.7 px -- no tunnelling.
+        //   (6.4, 3.6) m, radius 5.6 m, omega 1.9 rad/s.
+        //   Tip speed = 1.9 * 5.6 = 10.64 m/s; per step at 60 Hz = 10.64/60 ~ 0.177 m.
+        //   Wire half-thickness kWireHalf=0.15 -> diameter 0.30 m > 0.177 m -- no tunnelling.
         //
         // STABILITY DESIGN:
         //   pitch = kMaxBodyHalf*2 + margin  => no deep initial overlap (no explosion)
-        //   whisk tip speed ~1064 px/s at 60 Hz => < wire diameter 30 px per step
-        //   low density (0.05-0.10) + low friction (0.3-0.4) => mass flows, churns
+        //   whisk tip speed ~10.64 m/s at 60 Hz => < wire diameter 0.30 m per step
+        //   low density (0.07-0.08) + low friction (0.35) => mass flows, churns
         //   seeded std::mt19937 => identical layout every build (deterministic tests)
         //
         // `bodyCount` is the number of procedural dynamic bodies. The registered
@@ -824,30 +790,30 @@ namespace Arcane::Sandbox
 
             // ---- tuning constants (anon-ns only; knobs exposed via Scenes.hpp) --------
             constexpr unsigned int kStressSeed  = 0xCAFEBABEu;  // seeded RNG
-            constexpr float kWhiskRadius        = 560.0f;        // balloon-whisk cage radius (~1.8x)
+            constexpr float kWhiskRadius        = 5.6f;          // balloon-whisk cage radius (m)
             constexpr float kWhiskOmega         = 1.9f;          // rad/s (CCW) -- hard churn
-            // ^ tip speed = omega*radius = 1.9*560 = 1064 px/s (~17.7 px/60Hz step), under
-            //   the wire diameter (2*kWireHalf=30) so the cage still cannot tunnel.
-            constexpr float kWhiskCenterX       = 640.0f;
-            constexpr float kWhiskCenterY       = 360.0f;        // upper-bowl, hangs into pile
+            // ^ tip speed = omega*radius = 1.9*5.6 = 10.64 m/s (~0.177 m/60Hz step), under
+            //   the wire diameter (2*kWireHalf=0.30) so the cage still cannot tunnel.
+            constexpr float kWhiskCenterX       = 6.4f;
+            constexpr float kWhiskCenterY       = 3.6f;          // upper-bowl, hangs into pile
 
-            // Body size range (half-extent / radius / etc.) -- UNCHANGED (bodies stay same size)
-            constexpr float kMinBodyHalf = 18.0f;
-            constexpr float kMaxBodyHalf = 32.0f;
+            // Body size range (half-extent / radius / etc.) in meters.
+            constexpr float kMinBodyHalf = 0.18f;
+            constexpr float kMaxBodyHalf = 0.32f;
 
             // Grid pitch: >= max diameter + margin so there is no deep initial overlap.
-            constexpr float kPitch = kMaxBodyHalf * 2.0f + 18.0f; // 82 px
+            constexpr float kPitch = kMaxBodyHalf * 2.0f + 0.18f; // 0.82 m
 
-            // Bowl arena bounds (~1.8x wider/taller than the original 960-px arena).
-            constexpr float kFloorY     = 880.0f;    // floor top surface y
-            constexpr float kFloorHalfW = 880.0f;    // covers inner half-width + wall overlap
-            constexpr float kFloorHalfH = 40.0f;
-            constexpr float kWallHalfW  = 50.0f;     // thick walls
-            constexpr float kWallHalfH  = 1000.0f;   // tall enough to hold 1000-body pile
-            constexpr float kArenaLeft  = -220.0f;   // inner left edge (x)  ~1.8x wider
-            constexpr float kArenaRight = 1500.0f;   // inner right edge (x)
-            constexpr float kArenaInnerW = kArenaRight - kArenaLeft;  // 1720 px
-            constexpr float kArenaCenterX = (kArenaLeft + kArenaRight) * 0.5f; // 640
+            // Bowl arena bounds (meters, /100 of the old px arena).
+            constexpr float kFloorY     = 8.8f;      // floor top surface y
+            constexpr float kFloorHalfW = 8.8f;      // covers inner half-width + wall overlap
+            constexpr float kFloorHalfH = 0.4f;
+            constexpr float kWallHalfW  = 0.5f;      // thick walls
+            constexpr float kWallHalfH  = 10.0f;     // tall enough to hold the pile
+            constexpr float kArenaLeft  = -2.2f;     // inner left edge (x)
+            constexpr float kArenaRight = 15.0f;     // inner right edge (x)
+            constexpr float kArenaInnerW = kArenaRight - kArenaLeft;  // 17.2 m
+            constexpr float kArenaCenterX = (kArenaLeft + kArenaRight) * 0.5f; // 6.4 m
 
             // Grid spawn parameters: cols span the bowl inner width.
             const int   kCols        = std::max(1, static_cast<int>(kArenaInnerW / kPitch));
@@ -869,13 +835,12 @@ namespace Arcane::Sandbox
                            glm::vec2(kWallHalfW, kWallHalfH));
 
             // Angled bottom-corner fillets (~45 degrees) to funnel bodies toward center.
-            // Each is a static rotated box: half-extents 250 x 36, pivoted 45 deg inward.
-            // Scaled ~1.8x from the original (140 x 22) to span the wider bowl corners.
+            // Each is a static rotated box: half-extents 2.5 x 0.36 m, pivoted 45 deg inward.
             // Verts are in BODY-LOCAL frame (relative to the body position) per the
             // MakePolygon convention (same as WorldPolygonBox above).
             {
-                constexpr float kFiltHalfL = 250.0f;  // half-length along the slope (~1.8x)
-                constexpr float kFiltHalfT = 36.0f;   // half-thickness (~1.8x)
+                constexpr float kFiltHalfL = 2.5f;   // half-length along the slope (m)
+                constexpr float kFiltHalfT = 0.36f;  // half-thickness (m)
                 constexpr float kFiltAngle = static_cast<float>(std::numbers::pi) * 0.25f; // 45 deg
 
                 // Helper: build one fillet body. `cx/cy` = body center (world). `angle` = rotation.
@@ -902,10 +867,10 @@ namespace Arcane::Sandbox
                     w->AddBody(fd);
                 };
 
-                // Bottom-left fillet: tilts up-right (+45 deg). Center ~ (kArenaLeft+144, kFloorY-144).
-                MakeFillet(kArenaLeft  + 144.0f, kFloorY - 144.0f,  kFiltAngle);
-                // Bottom-right fillet: tilts up-left (-45 deg). Center ~ (kArenaRight-144, kFloorY-144).
-                MakeFillet(kArenaRight - 144.0f, kFloorY - 144.0f, -kFiltAngle);
+                // Bottom-left fillet: tilts up-right (+45 deg). Center ~ (kArenaLeft+1.44, kFloorY-1.44).
+                MakeFillet(kArenaLeft  + 1.44f, kFloorY - 1.44f,  kFiltAngle);
+                // Bottom-right fillet: tilts up-left (-45 deg). Center ~ (kArenaRight-1.44, kFloorY-1.44).
+                MakeFillet(kArenaRight - 1.44f, kFloorY - 1.44f, -kFiltAngle);
             }
 
             // ---- whisk: ONE top-mounted kinematic balloon-whisk (kStressWhiskCount=1) --

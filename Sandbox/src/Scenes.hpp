@@ -12,12 +12,12 @@
 // kStressBodyCount - THE single knob: change this to scale the brutal CHURN/PERF
 //   scene (the registered scene 8, the Loom showcase). Procedurally fills a
 //   20-column grid, so the spawn column is ceil(N/20) rows tall -- at 10000 that
-//   is a ~41,000 px column whose TOP sits ~ -40,000 (far above the bowl).
+//   is a ~410 m column (0.82 m pitch) whose TOP sits ~ -404 m (far above the bowl).
 // kStressStabilityBodyCount - the count the *unit-test* stability check runs at.
 //   DECOUPLED from the perf knob on purpose: the SandboxVisualsTest "stays
-//   bounded" assertion uses a 1k-scale spatial bound (kYMin = -5000), and the
-//   spawn column must fit inside it. 1200 bodies = 60 rows -> top row y ~ -4040,
-//   comfortably inside -5000 (a body would have to gain real energy to escape),
+//   bounded" assertion uses a meter-scale spatial bound (kYMin = -50), and the
+//   spawn column must fit inside it. 1200 bodies = 60 rows -> top row y ~ -40.4 m,
+//   comfortably inside -50 (a body would have to gain real energy to escape),
 //   so this check stays a true instability tripwire while the perf scene keeps
 //   the full 10000. (See the geometry note in BuildStressTest.)
 // kStressWhiskCount - number of kinematic balloon-whisk agitators (always 1).
