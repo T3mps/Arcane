@@ -65,6 +65,9 @@ TEST_CASE("PhysicsDebug: capsule outline rotates with the body", "[render]")
     // (their endpoints differ in BOTH x and y); the pre-fix code drew them
     // axis-aligned horizontal (a.y == b.y) regardless of the body angle.
     REQUIRE(mock.lines.size() >= 2);
+    // The 1.0f tilt threshold is coupled to the /10 content scale: side-line
+    // |dy| ~ 4.24 at halfLen 3 / 45 deg, but a /100 re-divide would land it
+    // at ~0.42 and fail spuriously -- re-derive alongside any future rescale.
     bool anyTilted = false;
     for (const auto& l : mock.lines)
         if (std::abs(l.first.y - l.second.y) > 1.0f) anyTilted = true;

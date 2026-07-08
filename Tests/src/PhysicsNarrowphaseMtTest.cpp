@@ -389,7 +389,7 @@ TEST_CASE("Narrowphase span-path create MT == serial: state bit-identical",
     bool sawBoundedY = false;
     for (std::size_t i = 1; i < a.size(); i += 3u)
     {
-        REQUIRE(a[i] < kSpanFloorTop + Real(0.6)); // never sank through the span (/100 of the px slack)
+        REQUIRE(a[i] < kSpanFloorTop + Real(0.6)); // never sank through the span (generous bound, 3x the 0.2 m cell; verified empirically)
         sawBoundedY = true;
     }
     REQUIRE(sawBoundedY);

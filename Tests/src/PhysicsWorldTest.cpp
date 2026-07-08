@@ -16,7 +16,7 @@
 //
 // The expected values are the literals from the harness (coordinate-agnostic,
 // no Map/iso needed: the world is built with NO passability source and bodies
-// are placed at plain pixel coords). A std::vector<ContactEvent> capture
+// are placed at plain world coords, meters since MKS P4). A std::vector<ContactEvent> capture
 // listener records the event stream. The narrowphase / broadphase are the same
 // modules the Lua harness exercised, so the overlap decisions match.
 //

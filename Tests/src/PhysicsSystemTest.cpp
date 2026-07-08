@@ -309,9 +309,9 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     Arcane::RegisterPhysicsComponents(reg);
 
     // Physics world (no gravity needed; we only test fixture count + write-back).
-    // Zero-g is a deliberate scene statement now that the engine default is
-    // gravityY=+10; gravityX and the sleep/restitution/push/hash-grid knobs
-    // are left at the MKS engine defaults (see BuildScene above).
+    // BOTH gravity axes are explicitly zeroed as a deliberate scene statement
+    // (the engine default is gravityY=+10); the sleep/restitution/push/hash-grid
+    // knobs are left at the MKS engine defaults (see BuildScene above).
     Arcane::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
     wd.gravityX = 0.0f;
