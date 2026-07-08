@@ -51,11 +51,11 @@ namespace
     constexpr Real kStep = Real(1) / Real(60);
 
     // A thin static wall AABB at x = kWallX, spanning a tall band in y. "Thin"
-    // (half-width 1 -> 2 units wide) is what makes tunneling possible without
+    // (half-width 0.1 -> 0.2 m wide) is what makes tunneling possible without
     // CCD: a fast body's one-step displacement steps clean over it.
-    constexpr Real kWallX  = Real(100);
-    constexpr Real kWallHW = Real(1);   // half-width -> span x[99, 101]
-    constexpr Real kWallHH = Real(50);  // half-height -> span y[-50, 50]
+    constexpr Real kWallX  = Real(10);
+    constexpr Real kWallHW = Real(0.1);  // half-width -> span x[9.9, 10.1]
+    constexpr Real kWallHH = Real(5);    // half-height -> span y[-5, 5]
 
     // Add the thin static wall body.
     BodyHandle AddWall(PhysicsWorld& w)
@@ -68,14 +68,15 @@ namespace
     }
 
     // The moving body's circle radius (matches the harness's tiny CCD probe).
-    constexpr Real kProbeR = Real(2);
+    constexpr Real kProbeR = Real(0.2);
 
     // A fast mover: starts left of the wall, travels far PAST it in one step.
-    // Start x = 0; one-step displacement = kSpeed * kStep. With kSpeed chosen so
-    // the displacement (~200) clears the 2-wide wall by a wide margin.
-    // kSpeed is a velocity (~12000 u/s at 60Hz) chosen so the per-step
-    // displacement is 200 units (clears the 2-wide wall by a wide margin).
-    constexpr Real kSpeed = Real(200) / kStep;
+    // The one-step cases start at x = 6; one-step displacement = kSpeed * kStep.
+    // With kSpeed chosen so the displacement (5 m) clears the 0.2 m wall by a
+    // wide margin (6 + 5 = 11 > far face + r = 10.3).
+    // kSpeed is a velocity (300 m/s at 60Hz) chosen so the per-step displacement
+    // is 5 m (clears the 0.2 m wall by a wide margin).
+    constexpr Real kSpeed = Real(5) / kStep;
 
     // true if the body center is inside the wall span (i.e. it tunneled into/
     // through the wall) rather than stopping at the wall surface.
@@ -84,11 +85,11 @@ namespace
         const Shape* s = w.GetShape(h);
         const Vec2 p = w.Position(h);
         const Aabb box = s->ComputeAABB(Transform{ p, Real(0) });
-        // The wall span x[99,101], y[-50,50]. The probe overlaps it badly iff its
-        // AABB center is inside the wall span by more than 0.5 on the x axis.
+        // The wall span x[9.9,10.1], y[-5,5]. The probe overlaps it badly iff its
+        // AABB center is inside the wall span by more than 0.05 on the x axis.
         const Real cx = (box.min.x + box.max.x) * Real(0.5);
-        return cx > kWallX - kWallHW + Real(0.5) &&
-               cx < kWallX + kWallHW - Real(0.5);
+        return cx > kWallX - kWallHW + Real(0.05) &&
+               cx < kWallX + kWallHW - Real(0.05);
     }
 }
 
@@ -100,30 +101,26 @@ TEST_CASE("PhysicsCcd: a fast dynamic body does not tunnel a thin static wall "
           "(speculative)", "[physics][ccd]")
 {
     WorldDef wd; // gravity 0 -- the body moves purely on its set velocity
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX               = Real(0);
+    wd.gravityY               = Real(0);
     PhysicsWorld w(wd);
     AddWall(w);
 
     BodyDef bd;
     bd.type     = BodyType::Dynamic;
-    bd.position = Vec2(Real(0), Real(0));
+    bd.position = Vec2(Real(6), Real(0));
     bd.shape    = MakeCircle(kProbeR);
     bd.density  = Real(1);
     BodyHandle body = w.AddBody(bd);
 
-    // Fire it straight at the wall fast enough to clear the 2-wide wall in one
-    // step's worth of plain integration (displacement ~200, wall ~2 wide).
+    // Fire it straight at the wall fast enough to clear the 0.2 m wall in one
+    // step's worth of plain integration (displacement 5 m, wall 0.2 m wide).
     w.SetVelocity(body, Vec2(kSpeed, Real(0)));
     w.Step(kStep);
 
     const Vec2 p = w.Position(body);
     // The speculative margin + solver bias must keep the body on the NEAR side
-    // of the wall (it did not pass through to x ~ 200).
+    // of the wall (it did not pass through to x ~ 11).
     REQUIRE(p.x < kWallX);
     // And it is not buried in the wall span (stopped at the surface, not inside).
     REQUIRE_FALSE(CenterInsideWall(w, body));
@@ -139,18 +136,14 @@ TEST_CASE("PhysicsCcd: an unflagged kinematic fast body tunnels a thin wall "
           "(expected baseline)", "[physics][ccd]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX               = Real(0);
+    wd.gravityY               = Real(0);
     PhysicsWorld w(wd); // no gravity needed
     AddWall(w);
 
     BodyDef bd;
     bd.type     = BodyType::Kinematic;
-    bd.position = Vec2(Real(0), Real(0));
+    bd.position = Vec2(Real(6), Real(0));
     bd.shape    = MakeCircle(kProbeR);
     bd.bullet   = false; // UNFLAGGED -> no CCD
     BodyHandle body = w.AddBody(bd);
@@ -159,9 +152,10 @@ TEST_CASE("PhysicsCcd: an unflagged kinematic fast body tunnels a thin wall "
     w.Step(kStep);
 
     const Vec2 p = w.Position(body);
-    // Plain integration: the body lands at its full one-step displacement (~200),
-    // having passed THROUGH the wall (this is the documented baseline behavior).
-    REQUIRE(p.x == Approx(Real(200)).margin(Real(0.01)));
+    // Plain integration: the body lands at its full one-step displacement
+    // (startX 6 + kSpeed*kStep 5 = 11), having passed THROUGH the wall
+    // (this is the documented baseline behavior).
+    REQUIRE(p.x == Approx(Real(11)).margin(Real(0.01)));
     REQUIRE(p.x > kWallX); // beyond the wall
 }
 
@@ -174,18 +168,14 @@ TEST_CASE("PhysicsCcd: a bullet kinematic body clamps to TOI against a thin wall
           "[physics][ccd]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX               = Real(0);
+    wd.gravityY               = Real(0);
     PhysicsWorld w(wd);
     AddWall(w);
 
     BodyDef bd;
     bd.type     = BodyType::Kinematic;
-    bd.position = Vec2(Real(0), Real(0));
+    bd.position = Vec2(Real(6), Real(0));
     bd.shape    = MakeCircle(kProbeR);
     bd.bullet   = true; // FLAGGED -> CCD bullet clamp
     BodyHandle body = w.AddBody(bd);
@@ -194,10 +184,10 @@ TEST_CASE("PhysicsCcd: a bullet kinematic body clamps to TOI against a thin wall
     w.Step(kStep);
 
     const Vec2 p = w.Position(body);
-    // Stops WELL before the destination (~200): clamped to TOI at the wall's near
-    // face (x=99) minus the probe radius (~97).
+    // Stops WELL before the destination (~11): clamped to TOI at the wall's near
+    // face (x=9.9) minus the probe radius (~9.7).
     REQUIRE(p.x < kWallX);                 // before the wall
-    REQUIRE(p.x == Approx(kWallX - kWallHW - kProbeR).margin(Real(0.5)));
+    REQUIRE(p.x == Approx(kWallX - kWallHW - kProbeR).margin(Real(0.05)));
     // And it is not buried in the wall span.
     REQUIRE_FALSE(CenterInsideWall(w, body));
 }
@@ -210,17 +200,14 @@ TEST_CASE("PhysicsCcd: a bullet dynamic body does not tunnel a thin wall",
           "[physics][ccd]")
 {
     WorldDef wd; // gravity 0
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX               = Real(0);
+    wd.gravityY               = Real(0);   // ERRATA E1: gravityY pin was absent since P1 (13cb2cf1) -- restored so case 4 is genuine zero-g
     PhysicsWorld w(wd);
     AddWall(w);
 
     BodyDef bd;
     bd.type     = BodyType::Dynamic;
-    bd.position = Vec2(Real(0), Real(0));
+    bd.position = Vec2(Real(6), Real(0));
     bd.shape    = MakeCircle(kProbeR);
     bd.density  = Real(1);
     bd.bullet   = true; // both speculative + the TOI backup apply
@@ -248,18 +235,14 @@ TEST_CASE("PhysicsCcd: a CCD scene is deterministic (run twice -> identical)",
     auto run = [](std::vector<Vec2>& out)
     {
         WorldDef wd;
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        wd.gravityX               = Real(0);
+        wd.gravityY               = Real(0);
         PhysicsWorld w(wd);
         AddWall(w);
 
         BodyDef kb;
         kb.type     = BodyType::Kinematic;
-        kb.position = Vec2(Real(0), Real(-10));
+        kb.position = Vec2(Real(0), Real(-1));
         kb.shape    = MakeCircle(kProbeR);
         kb.bullet   = true;
         BodyHandle kbh = w.AddBody(kb);
@@ -273,7 +256,7 @@ TEST_CASE("PhysicsCcd: a CCD scene is deterministic (run twice -> identical)",
 
         BodyDef db;
         db.type     = BodyType::Dynamic;
-        db.position = Vec2(Real(0), Real(10));
+        db.position = Vec2(Real(0), Real(1));
         db.shape    = MakeCircle(kProbeR);
         db.density  = Real(1);
         db.bullet   = true;
