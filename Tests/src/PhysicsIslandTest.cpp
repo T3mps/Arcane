@@ -50,7 +50,7 @@ namespace
         return w.AddBody(def);
     }
 
-    BodyHandle AddCircle(PhysicsWorld& w, Vec2 pos, Real r = Real(10),
+    BodyHandle AddCircle(PhysicsWorld& w, Vec2 pos, Real r = Real(1.0),
                          Real friction = Real(0.4))
     {
         BodyDef def;
@@ -84,18 +84,12 @@ namespace
 
 TEST_CASE("PhysicsIsland: resting body sleeps then stays frozen", "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400); // +Y down
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
     // Floor top at y = 0.
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    BodyHandle ball = AddCircle(w, Vec2(Real(0), Real(-50)));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    BodyHandle ball = AddCircle(w, Vec2(Real(0), Real(-5)));
 
     // The ball drops, settles, and the island pass sleeps it once it has been
     // idle for > 0.5s. 400 steps is plenty (matches the harness loop count).
@@ -124,17 +118,11 @@ TEST_CASE("PhysicsIsland: resting body sleeps then stays frozen", "[physics][isl
 
 TEST_CASE("PhysicsIsland: impulse wakes a sleeping body", "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    BodyHandle ball = AddCircle(w, Vec2(Real(0), Real(-50)));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    BodyHandle ball = AddCircle(w, Vec2(Real(0), Real(-5)));
 
     for (int k = 0; k < 400; ++k)
     {
@@ -145,7 +133,12 @@ TEST_CASE("PhysicsIsland: impulse wakes a sleeping body", "[physics][island]")
     const Real y0 = w.Position(ball).y;
 
     // Kick the ball upward (-Y). ApplyImpulse must wake it (P2.1 wake-on-force).
-    w.ApplyImpulse(ball, Vec2(Real(0), Real(-6000)));
+    // Authored as mass x delta-v (rule 3): circle mass = density*kPi*r*r =
+    // 1*kPi*1.0*1.0 (density 1, r = 1.0 m); targetDv = -20 m/s (well above
+    // sleepThreshold 0.05, well under the 400 m/s cap).
+    const Real ballMass = Real(1) * kPi * Real(1.0) * Real(1.0);
+    const Real targetDv = Real(-20);
+    w.ApplyImpulse(ball, Vec2(Real(0), ballMass * targetDv));
     REQUIRE(w.IsAwake(ball)); // impulse wakes the body
 
     w.Step(kStep);
@@ -158,25 +151,19 @@ TEST_CASE("PhysicsIsland: impulse wakes a sleeping body", "[physics][island]")
 
 TEST_CASE("PhysicsIsland: new contact wakes a sleeping body", "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(40), Real(0.5));
 
     // A dynamic ball that will settle + sleep on the floor.
-    const Real r = Real(10);
-    BodyHandle sleeper = AddCircle(w, Vec2(Real(0), Real(-50)));
+    const Real r = Real(1.0);
+    BodyHandle sleeper = AddCircle(w, Vec2(Real(0), Real(-5)));
 
     // A kinematic mover (statics/kinematics never sleep) parked off to the side.
     BodyDef mover;
     mover.type     = BodyType::Kinematic;
-    mover.position = Vec2(Real(-80), Real(-10));
+    mover.position = Vec2(Real(-8), Real(-1));
     mover.shape    = MakeCircle(r);
     BodyHandle pusher = w.AddBody(mover);
 
@@ -188,7 +175,8 @@ TEST_CASE("PhysicsIsland: new contact wakes a sleeping body", "[physics][island]
 
     // Drive the pusher rightward into the sleeping ball. The wake-on-contact
     // path in GenerateContacts must wake the sleeper once they AABB-overlap.
-    w.SetVelocity(pusher, Vec2(Real(120), Real(0)));
+    // 6 m gap at 12 m/s = 0.5 s = 30 steps, inside the 120-step wake window.
+    w.SetVelocity(pusher, Vec2(Real(12), Real(0)));
     bool woke = false;
     for (int k = 0; k < 120; ++k)
     {
@@ -208,24 +196,19 @@ TEST_CASE("PhysicsIsland: new contact wakes a sleeping body", "[physics][island]
 
 TEST_CASE("PhysicsIsland: stack sleeps as a unit, disturbance wakes a member", "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
 
     // A small stack of boxes -> one island (each box contacts the one below).
-    const Real hw = Real(4), hh = Real(4);
+    const Real hw = Real(0.4), hh = Real(0.4);
     const int N = 3;
     std::vector<BodyHandle> boxes;
     for (int i = 0; i < N; ++i)
     {
-        const Real y = -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1);
+        // gap = 2*kLinearSlop (0.005) -- a small seating overlap, not a scale division.
+        const Real y = -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1);
         boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
     }
 
@@ -264,7 +247,12 @@ TEST_CASE("PhysicsIsland: stack sleeps as a unit, disturbance wakes a member", "
     // immediate and strictly stronger. After this the top box separates and the
     // undisturbed neighbors correctly re-settle + re-sleep as a sub-island --
     // so the wake is asserted at the moment of disturbance, not after a delay.)
-    w.ApplyImpulse(boxes[N - 1], Vec2(Real(0), Real(-8000)));
+    // Authored as mass x delta-v (rule 3): box mass = density*4*hw*hh =
+    // 1*4*0.4*0.4 = 0.64 kg; targetDv = -20 m/s (well above sleepThreshold
+    // 0.05, well under the 400 m/s cap) is clearly enough to force a wake.
+    const Real boxMass = Real(1) * Real(4) * hw * hh;
+    const Real targetDv = Real(-20);
+    w.ApplyImpulse(boxes[N - 1], Vec2(Real(0), boxMass * targetDv));
     REQUIRE(w.IsAwake(boxes[N - 1]));
     for (int i = 0; i < N - 1; ++i)
     {
@@ -291,37 +279,31 @@ TEST_CASE("PhysicsIsland: stack sleeps as a unit, disturbance wakes a member", "
 TEST_CASE("PhysicsIsland: IslandRootOf returns the same root for all members of one island",
           "[physics][island]")
 {
-    WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
 
     // Floor: top surface at y = 0.
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
 
-    // A 4-box vertical stack. The boxes start slightly overlapping (0.5 gap)
+    // A 4-box vertical stack. The boxes start slightly overlapping (small gap)
     // so dynamic-dynamic contacts form on the VERY FIRST step without having
     // to fall and settle first. This guarantees the UF has the 4-body chain
-    // (b0↔b1, b1↔b2, b2↔b3 unioned) on each step while all are awake.
+    // (b0<->b1, b1<->b2, b2<->b3 unioned) on each step while all are awake.
     // fixedRotation keeps them axis-aligned (same as AddBox helper).
-    const Real hw = Real(5), hh = Real(5);
-    // Place boxes 1 unit apart (so they just touch; diameter = 2*hh = 10).
+    const Real hw = Real(0.5), hh = Real(0.5);
+    // Place boxes 1 unit apart (so they just touch; diameter = 2*hh = 1).
     // top of box i = center_i - hh; bottom = center_i + hh.
     // Box0 bottom rests on floor (y=0), so box0 center = 0 - hh = -hh.
-    // Box1 rests on box0: center1 = center0 - 2*hh - 0.5 gap.
+    // Box1 rests on box0: center1 = center0 - 2*hh - gap.
     // (With gravity +Y, "above" means smaller y. Lower y = higher in scene.)
-    const Real gap = Real(0.5); // small gap so they contact quickly
+    const Real gap = Real(0.02); // = kSkin -- small gap so they contact quickly
     const BodyHandle hBox0 = AddBox(w, Vec2(Real(0), -hh),                             hw, hh);
     const BodyHandle hBox1 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)),        hw, hh);
     const BodyHandle hBox2 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)*Real(2)), hw, hh);
     const BodyHandle hBox3 = AddBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)*Real(3)), hw, hh);
 
     // One isolated dynamic body far away (its own island, never contacts the stack).
-    const BodyHandle hFar = AddBox(w, Vec2(Real(500), -hh), hw, hh);
+    const BodyHandle hFar = AddBox(w, Vec2(Real(50), -hh), hw, hh);
 
     // Step just enough for all four boxes to fall, contact each other, and form
     // an island -- but NOT so many steps that they all fall asleep (the bug is
@@ -337,7 +319,7 @@ TEST_CASE("PhysicsIsland: IslandRootOf returns the same root for all members of 
     REQUIRE(w.IsAwake(hBox3));
 
     // All four stack members must share the SAME island root.
-    // With the old one-hop `m_uf[i]` the chain b0→b1→b2→b3, after path-
+    // With the old one-hop `m_uf[i]` the chain b0->b1->b2->b3, after path-
     // halving makes b0 point to b2 (not root b3), IslandRootOf returns
     // b2 for b0/b1 and b3 for b2/b3 -- different roots for members of the
     // same island. The root-walk fix makes all four equal.
@@ -361,22 +343,17 @@ TEST_CASE("PhysicsIsland: IslandRootOf returns the same root for all members of 
 TEST_CASE("PhysicsIsland: settle + sleep is deterministic across two runs", "[physics][island]")
 {
     auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
-        WorldDef wd;
-        wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
         PhysicsWorld w(wd);
 
-        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-        const Real hw = Real(4), hh = Real(4);
+        AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+        const Real hw = Real(0.4), hh = Real(0.4);
         const int N = 3;
         std::vector<BodyHandle> boxes;
         for (int i = 0; i < N; ++i)
         {
-            const Real y = -(Real(2) * hh + Real(0.1)) * static_cast<Real>(i + 1);
+            // gap = 2*kLinearSlop (0.005) -- a small seating overlap, not a scale division.
+            const Real y = -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1);
             boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
         }
         for (int k = 0; k < 700; ++k)
