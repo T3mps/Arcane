@@ -50,25 +50,19 @@ namespace
 TEST_CASE("Per-fixture broadphase pairs == brute-force (compound scene)", "[physics][fxbroadphase]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, Real hw, Real hh, BodyType t) {
         BodyDef d; d.type = t; d.position = Vec2(x, y); d.fixedRotation = true;
         d.shape = MakeAabb(hw, hh); return w.AddBody(d);
     };
-    BodyHandle c = addBox(0, 0, 10, 10, BodyType::Dynamic);
-    FixtureDef f; f.shape = MakeAabb(Real(10), Real(10));
-    f.localPos = Vec2(40, 0);  w.AddFixture(c, f);
-    f.localPos = Vec2(80, 0);  w.AddFixture(c, f);
-    addBox(35,  0, 12, 12, BodyType::Dynamic);
-    addBox(82,  0, 12, 12, BodyType::Dynamic);
-    addBox(400, 0, 12, 12, BodyType::Dynamic);
-    addBox(40, -3, 14, 14, BodyType::Static);   // static fixtures excluded from the tree
+    BodyHandle c = addBox(0, 0, Real(1), Real(1), BodyType::Dynamic);
+    FixtureDef f; f.shape = MakeAabb(Real(1), Real(1));
+    f.localPos = Vec2(Real(4), Real(0));  w.AddFixture(c, f);
+    f.localPos = Vec2(Real(8), Real(0));  w.AddFixture(c, f);
+    addBox(Real(3.5),  0, Real(1.2), Real(1.2), BodyType::Dynamic);
+    addBox(Real(8.2),  0, Real(1.2), Real(1.2), BodyType::Dynamic);
+    addBox(Real(40),   0, Real(1.2), Real(1.2), BodyType::Dynamic);
+    addBox(Real(4), Real(-0.3), Real(1.4), Real(1.4), BodyType::Static);   // static fixtures excluded from the tree
 
     w.Step(Real(1) / Real(60));
 
@@ -81,7 +75,7 @@ TEST_CASE("Per-fixture broadphase pairs == brute-force (compound scene)", "[phys
 // ----------------------------------------------------------------
 // Lifecycle case 1: DropFixture removes the proxy
 // ----------------------------------------------------------------
-// Build a 3-fixture compound body c (fixtures at x=0, x=40, x=80)
+// Build a 3-fixture compound body c (fixtures at x=0, x=4, x=8)
 // with a neighbor that overlaps the 2nd and 3rd fixtures.  After an
 // initial Step + oracle check, drop the 2nd fixture and verify:
 //   (a) LiveFixtureAabbs count drops by exactly 1 (immediately, before Step), and
@@ -89,12 +83,6 @@ TEST_CASE("Per-fixture broadphase pairs == brute-force (compound scene)", "[phys
 TEST_CASE("DropFixture removes proxy from fixture broadphase", "[physics][fxbroadphase]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, Real hw, Real hh, BodyType t) {
         BodyDef d; d.type = t; d.position = Vec2(x, y); d.fixedRotation = true;
@@ -102,13 +90,13 @@ TEST_CASE("DropFixture removes proxy from fixture broadphase", "[physics][fxbroa
     };
 
     // Compound body: primary fixture at origin, plus two extra fixtures.
-    BodyHandle c = addBox(0, 0, 10, 10, BodyType::Dynamic);
-    FixtureDef f; f.shape = MakeAabb(Real(10), Real(10));
-    f.localPos = Vec2(40, 0); FixtureHandle fx2 = w.AddFixture(c, f); // 2nd fixture
-    f.localPos = Vec2(80, 0);               w.AddFixture(c, f);       // 3rd fixture
+    BodyHandle c = addBox(0, 0, Real(1), Real(1), BodyType::Dynamic);
+    FixtureDef f; f.shape = MakeAabb(Real(1), Real(1));
+    f.localPos = Vec2(Real(4), Real(0)); FixtureHandle fx2 = w.AddFixture(c, f); // 2nd fixture
+    f.localPos = Vec2(Real(8), Real(0));              w.AddFixture(c, f);       // 3rd fixture
 
-    // Neighbor overlapping the 2nd fixture (at x=40) and the 3rd (at x=80).
-    addBox(45, 0, 12, 12, BodyType::Dynamic);
+    // Neighbor overlapping the 2nd fixture (at x=4) and the 3rd (at x=8).
+    addBox(Real(4.5), 0, Real(1.2), Real(1.2), BodyType::Dynamic);
 
     w.Step(Real(1) / Real(60));
 
@@ -150,12 +138,6 @@ TEST_CASE("DropFixture removes proxy from fixture broadphase", "[physics][fxbroa
 TEST_CASE("RemoveBody removes all fixture proxies from broadphase", "[physics][fxbroadphase]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, Real hw, Real hh, BodyType t) {
         BodyDef d; d.type = t; d.position = Vec2(x, y); d.fixedRotation = true;
@@ -163,10 +145,10 @@ TEST_CASE("RemoveBody removes all fixture proxies from broadphase", "[physics][f
     };
 
     // Two overlapping dynamic bodies.
-    BodyHandle a = addBox(  0, 0, 15, 15, BodyType::Dynamic);
-    BodyHandle b = addBox( 20, 0, 15, 15, BodyType::Dynamic);
+    BodyHandle a = addBox(Real(0), 0, Real(1.5), Real(1.5), BodyType::Dynamic);
+    BodyHandle b = addBox(Real(2), 0, Real(1.5), Real(1.5), BodyType::Dynamic);
     // A third body far away so the pair set stays non-trivial.
-    addBox(200, 0, 15, 15, BodyType::Dynamic);
+    addBox(Real(20), 0, Real(1.5), Real(1.5), BodyType::Dynamic);
 
     w.Step(Real(1) / Real(60));
 
@@ -197,18 +179,14 @@ TEST_CASE("RemoveBody removes all fixture proxies from broadphase", "[physics][f
 // away (SetPosition).  After a Step the pair must be gone and
 // Pairs()==brute must still hold.
 //
-// Gravity default is (0,0) per WorldDef, so a body with zero velocity
-// stays put without an external gravity pull.  SetPosition is the
+// WorldDef gravityY now defaults to MKS 10 (free fall, no floor); the two
+// steps here only accumulate ~0.5*10*(1/60)^2 ~ 0.0014 m of drift, dwarfed
+// by the box separations below, so both assertions (oracle equality and the
+// overlap/empty relation) hold regardless of gravity.  SetPosition is the
 // deterministic teleport that also snaps prev, avoiding lerp smear.
 TEST_CASE("Fixture broadphase pair removed after bodies separate (move)", "[physics][fxbroadphase]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, Real hw, Real hh, BodyType t) {
         BodyDef d; d.type = t; d.position = Vec2(x, y); d.fixedRotation = true;
@@ -216,8 +194,8 @@ TEST_CASE("Fixture broadphase pair removed after bodies separate (move)", "[phys
     };
 
     // Two overlapping bodies.
-    BodyHandle a = addBox(  0, 0, 20, 20, BodyType::Dynamic);
-    BodyHandle b = addBox( 10, 0, 20, 20, BodyType::Dynamic);
+    BodyHandle a = addBox(Real(0), 0, Real(2), Real(2), BodyType::Dynamic);
+    BodyHandle b = addBox(Real(1), 0, Real(2), Real(2), BodyType::Dynamic);
 
     w.Step(Real(1) / Real(60));
 
@@ -226,7 +204,7 @@ TEST_CASE("Fixture broadphase pair removed after bodies separate (move)", "[phys
     REQUIRE(!FxBpPairs(w).empty());
 
     // Teleport body B far away so its fixture no longer overlaps A's.
-    w.SetPosition(b, Vec2(Real(1000), Real(0)));
+    w.SetPosition(b, Vec2(Real(100), Real(0)));
 
     w.Step(Real(1) / Real(60));
 
@@ -245,10 +223,16 @@ TEST_CASE("Fixture broadphase pair removed after bodies separate (move)", "[phys
 TEST_CASE("DynamicTree incremental pairs == full == brute-force", "[physics][fxbroadphase][movebuffer]")
 {
     std::mt19937 rng(0xBADC0DE);
-    std::uniform_real_distribution<float> pos(-300.f, 300.f), ext(4.f, 40.f);
+    std::uniform_real_distribution<float> pos(-30.f, 30.f), ext(0.4f, 4.0f);
     // re-baselined: kMargin 8->0.05 (MKS P1.iii) -- nudges must stay within the
     // fat margin to keep exercising the no-reinsert tight-membership path (the
     // declared riskiest case); +/-3 would now always force a reinsert.
+    // NOTE (MKS P4): nudge is intentionally NOT re-divided alongside pos/ext
+    // above -- it was already re-tuned in P1.iii against the engine's fixed
+    // DynamicTree::kMargin=0.05 and must stay at that scale. Its ratio to the
+    // now-smaller ext range (0.02 against a 0.4-4.0 box, vs. the old 0.02
+    // against a 4-40 box) is now proportionally LARGER -- a more rigorous
+    // small-move perturbation, not a weaker one.
     std::uniform_real_distribution<float> nudge(-0.02f, 0.02f); // within fat margin (kMargin=0.05)
     DynamicTree tree;
     std::vector<std::pair<std::uint32_t, Aabb2>> live;
@@ -296,53 +280,47 @@ TEST_CASE("DynamicTree incremental pairs == full == brute-force", "[physics][fxb
 // ----------------------------------------------------------------
 // Fix 1 regression: SetAngle immediately refreshes mover proxies
 // ----------------------------------------------------------------
-// A KINEMATIC body carries a long thin box (half-extents 40 x 4) at the
-// origin.  At angle 0 it spans x in [-40,40], y in [-4,4].  A second
-// kinematic neighbor box sits at (0, 30) with half-extents 8x8
-// (spans y in [22,38]) -- clearly disjoint from the thin box at angle 0.
+// A KINEMATIC body carries a long thin box (half-extents 4 x 0.4) at the
+// origin.  At angle 0 it spans x in [-4,4], y in [-0.4,0.4].  A second
+// kinematic neighbor box sits at (0, 3) with half-extents 0.8x0.8
+// (spans y in [2.2,3.8]) -- clearly disjoint from the thin box at angle 0.
 //
 // After one Step both proxies are registered.  We assert NO pair exists
 // at angle 0, then call SetAngle(thin, pi/2) WITHOUT a Step.  Rotated
-// 90 deg, the thin box's AABB becomes x in [-4,4], y in [-40,40]
-// (swapped extents), which DOES overlap the neighbor at y=30.  Fix 1
+// 90 deg, the thin box's AABB becomes x in [-0.4,0.4], y in [-4,4]
+// (swapped extents), which DOES overlap the neighbor at y=3.  Fix 1
 // ensures SetAngle refreshes the proxy immediately; the pair must appear
 // in FixtureBroadphase().Pairs() before any Step.
 TEST_CASE("SetAngle immediately refreshes mover fixture proxies (no Step)", "[physics][fxbroadphase]")
 {
-    WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // both bodies are Kinematic, so gravity is moot regardless
     PhysicsWorld w(wd);
 
-    // Thin long box: half-extents 40 x 4, kinematic so it can rotate.
+    // Thin long box: half-extents 4 x 0.4, kinematic so it can rotate.
     BodyDef defThin;
     defThin.type     = BodyType::Kinematic;
     defThin.position = Vec2(Real(0), Real(0));
-    defThin.shape    = MakeAabb(Real(40), Real(4)); // half-extents 40 x 4
+    defThin.shape    = MakeAabb(Real(4), Real(0.4)); // half-extents 4 x 0.4
     BodyHandle thin = w.AddBody(defThin);
 
-    // Neighbor box at (0, 30): half-extents 8 x 8, kinematic (must be a
+    // Neighbor box at (0, 3): half-extents 0.8 x 0.8, kinematic (must be a
     // mover for its fixture to live in the per-fixture broadphase tree).
     BodyDef defNeigh;
     defNeigh.type     = BodyType::Kinematic;
-    defNeigh.position = Vec2(Real(0), Real(30));
-    defNeigh.shape    = MakeAabb(Real(8), Real(8)); // spans y in [22, 38]
+    defNeigh.position = Vec2(Real(0), Real(3));
+    defNeigh.shape    = MakeAabb(Real(0.8), Real(0.8)); // spans y in [2.2, 3.8]
     w.AddBody(defNeigh);
 
     // One Step registers both proxies in the fixture broadphase.
     w.Step(Real(1) / Real(60));
 
-    // At angle 0: thin spans y in [-4,4]; neighbor spans y in [22,38].
+    // At angle 0: thin spans y in [-0.4,0.4]; neighbor spans y in [2.2,3.8].
     // They must NOT overlap -- no pair.
     const auto pairsBefore = FxBpPairs(w);
     REQUIRE(pairsBefore.empty());
 
     // Rotate the thin box 90 degrees WITHOUT stepping.
-    // Its AABB becomes y in [-40, 40], which covers the neighbor's y in [22,38].
+    // Its AABB becomes y in [-4, 4], which covers the neighbor's y in [2.2,3.8].
     w.SetAngle(thin, kPi / Real(2));
 
     // The fixture broadphase must immediately reflect the rotated AABB.

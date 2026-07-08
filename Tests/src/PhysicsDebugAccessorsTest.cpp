@@ -22,13 +22,12 @@ using namespace Arcane::Physics;
 
 TEST_CASE("Debug accessors enumerate broadphase + contacts", "[physics][debugviz]")
 {
+    // WorldDef gravityY now defaults to MKS 10; this scene keeps the default
+    // (no override needed) -- one Step's worth of drift (~0.0014 m) is far
+    // below the 0.1 m gap/overlap scale below, and every assertion here is
+    // a structural/relational check (leaf counts, fat-encloses-tight,
+    // contact-count agreement), not a position target.
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     auto addBox = [&](Real x, Real y, BodyType t)
     {
@@ -36,11 +35,11 @@ TEST_CASE("Debug accessors enumerate broadphase + contacts", "[physics][debugviz
         d.type          = t;
         d.position      = Vec2(x, y);
         d.fixedRotation = true;
-        d.shape         = MakeAabb(Real(10), Real(10));
+        d.shape         = MakeAabb(Real(1), Real(1));
         return w.AddBody(d);
     };
-    addBox(0, 100, BodyType::Static);  // a static -> static grid
-    addBox(0, 79, BodyType::Dynamic);  // overlaps the static -> a contact
+    addBox(0, Real(10),  BodyType::Static);  // a static -> static grid
+    addBox(0, Real(7.9), BodyType::Dynamic); // overlaps the static -> a contact
     w.Step(Real(1) / Real(60));
 
     // (a) ForEachLeaf yields live mover fixtures, tight inside fat.
@@ -95,17 +94,14 @@ TEST_CASE("Debug accessors enumerate broadphase + contacts", "[physics][debugviz
 // trace tags SatPolygon and records >= 1 candidate axis.
 TEST_CASE("DebugCollide reproduces the manifold + records a trace", "[physics][debugviz]")
 {
+    // WorldDef gravityY now defaults to MKS 10 (kept, no override needed):
+    // gravity moves both dynamics down together and never touches the
+    // x-axis, so the x-overlap this test depends on is unaffected.
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
-    BodyDef d; d.type=BodyType::Dynamic; d.fixedRotation=true; d.shape=MakeAabb(Real(10),Real(10));
-    d.position=Vec2(0,0);  BodyHandle a = w.AddBody(d);
-    d.position=Vec2(15,0); BodyHandle b = w.AddBody(d); // overlapping boxes -> SAT/EPA
+    BodyDef d; d.type=BodyType::Dynamic; d.fixedRotation=true; d.shape=MakeAabb(Real(1),Real(1));
+    d.position=Vec2(0,0);        BodyHandle a = w.AddBody(d);
+    d.position=Vec2(Real(1.5),0); BodyHandle b = w.AddBody(d); // overlapping boxes -> SAT/EPA
     w.Step(Real(1)/Real(60));
 
     // The primary (back-compat) fixture slot of each body (fixture[0]).

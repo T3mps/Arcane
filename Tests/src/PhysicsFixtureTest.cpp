@@ -5,41 +5,42 @@
 // Tolerance 1e-4 for world-transform geometry.
 //
 // Gate cases:
-//   (a) Compound mass / COM / inertia: body with fixture0 = MakeCircle(5) at
-//       localPos (0,0) + fixture1 = MakeCircle(3) at localPos (12,0),
-//       density=1 for both. Hand derivation:
+//   (a) Compound mass / COM / inertia: body with fixture0 = MakeCircle(0.5) at
+//       localPos (0,0) + fixture1 = MakeCircle(0.3) at localPos (1.2,0),
+//       density=1 for both. Hand derivation (MKS P4: re-derived at /10 scale,
+//       not a mechanical /100 of the old px-era numbers -- shown in full):
 //
-//         Circle0: r=5 -> area=pi*25 ~ 78.5398
-//              mass0 ~ 78.5398
+//         Circle0: r=0.5 -> area=pi*0.25 ~ 0.785398
+//              mass0 ~ 0.785398
 //              centroid0_body = (0,0) [shape centroid at origin + localPos (0,0)]
-//              I0_centroid = 0.5*m0*r^2 = 0.5*78.5398*25 ~ 981.748
+//              I0_centroid = 0.5*m0*r^2 = 0.5*0.785398*0.25 ~ 0.098175
 //
-//         Circle1: r=3 -> area=pi*9 ~ 28.2743
-//              mass1 ~ 28.2743
-//              centroid1_body = (12,0) [shape centroid at origin + localPos (12,0)]
-//              I1_centroid = 0.5*m1*r^2 = 0.5*28.2743*9 ~ 127.234
+//         Circle1: r=0.3 -> area=pi*0.09 ~ 0.282743
+//              mass1 ~ 0.282743
+//              centroid1_body = (1.2,0) [shape centroid at origin + localPos (1.2,0)]
+//              I1_centroid = 0.5*m1*r^2 = 0.5*0.282743*0.09 ~ 0.012723
 //
-//         Total mass = 78.5398 + 28.2743 = 106.814
+//         Total mass = 0.785398 + 0.282743 = 1.068142
 //
-//         COM_x = (78.5398*0 + 28.2743*12) / 106.814 = 339.292 / 106.814 ~ 3.176
+//         COM_x = (0.785398*0 + 0.282743*1.2) / 1.068142 = 0.339292 / 1.068142 ~ 0.317647
 //         COM_y = 0
 //
 //         Inertia about COM (parallel axis for each fixture):
-//           d0 = |COM - (0,0)| = 3.176
-//           d1 = |12 - 3.176| = 8.824
+//           d0 = |COM - (0,0)| = 0.317647
+//           d1 = |1.2 - 0.317647| = 0.882353
 //           I_total = (I0_c + m0*d0^2) + (I1_c + m1*d1^2)
-//                   = (981.748 + 78.5398*10.090) + (127.234 + 28.2743*77.855)
-//                   = (981.748 + 792.46)  +  (127.234 + 2201.29)
-//                   = 1774.21 + 2328.52 ~ 4102.74
+//                   = (0.098175 + 0.785398*0.100900) + (0.012723 + 0.282743*0.778547)
+//                   = (0.098175 + 0.079246)  +  (0.012723 + 0.220129)
+//                   = 0.177421 + 0.232852 ~ 0.410274
 //
 //   (b) Fixture world transform: body at pos(0,0) angle=pi/2, fixture at
-//       localPos (5,0) localAngle=0.  World shape center:
-//         R(pi/2)*(5,0) = (5*cos(pi/2) - 0*sin(pi/2), 5*sin(pi/2) + 0*cos(pi/2))
-//                       = (0, 5)
-//       So worldPos ~ (0, 5) within 1e-4.
+//       localPos (0.5,0) localAngle=0.  World shape center:
+//         R(pi/2)*(0.5,0) = (0.5*cos(pi/2) - 0*sin(pi/2), 0.5*sin(pi/2) + 0*cos(pi/2))
+//                       = (0, 0.5)
+//       So worldPos ~ (0, 0.5) within 1e-4.
 //
-//   (c) Back-compat: AddBody(BodyDef{ MakeCircle(2), density=1 }) creates a
-//       body with exactly 1 fixture; mass ~ pi*4 ~ 12.566; localCenter ~ (0,0).
+//   (c) Back-compat: AddBody(BodyDef{ MakeCircle(0.2), density=1 }) creates a
+//       body with exactly 1 fixture; mass ~ pi*0.04 ~ 0.125664; localCenter ~ (0,0).
 //
 //   (d) Stale handle: DropFixture then IsValid(h)==false; new fixture from
 //       the same slot has a bumped generation (old handle stays invalid).
@@ -73,26 +74,20 @@ namespace
 
 // ============================================================================
 // (a) Compound mass / COM / inertia: two circle fixtures.
-//   fixture0 = MakeCircle(5) at localPos (0,0)
-//   fixture1 = MakeCircle(3) at localPos (12,0)
+//   fixture0 = MakeCircle(0.5) at localPos (0,0)
+//   fixture1 = MakeCircle(0.3) at localPos (1.2,0)
 //   density = 1 for both.
 // ============================================================================
 TEST_CASE("physics: Fixture compound mass/COM/inertia (two offset circles)", "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type        = BodyType::Dynamic;
     bd.position    = Vec2(Real(0), Real(0));
-    // fixture0: MakeCircle(5) via AddBody back-compat.
-    bd.shape       = MakeCircle(Real(5));
+    // fixture0: MakeCircle(0.5) via AddBody back-compat.
+    bd.shape       = MakeCircle(Real(0.5));
     bd.density     = Real(1);
     bd.restitution = Real(0);
     bd.friction    = Real(0.4);
@@ -102,10 +97,10 @@ TEST_CASE("physics: Fixture compound mass/COM/inertia (two offset circles)", "[p
     // 1 auto-fixture after AddBody.
     REQUIRE(w.FixtureCount(bh) == 1u);
 
-    // Add fixture1: MakeCircle(3) at localPos (12,0).
+    // Add fixture1: MakeCircle(0.3) at localPos (1.2,0).
     FixtureDef fd;
-    fd.shape      = MakeCircle(Real(3));
-    fd.localPos   = Vec2(Real(12), Real(0));
+    fd.shape      = MakeCircle(Real(0.3));
+    fd.localPos   = Vec2(Real(1.2), Real(0));
     fd.localAngle = Real(0);
     fd.density    = Real(1);
     const FixtureHandle fh2 = w.AddFixture(bh, fd);
@@ -114,19 +109,19 @@ TEST_CASE("physics: Fixture compound mass/COM/inertia (two offset circles)", "[p
     REQUIRE(w.FixtureCount(bh) == 2u);
 
     // ---- check aggregated mass ------------------------------------------
-    //   mass0 = pi*25 ~ 78.5398
-    //   mass1 = pi*9  ~ 28.2743
-    //   total ~ 106.814
-    const double mass0     = kPiD * 25.0;
-    const double mass1     = kPiD * 9.0;
+    //   mass0 = pi*0.25 ~ 0.785398
+    //   mass1 = pi*0.09 ~ 0.282743
+    //   total ~ 1.068142
+    const double mass0     = kPiD * 0.25;
+    const double mass1     = kPiD * 0.09;
     const double massTotal = mass0 + mass1;
 
     const Real bodyMass = w.GetBodyMass(bh);
     REQUIRE(static_cast<double>(bodyMass) == Approx(massTotal).epsilon(kMassTol));
 
     // ---- check COM ---------------------------------------------------------
-    //   COM_x = (mass0*0 + mass1*12) / massTotal
-    const double comX = (mass0 * 0.0 + mass1 * 12.0) / massTotal;
+    //   COM_x = (mass0*0 + mass1*1.2) / massTotal
+    const double comX = (mass0 * 0.0 + mass1 * 1.2) / massTotal;
     const double comY = 0.0;
 
     const Vec2 lc = w.GetLocalCenter(bh);
@@ -134,15 +129,15 @@ TEST_CASE("physics: Fixture compound mass/COM/inertia (two offset circles)", "[p
     REQUIRE(static_cast<double>(lc.y) == Approx(0.0).margin(kGeomTol));
 
     // ---- check inertia about COM -------------------------------------------
-    //   I0_c = 0.5*mass0*25 (I about centroid of circle0, r=5)
-    //   I1_c = 0.5*mass1*9  (I about centroid of circle1, r=3)
+    //   I0_c = 0.5*mass0*0.25 (I about centroid of circle0, r=0.5)
+    //   I1_c = 0.5*mass1*0.09 (I about centroid of circle1, r=0.3)
     //   d0   = comX - 0   = comX
-    //   d1   = 12 - comX
+    //   d1   = 1.2 - comX
     //   I_total = (I0_c + mass0*d0^2) + (I1_c + mass1*d1^2)
-    const double iCirc0C = 0.5 * mass0 * 25.0;
-    const double iCirc1C = 0.5 * mass1 * 9.0;
+    const double iCirc0C = 0.5 * mass0 * 0.25;
+    const double iCirc1C = 0.5 * mass1 * 0.09;
     const double d0      = comX;
-    const double d1      = 12.0 - comX;
+    const double d1      = 1.2 - comX;
     const double iTotal  = (iCirc0C + mass0 * d0 * d0)
                          + (iCirc1C + mass1 * d1 * d1);
 
@@ -151,23 +146,17 @@ TEST_CASE("physics: Fixture compound mass/COM/inertia (two offset circles)", "[p
 }
 
 // ============================================================================
-// (b) Fixture world transform: R(pi/2)*(5,0) = (0,5).
+// (b) Fixture world transform: R(pi/2)*(0.5,0) = (0,0.5).
 // ============================================================================
-TEST_CASE("physics: Fixture world transform (body angle pi/2, localPos (5,0))", "[physics]")
+TEST_CASE("physics: Fixture world transform (body angle pi/2, localPos (0.5,0))", "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type     = BodyType::Static; // use Static so no dynamics interference
     bd.position = Vec2(Real(0), Real(0));
-    bd.shape    = MakeCircle(Real(1)); // minimal body shape
+    bd.shape    = MakeCircle(Real(0.1)); // minimal body shape
     bd.density  = Real(0);
     const BodyHandle bh = w.AddBody(bd);
     REQUIRE(w.IsValid(bh));
@@ -175,10 +164,10 @@ TEST_CASE("physics: Fixture world transform (body angle pi/2, localPos (5,0))", 
     // Set body angle to pi/2.
     w.SetAngle(bh, Real(kPiD / 2.0));
 
-    // Add a fixture at localPos (5,0).
+    // Add a fixture at localPos (0.5,0).
     FixtureDef fd;
-    fd.shape      = MakeCircle(Real(1));
-    fd.localPos   = Vec2(Real(5), Real(0));
+    fd.shape      = MakeCircle(Real(0.1));
+    fd.localPos   = Vec2(Real(0.5), Real(0));
     fd.localAngle = Real(0);
     fd.density    = Real(0);
     const FixtureHandle fh = w.AddFixture(bh, fd);
@@ -186,12 +175,12 @@ TEST_CASE("physics: Fixture world transform (body angle pi/2, localPos (5,0))", 
 
     // Query the fixture world transform.
     // worldPos = bodyPos + R(bodyAngle) * localPos
-    //          = (0,0)  + R(pi/2) * (5,0)
-    //          = (5*cos(pi/2) - 0*sin(pi/2),  5*sin(pi/2) + 0*cos(pi/2))
-    //          = (0, 5)
+    //          = (0,0)  + R(pi/2) * (0.5,0)
+    //          = (0.5*cos(pi/2) - 0*sin(pi/2),  0.5*sin(pi/2) + 0*cos(pi/2))
+    //          = (0, 0.5)
     const Vec2 worldPos = w.GetFixtureWorldPos(fh);
     REQUIRE(static_cast<double>(worldPos.x) == Approx(0.0).margin(kGeomTol));
-    REQUIRE(static_cast<double>(worldPos.y) == Approx(5.0).epsilon(kGeomTol));
+    REQUIRE(static_cast<double>(worldPos.y) == Approx(0.5).epsilon(kGeomTol));
 
     // worldAngle = bodyAngle + localAngle = pi/2 + 0 = pi/2
     const Real worldAngle = w.GetFixtureWorldAngle(fh);
@@ -204,17 +193,11 @@ TEST_CASE("physics: Fixture world transform (body angle pi/2, localPos (5,0))", 
 TEST_CASE("physics: Fixture back-compat AddBody creates exactly 1 fixture", "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type    = BodyType::Dynamic;
-    bd.shape   = MakeCircle(Real(2));
+    bd.shape   = MakeCircle(Real(0.2));
     bd.density = Real(1);
     const BodyHandle bh = w.AddBody(bd);
     REQUIRE(w.IsValid(bh));
@@ -222,12 +205,12 @@ TEST_CASE("physics: Fixture back-compat AddBody creates exactly 1 fixture", "[ph
     // Exactly 1 fixture.
     REQUIRE(w.FixtureCount(bh) == 1u);
 
-    // Mass ~ pi * r^2 = pi * 4 ~ 12.566.
-    const double expectedMass = kPiD * 4.0;
+    // Mass ~ pi * r^2 = pi * 0.04 ~ 0.125664.
+    const double expectedMass = kPiD * 0.04;
     const Real bodyMass = w.GetBodyMass(bh);
     REQUIRE(static_cast<double>(bodyMass) == Approx(expectedMass).epsilon(kMassTol));
 
-    // invMass ~ 1/12.566.
+    // invMass ~ 1/0.125664.
     const Real expectedInvMass = Real(1) / Real(expectedMass);
     // We read it via GetBodyMass/InvMass indirectly; verify it by inverting.
     REQUIRE(static_cast<double>(Real(1) / bodyMass) ==
@@ -245,24 +228,18 @@ TEST_CASE("physics: Fixture back-compat AddBody creates exactly 1 fixture", "[ph
 TEST_CASE("physics: Fixture stale handle after DropFixture", "[physics]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Create a body (back-compat creates 1 fixture for us, but we want to test
     // explicit AddFixture / DropFixture, so let's add an extra one).
     BodyDef bd;
     bd.type    = BodyType::Static;
-    bd.shape   = MakeCircle(Real(1));
+    bd.shape   = MakeCircle(Real(0.1));
     bd.density = Real(0);
     const BodyHandle bh = w.AddBody(bd);
 
     FixtureDef fd;
-    fd.shape    = MakeCircle(Real(1));
+    fd.shape    = MakeCircle(Real(0.1));
     fd.density  = Real(0);
     const FixtureHandle fh = w.AddFixture(bh, fd);
     REQUIRE(w.IsValid(fh));
