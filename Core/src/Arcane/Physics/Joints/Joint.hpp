@@ -95,9 +95,12 @@ namespace Arcane
             // Prismatic / Wheel: world axis (direction). Normalized at Prepare.
             Vec2 axis{ Real(1), Real(0) };
 
-            // Mouse: target + force clamp.
+            // Mouse: target + force clamp. Default is an MKS-honest "effectively unclamped"
+            // value = Box2D's drag-sample convention 1000*mass*g (samples/sample.cpp:338)
+            // at the heaviest in-range body (~100 kg, g=10). Real callers set this per-body;
+            // the only in-repo MouseJoint (PhysicsJointsTest) overrides it explicitly.
             Vec2 target{ Real(0), Real(0) };
-            Real maxForce = Real(1e9); // MKS-DEFER(P5): rescale -- at MKS mass*g is ~1-1e3 N, 1e9 is a px-era "infinite" clamp
+            Real maxForce = Real(1e6);
 
             // Wheel suspension spring (b2WheelJoint). frequencyHz <= 0 -> a rigid
             // axis constraint (no suspension travel). dampingRatio is the spring's

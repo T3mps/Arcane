@@ -163,7 +163,7 @@ namespace Arcane
             BodyHandle    m_hB;
             std::uint32_t m_ib = kInvalidSlot;
             Vec2          m_target{ Real(0), Real(0) };
-            Real          m_maxForce = Real(1e9); // MKS-DEFER(P5): rescale -- at MKS mass*g is ~1-1e3 N, 1e9 is a px-era "infinite" clamp
+            Real          m_maxForce = Real(1e6); // dead default (ctor always sets it); mirrors JointDef::maxForce -- see Joint.hpp
             // Prepared per step.
             Real m_k  = Real(0); // spring stiffness
             Real m_d  = Real(0); // spring damping

@@ -52,7 +52,7 @@ namespace
 {
     constexpr Real kStep = Real(1) / Real(60);
 
-    BodyHandle AddStaticAnchor(PhysicsWorld& w, Vec2 pos, Real r = Real(2))
+    BodyHandle AddStaticAnchor(PhysicsWorld& w, Vec2 pos, Real r = Real(0.2))
     {
         BodyDef def;
         def.type     = BodyType::Static;
@@ -61,7 +61,7 @@ namespace
         return w.AddBody(def);
     }
 
-    BodyHandle AddDynamicCircle(PhysicsWorld& w, Vec2 pos, Real r = Real(5),
+    BodyHandle AddDynamicCircle(PhysicsWorld& w, Vec2 pos, Real r = Real(0.5),
                                 Real linDamp = Real(1.5))
     {
         BodyDef def;
@@ -75,13 +75,10 @@ namespace
 
     WorldDef GravityWorld()
     {
+        // Gravity inherits the MKS WorldDef default (+Y down, g=10); sleepThreshold,
+        // restitutionThreshold, contactPushMaxVelocity, and hashCellSize inherit the
+        // MKS defaults too (0.05 / 1.0 / 3.0 / 1.0).
         WorldDef wd;
-        wd.gravityY   = Real(400); // +Y down
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         return wd;
     }
 } // namespace
@@ -95,14 +92,14 @@ TEST_CASE("PhysicsJoints: revolute pendulum settles below anchor", "[physics][jo
 {
     auto run = []() {
         PhysicsWorld w(GravityWorld());
-        BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(100), Real(50)));
-        BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(140), Real(50)));
+        BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(10), Real(5)));
+        BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(14), Real(5)));
 
         JointDef jd;
         jd.kind   = JointKind::Revolute;
         jd.a      = anchor;
         jd.b      = bob;
-        jd.anchor = Vec2(Real(100), Real(50));
+        jd.anchor = Vec2(Real(10), Real(5));
         REQUIRE(w.AddJoint(jd) != nullptr);
 
         for (int k = 0; k < 900; ++k)
@@ -110,10 +107,10 @@ TEST_CASE("PhysicsJoints: revolute pendulum settles below anchor", "[physics][jo
             w.Step(kStep);
         }
         const Vec2 p = w.Position(bob);
-        // Rod length is the creation separation (140-100 = 40); the bob hangs
-        // straight below the anchor (+Y down) -> x ~ 100, y ~ 90.
-        CHECK(std::fabs(p.x - Real(100)) < Real(3));
-        CHECK(std::fabs(p.y - Real(90)) < Real(3));
+        // Rod length is the creation separation (14-10 = 4 m); the bob hangs
+        // straight below the anchor (+Y down) -> x ~ 10, y ~ 9.
+        CHECK(std::fabs(p.x - Real(10)) < Real(0.3));
+        CHECK(std::fabs(p.y - Real(9)) < Real(0.3));
     };
     run();
 }
@@ -127,14 +124,14 @@ TEST_CASE("PhysicsJoints: distance joint holds separation", "[physics][joints]")
 {
     auto run = []() {
         PhysicsWorld w(GravityWorld());
-        BodyHandle hub = AddStaticAnchor(w, Vec2(Real(300), Real(50)));
-        BodyHandle sat = AddDynamicCircle(w, Vec2(Real(300), Real(110)));
+        BodyHandle hub = AddStaticAnchor(w, Vec2(Real(30), Real(5)));
+        BodyHandle sat = AddDynamicCircle(w, Vec2(Real(30), Real(11)));
 
         JointDef jd;
         jd.kind   = JointKind::Distance;
         jd.a      = hub;
         jd.b      = sat;
-        jd.length = Real(60);
+        jd.length = Real(6);
         REQUIRE(w.AddJoint(jd) != nullptr);
 
         for (int k = 0; k < 600; ++k)
@@ -142,9 +139,9 @@ TEST_CASE("PhysicsJoints: distance joint holds separation", "[physics][joints]")
             w.Step(kStep);
         }
         const Vec2 p = w.Position(sat);
-        const Real d = std::sqrt((p.x - Real(300)) * (p.x - Real(300)) +
-                                 (p.y - Real(50)) * (p.y - Real(50)));
-        CHECK(std::fabs(d - Real(60)) < Real(2));
+        const Real d = std::sqrt((p.x - Real(30)) * (p.x - Real(30)) +
+                                 (p.y - Real(5)) * (p.y - Real(5)));
+        CHECK(std::fabs(d - Real(6)) < Real(0.2));
     };
     run();
 }
@@ -159,20 +156,17 @@ TEST_CASE("PhysicsJoints: mouse joint drags to target + removeJoint detaches",
 {
     WorldDef wd;
     wd.gravityY = Real(0); // the harness used gravityScale=0 for the mouse chip
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0); // zero-g scene (deliberate, both axes); other WorldDef fields inherit MKS defaults
     PhysicsWorld w(wd);
 
-    BodyHandle chip = AddDynamicCircle(w, Vec2(Real(500), Real(100)), Real(5), Real(0));
+    BodyHandle chip = AddDynamicCircle(w, Vec2(Real(50), Real(10)), Real(0.5), Real(0));
 
     JointDef jd;
     jd.kind     = JointKind::Mouse;
     jd.b        = chip;
-    jd.target   = Vec2(Real(540), Real(60));
-    jd.maxForce = Real(8000);
+    jd.target   = Vec2(Real(54), Real(6));
+    // 8 N = the px-era 8000 /1000 (linear force: mass /100 x accel /10).
+    jd.maxForce = Real(8);
     Joint* mj = w.AddJoint(jd);
     REQUIRE(mj != nullptr);
     REQUIRE(w.JointCount() == 1u);
@@ -182,8 +176,8 @@ TEST_CASE("PhysicsJoints: mouse joint drags to target + removeJoint detaches",
         w.Step(kStep);
     }
     const Vec2 p = w.Position(chip);
-    CHECK(std::fabs(p.x - Real(540)) < Real(4));
-    CHECK(std::fabs(p.y - Real(60)) < Real(8));
+    CHECK(std::fabs(p.x - Real(54)) < Real(0.4));
+    CHECK(std::fabs(p.y - Real(6)) < Real(0.8));
 
     w.RemoveJoint(mj);
     CHECK(w.JointCount() == 0u);
@@ -207,7 +201,7 @@ TEST_CASE("PhysicsJoints: weld keeps two bodies rigid", "[physics][joints]")
     // A static anchor + a dynamic body welded to it: the dynamic body must not
     // fall (the weld is rigid against the static).
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
-    BodyHandle welded  = AddDynamicCircle(w, Vec2(Real(20), Real(0)), Real(5), Real(0));
+    BodyHandle welded  = AddDynamicCircle(w, Vec2(Real(2), Real(0)), Real(0.5), Real(0));
 
     const Vec2 start = w.Position(welded);
     const Real startAngle = w.GetAngle(welded);
@@ -216,7 +210,7 @@ TEST_CASE("PhysicsJoints: weld keeps two bodies rigid", "[physics][joints]")
     jd.kind   = JointKind::Weld;
     jd.a      = anchor;
     jd.b      = welded;
-    jd.anchor = Vec2(Real(20), Real(0)); // weld point at the body
+    jd.anchor = Vec2(Real(2), Real(0)); // weld point at the body
     REQUIRE(w.AddJoint(jd) != nullptr);
 
     for (int k = 0; k < 600; ++k)
@@ -225,8 +219,8 @@ TEST_CASE("PhysicsJoints: weld keeps two bodies rigid", "[physics][joints]")
     }
     const Vec2 p = w.Position(welded);
     // Rigidly held to the static -> stays near its start (small Baumgarte give).
-    CHECK(std::fabs(p.x - start.x) < Real(2));
-    CHECK(std::fabs(p.y - start.y) < Real(2));
+    CHECK(std::fabs(p.x - start.x) < Real(0.2));
+    CHECK(std::fabs(p.y - start.y) < Real(0.2));
     // Angle stays locked (no spin under gravity).
     CHECK(std::fabs(w.GetAngle(welded) - startAngle) < Real(0.1));
 }
@@ -243,7 +237,7 @@ TEST_CASE("PhysicsJoints: prismatic constrains to its axis", "[physics][joints]"
 
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
     // Dynamic body offset along +X from the anchor; axis is +X (horizontal).
-    BodyHandle slider = AddDynamicCircle(w, Vec2(Real(40), Real(0)), Real(5), Real(0));
+    BodyHandle slider = AddDynamicCircle(w, Vec2(Real(4), Real(0)), Real(0.5), Real(0));
 
     const Real startY = w.Position(slider).y;
 
@@ -255,8 +249,14 @@ TEST_CASE("PhysicsJoints: prismatic constrains to its axis", "[physics][joints]"
     REQUIRE(w.AddJoint(jd) != nullptr);
 
     // Gravity pulls +Y (perpendicular to the axis): the perp constraint must
-    // hold y. Push the slider along +X with an impulse so it slides.
-    w.ApplyImpulse(slider, Vec2(Real(2000), Real(0)));
+    // hold y. Push the slider along +X with an impulse so it slides. Rule-3:
+    // impulse = mass x dv; sliderMass = density*pi*r^2 = 1*pi*0.5^2 (~0.785 kg,
+    // r = 0.5 m), pushDv = 2.5 m/s (well under the 400 m/s cap; enough to carry
+    // the slider past x > 4.5 m). ~1.96 N*s = the px-era 2000 impulse /1000
+    // (mass /100 x velocity /10).
+    const Real sliderMass = Real(1) * kPi * Real(0.5) * Real(0.5);
+    const Real pushDv     = Real(2.5);
+    w.ApplyImpulse(slider, Vec2(sliderMass * pushDv, Real(0)));
 
     for (int k = 0; k < 300; ++k)
     {
@@ -264,9 +264,9 @@ TEST_CASE("PhysicsJoints: prismatic constrains to its axis", "[physics][joints]"
     }
     const Vec2 p = w.Position(slider);
     // No perpendicular (y) drift despite gravity (the axis is horizontal).
-    CHECK(std::fabs(p.y - startY) < Real(2));
-    // It slid along +X (the axis) -- moved meaningfully from x=40.
-    CHECK(p.x > Real(45));
+    CHECK(std::fabs(p.y - startY) < Real(0.2));
+    // It slid along +X (the axis) -- moved meaningfully from x=4.
+    CHECK(p.x > Real(4.5));
     // No relative rotation locked in.
     CHECK(std::fabs(w.GetAngle(slider)) < Real(0.1));
 }
@@ -279,13 +279,9 @@ TEST_CASE("PhysicsJoints: prismatic constrains to its axis", "[physics][joints]"
 
 TEST_CASE("PhysicsJoints: motor drives relative angular velocity", "[physics][joints]")
 {
-    WorldDef wd; // no gravity -- isolate the angular drive
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // no gravity -- isolate the angular drive (deliberate zero-g, both axes)
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
 
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
@@ -293,7 +289,7 @@ TEST_CASE("PhysicsJoints: motor drives relative angular velocity", "[physics][jo
     BodyDef def;
     def.type     = BodyType::Dynamic;
     def.position = Vec2(Real(0), Real(0));
-    def.shape    = MakeCircle(Real(10));
+    def.shape    = MakeCircle(Real(1));
     def.density  = Real(1);
     BodyHandle disk = w.AddBody(def);
 
@@ -303,7 +299,9 @@ TEST_CASE("PhysicsJoints: motor drives relative angular velocity", "[physics][jo
     jd.a              = anchor;
     jd.b              = disk;
     jd.motorSpeed     = targetSpeed;
-    jd.maxMotorTorque = Real(1e6); // plenty of torque to reach the target
+    // 100 N*m = the px-era 1e6 /10000 (torque: inertia /10000 x angular-accel /1);
+    // still "plenty" relative to the new-scale disk inertia.
+    jd.maxMotorTorque = Real(100);
     REQUIRE(w.AddJoint(jd) != nullptr);
 
     REQUIRE(w.GetAngle(disk) == Approx(Real(0)));
@@ -329,20 +327,16 @@ TEST_CASE("PhysicsJoints: motor drives relative angular velocity", "[physics][jo
 
 TEST_CASE("PhysicsJoints: motor respects the torque clamp", "[physics][joints]")
 {
-    WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // deliberate zero-g, both axes
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
 
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
     BodyDef def;
     def.type     = BodyType::Dynamic;
     def.position = Vec2(Real(0), Real(0));
-    def.shape    = MakeCircle(Real(10));
+    def.shape    = MakeCircle(Real(1));
     def.density  = Real(1);
     BodyHandle disk = w.AddBody(def);
 
@@ -350,8 +344,10 @@ TEST_CASE("PhysicsJoints: motor respects the torque clamp", "[physics][joints]")
     jd.kind           = JointKind::Motor;
     jd.a              = anchor;
     jd.b              = disk;
-    jd.motorSpeed     = Real(50);    // a high target
-    jd.maxMotorTorque = Real(1);     // a tiny torque budget
+    jd.motorSpeed     = Real(50);       // a high target
+    // 0.0001 N*m = the px-era 1 /10000 (torque: inertia /10000 x angular-accel /1);
+    // a tiny torque budget the motor cannot spend fast enough to reach 50 rad/s.
+    jd.maxMotorTorque = Real(0.0001);
     REQUIRE(w.AddJoint(jd) != nullptr);
 
     const Real a0 = w.GetAngle(disk);
@@ -380,8 +376,8 @@ TEST_CASE("PhysicsJoints: wheel suspension holds the axis + springs", "[physics]
     BodyHandle chassis = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
     BodyDef def;
     def.type     = BodyType::Dynamic;
-    def.position = Vec2(Real(0), Real(30)); // 30 below the chassis
-    def.shape    = MakeCircle(Real(8));
+    def.position = Vec2(Real(0), Real(3)); // 3 m below the chassis
+    def.shape    = MakeCircle(Real(0.8));
     def.density  = Real(1);
     BodyHandle wheel = w.AddBody(def);
 
@@ -389,13 +385,14 @@ TEST_CASE("PhysicsJoints: wheel suspension holds the axis + springs", "[physics]
     jd.kind          = JointKind::Wheel;
     jd.a             = chassis;
     jd.b             = wheel;
-    jd.anchor        = Vec2(Real(0), Real(30)); // axle = wheel center
+    jd.anchor        = Vec2(Real(0), Real(3)); // axle = wheel center
     jd.axis          = Vec2(Real(0), Real(1));  // vertical suspension axis
     jd.frequencyHz   = Real(4);
     jd.dampingRatio  = Real(0.7);
     jd.enableMotor   = true;
     jd.motorSpeed    = Real(8);  // spin the wheel
-    jd.maxMotorTorque = Real(1e6);
+    // 100 N*m = the px-era 1e6 /10000 (torque: inertia /10000 x angular-accel /1).
+    jd.maxMotorTorque = Real(100);
     REQUIRE(w.AddJoint(jd) != nullptr);
 
     const Real startAngle = w.GetAngle(wheel);
@@ -410,15 +407,15 @@ TEST_CASE("PhysicsJoints: wheel suspension holds the axis + springs", "[physics]
         minY = std::min(minY, p.y);
         maxY = std::max(maxY, p.y);
         // PERPENDICULAR (x) drift must stay ~0 (the rigid perp constraint).
-        CHECK(std::fabs(p.x) < Real(2));
+        CHECK(std::fabs(p.x) < Real(0.2));
     }
     const Vec2 settled = w.Position(wheel);
     // The wheel hangs near its suspension length below the chassis along +Y
     // (gravity stretches the spring a bit, but it is bounded).
-    CHECK(settled.y > Real(28));        // still roughly at suspension length
-    CHECK(settled.y < Real(120));       // spring did not let it fall away
+    CHECK(settled.y > Real(2.8));        // still roughly at suspension length
+    CHECK(settled.y < Real(12));         // spring did not let it fall away
     // The spring MOVED (compressed/extended) during settling, not a rigid lock.
-    CHECK((maxY - minY) > Real(0.5));
+    CHECK((maxY - minY) > Real(0.05));
     // The motor spun the wheel.
     CHECK(std::fabs(w.GetAngle(wheel) - startAngle) > Real(0.5));
 }
@@ -432,7 +429,7 @@ TEST_CASE("PhysicsJoints: RemoveBody drops referencing joints", "[physics][joint
 {
     PhysicsWorld w(GravityWorld());
     BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(0), Real(0)));
-    BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(40), Real(0)));
+    BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(4), Real(0)));
 
     JointDef jd;
     jd.kind   = JointKind::Revolute;
@@ -465,13 +462,13 @@ TEST_CASE("PhysicsJoints: jointed scene is deterministic", "[physics][joints]")
 {
     auto runOnce = []() -> Vec2 {
         PhysicsWorld w(GravityWorld());
-        BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(100), Real(50)));
-        BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(140), Real(50)));
+        BodyHandle anchor = AddStaticAnchor(w, Vec2(Real(10), Real(5)));
+        BodyHandle bob     = AddDynamicCircle(w, Vec2(Real(14), Real(5)));
         JointDef jd;
         jd.kind   = JointKind::Revolute;
         jd.a      = anchor;
         jd.b      = bob;
-        jd.anchor = Vec2(Real(100), Real(50));
+        jd.anchor = Vec2(Real(10), Real(5));
         w.AddJoint(jd);
         for (int k = 0; k < 300; ++k)
         {
