@@ -44,12 +44,13 @@ using Catch::Approx;
 
 namespace
 {
-    // A 16x16 Cartesian grid, cellSize 10, origin (0,0). Cell C spans world
-    // [C*10, (C+1)*10) on each axis (min-corner indexing, matching
-    // TileGrid::CellBox). The center of cell (cx,cy) is (cx*10+5, cy*10+5).
+    // A 16x16 Cartesian grid, cellSize 1, origin (0,0) -- a 16x16 m world.
+    // Cell C spans world [C*1, (C+1)*1) on each axis (min-corner indexing,
+    // matching TileGrid::CellBox). The center of cell (cx,cy) is
+    // (cx*1+0.5, cy*1+0.5).
     constexpr int  kGridW    = 16;
     constexpr int  kGridH    = 16;
-    constexpr Real kCellSize = Real(10);
+    constexpr Real kCellSize = Real(1);
 
     // World position of cell (cx,cy)'s center.
     Vec2 CellCenter(int cx, int cy)
@@ -64,12 +65,6 @@ namespace
         def.passability  = &src;
         def.tileCellSize = kCellSize;
         def.tileOrigin   = Vec2(Real(0), Real(0));
-        def.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        def.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        def.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        def.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        def.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        def.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         return def;
     }
 }
@@ -87,9 +82,9 @@ TEST_CASE("Raycast: a wall cell in the path is hit with 0<t<1 + correct cell",
 
     PhysicsWorld w(MakeWorldDef(grid));
 
-    // Ray along the center of row 2, from cell 0 to cell 10 (x: 5 -> 105).
-    const Vec2 from = CellCenter(0, 2);   // (5, 25)
-    const Vec2 to   = CellCenter(10, 2);  // (105, 25)
+    // Ray along the center of row 2, from cell 0 to cell 10 (x: 0.5 -> 10.5).
+    const Vec2 from = CellCenter(0, 2);   // (0.5, 2.5)
+    const Vec2 to   = CellCenter(10, 2);  // (10.5, 2.5)
 
     const auto hit = w.Raycast(from, to);
     REQUIRE(hit.has_value());
@@ -98,10 +93,10 @@ TEST_CASE("Raycast: a wall cell in the path is hit with 0<t<1 + correct cell",
     REQUIRE(hit->cellY == 2);
     REQUIRE(hit->t > Real(0));
     REQUIRE(hit->t < Real(1));
-    // The hit enters cell 5 at its left boundary x = 50; t = (50-5)/(105-5) = 0.45.
+    // The hit enters cell 5 at its left boundary x = 5; t = (5-0.5)/(10.5-0.5) = 0.45.
     REQUIRE(hit->t == Approx(Real(0.45)));
-    REQUIRE(hit->point.x == Approx(Real(50)));
-    REQUIRE(hit->point.y == Approx(Real(25)));
+    REQUIRE(hit->point.x == Approx(Real(5)));
+    REQUIRE(hit->point.y == Approx(Real(2.5)));
 }
 
 TEST_CASE("Raycast: a clear column yields no cell hit", "[physics][queries][raycast]")
@@ -144,8 +139,8 @@ TEST_CASE("Raycast: a diagonal wall cell is hit on the correct cell",
 
     RaycastOpts opts;
     opts.cellsOnly = true;
-    const Vec2 from = CellCenter(0, 0); // (5, 5)
-    const Vec2 to   = CellCenter(8, 8); // (85, 85)
+    const Vec2 from = CellCenter(0, 0); // (0.5, 0.5)
+    const Vec2 to   = CellCenter(8, 8); // (8.5, 8.5)
     const auto hit = w.Raycast(from, to, opts);
     REQUIRE(hit.has_value());
     REQUIRE(hit->isCell);
@@ -163,28 +158,22 @@ TEST_CASE("Raycast: AABB body slab hit is exact", "[physics][queries][raycast]")
 {
     // No passability source -> no cell pass; only the body test runs.
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type     = BodyType::Static;
-    bd.position = Vec2(Real(100), Real(0));
-    bd.shape    = MakeAabb(Real(10), Real(10)); // box spans x[90,110], y[-10,10]
+    bd.position = Vec2(Real(10), Real(0));
+    bd.shape    = MakeAabb(Real(1), Real(1)); // box spans x[9,11], y[-1,1]
     BodyHandle box = w.AddBody(bd);
 
-    // Horizontal ray from x=0 to x=200 at y=0 -> enters the box at x=90.
-    const auto hit = w.Raycast(Vec2(Real(0), Real(0)), Vec2(Real(200), Real(0)));
+    // Horizontal ray from x=0 to x=20 at y=0 -> enters the box at x=9.
+    const auto hit = w.Raycast(Vec2(Real(0), Real(0)), Vec2(Real(20), Real(0)));
     REQUIRE(hit.has_value());
     REQUIRE_FALSE(hit->isCell);
     REQUIRE(hit->body == box);
-    // Enters at x=90; t = 90/200 = 0.45.
+    // Enters at x=9; t = 9/20 = 0.45.
     REQUIRE(hit->t == Approx(Real(0.45)));
-    REQUIRE(hit->point.x == Approx(Real(90)));
+    REQUIRE(hit->point.x == Approx(Real(9)));
     REQUIRE(hit->point.y == Approx(Real(0)));
 }
 
@@ -196,66 +185,60 @@ TEST_CASE("Raycast: a near body beats a farther wall (nearest wins)",
     grid.SetSolid(10, 2, true);
     PhysicsWorld w(MakeWorldDef(grid));
 
-    // A static AABB body NEARER than the wall: spans x[40,60] on row-2 center.
+    // A static AABB body NEARER than the wall: spans x[4,6] on row-2 center.
     BodyDef bd;
     bd.type     = BodyType::Static;
-    bd.position = Vec2(Real(50), Real(25)); // row 2 center y = 25
-    bd.shape    = MakeAabb(Real(10), Real(10)); // x[40,60], y[15,35]
+    bd.position = Vec2(Real(5), Real(2.5)); // row 2 center y = 2.5
+    bd.shape    = MakeAabb(Real(1), Real(1)); // x[4,6], y[1.5,3.5]
     BodyHandle box = w.AddBody(bd);
 
-    const Vec2 from = CellCenter(0, 2);   // (5, 25)
-    const Vec2 to   = CellCenter(14, 2);  // (145, 25)
+    const Vec2 from = CellCenter(0, 2);   // (0.5, 2.5)
+    const Vec2 to   = CellCenter(14, 2);  // (14.5, 2.5)
 
     const auto hit = w.Raycast(from, to);
     REQUIRE(hit.has_value());
-    // The body (enters x=40, t~0.25) beats the wall cell 10 (enters x=100,
+    // The body (enters x=4, t~0.25) beats the wall cell 10 (enters x=10,
     // t~0.68): the NEARER hit wins, and it is the body, not a cell.
     REQUIRE_FALSE(hit->isCell);
     REQUIRE(hit->body == box);
-    REQUIRE(hit->point.x == Approx(Real(40)));
+    REQUIRE(hit->point.x == Approx(Real(4)));
 }
 
 TEST_CASE("Raycast: a farther body loses to a nearer wall (nearest wins, "
           "cell side)", "[physics][queries][raycast]")
 {
     GridPassability grid(kGridW, kGridH);
-    // Wall NEAR at cell (2, 2): entered at x=20.
+    // Wall NEAR at cell (2, 2): entered at x=2.
     grid.SetSolid(2, 2, true);
     PhysicsWorld w(MakeWorldDef(grid));
 
-    // A body FARTHER than the wall: spans x[90,110].
+    // A body FARTHER than the wall: spans x[9,11].
     BodyDef bd;
     bd.type     = BodyType::Static;
-    bd.position = Vec2(Real(100), Real(25));
-    bd.shape    = MakeAabb(Real(10), Real(10));
+    bd.position = Vec2(Real(10), Real(2.5));
+    bd.shape    = MakeAabb(Real(1), Real(1));
     w.AddBody(bd);
 
-    const Vec2 from = CellCenter(0, 2);   // (5, 25)
-    const Vec2 to   = CellCenter(14, 2);  // (145, 25)
+    const Vec2 from = CellCenter(0, 2);   // (0.5, 2.5)
+    const Vec2 to   = CellCenter(14, 2);  // (14.5, 2.5)
 
     const auto hit = w.Raycast(from, to);
     REQUIRE(hit.has_value());
-    // The wall (x=20) is nearer than the body (x=90): the cell wins.
+    // The wall (x=2) is nearer than the body (x=9): the cell wins.
     REQUIRE(hit->isCell);
     REQUIRE(hit->cellX == 2);
     REQUIRE(hit->cellY == 2);
-    REQUIRE(hit->point.x == Approx(Real(20)));
+    REQUIRE(hit->point.x == Approx(Real(2)));
 }
 
 TEST_CASE("Raycast: a diagonal ray through a circle center hits at exactly r",
           "[physics][queries][raycast]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd); // no cells; body test only
 
-    const Real r = Real(10);
-    const Vec2 center(Real(100), Real(100));
+    const Real r = Real(1);
+    const Vec2 center(Real(10), Real(10));
     BodyDef bd;
     bd.type     = BodyType::Static;
     bd.position = center;
@@ -264,18 +247,18 @@ TEST_CASE("Raycast: a diagonal ray through a circle center hits at exactly r",
 
     // Diagonal ray heading straight at the circle center from the lower-left.
     const Vec2 from(Real(0), Real(0));
-    const Vec2 to(Real(200), Real(200)); // passes through (100,100)
+    const Vec2 to(Real(20), Real(20)); // passes through (10,10)
 
     const auto hit = w.Raycast(from, to);
     REQUIRE(hit.has_value());
     REQUIRE_FALSE(hit->isCell);
-    // The harness "exact surface hit (r=10)" invariant: the hit point lies on
-    // the circle surface, i.e. |hit.point - center| == r (within ~0.2 -- the
-    // conservative-advancement TOL is 0.05).
+    // The harness "exact surface hit (r=1)" invariant: the hit point lies on
+    // the circle surface, i.e. |hit.point - center| == r (within ~0.02 --
+    // margin ~3.2x kShapeCastTol (1.25*kLinearSlop) (MKS P4)).
     const Real dx = hit->point.x - center.x;
     const Real dy = hit->point.y - center.y;
     const Real dist = std::sqrt(dx * dx + dy * dy);
-    REQUIRE(dist == Approx(r).margin(Real(0.2)));
+    REQUIRE(dist == Approx(r).margin(Real(0.02)));
     // And it hit the NEAR surface (the lower-left side), so the hit is before
     // the center along the ray.
     REQUIRE(hit->point.x < center.x);
@@ -354,33 +337,27 @@ TEST_CASE("ShapeCast: a swept circle stops a radius short of where a ray hits",
           "[physics][queries][shapecast]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd); // no cells; cast against a static body
 
-    // A static wall AABB the cast moves toward: spans x[100,120], y[-50,50].
+    // A static wall AABB the cast moves toward: spans x[10,12], y[-5,5].
     BodyDef bd;
     bd.type     = BodyType::Static;
-    bd.position = Vec2(Real(110), Real(0));
-    bd.shape    = MakeAabb(Real(10), Real(50));
+    bd.position = Vec2(Real(11), Real(0));
+    bd.shape    = MakeAabb(Real(1), Real(5));
     w.AddBody(bd);
 
-    const Real circleR = Real(8);
+    const Real circleR = Real(0.8);
     const Shape circle = MakeCircle(circleR);
     const Vec2  start(Real(0), Real(0));
-    const Vec2  delta(Real(200), Real(0)); // sweep right past the wall
+    const Vec2  delta(Real(20), Real(0)); // sweep right past the wall
 
     const auto cast = w.ShapeCast(circle, start, delta);
     REQUIRE(cast.has_value());
     REQUIRE(cast->body != kInvalidBody);
 
-    // A zero-radius RAY along the same line hits the wall's near face at x=100,
-    // t = 100/200 = 0.5. The radius-8 circle must stop ~its radius SHORT of
-    // that (its center stops near x=92), so cast.t < ray.t.
+    // A zero-radius RAY along the same line hits the wall's near face at x=10,
+    // t = 10/20 = 0.5. The radius-0.8 circle must stop ~its radius SHORT of
+    // that (its center stops near x=9.2), so cast.t < ray.t.
     const auto ray = w.Raycast(start, Vec2(start.x + delta.x, start.y + delta.y));
     REQUIRE(ray.has_value());
     REQUIRE(cast->t < ray->t);
@@ -388,33 +365,29 @@ TEST_CASE("ShapeCast: a swept circle stops a radius short of where a ray hits",
     // The cast reports a near-touching surface distance (< the cast TOL) and a
     // push-back normal pointing back toward the moving shape (i.e. -x, away
     // from the wall the circle is approaching from the left).
-    REQUIRE(cast->distance < Real(0.1));
+    // margin ~1.6x kShapeCastTol (1.25*kLinearSlop) (MKS P4)
+    REQUIRE(cast->distance < Real(0.01));
     REQUIRE(cast->normal.x < Real(0)); // points back toward the mover
-    // The circle center at TOI is ~radius short of the wall face (x=100).
-    REQUIRE(cast->point.x == Approx(Real(100) - circleR).margin(Real(0.2)));
+    // The circle center at TOI is ~radius short of the wall face (x=10).
+    // margin ~3.2x kShapeCastTol (1.25*kLinearSlop) (MKS P4)
+    REQUIRE(cast->point.x == Approx(Real(10) - circleR).margin(Real(0.02)));
 }
 
 TEST_CASE("ShapeCast: a clear cast misses", "[physics][queries][shapecast]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // A static body well off the cast's path.
     BodyDef bd;
     bd.type     = BodyType::Static;
-    bd.position = Vec2(Real(100), Real(500)); // far away in y
-    bd.shape    = MakeAabb(Real(10), Real(10));
+    bd.position = Vec2(Real(10), Real(50)); // far away in y
+    bd.shape    = MakeAabb(Real(1), Real(1));
     w.AddBody(bd);
 
-    const Shape circle = MakeCircle(Real(5));
+    const Shape circle = MakeCircle(Real(0.5));
     const auto cast =
-        w.ShapeCast(circle, Vec2(Real(0), Real(0)), Vec2(Real(50), Real(0)));
+        w.ShapeCast(circle, Vec2(Real(0), Real(0)), Vec2(Real(5), Real(0)));
     REQUIRE_FALSE(cast.has_value());
 }
 
@@ -422,20 +395,14 @@ TEST_CASE("ShapeCast: degenerate (zero-length) delta returns none",
           "[physics][queries][shapecast]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     BodyDef bd;
     bd.type     = BodyType::Static;
-    bd.position = Vec2(Real(10), Real(0));
-    bd.shape    = MakeAabb(Real(10), Real(10));
+    bd.position = Vec2(Real(1), Real(0));
+    bd.shape    = MakeAabb(Real(1), Real(1));
     w.AddBody(bd);
 
-    const Shape circle = MakeCircle(Real(5));
+    const Shape circle = MakeCircle(Real(0.5));
     const auto cast =
         w.ShapeCast(circle, Vec2(Real(0), Real(0)), Vec2(Real(0), Real(0)));
     REQUIRE_FALSE(cast.has_value());
@@ -445,24 +412,18 @@ TEST_CASE("ShapeCast: movers are obstacles only with opts.movers",
           "[physics][queries][shapecast]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // A KINEMATIC body in the cast path -- a mover, not a static.
     BodyDef bd;
     bd.type     = BodyType::Kinematic;
-    bd.position = Vec2(Real(100), Real(0));
-    bd.shape    = MakeAabb(Real(10), Real(50));
+    bd.position = Vec2(Real(10), Real(0));
+    bd.shape    = MakeAabb(Real(1), Real(5));
     w.AddBody(bd);
 
-    const Shape circle = MakeCircle(Real(8));
+    const Shape circle = MakeCircle(Real(0.8));
     const Vec2  start(Real(0), Real(0));
-    const Vec2  delta(Real(200), Real(0));
+    const Vec2  delta(Real(20), Real(0));
 
     // Without opts.movers, the kinematic body is NOT an obstacle -> miss.
     REQUIRE_FALSE(w.ShapeCast(circle, start, delta).has_value());
@@ -479,34 +440,28 @@ TEST_CASE("ShapeCast: opts.exclude skips the caster's own body",
           "[physics][queries][shapecast]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // The "caster" body overlapping the start, plus a wall down the path.
     BodyDef self;
     self.type     = BodyType::Kinematic;
     self.position = Vec2(Real(0), Real(0));
-    self.shape    = MakeCircle(Real(8));
+    self.shape    = MakeCircle(Real(0.8));
     BodyHandle selfH = w.AddBody(self);
 
     BodyDef wall;
     wall.type     = BodyType::Kinematic;
-    wall.position = Vec2(Real(100), Real(0));
-    wall.shape    = MakeAabb(Real(10), Real(50));
+    wall.position = Vec2(Real(10), Real(0));
+    wall.shape    = MakeAabb(Real(1), Real(5));
     w.AddBody(wall);
 
-    const Shape circle = MakeCircle(Real(8));
+    const Shape circle = MakeCircle(Real(0.8));
     ShapeCastOpts opts;
     opts.movers  = true;
     opts.exclude = selfH;
 
     const auto cast =
-        w.ShapeCast(circle, Vec2(Real(0), Real(0)), Vec2(Real(200), Real(0)), opts);
+        w.ShapeCast(circle, Vec2(Real(0), Real(0)), Vec2(Real(20), Real(0)), opts);
     REQUIRE(cast.has_value());
     // The hit is the wall, not the excluded self body.
     REQUIRE(cast->body != selfH);
@@ -520,37 +475,31 @@ TEST_CASE("OverlapShape: returns exactly the overlapping bodies",
           "[physics][queries][overlap]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // Body A: overlaps the query. Body B: also overlaps. Body C: far away.
     BodyDef a;
     a.type     = BodyType::Static;
     a.position = Vec2(Real(0), Real(0));
-    a.shape    = MakeCircle(Real(10));
+    a.shape    = MakeCircle(Real(1));
     BodyHandle ha = w.AddBody(a);
 
     BodyDef b;
     b.type     = BodyType::Kinematic;
-    b.position = Vec2(Real(15), Real(0));
-    b.shape    = MakeCircle(Real(10));
+    b.position = Vec2(Real(1.5), Real(0));
+    b.shape    = MakeCircle(Real(1));
     BodyHandle hb = w.AddBody(b);
 
     BodyDef c;
     c.type     = BodyType::Static;
-    c.position = Vec2(Real(500), Real(500)); // far away -> excluded
-    c.shape    = MakeCircle(Real(10));
+    c.position = Vec2(Real(50), Real(50)); // far away -> excluded
+    c.shape    = MakeCircle(Real(1));
     w.AddBody(c);
 
-    // Query a circle centered at (5,0) radius 12: overlaps A (dist 5 < 22) and
-    // B (dist 10 < 22), excludes C.
-    const Shape query = MakeCircle(Real(12));
-    const Transform xf{ Vec2(Real(5), Real(0)), Real(0) };
+    // Query a circle centered at (0.5,0) radius 1.2: overlaps A (dist 0.5 <
+    // 2.2) and B (dist 1.0 < 2.2), excludes C.
+    const Shape query = MakeCircle(Real(1.2));
+    const Transform xf{ Vec2(Real(0.5), Real(0)), Real(0) };
 
     std::vector<BodyHandle> hits;
     const int n = w.OverlapShape(query, xf, hits);
@@ -564,22 +513,16 @@ TEST_CASE("OverlapShape: a non-overlapping query returns empty",
           "[physics][queries][overlap]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef a;
     a.type     = BodyType::Static;
     a.position = Vec2(Real(0), Real(0));
-    a.shape    = MakeCircle(Real(5));
+    a.shape    = MakeCircle(Real(0.5));
     w.AddBody(a);
 
-    const Shape query = MakeCircle(Real(5));
-    const Transform xf{ Vec2(Real(100), Real(100)), Real(0) }; // far away
+    const Shape query = MakeCircle(Real(0.5));
+    const Transform xf{ Vec2(Real(10), Real(10)), Real(0) }; // far away
 
     std::vector<BodyHandle> hits;
     const int n = w.OverlapShape(query, xf, hits);
@@ -595,29 +538,23 @@ TEST_CASE("QueryAABB: includes overlapping, excludes non-overlapping",
           "[physics][queries][aabb]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef in;
     in.type     = BodyType::Kinematic;
-    in.position = Vec2(Real(10), Real(10));
-    in.shape    = MakeCircle(Real(5));
+    in.position = Vec2(Real(1), Real(1));
+    in.shape    = MakeCircle(Real(0.5));
     BodyHandle hin = w.AddBody(in);
 
     BodyDef out;
     out.type     = BodyType::Static;
-    out.position = Vec2(Real(500), Real(500));
-    out.shape    = MakeAabb(Real(5), Real(5));
+    out.position = Vec2(Real(50), Real(50));
+    out.shape    = MakeAabb(Real(0.5), Real(0.5));
     w.AddBody(out);
 
     std::vector<BodyHandle> hits;
     const int n =
-        w.QueryAABB(Aabb{ Vec2(Real(0), Real(0)), Vec2(Real(50), Real(50)) }, hits);
+        w.QueryAABB(Aabb{ Vec2(Real(0), Real(0)), Vec2(Real(5), Real(5)) }, hits);
     REQUIRE(n == 1);
     REQUIRE(hits[0] == hin);
 }
@@ -633,38 +570,32 @@ TEST_CASE("OverlapShape: a sensor body overlapping the query shape IS returned",
     // ShapeCast, which skips sensors). This test locks that contract so any
     // future refactor that accidentally silences sensors will fail here.
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     // A non-sensor body well outside the query (should not appear).
     BodyDef far;
     far.type     = BodyType::Static;
-    far.position = Vec2(Real(500), Real(500));
-    far.shape    = MakeCircle(Real(5));
+    far.position = Vec2(Real(50), Real(50));
+    far.shape    = MakeCircle(Real(0.5));
     w.AddBody(far);
 
     // A SENSOR body squarely overlapping the query center.
     BodyDef sensor;
     sensor.type      = BodyType::Static;
     sensor.position  = Vec2(Real(0), Real(0));
-    sensor.shape     = MakeCircle(Real(10));
+    sensor.shape     = MakeCircle(Real(1));
     sensor.isSensor  = true;
     BodyHandle hs = w.AddBody(sensor);
 
     // A non-sensor body also overlapping (included for the non-sensor path too).
     BodyDef solid;
     solid.type     = BodyType::Kinematic;
-    solid.position = Vec2(Real(5), Real(0));
-    solid.shape    = MakeCircle(Real(10));
+    solid.position = Vec2(Real(0.5), Real(0));
+    solid.shape    = MakeCircle(Real(1));
     BodyHandle hk = w.AddBody(solid);
 
-    // Query circle at origin radius 8: overlaps both the sensor and the solid.
-    const Shape query = MakeCircle(Real(8));
+    // Query circle at origin radius 0.8: overlaps both the sensor and the solid.
+    const Shape query = MakeCircle(Real(0.8));
     const Transform xf{ Vec2(Real(0), Real(0)), Real(0) };
 
     std::vector<BodyHandle> hits;
@@ -695,7 +626,7 @@ TEST_CASE("ShapeCast: a swept circle hits a solid tile span",
 {
     // Build a world with a TileGrid that has a solid run at column 5, row 2.
     // The merged tile span for that cell is the AABB of cell (5,2):
-    //   x in [50, 60), y in [20, 30)  (cellSize=10, origin=0).
+    //   x in [5, 6), y in [2, 3)  (cellSize=1, origin=0).
     // Sweep a circle from the left toward the span; assert it hits (exercises
     // the ShapeCastPoly-against-tile-span path) and that the hit normal points
     // back toward the mover (i.e. away from the span, in the -x direction).
@@ -704,25 +635,27 @@ TEST_CASE("ShapeCast: a swept circle hits a solid tile span",
 
     PhysicsWorld w(MakeWorldDef(grid));
 
-    const Real   circleR = Real(4);
+    const Real   circleR = Real(0.4);
     const Shape  circle  = MakeCircle(circleR);
-    // Start left of the span, sweeping right along row-2 center (y=25).
-    const Vec2   start(Real(10), Real(25));
-    const Vec2   delta(Real(100), Real(0)); // sweeps from x=10 to x=110
+    // Start left of the span, sweeping right along row-2 center (y=2.5).
+    const Vec2   start(Real(1), Real(2.5));
+    const Vec2   delta(Real(10), Real(0)); // sweeps from x=1 to x=11
 
     const auto cast = w.ShapeCast(circle, start, delta);
     REQUIRE(cast.has_value());
     // A tile span hit has body == kInvalidBody.
     REQUIRE(cast->body == kInvalidBody);
-    // The circle must stop BEFORE the span's near face (x=50): its center
-    // lands approximately at x = 50 - circleR (a radius short of the wall).
-    REQUIRE(cast->point.x < Real(50));
-    REQUIRE(cast->point.x == Approx(Real(50) - circleR).margin(Real(0.5)));
+    // The circle must stop BEFORE the span's near face (x=5): its center
+    // lands approximately at x = 5 - circleR (a radius short of the wall).
+    REQUIRE(cast->point.x < Real(5));
+    // margin ~8x kShapeCastTol (1.25*kLinearSlop) (MKS P4)
+    REQUIRE(cast->point.x == Approx(Real(5) - circleR).margin(Real(0.05)));
     // The cast terminates at t < 1 (did not pass through).
     REQUIRE(cast->t > Real(0));
     REQUIRE(cast->t < Real(1));
     // Push-back normal faces back toward the mover (negative x direction).
     REQUIRE(cast->normal.x < Real(0));
     // Near-touching at impact: surface distance is small.
-    REQUIRE(cast->distance < Real(0.2));
+    // margin ~3.2x kShapeCastTol (1.25*kLinearSlop) (MKS P4)
+    REQUIRE(cast->distance < Real(0.02));
 }

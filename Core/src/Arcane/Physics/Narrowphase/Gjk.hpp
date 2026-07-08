@@ -154,11 +154,14 @@ namespace Arcane
         };
 
         // ----------------------------------------------------------------
-        // MKS-DEFER(P4): re-couple to kLinearSlop (Box2D distance.c:611-614
-        // uses linearSlop-scale termination) when the Queries cluster converts.
-        // Conservative-advancement constants (Cast.lua:11-12, verbatim).
+        // Coupled to kLinearSlop per Box2D v3.1.1 (distance.c:610-614,641: target =
+        // max(linearSlop, totalRadius - linearSlop), tolerance = 0.25*linearSlop --
+        // effective near-zero-radius hit band = 1.25*linearSlop). Arcane compares a
+        // single flat tolerance against the POST-RADII surface distance (Gjk.cpp
+        // Advance), so the flat equivalent of Box2D's band is used; the radius-aware
+        // target split is a recorded parity note, not adopted (MKS P4).
         // ----------------------------------------------------------------
-        inline constexpr Real kShapeCastTol     = Real(0.05);
+        inline constexpr Real kShapeCastTol = Real(1.25) * kLinearSlop; // = 0.00625
         inline constexpr int  kShapeCastMaxIter = 32;
 
         // ----------------------------------------------------------------

@@ -65,51 +65,51 @@ namespace
 // ===========================================================================
 // (a) Part 0 -- BuildCore honors rotation: ShapeDistance to a rotated capsule.
 //
-// MakeCapsule(6, 2): core segment (-6,0)-(+6,0), radius 2.
-//   At angle 0 it is HORIZONTAL: x in [-8,8], y in [-2,2].
-//   Rotated +pi/2 it is VERTICAL: x in [-2,2], y in [-8,8].
+// MakeCapsule(0.6, 0.2): core segment (-0.6,0)-(+0.6,0), radius 0.2.
+//   At angle 0 it is HORIZONTAL: x in [-0.8,0.8], y in [-0.2,0.2].
+//   Rotated +pi/2 it is VERTICAL: x in [-0.2,0.2], y in [-0.8,0.8].
 //
-// A zero-radius point (MakeCircle(0)) at (0,12):
-//   vs the ROTATED (vertical) capsule: nearest segment point is (0,6),
-//     gap 12-6 = 6, minus radius 2 = 4.
+// A zero-radius point (MakeCircle(0)) at (0,1.2):
+//   vs the ROTATED (vertical) capsule: nearest segment point is (0,0.6),
+//     gap 1.2-0.6 = 0.6, minus radius 0.2 = 0.4.
 //   vs the angle-0 (horizontal) capsule: nearest segment point is (0,0),
-//     gap 12, minus radius 2 = 10.
-// Rotation-blind code would report 10 for BOTH (it would never rotate the
+//     gap 1.2, minus radius 0.2 = 1.0.
+// Rotation-blind code would report 1.0 for BOTH (it would never rotate the
 // segment), so the rotated case is the discriminator.
 // ===========================================================================
 TEST_CASE("physics-v2 T7 (a): ShapeDistance honors rotation (rotated capsule)",
           "[physics][PhysicsQueryRotation]")
 {
-    const Shape capsule = MakeCapsule(Real(6), Real(2));
+    const Shape capsule = MakeCapsule(Real(0.6), Real(0.2));
     const Shape point   = MakeCircle(Real(0));
 
-    // Rotated +pi/2 (vertical): surface distance from (0,12) = 12 - 6 - 2 = 4.
+    // Rotated +pi/2 (vertical): surface distance from (0,1.2) = 1.2-0.6-0.2 = 0.4.
     {
         const Transform xfCap{ Vec2(Real(0), Real(0)), kHalfPi };
-        const Transform xfPt { Vec2(Real(0), Real(12)), Real(0) };
+        const Transform xfPt { Vec2(Real(0), Real(1.2)), Real(0) };
         const ShapeDistanceResult d = ShapeDistance(point, xfPt, capsule, xfCap);
-        CHECK(static_cast<double>(d.distance) == Approx(4.0).margin(1e-3));
+        CHECK(static_cast<double>(d.distance) == Approx(0.4).margin(1e-4));
     }
 
-    // Angle 0 (horizontal): surface distance from (0,12) = 12 - 0 - 2 = 10.
+    // Angle 0 (horizontal): surface distance from (0,1.2) = 1.2-0-0.2 = 1.0.
     // (Proves the angle-0 path is unchanged by the rotation fix.)
     {
         const Transform xfCap{ Vec2(Real(0), Real(0)), Real(0) };
-        const Transform xfPt { Vec2(Real(0), Real(12)), Real(0) };
+        const Transform xfPt { Vec2(Real(0), Real(1.2)), Real(0) };
         const ShapeDistanceResult d = ShapeDistance(point, xfPt, capsule, xfCap);
-        CHECK(static_cast<double>(d.distance) == Approx(10.0).margin(1e-3));
+        CHECK(static_cast<double>(d.distance) == Approx(1.0).margin(1e-4));
     }
 }
 
 // ===========================================================================
 // (b) Part A -- ContactManager events are rotation + fixture aware.
 //
-// A static CIRCLE radius 2 at (0,6) and a KINEMATIC box-polygon (half-extents
-// 10 x 2) at the origin.
-//   At angle 0 the box spans y in [-2,2]; the circle bottom is at y=4 -> a
-//     gap of 2 -> NO overlap -> no Begin event.
-//   Rotated +pi/2 the box spans y in [-10,10]; it now overlaps the circle
-//     (whose center y=6 is well inside the box) -> a Begin event fires.
+// A static CIRCLE radius 0.2 at (0,0.6) and a KINEMATIC box-polygon
+// (half-extents 1 x 0.2) at the origin.
+//   At angle 0 the box spans y in [-0.2,0.2]; the circle bottom is at y=0.4
+//     -> a gap of 0.2 -> NO overlap -> no Begin event.
+//   Rotated +pi/2 the box spans y in [-1,1]; it now overlaps the circle
+//     (whose center y=0.6 is well inside the box) -> a Begin event fires.
 // ===========================================================================
 TEST_CASE("physics-v2 T7 (b): contact Begin fires only when the body is rotated",
           "[physics][PhysicsQueryRotation]")
@@ -117,24 +117,18 @@ TEST_CASE("physics-v2 T7 (b): contact Begin fires only when the body is rotated"
     auto buildWorld = [](Real boxAngle) -> int
     {
         WorldDef wd;
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
         BodyDef circ;
         circ.type     = BodyType::Static;
-        circ.position = Vec2(Real(0), Real(6));
-        circ.shape    = MakeCircle(Real(2));
+        circ.position = Vec2(Real(0), Real(0.6));
+        circ.shape    = MakeCircle(Real(0.2));
         w.AddBody(circ);
 
         BodyDef box;
         box.type     = BodyType::Kinematic; // kinematic-vs-static emits events
         box.position = Vec2(Real(0), Real(0));
-        box.shape    = MakeBoxPolygon(Real(10), Real(2));
+        box.shape    = MakeBoxPolygon(Real(1), Real(0.2));
         BodyHandle hb = w.AddBody(box);
         w.SetAngle(hb, boxAngle);
 
@@ -161,10 +155,10 @@ TEST_CASE("physics-v2 T7 (b): contact Begin fires only when the body is rotated"
 // (c) Part B -- Raycast / RayVsBody vs a rotated capsule hits the rotated
 //               extent.
 //
-// A kinematic body with MakeCapsule(6,2) at the origin.
-//   Rotated +pi/2 (vertical): top surface at y=8.  A ray from (0,20) down to
-//     (0,-20) (delta y = -40) hits the top at y=8 -> t = (20-8)/40 = 0.30.
-//   Angle 0 (horizontal): top surface at y=2 -> t = (20-2)/40 = 0.45.
+// A kinematic body with MakeCapsule(0.6,0.2) at the origin.
+//   Rotated +pi/2 (vertical): top surface at y=0.8.  A ray from (0,2) down to
+//     (0,-2) (delta y = -4) hits the top at y=0.8 -> t = (2-0.8)/4 = 0.30.
+//   Angle 0 (horizontal): top surface at y=0.2 -> t = (2-0.2)/4 = 0.45.
 // ===========================================================================
 TEST_CASE("physics-v2 T7 (c): raycast vs a rotated capsule hits rotated extent",
           "[physics][PhysicsQueryRotation]")
@@ -172,42 +166,36 @@ TEST_CASE("physics-v2 T7 (c): raycast vs a rotated capsule hits rotated extent",
     auto castT = [](Real capAngle) -> Real
     {
         WorldDef wd;
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         BodyDef bd;
         bd.type     = BodyType::Kinematic;
         bd.position = Vec2(Real(0), Real(0));
-        bd.shape    = MakeCapsule(Real(6), Real(2));
+        bd.shape    = MakeCapsule(Real(0.6), Real(0.2));
         BodyHandle h = w.AddBody(bd);
         w.SetAngle(h, capAngle);
 
-        const auto hit = w.Raycast(Vec2(Real(0), Real(20)), Vec2(Real(0), Real(-20)));
+        const auto hit = w.Raycast(Vec2(Real(0), Real(2)), Vec2(Real(0), Real(-2)));
         REQUIRE(hit.has_value());
         REQUIRE_FALSE(hit->isCell);
         return hit->t;
     };
 
-    // Rotated pi/2: top at y=8 -> t = 12/40 = 0.30.
-    CHECK(static_cast<double>(castT(kHalfPi)) == Approx(0.30).margin(1e-2));
-    // Angle 0: top at y=2 -> t = 18/40 = 0.45 (unchanged path).
-    CHECK(static_cast<double>(castT(Real(0))) == Approx(0.45).margin(1e-2));
+    // Rotated pi/2: top at y=0.8 -> t = 1.2/4 = 0.30.
+    CHECK(static_cast<double>(castT(kHalfPi)) == Approx(0.30).margin(1e-3));
+    // Angle 0: top at y=0.2 -> t = 1.8/4 = 0.45 (unchanged path).
+    CHECK(static_cast<double>(castT(Real(0))) == Approx(0.45).margin(1e-3));
 }
 
 // ===========================================================================
 // (d) Part B -- OverlapShape on a body that overlaps the query ONLY rotated.
 //
-// A static MakeAabb(10,2) body at the origin (a long thin box).
-//   At angle 0 it spans y in [-2,2].
-//   Rotated +pi/2 it spans y in [-10,10].
-// A query MakeCircle(1) at (0,9):
-//   unrotated: nearest body point y=2, gap 9-2=7 > radius 1 -> NO overlap.
-//   rotated  : the query center y=9 is inside the body (y in [-10,10]),
-//              x=0 in [-2,2] -> OVERLAP.
+// A static MakeAabb(1,0.2) body at the origin (a long thin box).
+//   At angle 0 it spans y in [-0.2,0.2].
+//   Rotated +pi/2 it spans y in [-1,1].
+// A query MakeCircle(0.1) at (0,0.9):
+//   unrotated: nearest body point y=0.2, gap 0.9-0.2=0.7 > radius 0.1 -> NO overlap.
+//   rotated  : the query center y=0.9 is inside the body (y in [-1,1]),
+//              x=0 in [-0.2,0.2] -> OVERLAP.
 // ===========================================================================
 TEST_CASE("physics-v2 T7 (d): OverlapShape sees a body only when rotated",
           "[physics][PhysicsQueryRotation]")
@@ -215,22 +203,16 @@ TEST_CASE("physics-v2 T7 (d): OverlapShape sees a body only when rotated",
     auto overlaps = [](Real bodyAngle) -> int
     {
         WorldDef wd;
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         BodyDef bd;
         bd.type     = BodyType::Static;
         bd.position = Vec2(Real(0), Real(0));
-        bd.shape    = MakeAabb(Real(10), Real(2));
+        bd.shape    = MakeAabb(Real(1), Real(0.2));
         BodyHandle h = w.AddBody(bd);
         w.SetAngle(h, bodyAngle);
 
-        const Shape query = MakeCircle(Real(1));
-        const Transform xf{ Vec2(Real(0), Real(9)), Real(0) };
+        const Shape query = MakeCircle(Real(0.1));
+        const Transform xf{ Vec2(Real(0), Real(0.9)), Real(0) };
         std::vector<BodyHandle> hits;
         return w.OverlapShape(query, xf, hits);
     };
@@ -243,46 +225,40 @@ TEST_CASE("physics-v2 T7 (d): OverlapShape sees a body only when rotated",
 // (e) Part B -- OverlapShape on a COMPOUND body via fixture[1].
 //
 // A body with TWO fixtures:
-//   fixture0 = MakeAabb(2,2) at local (0,0) [the AddBody auto-fixture]
-//   fixture1 = MakeCircle(2) at local (12,0)
-// A query MakeCircle(1) at (12,0): the rotation-blind single-shape path would
-// test only the primary box at the origin and MISS; the fixture-aware path
-// finds the overlap via fixture[1] (the offset circle).
+//   fixture0 = MakeAabb(0.2,0.2) at local (0,0) [the AddBody auto-fixture]
+//   fixture1 = MakeCircle(0.2) at local (1.2,0)
+// A query MakeCircle(0.1) at (1.2,0): the rotation-blind single-shape path
+// would test only the primary box at the origin and MISS; the fixture-aware
+// path finds the overlap via fixture[1] (the offset circle).
 // ===========================================================================
 TEST_CASE("physics-v2 T7 (e): OverlapShape sees a compound body via fixture[1]",
           "[physics][PhysicsQueryRotation]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type     = BodyType::Static;
     bd.position = Vec2(Real(0), Real(0));
-    bd.shape    = MakeAabb(Real(2), Real(2)); // fixture0 at local (0,0)
+    bd.shape    = MakeAabb(Real(0.2), Real(0.2)); // fixture0 at local (0,0)
     BodyHandle bh = w.AddBody(bd);
 
     FixtureDef fd;
-    fd.shape    = MakeCircle(Real(2));
-    fd.localPos = Vec2(Real(12), Real(0)); // fixture1 offset
+    fd.shape    = MakeCircle(Real(0.2));
+    fd.localPos = Vec2(Real(1.2), Real(0)); // fixture1 offset
     w.AddFixture(bh, fd);
 
-    // Query at (12,0): overlaps fixture1 (a circle r=2 at (12,0)) but NOT the
-    // primary box at the origin.
-    const Shape query = MakeCircle(Real(1));
-    const Transform xf{ Vec2(Real(12), Real(0)), Real(0) };
+    // Query at (1.2,0): overlaps fixture1 (a circle r=0.2 at (1.2,0)) but NOT
+    // the primary box at the origin.
+    const Shape query = MakeCircle(Real(0.1));
+    const Transform xf{ Vec2(Real(1.2), Real(0)), Real(0) };
     std::vector<BodyHandle> hits;
     const int n = w.OverlapShape(query, xf, hits);
     REQUIRE(n == 1);
     CHECK(hits[0] == bh);
 
     // Control: the same query far from BOTH fixtures finds nothing.
-    const Transform xfFar{ Vec2(Real(40), Real(0)), Real(0) };
+    const Transform xfFar{ Vec2(Real(4), Real(0)), Real(0) };
     std::vector<BodyHandle> none;
     CHECK(w.OverlapShape(query, xfFar, none) == 0);
 }
@@ -291,58 +267,55 @@ TEST_CASE("physics-v2 T7 (e): OverlapShape sees a compound body via fixture[1]",
 // (f) Part C -- BulletSweep clamps a fast bullet whose ROTATED fixture extent
 //               tunnels a thin wall.
 //
-// A thin horizontal static wall MakeAabb(50, 0.5) at (0,100): spans
-//   y in [99.5, 100.5].
-// A KINEMATIC bullet box MakeBoxPolygon(8, 1) rotated +pi/2 so its y
-//   half-extent is 8 (instead of 1).  It starts at (0,0) and is given a huge
-//   downward velocity so it would travel 200 units in one step (prev=(0,0),
-//   curr=(0,200), delta=(0,200)).
+// A thin horizontal static wall MakeAabb(5, 0.05) at (0,10): spans
+//   y in [9.95, 10.05].
+// A KINEMATIC bullet box MakeBoxPolygon(0.8, 0.1) rotated +pi/2 so its y
+//   half-extent is 0.8 (instead of 0.1).  It starts at (0,0) and is given a
+//   huge downward velocity so it would travel 20 units in one step
+//   (prev=(0,0), curr=(0,20), delta=(0,20)).
 //
-// The rotated bullet's leading (bottom) edge is at center_y + 8.  It first
-// touches the wall top (y=99.5) when center_y + 8 = 99.5 -> center_y = 91.5,
-//   t = 91.5 / 200 = 0.4575.  Clamp = t - 0.001 -> clamped center_y ~= 91.3.
+// The rotated bullet's leading (bottom) edge is at center_y + 0.8.  It first
+// touches the wall top (y=9.95) when center_y + 0.8 = 9.95 -> center_y = 9.15,
+//   t = 9.15 / 20 = 0.4575.  Clamp = t - 0.001 -> clamped center_y ~= 9.13.
 //
-// Rotation-blind (y half-extent 1) would clamp at center_y ~= 98.5 instead, so
-// the post-step y near 91.3 (NOT ~98.5) is the discriminator.  Either way the
-// bullet must stop SHORT of the wall top (y=99.5).
+// Rotation-blind (y half-extent 0.1) would clamp at center_y ~= 9.85 instead,
+// so the post-step y near 9.13 (NOT ~9.85) is the discriminator.  Either way
+// the bullet must stop SHORT of the wall top (y=9.95).
 // ===========================================================================
 TEST_CASE("physics-v2 T7 (f): BulletSweep clamps a rotated bullet at its extent",
           "[physics][PhysicsQueryRotation]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef wall;
     wall.type     = BodyType::Static;
-    wall.position = Vec2(Real(0), Real(100));
-    wall.shape    = MakeAabb(Real(50), Real(0.5)); // thin: y in [99.5,100.5]
+    wall.position = Vec2(Real(0), Real(10));
+    wall.shape    = MakeAabb(Real(5), Real(0.05)); // thin: y in [9.95,10.05]
     w.AddBody(wall);
 
     BodyDef bullet;
     bullet.type     = BodyType::Kinematic;
     bullet.position = Vec2(Real(0), Real(0));
-    bullet.shape    = MakeBoxPolygon(Real(8), Real(1)); // long in x, thin in y
+    bullet.shape    = MakeBoxPolygon(Real(0.8), Real(0.1)); // long in x, thin in y
     bullet.bullet   = true;
     BodyHandle hb = w.AddBody(bullet);
-    w.SetAngle(hb, kHalfPi); // rotate so the y half-extent becomes 8
+    w.SetAngle(hb, kHalfPi); // rotate so the y half-extent becomes 0.8
 
-    // Velocity that moves the bullet 200 units down in one 1/60s step.
-    w.SetVelocity(hb, Vec2(Real(0), Real(200) / kStep));
+    // Velocity that moves the bullet 20 units down in one 1/60s step. KINEMATIC
+    // -- the solver's 400 m/s maxLinearVelocity clamp only gates Dynamic bodies
+    // (InvMass > 0), so this deliberately-fast bullet integrates unclamped; do
+    // not "fix" this to be under 400, the exemption is the point of the test.
+    w.SetVelocity(hb, Vec2(Real(0), Real(20) / kStep));
 
     w.Step(kStep);
 
     const Vec2 finalPos = w.Position(hb);
-    // The bullet's bottom edge (center_y + 8) must stop just OUTSIDE the wall
-    // top (y=99.5): center_y < 91.5.
-    CHECK(static_cast<double>(finalPos.y) < 91.5);
-    // And it must be clamped at the rotated extent (~91.3), NOT the angle-0
-    // extent (~98.5) -- so it is well below 95.
-    CHECK(static_cast<double>(finalPos.y) > 88.0);
-    CHECK(static_cast<double>(finalPos.y) < 95.0);
+    // The bullet's bottom edge (center_y + 0.8) must stop just OUTSIDE the wall
+    // top (y=9.95): center_y < 9.15.
+    CHECK(static_cast<double>(finalPos.y) < 9.15);
+    // And it must be clamped at the rotated extent (~9.13), NOT the angle-0
+    // extent (~9.85) -- so it is well below 9.5.
+    CHECK(static_cast<double>(finalPos.y) > 8.8);
+    CHECK(static_cast<double>(finalPos.y) < 9.5);
 }
