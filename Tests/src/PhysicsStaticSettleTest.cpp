@@ -2,18 +2,19 @@
 // on / tunnels through a STATIC body" bug (Physics v2 debug).
 //
 // SYMPTOMS reproduced here as FAILING CPU tests (red before the fix):
-//   (a) SETTLE  -- a horizontal capsule (radius 14, halfLen 24, the Sandbox
-//       "Mixed shapes" green capsule) dropped onto a wide static floor must come
-//       to REST: |velocity| ~ 0, |angVel| ~ 0, penetration within the documented
-//       budget. Before the fix the capsule keeps a persistent into-floor velocity
-//       (a single-point round manifold lets it rock) and never sleeps.
+//   (a) SETTLE  -- a horizontal capsule (radius 0.14 m, halfLen 0.24 m, the
+//       Sandbox "Mixed shapes" green capsule) dropped onto a wide static floor
+//       must come to REST: |velocity| ~ 0, |angVel| ~ 0, penetration within the
+//       documented budget. Before the fix the capsule keeps a persistent
+//       into-floor velocity (a single-point round manifold lets it rock) and
+//       never sleeps.
 //   (b) NO PULL-THROUGH -- a dynamic body resting on a static floor, driven with
 //       a strong sustained DOWNWARD push every frame (mimicking the mouse drag),
 //       must NOT sink deep into / pass through the floor. Tested for a capsule
 //       AND a box. Before the fix the forced body penetrates well past the budget.
 //
-// The floor is CENTERED under the bodies (x in [-560,560]) and bodies spawn near
-// x=0 so they cannot roll off the floor edge and give a false "fell through".
+// The floor is CENTERED under the bodies (x in [-5.6,5.6] m) and bodies spawn
+// near x=0 so they cannot roll off the floor edge and give a false "fell through".
 //
 // PRESENTATION-FREE + C++20-clean.
 
@@ -36,13 +37,18 @@ namespace
     // Mimic the Sandbox mouse-spring drag (Interaction.cpp): drive the body's
     // grab anchor toward a target world point with a CAPPED impulse applied at
     // the anchor, then Step. This is the path the user uses to drag a body into
-    // a static body. The caps match Interaction.hpp.
+    // a static body. The caps below are copied VERBATIM from Interaction.hpp
+    // (do not derive them) -- MKS P6 retuned production's drag caps from
+    // px-era values (4000 / 40000 / 8) to these m/s-scale values, so this
+    // local port must be re-synced whenever Interaction.hpp's caps change.
     void DragStep(PhysicsWorld& w, BodyHandle h, Vec2 grabLocalAnchor,
                   Vec2 cursorWorld, Real dt)
     {
-        constexpr Real kDragMaxSpeed  = Real(4000);
-        constexpr Real kDragMaxAccel  = Real(40000);
-        constexpr Real kDragMaxAngVel = Real(8);
+        // Verbatim from Arcane/Sandbox/src/Interaction.hpp:109 (kDragMaxSpeed),
+        // :121 (kDragMaxAccel), :129 (kDragMaxAngVel) -- MKS P6.
+        constexpr Real kDragMaxSpeed  = Real(40.0);
+        constexpr Real kDragMaxAccel  = Real(400.0);
+        constexpr Real kDragMaxAngVel = Real(8.0);
 
         const std::uint32_t si = h.index;
         const Vec2 o = w.Position(h);
@@ -107,16 +113,16 @@ namespace
 {
     constexpr Real kStep = Real(1) / Real(60);
 
-    // Sandbox "Mixed shapes" parameters.
-    constexpr Real kGravityY  = Real(900);
-    constexpr Real kCapRadius = Real(14);
-    constexpr Real kCapHalf   = Real(24);
+    // Sandbox "Mixed shapes" parameters (MKS: meters, g = 10 -- MKS P3).
+    constexpr Real kGravityY  = Real(10);
+    constexpr Real kCapRadius = Real(0.14);
+    constexpr Real kCapHalf   = Real(0.24);
 
     // Floor: a wide static box centered at x=0. Top surface at y=0; the box
-    // spans y in [0, 40] (half-height 20), x in [-560, 560] (half-width 560).
+    // spans y in [0, 0.4] (half-height 0.2), x in [-5.6, 5.6] (half-width 5.6).
     constexpr Real kFloorTopY  = Real(0);
-    constexpr Real kFloorHalfW = Real(560);
-    constexpr Real kFloorHalfH = Real(20);
+    constexpr Real kFloorHalfW = Real(5.6);
+    constexpr Real kFloorHalfH = Real(0.2);
 
     BodyHandle AddFloor(PhysicsWorld& w)
     {
@@ -161,17 +167,12 @@ TEST_CASE("physics: capsule settles at rest on a static floor", "[physics]")
 {
     WorldDef wd;
     wd.gravityY = kGravityY;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w);
     // Spawn the capsule a little above the floor so it drops a short distance
-    // and lands flat (resting y ~ floorTop - radius == -14).
-    BodyHandle cap = AddCapsule(w, Vec2(Real(0), Real(-60)));
+    // and lands flat (resting y ~ floorTop - radius == -0.14).
+    BodyHandle cap = AddCapsule(w, Vec2(Real(0), Real(-0.6)));
 
     // Simulate ~3 seconds.
     for (int k = 0; k < 180; ++k)
@@ -189,16 +190,31 @@ TEST_CASE("physics: capsule settles at rest on a static floor", "[physics]")
          << ") angVel=" << avel << " angle=" << ang << " awake=" << w.IsAwake(cap));
 
     // The capsule must have come to rest: near-zero linear + angular velocity.
-    CHECK(spd  < Real(1.0));
+    // Re-baselined for MKS (protocol rule 6): measured spd=0, avel=0 (the body
+    // is already asleep by assert time -- see CHECK_FALSE(IsAwake) below -- and
+    // sleeping zeroes velocity). Both bounds are set at the WorldDef sleep gate
+    // (sleepThreshold default 0.05 m/s, PhysicsWorld.hpp): Island::UpdateSleep
+    // requires |v| + |w|*maxExtent < sleepThreshold before it sleeps a body, so
+    // 0.05 is the theoretical worst case at the sleep boundary, not a coincidence
+    // with the old px-era literal.
+    CHECK(spd  < Real(0.05));
     CHECK(avel < Real(0.05));
 
     // Penetration budget: the capsule bottom (p.y + radius) must not sink more
-    // than the documented ~0.21 budget below the floor top (y=0).
+    // than the documented budget below the floor top (y=0). Re-baselined for
+    // MKS (protocol rule 6): measured ~0.0003 m (SoftStep drives a single
+    // resting contact toward kLinearSlop = 0.005 asymptotically, matching the
+    // PhysicsSolverTest single-ball precedent); bound set at kLinearSlop/5 =
+    // 0.001, ~3x headroom over measured.
     const Real penetration = (p.y + kCapRadius) - kFloorTopY;
-    CHECK(penetration < Real(0.25));
+    CHECK(penetration < Real(0.001));
 
     // And it must actually be resting on the floor (not floating far above it).
-    CHECK(penetration > Real(-2.0));
+    // Re-baselined for MKS (protocol rule 6): a sanity gate, not a tight
+    // residual bound -- measured penetration ~0.0003 m (essentially zero, not
+    // floating). Bound at -kSkin (-0.02 m): a settled body should never be
+    // found resting more than one skin-width above the floor surface.
+    CHECK(penetration > Real(-0.02));
 
     // Eventually it should sleep (the island pass sleeps a settled body).
     CHECK_FALSE(w.IsAwake(cap));
@@ -216,15 +232,10 @@ TEST_CASE("physics: tilted capsule settles (no rocking limit cycle)", "[physics]
 {
     WorldDef wd;
     wd.gravityY = kGravityY;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w);
-    BodyHandle cap = AddCapsule(w, Vec2(Real(0), Real(-60)));
+    BodyHandle cap = AddCapsule(w, Vec2(Real(0), Real(-0.6)));
     w.SetAngle(cap, Real(0.25)); // land tilted ~14 degrees
 
     for (int k = 0; k < 240; ++k)
@@ -243,10 +254,13 @@ TEST_CASE("physics: tilted capsule settles (no rocking limit cycle)", "[physics]
          << " awake=" << w.IsAwake(cap));
 
     // Must come to rest -- the rocking bug left a persistent ~7 u/s into-floor
-    // speed and ~0.29 rad/s angVel that never decayed.
-    CHECK(spd  < Real(1.0));
+    // speed and ~0.29 rad/s angVel that never decayed. Re-baselined for MKS
+    // (protocol rule 6): measured spd=0, avel=0, penetration ~0.0003 m (same
+    // shape as the untilted settle case above -- see that case's comments for
+    // the sleepThreshold / kLinearSlop reasoning behind these bounds).
+    CHECK(spd  < Real(0.05));
     CHECK(avel < Real(0.05));
-    CHECK(penetration < Real(0.25));
+    CHECK(penetration < Real(0.001));
     CHECK_FALSE(w.IsAwake(cap)); // a settled capsule sleeps
 }
 
@@ -258,11 +272,6 @@ TEST_CASE("physics: forced capsule does not tunnel a static floor", "[physics]")
 {
     WorldDef wd;
     wd.gravityY = kGravityY;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w);
@@ -275,20 +284,24 @@ TEST_CASE("physics: forced capsule does not tunnel a static floor", "[physics]")
     }
 
     // Drive a strong sustained downward velocity every frame (mimics the drag
-    // forcing the body into the floor). 600 u/s downward, far faster than the
+    // forcing the body into the floor). 6.0 m/s downward, far faster than the
     // body would ever move under gravity in one step.
     for (int k = 0; k < 120; ++k)
     {
         Vec2 v = w.Velocity(cap);
-        w.SetVelocity(cap, Vec2(v.x, Real(600)));
+        w.SetVelocity(cap, Vec2(v.x, Real(6.0)));
         w.Step(kStep);
 
         const Vec2 p = w.Position(cap);
         const Real penetration = (p.y + kCapRadius) - kFloorTopY;
         INFO("frame " << k << " pos.y=" << p.y << " penetration=" << penetration);
         // The capsule must stay essentially on top of the floor: bounded
-        // penetration, never sinking past the floor's far side (y=+40 bottom).
-        CHECK(penetration < Real(2.0));
+        // penetration, never sinking past the floor's far side (y=+0.4 bottom).
+        // Re-baselined for MKS (protocol rule 6): measured max ~0.0097 m over
+        // the loop. Bound set at 0.02 m -- 10% of kFloorHalfH (0.2 m), matching
+        // the original file's 2.0/20 == 10% ratio, which also lands exactly at
+        // kSkin (0.02 m); ~2.1x headroom over measured.
+        CHECK(penetration < Real(0.02));
         CHECK(p.y < kFloorTopY + kFloorHalfH * Real(2)); // never below the floor bottom
     }
 }
@@ -304,11 +317,6 @@ TEST_CASE("physics: dragged capsule does not pull through a static floor", "[phy
 {
     WorldDef wd;
     wd.gravityY = kGravityY;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w);
@@ -318,8 +326,8 @@ TEST_CASE("physics: dragged capsule does not pull through a static floor", "[phy
 
     // Grab near the right end of the capsule (off-center, so the drag torques it
     // like a real off-center mouse grab) and aim the cursor far BELOW the floor.
-    const Vec2 grabLocalAnchor(Real(20), Real(0));
-    const Vec2 cursorBelow(Real(0), Real(200)); // 200 px below the floor top
+    const Vec2 grabLocalAnchor(Real(0.2), Real(0));
+    const Vec2 cursorBelow(Real(0), Real(2.0)); // 2.0 m below the floor top
 
     for (int k = 0; k < 200; ++k)
     {
@@ -330,11 +338,16 @@ TEST_CASE("physics: dragged capsule does not pull through a static floor", "[phy
         INFO("frame " << k << " pos=(" << p.x << "," << p.y << ") penetration="
              << penetration << " angle=" << w.GetAngle(cap));
         // The capsule COM must never cross to the floor's far side: its origin
-        // must stay above the floor bottom (y < +40). A pull-through would send
-        // p.y past +40 toward the cursor at +200.
+        // must stay above the floor bottom (y < +0.4). A pull-through would send
+        // p.y past +0.4 toward the cursor at +2.0.
         CHECK(p.y < kFloorTopY + kFloorHalfH * Real(2));
         // And bounded penetration of the top surface (the solver resists it).
-        CHECK(penetration < Real(6.0));
+        // Re-baselined for MKS (protocol rule 6): measured max ~0.00357 m over
+        // the loop -- LESS than the forced-push case's 0.0097 m, because the
+        // capped-impulse mouse-spring (kDragMaxAccel, bounded FORCE) lets the
+        // solver resist it, unlike the forced-push case's raw velocity
+        // override. Bound set at 2*kLinearSlop = 0.01 m, ~2.8x headroom.
+        CHECK(penetration < Real(0.01));
     }
 
     // After all that dragging, the capsule is still on top of the floor.
@@ -349,15 +362,10 @@ TEST_CASE("physics: forced box does not tunnel a static floor", "[physics]")
 {
     WorldDef wd;
     wd.gravityY = kGravityY;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     AddFloor(w);
-    const Real hw = Real(20), hh = Real(20);
+    const Real hw = Real(0.2), hh = Real(0.2);
     BodyHandle box = AddBox(w, Vec2(Real(0), -hh), hw, hh); // resting on floor
 
     for (int k = 0; k < 10; ++k)
@@ -368,13 +376,18 @@ TEST_CASE("physics: forced box does not tunnel a static floor", "[physics]")
     for (int k = 0; k < 120; ++k)
     {
         Vec2 v = w.Velocity(box);
-        w.SetVelocity(box, Vec2(v.x, Real(600)));
+        w.SetVelocity(box, Vec2(v.x, Real(6.0)));
         w.Step(kStep);
 
         const Vec2 p = w.Position(box);
         const Real penetration = (p.y + hh) - kFloorTopY;
         INFO("frame " << k << " pos.y=" << p.y << " penetration=" << penetration);
-        CHECK(penetration < Real(2.0));
+        // Re-baselined for MKS (protocol rule 6): measured max ~0.00079 m over
+        // the loop (a fixedRotation box settles flatter than the capsule).
+        // Same bound as the forced-capsule case above (0.02 m, 10% of
+        // kFloorHalfH / kSkin-scale) for a shared, well-clear tunneling gate;
+        // ~25x headroom over measured here.
+        CHECK(penetration < Real(0.02));
         CHECK(p.y < kFloorTopY + kFloorHalfH * Real(2));
     }
 }
