@@ -42,15 +42,17 @@ namespace
     // Fixed timestep used throughout: 60 Hz.
     constexpr float kDt = 1.0f / 60.0f;
     // Gravity magnitude: +Y down, matching the dynamics test convention.
-    constexpr float kGravityY = 400.0f;
-    // Kinematic body speed (pixels/s, +X direction).
-    constexpr float kKinSpeed = 100.0f;
+    // 10.0f is the engine MKS default (WorldDef::gravityY, PhysicsWorld.hpp:188)
+    // -- nothing in this file requires a non-default g, so we just take it.
+    constexpr float kGravityY = 10.0f;
+    // Kinematic body speed (m/s, +X direction).
+    constexpr float kKinSpeed = 10.0f;
 
     // ---------------------------------------------------------------------------
     // Build a registry + resource for use by all tests.
     //   - SceneRoot entity (no physics)
     //   - Dynamic body entity (circle r=0.5 single-fixture, at origin)
-    //   - Kinematic body entity (circle r=0.5 single-fixture, at (50,0), velocity=(kKinSpeed,0))
+    //   - Kinematic body entity (circle r=0.5 single-fixture, at (5,0), velocity=(kKinSpeed,0))
     // Returns {registry, root, dynEntity, kinEntity}.
     // ---------------------------------------------------------------------------
     struct SceneHandles
@@ -67,14 +69,12 @@ namespace
         Arcane::RegisterSceneComponents(reg);
         Arcane::RegisterPhysicsComponents(reg);
 
-        // Physics world resource: gravity +Y down.
+        // Physics world resource: gravity +Y down. gravityX and the sleep/
+        // restitution/push/hash-grid knobs are all left at the MKS engine
+        // defaults (PhysicsWorld.hpp: gravityX=0, sleepThreshold=0.05,
+        // restitutionThreshold=1, contactPushMaxVelocity=3, hashCellSize=1).
         Arcane::Physics::WorldDef wd;
         wd.gravityY = kGravityY;
-        wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
         reg.SetResource(Arcane::PhysicsResource{
             std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
             {}
@@ -116,7 +116,7 @@ namespace
         // Kinematic body entity: constant velocity in +X (single-fixture circle).
         Astra::Entity kin = reg.CreateEntity();
         {
-            Arcane::LocalTransform lt; lt.position = glm::vec2(50.0f, 0.0f);
+            Arcane::LocalTransform lt; lt.position = glm::vec2(5.0f, 0.0f);
             reg.AddComponent<Arcane::LocalTransform>(kin, lt);
             reg.AddComponent<Arcane::WorldTransform>(kin, Arcane::WorldTransform{});
 
@@ -176,11 +176,11 @@ TEST_CASE("PhysicsSystem: dynamic body falls under gravity (LocalTransform updat
     const auto* lt = reg.GetComponent<Arcane::LocalTransform>(h.dyn);
     REQUIRE(lt != nullptr);
 
-    // After 10 steps at 60 Hz with gravityY = 400 (+Y down), y must be well positive.
-    // Forward-Euler lower bound: 0.5 * g * (dt*N)^2 ~= 0.5*400*(10/60)^2 ~= 5.6 px.
-    // A bound of 5.0f is safely below the true displacement but well above 0, so
+    // After 10 steps at 60 Hz with gravityY = 10 (+Y down), y must be well positive.
+    // Forward-Euler lower bound: 0.5 * g * (dt*N)^2 ~= 0.5*10*(10/60)^2 ~= 0.139 m.
+    // A bound of 0.1f is safely below the true displacement but well above 0, so
     // a near-zero or sign-flipped gravity is caught.
-    CHECK(lt->position.y > 5.0f);
+    CHECK(lt->position.y > 0.1f);
 
     // WorldTransform must match: TransformPropagationSystem ran; root is at origin,
     // so the child's world matrix column 2 = its local position.
@@ -199,18 +199,21 @@ TEST_CASE("PhysicsSystem: kinematic body moves by authored velocity", "[physics]
     auto h = BuildScene(reg);
 
     constexpr int   kSteps = 30;
-    const float startX = 50.0f;
+    const float startX = 5.0f;
 
     RunNSteps(reg, kSteps);
 
     const auto* lt = reg.GetComponent<Arcane::LocalTransform>(h.kin);
     REQUIRE(lt != nullptr);
 
-    // Kinematic body at (50, 0), velocity (kKinSpeed, 0):
-    // expected X = 50 + kKinSpeed * kDt * kSteps (exact forward-Euler, one Step per
-    // invocation, constant dt).  The margin(0.01f) is an absolute sub-pixel tolerance
-    // that only absorbs float accumulation; it is intentionally tight to catch
-    // off-by-one-step or dt-scale bugs.
+    // Kinematic body at (5, 0), velocity (kKinSpeed, 0):
+    // expected X = 5 + kKinSpeed * kDt * kSteps = 5 + 10*(1/60)*30 = 10.0 m
+    // (exact forward-Euler, one Step per invocation, constant dt). The
+    // margin(0.01f) is an absolute float-accumulation tolerance, not a
+    // percentage of the displacement -- 30 additions of a ~0.1667 m/step
+    // increment accumulate at most a few float32 ULPs (<< 0.01 m regardless
+    // of the target magnitude), so the MKS recompute (100 -> 10) does not
+    // demand widening this margin; it stays 0.01f.
     const float expectedX = startX + kKinSpeed * kDt * static_cast<float>(kSteps);
     CHECK(lt->position.x == Approx(expectedX).margin(0.01f));
 
@@ -306,13 +309,12 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     Arcane::RegisterPhysicsComponents(reg);
 
     // Physics world (no gravity needed; we only test fixture count + write-back).
+    // Zero-g is a deliberate scene statement now that the engine default is
+    // gravityY=+10; gravityX and the sleep/restitution/push/hash-grid knobs
+    // are left at the MKS engine defaults (see BuildScene above).
     Arcane::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
-    wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = 0.0f;
     reg.SetResource(Arcane::PhysicsResource{
         std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
         {}
@@ -328,11 +330,11 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     }
 
     // Entity with a 2-fixture Collider2D.
-    // Fixture 0: circle r=5 @ local(0,0).
-    // Fixture 1: aabb(3,3) @ local(20,0), sensor.
+    // Fixture 0: circle r=0.5 @ local(0,0).
+    // Fixture 1: aabb(0.3,0.3) @ local(2,0), sensor.
     Astra::Entity e = reg.CreateEntity();
     {
-        Arcane::LocalTransform lt; lt.position = glm::vec2(100.0f, 50.0f);
+        Arcane::LocalTransform lt; lt.position = glm::vec2(10.0f, 5.0f);
         reg.AddComponent<Arcane::LocalTransform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
@@ -345,7 +347,7 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
         {
             Arcane::Fixture fx;
             fx.kind     = Arcane::Physics::ShapeKind::Circle;
-            fx.radius   = 5.0f;
+            fx.radius   = 0.5f;
             fx.localPos = glm::vec2(0.0f, 0.0f);
             fx.density  = 1.0f;
             fx.friction = 0.3f;
@@ -355,9 +357,9 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
         {
             Arcane::Fixture fx;
             fx.kind      = Arcane::Physics::ShapeKind::Aabb;
-            fx.halfW     = 3.0f;
-            fx.halfH     = 3.0f;
-            fx.localPos  = glm::vec2(20.0f, 0.0f);
+            fx.halfW     = 0.3f;
+            fx.halfH     = 0.3f;
+            fx.localPos  = glm::vec2(2.0f, 0.0f);
             fx.isSensor  = true;
             fx.density   = 1.0f;
             fx.friction  = 0.3f;
@@ -390,9 +392,9 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
 
     const auto* lt = reg.GetComponent<Arcane::LocalTransform>(e);
     REQUIRE(lt != nullptr);
-    // Kinematic body with no velocity, gravity 0 -> position stays at (100, 50).
-    CHECK(lt->position.x == Approx(100.0f).margin(0.01f));
-    CHECK(lt->position.y == Approx(50.0f).margin(0.01f));
+    // Kinematic body with no velocity, gravity 0 -> position stays at (10, 5).
+    CHECK(lt->position.x == Approx(10.0f).margin(0.01f));
+    CHECK(lt->position.y == Approx(5.0f).margin(0.01f));
 }
 
 // ---------------------------------------------------------------------------
@@ -414,13 +416,12 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     Arcane::RegisterPhysicsComponents(reg);
 
     // Physics world (zero gravity; we're testing fixture metadata, not dynamics).
+    // Zero-g is a deliberate scene statement now that the engine default is
+    // gravityY=+10; gravityX and the sleep/restitution/push/hash-grid knobs
+    // are left at the MKS engine defaults (see BuildScene above).
     Arcane::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
-    wd.gravityX               = 0.0f;   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = 8.0f;   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = 20.0f;  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = 300.0f; // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = 64.0f;  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = 0.0f;
     reg.SetResource(Arcane::PhysicsResource{
         std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
         {}
@@ -436,14 +437,14 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     }
 
     // Authored fixture[0] params: non-default filter + local offset.
-    //   categoryBits = 0x02, maskBits = 0x05, localPos = (3, 0), localAngle = 0.
+    //   categoryBits = 0x02, maskBits = 0x05, localPos = (0.3, 0), localAngle = 0.
     constexpr uint32_t kCat   = 0x02u;
     constexpr uint32_t kMask  = 0x05u;
-    constexpr float    kLx    = 3.0f;
+    constexpr float    kLx    = 0.3f;
     constexpr float    kLy    = 0.0f;
 
     // Entity at world origin (body angle 0) with a single kinematic circle
-    // so GetFixtureWorldPos(fixture0) == bodyPos + R(0)*localPos == (3,0).
+    // so GetFixtureWorldPos(fixture0) == bodyPos + R(0)*localPos == (0.3,0).
     Astra::Entity e = reg.CreateEntity();
     {
         Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
@@ -458,7 +459,7 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
         {
             Arcane::Fixture fx;
             fx.kind         = Arcane::Physics::ShapeKind::Circle;
-            fx.radius       = 1.0f;
+            fx.radius       = 0.1f;
             fx.localPos     = glm::vec2(kLx, kLy);
             fx.localAngle   = 0.0f;
             fx.categoryBits = kCat;
@@ -496,7 +497,7 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     CHECK(res->world->GetFixtureMask(fh0)     == kMask);
 
     // Assert the authored local-xf flowed through:
-    //   body at origin (0,0), angle 0 -> worldPos = (0,0) + R(0)*(3,0) = (3,0).
+    //   body at origin (0,0), angle 0 -> worldPos = (0,0) + R(0)*(0.3,0) = (0.3,0).
     // BEFORE the fix this would return (0,0) because localPos was hardcoded to (0,0).
     const Arcane::Physics::Vec2 worldPos = res->world->GetFixtureWorldPos(fh0);
     CHECK(static_cast<double>(worldPos.x) == Approx(static_cast<double>(kLx)).margin(1e-4));
