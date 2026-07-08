@@ -45,18 +45,14 @@ namespace
 TEST_CASE("PhysicsDebug: capsule outline rotates with the body", "[render]")
 {
     WorldDef wd; // gravity 0, no floor -> no contacts, only the capsule outline
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
 
     BodyDef bd;
     bd.type          = BodyType::Dynamic;
-    bd.position      = Vec2(Real(100), Real(100));
-    bd.shape         = MakeCapsule(Real(30), Real(10)); // halfLen 30, radius 10
+    bd.position      = Vec2(Real(10), Real(10));
+    bd.shape         = MakeCapsule(Real(3), Real(1)); // halfLen 3, radius 1
     bd.density       = Real(1);
     bd.fixedRotation = false;
     const BodyHandle h = w.AddBody(bd);

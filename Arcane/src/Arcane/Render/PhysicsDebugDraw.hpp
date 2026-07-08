@@ -55,11 +55,8 @@ namespace Arcane
         // contact reads clearly even when the two body centers are close.
         bool drawContacts = true;
         // Radius (WORLD units, multiplied by zoom) of the contact-midpoint disc.
-        // MKS-DEFER(P4/P5): 3.0 is the px-era Lua value -- MKS callers (the
-        // sandbox forwards 0.03, the same 3 px apparent size at
-        // pixelsPerMeter=100) override it; flip the default when the
-        // debug-draw test cluster converts.
-        float contactMarkerSize = 3.0f;
+        // 0.03 m = 3 px apparent size at the sandbox's pixelsPerMeter=100.
+        float contactMarkerSize = 0.03f;
 
         // Outline each body's world-space AABB (SlotAabb).  Off by default;
         // useful when debugging the broadphase.
@@ -85,14 +82,14 @@ namespace Arcane
         // Center-of-mass marker: a small cross (two short lines) at each DYNAMIC
         // body's world COM.  Makes the off-origin COM of compound bodies visible.
         bool  drawComMarkers = true;
-        // Half-length (canvas px, pre-zoom) of each COM cross arm.
-        float comMarkerSize  = 5.0f;
+        // Half-length (WORLD units, multiplied by zoom) of each COM cross arm.
+        float comMarkerSize  = 0.05f;
 
         // Orientation tick: a short line from each body's COM along its local +x
         // axis, so rotation is visible even on a circle (whose outline is
         // rotation-invariant).  Length is `orientationTickLen` (world units).
         bool  drawOrientations = true;
-        float orientationTickLen = 18.0f;
+        float orientationTickLen = 0.18f;
 
         // ---- Slice A broadphase + manifold overlays (default OFF) -----------
         //

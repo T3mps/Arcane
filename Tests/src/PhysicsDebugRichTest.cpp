@@ -66,30 +66,26 @@ namespace
     {
         BodyDef bd;
         bd.type     = BodyType::Dynamic;
-        bd.position = Vec2(Real(100), Real(100));
+        bd.position = Vec2(Real(10), Real(10));
         // Polygon box so it can carry a nonzero angle (a dynamic Aabb is
-        // forced fixedRotation); 30x20 half-extents.
+        // forced fixedRotation); 3x2 m half-extents.
         const std::vector<Vec2> verts = {
-            Vec2(Real(-30), Real(-20)), Vec2(Real(30), Real(-20)),
-            Vec2(Real(30), Real(20)),   Vec2(Real(-30), Real(20)),
+            Vec2(Real(-3), Real(-2)), Vec2(Real(3), Real(-2)),
+            Vec2(Real(3), Real(2)),   Vec2(Real(-3), Real(2)),
         };
         bd.shape   = MakePolygon(verts);
         bd.density = Real(1);
         outHandle  = w.AddBody(bd);
-        w.SetVelocity(outHandle, Vec2(Real(200), Real(0)));  // moving +x fast
+        w.SetVelocity(outHandle, Vec2(Real(20), Real(0)));   // moving +x fast
         w.SetAngle(outHandle, Real(0.5));                    // tilted so the tick reads
     }
 }
 
 TEST_CASE("PhysicsDebug rich: velocity vector emitted only when enabled", "[render]")
 {
-    WorldDef wd;  // gravity 0
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd;  // gravity 0 -- isolates kinematics from the debug-draw overlay
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
     BodyHandle h;
     OneMovingBox(w, h);
@@ -121,13 +117,9 @@ TEST_CASE("PhysicsDebug rich: velocity vector emitted only when enabled", "[rend
 
 TEST_CASE("PhysicsDebug rich: orientation tick + COM marker gated by flags", "[render]")
 {
-    WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd;  // gravity 0 -- isolates kinematics from the debug-draw overlay
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
     BodyHandle h;
     OneMovingBox(w, h);
@@ -159,21 +151,17 @@ TEST_CASE("PhysicsDebug rich: orientation tick + COM marker gated by flags", "[r
 
 TEST_CASE("PhysicsDebug rich: a resting body draws no velocity ray", "[render]")
 {
-    WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd;  // gravity 0 -- isolates kinematics from the debug-draw overlay
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
 
     // A static body never moves -> with drawVelocities on it must still emit
     // ONLY its outline (no zero-length velocity ray clutter).
     BodyDef bd;
     bd.type     = BodyType::Static;
-    bd.position = Vec2(Real(50), Real(50));
-    bd.shape    = MakeAabb(Real(20), Real(10));
+    bd.position = Vec2(Real(5), Real(5));
+    bd.shape    = MakeAabb(Real(2), Real(1));
     w.AddBody(bd);
 
     RecMock m;
