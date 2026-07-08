@@ -130,7 +130,7 @@ namespace Arcane
             Real restitution    = Real(0);     // bounciness (solver, P2.2)
             Real friction       = Real(0.4);   // Lua default 0.4 (line 233)
             Real linearDamping  = Real(0);     // per-step velocity decay
-            // Per-body sleep speed gate (px/s). < 0 inherits WorldDef::sleepThreshold.
+            // Per-body sleep speed gate (m/s). < 0 inherits WorldDef::sleepThreshold.
             // A body is idle when |v| + |w|*maxExtent < sleepThreshold (Box2D v3).
             Real sleepThreshold = Real(-1);
             bool fixedRotation  = false;       // invInertia forced to 0
@@ -1115,7 +1115,7 @@ namespace Arcane
             [[nodiscard]] Real RestitutionThreshold() const noexcept { return m_restitutionThreshold; }
             [[nodiscard]] Real ContactPushMaxVelocity() const noexcept { return m_contactPushMaxVelocity; }
             [[nodiscard]] Real MaxLinearVelocity() const noexcept { return m_maxLinearVelocity; }
-            // World default sleep gate (px/s); AddBody copies it onto a body whose
+            // World default sleep gate (m/s); AddBody copies it onto a body whose
             // BodyDef::sleepThreshold is < 0 (the inherit sentinel).
             [[nodiscard]] Real SleepThresholdDefault() const noexcept { return m_sleepThresholdDefault; }
 
@@ -1308,7 +1308,7 @@ namespace Arcane
             std::vector<Real>          m_linDamp;             // velocity decay
             std::vector<Real>          m_sleepTimer;          // island sleep (P2.4)
             std::vector<Real>          m_maxExtent;           // body COM->farthest-point dist (+radius); sleep test
-            std::vector<Real>          m_sleepThreshold;      // per-body sleep speed gate (px/s); see WorldDef/BodyDef
+            std::vector<Real>          m_sleepThreshold;      // per-body sleep speed gate (m/s); see WorldDef/BodyDef
             std::vector<std::uint8_t>  m_awake;               // 1 = awake (integrates this step; P2.4 sleep clears to 0)
             std::vector<std::uint8_t>  m_bullet;              // CCD clamp (P3)
 

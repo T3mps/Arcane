@@ -2335,7 +2335,7 @@ namespace Arcane
             // Only a NON-IDLE (moving) mover wakes a sleeping neighbour. A body idle
             // enough to be a sleep candidate itself (same predicate as
             // Island::UpdateSleep) must NOT wake its sleeping neighbours -- otherwise
-            // two near-resting bodies in different islands (a sub-pixel gap; NOT
+            // two near-resting bodies in different islands (a sub-millimeter gap; NOT
             // touching) ping-pong each other awake forever (each wakes the other the
             // step it sleeps). A real mover (thrown body, moving/spinning kinematic)
             // is non-idle and still wakes. (Static wakers never reach here -- this
