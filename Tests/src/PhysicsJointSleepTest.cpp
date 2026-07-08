@@ -47,15 +47,15 @@ namespace
     {
         WorldDef wd;
         wd.gravityY = Real(0);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        wd.gravityX = Real(0);
+        // sleepThreshold, restitutionThreshold, contactPushMaxVelocity, and
+        // hashCellSize all inherit the MKS WorldDef defaults (0.05 / 1.0 / 3.0 / 1.0).
         return PhysicsWorld(wd);
     }
 
-    BodyHandle AddDynamicCircle(PhysicsWorld& w, Vec2 pos, Real r = Real(5))
+    // Default radius re-authored to the 0.1 m body-size floor (not /100's
+    // 0.05 m -- nothing in this file depends on the exact radius).
+    BodyHandle AddDynamicCircle(PhysicsWorld& w, Vec2 pos, Real r = Real(0.1))
     {
         BodyDef def;
         def.type          = BodyType::Dynamic;
@@ -90,9 +90,9 @@ TEST_CASE("PhysicsJointSleep: jointed chain shares one island and sleeps as a un
 {
     PhysicsWorld w = MakeQuietWorld();
 
-    const BodyHandle a = AddDynamicCircle(w, Vec2(Real(0),  Real(0)));
-    const BodyHandle b = AddDynamicCircle(w, Vec2(Real(30), Real(0)));
-    const BodyHandle c = AddDynamicCircle(w, Vec2(Real(60), Real(0)));
+    const BodyHandle a = AddDynamicCircle(w, Vec2(Real(0),   Real(0)));
+    const BodyHandle b = AddDynamicCircle(w, Vec2(Real(0.3), Real(0)));
+    const BodyHandle c = AddDynamicCircle(w, Vec2(Real(0.6), Real(0)));
 
     REQUIRE(JoinDistance(w, a, b) != nullptr);
     REQUIRE(JoinDistance(w, b, c) != nullptr);
@@ -129,9 +129,9 @@ TEST_CASE("PhysicsJointSleep: impulse on one member wakes the whole jointed isla
 {
     PhysicsWorld w = MakeQuietWorld();
 
-    const BodyHandle a = AddDynamicCircle(w, Vec2(Real(0),  Real(0)));
-    const BodyHandle b = AddDynamicCircle(w, Vec2(Real(30), Real(0)));
-    const BodyHandle c = AddDynamicCircle(w, Vec2(Real(60), Real(0)));
+    const BodyHandle a = AddDynamicCircle(w, Vec2(Real(0),   Real(0)));
+    const BodyHandle b = AddDynamicCircle(w, Vec2(Real(0.3), Real(0)));
+    const BodyHandle c = AddDynamicCircle(w, Vec2(Real(0.6), Real(0)));
 
     REQUIRE(JoinDistance(w, a, b) != nullptr);
     REQUIRE(JoinDistance(w, b, c) != nullptr);
@@ -141,8 +141,13 @@ TEST_CASE("PhysicsJointSleep: impulse on one member wakes the whole jointed isla
     REQUIRE_FALSE(w.IsAwake(b));
     REQUIRE_FALSE(w.IsAwake(c));
 
-    // Impulse an ENDPOINT (C): the whole island wakes at once.
-    w.ApplyImpulse(c, Vec2(Real(0), Real(-4000)));
+    // Impulse an ENDPOINT (C): the whole island wakes at once. Authored as
+    // mass x delta-v (rule 3): circle mass = density*kPi*r*r =
+    // 1*kPi*0.1*0.1 (~0.0314 kg, density 1, r = 0.1 m); targetDv = -20 m/s
+    // (well above sleepThreshold 0.05, well under the 400 m/s cap).
+    const Real circleMass = Real(1) * kPi * Real(0.1) * Real(0.1);
+    const Real targetDv = Real(-20);
+    w.ApplyImpulse(c, Vec2(Real(0), circleMass * targetDv));
     CHECK(w.IsAwake(a));
     CHECK(w.IsAwake(b));
     CHECK(w.IsAwake(c));
@@ -158,8 +163,8 @@ TEST_CASE("PhysicsJointSleep: removing a joint splits the island; pieces sleep i
 {
     PhysicsWorld w = MakeQuietWorld();
 
-    const BodyHandle a = AddDynamicCircle(w, Vec2(Real(0),  Real(0)));
-    const BodyHandle b = AddDynamicCircle(w, Vec2(Real(40), Real(0)));
+    const BodyHandle a = AddDynamicCircle(w, Vec2(Real(0),   Real(0)));
+    const BodyHandle b = AddDynamicCircle(w, Vec2(Real(0.4), Real(0)));
 
     Joint* j = JoinDistance(w, a, b);
     REQUIRE(j != nullptr);

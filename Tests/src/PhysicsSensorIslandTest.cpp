@@ -72,17 +72,19 @@ TEST_CASE("PhysicsSensorIsland: sensor dyn-dyn pair does not merge islands",
     // (sensor -> solverRelevant=false -> no collision response).
     WorldDef wd;
     wd.gravityY = Real(0);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0);
+    // sleepThreshold, restitutionThreshold, contactPushMaxVelocity, and
+    // hashCellSize all inherit the MKS WorldDef defaults (0.05 / 1.0 / 3.0 / 1.0).
     PhysicsWorld w(wd);
 
     // Place bA (sensor) and bB (solid) overlapping so the broadphase detects them.
-    // Half-width 5 each, centres 3 apart -> 7-unit overlap.
-    const BodyHandle bA = AddSensorBox(w, Vec2(Real(0),  Real(0)), Real(5), Real(5));
-    const BodyHandle bB = AddSolidBox (w, Vec2(Real(3),  Real(0)), Real(5), Real(5));
+    // Half-width 0.5 each, centres 0.3 apart -> 0.7 m overlap. Re-authored /10
+    // (not /100): this is the cluster's most slop-marginal geometry -- a /100
+    // centre offset of 0.03 m would sit only 1.5x above kSkin (0.02), inside
+    // speculative-margin noise. /10 keeps every quantity 15x+ above kSkin while
+    // preserving the "large overlap relative to body size" shape under test.
+    const BodyHandle bA = AddSensorBox(w, Vec2(Real(0),   Real(0)), Real(0.5), Real(0.5));
+    const BodyHandle bB = AddSolidBox (w, Vec2(Real(0.3), Real(0)), Real(0.5), Real(0.5));
 
     // Before any Step: distinct islands (one-body each, assigned at AddBody).
     REQUIRE(w.IslandRootOf(bA.index) != w.IslandRootOf(bB.index));
@@ -106,19 +108,16 @@ TEST_CASE("PhysicsSensorIsland: non-sensor dyn-dyn contact merges islands (regre
           "[physics][island]")
 {
     WorldDef wd;
-    wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityY = Real(10);
+    // gravityX, sleepThreshold, restitutionThreshold, contactPushMaxVelocity, and
+    // hashCellSize all inherit the MKS WorldDef defaults (0 / 0.05 / 1.0 / 3.0 / 1.0).
     PhysicsWorld w(wd);
 
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
 
     // Two solid boxes stacked: they will settle into contact and merge.
-    const Real hw = Real(5), hh = Real(5);
-    const Real gap = Real(0.5);
+    const Real hw = Real(0.5), hh = Real(0.5);
+    const Real gap = Real(0.02); // = kSkin (mirrors MKS P3 Task 4 case 5)
     const BodyHandle bA = AddSolidBox(w, Vec2(Real(0), -hh),                      hw, hh);
     const BodyHandle bB = AddSolidBox(w, Vec2(Real(0), -hh - (Real(2)*hh + gap)), hw, hh);
 
