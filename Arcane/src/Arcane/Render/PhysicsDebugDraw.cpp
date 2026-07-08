@@ -441,7 +441,7 @@ namespace Arcane
                 const glm::vec2 pa = ToScreen(world.PosSlot(a), off, zoom);
                 const glm::vec2 pb = ToScreen(world.PosSlot(b), off, zoom);
                 batcher.Line(pa, pb, thick, kColContact);
-                batcher.Circle((pa + pb) * 0.5f, 3.0f * zoom, kColContact);
+                batcher.Circle((pa + pb) * 0.5f, opts.contactMarkerSize * zoom, kColContact);
             });
         }
 

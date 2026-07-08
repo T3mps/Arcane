@@ -54,6 +54,12 @@ namespace Arcane
         // in PhysicsDebug.lua.  A small disc marks the segment midpoint so the
         // contact reads clearly even when the two body centers are close.
         bool drawContacts = true;
+        // Radius (WORLD units, multiplied by zoom) of the contact-midpoint disc.
+        // MKS-DEFER(P4/P5): 3.0 is the px-era Lua value -- MKS callers (the
+        // sandbox forwards 0.03, the same 3 px apparent size at
+        // pixelsPerMeter=100) override it; flip the default when the
+        // debug-draw test cluster converts.
+        float contactMarkerSize = 3.0f;
 
         // Outline each body's world-space AABB (SlotAabb).  Off by default;
         // useful when debugging the broadphase.

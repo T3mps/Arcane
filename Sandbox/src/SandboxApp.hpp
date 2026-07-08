@@ -85,6 +85,10 @@ namespace Arcane::Sandbox
     struct SandboxDebugDraw
     {
         bool  drawContacts  = true;
+        // MKS: 0.03 m = 3 px at pixelsPerMeter=100, zoom 1 (the px-era apparent
+        // size; the engine-side default is still the px-era 3.0 until the debug
+        // test cluster converts).
+        float contactMarkerSize = 0.03f;
         bool  drawAabbs     = false;
         float lineThickness = 1.0f;
 
@@ -178,6 +182,7 @@ namespace Arcane::Sandbox
             if (const SandboxDebugDraw* dbg = reg.GetResource<SandboxDebugDraw>())
             {
                 opts.drawContacts      = dbg->drawContacts;
+                opts.contactMarkerSize = dbg->contactMarkerSize;
                 opts.drawAabbs         = dbg->drawAabbs;
                 opts.lineThickness     = dbg->lineThickness;
                 opts.drawVelocities    = dbg->drawVelocities;
