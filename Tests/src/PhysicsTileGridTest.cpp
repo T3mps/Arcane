@@ -84,14 +84,14 @@ namespace
 TEST_CASE("physics: tilegrid per-row merge yields the analytic rect set",
           "[physics]")
 {
-    const Real     cs = Real(32);
+    const Real     cs = Real(3.2);
     const Vec2     origin(Real(0), Real(0));
     GridPassability grid = MakeHarnessGrid();
     TileGrid       tg(grid, cs, origin);
 
     // Whole-grid query: the world box is exactly the 8x4 grid extent. With
-    // origin {0,0} and cellSize 32 that is [0,0]..[256,128]. PAD adds slack but
-    // the scan still clamps to the grid bounds.
+    // origin {0,0} and cellSize 3.2 that is [0,0]..[25.6,12.8]. PAD adds slack
+    // but the scan still clamps to the grid bounds.
     const Aabb2 whole{ Vec2(Real(0), Real(0)), Vec2(Real(kW) * cs, Real(kH) * cs) };
     std::vector<Aabb2> rects;
     const int n = tg.Query(whole, rects);
@@ -103,19 +103,19 @@ TEST_CASE("physics: tilegrid per-row merge yields the analytic rect set",
     // Analytic expectations (cell (cx,cy) -> [cx*cs, cy*cs]..[(cx+1)*cs,(cy+1)*cs];
     // a run runStart..runEnd in row cy -> [runStart*cs, cy*cs]..[(runEnd+1)*cs,(cy+1)*cs]):
     //
-    //   row 1 run 2..4 -> [2*32, 1*32]..[5*32, 2*32] = [64,32]..[160,64]
-    //   row 2 run 1..1 -> [1*32, 2*32]..[2*32, 3*32] = [32,64]..[ 64,96]
-    //   row 2 run 5..6 -> [5*32, 2*32]..[7*32, 3*32] = [160,64]..[224,96]
-    CHECK(HasRect(rects, 64, 32, 160, 64));  // the single merged run
-    CHECK(HasRect(rects, 32, 64, 64, 96));   // gapped row, first run (col 1)
-    CHECK(HasRect(rects, 160, 64, 224, 96)); // gapped row, second run (5..6)
+    //   row 1 run 2..4 -> [2*3.2, 1*3.2]..[5*3.2, 2*3.2] = [6.4,3.2]..[16,6.4]
+    //   row 2 run 1..1 -> [1*3.2, 2*3.2]..[2*3.2, 3*3.2] = [3.2,6.4]..[6.4,9.6]
+    //   row 2 run 5..6 -> [5*3.2, 2*3.2]..[7*3.2, 3*3.2] = [16,6.4]..[22.4,9.6]
+    CHECK(HasRect(rects, 6.4f, 3.2f, 16.0f, 6.4f));   // the single merged run
+    CHECK(HasRect(rects, 3.2f, 6.4f, 6.4f, 9.6f));    // gapped row, first run (col 1)
+    CHECK(HasRect(rects, 16.0f, 6.4f, 22.4f, 9.6f));  // gapped row, second run (5..6)
 
-    // The merged run spans EXACTLY 3 cells wide (96 px) -- one rect, not three.
-    // (Per-cell rects would be 32 px each with internal seams; the merge fuses
-    // them into a single 96 px rect with no internal vertical edges.)
+    // The merged run spans EXACTLY 3 cells wide (9.6 m) -- one rect, not three.
+    // (Per-cell rects would be 3.2 m each with internal seams; the merge fuses
+    // them into a single 9.6 m rect with no internal vertical edges.)
     for (const Aabb2& r : rects)
     {
-        if (r.min.x == Approx(64) && r.min.y == Approx(32))
+        if (r.min.x == Approx(6.4) && r.min.y == Approx(3.2))
         {
             CHECK((r.max.x - r.min.x) == Approx(Real(3) * cs));
             CHECK((r.max.y - r.min.y) == Approx(cs));
@@ -126,7 +126,7 @@ TEST_CASE("physics: tilegrid per-row merge yields the analytic rect set",
 TEST_CASE("physics: tilegrid offscreen query is empty, partial overlap finds runs",
           "[physics]")
 {
-    const Real     cs = Real(32);
+    const Real     cs = Real(3.2);
     GridPassability grid = MakeHarnessGrid();
     TileGrid       tg(grid, cs, Vec2(Real(0), Real(0)));
 
@@ -134,21 +134,21 @@ TEST_CASE("physics: tilegrid offscreen query is empty, partial overlap finds run
 
     // Far offscreen query (the harness's offscreen-empty check): no in-bounds
     // solid cell -> 0 rects.
-    const Aabb2 offscreen{ Vec2(Real(-10000), Real(-10000)),
-                           Vec2(Real(-9000), Real(-9000)) };
+    const Aabb2 offscreen{ Vec2(Real(-1000), Real(-1000)),
+                           Vec2(Real(-900), Real(-900)) };
     CHECK(tg.Query(offscreen, rects) == 0);
     CHECK(rects.empty());
 
     // A query that only PARTIALLY overlaps the grid: a tight window over the
-    // gapped row's second run only (cells 5..6 of row 2 = world [160,64]..[224,96]).
+    // gapped row's second run only (cells 5..6 of row 2 = world [16,6.4]..[22.4,9.6]).
     // PAD = 1 widens the cell scan, so it can also pick up the row-1 run above
     // (cells 2..4 of row 1) and col 1 of row 2 -- assert the 5..6 run is found
     // and the result is a subset of the full 3 (not all the offscreen junk).
-    const Aabb2 window{ Vec2(Real(170), Real(70)), Vec2(Real(200), Real(90)) };
+    const Aabb2 window{ Vec2(Real(17), Real(7)), Vec2(Real(20), Real(9)) };
     const int   n = tg.Query(window, rects);
     CHECK(n >= 1);
     CHECK(static_cast<std::size_t>(n) == rects.size());
-    CHECK(HasRect(rects, 160, 64, 224, 96)); // the 5..6 run is present
+    CHECK(HasRect(rects, 16.0f, 6.4f, 22.4f, 9.6f)); // the 5..6 run is present
 
     // An empty grid (no solids) returns 0 for any query.
     GridPassability emptyGrid(kW, kH);
@@ -163,8 +163,8 @@ TEST_CASE("physics: tilegrid honors a non-zero origin", "[physics]")
 {
     // The Cartesian cell->world mapping offsets by `origin`; verify the run
     // rect shifts by exactly the origin.
-    const Real      cs = Real(32);
-    const Vec2      origin(Real(1000), Real(-500));
+    const Real      cs = Real(3.2);
+    const Vec2      origin(Real(100), Real(-50));
     GridPassability grid = MakeHarnessGrid();
     TileGrid        tg(grid, cs, origin);
 
@@ -172,14 +172,14 @@ TEST_CASE("physics: tilegrid honors a non-zero origin", "[physics]")
     std::vector<Aabb2> rects;
     CHECK(tg.Query(whole, rects) == 3);
 
-    // row 1 run 2..4 shifted by origin: [1000+64, -500+32]..[1000+160, -500+64]
-    CHECK(HasRect(rects, Real(1064), Real(-468), Real(1160), Real(-436)));
+    // row 1 run 2..4 shifted by origin: [100+6.4, -50+3.2]..[100+16, -50+6.4]
+    CHECK(HasRect(rects, Real(106.4), Real(-46.8), Real(116), Real(-43.6)));
 }
 
 TEST_CASE("physics: tilegrid Query reuses the out vector (zero steady-state alloc)",
           "[physics]")
 {
-    const Real      cs = Real(32);
+    const Real      cs = Real(3.2);
     GridPassability grid = MakeHarnessGrid();
     TileGrid        tg(grid, cs);
 
@@ -223,10 +223,10 @@ TEST_CASE("physics: tilegrid Query reuses the out vector (zero steady-state allo
 TEST_CASE("physics: tilegrid merged span has no internal seam to catch on",
           "[physics]")
 {
-    const Real cs = Real(32);
+    const Real cs = Real(3.2);
     // A single long horizontal run: row 0, cols 0..4 (5 cells). origin {0,0}.
-    // Merged rect = [0,0]..[160,32]. Internal cell boundaries WOULD be at
-    // x = 32, 64, 96, 128 -- the merge fuses them away.
+    // Merged rect = [0,0]..[16,3.2]. Internal cell boundaries WOULD be at
+    // x = 3.2, 6.4, 9.6, 12.8 -- the merge fuses them away.
     GridPassability grid(/*w*/ 8, /*h*/ 2);
     for (int cx = 0; cx <= 4; ++cx)
     {
@@ -244,26 +244,26 @@ TEST_CASE("physics: tilegrid merged span has no internal seam to catch on",
     const Aabb2 span = rects[0];
     REQUIRE(span.min.x == Approx(0));
     REQUIRE(span.min.y == Approx(0));
-    REQUIRE(span.max.x == Approx(Real(5) * cs)); // 160 -- the OUTER extent
-    REQUIRE(span.max.y == Approx(cs));           // 32
+    REQUIRE(span.max.x == Approx(Real(5) * cs)); // 16 -- the OUTER extent
+    REQUIRE(span.max.y == Approx(cs));           // 3.2
 
     // Build the merged rect as a collidable polygon (CCW box) for the cast.
     const Aabb2 r        = span;
     const Vec2  poly[4]  = { Vec2(r.min.x, r.min.y), Vec2(r.max.x, r.min.y),
                              Vec2(r.max.x, r.max.y), Vec2(r.min.x, r.max.y) };
 
-    // A capsule grazing JUST ABOVE the span's top edge (y = 32). Capsule
-    // half-length 6, radius 4; center placed so its bottom (y_center + radius)
-    // sits a hair above the span top -> it should NOT touch the span at all,
-    // and crucially must not catch at any internal x (there are none).
-    const Shape cap = MakeCapsule(/*halfLen*/ Real(6), /*radius*/ Real(4));
+    // A capsule grazing JUST ABOVE the span's top edge (y = 3.2). Capsule
+    // half-length 0.6, radius 0.4; center placed so its bottom (y_center +
+    // radius) sits a hair above the span top -> it should NOT touch the span
+    // at all, and crucially must not catch at any internal x (there are none).
+    const Shape cap = MakeCapsule(/*halfLen*/ Real(0.6), /*radius*/ Real(0.4));
 
     // Start to the LEFT of the span, sweep RIGHT across its full width, riding
     // at y just above the top edge: center y = top - radius - gap.
-    const Real gap     = Real(1.0);
-    const Real rideY   = span.min.y - Real(4) - gap; // above the top edge
-    const Vec2 start(span.min.x - Real(20), rideY);
-    const Vec2 endPt(span.max.x + Real(20), rideY);
+    const Real gap     = Real(0.1);
+    const Real rideY   = span.min.y - Real(0.4) - gap; // above the top edge
+    const Vec2 start(span.min.x - Real(2), rideY);
+    const Vec2 endPt(span.max.x + Real(2), rideY);
     const Vec2 translation = endPt - start;
 
     Transform   xf;
@@ -278,28 +278,28 @@ TEST_CASE("physics: tilegrid merged span has no internal seam to catch on",
 
     // Now drive the capsule THROUGH the span's left face at mid-height: it must
     // stop at the span's OUTER left extent, NOT at an internal cell boundary
-    // (x = 32/64/96/128 do not exist as edges anymore). Sweep left->right at the
-    // span's vertical mid-line.
+    // (x = 3.2/6.4/9.6/12.8 do not exist as edges anymore). Sweep left->right
+    // at the span's vertical mid-line.
     const Real  midY = (span.min.y + span.max.y) * Real(0.5);
     Transform   xf2;
-    xf2.position = Vec2(span.min.x - Real(40), midY);
-    const Vec2  trans2 = Vec2(Real(80), Real(0)); // drive into the left face
+    xf2.position = Vec2(span.min.x - Real(4), midY);
+    const Vec2  trans2 = Vec2(Real(8), Real(0)); // drive into the left face
     const ShapeCastResult faceCast =
         ShapeCastPoly(cap, xf2, trans2, poly, 4);
 
     REQUIRE(faceCast.hit);
     // Impact center x at TOI: start.x + trans2.x * t. It must land at the OUTER
     // left face (x = span.min.x), offset by the capsule's right extent
-    // (halfLen + radius = 10) and the cast tolerance. The KEY assertion: the
+    // (halfLen + radius = 1.0) and the cast tolerance. The KEY assertion: the
     // stop is at the span's outer extent, far from any internal cell boundary
-    // (the first internal boundary would have been x = 32, well to the right of
-    // the outer left face at x = 0).
+    // (the first internal boundary would have been x = 3.2, well to the right
+    // of the outer left face at x = 0).
     const Real impactX = xf2.position.x + trans2.x * faceCast.t;
     // The capsule's leading (right) edge at impact ~ impactX + (halfLen+radius).
-    const Real leadingX = impactX + (Real(6) + Real(4));
+    const Real leadingX = impactX + (Real(0.6) + Real(0.4));
     // Leading edge stops at (or a tolerance short of) the OUTER left face x = 0.
-    CHECK(leadingX <= Approx(span.min.x).margin(0.2));
-    // And it is NOWHERE NEAR the first internal cell boundary x = 32 (which the
-    // merge eliminated) -- it stopped at the outer extent, not mid-run.
-    CHECK(leadingX < Real(32) - Real(10));
+    CHECK(leadingX <= Approx(span.min.x).margin(0.02));
+    // And it is NOWHERE NEAR the first internal cell boundary x = 3.2 (which
+    // the merge eliminated) -- it stopped at the outer extent, not mid-run.
+    CHECK(leadingX < Real(3.2) - Real(1.0));
 }

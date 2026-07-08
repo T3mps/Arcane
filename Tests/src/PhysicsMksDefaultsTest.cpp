@@ -6,6 +6,7 @@
 #include <Arcane/Physics/PhysicsWorld.hpp>
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
+#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>
 
 using namespace Arcane::Physics;
 using Catch::Approx;
@@ -37,4 +38,47 @@ TEST_CASE("Engine length constants are Box2D v3 MKS", "[physics][mks]")
     CHECK(kSkin == Approx(Real(4) * kLinearSlop));      // the RELATION, not just the value
     CHECK(DynamicTree::kMargin == Approx(Real(0.05))); // constants.h:44 B2_AABB_MARGIN (v3.1.1)
     CHECK(kMaxRotation == Approx(Real(0.25) * kPi));    // constants.h:33 (unchanged)
+}
+
+// ---------------------------------------------------------------------------
+// Blind-spot closure (MKS P4): "WorldDef.hashCellSize == 1" (asserted above)
+// does NOT mean the engine's actual default broadphase, or the separate
+// residency index, use a 1 m cell just because the default happens to also
+// be 1. Three independent facts, documented/verified here so a reader of
+// this file cannot mistake hashCellSize==1 for "the" live cell size:
+//
+//   (a) hashCellSize is read ONLY inside MakeBroadphase's
+//       BroadphaseKind::Hash case (PhysicsWorld.cpp:93-107). Every other
+//       kind -- including Tree, the default every test in this suite (and
+//       every survey'd P4 file) uses -- ignores it entirely. Verified below:
+//       an absurd hashCellSize under the default WorldDef still yields a
+//       DynamicTree-backed world (FixtureBroadphaseTree() non-null).
+//
+//   (b) PhysicsWorld::m_residencyGrid (PhysicsWorld.hpp:1402) is a SEPARATE,
+//       hardcoded SpatialGrid{Real(1)} -- tagged
+//       TODO(map-integration): wire to the map's real tile size -- with NO
+//       wiring to WorldDef.hashCellSize at all. Verified below: it stays
+//       1 m even when hashCellSize is set far away from 1.
+//
+//   (c) SpatialHash's own argless-default cellSize is ALSO Real(1)
+//       (SpatialHash.hpp:51, `explicit SpatialHash(Real cellSize = Real(1))`)
+//       -- a third independent "1 m" that happens to agree with (a)/(b) by
+//       authoring convention, not by any shared code path (no live caller or
+//       test ever default-constructs a SpatialHash). SpatialHash exposes no
+//       public accessor for its cell size (m_cellSize is private, unread by
+//       any test or live caller), so this fact is documented here rather
+//       than asserted -- adding an engine getter solely to assert a private
+//       constant is out of scope for this tests-only pass.
+TEST_CASE("hashCellSize blind spot: Tree broadphase and the residency grid both ignore it", "[physics][mks]")
+{
+    WorldDef wd;
+    wd.hashCellSize = Real(999); // deliberately absurd; must have zero effect under the default (Tree) broadphase
+    PhysicsWorld w(wd);
+
+    // (a) Still Tree-backed -- hashCellSize did not reroute or reconfigure
+    // the default broadphase in any way.
+    CHECK(w.FixtureBroadphaseTree() != nullptr);
+
+    // (b) The residency grid's tile size is untouched by hashCellSize.
+    CHECK(w.ResidencyGrid().TileSize() == Approx(Real(1)));
 }
