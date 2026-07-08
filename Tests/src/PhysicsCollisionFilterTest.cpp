@@ -56,20 +56,15 @@ TEST_CASE("Collision filter: disjoint category/mask pair never creates a contact
           "[physics][filter]")
 {
     // Gravity pulls downward so the bodies are kinetically moving (covers the
-    // broadphase path). WorldDef default gravityX/Y = 0; set Y to 200.
+    // broadphase path). WorldDef default gravityY is now MKS 10; this scene
+    // keeps the default (no override needed).
     WorldDef wd;
-    wd.gravityY = Real(200);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    // Place A above B, overlapping (radius=10 each, centers 8 apart -> overlap).
+    // Place A above B, overlapping (radius=1 each, centers 0.8 apart -> overlap).
     // Without filtering they would push apart; with filtering they pass through.
-    BodyHandle bA = AddFiltered(w, Vec2(Real(0), Real(0)),  Real(10), 0x0002u, 0x0002u);
-    BodyHandle bB = AddFiltered(w, Vec2(Real(0), Real(8)),  Real(10), 0x0004u, 0x0004u);
+    BodyHandle bA = AddFiltered(w, Vec2(Real(0), Real(0)),  Real(1), 0x0002u, 0x0002u);
+    BodyHandle bB = AddFiltered(w, Vec2(Real(0), Real(0.8)),  Real(1), 0x0004u, 0x0004u);
 
     int beginCount = 0;
     w.OnContact([&](const ContactEvent& ev)
@@ -102,17 +97,13 @@ TEST_CASE("Collision filter: compatible non-default filters allow contact creati
           "[physics][filter]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
-    PhysicsWorld w(wd); // default: no gravity
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0); // zero-g: overlap is purely geometric
+    PhysicsWorld w(wd);
 
-    // Overlapping circles (centers 8 apart, radius 10 each -> overlap).
-    BodyHandle bA = AddFiltered(w, Vec2(Real(0), Real(0)), Real(10), 0x0002u, 0x0006u);
-    BodyHandle bB = AddFiltered(w, Vec2(Real(0), Real(8)), Real(10), 0x0004u, 0x0003u);
+    // Overlapping circles (centers 0.8 apart, radius 1 each -> overlap).
+    BodyHandle bA = AddFiltered(w, Vec2(Real(0), Real(0)), Real(1), 0x0002u, 0x0006u);
+    BodyHandle bB = AddFiltered(w, Vec2(Real(0), Real(0.8)), Real(1), 0x0004u, 0x0003u);
 
     w.Step(kStep);
 
@@ -130,24 +121,20 @@ TEST_CASE("Collision filter: default category/mask (cat=1 mask=all) collide",
           "[physics][filter]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
-    PhysicsWorld w(wd); // default: no gravity
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0); // zero-g: overlap is purely geometric
+    PhysicsWorld w(wd);
 
     // Two overlapping dynamics with default filters (BodyDef defaults cat=1 mask=all).
     BodyDef d;
     d.type     = BodyType::Dynamic;
     d.density  = Real(1);
-    d.shape    = MakeCircle(Real(10));
+    d.shape    = MakeCircle(Real(1));
 
     d.position = Vec2(Real(0), Real(0));
     BodyHandle bA = w.AddBody(d);
 
-    d.position = Vec2(Real(0), Real(8));
+    d.position = Vec2(Real(0), Real(0.8));
     BodyHandle bB = w.AddBody(d);
 
     w.Step(kStep);

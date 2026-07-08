@@ -64,86 +64,68 @@ namespace
 TEST_CASE("PhysicsWorld: handle validity + kinematic integration", "[physics][world]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd); // no passability source -> plain Cartesian coords
 
     BodyDef def;
     def.type     = BodyType::Kinematic;
-    def.position = Vec2(Real(10), Real(20));
-    def.shape    = MakeCircle(Real(5));
+    def.position = Vec2(Real(1), Real(2));
+    def.shape    = MakeCircle(Real(0.5));
     BodyHandle body = w.AddBody(def);
 
     REQUIRE(w.IsValid(body));
-    REQUIRE(w.Position(body).x == Approx(Real(10)));
-    REQUIRE(w.Position(body).y == Approx(Real(20)));
+    REQUIRE(w.Position(body).x == Approx(Real(1)));
+    REQUIRE(w.Position(body).y == Approx(Real(2)));
 
     // kinematic integration: velocity moves the body; prev tracks for lerp.
-    w.SetVelocity(body, Vec2(Real(60), Real(0)));
+    w.SetVelocity(body, Vec2(Real(6), Real(0)));
     w.Step(kStep);
-    REQUIRE(w.Position(body).x == Approx(Real(11)));  // 10 + 60*(1/60)
-    REQUIRE(w.Position(body).y == Approx(Real(20)));
-    REQUIRE(w.DrawPosition(body, Real(0.5)).x == Approx(Real(10.5))); // prev=10,cur=11
+    REQUIRE(w.Position(body).x == Approx(Real(1.1)));  // 1 + 6*(1/60)
+    REQUIRE(w.Position(body).y == Approx(Real(2)));
+    REQUIRE(w.DrawPosition(body, Real(0.5)).x == Approx(Real(1.05))); // prev=1,cur=1.1
 }
 
 TEST_CASE("PhysicsWorld: statics never integrate", "[physics][world]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef kdef;
     kdef.type     = BodyType::Kinematic;
-    kdef.position = Vec2(Real(10), Real(20));
-    kdef.shape    = MakeCircle(Real(5));
+    kdef.position = Vec2(Real(1), Real(2));
+    kdef.shape    = MakeCircle(Real(0.5));
     w.AddBody(kdef);
 
     BodyDef sdef;
     sdef.type     = BodyType::Static;
-    sdef.position = Vec2(Real(100), Real(100));
-    sdef.shape    = MakeAabb(Real(10), Real(6));
+    sdef.position = Vec2(Real(10), Real(10));
+    sdef.shape    = MakeAabb(Real(1), Real(0.6));
     BodyHandle prop = w.AddBody(sdef);
 
-    w.SetVelocity(prop, Vec2(Real(50), Real(50))); // ignored for statics
+    w.SetVelocity(prop, Vec2(Real(5), Real(5))); // ignored for statics
     w.Step(kStep);
-    REQUIRE(w.Position(prop).x == Approx(Real(100))); // pinned
-    REQUIRE(w.Position(prop).y == Approx(Real(100)));
+    REQUIRE(w.Position(prop).x == Approx(Real(10))); // pinned
+    REQUIRE(w.Position(prop).y == Approx(Real(10)));
 }
 
 TEST_CASE("PhysicsWorld: QueryAABB sees both body kinds", "[physics][world]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef kdef;
     kdef.type     = BodyType::Kinematic;
-    kdef.position = Vec2(Real(10), Real(20));
-    kdef.shape    = MakeCircle(Real(5));
+    kdef.position = Vec2(Real(1), Real(2));
+    kdef.shape    = MakeCircle(Real(0.5));
     w.AddBody(kdef);
 
     BodyDef sdef;
     sdef.type     = BodyType::Static;
-    sdef.position = Vec2(Real(100), Real(100));
-    sdef.shape    = MakeAabb(Real(10), Real(6));
+    sdef.position = Vec2(Real(10), Real(10));
+    sdef.shape    = MakeAabb(Real(1), Real(0.6));
     w.AddBody(sdef);
 
     std::vector<BodyHandle> hits;
-    int n = w.QueryAABB(Aabb{ Vec2(Real(0), Real(0)), Vec2(Real(200), Real(200)) }, hits);
+    int n = w.QueryAABB(Aabb{ Vec2(Real(0), Real(0)), Vec2(Real(20), Real(20)) }, hits);
     REQUIRE(n == 2);
 }
 
@@ -151,18 +133,12 @@ TEST_CASE("PhysicsWorld: removal invalidates handle + slot reuse bumps generatio
           "[physics][world]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef sdef;
     sdef.type     = BodyType::Static;
-    sdef.position = Vec2(Real(100), Real(100));
-    sdef.shape    = MakeAabb(Real(10), Real(6));
+    sdef.position = Vec2(Real(10), Real(10));
+    sdef.shape    = MakeAabb(Real(1), Real(0.6));
     BodyHandle prop = w.AddBody(sdef);
 
     REQUIRE(w.IsValid(prop));
@@ -172,8 +148,8 @@ TEST_CASE("PhysicsWorld: removal invalidates handle + slot reuse bumps generatio
     // Slot reuse: the next add recycles prop's slot at a bumped generation.
     BodyDef again;
     again.type     = BodyType::Static;
-    again.position = Vec2(Real(1), Real(1));
-    again.shape    = MakeCircle(Real(2));
+    again.position = Vec2(Real(0.1), Real(0.1));
+    again.shape    = MakeCircle(Real(0.2));
     BodyHandle h2 = w.AddBody(again);
 
     REQUIRE_FALSE(w.IsValid(prop)); // stale handle stays invalid after reuse
@@ -188,24 +164,18 @@ TEST_CASE("PhysicsWorld: determinism -- identical input -> identical state",
     auto run = []() -> double
     {
         WorldDef wd;
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         BodyDef def;
         def.type     = BodyType::Kinematic;
         def.position = Vec2(Real(0), Real(0));
-        def.shape    = MakeCircle(Real(4));
+        def.shape    = MakeCircle(Real(0.4));
         BodyHandle b = w.AddBody(def);
 
         double acc = 0.0;
         for (int i = 1; i <= 120; ++i)
         {
-            const Real vx = Real((i % 7) * 10 - 30);
-            const Real vy = Real((i % 5) * 8 - 16);
+            const Real vx = Real((i % 7) * 1 - 3);
+            const Real vy = Real((i % 5) * 0.8 - 1.6);
             w.SetVelocity(b, Vec2(vx, vy));
             w.Step(kStep);
             const Vec2 p = w.Position(b);
@@ -219,25 +189,19 @@ TEST_CASE("PhysicsWorld: determinism -- identical input -> identical state",
 TEST_CASE("PhysicsWorld: Body view forwards to the world", "[physics][world]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     BodyDef def;
     def.type     = BodyType::Kinematic;
-    def.position = Vec2(Real(10), Real(20));
-    def.shape    = MakeCircle(Real(5));
+    def.position = Vec2(Real(1), Real(2));
+    def.shape    = MakeCircle(Real(0.5));
     Body body = w.GetBody(w.AddBody(def));
 
     REQUIRE(body.IsValid());
-    REQUIRE(body.GetPosition().x == Approx(Real(10)));
-    body.SetVelocity(Vec2(Real(60), Real(0)));
+    REQUIRE(body.GetPosition().x == Approx(Real(1)));
+    body.SetVelocity(Vec2(Real(6), Real(0)));
     w.Step(kStep);
-    REQUIRE(body.GetPosition().x == Approx(Real(11)));
-    REQUIRE(body.DrawPosition(Real(0.5)).x == Approx(Real(10.5)));
+    REQUIRE(body.GetPosition().x == Approx(Real(1.1)));
+    REQUIRE(body.DrawPosition(Real(0.5)).x == Approx(Real(1.05)));
     REQUIRE(body.GetType() == BodyType::Kinematic);
 }
 
@@ -249,12 +213,6 @@ TEST_CASE("ContactManager: begin/stay/end/sensor events fire deterministically",
           "[physics][contacts]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     Capture cap;
     w.OnContact([&cap](const ContactEvent& ev) { cap(ev); });
@@ -262,13 +220,13 @@ TEST_CASE("ContactManager: begin/stay/end/sensor events fire deterministically",
     BodyDef ad;
     ad.type     = BodyType::Kinematic;
     ad.position = Vec2(Real(0), Real(0));
-    ad.shape    = MakeCircle(Real(5));
+    ad.shape    = MakeCircle(Real(0.5));
     BodyHandle a = w.AddBody(ad);
 
     BodyDef bd;
     bd.type     = BodyType::Kinematic;
-    bd.position = Vec2(Real(30), Real(0));
-    bd.shape    = MakeCircle(Real(5));
+    bd.position = Vec2(Real(3), Real(0));
+    bd.shape    = MakeCircle(Real(0.5));
     w.AddBody(bd);
 
     // apart: no events
@@ -276,7 +234,7 @@ TEST_CASE("ContactManager: begin/stay/end/sensor events fire deterministically",
     REQUIRE(cap.types.empty());
 
     // jump next to b in one step -> begin
-    w.SetVelocity(a, Vec2(Real(60 * 25), Real(0)));
+    w.SetVelocity(a, Vec2(Real(6 * 25), Real(0))); // 150 m/s, well under the 400 cap
     w.Step(kStep);
     w.SetVelocity(a, Vec2(Real(0), Real(0)));
     REQUIRE_FALSE(cap.types.empty());
@@ -289,7 +247,7 @@ TEST_CASE("ContactManager: begin/stay/end/sensor events fire deterministically",
     REQUIRE(cap.types.size() == before + 1);
 
     // move apart -> end
-    w.SetVelocity(a, Vec2(Real(-60 * 25), Real(0)));
+    w.SetVelocity(a, Vec2(Real(-6 * 25), Real(0)));
     w.Step(kStep);
     w.SetVelocity(a, Vec2(Real(0), Real(0)));
     REQUIRE(cap.types.back() == ContactEvent::Type::End);
@@ -299,18 +257,12 @@ TEST_CASE("ContactManager: static sensor overlap carries sensor flag + handles",
           "[physics][contacts]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
     BodyDef ad;
     ad.type     = BodyType::Kinematic;
     ad.position = Vec2(Real(0), Real(0));
-    ad.shape    = MakeCircle(Real(5));
+    ad.shape    = MakeCircle(Real(0.5));
     w.AddBody(ad);
 
     // Capture the full last event (sensor flag + handles).
@@ -321,7 +273,7 @@ TEST_CASE("ContactManager: static sensor overlap carries sensor flag + handles",
     BodyDef sd;
     sd.type     = BodyType::Static;
     sd.position = Vec2(Real(0), Real(0));
-    sd.shape    = MakeAabb(Real(8), Real(8));
+    sd.shape    = MakeAabb(Real(0.8), Real(0.8));
     sd.isSensor = true;
     w.AddBody(sd);
 
@@ -341,12 +293,6 @@ TEST_CASE("Event gating: per-body mute drops + re-arm emits fresh begin",
           "[physics][contacts][gating]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     Capture cap;
     w.OnContact([&cap](const ContactEvent& ev) { cap(ev); });
@@ -354,13 +300,13 @@ TEST_CASE("Event gating: per-body mute drops + re-arm emits fresh begin",
     BodyDef ad;
     ad.type     = BodyType::Kinematic;
     ad.position = Vec2(Real(0), Real(0));
-    ad.shape    = MakeCircle(Real(6));
+    ad.shape    = MakeCircle(Real(0.6));
     BodyHandle a = w.AddBody(ad);
 
     BodyDef cd;
     cd.type     = BodyType::Kinematic;
-    cd.position = Vec2(Real(5), Real(0)); // overlapping a (dist 5 < 12 = sumR)
-    cd.shape    = MakeCircle(Real(6));
+    cd.position = Vec2(Real(0.5), Real(0)); // overlapping a (dist 0.5 < 1.2 = sumR)
+    cd.shape    = MakeCircle(Real(0.6));
     w.AddBody(cd);
 
     // baseline begin
@@ -388,12 +334,6 @@ TEST_CASE("Event gating: world gate drops everything + re-arms overlapping",
           "[physics][contacts][gating]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
     Capture cap;
     w.OnContact([&cap](const ContactEvent& ev) { cap(ev); });
@@ -401,13 +341,13 @@ TEST_CASE("Event gating: world gate drops everything + re-arms overlapping",
     BodyDef ad;
     ad.type     = BodyType::Kinematic;
     ad.position = Vec2(Real(0), Real(0));
-    ad.shape    = MakeCircle(Real(6));
+    ad.shape    = MakeCircle(Real(0.6));
     w.AddBody(ad);
 
     BodyDef cd;
     cd.type     = BodyType::Kinematic;
-    cd.position = Vec2(Real(5), Real(0));
-    cd.shape    = MakeCircle(Real(6));
+    cd.position = Vec2(Real(0.5), Real(0));
+    cd.shape    = MakeCircle(Real(0.6));
     w.AddBody(cd);
 
     // baseline begin

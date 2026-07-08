@@ -22,12 +22,6 @@ namespace
         RegisterPhysicsComponents(reg);
 
         Physics::WorldDef wd;
-        wd.gravityX               = Physics::Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Physics::Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Physics::Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Physics::Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Physics::Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Physics::Real(64);  // PX-PIN: remove when this file converts to MKS
         reg.SetResource(PhysicsResource{
             std::make_unique<Physics::PhysicsWorld>(wd), {} });
         auto add = [&](glm::vec2 pos, glm::vec2 half, Physics::BodyType t) {
@@ -43,8 +37,8 @@ namespace
             reg.AddComponent<Collider2D>(e, col);
             reg.AddComponent<PhysicsBodyRef>(e, PhysicsBodyRef{});
         };
-        add({0.0f, 100.0f}, {200.0f, 20.0f}, Physics::BodyType::Static);
-        add({0.0f,  79.0f}, { 20.0f, 20.0f}, Physics::BodyType::Dynamic); // resting/overlapping
+        add({0.0f, 10.0f}, {20.0f, 2.0f}, Physics::BodyType::Static);
+        add({0.0f, 7.9f}, { 2.0f, 2.0f}, Physics::BodyType::Dynamic); // resting/overlapping
     }
 }
 
