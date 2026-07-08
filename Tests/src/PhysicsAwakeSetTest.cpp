@@ -22,15 +22,10 @@ namespace {
 // StepProf is a no-op by default: a Step still runs and the scoped timers compile away.
 TEST_CASE("PhysicsAwakeSet: StepProf is a no-op when ARCANE_STEPPROF is off", "[physics][awakeset]")
 {
-    WorldDef wd; wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    AddBox(w, Vec2(Real(0), Real(-2)), Real(0.5), Real(0.5));
     for (int k = 0; k < 10; ++k) { w.Step(kStep); }
     REQUIRE(StepProf::Enabled() == false);
 }
@@ -39,16 +34,11 @@ TEST_CASE("PhysicsAwakeSet: StepProf is a no-op when ARCANE_STEPPROF is off", "[
 TEST_CASE("PhysicsAwakeSet: awake-only solve is deterministic + settles identically", "[physics][awakeset]")
 {
     auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
-        WorldDef wd; wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
         PhysicsWorld w(wd);
-        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+        AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
         std::vector<BodyHandle> boxes;
-        for (int i = 0; i < 5; ++i) { boxes.push_back(AddBox(w, Vec2(Real(0), Real(-10) - Real(9)*static_cast<Real>(i)), Real(4), Real(4))); }
+        for (int i = 0; i < 5; ++i) { boxes.push_back(AddBox(w, Vec2(Real(0), Real(-1.0) - Real(0.9)*static_cast<Real>(i)), Real(0.4), Real(0.4))); }
         for (int k = 0; k < 900; ++k) { w.Step(kStep); }
         pos.clear(); awake.clear();
         for (const BodyHandle b : boxes) { pos.push_back(w.Position(b)); awake.push_back(w.IsAwake(b)?1:0); }
@@ -78,24 +68,22 @@ TEST_CASE("PhysicsAwakeSet: set membership tracks awake-dynamic slots", "[physic
         }
     };
 
-    WorldDef wd; wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    const BodyHandle b0 = AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
-    const BodyHandle b1 = AddBox(w, Vec2(Real(0), Real(-40)), Real(5), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    const BodyHandle b0 = AddBox(w, Vec2(Real(0), Real(-2)), Real(0.5), Real(0.5));
+    const BodyHandle b1 = AddBox(w, Vec2(Real(0), Real(-4)), Real(0.5), Real(0.5));
     checkInvariant(w);                                  // 2 awake dynamics
     for (int k = 0; k < 700; ++k) { w.Step(kStep); }
     checkInvariant(w);                                  // settled -> asleep -> not in set
-    w.ApplyImpulse(b1, Vec2(Real(0), Real(-8000)));     // wake fan-out
+    // Authored as mass x delta-v (rule 3): box mass = density * 4*hw*hh
+    const Real boxMass = Real(1) * Real(4) * Real(0.5) * Real(0.5); // = 1.0 kg
+    const Real targetDv = Real(-20); // m/s: well above sleepThreshold 0.05, well under the 400 cap
+    w.ApplyImpulse(b1, Vec2(Real(0), boxMass * targetDv));          // wake fan-out
     checkInvariant(w);
     w.RemoveBody(b0);                                   // out of the set
     checkInvariant(w);
-    const BodyHandle b2 = AddBox(w, Vec2(Real(0), Real(-60)), Real(5), Real(5)); // recycle a slot
+    const BodyHandle b2 = AddBox(w, Vec2(Real(0), Real(-6)), Real(0.5), Real(0.5)); // recycle a slot
     (void)b2;
     checkInvariant(w);
 }
@@ -105,15 +93,10 @@ TEST_CASE("PhysicsAwakeSet: set membership tracks awake-dynamic slots", "[physic
 // mechanism that guarantees prev==pos for a body that has settled and frozen.
 TEST_CASE("PhysicsAwakeSet: sleeping body render-lerp is frozen (prev==pos)", "[physics][awakeset]")
 {
-    WorldDef wd; wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(-2)), Real(0.5), Real(0.5));
     for (int k = 0; k < 700; ++k) { w.Step(kStep); }
     REQUIRE_FALSE(w.IsAwake(b));
     const Vec2 mid = w.DrawPosition(b, Real(0.5));
@@ -129,21 +112,20 @@ TEST_CASE("PhysicsAwakeSet: sleeping body render-lerp is frozen (prev==pos)", "[
 // threshold -> the controller decides the minimal quiescence fix.
 TEST_CASE("PhysicsAwakeSet: a dense settled pile fully sleeps", "[physics][awakeset]")
 {
-    WorldDef wd; wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(400), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(40), Real(0.5));
     std::vector<BodyHandle> boxes;
-    const Real hw = Real(4), hh = Real(4);
+    const Real hw = Real(0.4), hh = Real(0.4);
+    // Seating gap re-authored from kSkin (0.02 m = 4x kLinearSlop 0.005), a
+    // chosen clearance -- NOT a /10 division of the old 0.2 px gap, even
+    // though the two numerically coincide here.
+    const Real gap = Real(0.02);
     for (int row = 0; row < 6; ++row) {
         const int n = 10 - row;
         for (int c = 0; c < n; ++c) {
-            const Real x = (static_cast<Real>(c) - static_cast<Real>(n)*Real(0.5)) * (Real(2)*hw + Real(0.2));
-            const Real y = Real(-5) - static_cast<Real>(row) * (Real(2)*hh + Real(0.2));
+            const Real x = (static_cast<Real>(c) - static_cast<Real>(n)*Real(0.5)) * (Real(2)*hw + gap);
+            const Real y = Real(-0.5) - static_cast<Real>(row) * (Real(2)*hh + gap);
             boxes.push_back(AddBox(w, Vec2(x, y), hw, hh));
         }
     }
@@ -153,19 +135,16 @@ TEST_CASE("PhysicsAwakeSet: a dense settled pile fully sleeps", "[physics][awake
 }
 // Guard: a body in clear motion must NEVER sleep (protects the sleep threshold
 // from being loosened to the point a visibly-moving body would freeze). With
-// zero gravity it coasts at constant velocity -- far above the sleep threshold
-// (|v| < 2.0) -- for the whole window.
+// zero gravity it coasts at constant velocity -- 5.0 m/s is 100x the default
+// 0.05 m/s sleepThreshold -- for the whole window.
 TEST_CASE("PhysicsAwakeSet: a body in clear motion never sleeps", "[physics][awakeset]")
 {
-    WorldDef wd; wd.gravityY = Real(0);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd;
+    wd.gravityX = Real(0); // zero-g: coasts at constant velocity, never settles
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
-    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(0)), Real(5), Real(5));
-    w.SetVelocity(b, Vec2(Real(50), Real(0)));   // |v|=50, far above threshold
+    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(0)), Real(0.5), Real(0.5));
+    w.SetVelocity(b, Vec2(Real(5.0), Real(0)));   // |v|=5.0 m/s, far above threshold
     for (int k = 0; k < 120; ++k) { w.Step(kStep); REQUIRE(w.IsAwake(b)); }
 }
 // A stationary (zero-velocity) kinematic must not prevent the scene from
@@ -173,17 +152,12 @@ TEST_CASE("PhysicsAwakeSet: a body in clear motion never sleeps", "[physics][awa
 // (Regression guard for the Stage-1 zero-velocity kinematic proxy gate.)
 TEST_CASE("PhysicsAwakeSet: a stationary kinematic does not prevent the scene from sleeping", "[physics][awakeset]")
 {
-    WorldDef wd; wd.gravityY = Real(400);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
-    AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
-    BodyDef kd; kd.type = BodyType::Kinematic; kd.position = Vec2(Real(150), Real(-50)); kd.shape = MakeAabb(Real(5), Real(5));
+    AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
+    BodyDef kd; kd.type = BodyType::Kinematic; kd.position = Vec2(Real(15), Real(-5)); kd.shape = MakeAabb(Real(0.5), Real(0.5));
     const BodyHandle k = w.AddBody(kd);          // zero velocity, off to the side
-    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(-20)), Real(5), Real(5));
+    const BodyHandle b = AddBox(w, Vec2(Real(0), Real(-2)), Real(0.5), Real(0.5));
     for (int n = 0; n < 700; ++n) { w.Step(kStep); }
     REQUIRE_FALSE(w.IsAwake(b));                  // dynamic still sleeps
     (void)k;
@@ -195,20 +169,18 @@ TEST_CASE("PhysicsAwakeSet: a stationary kinematic does not prevent the scene fr
 TEST_CASE("PhysicsAwakeSet: create/sleep/wake/remove is deterministic across two runs", "[physics][awakeset]")
 {
     auto run = [](std::vector<Vec2>& pos, std::vector<int>& awake) {
-        WorldDef wd; wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
         PhysicsWorld w(wd);
-        AddFloor(w, Vec2(Real(0), Real(5)), Real(200), Real(5));
+        AddFloor(w, Vec2(Real(0), Real(0.5)), Real(20), Real(0.5));
         std::vector<BodyHandle> boxes;
-        for (int i = 0; i < 6; ++i) { boxes.push_back(AddBox(w, Vec2(Real(0), Real(-10) - Real(9)*static_cast<Real>(i)), Real(4), Real(4))); }
+        for (int i = 0; i < 6; ++i) { boxes.push_back(AddBox(w, Vec2(Real(0), Real(-1.0) - Real(0.9)*static_cast<Real>(i)), Real(0.4), Real(0.4))); }
         for (int k = 0; k < 200; ++k) { w.Step(kStep); }
         w.RemoveBody(boxes[2]);                                          // swap-remove from the awake-set mid-life
-        const BodyHandle nb = AddBox(w, Vec2(Real(30), Real(-10)), Real(4), Real(4)); // recycle a slot
-        w.ApplyImpulse(boxes[5], Vec2(Real(120), Real(-3000)));          // wake fan-out
+        const BodyHandle nb = AddBox(w, Vec2(Real(3), Real(-1)), Real(0.4), Real(0.4)); // recycle a slot
+        // Authored as mass x delta-v (rule 3): box mass = density * 4*hw*hh
+        const Real boxMass = Real(1) * Real(4) * Real(0.4) * Real(0.4); // = 0.64 kg
+        const Vec2 targetDv = Vec2(Real(2), Real(-25)); // m/s: up+sideways kick, well under the 400 cap
+        w.ApplyImpulse(boxes[5], boxMass * targetDv);          // wake fan-out
         for (int k = 0; k < 500; ++k) { w.Step(kStep); }
         pos.clear(); awake.clear();
         for (std::size_t i = 0; i < boxes.size(); ++i) { if (i==2) continue; pos.push_back(w.Position(boxes[i])); awake.push_back(w.IsAwake(boxes[i])?1:0); }
@@ -225,23 +197,20 @@ TEST_CASE("PhysicsAwakeSet: create/sleep/wake/remove is deterministic across two
 // STATIONARY neighbour across a sub-pixel gap (the bodies were in different
 // islands, not touching) -> the pile flashed rest/wake forever. Fix: a body
 // idle enough to be a sleep candidate must not wake its sleeping neighbours.
+// Values mirror the MKS-converted Scenes.cpp BuildPlayground exactly (MKS P6)
+// -- this test is that scene's regression twin.
 TEST_CASE("PhysicsAwakeSet: scene-0 mixed AABB+circle pile fully settles (no rest/wake flashing)",
           "[physics][awakeset]")
 {
-    WorldDef wd; wd.gravityY = Real(900);
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    WorldDef wd; // gravity defaults to (0, 10) m/s^2, +Y down
     PhysicsWorld w(wd);
     // Floor + 2 walls (static).
     auto staticBox = [&](Real cx, Real cy, Real hw, Real hh){
         BodyDef d; d.type=BodyType::Static; d.position=Vec2(cx,cy); d.shape=MakeAabb(hw,hh); d.friction=Real(0.4); return w.AddBody(d);
     };
-    staticBox(Real(640), Real(820), Real(760), Real(36));
-    staticBox(Real(-80), Real(560), Real(36),  Real(300));
-    staticBox(Real(1360),Real(560), Real(36),  Real(300));
+    staticBox(Real(6.4),  Real(8.2), Real(7.6),  Real(0.36));
+    staticBox(Real(-0.8), Real(5.6), Real(0.36), Real(3.0));
+    staticBox(Real(13.6), Real(5.6), Real(0.36), Real(3.0));
     // 3 dynamic boxes (fixedRotation) + 2 dynamic circles.
     auto dynBox = [&](Real cx, Real cy, Real hw, Real hh){
         BodyDef d; d.type=BodyType::Dynamic; d.position=Vec2(cx,cy); d.shape=MakeAabb(hw,hh);
@@ -252,11 +221,11 @@ TEST_CASE("PhysicsAwakeSet: scene-0 mixed AABB+circle pile fully settles (no res
         d.density=Real(1); d.friction=Real(0.4); d.restitution=Real(0.2); return w.AddBody(d);
     };
     std::vector<BodyHandle> dyn;
-    dyn.push_back(dynBox(Real(440), Real(120), Real(54), Real(54)));
-    dyn.push_back(dynBox(Real(640), Real(40),  Real(66), Real(42)));
-    dyn.push_back(dynBox(Real(860), Real(90),  Real(46), Real(46)));
-    dyn.push_back(dynCircle(Real(540), Real(260), Real(50)));
-    dyn.push_back(dynCircle(Real(760), Real(200), Real(58)));
+    dyn.push_back(dynBox(Real(4.4), Real(1.2), Real(0.54), Real(0.54)));
+    dyn.push_back(dynBox(Real(6.4), Real(0.4), Real(0.66), Real(0.42)));
+    dyn.push_back(dynBox(Real(8.6), Real(0.9), Real(0.46), Real(0.46)));
+    dyn.push_back(dynCircle(Real(5.4), Real(2.6), Real(0.50)));
+    dyn.push_back(dynCircle(Real(7.6), Real(2.0), Real(0.58)));
 
     // 10 seconds is ample for a 5-body pile to settle + sleep.
     for (int k = 0; k < 600; ++k) { w.Step(kStep); }
