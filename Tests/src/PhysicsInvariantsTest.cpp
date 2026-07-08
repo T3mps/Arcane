@@ -115,13 +115,13 @@ namespace
 // A small stack of dynamic boxes dropped onto a floor settles with bounded
 // box-box / box-floor overlap. The SoftStep solver drives the overlap TOWARD
 // kLinearSlop (0.005); a free-resting contact lands very close to it. A loaded
-// stack carries more residual (the lower contacts bear the weight above), so
-// the documented settled budget is ~0.18 for a stack (see PhysicsSolverTest /
-// PhysicsSolverBudgetTest, which use 0.21 as the stack budget). We assert that
-// SOLVER-APPROPRIATE bound here: the invariant is "rest penetration stays
-// bounded near slop", not "literally < kLinearSlop" (no soft solver achieves
-// the latter under load). A regression that let the stack sink would blow past
-// this.
+// stack carries more residual (the lower contacts bear the weight above); the
+// MKS-re-derived stack budget is 0.003 (matching PhysicsSolverBudgetTest's
+// PenBudget.stack, MKS P2; the px-era lore was ~0.18 measured / 0.21 budget).
+// We assert that SOLVER-APPROPRIATE bound here: the invariant is "rest
+// penetration stays bounded near slop", not "literally < kLinearSlop" (no
+// soft solver achieves the latter under load). A regression that let the
+// stack sink would blow past this.
 // ====================================================================
 TEST_CASE("physics-invariant: rest penetration stays bounded near the slop",
           "[physics][invariant]")
@@ -526,18 +526,20 @@ TEST_CASE("physics-invariant: sliding over a merged tile span does not catch",
 //   (c) NO LATERAL DRIFT -- the top-face axis is vertical, so |x| stays ~0; a
 //       sideways wrong-axis eject would slide it.
 //   (d) CLEAN REST -- velocity bled off; penetration within the solver's settled
-//       budget (the same ~0.21 stack-budget style the rest-penetration invariant
-//       above uses) and far under the radius (not still buried).
+//       budget (0.1, re-derived for MKS below -- same rule-6 style as the
+//       rest-penetration invariant above, which uses 0.003) and far under the
+//       radius (not still buried).
 //
 // NOTE on the budget: the SoftStep recovery reaches a stable force-balance whose
-// residual grows with the INITIAL overlap (measured: ~0.17 at depth 6, ~0.22 at
-// depth 10, ~0.48 at depth 30). That depth-scaling residual is a documented soft-
+// residual grows with the INITIAL overlap (px-era measurements: ~0.17 at depth 6,
+// ~0.22 at depth 10, ~0.48 at depth 30 -- the depth-scaling TREND is scale-
+// independent; the numbers predate MKS). That residual is a documented soft-
 // solver characteristic (bias-vs-gravity equilibrium), NOT an EPA error -- the
 // EPA axis/separation are exact (verified above) and recovery is always correct-
 // direction + bounded + deterministic. We spawn at a genuine deep overlap (a full
 // radius past the face -> coreDist 0 -> EPA path) that settles within the
-// conventional ~0.21 budget; we do NOT loosen the budget to absorb a pathological
-// initial overlap.
+// re-derived MKS budget (0.1, measured 0.0623 below); we do NOT loosen the
+// budget to absorb a pathological initial overlap.
 // ====================================================================
 TEST_CASE("physics-invariant: a deeply-overlapping round body recovers cleanly",
           "[physics][invariant]")
@@ -616,7 +618,11 @@ TEST_CASE("physics-invariant: a deeply-overlapping round body recovers cleanly",
 
     // (d) CLEAN REST: velocity bled off.
     const Real keFinal = Real(0.5) * (vf.x * vf.x + vf.y * vf.y);
-    CHECK(keFinal < Real(50)); // effectively at rest
+    // Re-derived for MKS (review fix): the px-era 50 admitted 10 units/s as
+    // "at rest"; /100 keeps the velocity^2 dimension honest (v ~ 1 m/s cap).
+    // Measured keFinal ~ 1e-13 (EPA recovery is a position bias) -- this stays
+    // a coarse explosion tripwire, same character as keBound above.
+    CHECK(keFinal < Real(0.5)); // effectively at rest
 
     // Rest penetration bounded near the slop: the circle's bottom barely overlaps
     // the box top. Re-derived for MKS (MKS P4) -- the old 0.21 was a px-era
