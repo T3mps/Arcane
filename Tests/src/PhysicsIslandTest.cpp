@@ -207,7 +207,7 @@ TEST_CASE("PhysicsIsland: stack sleeps as a unit, disturbance wakes a member", "
     std::vector<BodyHandle> boxes;
     for (int i = 0; i < N; ++i)
     {
-        // gap = 2*kLinearSlop (0.005) -- a small seating overlap, not a scale division.
+        // gap = 2*kLinearSlop (0.005) -- a small seating clearance, not a scale division.
         const Real y = -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1);
         boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
     }
@@ -352,7 +352,7 @@ TEST_CASE("PhysicsIsland: settle + sleep is deterministic across two runs", "[ph
         std::vector<BodyHandle> boxes;
         for (int i = 0; i < N; ++i)
         {
-            // gap = 2*kLinearSlop (0.005) -- a small seating overlap, not a scale division.
+            // gap = 2*kLinearSlop (0.005) -- a small seating clearance, not a scale division.
             const Real y = -(Real(2) * hh + Real(0.01)) * static_cast<Real>(i + 1);
             boxes.push_back(AddBox(w, Vec2(Real(0), y), hw, hh));
         }
