@@ -11,12 +11,9 @@ using namespace Arcane::Physics;
 TEST_CASE("Linear velocity is clamped to maxLinearVelocity", "[physics][clamp]")
 {
     WorldDef def; // default maxLinearVelocity == 400
-    def.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    def.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    def.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    def.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    def.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    def.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    // zero-g isolates the clamp from gravity; other WorldDef fields inherit MKS defaults.
+    def.gravityX               = Real(0);
+    def.gravityY               = Real(0);
     PhysicsWorld w(def);
     BodyDef d; d.type = BodyType::Dynamic; d.shape = MakeCircle(Real(4));
     d.fixedRotation = true; d.position = Vec2(0, 0);
@@ -32,12 +29,8 @@ TEST_CASE("Linear velocity is clamped to maxLinearVelocity", "[physics][clamp]")
 TEST_CASE("Sub-cap linear velocity is untouched", "[physics][clamp]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX               = Real(0);
+    wd.gravityY               = Real(0);
     PhysicsWorld w(wd);
     BodyDef d; d.type = BodyType::Dynamic; d.shape = MakeCircle(Real(4));
     d.fixedRotation = true; d.position = Vec2(0, 0);
@@ -52,12 +45,8 @@ TEST_CASE("Sub-cap linear velocity is untouched", "[physics][clamp]")
 TEST_CASE("Angular velocity is clamped to kMaxRotation * invDt", "[physics][clamp]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX               = Real(0);
+    wd.gravityY               = Real(0);
     PhysicsWorld w(wd);
     // Rotatable dynamic body: a circle carries rotational inertia and is NOT
     // fixedRotation by default, so its angular velocity integrates (and is
