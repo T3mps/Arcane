@@ -20,6 +20,7 @@
 // 7-entry PluginVTable is unchanged; SceneControl is a sandbox-private side channel.
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
@@ -128,6 +129,14 @@ namespace
         // over 8 quads. Step + render; the gate is no-crash + clean GPU + non-trivial
         // geometry submitted.
         const std::uint32_t scene0Quads = StepAndRender(rt, host, *device, *canvas, *batcher, 30);
+
+        // Framing tripwire (P6 residual): the plugin must push the COMBINED world->screen
+        // scale (Camera::WorldToScreenScale() = kPixelsPerMeter * zoom = 100 at the default
+        // scene), NOT the raw zoom (1.0). The P6 regression pushed raw zoom -> a 1 px/m
+        // render that RenderErrorCount()==0 could not see. CameraZoom() reads back the
+        // actual cross-DLL value the plugin pushed.
+        CHECK(rt.CameraZoom() == Catch::Approx(100.0f));
+
         CHECK(scene0Quads >= 8);
         CHECK(Arcane::RenderErrorCount() == 0);
 

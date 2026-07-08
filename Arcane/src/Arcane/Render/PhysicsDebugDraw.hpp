@@ -78,6 +78,12 @@ namespace Arcane
         // Seconds of look-ahead for the velocity ray length (world = v * scale,
         // then * zoom).  0.15 s reads well at the sandbox scale.
         float velocityScale  = 0.15f;
+        // Minimum world-space speed (m/s) for a body to draw a velocity ray; below
+        // this the ray is suppressed as jitter. Defaults to the MKS sleep threshold
+        // (WorldDef sleepThreshold default 0.05 m/s) so any body the solver considers
+        // awake shows a ray -- restoring the px-era gate<<sleepThreshold relation that
+        // the units flip had inverted (old raw literal was 1.0 world-u/s).
+        float velocityRayMinSpeed = 0.05f;
 
         // Center-of-mass marker: a small cross (two short lines) at each DYNAMIC
         // body's world COM.  Makes the off-origin COM of compound bodies visible.

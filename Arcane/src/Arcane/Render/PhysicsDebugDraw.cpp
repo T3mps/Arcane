@@ -398,7 +398,7 @@ namespace Arcane
                 const float vx  = static_cast<float>(v.x);
                 const float vy  = static_cast<float>(v.y);
                 const float spd = std::sqrt(vx * vx + vy * vy);
-                if (spd > 1.0f)   // world units/s threshold -> suppress jitter
+                if (spd > opts.velocityRayMinSpeed)
                 {
                     const glm::vec2 tip =
                         comS + glm::vec2(vx, vy) * (opts.velocityScale * zoom);
