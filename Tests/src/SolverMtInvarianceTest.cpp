@@ -12,12 +12,8 @@ using namespace Arcane::Physics;
 TEST_CASE("PhysicsWorld accepts an executor and steps with it (serial default)", "[physics][solvermt]")
 {
     WorldDef wd;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd.gravityX = Real(0); // zero-g: API-mechanics test, no physics content
+    wd.gravityY = Real(0);
     PhysicsWorld w(wd);
     Arcane::SerialTaskExecutor serial;
     w.SetExecutor(&serial);                 // explicit serial
@@ -26,12 +22,8 @@ TEST_CASE("PhysicsWorld accepts an executor and steps with it (serial default)",
     SUCCEED("stepped with an injected executor");
 
     WorldDef wd2;
-    wd2.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd2.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd2.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd2.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd2.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd2.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+    wd2.gravityX = Real(0); // zero-g: API-mechanics test, no physics content
+    wd2.gravityY = Real(0);
     PhysicsWorld w2(wd2);
     w2.SetExecutor(nullptr);                // null -> falls back to the world's serial default
     REQUIRE(w2.Executor() != nullptr);      // always-non-null invariant: serial fallback, never null
@@ -58,13 +50,7 @@ namespace
     // serial == enki(1) == enki(N), byte-identical across executors/thread counts.
     std::vector<float> RunPile(Arcane::ITaskExecutor* exec, int steps)
     {
-        WorldDef wd;
-        wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravityY inherits the MKS default (+10)
         PhysicsWorld w(wd);
         w.SetExecutor(exec);
 

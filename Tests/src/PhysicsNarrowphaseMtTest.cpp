@@ -33,12 +33,12 @@ namespace
     // Position(h) / GetAngle(h).
     std::vector<BodyHandle> BuildChurn(PhysicsWorld& w)
     {
-        // Static floor: wide box at y=300 (gravity is +Y so bodies fall down).
+        // Static floor: wide box at y=30 (gravity is +Y so bodies fall down).
         {
             BodyDef fd;
             fd.type     = BodyType::Static;
-            fd.position = Vec2(Real(0), Real(300));
-            fd.shape    = MakeAabb(Real(400), Real(20));
+            fd.position = Vec2(Real(0), Real(30));
+            fd.shape    = MakeAabb(Real(40), Real(2));
             fd.friction = Real(0.6);
             w.AddBody(fd);
         }
@@ -60,24 +60,24 @@ namespace
             d.type     = BodyType::Dynamic;
             d.density  = Real(1);
             d.friction = Real(0.4);
-            d.position = Vec2(rnd(Real(-300), Real(300)),
-                              rnd(Real(-200), Real(260)));
+            d.position = Vec2(rnd(Real(-30), Real(30)),
+                              rnd(Real(-20), Real(26)));
 
             if (i % 3 == 0)
             {
                 // Circle -- can freely rotate.
-                d.shape = MakeCircle(rnd(Real(6), Real(12)));
+                d.shape = MakeCircle(rnd(Real(0.6), Real(1.2)));
             }
             else if (i % 3 == 1)
             {
                 // Box -- fixedRotation because AABB shapes are axis-aligned.
-                d.shape         = MakeAabb(Real(8), Real(8));
+                d.shape         = MakeAabb(Real(0.8), Real(0.8));
                 d.fixedRotation = true;
             }
             else
             {
                 // Capsule -- can freely rotate.
-                d.shape = MakeCapsule(Real(10), Real(5));
+                d.shape = MakeCapsule(Real(1.0), Real(0.5));
             }
 
             handles.push_back(w.AddBody(d));
@@ -94,13 +94,13 @@ namespace
     std::vector<BodyHandle> BuildCreateHeavy(PhysicsWorld& w)
     {
         // Row of 12 static blocks -- the landing field.
-        // Blocks span x in [-330, 330], y=280 (gravity +Y, so fall down).
+        // Blocks span x in [-33, 33], y=28 (gravity +Y, so fall down).
         for (int s = 0; s < 12; ++s)
         {
             BodyDef st;
             st.type     = BodyType::Static;
-            st.position = Vec2(Real(-330 + s * 60), Real(280));
-            st.shape    = MakeAabb(Real(26), Real(12));
+            st.position = Vec2(Real(-33 + s * 6), Real(28));
+            st.shape    = MakeAabb(Real(2.6), Real(1.2));
             w.AddBody(st);
         }
 
@@ -121,21 +121,21 @@ namespace
             d.type     = BodyType::Dynamic;
             d.density  = Real(1);
             d.friction = Real(0.4);
-            d.position = Vec2(rnd(Real(-330), Real(330)),
-                              rnd(Real(-260), Real(220)));
+            d.position = Vec2(rnd(Real(-33), Real(33)),
+                              rnd(Real(-26), Real(22)));
 
             if (j % 3 == 0)
             {
-                d.shape = MakeCircle(rnd(Real(6), Real(11)));
+                d.shape = MakeCircle(rnd(Real(0.6), Real(1.1)));
             }
             else if (j % 3 == 1)
             {
-                d.shape         = MakeAabb(Real(8), Real(8));
+                d.shape         = MakeAabb(Real(0.8), Real(0.8));
                 d.fixedRotation = true;
             }
             else
             {
-                d.shape = MakeCapsule(Real(10), Real(5));
+                d.shape = MakeCapsule(Real(1.0), Real(0.5));
             }
 
             handles.push_back(w.AddBody(d));
@@ -151,12 +151,6 @@ namespace
     std::vector<Real> RunCapture(Arcane::ITaskExecutor* exec, Builder&& build)
     {
         WorldDef wd;
-        wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
         w.SetExecutor(exec);
 
@@ -180,29 +174,40 @@ namespace
     }
 
     // Span-path grid geometry (shared by RunCaptureSpans + its sanity bound).
-    // A 64x64 grid of 20px cells (world span [0,1280]x[0,1280], tileOrigin 0,0)
+    // A 64x64 grid of 0.2 m cells (world span [0,12.8]x[0,12.8], tileOrigin 0,0)
     // shaped into a solid BOWL: a THICK full-width floor (rows 40..43 -> a merged
-    // span at world y [800,880], top face y=800) plus solid side walls (cols 0..1
+    // span at world y [8.0,8.8], top face y=8.0) plus solid side walls (cols 0..1
     // and 62..63, rows 24..43). The bowl CONTAINS the falling bodies: a 1-tile
-    // (20px) span can be squeezed through by a dense agitated non-sleeping pile,
+    // (0.2 m) span can be squeezed through by a dense agitated non-sleeping pile,
     // and a single-row floor lets edge bodies roll off into the void -- a 4-tile
-    // (80px) floor cannot be tunnelled and the walls stop edge escape, so every
+    // (0.8 m) floor cannot be tunnelled and the walls stop edge escape, so every
     // resting body sits on the merged tile SPANS, step after step.
+    //
+    // Cell size is /100 (20 -> 0.2), the SAME divisor PhysicsIslandWakeMergeTest's
+    // tile-span bowl uses -- this restores the numeric mirror between the two
+    // files (both grids are 64x64 cells of 0.2 m, both floor top faces sit at
+    // y=8.0). That is a deliberate divergence from BuildChurn/BuildCreateHeavy
+    // below, which use /10 (the P4 cluster's plain body-scale convention),
+    // WITHIN THE SAME FILE -- this span scene's whole geometry (grid extent,
+    // floor/wall rows, floor top) hangs off the cell size, so /100 preserves
+    // the proven 140-body bowl shape exactly instead of re-deriving a new one.
+    // Grid row/col indices below are counts, not distances -- unchanged.
     constexpr int  kSpanGridW       = 64;
     constexpr int  kSpanGridH       = 64;
-    constexpr Real kSpanCellSize    = Real(20);
+    constexpr Real kSpanCellSize    = Real(0.2);
     constexpr int  kSpanFloorRow    = 40;                    // top solid floor row
     constexpr int  kSpanFloorRowEnd = 43;                    // thick floor: rows 40..43
     constexpr int  kSpanWallRowTop  = 24;                    // walls span rows 24..43
-    constexpr Real kSpanFloorTop    = Real(kSpanFloorRow) * kSpanCellSize; // 800
+    constexpr Real kSpanFloorTop    = Real(kSpanFloorRow) * kSpanCellSize; // 8.0
 
     // Rain 140 mixed-shape dynamic bodies INSIDE the bowl, above the floor. They
     // fall (gravity +y) onto the merged tile span, generating tile-SPAN contacts
-    // every step. Spawn x in [120,1160] keeps every body clear of the side walls
-    // (inner faces x=40 and x=1240); spawn y in [520,720] is well ABOVE the floor
-    // top (800) so they fall onto it. 140 bodies / kCreateGrain(16) ~= 9 chunks,
-    // so the parallel detect fans across many workers and the per-worker span
-    // buffers are non-empty on multiple workers (the merge under test).
+    // every step. Spawn x in [1.2,11.6] keeps every body clear of the side walls
+    // (inner faces x=0.4 and x=12.4); spawn y in [5.2,7.2] is well ABOVE the
+    // floor top (8.0) so they fall onto it. 140 bodies / kCreateGrain(16) ~= 9
+    // chunks, so the parallel detect fans across many workers and the
+    // per-worker span buffers are non-empty on multiple workers (the merge
+    // under test).
     std::vector<BodyHandle> BuildSpanRain(PhysicsWorld& w)
     {
         std::uint32_t seed = 0xC0FFEEu;
@@ -221,21 +226,26 @@ namespace
             d.type     = BodyType::Dynamic;
             d.density  = Real(1);
             d.friction = Real(0.4);
-            d.position = Vec2(rnd(Real(120), Real(1160)),
-                              rnd(Real(520), Real(720)));
+            d.position = Vec2(rnd(Real(1.2), Real(11.6)),
+                              rnd(Real(5.2), Real(7.2)));
 
+            // Shape dims (0.05-0.11 m) land below the 0.1 m body-size floor --
+            // ACCEPTED EXCEPTION for this file: every dim is still 2.5-5.5x
+            // kSkin (0.02), not degenerate, and preserving the body:tile ratio
+            // (vs. the 0.2 m cell) against the proven 140-body scene is what
+            // the wake-merge scenario needs. LCG seed/algorithm untouched.
             if (j % 3 == 0)
             {
-                d.shape = MakeCircle(rnd(Real(6), Real(11)));
+                d.shape = MakeCircle(rnd(Real(0.06), Real(0.11)));
             }
             else if (j % 3 == 1)
             {
-                d.shape         = MakeAabb(Real(8), Real(8));
+                d.shape         = MakeAabb(Real(0.08), Real(0.08));
                 d.fixedRotation = true;
             }
             else
             {
-                d.shape = MakeCapsule(Real(10), Real(5));
+                d.shape = MakeCapsule(Real(0.10), Real(0.05));
             }
 
             handles.push_back(w.AddBody(d));
@@ -272,25 +282,17 @@ namespace
         }
 
         WorldDef wd;
-        wd.gravityY     = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         wd.passability  = &grid;
         wd.tileCellSize = kSpanCellSize;
         wd.tileOrigin   = Vec2(Real(0), Real(0));
         // Disable sleep (threshold 0 -> the |v|+|w|*ext < threshold idle test is
-        // never satisfied). Two reasons, both about KEEPING the span-create-MT
-        // path under test: (1) every body stays in the awake-set every step, so
-        // StaticCandidates runs for all of them and the per-worker span buffers
-        // are populated across multiple workers for all 200 steps (not just the
-        // brief fall-and-settle window). (2) It keeps this scene focused on the
-        // create-phase narrowphase MT contract; deep dynamic piles resting purely
-        // on tile spans (no static anchor BODY) otherwise stress the orthogonal
-        // Phase-B "no sleeping dynamic in the solver feed" island invariant, which
-        // is SERIAL sleep/island logic identical across executors -- not a
-        // create-MT divergence, and out of scope for this guard.
+        // never satisfied). This is a deliberate MT-coverage knob, kept as an
+        // intentional non-default scene choice (Real(0) needs no unit conversion,
+        // it is scale-invariant): every body stays in the awake-set every step,
+        // so StaticCandidates runs for all of them and the per-worker span
+        // buffers are populated across multiple workers for all 200 steps (not
+        // just the brief fall-and-settle window) -- keeping this scene focused
+        // on the create-phase narrowphase MT contract under test.
         wd.sleepThreshold = Real(0);
         PhysicsWorld w(wd);
         w.SetExecutor(exec);
@@ -387,7 +389,7 @@ TEST_CASE("Narrowphase span-path create MT == serial: state bit-identical",
     bool sawBoundedY = false;
     for (std::size_t i = 1; i < a.size(); i += 3u)
     {
-        REQUIRE(a[i] < kSpanFloorTop + Real(60)); // never sank through the span
+        REQUIRE(a[i] < kSpanFloorTop + Real(0.6)); // never sank through the span (/100 of the px slack)
         sawBoundedY = true;
     }
     REQUIRE(sawBoundedY);

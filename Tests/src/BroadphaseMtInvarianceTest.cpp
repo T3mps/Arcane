@@ -11,12 +11,7 @@ namespace
     // proxies/step (UpdatePairs work-list > grain -> real broadphase MT).
     std::vector<float> RunActivePile(Arcane::ITaskExecutor* exec, int steps)
     {
-        WorldDef wd; wd.gravityY = Real(400);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        WorldDef wd; // gravityY inherits the MKS default (+10)
         PhysicsWorld w(wd); w.SetExecutor(exec);
         { BodyDef fd; fd.type=BodyType::Static; fd.position=Vec2(Real(0),Real(5));
           fd.shape=MakeAabb(Real(40),Real(0.5)); w.AddBody(fd); }

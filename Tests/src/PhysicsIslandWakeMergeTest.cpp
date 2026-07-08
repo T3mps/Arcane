@@ -47,12 +47,16 @@ namespace
     // sits on the merged tile SPAN -- there is NO static anchor BODY, so a settled
     // body sleeps as a SINGLETON island (the exact precondition for the bug).
     //
-    // Cell size is /100 (20 -> 0.2), a deliberate divergence from MKS P2-T8's
-    // tile-span precedent (which re-authored its cell to the 1 m residency
-    // scale): THIS scene is a 64x64-cell bowl whose whole geometry (grid extent,
-    // floor/wall rows, floor top) hangs off the cell size, so /100 preserves the
-    // proven 140-body scene shape exactly instead of re-deriving a new bowl.
-    // Grid row/col indices below are counts, not distances -- unchanged.
+    // Cell size is /100 (20 -> 0.2). NarrowphaseMt's own RunCaptureSpans now uses
+    // the SAME /100 divisor and the SAME constants (MKS P4) -- the mirror between
+    // the two files is numeric again, not just structural: both grids are 64x64
+    // cells of 0.2 m, both floor top faces sit at y=8.0. This is a deliberate
+    // divergence from MKS P2-T8's tile-span precedent (which re-authored its cell
+    // to the 1 m residency scale): THIS scene is a 64x64-cell bowl whose whole
+    // geometry (grid extent, floor/wall rows, floor top) hangs off the cell size,
+    // so /100 preserves the proven 140-body scene shape exactly instead of
+    // re-deriving a new bowl. Grid row/col indices below are counts, not
+    // distances -- unchanged.
     constexpr int  kSpanGridW       = 64;
     constexpr int  kSpanGridH       = 64;
     constexpr Real kSpanCellSize    = Real(0.2);
@@ -219,7 +223,7 @@ TEST_CASE("PhysicsIslandWakeMerge: tile-span pile with sleep keeps islands unifo
     bool sawBoundedY = false;
     for (const BodyHandle h : handles)
     {
-        REQUIRE(w.Position(h).y < kSpanFloorTop + Real(0.8)); // re-measured for MKS: /100 of the px slack
+        REQUIRE(w.Position(h).y < kSpanFloorTop + Real(0.8)); // 0.8 = 4 floor rows x 0.2 m cell (same structural relation as the px-era 80 = 4x20)
         sawBoundedY = true;
     }
     REQUIRE(sawBoundedY);
