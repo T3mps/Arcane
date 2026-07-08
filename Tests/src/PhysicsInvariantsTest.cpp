@@ -51,7 +51,7 @@ using Catch::Approx;
 namespace
 {
     constexpr Real kStep   = Real(1) / Real(60);
-    constexpr Real kGravity = Real(400); // matches the dynamics/solver/rotation suites
+    constexpr Real kGravity = Real(10); // MKS default gravity (matches WorldDef default gravityY)
 
     // CCW box polygon (half-extents hw x hh): BL, BR, TR, TL. A polygon (not an
     // AABB) is required for any rotating-dynamics case.
@@ -66,12 +66,12 @@ namespace
     }
 
     // A wide static AABB floor; `top` is the world Y of its top surface.
-    BodyHandle AddFloor(PhysicsWorld& w, Real top, Real halfWidth = Real(400))
+    BodyHandle AddFloor(PhysicsWorld& w, Real top, Real halfWidth = Real(40))
     {
         BodyDef bd;
         bd.type     = BodyType::Static;
-        bd.position = Vec2(Real(0), top + Real(5)); // center 5 below the surface
-        bd.shape    = MakeAabb(halfWidth, Real(5));
+        bd.position = Vec2(Real(0), top + Real(0.5)); // center 0.5 below the surface
+        bd.shape    = MakeAabb(halfWidth, Real(0.5));
         return w.AddBody(bd);
     }
 
@@ -128,19 +128,14 @@ TEST_CASE("physics-invariant: rest penetration stays bounded near the slop",
 {
     WorldDef wd;
     wd.gravityY = kGravity;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    const Real floorTop = Real(300);
+    const Real floorTop = Real(30);
     BodyHandle floor = AddFloor(w, floorTop);
 
-    // Three stacked boxes (half-extent 10) released just touching, above floor.
+    // Three stacked boxes (half-extent 1) released just touching, above floor.
     // Start them already near their resting heights so they settle quickly.
-    const Real h = Real(10);
+    const Real h = Real(1);
     BodyHandle b0 = AddBox(w, Vec2(Real(0), floorTop - h),           h);
     BodyHandle b1 = AddBox(w, Vec2(Real(0), floorTop - Real(3) * h), h);
     BodyHandle b2 = AddBox(w, Vec2(Real(0), floorTop - Real(5) * h), h);
@@ -164,10 +159,14 @@ TEST_CASE("physics-invariant: rest penetration stays bounded near the slop",
     CHECK(w.Position(b0).y >= floorTop - Real(2) * h);
 
     // Rest penetration bound: the SoftStep solver drives overlap toward
-    // kLinearSlop; a loaded stack settles within the documented stack budget
-    // (~0.18; PhysicsSolverTest/PhysicsSolverBudgetTest use 0.21). We assert the
-    // overlap stays within that solver-appropriate bound at every contact.
-    const Real kStackPenBound = Real(0.21); // matches PhysicsSolverTest's stack budget
+    // kLinearSlop; re-derived for MKS (MKS P4) -- the old 0.21 was a px-era
+    // number and is NOT mechanically divided. MEASURED (f32, 60 Hz) at this
+    // file's MKS content: overlaps 0.00044 / 0.00120 / 0.00036 (max ~0.0012).
+    // This lands in the SAME family P2 already re-derived for an equivalent
+    // loaded box stack (PhysicsSolverBudgetTest's PenBudget.stack: measured
+    // ~0.00137, bounded 0.003, ~2.2x headroom, well under kSkin = 0.02) -- we
+    // reuse that exact bound here (~2.5x headroom over our own measured max).
+    const Real kStackPenBound = Real(0.003);
     CHECK(BoxOverlap(a0, fb) <= kStackPenBound);
     CHECK(BoxOverlap(a1, a0) <= kStackPenBound);
     CHECK(BoxOverlap(a2, a1) <= kStackPenBound);
@@ -190,9 +189,9 @@ TEST_CASE("physics-invariant: rest penetration stays bounded near the slop",
 TEST_CASE("physics-invariant: fast + rotating bodies do not tunnel a thin wall",
           "[physics][invariant]")
 {
-    const Real wallX  = Real(100);
-    const Real wallHW = Real(1);   // span x[99,101]
-    const Real wallHH = Real(60);
+    const Real wallX  = Real(10);
+    const Real wallHW = Real(0.1); // span x[9.9,10.1]
+    const Real wallHH = Real(6);
 
     auto makeWorldWithWall = [&](PhysicsWorld& w) {
         BodyDef bd;
@@ -202,24 +201,20 @@ TEST_CASE("physics-invariant: fast + rotating bodies do not tunnel a thin wall",
         w.AddBody(bd);
     };
 
-    const Real speed = Real(200) / kStep; // ~200 units / step -> clears 2-wide wall
+    const Real speed = Real(20) / kStep; // ~20 units / step -> clears 0.2-wide wall
 
     // (a) FAST circle.
     {
         WorldDef wd; // gravity 0
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        wd.gravityX = Real(0);
+        wd.gravityY = Real(0);
         PhysicsWorld w(wd);
         makeWorldWithWall(w);
 
         BodyDef bd;
         bd.type     = BodyType::Dynamic;
         bd.position = Vec2(Real(0), Real(0));
-        bd.shape    = MakeCircle(Real(2));
+        bd.shape    = MakeCircle(Real(0.2));
         bd.density  = Real(1);
         BodyHandle body = w.AddBody(bd);
         w.SetVelocity(body, Vec2(speed, Real(0)));
@@ -233,19 +228,15 @@ TEST_CASE("physics-invariant: fast + rotating bodies do not tunnel a thin wall",
     //     contact must still catch it.
     {
         WorldDef wd; // gravity 0
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.gravityY               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
+        wd.gravityX = Real(0);
+        wd.gravityY = Real(0);
         PhysicsWorld w(wd);
         makeWorldWithWall(w);
 
         BodyDef bd;
         bd.type          = BodyType::Dynamic;
         bd.position      = Vec2(Real(0), Real(0));
-        bd.shape         = BoxPolygon(Real(3), Real(3));
+        bd.shape         = BoxPolygon(Real(0.3), Real(0.3));
         bd.density       = Real(1);
         bd.fixedRotation = false;
         BodyHandle body = w.AddBody(bd);
@@ -269,29 +260,29 @@ TEST_CASE("physics-invariant: dropped scene kinetic energy stays bounded",
 {
     WorldDef wd;
     wd.gravityY = kGravity;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    const Real floorTop = Real(300);
+    const Real floorTop = Real(30);
     AddFloor(w, floorTop);
 
     // A little pile of boxes dropped from a height onto the floor.
     std::vector<BodyHandle> boxes;
-    const Real h = Real(8);
+    const Real h = Real(0.8);
     for (int i = 0; i < 5; ++i)
     {
-        boxes.push_back(AddBox(w, Vec2(Real(i * 4 - 8), floorTop - Real(80) - Real(i * 20)), h));
+        boxes.push_back(AddBox(w, Vec2(Real(i) * Real(0.4) - Real(0.8),
+                                       floorTop - Real(8) - Real(i) * Real(2)), h));
     }
 
     // The max kinetic energy a free body could acquire is bounded by falling the
-    // full drop height H under gravity: v^2 = 2*g*H -> KE/m = g*H. With H ~ 180
-    // and g = 400, g*H ~ 72000; allow a generous factor for the brief impact
-    // transient. A solver that INJECTS energy would blow far past this.
-    const Real maxDrop  = Real(200);
+    // full drop height H under gravity: v^2 = 2*g*H -> KE/m = g*H. Re-derived for
+    // MKS (do not mechanically /10 the old px product: gravity scaled /40 while
+    // lengths scaled /10, so keBound must recompute from the NEW fixed g=10 and
+    // the converted maxDrop, not from dividing the old 320000 by 10 or 40).
+    // With maxDrop = 20 and g = 10, g*H = 200; keBound applies a x4 slack factor
+    // for the impact transient -> keBound = 800. MEASURED peak per-mass KE
+    // ~91.13 (f32, 60 Hz) -- well under keBound (~8.8x headroom).
+    const Real maxDrop  = Real(20);
     const Real keBound  = Real(4) * kGravity * maxDrop; // per unit mass, x4 slack
 
     Real peakKE = Real(0);
@@ -328,25 +319,20 @@ TEST_CASE("physics-invariant: a colliding scene is run-twice deterministic",
     {
         WorldDef wd;
         wd.gravityY = kGravity;
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-        wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
-        const Real floorTop = Real(300);
+        const Real floorTop = Real(30);
         AddFloor(w, floorTop);
 
         std::vector<BodyHandle> boxes;
-        const Real h = Real(9);
+        const Real h = Real(0.9);
         for (int i = 0; i < 4; ++i)
         {
-            boxes.push_back(AddBox(w, Vec2(Real(i * 3 - 4),
-                                           floorTop - Real(40) - Real(i * 22)), h));
+            boxes.push_back(AddBox(w, Vec2(Real(i) * Real(0.3) - Real(0.4),
+                                           floorTop - Real(4) - Real(i) * Real(2.2)), h));
         }
         // Nudge one box sideways so the scene has lateral motion + friction.
-        w.SetVelocity(boxes[0], Vec2(Real(30), Real(0)));
+        w.SetVelocity(boxes[0], Vec2(Real(3.0), Real(0)));
 
         trace.clear();
         for (int k = 0; k < 200; ++k)
@@ -394,22 +380,17 @@ TEST_CASE("physics-invariant: broadphase strategy does not change the result",
         WorldDef wd;
         wd.gravityY   = kGravity;
         wd.broadphase = kind;
-        wd.hashCellSize = Real(64);
-        wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-        wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-        wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-        wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
         PhysicsWorld w(wd);
 
-        const Real floorTop = Real(300);
+        const Real floorTop = Real(30);
         AddFloor(w, floorTop);
 
         std::vector<BodyHandle> boxes;
-        const Real h = Real(9);
+        const Real h = Real(0.9);
         for (int i = 0; i < 5; ++i)
         {
-            boxes.push_back(AddBox(w, Vec2(Real(i * 6 - 12),
-                                           floorTop - Real(30) - Real(i * 21)), h));
+            boxes.push_back(AddBox(w, Vec2(Real(i) * Real(0.6) - Real(1.2),
+                                           floorTop - Real(3) - Real(i) * Real(2.1)), h));
         }
 
         trace.clear();
@@ -454,11 +435,11 @@ TEST_CASE("physics-invariant: broadphase strategy does not change the result",
 TEST_CASE("physics-invariant: sliding over a merged tile span does not catch",
           "[physics][invariant]")
 {
-    const Real cs = Real(32);
+    const Real cs = Real(3.2);
 
     // A single long horizontal run: row 0, cols 0..5 (6 cells). Merged rect =
-    // [0,0]..[192,32]. Internal cell boundaries WOULD be at x = 32,64,96,128,160;
-    // the merge fuses them away.
+    // [0,0]..[19.2,3.2]. Internal cell boundaries WOULD be at x = 3.2,6.4,9.6,
+    // 12.8,16; the merge fuses them away.
     GridPassability grid(/*w*/ 10, /*h*/ 2);
     for (int cx = 0; cx <= 5; ++cx)
     {
@@ -475,20 +456,22 @@ TEST_CASE("physics-invariant: sliding over a merged tile span does not catch",
     REQUIRE(n == 1);
     const Aabb2 span = rects[0];
     REQUIRE(span.min.x == Approx(Real(0)));
-    REQUIRE(span.max.x == Approx(Real(6) * cs)); // 192 -- the OUTER extent
-    REQUIRE(span.max.y == Approx(cs));           // 32
+    REQUIRE(span.max.x == Approx(Real(6) * cs)); // 19.2 -- the OUTER extent
+    REQUIRE(span.max.y == Approx(cs));           // 3.2
 
     // Build the merged rect as a CCW box polygon for the cast.
     const Vec2 poly[4] = { Vec2(span.min.x, span.min.y), Vec2(span.max.x, span.min.y),
                            Vec2(span.max.x, span.max.y), Vec2(span.min.x, span.max.y) };
 
     // A capsule grazing JUST ABOVE the span's top edge sweeping its full width.
-    const Shape cap = MakeCapsule(/*halfLen*/ Real(6), /*radius*/ Real(4));
-    const Real  gap   = Real(1.0);
-    const Real  rideY = span.min.y - Real(4) - gap; // a hair above the top edge
+    const Shape cap = MakeCapsule(/*halfLen*/ Real(0.6), /*radius*/ Real(0.4));
+    // gap = 0.1 -- ~16x kShapeCastTol (1.25*kLinearSlop = 0.00625, MKS P4 Task 3),
+    // ample clearance so the "clear" cast genuinely does not touch the span.
+    const Real  gap   = Real(0.1);
+    const Real  rideY = span.min.y - Real(0.4) - gap; // a hair above the top edge
     Transform   xf;
-    xf.position = Vec2(span.min.x - Real(20), rideY);
-    const Vec2  translation = Vec2((span.max.x + Real(20)) - (span.min.x - Real(20)), Real(0));
+    xf.position = Vec2(span.min.x - Real(2), rideY);
+    const Vec2  translation = Vec2((span.max.x + Real(2)) - (span.min.x - Real(2)), Real(0));
 
     const ShapeCastResult clear = ShapeCastPoly(cap, xf, translation, poly, 4);
     // Riding above the top edge with clearance: the swept capsule never reaches
@@ -496,17 +479,19 @@ TEST_CASE("physics-invariant: sliding over a merged tile span does not catch",
     CHECK_FALSE(clear.hit);
 
     // Driving INTO the left face must stop at the OUTER left extent (x = 0), NOT
-    // at any internal cell boundary (x = 32/64/... were eliminated by the merge).
+    // at any internal cell boundary (x = 3.2/6.4/... were eliminated by the merge).
     const Real midY = (span.min.y + span.max.y) * Real(0.5);
     Transform  xf2;
-    xf2.position = Vec2(span.min.x - Real(40), midY);
-    const Vec2 trans2 = Vec2(Real(80), Real(0));
+    xf2.position = Vec2(span.min.x - Real(4), midY);
+    const Vec2 trans2 = Vec2(Real(8), Real(0));
     const ShapeCastResult face = ShapeCastPoly(cap, xf2, trans2, poly, 4);
     REQUIRE(face.hit);
     const Real impactX  = xf2.position.x + trans2.x * face.t;
-    const Real leadingX = impactX + (Real(6) + Real(4)); // capsule leading edge
-    CHECK(leadingX <= Approx(span.min.x).margin(0.2)); // stops at outer face
-    CHECK(leadingX < Real(32) - Real(10));             // nowhere near 1st internal seam
+    const Real leadingX = impactX + (Real(0.6) + Real(0.4)); // capsule leading edge
+    // margin = 0.02 = 3.2x kShapeCastTol (0.00625, MKS P4 Task 3) -- same ratio
+    // PhysicsQueriesTest already uses for its converted ShapeCastPoly margins.
+    CHECK(leadingX <= Approx(span.min.x).margin(0.02)); // stops at outer face
+    CHECK(leadingX < Real(3.2) - Real(1.0));            // nowhere near 1st internal seam
 }
 
 // ====================================================================
@@ -559,17 +544,12 @@ TEST_CASE("physics-invariant: a deeply-overlapping round body recovers cleanly",
 {
     WorldDef wd;
     wd.gravityY = kGravity;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    // A static box centred at the origin, half-extent 40 (span [-40,40]^2). Use
+    // A static box centred at the origin, half-extent 4 (span [-4,4]^2). Use
     // a polygon box so the deep round-vs-polygon EPA path is exercised (an AABB
     // would also work, but the polygon core is the general v2 narrowphase path).
-    const Real boxHalf = Real(40);
+    const Real boxHalf = Real(4.0);
     BodyHandle box;
     {
         BodyDef bd;
@@ -580,17 +560,19 @@ TEST_CASE("physics-invariant: a deeply-overlapping round body recovers cleanly",
     }
 
     // A dynamic circle spawned DEEPLY INSIDE the box: a full radius past the top
-    // face. Box top is at y = -boxHalf = -40; spawn the centre at -34 so the
-    // circle (radius 6) has its TOP at the face and its whole body buried below
+    // face. Box top is at y = -boxHalf = -4; spawn the centre at -3.4 so the
+    // circle (radius 0.6) has its TOP at the face and its whole body buried below
     // it -- coreDist ~ 0, so the first contact is the EPA deep-round cell (the
-    // VERIFIED depth-6 manifold: 1 pt, normal (0,-1), sep 12). The EPA nearest-
-    // face axis ejects it UP (out the near face); gravity then rests it on top.
-    const Real circR = Real(6);
+    // VERIFIED depth-6 manifold: 1 pt, normal (0,-1), sep 12, is a px-era
+    // reference frame; the EPA normal/direction property it documents is scale-
+    // independent). The EPA nearest-face axis ejects it UP (out the near face);
+    // gravity then rests it on top.
+    const Real circR = Real(0.6);
     BodyHandle ball;
     {
         BodyDef bd;
         bd.type        = BodyType::Dynamic;
-        bd.position    = Vec2(Real(0), -boxHalf + circR); // = -34, a full radius below the top face
+        bd.position    = Vec2(Real(0), -boxHalf + circR); // = -3.4, a full radius below the top face
         bd.shape       = MakeCircle(circR);
         bd.density     = Real(1);
         bd.friction    = Real(0.4);
@@ -601,6 +583,13 @@ TEST_CASE("physics-invariant: a deeply-overlapping round body recovers cleanly",
     // (a) ENERGY BOUNDED: a deep ejection could fling the body. Bound mirrors the
     // energy-bounded invariant style (a sane cap derived from the scene scale):
     // the body can fall at most ~box span under gravity, plus generous push slack.
+    // Re-derived for MKS (do not mechanically /10 the old px product): with
+    // boxHalf = 4.0 and g = 10, g*boxHalf = 40; keBound applies a x4 slack
+    // factor -> keBound = 160. MEASURED peak per-mass KE ~1.1e-13 (f32, 60 Hz)
+    // -- effectively zero, because the EPA push-out here is a soft POSITION
+    // bias (see file header note above), not an injected velocity, so KE
+    // never actually spikes; keBound stands as the defensive explosion
+    // tripwire it was documented to be.
     const Real keBound = Real(4) * kGravity * boxHalf; // generous, x4 slack
     Real peakKE = Real(0);
     for (int i = 0; i < 120; ++i) // ~2 s: eject, settle (stable by ~frame 40)
@@ -617,22 +606,27 @@ TEST_CASE("physics-invariant: a deeply-overlapping round body recovers cleanly",
     const Vec2 vf = w.Velocity(ball);
 
     // (b) CORRECT DIRECTION: ejected out the TOP (centre above the top face),
-    // NOT still buried inside the [-40,40] span and NOT ejected DOWN past it.
+    // NOT still buried inside the [-4,4] span and NOT ejected DOWN past it.
     CHECK(pf.y <= -boxHalf);                    // pushed out the top face
     CHECK(pf.y >= -boxHalf - Real(2) * circR);  // resting on the surface, not flung away
 
     // (c) NO LATERAL DRIFT: the top-face axis is vertical -> |x| ~ 0. A wrong-axis
     // (old-centroid) eject would slide the body sideways.
-    CHECK(std::abs(pf.x) < Real(1));
+    CHECK(std::abs(pf.x) < Real(0.1));
 
     // (d) CLEAN REST: velocity bled off.
     const Real keFinal = Real(0.5) * (vf.x * vf.x + vf.y * vf.y);
     CHECK(keFinal < Real(50)); // effectively at rest
 
     // Rest penetration bounded near the slop: the circle's bottom barely overlaps
-    // the box top, within the documented settled budget (same ~0.21 stack-budget
-    // style as the rest-penetration invariant above).
-    const Real kPenBound = Real(0.21);
+    // the box top. Re-derived for MKS (MKS P4) -- the old 0.21 was a px-era
+    // number for a DIFFERENT scenario (a loaded stack) and is not reused
+    // mechanically here. MEASURED (f32, 60 Hz) at this file's MKS content:
+    // penetration ~0.0623 -- a genuine one-time deep-recovery residual (this
+    // scenario is a single EPA push-out settle, not a loaded stack, so it does
+    // not match P2's ball/stack/massRatio family directly). Bound set at
+    // ~1.6x measured headroom, ~5x kSkin (0.02).
+    const Real kPenBound = Real(0.1);
     const Real circBottom  = pf.y + circR;        // lowest point of the circle
     const Real boxTop      = -boxHalf;            // top surface of the box
     const Real penetration = circBottom - boxTop; // positive = into the box
@@ -661,22 +655,17 @@ TEST_CASE("physics-invariant: warm-start is live and the contact set stays bound
 {
     WorldDef wd;
     wd.gravityY = kGravity;
-    wd.gravityX               = Real(0);   // PX-PIN: remove when this file converts to MKS
-    wd.sleepThreshold         = Real(8);   // PX-PIN: remove when this file converts to MKS
-    wd.restitutionThreshold   = Real(20);  // PX-PIN: remove when this file converts to MKS
-    wd.contactPushMaxVelocity = Real(300); // PX-PIN: remove when this file converts to MKS
-    wd.hashCellSize           = Real(64);  // PX-PIN: remove when this file converts to MKS
     PhysicsWorld w(wd);
 
-    const Real floorTop = Real(300);
+    const Real floorTop = Real(30);
     AddFloor(w, floorTop);
 
     // A handful of resting boxes -> a small, fixed set of persistent contacts.
-    const Real h = Real(10);
+    const Real h = Real(1.0);
     const int  kBoxes = 4;
     for (int i = 0; i < kBoxes; ++i)
     {
-        AddBox(w, Vec2(Real(0), floorTop - h - Real(i * 2 * h)), h);
+        AddBox(w, Vec2(Real(0), floorTop - h - Real(i) * Real(2) * h), h);
     }
 
     // The persistent contact set is at most a few constraints per box (box-box +
