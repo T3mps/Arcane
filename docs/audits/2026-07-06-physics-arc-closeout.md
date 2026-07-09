@@ -1,5 +1,15 @@
 # Physics Arc — Closeout Inventory (2026-07-06)
 
+> **STATUS (2026-07-09): ARC CLOSED — every item below is resolved.** This inventory
+> is the historical planning doc that drove the physics-arc closeout; it is preserved on
+> main for the record. Dispositions: **A1–A5** = MKS P1–P6 (merged `@6b5845fa`); **A6**
+> = SpatialGrid benchmark, docs-only close (`@a6ed7b82`); **A7** = restitution-rebound
+> tautology fixed in MKS-P2; **B1–B7** = `2026-07-08-physics-parity-ledger.md`; **C1–C7**
+> = `2026-07-09-physics-perf-tails-closeout.md` (two items were already done pre-audit);
+> **D1** = folded into P6 + the E01-5 SaneBox guards; **D2** = this doc sweep; **E01-5**
+> = geometry robust predicates (merged `@ceb602b7`). The text below is the original
+> 2026-07-06 open-state inventory, unedited.
+
 Everything known-open across the Arcane physics arc, gathered from: the MKS spec/plans
 (`docs/superpowers/specs/2026-07-02-arcane-physics-mks-units-design.md`), the SDD ledger,
 the Box2D-parity program notes, the SpatialGrid benchmark findings, the 2026-07-04 engine
