@@ -154,9 +154,11 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
     PhysicsWorld wPlain(wd);
     BodyHandle hp = AddFallingBody(wPlain);
 
-    // Analytic damped recurrence (P2.2: gravity + damping run PER SUB-STEP).
-    // Each sub-step: v = (v + g*h) * 1/(1 + damp*h), with h = dt/N, N sub-steps
-    // per full Step. (The old once-per-step recurrence was the P2.1 timing.)
+    // Analytic damped recurrence (gravity + damping run PER SUB-STEP). Box2D v3
+    // order (solver.c:102-106, B2 parity fix): damp the OLD velocity, THEN add the
+    // undamped gravity delta -- v = v/(1 + damp*h) + g*h, with h = dt/N, N sub-steps
+    // per full Step. (Before B2 the gravity was damped too, v = (v + g*h)/(1+damp*h);
+    // the two agree only in the d == 0 limit.)
     const std::uint32_t N = WorldDef{}.substepCount; // 4
     const Real h  = dt / static_cast<Real>(N);
     const Real fh = Real(1) / (Real(1) + damp * h);
@@ -170,7 +172,7 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
         wPlain.Step(dt);
         for (std::uint32_t s = 0; s < N; ++s)
         {
-            refV = (refV + g * h) * fh;
+            refV = refV * fh + g * h;
         }
 
         const Real vDamp  = wDamp.Velocity(hd).y;
@@ -182,15 +184,17 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
         REQUIRE(vDamp < vPlain);
     }
 
-    // The discrete fixed point of v = (v + g*dt)*f is EXACTLY g/damp (the
-    // continuous terminal velocity): v(1-f) = g*dt*f, and 1-f = d*dt*f, so
-    // v = g/d. Convergence is geometric in f (~0.968 here), so step long enough
-    // for the transient to die out before asserting it.
+    // The discrete fixed point of v = v*f + g*h (gravity undamped, added AFTER
+    // damping -- Box2D v3 order) is g/damp + g*h: v(1-f) = g*h, and
+    // 1-f = d*h/(1+d*h) = d*h*f, so v = g*h/(d*h*f) = g/(d*f) = g/d + g*h. (The
+    // old damp-the-gravity form sat at exactly g/d, the continuous terminal; the
+    // B2 parity fix shifts it up by one sub-step of undamped gravity, g*h.)
+    // Convergence is geometric in f, so step long enough for the transient to die.
     for (int k = 0; k < 400; ++k)
     {
         wDamp.Step(dt);
     }
-    const Real terminal = g / damp;
+    const Real terminal = g / damp + g * h;
     REQUIRE(wDamp.Velocity(hd).y == Approx(terminal).margin(terminal * Real(0.01)));
 }
 

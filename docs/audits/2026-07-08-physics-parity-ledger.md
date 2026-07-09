@@ -13,7 +13,7 @@ authored-content game engine, we may diverge **with a written rationale here**.
 | ID | Divergence | Disposition |
 |----|------------|-------------|
 | B1 | Kinematic/pinned bodies not speed-clamped | ACCEPTED-AS-DIVERGENCE |
-| B2 | Gravity/damping ordering (gravity damped) | — |
+| B2 | Gravity/damping ordering (gravity damped) | FIXED |
 | B3 | Joints in island split/merge linkage | — |
 | B4 | Sensors in island linkage | — |
 | B5 | CCD multithreading | — |
@@ -66,3 +66,56 @@ fast movers.
 
 **Code touched.** None (engine unchanged). The ad-hoc exemption comment in
 `PhysicsQueryRotationTest.cpp` was reframed to reference this ledger entry.
+
+---
+
+## B2 — Gravity/damping ordering — FIXED
+
+**Box2D behavior.** `b2IntegrateVelocitiesTask` (`src/solver.c:102-106`) damps the
+OLD velocity and adds the **undamped** velocity delta afterward:
+`v = linearVelocityDelta + linearDamping * v_old`, where
+`linearVelocityDelta = h*invMass*force + h*gravityScale*gravity`. Gravity is NOT
+scaled by the damping factor.
+
+**Arcane behavior (before).** `SoftStep::IntegrateVelocitiesRange` computed
+`v = (v_old + g*h) * f` with `f = 1/(1 + d*h)` — i.e. the gravity delta was damped
+along with the velocity.
+
+**Fix.** Reordered to Box2D's form: damp `v_old` first, then add the undamped
+`g*h`. `SoftStep.cpp`:
+```
+float vx = m_bodyState[i].vx;               // was: + g.x*h
+...
+if (d > 0) { vx *= f; vy *= f; wv *= f; }   // damp OLD velocity
+vx += g.x*h; vy += g.y*h;                    // undamped gravity delta AFTER
+```
+(Arcane has no external force/torque accumulators, so the linear delta is gravity
+only; angular velocity gets damping only, matching Box2D's zero-torque case.)
+
+**Byte-identity.** For `d == 0` (the default; the overwhelming majority of bodies)
+the damping branch is skipped and both forms reduce to `v = v_old + g*h` —
+identical. The behavior differs only for bodies with `linearDamping > 0`.
+
+**Re-baseline surface (smaller than the audit anticipated: ONE test).** Only
+`PhysicsDynamicsTest` "linear damping decays velocity" asserts absolute damped
+velocities, so only it moved:
+- Per-sub-step reference recurrence `refV = (refV + g*h)*fh` -> `refV = refV*fh + g*h`
+  (the closed form of the new algorithm; the tight `Approx` at the loop still holds
+  because the engine does exactly this per sub-step).
+- Discrete terminal `g/damp` -> `g/damp + g*h`. Derivation: the fixed point of
+  `v = v*f + g*h` is `v(1-f) = g*h`; with `1-f = d*h*f` this gives `v = g/(d*f) =
+  g/d + g*h` (the old form's fixed point was exactly `g/d`, the continuous terminal;
+  the parity fix shifts it up by one sub-step of undamped gravity). Both values
+  derived from the algorithm, not read off engine output.
+
+Every other damped case is unaffected: `PhysicsComponentsTest` only round-trips the
+`linearDamping` field; `PhysicsDynamics` run-twice determinism compares two runs of
+the same engine (bit-identical either ordering); `PhysicsJointsTest` (linDamp 1.5)
+asserts the settled joint EQUILIBRIUM (pendulum at rod length), which is
+ordering-invariant. Full `[physics]` 30639/279 green, assertion count unchanged.
+
+**Adjacent observation (NOT addressed by B2, on record).** Arcane has no
+`angularDamping` field; the single linear-damping factor `f` is applied to angular
+velocity too. Box2D keeps a separate `angularDamping`. This is a pre-existing model
+simplification, not an ordering bug, and out of B2's scope — revisit only if a body
+needs distinct angular damping (a `BodyDef.angularDamping` feature, not a parity fix).

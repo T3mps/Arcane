@@ -340,15 +340,25 @@ namespace Arcane
                     continue; // pinned dynamic -- never integrates
                 }
                 const std::uint32_t i = w.AwakeIndexOf(s);
-                float vx = m_bodyState[i].vx + static_cast<float>(g.x * h);
-                float vy = m_bodyState[i].vy + static_cast<float>(g.y * h);
+                float vx = m_bodyState[i].vx;
+                float vy = m_bodyState[i].vy;
                 float wv = m_bodyState[i].w;
+                // Box2D v3 order (solver.c:102-106): damp the OLD velocity FIRST,
+                // then add the UNDAMPED gravity delta -- v = h*g + linearDamping*v_old.
+                // (Arcane has no external force/torque accumulators, so the delta is
+                // gravity only; angular velocity gets damping only.) This is
+                // byte-identical to the old damp-the-gravity-too form whenever d == 0
+                // (the branch is skipped); for d > 0 the gravity term is no longer
+                // scaled by f, so the discrete terminal velocity is g/d + g*h (the
+                // semi-implicit fixed point) instead of the old g/d.
                 const Real d = w.LinDampSlot(s);
                 if (d > Real(0))
                 {
                     const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
                     vx *= f; vy *= f; wv *= f;
                 }
+                vx += static_cast<float>(g.x * h);
+                vy += static_cast<float>(g.y * h);
                 // Clamp to max linear speed (Box2D v3 b2IntegrateVelocitiesTask,
                 // solver.c:108-114). Arcane units == Box2D units.
                 const float maxLin   = static_cast<float>(w.MaxLinearVelocity());
