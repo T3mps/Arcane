@@ -18,7 +18,7 @@ authored-content game engine, we may diverge **with a written rationale here**.
 | B4 | Sensors in island linkage | — |
 | B5 | CCD multithreading | — |
 | B6 | 24-color constraint-coloring parity | — |
-| B7 | Dynamics on tile-spans vs the no-sleeping-dynamic invariant | — |
+| B7 | Dynamics on tile-spans vs the no-sleeping-dynamic invariant | FIXED (+ test hardened) |
 
 ---
 
@@ -119,3 +119,54 @@ ordering-invariant. Full `[physics]` 30639/279 green, assertion count unchanged.
 velocity too. Box2D keeps a separate `angularDamping`. This is a pre-existing model
 simplification, not an ordering bug, and out of B2's scope — revisit only if a body
 needs distinct angular damping (a `BodyDef.angularDamping` feature, not a parity fix).
+
+---
+
+## B7 — Dynamics on tile-spans vs the no-sleeping-dynamic invariant — FIXED (real state fix, already on main) + regression test hardened
+
+**The invariant.** `EmitContactConstraints` (PhysicsWorld.cpp:3146-3155) requires that
+no emitted contact constraint references a sleeping dynamic: it emits only for an
+AWAKE bodyA (the :3062 gate) and asserts (Debug) that neither A nor a body B is a
+sleeping dynamic. The solver's `SyncIn` relies on this to safely skip sleeping
+dynamics.
+
+**Root cause of the trip (diagnosed).** A dynamic that settles and sleeps resting
+PURELY on tile spans (a span is a virtual fixture, not a body, so it anchors no
+island) becomes a SINGLETON sleeping island. When a still-awake, NEAR-IDLE neighbour
+later drifts into speculative contact, the touch-begin queues a cross-awake island
+merge. `WakeMoverPair`'s `moverIsMoving` gate (PhysicsWorld.cpp:2343-2350) declines to
+wake the sleeper because the incoming body is below `sleepThreshold` (checked in
+stage 2, before the solver integrates gravity), so `MergeIslands` would graft the
+sleeping singleton into the awake island: a MIXED island (awake A + sleeping B), and
+the very next emit trips the assert (aborts in Debug). Contact orientation makes the
+awake body bodyA (lower slot) and the sleeper bodyB (PhysicsWorld.cpp:2412), so the
+emit passes the awake-A gate and the sleeping-B assert fires.
+
+**Disposition: FIXED via a REAL STATE FIX (not a relax), already on main.**
+Commit `e4a1168c` added, at the pending-merge apply loop (PhysicsWorld.cpp:3014-3018):
+before `MergeIslands`, if the two sides differ in awake state, `WakeIsland` the
+sleeping side. This restores Box2D's "island is uniformly awake" invariant so a
+cross-awake merge always ends awake (the correct fix, NOT a relaxation of the assert).
+A begin-touch always involves at least one moving/awake body, so it never over-wakes a
+legitimately all-asleep pair. The invariant holds suite-wide on main (Debug
+`[physics]` green with asserts active).
+
+**Regression coverage hardened (this closeout).** The original regression test
+(`PhysicsIslandWakeMergeTest`, a 140-body emergent pile) had gone VACUOUS after the
+MKS scene conversion (sleepThreshold 8 px/s to 0.05 m/s, /100 geometry, g to 10)
+shifted its settling so it no longer reproduces the near-idle-toucher window:
+verified: with the wake guard commented out, the emergent test still passed. A vacuous
+regression test gives false confidence, so a DETERMINISTIC tripwire was added
+(`PhysicsIslandWakeMerge: cross-awake merge wakes a span-sleeping singleton`): settle
+two boxes to sleep as separate span singletons (waker = lower slot = bodyA), then
+`Wake` + teleport the waker to just overlap the still-sleeping sleeper at zero
+velocity, and step once. It is load-bearing in BOTH build modes:
+- Debug: the engine assert fires inside `Step()` (aborts) when the guard is removed.
+- Release/any: the test's own `REQUIRE(IsAwake(sleeper))` fails (VERIFIED: a Release
+  build with the guard disabled fails exactly there, sleeper stays asleep in the mixed
+  island).
+The emergent pile test is retained + relabelled as a realistic-scene sanity check.
+
+**Code touched.** Engine: none (the fix `e4a1168c` was already on main). Test:
+`PhysicsIslandWakeMergeTest.cpp` (new deterministic tripwire + honest relabel of the
+emergent case). `[physics]` 30639/279 to 30649/280 (+1 case).

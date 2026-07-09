@@ -163,15 +163,20 @@ namespace
 }
 
 // ---------------------------------------------------------------------------
-// Dense pile raining into a solid tile BOWL with sleep ENABLED. Bodies settle
-// and sleep resting purely on the merged tile span (singleton sleeping
-// islands), while later arrivals keep drifting into speculative contact and
-// firing island merges. Pre-fix this trips the EmitContactConstraints
-// no-sleeping-dynamic assert (aborts in Debug) once a sleeping singleton is
-// grafted into an awake island. Post-fix the merge wakes the sleeping side, so:
-//   (a) the sim runs to completion with NO assertion failure / UB, AND
-//   (b) the uniform-awake invariant holds after EVERY step -- no island ever
-//       holds both an awake and a sleeping dynamic.
+// REALISTIC-SCENE sanity check: a dense pile raining into a solid tile BOWL with
+// sleep ENABLED. Bodies settle and sleep resting purely on the merged tile span
+// (singleton sleeping islands) while later arrivals drift into speculative
+// contact and fire island merges. It asserts the uniform-awake invariant after
+// EVERY step (no island holds both an awake and a sleeping dynamic) + that bodies
+// really slept (sawAnySleep) + containment.
+//
+// NOTE: after the MKS scene conversion (sleepThreshold 8 px/s -> 0.05 m/s, /100
+// geometry, g -> 10) this emergent pile no longer reliably hits the exact
+// "lone span-sleeper + near-idle awake toucher" window that trips the guard, so
+// it is NO LONGER the load-bearing regression: with the merge-time wake removed
+// it still passes. The DETERMINISTIC tripwire below ("cross-awake merge wakes a
+// span-sleeping singleton") is the load-bearing guard -- it fails/aborts if the
+// wake is ever removed. This case stays as a broad realistic-pile smoke check.
 // ---------------------------------------------------------------------------
 TEST_CASE("PhysicsIslandWakeMerge: tile-span pile with sleep keeps islands uniformly awake",
           "[physics][island]")
@@ -227,4 +232,92 @@ TEST_CASE("PhysicsIslandWakeMerge: tile-span pile with sleep keeps islands unifo
         sawBoundedY = true;
     }
     REQUIRE(sawBoundedY);
+}
+
+// ---------------------------------------------------------------------------
+// DETERMINISTIC guard tripwire -- the LOAD-BEARING regression for the fix.
+//
+// The 140-body emergent pile above is a realistic-scene invariant SANITY check,
+// but it does not by itself prove the merge-time wake is load-bearing: after the
+// MKS scene conversion its settling dynamics no longer reliably produce the exact
+// "lone span-sleeper + near-idle awake toucher" window (verified: with the wake
+// guard commented out, the pile test still passes). This case reproduces that
+// window DETERMINISTICALLY, so it aborts in Debug if the guard is ever removed:
+//
+//   * D_waker is added FIRST -> LOWER body slot. TryCreateContact orients the
+//     lower dynamic slot as contact bodyA (PhysicsWorld.cpp ~2412), and
+//     EmitContactConstraints only emits (and only asserts B) when A is AWAKE --
+//     so the AWAKE body must be A (lower slot) and the SLEEPER must be B (higher).
+//   * Both bodies settle + sleep as SINGLETON islands on the merged tile span
+//     (no static anchor body). Then D_waker is Wake()d (awake, sleepTimer 0,
+//     velocity still 0) and teleported to just overlap the still-sleeping
+//     D_sleeper. WakeMoverPair runs in stage 2 BEFORE the solver integrates
+//     gravity, so D_waker reads |v| = 0 < sleepThreshold -> its moverIsMoving
+//     gate declines to wake D_sleeper, yet the new contact touch-begins.
+//   * The touch-begin queues a cross-awake island merge (A awake, B asleep).
+//     Guard OFF: MergeIslands grafts the sleeping singleton into the awake island
+//     -> mixed island -> EmitContactConstraints trips the no-sleeping-dynamic
+//     assert and aborts INSIDE Step(). Guard ON: the merge wakes D_sleeper's
+//     island first, so the merged island is uniformly awake and the step completes.
+// ---------------------------------------------------------------------------
+TEST_CASE("PhysicsIslandWakeMerge: cross-awake merge wakes a span-sleeping singleton",
+          "[physics][island]")
+{
+    GridPassability grid(kSpanGridW, kSpanGridH);
+    BuildBowl(grid);
+
+    WorldDef wd;
+    wd.gravityY     = Real(10);
+    wd.passability  = &grid;
+    wd.tileCellSize = kSpanCellSize;
+    wd.tileOrigin   = Vec2(Real(0), Real(0));
+    PhysicsWorld w(wd);
+
+    // Two flat boxes (half-extent 0.1) dropped a little above the floor span
+    // (top face y = 8.0), FAR apart so they settle as SEPARATE singleton islands.
+    // D_waker is added first (lower slot -> contact bodyA); D_sleeper second.
+    auto makeBox = [&](Real x) {
+        BodyDef d;
+        d.type          = BodyType::Dynamic;
+        d.density       = Real(1);
+        d.friction      = Real(0.4);
+        d.fixedRotation = true;                        // stays flat -> settles fast
+        d.shape         = MakeAabb(Real(0.1), Real(0.1));
+        d.position      = Vec2(x, Real(7.5));
+        return w.AddBody(d);
+    };
+    const BodyHandle waker   = makeBox(Real(4));       // slot lo -> bodyA (must be awake)
+    const BodyHandle sleeper = makeBox(Real(8));       // slot hi -> bodyB (the sleeper)
+
+    // Settle + sleep BOTH (kSleepTime = 0.5 s of idle = 30 steps after they stop).
+    int settledStep = -1;
+    for (int k = 0; k < 400; ++k)
+    {
+        w.Step(kStep);
+        if (!w.IsAwake(waker) && !w.IsAwake(sleeper)) { settledStep = k; break; }
+    }
+    REQUIRE(settledStep >= 0);                          // both actually slept
+    REQUIRE_FALSE(w.IsAwake(waker));
+    REQUIRE_FALSE(w.IsAwake(sleeper));
+    // Separate singleton islands (rest purely on the span -- the bug precondition).
+    REQUIRE(w.IslandRootOf(waker.index) != w.IslandRootOf(sleeper.index));
+
+    // Wake ONLY the waker (awake, sleepTimer 0, velocity still 0) and teleport it
+    // to just overlap the still-sleeping sleeper's left face (0.01 m overlap:
+    // centres 0.19 < 0.2 = sum of half-extents apart).
+    const Vec2 ps = w.Position(sleeper);
+    w.Wake(waker);
+    w.SetPosition(waker, Vec2(ps.x - Real(0.19), ps.y));
+    REQUIRE(w.IsAwake(waker));
+    REQUIRE_FALSE(w.IsAwake(sleeper));                  // sleeper still asleep -> mixed pair on merge
+
+    // One step: the new waker(A, awake)-sleeper(B, asleep) contact touch-begins and
+    // queues a cross-awake merge. Reaching the line AFTER this Step (no abort)
+    // proves the guard woke the sleeper before the merge.
+    w.Step(kStep);
+
+    REQUIRE(w.IsAwake(sleeper));                        // woken by the merge-time guard
+    REQUIRE(w.IsAwake(waker));
+    REQUIRE(w.IslandRootOf(waker.index) == w.IslandRootOf(sleeper.index)); // one merged island
+    REQUIRE(IslandsUniformlyAwake(w, { waker, sleeper }));
 }
