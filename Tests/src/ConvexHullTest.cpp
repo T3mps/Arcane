@@ -417,3 +417,77 @@ TEST_CASE("All six hull policies agree on degenerate + near-collinear clouds",
     for (std::uint32_t s = 0; s < 50; ++s)
         AllSixAgreeExact<double>(intCloud(0xC0440u + s));
 }
+
+// E01-5 Part A: Canonicalize must derive winding EXACTLY. The old shoelace sum
+// (SignedArea2 < 0) can flip its sign under large-coordinate cancellation; the new
+// path takes the exact Orient2d turn at the lex-min corner (a guaranteed convex
+// vertex). Feed a thin ~1e6-scale quad in BOTH windings: the canonical output must
+// be CCW either way. (The area of this quad is large, so this may already pass with
+// the old code -- its job is to LOCK the exact-winding guarantee going forward.)
+TEST_CASE("Canonical winding is exact for large-coordinate hulls", "[geometry][robust]")
+{
+    using Arcane::Geometry::Pt;
+    using Arcane::Geometry::ConvexHull;
+    using Arcane::Geometry::MonotoneChain;
+    using Arcane::Geometry::detail::Orient2d;
+
+    // A thin, large-coordinate quad. Its true signed area is far from zero, but a
+    // float shoelace of ~1e6-scale products loses low bits; the winding decision
+    // must still be exact. Feed both windings; canonical output must be CCW either way.
+    std::vector<Pt<float>> cw   = {{1.0e6f, 1.0e6f}, {1.0e6f, -1.0e6f},
+                                   {-1.0e6f, -1.0e6f}, {-1.0e6f, 1.0e6f}};
+    std::vector<Pt<float>> ccw  = {{-1.0e6f, 1.0e6f}, {-1.0e6f, -1.0e6f},
+                                   {1.0e6f, -1.0e6f}, {1.0e6f, 1.0e6f}};
+    for (auto* in : {&cw, &ccw})
+    {
+        auto h = ConvexHull<MonotoneChain, float>(*in);
+        REQUIRE(h.size() == 4);
+        // CCW: every corner turns left.
+        for (std::size_t i = 0; i < h.size(); ++i)
+            REQUIRE(Orient2d<float>(h[(i + h.size() - 1) % h.size()], h[i],
+                                    h[(i + 1) % h.size()]) > 0);
+    }
+}
+
+// E01-5 Part B: QuickHull's farthest-point gate is the EXACT Orient2d, but its
+// RANK is an inexact double `mag`. For a strictly-left vertex whose double mag
+// rounds to <= 0 (large exponent spread across the base edge), the un-hardened
+// update `mag > best` (best initialised 0.0) never fires, so `c` stays unset and
+// the gated vertex is DROPPED -- QuickHull returns a smaller hull than the exact
+// gate accepted. The Part B fix makes the FIRST gated candidate always set `c`.
+//
+// This wedge triangle is a hand-verified regression (found by exhaustive search
+// over float triples): apex P is strictly LEFT of the A->B base per exact Orient2d,
+// yet the naive double mag (Bx-Ax)(Py-Ay)-(By-Ay)(Px-Ax) rounds to exactly 0.0 --
+// A is ~1.6e7 while B,P are ~0.1, so the two products reach ~2^53 and the
+// near-collinear difference rounds away. Coords are hex-float literals (exact bit
+// pattern pinned). Un-hardened QuickHull drops P (2-point hull); MonotoneChain
+// (whose stack test is also exact Orient2d) keeps all three -> they disagree until
+// the farthest-point gate is hardened.
+TEST_CASE("QuickHull keeps every exact-gated vertex at large-coordinate spread",
+          "[geometry][robust]")
+{
+    using Arcane::Geometry::Pt;
+    using Arcane::Geometry::QuickHull;
+    using Arcane::Geometry::detail::Orient2d;
+
+    const Pt<float> A{-0x1.f3ef380000000p+23f, -0x1.051daa0000000p+23f}; // ~(-1.638e7,-8.556e6)
+    const Pt<float> B{-0x1.d0428e0000000p-5f,   0x1.62ce7e0000000p-3f};  // ~(-0.0567, 0.1732)
+    const Pt<float> P{-0x1.eb26600000000p-2f,  -0x1.86831c0000000p-5f};  // ~(-0.4796,-0.04767)
+
+    // Self-check that this cloud actually exercises the gate: exact says strictly
+    // LEFT (P is a genuine hull apex), but the inexact double rank rounds to <= 0,
+    // so the un-hardened `mag > best` would fail to certify P and drop it.
+    REQUIRE(Orient2d<float>(A, B, P) > 0);
+    const double mag = (double(B.x) - double(A.x)) * (double(P.y) - double(A.y))
+                     - (double(B.y) - double(A.y)) * (double(P.x) - double(A.x));
+    REQUIRE(mag <= 0.0);
+
+    std::vector<Pt<float>> cloud = {A, B, P};
+    std::span<const Pt<float>> s(cloud);
+    // Both policies sign every orientation through the exact Orient2d, so on the
+    // identical vertex set they must produce byte-identical canonical hulls.
+    REQUIRE(ConvexHull<QuickHull, float>(s) == ConvexHull<MonotoneChain, float>(s));
+    // ...and the hull is the full triangle (P must not be dropped).
+    REQUIRE(ConvexHull<MonotoneChain, float>(s).size() == 3);
+}

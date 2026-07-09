@@ -11,6 +11,11 @@ namespace Arcane::Geometry::detail
         // Farthest point strictly left of a->b. The side is decided by the EXACT
         // Orient2d sign; the farthest-point ranking is a double-promoted magnitude
         // (ranking need not be exact, only monotonic among the strictly-left set).
+        // The gate is exact but `mag` is not: at large exponent spread a strictly-left
+        // point's mag can round to <= 0, so `mag > best` (best = 0) would never fire
+        // and drop a vertex the EXACT gate accepted. Never let the inexact rank
+        // contradict the exact gate: the FIRST gated candidate always sets `c`; later
+        // ones replace it only if strictly farther.
         double best = 0.0;
         std::size_t c = static_cast<std::size_t>(-1);
         for (std::size_t idx : set)
@@ -18,7 +23,7 @@ namespace Arcane::Geometry::detail
             if (Orient2d<T>(pts[a], pts[b], pts[idx]) <= 0) continue;   // strictly left only
             const double mag = (double(pts[b].x) - double(pts[a].x)) * (double(pts[idx].y) - double(pts[a].y))
                              - (double(pts[b].y) - double(pts[a].y)) * (double(pts[idx].x) - double(pts[a].x));
-            if (mag > best) { best = mag; c = idx; }
+            if (c == static_cast<std::size_t>(-1) || mag > best) { best = mag; c = idx; }
         }
         if (c == static_cast<std::size_t>(-1)) { out.push_back(pts[a]); return; }
 

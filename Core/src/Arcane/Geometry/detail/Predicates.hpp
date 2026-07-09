@@ -190,20 +190,30 @@ namespace Arcane::Geometry
         }
 
         // Canonical form of a policy's ordered boundary cycle WITHOUT re-deriving the
-        // hull: strip collinear, normalise winding to CCW by signed-area SIGN (reverse
-        // if negative -- NOT an angular re-sort, so a policy ordering bug surfaces as a
-        // wrong result), rotate to start at the lexicographically smallest vertex.
+        // hull: strip collinear, normalise winding to CCW EXACTLY (reverse if the
+        // lex-min corner turns CW -- NOT an angular re-sort, so a policy ordering bug
+        // still surfaces as a wrong result), rotate to start at the lexicographically
+        // smallest vertex. Winding is decided by the exact Orient2d turn at the lex-min
+        // vertex -- a guaranteed convex, non-collinear corner -- rather than a summed
+        // shoelace (SignedArea2) whose sign large-coordinate cancellation can flip.
         template <class T>
         std::vector<Pt<T>> Canonicalize(std::vector<Pt<T>> hull)
         {
             hull = StripCollinear<T>(hull);
             if (hull.size() < 3) return hull;
-            if (SignedArea2<T>(hull) < T(0))
+            const std::size_t n = hull.size();
+            // Lex-min vertex is an extreme point => a genuine convex corner
+            // (non-collinear turn). Its exact orientation gives the winding without
+            // summing a cancellation-prone area.
+            std::size_t m = 0;
+            for (std::size_t i = 1; i < n; ++i)
+                if (Less<T>(hull[i], hull[m])) m = i;
+            if (Orient2d<T>(hull[(m + n - 1) % n], hull[m], hull[(m + 1) % n]) < 0)
+            {
                 std::reverse(hull.begin(), hull.end());
-            std::size_t start = 0;
-            for (std::size_t i = 1; i < hull.size(); ++i)
-                if (Less<T>(hull[i], hull[start])) start = i;
-            std::rotate(hull.begin(), hull.begin() + static_cast<std::ptrdiff_t>(start),
+                m = n - 1 - m;                 // same vertex, new index after reverse
+            }
+            std::rotate(hull.begin(), hull.begin() + static_cast<std::ptrdiff_t>(m),
                         hull.end());
             return hull;
         }
