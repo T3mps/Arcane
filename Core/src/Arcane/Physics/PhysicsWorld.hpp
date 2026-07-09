@@ -84,6 +84,7 @@
 #include <Arcane/Physics/Joints/Joint.hpp>       // Joint base + JointDef (P2.5)
 #include <Arcane/Physics/Island.hpp>             // Island::Island registry struct + constants (Phase A)
 #include <Arcane/Physics/IslandManager.hpp>      // island topology collaborator (decomp step 1)
+#include <Arcane/Physics/ConstraintGraph.hpp>    // contact subsystem collaborator (decomp step 2)
 
 namespace Arcane
 {
@@ -316,6 +317,14 @@ namespace Arcane
             // SplitIsland needs intimate world state (contact pool + joint edges) --
             // the same trust boundary this code had when it lived inside the world.
             friend class IslandManager;
+            // decomp step 2: ConstraintGraph owns the contact subsystem (pool +
+            // coloring + UpdateContacts/EmitContactConstraints driving). Befriended
+            // for the same reason: the drivers need intimate world SoA (body/
+            // fixture columns, awake state, broadphase, executor) -- the identical
+            // trust boundary the code had inside the world. Friendship rays stay
+            // world -> collaborator: IslandManager reads the graph's pool via the
+            // public const Pool() accessor, never laterally via friendship.
+            friend class ConstraintGraph;
 
         public:
             explicit PhysicsWorld(const WorldDef& def = {});
@@ -1418,6 +1427,9 @@ namespace Arcane
 
             // ---- islands (topology + sleep pass; decomp step 1) ------------
             IslandManager m_islandMgr;
+
+            // ---- contact subsystem (pool + coloring + driving; decomp step 2) --
+            ConstraintGraph m_graph;
 
             // ---- solver (SoftStep; the ISolver seam) ------------------------
             //
