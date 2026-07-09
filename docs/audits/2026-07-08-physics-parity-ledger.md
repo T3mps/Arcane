@@ -14,10 +14,10 @@ authored-content game engine, we may diverge **with a written rationale here**.
 |----|------------|-------------|
 | B1 | Kinematic/pinned bodies not speed-clamped | ACCEPTED-AS-DIVERGENCE |
 | B2 | Gravity/damping ordering (gravity damped) | FIXED |
-| B3 | Joints in island split/merge linkage | — |
-| B4 | Sensors in island linkage | — |
-| B5 | CCD multithreading | — |
-| B6 | 24-color constraint-coloring parity | — |
+| B3 | Joints in island split/merge linkage | ACCEPTED (already handled + tested) |
+| B4 | Sensors in island linkage | ACCEPTED (already handled + tested) |
+| B5 | CCD multithreading | ACCEPTED-AS-DIVERGENCE |
+| B6 | 24-color constraint-coloring parity | ACCEPTED-AS-DIVERGENCE |
 | B7 | Dynamics on tile-spans vs the no-sleeping-dynamic invariant | FIXED (+ test hardened) |
 
 ---
@@ -119,6 +119,68 @@ ordering-invariant. Full `[physics]` 30639/279 green, assertion count unchanged.
 velocity too. Box2D keeps a separate `angularDamping`. This is a pre-existing model
 simplification, not an ordering bug, and out of B2's scope — revisit only if a body
 needs distinct angular damping (a `BodyDef.angularDamping` feature, not a parity fix).
+
+---
+
+## B3 — Joints in island split/merge linkage — ACCEPTED (already handled + tested)
+
+**GAP A** from the Box2D-v3 MT-parity program: are joints treated as island edges in
+BOTH merge and split, so a jointed construct sleeps/wakes as one unit and a contact
+removal never wrongly splits a still-jointed pair? Verified on main: they are.
+- MERGE: `AddJoint` unions the two dynamic endpoints' islands (PhysicsWorld.cpp:1282);
+  `RemoveJoint` / body-destroy wakes + marks the surviving endpoint's island a split
+  candidate (:1330, :1227).
+- SPLIT: `SplitIsland`'s connected-component union-find walks BOTH contact edges AND
+  `m_joints` (PhysicsWorld.cpp:3590-3614) — a jointed dyn-dyn pair stays in one
+  component even when it shares no touching contact.
+- TESTED: `PhysicsJointSleepTest` (3 cases, 28 assertions, green): jointed chain sleeps
+  as a unit; impulse on one member wakes the whole island; removing a joint splits the
+  island and the pieces sleep independently.
+
+**Decision: ACCEPTED — no behavioral gap.** The serial split-linkage work already
+satisfied GAP A; joints are full island edges in both directions and verified.
+Island split/merge is a serial pass (not on the MT solve path), so there is no
+MT-specific joint-linkage gap. No code change.
+
+---
+
+## B4 — Sensors in island linkage — ACCEPTED (already handled + tested)
+
+**GAP B** from the MT-parity program: sensors must be event-only and must NEVER act as
+island edges (a sensor contact transmits no force — Box2D excludes sensors from
+islands). Verified on main: sensor dyn-dyn pairs carry `solverRelevant == false`
+(PhysicsWorld.cpp:2427), and the island merge/split signals `kNpStarted`/`kNpStopped`
+are set ONLY for `solverRelevant` contacts (PhysicsWorld.cpp:2554-2561), so a sensor
+pair never enters `m_pendingMerges` and never marks a split candidate.
+- TESTED: `PhysicsSensorIslandTest` — "sensor dyn-dyn pair does not merge islands" +
+  the non-sensor regression counterpart ("does merge").
+
+**Decision: ACCEPTED — no behavioral gap.** Sensors are correctly excluded from island
+linkage (matching Box2D), verified by a dedicated test pair. No code change.
+
+---
+
+## B5 — CCD multithreading — ACCEPTED-AS-DIVERGENCE
+
+Box2D parallelizes its continuous-collision (bullet) pass; Arcane's `BulletSweep` is
+serial. **Decision: ACCEPTED.** The discrete sweep runs only for `isBullet` bodies (a
+tiny minority — ordinary fast dynamics are handled inline by the speculative contact
+margin, not the discrete sweep), so it is a negligible fraction of step time;
+parallelizing it is an unproven-value optimization. Revisit only if a game consumer
+profiles a bullet-heavy scene where the serial sweep dominates.
+
+---
+
+## B6 — 24-color constraint-coloring parity — ACCEPTED-AS-DIVERGENCE
+
+Box2D uses a fixed 24-color graph-coloring scheme; Arcane uses a persistent per-contact
+coloring (`kColorCount` colors + a scalar overflow tail). **Decision: ACCEPTED (value
+unproven).** The color scheme only governs the batch granularity of the MT contact
+solve, which is inherently L3-bandwidth-bound and breaks even only at ~10k bodies
+(ledger C7 / the solver-MT findings). The exact color count is an internal parallelism
+detail with no correctness or behavioral impact and no measured benefit at current
+scales. Matching Box2D's 24-color scheme is a mechanical change we would adopt only if
+a profiled MT-solve workload showed a coloring-limited bottleneck.
 
 ---
 
