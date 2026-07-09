@@ -832,59 +832,36 @@ namespace Arcane
 
             // ---- persistent incremental contact coloring (Phase C, Task 4) ---
             //
-            // A solver-relevant body-body contact is assigned a graph color ONCE at
-            // create (AssignContactColor) and releases it at destroy
-            // (ReleaseContactColor) -- the assign-at-create / release-at-destroy
-            // replacement for the per-step greedy recolor. The invariant: no two
-            // same-color contacts share a DYNAMIC body (a static/kinematic endpoint
-            // never constrains coloring, mirroring ColorConstraints' aDyn/bDyn rule).
-            //
-            // CONSUMED by the solver (Task 5): the per-body color mask gates
-            // AssignContactColor's lowest-free search, and the solver buckets
-            // contacts by this persistent color instead of recoloring per step.
-            // This persistent coloring is a DIFFERENT but equally-valid color
-            // partition than the old per-step greedy one; because the colored solve
-            // is Gauss-Seidel (color k's velocity updates feed color k+1), a
-            // different valid partition is an INTENTIONAL re-baseline vs pre-Phase-C
-            // main (different floats), NOT bit-identical. The contract that holds is
-            // run-twice DETERMINISM + the behavioral [physics] suite (no exact
-            // goldens) -- per the engine's re-baseline-numerics-on-purpose rule.
-            // Public so the [phasec] coloring-validity test can call the
-            // oracle/probes.
-
-            // Assign the lowest free color to a NEW solver-relevant body-body
-            // contact `id` between body slots `a`/`b`. `aDyn`/`bDyn` mark which
-            // endpoints are dynamic (only dynamic endpoints constrain coloring +
-            // occupy a per-body color bit). If no color in [0, kColorCount) is free
-            // for both dynamic endpoints, the contact spills to overflow
-            // (color == kInvalidColor). Caller passes the ORIENTED slots/dyn flags
-            // computed in TryCreateContact.
-            void AssignContactColor(std::uint32_t id, std::uint32_t a, std::uint32_t b,
-                                    bool aDyn, bool bDyn);
-
-            // Release contact `id`'s color back to its dynamic endpoints. No-op for
-            // an uncolored (kInvalidColor) contact. Recomputes dyn-ness from the
-            // contact's cached body slots (a body's type is fixed for its life), so
-            // this is exact: the coloring invariant guarantees a body has at most
-            // one contact per color, so clearing the bit on destroy frees it cleanly.
-            void ReleaseContactColor(std::uint32_t id);
+            // MOVED to ConstraintGraph (decomp step 2 Task 2): the assign-at-create /
+            // release-at-destroy incremental coloring (state + methods) lives there;
+            // the create/destroy/grow seams call it internally via m_graph. The three
+            // read-only probes below stay as thin public forwarders so the [phasec]
+            // coloring-validity tests keep their call sites unchanged.
 
             // The persistent color of contact `id` (kInvalidColor if uncolored).
             // Read-only probe; not used by the Step path.
-            [[nodiscard]] std::uint8_t ContactColorOf(std::uint32_t id) const;
+            [[nodiscard]] std::uint8_t ContactColorOf(std::uint32_t id) const
+            {
+                return m_graph.ContactColorOf(*this, id);
+            }
 
             // Oracle: walk the live coloring and prove the invariant -- no DYNAMIC
             // body appears twice in one color, every listed contact is alive and
             // tagged with its color. Returns false on any violation. Used by the
             // [phasec] coloring-validity test (Debug + Release).
-            [[nodiscard]] bool ValidatePersistentColoring() const;
+            [[nodiscard]] bool ValidatePersistentColoring() const
+            {
+                return m_graph.ValidatePersistentColoring(*this);
+            }
 
-            // Read-only probe: the total number of COLORED contacts (the sum of
-            // m_colorContacts[k].size() over all colors). Lets the [phasec] coloring-
-            // validity test prove the oracle did not trivially pass on an EMPTY
-            // coloring (assert this > 0 after a settle that creates contacts). Not
-            // used by the Step path.
-            [[nodiscard]] std::size_t ColoredContactCount() const noexcept;
+            // Read-only probe: the total number of COLORED contacts. Lets the
+            // [phasec] coloring-validity test prove the oracle did not trivially
+            // pass on an EMPTY coloring (assert this > 0 after a settle that
+            // creates contacts). Not used by the Step path.
+            [[nodiscard]] std::size_t ColoredContactCount() const noexcept
+            {
+                return m_graph.ColoredContactCount();
+            }
 
             [[nodiscard]] Real InvMassSlot(std::uint32_t i) const noexcept { return m_invMass[i]; }
             [[nodiscard]] Real InvInertiaSlot(std::uint32_t i) const noexcept { return m_invInertia[i]; }
@@ -1633,22 +1610,10 @@ namespace Arcane
 
             // ---- persistent incremental contact coloring (Phase C, Task 4) -----
             //
-            // m_bodyColorMask[slot] is a 12-bit (one bit per color, kColorCount<32)
-            // occupancy mask over the colors that body slot currently has a contact
-            // in. Keyed by WORLD body slot; a removed/recycled slot resets to 0
-            // (EnsureCapacity defaults new slots to 0; the RemoveBody leak-detector
-            // asserts a removed body left mask 0). m_colorContacts[k] is the list of
-            // contact ids assigned to color k (sized kColorCount in the ctor). These
-            // are maintained at create/destroy and CONSUMED by the solver (Task 5):
-            // m_bodyColorMask gates color assignment, m_colorContacts is the
-            // solver's per-color bucket list. The persistent coloring is a DIFFERENT
-            // but equally-valid color partition than the old per-step greedy one, so
-            // the colored Gauss-Seidel solve is an INTENTIONAL re-baseline vs
-            // pre-Phase-C main (different floats), NOT bit-identical. The contract is
-            // run-twice DETERMINISM + the behavioral [physics] suite (no exact
-            // goldens) -- per the engine's re-baseline-numerics-on-purpose rule.
-            std::vector<std::uint32_t>              m_bodyColorMask;
-            std::vector<std::vector<std::uint32_t>> m_colorContacts;
+            // Persistent-coloring state (m_bodyColorMask + m_colorContacts) MOVED
+            // to ConstraintGraph (decomp step 2 Task 2), reached through the probe
+            // forwarders above (ContactColorOf/ValidatePersistentColoring/
+            // ColoredContactCount) and the Grow/DebugBodyMaskClear seams.
 
             // ---- per-step touched EVENT body-pairs (collision-rebuild Phase 4) --
             //

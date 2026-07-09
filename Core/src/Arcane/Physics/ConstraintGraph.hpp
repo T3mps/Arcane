@@ -42,6 +42,10 @@
 // PRESENTATION-FREE + C++23-clean: std + sibling Physics headers only.
 // namespace Arcane::Physics, Core style.
 
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
 namespace Arcane
 {
     namespace Physics
@@ -50,8 +54,88 @@ namespace Arcane
 
         class ConstraintGraph
         {
-            // T1: scaffold only -- state + methods move in T2 (coloring) and
-            // T3 (pool + lifecycle + driver + feed).
+        public:
+            // Sizes the per-color contact-id lists once to kColorCount (overflow
+            // contacts are not listed -- they carry color == kInvalidColor and
+            // never enter m_colorContacts). The per-body mask grows via Grow.
+            ConstraintGraph();
+
+            // ---- persistent incremental contact coloring (Phase C, Task 4;
+            //      moved here in decomp step 2 Task 2) -------------------------
+            //
+            // A solver-relevant body-body contact is assigned a graph color ONCE
+            // at create (AssignContactColor, from TryCreateContact) and releases
+            // it at destroy (ReleaseContactColor, from ReleaseAndDestroyContact)
+            // -- the assign-at-create / release-at-destroy replacement for the
+            // per-step greedy recolor. The invariant: no two same-color contacts
+            // share a DYNAMIC body (a static/kinematic endpoint never constrains
+            // coloring, mirroring ColorConstraints' aDyn/bDyn rule). The solver
+            // consumes the coloring only via the emitted constraint's own `color`
+            // field (bucketed into SoftStep's m_colorRefs); it never reads this
+            // state -- m_colorContacts is lifecycle/validation bookkeeping.
+
+            // Assign the lowest free color to a NEW solver-relevant body-body
+            // contact `id` between body slots `a`/`b`. `aDyn`/`bDyn` mark which
+            // endpoints are dynamic (only dynamic endpoints constrain coloring +
+            // occupy a per-body color bit). If no color in [0, kColorCount) is
+            // free for both dynamic endpoints, the contact spills to overflow
+            // (color == kInvalidColor). Caller passes the ORIENTED slots/dyn
+            // flags computed in TryCreateContact.
+            void AssignContactColor(PhysicsWorld& w, std::uint32_t id,
+                                    std::uint32_t a, std::uint32_t b,
+                                    bool aDyn, bool bDyn);
+
+            // Release contact `id`'s color back to its dynamic endpoints. No-op
+            // for an uncolored (kInvalidColor) contact. Recomputes dyn-ness from
+            // the contact's cached body slots (a body's type is fixed for its
+            // life), so this is exact: the coloring invariant guarantees a body
+            // has at most one contact per color, so clearing the bit on destroy
+            // frees it cleanly.
+            void ReleaseContactColor(PhysicsWorld& w, std::uint32_t id);
+
+            // The persistent color of contact `id` (kInvalidColor if uncolored).
+            // Read-only probe; not used by the Step path.
+            [[nodiscard]] std::uint8_t ContactColorOf(const PhysicsWorld& w,
+                                                      std::uint32_t id) const;
+
+            // Oracle: walk the live coloring and prove the invariant -- no
+            // DYNAMIC body appears twice in one color, every listed contact is
+            // alive and tagged with its color, and the per-body mask matches the
+            // lists bit-for-bit. Used by the [phasec] coloring-validity test.
+            [[nodiscard]] bool ValidatePersistentColoring(const PhysicsWorld& w) const;
+
+            // Read-only probe: the total number of COLORED contacts (the sum of
+            // m_colorContacts[k].size() over all colors).
+            [[nodiscard]] std::size_t ColoredContactCount() const noexcept;
+
+            // ---- world-lifecycle seams (PhysicsWorld drives these) -----------
+            // Grow the per-body color-mask column to `next` (EnsureCapacity seam).
+            // A fresh/recycled slot starts with NO colors occupied.
+            void Grow(std::uint32_t next);
+            // Debug probe for the RemoveBody leak-detector assert: true iff the
+            // slot's color mask is 0 (every contact referencing it released its
+            // bits). Out-of-range counts as clear (mirrors the original guard).
+            [[nodiscard]] bool DebugBodyMaskClear(std::uint32_t slot) const noexcept
+            {
+                return slot >= m_bodyColorMask.size() || m_bodyColorMask[slot] == 0u;
+            }
+
+        private:
+            // m_bodyColorMask[slot] is a 12-bit (one bit per color, kColorCount<32)
+            // occupancy mask over the colors that body slot currently has a
+            // contact in. Keyed by WORLD body slot; a removed/recycled slot resets
+            // to 0 (Grow defaults new slots to 0; the RemoveBody leak-detector
+            // asserts a removed body left mask 0). m_colorContacts[k] is the list
+            // of contact ids assigned to color k (sized kColorCount in the ctor).
+            // Maintained at create/destroy; the mask GATES AssignContactColor's
+            // lowest-free search. The persistent coloring is a DIFFERENT but
+            // equally-valid color partition than the old per-step greedy one, so
+            // the colored Gauss-Seidel solve is an INTENTIONAL re-baseline vs
+            // pre-Phase-C main (different floats), NOT bit-identical. The contract
+            // is run-twice DETERMINISM + the behavioral [physics] suite (no exact
+            // goldens) -- per the engine's re-baseline-numerics-on-purpose rule.
+            std::vector<std::uint32_t>              m_bodyColorMask;
+            std::vector<std::vector<std::uint32_t>> m_colorContacts;
         };
     } // namespace Physics
 } // namespace Arcane

@@ -139,11 +139,9 @@ namespace Arcane
                                                         def.tileOrigin);
             }
 
-            // Phase C, Task 4: one contact-id list per graph color. Sized once here
-            // to kColorCount (overflow contacts are not listed -- they carry
-            // color == kInvalidColor and never enter m_colorContacts). m_bodyColorMask
-            // grows lazily with the body SoA in EnsureCapacity (default 0).
-            m_colorContacts.resize(static_cast<std::size_t>(kColorCount));
+            // Phase C, Task 4: the per-color contact-id lists are sized once in the
+            // ConstraintGraph ctor (decomp step 2); the per-body color mask grows
+            // lazily with the body SoA via m_graph.Grow in EnsureCapacity.
         }
 
         PhysicsWorld::~PhysicsWorld() = default;
@@ -200,10 +198,11 @@ namespace Arcane
             // Phase C: kinematic-set back-index column. kNotKinematic = not in the
             // set. A tail slot is never in the set until AddBody writes it.
             m_kinematicIndex.resize(next, kNotKinematic);
-            // Phase C, Task 4: per-body color-occupancy bitmask. A fresh/recycled
-            // slot starts with NO colors occupied (the RemoveBody leak-detector
-            // asserts a removed body left mask 0, so a recycled slot is always 0).
-            m_bodyColorMask.resize(next, 0u);
+            // Phase C, Task 4: per-body color-occupancy bitmask -- now owned by
+            // ConstraintGraph (decomp step 2); grow it through the seam. A fresh/
+            // recycled slot starts with NO colors occupied (the RemoveBody
+            // leak-detector asserts a removed body left mask 0).
+            m_graph.Grow(next);
         }
 
         // ----------------------------------------------------------------
@@ -1149,7 +1148,7 @@ namespace Arcane
             // bit would mis-color a future body recycled into this slot). Debug-only;
             // the recycle path also defaults the mask to 0 in EnsureCapacity, so a
             // leak here is a real bug, not a benign stale value.
-            assert((idx >= m_bodyColorMask.size() || m_bodyColorMask[idx] == 0u) &&
+            assert(m_graph.DebugBodyMaskClear(idx) &&
                    "RemoveBody: body left a non-zero color mask -- a Destroy site is missing ReleaseContactColor");
 
             // Phase B: remove from the awake-set while the slot is still typed
@@ -2012,181 +2011,12 @@ namespace Arcane
             });
         }
 
-        // ----------------------------------------------------------------
         // Persistent incremental contact coloring (Phase C, Stage 2, Tasks 4-5)
-        // ----------------------------------------------------------------
-        //
-        // A solver-relevant body-body contact is colored ONCE at create and frees
-        // its color at destroy -- the incremental replacement for the per-step
-        // greedy recolor. Task 5 makes the solver CONSUME this coloring
-        // (EmitContactConstraints copies Contact::color onto the emitted constraint;
-        // SoftStep buckets by it instead of recoloring), so the color is now
-        // load-bearing -- the mask GATES this lowest-free search. This persistent
-        // coloring is a DIFFERENT but equally-valid color partition than the old
-        // per-step greedy one; because the colored solve is Gauss-Seidel (color k's
-        // velocity updates feed color k+1), a different valid partition is an
-        // INTENTIONAL re-baseline vs pre-Phase-C main (different floats), NOT
-        // bit-identical. The contract that holds is run-twice DETERMINISM + the
-        // behavioral [physics] suite (no exact goldens) -- per the engine's
-        // re-baseline-numerics-on-purpose rule. ValidatePersistentColoring
-        // cross-checks the mask against the lists.
-
-        void PhysicsWorld::AssignContactColor(std::uint32_t id, std::uint32_t a, std::uint32_t b,
-                                              bool aDyn, bool bDyn)
-        {
-            // Lowest free color: one whose bit is unset in BOTH dynamic endpoints'
-            // masks. A static/kinematic endpoint never blocks (it is read-only in
-            // the solve, so sharing it across a color is harmless -- mirrors
-            // ColorConstraints' aDyn/bDyn rule).
-            int chosen = -1;
-            for (int k = 0; k < kColorCount; ++k)
-            {
-                const std::uint32_t bit = 1u << k;
-                const bool aFree = !aDyn || !(m_bodyColorMask[a] & bit);
-                const bool bFree = !bDyn || !(m_bodyColorMask[b] & bit);
-                if (aFree && bFree) { chosen = k; break; }
-            }
-            Contact& c = m_contactPool.Get(id);
-            if (chosen < 0)
-            {
-                // OVERFLOW: no free color. The contact stays uncolored
-                // (kInvalidColor) and is NOT listed in m_colorContacts; the solver
-                // (Task 5) will solve it in the scalar tail.
-                c.color = kInvalidColor;
-                return;
-            }
-            c.color = static_cast<std::uint8_t>(chosen);
-            const std::uint32_t bit = 1u << chosen;
-            // Occupy the color bit on each DYNAMIC endpoint only.
-            if (aDyn) m_bodyColorMask[a] |= bit;
-            if (bDyn) m_bodyColorMask[b] |= bit;
-            m_colorContacts[chosen].push_back(id);
-        }
-
-        void PhysicsWorld::ReleaseContactColor(std::uint32_t id)
-        {
-            Contact& c = m_contactPool.Get(id);
-            const std::uint8_t col = c.color;
-            if (col == kInvalidColor)
-            {
-                // Sensor / non-solver / span / overflow contact -- never colored,
-                // never in m_colorContacts. Nothing to release.
-                return;
-            }
-
-            // RATIONALE: the coloring invariant (no two same-color contacts share a
-            // dynamic body) means each body has AT MOST ONE contact per color, so
-            // clearing the body's bit for this color is exact -- no OTHER live
-            // contact of this body occupies the same color, so we never strip a bit
-            // a sibling contact still needs.
-            //
-            // Recompute dyn-ness from the cached body slots (a body's type is fixed
-            // for its life -- m_btype is set only in AddBody -- so this matches the
-            // aDyn/bDyn passed at AssignContactColor). A SPAN (c.bIsBody == false)
-            // has no real B body, so only A can be a dynamic endpoint there.
-            const std::uint32_t bit = 1u << col;
-            const std::uint32_t bA  = c.bodyA;
-            const std::uint32_t bB  = c.bodyB;
-            const bool aDyn = (bA != kInvalidSlot) &&
-                              (static_cast<BodyType>(m_btype[bA]) == BodyType::Dynamic);
-            const bool bDyn = c.bIsBody && (bB != kInvalidSlot) &&
-                              (static_cast<BodyType>(m_btype[bB]) == BodyType::Dynamic);
-            if (aDyn) m_bodyColorMask[bA] &= ~bit;
-            if (bDyn) m_bodyColorMask[bB] &= ~bit;
-
-            // Swap-remove id from this color's contact list (order-independent --
-            // the list is a set, never walked in a determinism-sensitive order).
-            // TODO(perf): O(1) swap-remove by a stored per-contact index if destroy
-            // frequency shows on a profile.
-            std::vector<std::uint32_t>& list = m_colorContacts[col];
-            for (std::size_t i = 0; i < list.size(); ++i)
-            {
-                if (list[i] == id)
-                {
-                    list[i] = list.back();
-                    list.pop_back();
-                    break;
-                }
-            }
-            c.color = kInvalidColor;
-        }
-
-        std::uint8_t PhysicsWorld::ContactColorOf(std::uint32_t id) const
-        {
-            // Read-only probe (not used by the Step path). Get() asserts liveness
-            // in Debug; the caller is expected to pass a live id. A dead/recycled
-            // slot carries kInvalidColor (the EnsurePair recycle reset), so the
-            // value is meaningful even on the recycled path.
-            return m_contactPool.Get(id).color;
-        }
-
-        bool PhysicsWorld::ValidatePersistentColoring() const
-        {
-            // For each color, no DYNAMIC body slot may appear in two contacts, and
-            // every listed contact must be alive AND tagged with this color. Task 5
-            // also cross-checks the per-body color MASK against the lists: now that
-            // the mask is load-bearing (it GATES AssignContactColor's lowest-free
-            // search), a mask/list divergence would silently corrupt the coloring, so
-            // reconstruct the mask from the lists and require it to match m_bodyColorMask
-            // bit-for-bit -- bit k is set IFF the slot has exactly one contact in
-            // m_colorContacts[k] (uniqueness is enforced by the per-color seen check
-            // below; "no stray bits" is enforced by the final equality).
-            std::vector<std::uint8_t>  seen;      // per-body-slot "claimed this color"
-            std::vector<std::uint32_t> rebuilt(m_bodyColorMask.size(), 0u); // mask from the lists
-            for (int k = 0; k < kColorCount; ++k)
-            {
-                seen.assign(m_bodyColorMask.size(), 0u);
-                const std::uint32_t bit = 1u << k;
-                const std::vector<std::uint32_t>& list = m_colorContacts[static_cast<std::size_t>(k)];
-                for (const std::uint32_t id : list)
-                {
-                    const Contact& c = m_contactPool.Get(id); // asserts alive in Debug
-                    if (c.color != static_cast<std::uint8_t>(k))
-                    {
-                        return false; // listed under the wrong color
-                    }
-                    const std::uint32_t bA = c.bodyA;
-                    const std::uint32_t bB = c.bodyB;
-                    const bool aDyn = (bA != kInvalidSlot) &&
-                                      (static_cast<BodyType>(m_btype[bA]) == BodyType::Dynamic);
-                    const bool bDyn = c.bIsBody && (bB != kInvalidSlot) &&
-                                      (static_cast<BodyType>(m_btype[bB]) == BodyType::Dynamic);
-                    if (aDyn)
-                    {
-                        if (seen[bA] != 0u) return false; // dynamic body twice in one color
-                        seen[bA] = 1u;
-                        rebuilt[bA] |= bit;
-                    }
-                    if (bDyn)
-                    {
-                        if (seen[bB] != 0u) return false;
-                        seen[bB] = 1u;
-                        rebuilt[bB] |= bit;
-                    }
-                }
-            }
-            // The mask must equal what the lists imply -- catches a set bit with no
-            // backing contact (a missed ReleaseContactColor) or a contact in a list
-            // whose mask bit was never set (a missed AssignContactColor mask write).
-            for (std::size_t s = 0; s < m_bodyColorMask.size(); ++s)
-            {
-                if (m_bodyColorMask[s] != rebuilt[s]) { return false; }
-            }
-            return true;
-        }
-
-        std::size_t PhysicsWorld::ColoredContactCount() const noexcept
-        {
-            // Sum the per-color lists. Read-only probe (not on the Step path): the
-            // [phasec] coloring-validity test asserts this > 0 so the oracle cannot
-            // trivially pass on an EMPTY coloring.
-            std::size_t n = 0;
-            for (const std::vector<std::uint32_t>& list : m_colorContacts)
-            {
-                n += list.size();
-            }
-            return n;
-        }
+        // MOVED to ConstraintGraph (decomp step 2 Task 2): AssignContactColor /
+        // ReleaseContactColor / ContactColorOf / ValidatePersistentColoring /
+        // ColoredContactCount + m_bodyColorMask / m_colorContacts now live there,
+        // reached through the inline probe forwarders (hpp) and the internal
+        // m_graph calls at the create/destroy/grow seams.
 
         bool PhysicsWorld::BothAsleep(const Contact& c) const noexcept
         {
@@ -2440,7 +2270,7 @@ namespace Arcane
                 // so assign MUST key off the same oriented flags to stay consistent.
                 if (solverRelevant && c.bIsBody)
                 {
-                    AssignContactColor(r.id, ia, ib, aDyn, bDyn);
+                    m_graph.AssignContactColor(*this, r.id, ia, ib, aDyn, bDyn);
                 }
                 // Per-body contact adjacency (G1 island-split linkage): a dyn-dyn
                 // body contact is an island edge -> record it on BOTH endpoints so
@@ -3436,7 +3266,7 @@ namespace Arcane
         void PhysicsWorld::ReleaseAndDestroyContact(std::uint32_t id, const Contact& c) noexcept
         {
             m_islandMgr.DetachContactAdjacency(*this, id, c); // reads c before the pool frees the slot
-            ReleaseContactColor(id);       // free the color while c still holds it
+            m_graph.ReleaseContactColor(*this, id); // free the color while c still holds it
             m_contactPool.Destroy(id);
         }
 
