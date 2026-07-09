@@ -1440,11 +1440,12 @@ namespace Arcane
         // ---- pooled-contact teardown (G1 island-split linkage) ------------------
         //
         // The per-body dyn-dyn contact adjacency (SwapRemoveId + DetachContactAdjacency
-        // + DebugValidateBodyContacts) MOVED to IslandManager (decomp step 1 Task 3):
+        // + DebugValidateBodyContacts) lives in IslandManager (decomp step 1 Task 3):
         // it is the split-linkage the island topology owns. ReleaseAndDestroyContact
-        // stays here as the world-level teardown coordinator -- it detaches the island
-        // adjacency (delegated), releases the persistent color (contact-coloring, a
-        // future Step-2 collaborator), and destroys the pool slot.
+        // is the graph-level teardown coordinator (decomp step 2 Task 3) -- it
+        // detaches the island adjacency (via w.m_islandMgr), releases the persistent
+        // color, and destroys the pool slot. Order is FROZEN (reads c before the
+        // pool frees it; the RemoveBody color-leak assert gates the pairing).
         void ConstraintGraph::ReleaseAndDestroyContact(PhysicsWorld& w, std::uint32_t id, const Contact& c) noexcept
         {
             w.m_islandMgr.DetachContactAdjacency(w, id, c); // reads c before the pool frees the slot

@@ -6,8 +6,8 @@
 // contained collaborator (PhysicsWorld decomposition step 1, 2026-07-09),
 // mirroring Box2D v3's b2Island (connectivity topology + the sleep trigger) as
 // distinct from:
-//   * b2ConstraintGraph -- the coloring / solve partition, which stays with the
-//     contact pool for now (a future Step-2 collaborator), and
+//   * b2ConstraintGraph -- the coloring / solve partition, owned (with the
+//     contact pool) by the ConstraintGraph collaborator (decomp step 2), and
 //   * b2SolverSet -- the hot awake/kinematic sets, which STAY world-owned as flat
 //     SoA: m_awakeIndex[slot] is read per-body every substep (and handed as a raw
 //     pointer into the SIMD packer), and the awake-set element ORDER feeds
@@ -92,7 +92,8 @@ namespace Arcane
             void          MarkSplitCandidate(std::uint32_t islandId) noexcept;
             // Rebuild one candidate island into 1+ connected components (fresh local
             // UF over its members' current touching pool contacts + joint edges);
-            // clears the flag. Reaches w.m_bodyContacts / w.m_contactPool / w.m_joints.
+            // clears the flag. Walks its own m_bodyContacts adjacency + the graph's
+            // pool (read-only, w.m_graph.Pool()) + w.m_joints.
             void          SplitIsland(PhysicsWorld& w, std::uint32_t islandId);
             // Wake every member of the body's island (set awake flag + reset timer +
             // re-add to the world's awake-set).
