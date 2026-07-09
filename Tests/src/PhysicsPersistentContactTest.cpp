@@ -229,6 +229,22 @@ TEST_CASE("Persistent contact walk == GenerateContacts constraint set", "[physic
 
     REQUIRE(!fromGen.empty());                            // the scene actually has contacts
     REQUIRE(SameConstraintSet(fromPool, fromGen));       // sorted set-equality on key fields
+
+    // Decomp step 2, T0 (gap G2): the pool-emitted constraints must carry NONZERO
+    // warm-start impulses here -- nonzero ONLY if Step stage 3b wrote the solver's
+    // impulses back onto the pooled manifolds last step. The warm-start liveness
+    // asserts elsewhere read post-solve constraints (nonzero even with a broken
+    // write-back) and SameConstraintSet above deliberately skips impulses, so this
+    // is the suite's only direct read of the pool's STORED impulses.
+    bool anyWarmImpulse = false;
+    for (const ContactConstraint& cc : fromPool)
+    {
+        for (int p = 0; p < cc.pointCount; ++p)
+        {
+            if (cc.points[p].normalImpulse > Real(0)) { anyWarmImpulse = true; }
+        }
+    }
+    REQUIRE(anyWarmImpulse);
 }
 
 // ---- Task 4: tile-SPAN solver feed --------------------------------------------

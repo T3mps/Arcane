@@ -135,3 +135,45 @@ TEST_CASE("PhysicsCompacted: incremental coloring is deterministic across two ru
     REQUIRE(p1.size()==p2.size());
     for (std::size_t i=0;i<p1.size();++i){ REQUIRE(p1[i].x==p2[i].x); REQUIRE(p1[i].y==p2[i].y); }
 }
+
+// Decomp step 2, T0 (gap G1): pin the lowest-free color VALUE semantics -- assign
+// at create picks the LOWEST free color of the dynamic endpoints, and release at
+// destroy makes that color immediately reusable. ValidatePersistentColoring proves
+// the partition is VALID and the churn case above proves it is DETERMINISTIC per
+// binary, but neither pins WHICH color a contact gets: a consistent change
+// (highest-free search, or a missed release + fresh assign) would pass both while
+// re-ordering the colored Gauss-Seidel solve -- a cross-build float change that
+// run-twice determinism cannot see. Also gives ContactColorOf (the [phasec] probe)
+// its first caller.
+TEST_CASE("PhysicsCompacted: destroyed contact's color is reused lowest-free on recreate",
+          "[physics][phasec]")
+{
+    WorldDef wd;
+    wd.gravityX = Real(0); // zero-g: the row of boxes stays put (solver drift over
+    wd.gravityY = Real(0); // ~6 steps is tiny -- far inside the fat-box keep-alive)
+    PhysicsWorld w(wd);
+    // Three dynamic boxes in a row, each overlapping its neighbour by 0.1 m:
+    // contacts (b0,b1) and (b1,b2) share dynamic b1 -> forced into colors 0 and 1.
+    // Create order is deterministic (sorted broadphase pairs over ascending slots)
+    // and the pool starts empty, so (b0,b1) = pool id 0 / color 0 and
+    // (b1,b2) = pool id 1 / color 1.
+    BodyHandle b0 = AddBox(w, Vec2(Real(0),   Real(0)), Real(0.4), Real(0.4));
+    AddBox(w, Vec2(Real(0.7), Real(0)), Real(0.4), Real(0.4));
+    AddBox(w, Vec2(Real(1.4), Real(0)), Real(0.4), Real(0.4));
+    w.Step(kStep);
+    REQUIRE(w.ValidatePersistentColoring());
+    REQUIRE(w.ColoredContactCount() == 2u);
+    REQUIRE(w.ContactColorOf(0) == 0);  // (b0,b1): lowest free of two clean bodies
+    REQUIRE(w.ContactColorOf(1) == 1);  // (b1,b2): b1 already holds color 0
+
+    w.SetPosition(b0, Vec2(Real(1000), Real(1000)));  // fat boxes separate
+    w.Step(kStep);
+    w.Step(kStep);
+    REQUIRE(w.ColoredContactCount() == 1u);  // (b0,b1) destroyed, color 0 released
+
+    w.SetPosition(b0, Vec2(Real(0), Real(0)));        // back into overlap
+    w.Step(kStep);
+    REQUIRE(w.ColoredContactCount() == 2u);           // recreated
+    REQUIRE(w.ContactColorOf(0) == 0);  // LIFO id reuse + lowest-free color reuse
+    REQUIRE(w.ValidatePersistentColoring());
+}
