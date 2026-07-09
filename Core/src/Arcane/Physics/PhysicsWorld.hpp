@@ -83,6 +83,7 @@
 #include <Arcane/Physics/Solver/Solver.hpp>      // ISolver + ContactConstraint pool type
 #include <Arcane/Physics/Joints/Joint.hpp>       // Joint base + JointDef (P2.5)
 #include <Arcane/Physics/Island.hpp>             // Island::Island registry struct + constants (Phase A)
+#include <Arcane/Physics/IslandManager.hpp>      // island topology collaborator (decomp step 1)
 
 namespace Arcane
 {
@@ -310,6 +311,12 @@ namespace Arcane
         // {world, handle} pair for ergonomic call sites; it forwards to these.
         class PhysicsWorld
         {
+            // decomp step 1: IslandManager owns island topology + the sleep pass.
+            // Befriended (not a public accessor seam like ContactManager) because
+            // SplitIsland needs intimate world state (contact pool + joint edges) --
+            // the same trust boundary this code had when it lived inside the world.
+            friend class IslandManager;
+
         public:
             explicit PhysicsWorld(const WorldDef& def = {});
             ~PhysicsWorld();
@@ -1419,6 +1426,9 @@ namespace Arcane
 
             // ---- contacts --------------------------------------------------
             ContactManager m_contacts;
+
+            // ---- islands (topology + sleep pass; decomp step 1) ------------
+            IslandManager m_islandMgr;
 
             // ---- solver (SoftStep; the ISolver seam) ------------------------
             //
