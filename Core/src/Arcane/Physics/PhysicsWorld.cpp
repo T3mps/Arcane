@@ -1188,7 +1188,7 @@ namespace Arcane
                     // the joint's island edge: wake + mark the SURVIVING endpoint's
                     // island a split candidate so it re-derives its components
                     // (mirrors the contact-removal pattern). idx already left its own
-                    // island above (m_islandId[idx] == kInvalidIsland here).
+                    // island above (IslandOf(idx) == kInvalidIsland here).
                     const BodyHandle other = aIsIdx ? hb : ha;
                     if (other.generation != 0u && other.index < m_count &&
                         TypeSlot(idx) == BodyType::Dynamic &&
@@ -1995,7 +1995,7 @@ namespace Arcane
                     // A removed body's touching dynamic-dynamic contact may fracture
                     // its island. Mark both bodies' islands and wake them so the
                     // remaining pile re-settles. The removed body's slot still has a
-                    // valid m_islandId here -- RemoveBody clears it AFTER this call.
+                    // valid island id (IslandOf) here -- RemoveBody clears it AFTER this call.
                     if (c.bIsBody && c.touching &&
                         c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
                         c.bodyA < m_islandMgr.IslandIdCount() && c.bodyB < m_islandMgr.IslandIdCount() &&

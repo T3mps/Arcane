@@ -21,7 +21,7 @@
 //   * Static/Kinematic bodies are NOT island members (they anchor; they are not
 //     island nodes -- the dynamic-dynamic-only union rule).
 //
-// The per-Step sleep pass (IslandManager::UpdateSleep, Step stage 4) advances each
+// The per-Step sleep pass (IslandManager::UpdateSleep, Step stage 5) advances each
 // awake dynamic body's idle timer, then sleeps an island AS A UNIT when EVERY
 // awake-dynamic member has accumulated kSleepTime seconds of idle. WAKE paths live
 // in PhysicsWorld (WakeMoverPair / ApplyImpulse / SetVelocity / Wake) and
@@ -59,9 +59,10 @@ namespace Arcane
             // Static/Kinematic bodies are NOT members (they anchor, they are not
             // island nodes -- the same dynamic-dynamic-only rule the old UF used).
             //
-            // The registry lives on PhysicsWorld (m_islands, id-indexed, free-list
+            // The registry lives on IslandManager (m_islands, id-indexed, free-list
             // recycled). Sleep bookkeeping is DERIVED from members (per-body idle
-            // timers stay per-body in m_sleepTimer); an island holds no timer.
+            // timers stay per-body on PhysicsWorld in m_sleepTimer); an island holds
+            // no timer.
             struct Island
             {
                 // Member body SLOTS (dynamic only). Order is append-order; the
@@ -75,7 +76,7 @@ namespace Arcane
             };
 
             // A body with no island (Static/Kinematic, or a transiently un-assigned
-            // dynamic slot). m_islandId[slot] == kInvalidIsland.
+            // dynamic slot) has island id == kInvalidIsland (IslandManager::IslandOf).
             inline constexpr std::uint32_t kInvalidIsland = 0xFFFFFFFFu;
 
             // At most this many split-candidate islands are rebuilt per Step (Box2D

@@ -192,8 +192,8 @@ TEST_CASE("physics: capsule settles at rest on a static floor", "[physics]")
     // The capsule must have come to rest: near-zero linear + angular velocity.
     // Re-baselined for MKS (protocol rule 6): measured spd=0, avel=0 (the body
     // is already asleep by assert time -- see CHECK_FALSE(IsAwake) below -- and
-    // island sleep zeroes both velocities, Island.cpp). The spd bound IS the
-    // sleep gate's ceiling: Island::UpdateSleep requires
+    // island sleep zeroes both velocities, IslandManager::UpdateSleep). The spd
+    // bound IS the sleep gate's ceiling: that pass requires
     // |v| + |w|*maxExtent < sleepThreshold (default 0.05 m/s) before sleeping,
     // so |v| < 0.05 at sleep onset. The avel bound rests on sleep-zeroing
     // alone: the gate by itself only bounds |w| by sleepThreshold/maxExtent

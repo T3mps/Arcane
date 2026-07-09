@@ -1,7 +1,7 @@
 // Physics correctness batch, Task C: joints union islands + jointed constructs
 // can sleep (the Box2D island-joint model).
 //
-// BEFORE this change jointed dynamics NEVER slept: Island::UpdateSleep reset the
+// BEFORE this change jointed dynamics NEVER slept: the island sleep pass reset the
 // sleep timer of every joint-attached dynamic every Step, so a settled rope /
 // ragdoll / hinge kept solving forever. The fix makes a joint an ISLAND EDGE
 // (AddJoint merges the two dynamics' islands; SplitIsland unions joint edges;

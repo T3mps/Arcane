@@ -2,7 +2,8 @@
 //
 // PORT NOTE: P2.4 extracted the inline Lua island/sleep logic
 // (Client/src/physics/PhysicsWorld.lua:28-31 + 403-452) into Physics/Island.cpp
-// and wired it at the Step stage-4 seam (after the solve, using this step's
+// (folded into IslandManager by the 2026-07-09 decomp) and wired it at the
+// Step island-sleep seam (after the solve, using this step's
 // contacts). There is no Island.lua; the oracle is the harness "islands +
 // sleeping (M3)" block (Client/src/tests/physics_harness/main.lua:756-777),
 // reformulated Cartesian here (+Y is DOWN, gravity is +Y) plus the plan's

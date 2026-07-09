@@ -99,7 +99,7 @@ namespace Arcane
             void          WakeIsland(PhysicsWorld& w, std::uint32_t slot) noexcept;
 
             // ---- per-Step sleep pass (decomp step 1 Task 4) -----------------
-            // The per-Step island sleep pass (PhysicsWorld::Step stage 4). Iterates
+            // The per-Step island sleep pass (PhysicsWorld::Step stage 5). Iterates
             // the PERSISTENT island registry (members already known -- no per-step
             // union-find rebuild, no O(n^2) global scan): advances each awake dynamic
             // body's idle timer by `dt` using Box2D v3's combined, extent-weighted

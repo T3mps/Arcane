@@ -36,7 +36,7 @@
 //       stage 5: contacts:step (events + gating + deferred flush)
 //
 // PORTED IN P2.4 (island sleep):
-//   * Island::UpdateSleep wired at stage 4; sleep-island logic active.
+//   * IslandManager::UpdateSleep wired at stage 4; sleep-island logic active.
 //
 // DELIBERATELY NOT PORTED (still deferred -- see PORT BOUNDARY below):
 //   * Joints (P2.5).
@@ -800,8 +800,9 @@ namespace Arcane
             [[nodiscard]] const std::uint32_t* AwakeIndexData() const noexcept { return m_awakeIndex.data(); }
             [[nodiscard]] const std::uint32_t* KinematicIndexData() const noexcept { return m_kinematicIndex.data(); }
             // Awake-set maintenance (called at create/sleep/wake/remove seams).
-            // Both are idempotent and are PUBLIC so Island.cpp can reach them at
-            // the sleep seam without coupling Island.cpp to a PhysicsWorld private.
+            // Both are idempotent. They are the awake-set MECHANISM the IslandManager
+            // sleep pass drives through PhysicsWorld& (RemoveFromAwakeSet at sleep,
+            // AddToAwakeSet at wake); the hot awake-set SoA itself stays world-owned.
             void AddToAwakeSet(std::uint32_t slot) noexcept;
             void RemoveFromAwakeSet(std::uint32_t slot) noexcept;
 
@@ -908,9 +909,9 @@ namespace Arcane
                 FunctionRef<void(std::uint32_t a,
                                  std::uint32_t b)> fn) const;
 
-            // Island ROOT of slot i (debug/inspection, Phase A).
-            // Phase A: reads m_islandId -- the persistent island id IS the root
-            // (equal for all co-island members after merge, distinct across
+            // Island ROOT of slot i (debug/inspection, Phase A). Forwards to
+            // IslandManager::IslandRootOf. Phase A: the persistent island id IS the
+            // root (equal for all co-island members after merge, distinct across
             // islands). Non-members (static/kinematic or un-assigned) return a
             // high-bit-tagged slot that can never collide with a real (dense,
             // small) island id. Replaces the old per-step UF walk.
@@ -921,7 +922,8 @@ namespace Arcane
             std::uint32_t AllocIsland() { return m_islandMgr.AllocIsland(); }
             // Return an island id to the free list (clears members + flag).
             void          FreeIsland(std::uint32_t id) noexcept { m_islandMgr.FreeIsland(id); }
-            // m_islandId[slot] (or kInvalidIsland). Inline -> zero call cost.
+            // The slot's persistent island id (or kInvalidIsland). Forwards to the
+            // manager's inline IslandOf -> zero call cost.
             [[nodiscard]] std::uint32_t IslandOf(std::uint32_t slot) const noexcept
             {
                 return m_islandMgr.IslandOf(slot);
