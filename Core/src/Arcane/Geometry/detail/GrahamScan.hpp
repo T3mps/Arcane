@@ -22,8 +22,8 @@ namespace Arcane::Geometry::detail
 
         std::sort(pts.begin() + 1, pts.end(), [&](const Pt<T>& a, const Pt<T>& b)
         {
-            const T c = Cross<T>(p0, a, b);
-            if (c != T(0)) return c > T(0);   // CCW (left) first
+            const int o = Orient2d<T>(p0, a, b);
+            if (o != 0) return o > 0;          // CCW (left) first
             const T da = (a.x - p0.x) * (a.x - p0.x) + (a.y - p0.y) * (a.y - p0.y);
             const T db = (b.x - p0.x) * (b.x - p0.x) + (b.y - p0.y) * (b.y - p0.y);
             return da < db;                   // nearer first among equal angle
@@ -33,7 +33,7 @@ namespace Arcane::Geometry::detail
         for (std::size_t i = 0; i < n; ++i)
         {
             while (st.size() >= 2 &&
-                   Cross<T>(st[st.size() - 2], st[st.size() - 1], pts[i]) <= T(0))
+                   Orient2d<T>(st[st.size() - 2], st[st.size() - 1], pts[i]) <= 0)
                 st.pop_back();
             st.push_back(pts[i]);
         }

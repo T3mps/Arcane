@@ -18,13 +18,13 @@ namespace Arcane::Geometry::detail
         std::size_t k = 0;
         for (std::size_t i = 0; i < n; ++i)
         {
-            while (k >= 2 && Cross<T>(h[k - 2], h[k - 1], pts[i]) <= T(0)) --k;
+            while (k >= 2 && Orient2d<T>(h[k - 2], h[k - 1], pts[i]) <= 0) --k;
             h[k++] = pts[i];
         }
         const std::size_t lower = k + 1;
         for (std::size_t i = n - 1; i-- > 0;)   // i = n-2 .. 0
         {
-            while (k >= lower && Cross<T>(h[k - 2], h[k - 1], pts[i]) <= T(0)) --k;
+            while (k >= lower && Orient2d<T>(h[k - 2], h[k - 1], pts[i]) <= 0) --k;
             h[k++] = pts[i];
         }
         h.resize(k - 1);   // last == first

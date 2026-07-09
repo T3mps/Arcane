@@ -7,8 +7,7 @@ namespace Arcane::Geometry::detail
     template <class T>
     int Turn(const Pt<T>& p, const Pt<T>& q, const Pt<T>& r) noexcept
     {
-        const T c = Cross<T>(p, q, r);
-        return (c > T(0)) - (c < T(0));   // 1 CCW/left, -1 CW/right, 0 collinear
+        return Orient2d<T>(p, q, r);   // {-1 CW, 0 collinear, +1 CCW}
     }
     template <class T>
     T Dist2(const Pt<T>& a, const Pt<T>& b) noexcept

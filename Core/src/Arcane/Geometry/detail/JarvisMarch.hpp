@@ -20,12 +20,12 @@ namespace Arcane::Geometry::detail
             for (std::size_t j = 0; j < n; ++j)
             {
                 if (j == cur || j == endp) continue;
-                const T c = Cross<T>(pts[cur], pts[endp], pts[j]);
-                if (c > T(0))
+                const int c = Orient2d<T>(pts[cur], pts[endp], pts[j]);
+                if (c > 0)
                 {
                     endp = j;                       // strictly more CCW
                 }
-                else if (c == T(0))
+                else if (c == 0)
                 {
                     const Pt<T>& b = pts[cur];      // collinear: take the farther
                     const T dj = (pts[j].x - b.x) * (pts[j].x - b.x) +

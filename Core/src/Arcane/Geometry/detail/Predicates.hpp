@@ -183,7 +183,7 @@ namespace Arcane::Geometry
                 const Pt<T>& prev = poly[(i + n - 1) % n];
                 const Pt<T>& cur  = poly[i];
                 const Pt<T>& next = poly[(i + 1) % n];
-                if (Cross<T>(prev, cur, next) != T(0))
+                if (Orient2d<T>(prev, cur, next) != 0)
                     out.push_back(cur);
             }
             return out;

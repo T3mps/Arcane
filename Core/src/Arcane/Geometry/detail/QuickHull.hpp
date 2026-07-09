@@ -8,13 +8,17 @@ namespace Arcane::Geometry::detail
     static void QuickHullRec(std::span<const Pt<T>> pts, std::size_t a, std::size_t b,
                              const std::vector<std::size_t>& set, std::vector<Pt<T>>& out)
     {
-        // Farthest point strictly left of a->b.
-        T best = T(0);
+        // Farthest point strictly left of a->b. The side is decided by the EXACT
+        // Orient2d sign; the farthest-point ranking is a double-promoted magnitude
+        // (ranking need not be exact, only monotonic among the strictly-left set).
+        double best = 0.0;
         std::size_t c = static_cast<std::size_t>(-1);
         for (std::size_t idx : set)
         {
-            const T d = Cross<T>(pts[a], pts[b], pts[idx]);
-            if (d > best) { best = d; c = idx; }
+            if (Orient2d<T>(pts[a], pts[b], pts[idx]) <= 0) continue;   // strictly left only
+            const double mag = (double(pts[b].x) - double(pts[a].x)) * (double(pts[idx].y) - double(pts[a].y))
+                             - (double(pts[b].y) - double(pts[a].y)) * (double(pts[idx].x) - double(pts[a].x));
+            if (mag > best) { best = mag; c = idx; }
         }
         if (c == static_cast<std::size_t>(-1)) { out.push_back(pts[a]); return; }
 
@@ -22,8 +26,8 @@ namespace Arcane::Geometry::detail
         for (std::size_t idx : set)
         {
             if (idx == c) continue;
-            if (Cross<T>(pts[a], pts[c], pts[idx]) > T(0))      leftAC.push_back(idx);
-            else if (Cross<T>(pts[c], pts[b], pts[idx]) > T(0)) leftCB.push_back(idx);
+            if (Orient2d<T>(pts[a], pts[c], pts[idx]) > 0)      leftAC.push_back(idx);
+            else if (Orient2d<T>(pts[c], pts[b], pts[idx]) > 0) leftCB.push_back(idx);
         }
         QuickHullRec<T>(pts, a, c, leftAC, out);
         QuickHullRec<T>(pts, c, b, leftCB, out);
@@ -43,9 +47,9 @@ namespace Arcane::Geometry::detail
         for (std::size_t i = 0; i < n; ++i)
         {
             if (i == minI || i == maxI) continue;
-            const T d = Cross<T>(pts[minI], pts[maxI], pts[i]);
-            if (d > T(0))      upper.push_back(i);
-            else if (d < T(0)) lower.push_back(i);
+            const int s = Orient2d<T>(pts[minI], pts[maxI], pts[i]);
+            if (s > 0)      upper.push_back(i);
+            else if (s < 0) lower.push_back(i);
         }
         std::vector<Pt<T>> out;
         QuickHullRec<T>(pts, minI, maxI, upper, out);   // minI..(upper chain)

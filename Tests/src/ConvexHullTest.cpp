@@ -148,6 +148,27 @@ namespace
         REQUIRE(ConvexHull<Chan, T>(s)              == ref);
         REQUIRE(ConvexHull<KirkpatrickSeidel, T>(s) == ref);
     }
+
+    // All six agree AND the reference hull obeys the standalone canonical contract,
+    // with the no-three-collinear check made through the EXACT Orient2d -- so even if
+    // all six agreed on a non-canonical hull (an interior/collinear vertex the plain
+    // float Cross failed to strip), this still trips. This is the E01-5 payoff check
+    // AllSixAgree alone does not perform.
+    template <class T>
+    void AllSixAgreeExact(const std::vector<Arcane::Geometry::Pt<T>>& cloud)
+    {
+        using namespace Arcane::Geometry;
+        AllSixAgree<T>(cloud);
+        std::span<const Arcane::Geometry::Pt<T>> s(cloud);
+        const auto h = ConvexHull<MonotoneChain, T>(s);
+        if (h.size() < 3) return;   // all-collinear degenerate draw
+        REQUIRE(detail::SignedArea2<T>(h) > T(0));
+        for (std::size_t i = 1; i < h.size(); ++i)
+            REQUIRE_FALSE(detail::Less<T>(h[i], h[0]));
+        for (std::size_t i = 0; i < h.size(); ++i)
+            REQUIRE(detail::Orient2d<T>(h[(i + h.size() - 1) % h.size()],
+                                        h[i], h[(i + 1) % h.size()]) != 0);
+    }
 }
 
 TEST_CASE("All six convex-hull algorithms agree on random clouds", "[geometry]")
@@ -327,4 +348,72 @@ TEST_CASE("Orient2d is exact for float and double", "[geometry][robust]")
             REQUIRE(Orient2d<float>(o, a, b) == -Orient2d<float>(o, b, a));
         }
     }
+}
+
+// E01-5 acceptance: all 6 policies agree on the EXACT canonical hull for the
+// degenerate / near-collinear / large-magnitude regimes the old float Cross
+// mis-oriented. Purely additive -- these inputs were never fed before.
+TEST_CASE("All six hull policies agree on degenerate + near-collinear clouds",
+          "[geometry][robust]")
+{
+    // Near-collinear float clouds: points on y = m*x + c with sub-ULP jitter,
+    // plus a few genuine off-line corners. Large magnitude within the exact bound.
+    auto nearCollinear = [](std::uint32_t seed, float scale) {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> t(-scale, scale);
+        std::uniform_int_distribution<int>    jig(-2, 2);
+        std::vector<Arcane::Geometry::Pt<float>> v;
+        const float m = 0.37f, c = 1.5f;
+        for (int i = 0; i < 200; ++i)
+        {
+            const float x = t(rng);
+            float y = m * x + c;
+            for (int k = 0; k < jig(rng); ++k) y = std::nextafter(y, 1e30f); // sub-ULP off
+            v.push_back({x, y});
+        }
+        v.push_back({-scale, -scale}); v.push_back({scale, scale});           // real corners
+        v.push_back({0.0f, scale});    v.push_back({0.0f, -scale});
+        return v;
+    };
+    for (std::uint32_t s = 0; s < 50; ++s)
+    {
+        AllSixAgreeExact<float>(nearCollinear(0xC0110u + s, 1.0f));       // unit scale
+        AllSixAgreeExact<float>(nearCollinear(0xC0220u + s, 1.0e5f));     // large, in-bound
+    }
+
+    // Dense collinear runs + duplicates: hull is a small polygon whose edges carry
+    // many interior collinear points; StripCollinear must remove all of them and
+    // all six must produce the identical canonical corner set.
+    auto collinearRuns = [](std::uint32_t seed) {
+        std::mt19937 rng(seed);
+        std::uniform_int_distribution<int> pick(0, 3);
+        std::vector<Arcane::Geometry::Pt<float>> corners =
+            {{0,0},{100,0},{100,100},{0,100}};
+        std::vector<Arcane::Geometry::Pt<float>> v = corners;
+        std::uniform_real_distribution<float> u(0.0f, 1.0f);
+        for (int i = 0; i < 300; ++i)                    // interior edge points + dups
+        {
+            const auto& p = corners[pick(rng)];
+            const auto& q = corners[(pick(rng)) % 4];
+            const float f = u(rng);
+            v.push_back({p.x + f * (q.x - p.x), p.y + f * (q.y - p.y)});
+        }
+        return v;
+    };
+    for (std::uint32_t s = 0; s < 50; ++s)
+        AllSixAgreeExact<float>(collinearRuns(0xC0330u + s));
+
+    // Double instantiation: exact-representable (integer) moderate clouds so the
+    // exact-EFT policies and KirkpatrickSeidel's plain-double accumulator both
+    // compute the SAME sign (validates the double policy logic without exercising
+    // KS's non-EFT limitation, which production never hits -- production is float).
+    auto intCloud = [](std::uint32_t seed) {
+        std::mt19937 rng(seed);
+        std::uniform_int_distribution<int> d(-500, 500);
+        std::vector<Arcane::Geometry::Pt<double>> v;
+        for (int i = 0; i < 300; ++i) v.push_back({double(d(rng)), double(d(rng))});
+        return v;
+    };
+    for (std::uint32_t s = 0; s < 50; ++s)
+        AllSixAgreeExact<double>(intCloud(0xC0440u + s));
 }

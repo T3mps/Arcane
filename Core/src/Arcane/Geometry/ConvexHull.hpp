@@ -82,7 +82,7 @@ namespace Arcane::Geometry
         bool collinear = true;
         for (std::size_t i = 2; i < n && collinear; ++i)
         {
-            if (detail::Cross<T>(pts[0], pts[1], pts[i]) != T(0))
+            if (detail::Orient2d<T>(pts[0], pts[1], pts[i]) != 0)
                 collinear = false;
         }
         if (collinear)
