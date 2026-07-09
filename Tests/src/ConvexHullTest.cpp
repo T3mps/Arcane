@@ -338,10 +338,10 @@ TEST_CASE("Orient2d is exact for float and double", "[geometry][robust]")
         REQUIRE(naiveDisagreements > 0);
     }
 
-    SECTION("antisymmetry + large-coordinate float within the exact bound")
+    SECTION("antisymmetry holds for large-coordinate float")
     {
         std::mt19937 rng(0xE0156u);
-        std::uniform_real_distribution<float> d(-8.0e5f, 8.0e5f); // |coord| < 2^20 << 2^25
+        std::uniform_real_distribution<float> d(-8.0e5f, 8.0e5f); // large-coord stress; Orient2d is exact for any input
         for (int i = 0; i < 20000; ++i)
         {
             const Pt<float> o{d(rng), d(rng)}, a{d(rng), d(rng)}, b{d(rng), d(rng)};
@@ -357,7 +357,9 @@ TEST_CASE("All six hull policies agree on degenerate + near-collinear clouds",
           "[geometry][robust]")
 {
     // Near-collinear float clouds: points on y = m*x + c with sub-ULP jitter,
-    // plus a few genuine off-line corners. Large magnitude within the exact bound.
+    // plus a few genuine off-line corners. Scales stay <= ~1e5 so KirkpatrickSeidel's
+    // double accumulator is also exact (it, not the exact Orient2d, is the binding
+    // constraint on how large these coords may go before the six policies diverge).
     auto nearCollinear = [](std::uint32_t seed, float scale) {
         std::mt19937 rng(seed);
         std::uniform_real_distribution<float> t(-scale, scale);
