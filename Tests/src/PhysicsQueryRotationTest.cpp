@@ -302,10 +302,15 @@ TEST_CASE("physics-v2 T7 (f): BulletSweep clamps a rotated bullet at its extent"
     BodyHandle hb = w.AddBody(bullet);
     w.SetAngle(hb, kHalfPi); // rotate so the y half-extent becomes 0.8
 
-    // Velocity that moves the bullet 20 units down in one 1/60s step. KINEMATIC
-    // -- the solver's 400 m/s maxLinearVelocity clamp only gates Dynamic bodies
-    // (InvMass > 0), so this deliberately-fast bullet integrates unclamped; do
-    // not "fix" this to be under 400, the exemption is the point of the test.
+    // Velocity that moves the bullet 20 units (+Y, down) in one 1/60s step.
+    // KINEMATIC and deliberately faster than the 400 m/s cap: Arcane exempts
+    // kinematics from the maxLinearVelocity clamp -- parity ledger B1,
+    // ACCEPTED-AS-DIVERGENCE (Box2D v3 clamps its whole awake set incl.
+    // kinematics; Arcane does not, because kinematic motion is authored and the
+    // CCD bullet sweep handles fast kinematics -- see
+    // docs/superpowers/audits/2026-07-08-physics-parity-ledger.md). Do NOT reduce
+    // this below the tunneling speed -- a fast kinematic bullet is the point of
+    // the rotated-extent CCD test.
     w.SetVelocity(hb, Vec2(Real(0), Real(20) / kStep));
 
     w.Step(kStep);
