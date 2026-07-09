@@ -5,8 +5,10 @@
 // /MD and static-CRT). Header-only templates; scalar-generic on T (float|double).
 
 #include <algorithm>
+#include <cmath>          // std::fma
 #include <cstddef>
 #include <span>
+#include <type_traits>    // std::is_same_v
 #include <vector>
 
 #include <glm/vec2.hpp>
@@ -22,6 +24,111 @@ namespace Arcane::Geometry
         constexpr T Cross(const Pt<T>& o, const Pt<T>& a, const Pt<T>& b) noexcept
         {
             return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+        }
+
+        // ---- E01-5 robust orientation predicate ------------------------------
+        // Exact sign of the orientation determinant
+        //   Cross(o,a,b) = (a.x-o.x)*(b.y-o.y) - (a.y-o.y)*(b.x-o.x).
+        // Returns +1 (b left of o->a, CCW), -1 (right/CW), 0 (collinear) EXACTLY,
+        // so callers get the correct side even for near-collinear / large-coord
+        // inputs where the plain-T Cross rounds to the wrong side of zero.
+        //
+        // float  T: promote to double. The determinant of three binary32 points is
+        //   exact in binary64 for |coord| <= 2^25 (float-minus-float is exact in
+        //   double when operand exponents are within 29; a product of two <=24-bit
+        //   significands is <=48 bits; their difference <=49 -- all < the 53-bit
+        //   mantissa). Hull/physics content (|coord| ~ 2^14) sits ~11 bits inside
+        //   this region. One straight-line double expression: no error-free
+        //   transform to break, robust under ANY /fp mode.
+        // double T: MSVC has no wider hardware float, so compute the sign EXACTLY
+        //   with error-free transforms over the EXPANDED determinant
+        //     (ax*by - ay*bx) + (ay*ox - ax*oy) + (bx*oy - by*ox)
+        //   (the o.x*o.y terms cancel), each product split by std::fma TwoProduct
+        //   and summed into a non-overlapping Shewchuk expansion whose top term
+        //   carries the true sign. Correct ONLY if the compiler neither contracts
+        //   a*b+c into an FMA nor reassociates the recovery terms -- guaranteed by
+        //   this repo's /fp:strict (see the static_assert in the .cpp-free header
+        //   note below). std::fma is single-rounding by the standard regardless.
+
+        template <class W>
+        constexpr int SignOf(W d) noexcept { return (d > W(0)) - (d < W(0)); }
+
+        // Knuth TwoSum: a+b == x+y exactly (round-to-nearest, no reassociation).
+        inline void TwoSum(double a, double b, double& x, double& y) noexcept
+        {
+            x = a + b;
+            const double z = x - a;
+            y = (a - (x - z)) + (b - z);
+        }
+        // std::fma TwoProduct: a*b == p+e exactly (single-rounding fma).
+        inline void TwoProduct(double a, double b, double& p, double& e) noexcept
+        {
+            p = a * b;
+            e = std::fma(a, b, -p);
+        }
+        // Grow a non-overlapping increasing expansion e[0..m) by scalar b -> h[0..ret).
+        inline int GrowExpansion(const double* e, int m, double b, double* h) noexcept
+        {
+            double Q = b;
+            int hi = 0;
+            for (int i = 0; i < m; ++i)
+            {
+                double s, err;
+                TwoSum(Q, e[i], s, err);
+                if (err != 0.0) h[hi++] = err;
+                Q = s;
+            }
+            if (Q != 0.0 || hi == 0) h[hi++] = Q;
+            return hi;
+        }
+        // Exact sign of the sum of n signed doubles (n small; determinant expansion
+        // stays well under 32). Non-overlapping increasing expansion => the sign is
+        // its most-significant nonzero component's sign.
+        inline int ExactSignOfSum(const double* comps, int n) noexcept
+        {
+            double buf[2][32];
+            int cur = 0, m = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                const int nx = GrowExpansion(buf[cur], m, comps[i], buf[cur ^ 1]);
+                cur ^= 1;
+                m = nx;
+            }
+            for (int i = m - 1; i >= 0; --i)
+                if (buf[cur][i] != 0.0) return buf[cur][i] > 0.0 ? 1 : -1;
+            return 0;
+        }
+        inline int Orient2dExactD(const Pt<double>& o, const Pt<double>& a,
+                                  const Pt<double>& b) noexcept
+        {
+            double p, e, comps[12];
+            int n = 0;
+            TwoProduct(a.x, b.y, p, e); comps[n++] =  p; comps[n++] =  e;  // + ax*by
+            TwoProduct(a.y, b.x, p, e); comps[n++] = -p; comps[n++] = -e;  // - ay*bx
+            TwoProduct(a.y, o.x, p, e); comps[n++] =  p; comps[n++] =  e;  // + ay*ox
+            TwoProduct(a.x, o.y, p, e); comps[n++] = -p; comps[n++] = -e;  // - ax*oy
+            TwoProduct(b.x, o.y, p, e); comps[n++] =  p; comps[n++] =  e;  // + bx*oy
+            TwoProduct(b.y, o.x, p, e); comps[n++] = -p; comps[n++] = -e;  // - by*ox
+            return ExactSignOfSum(comps, n);
+        }
+
+        template <class T>
+        int Orient2d(const Pt<T>& o, const Pt<T>& a, const Pt<T>& b) noexcept
+        {
+            if constexpr (std::is_same_v<T, float>)
+            {
+                const double d = (double(a.x) - double(o.x)) * (double(b.y) - double(o.y))
+                               - (double(a.y) - double(o.y)) * (double(b.x) - double(o.x));
+                return SignOf(d);
+            }
+            else if constexpr (std::is_same_v<T, double>)
+            {
+                return Orient2dExactD(o, a, b);
+            }
+            else
+            {
+                static_assert(sizeof(T) == 0, "Orient2d supports only float and double");
+            }
         }
 
         // Lexicographic order: x then y.

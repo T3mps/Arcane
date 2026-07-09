@@ -1,3 +1,4 @@
+#include <cmath>
 #include <span>
 #include <vector>
 
@@ -183,5 +184,72 @@ TEST_CASE("ConvexHull output obeys the canonical contract", "[geometry]")
         for (const auto& p : cloud)
             for (std::size_t i = 0; i < h.size(); ++i)
                 REQUIRE(detail::Cross<float>(h[i], h[(i + 1) % h.size()], p) >= 0.0f);
+    }
+}
+
+// E01-5: the robust orientation predicate must return the EXACT sign.
+TEST_CASE("Orient2d is exact for float and double", "[geometry][robust]")
+{
+    using Arcane::Geometry::Pt;
+    using Arcane::Geometry::detail::Orient2d;
+
+    SECTION("basic float orientation")
+    {
+        REQUIRE(Orient2d<float>({0,0}, {1,0}, {0,1}) ==  1);   // CCW
+        REQUIRE(Orient2d<float>({0,0}, {1,0}, {0,-1}) == -1);  // CW
+        REQUIRE(Orient2d<float>({0,0}, {1,0}, {2,0}) ==  0);   // collinear
+    }
+
+    SECTION("float near-collinear that naive float mis-signs")
+    {
+        // Classic incremental-orientation failure: three points that are NOT
+        // collinear, but whose plain-float cross rounds to 0 (or the wrong sign).
+        // Construction after Kettner et al.: a tiny perturbation off a diagonal.
+        const Pt<float> o{0.5f, 0.5f};
+        const Pt<float> a{12.0f, 12.0f};
+        const Pt<float> b{24.0f, 24.0f};
+        REQUIRE(Orient2d<float>(o, a, b) == 0);                // exactly collinear
+        Pt<float> b2 = b; b2.y = std::nextafter(b2.y, 100.0f); // one ULP above the line
+        REQUIRE(Orient2d<float>(o, a, b2) == 1);               // now strictly left
+    }
+
+    SECTION("float path == exact double path on the same points")
+    {
+        // Double-promotion of float inputs is exact, so it MUST agree with the
+        // exact-double predicate applied to the identical (exactly promoted) points.
+        std::mt19937 rng(0xE0155u);
+        std::uniform_real_distribution<float> d(-3.0e5f, 3.0e5f);
+        for (int i = 0; i < 20000; ++i)
+        {
+            const Pt<float> o{d(rng), d(rng)}, a{d(rng), d(rng)}, b{d(rng), d(rng)};
+            const Pt<double> od{o.x, o.y}, ad{a.x, a.y}, bd{b.x, b.y};
+            REQUIRE(Orient2d<float>(o, a, b) == Orient2d<double>(od, ad, bd));
+        }
+    }
+
+    SECTION("double exact where plain double rounds")
+    {
+        // Points chosen so the true determinant is a tiny known nonzero that a
+        // plain-double (ax-ox)(by-oy)-(ay-oy)(bx-ox) rounds to 0 via cancellation.
+        const double s = 1.0;
+        const Pt<double> o{0.5, 0.5};
+        const Pt<double> a{s + 0.5, s + 0.5};
+        Pt<double> b{2*s + 0.5, 2*s + 0.5};
+        REQUIRE(Orient2d<double>(o, a, b) == 0);               // exactly collinear
+        b.y = std::nextafter(b.y, 1e9);                        // 1 ULP left of the line
+        REQUIRE(Orient2d<double>(o, a, b) == 1);
+        b.y = std::nextafter(b.y = 2*s + 0.5, -1e9);           // 1 ULP right
+        REQUIRE(Orient2d<double>(o, a, b) == -1);
+    }
+
+    SECTION("antisymmetry + large-coordinate float within the exact bound")
+    {
+        std::mt19937 rng(0xE0156u);
+        std::uniform_real_distribution<float> d(-8.0e5f, 8.0e5f); // |coord| < 2^20 << 2^25
+        for (int i = 0; i < 20000; ++i)
+        {
+            const Pt<float> o{d(rng), d(rng)}, a{d(rng), d(rng)}, b{d(rng), d(rng)};
+            REQUIRE(Orient2d<float>(o, a, b) == -Orient2d<float>(o, b, a));
+        }
     }
 }
