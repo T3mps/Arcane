@@ -934,12 +934,9 @@ namespace Arcane
             // Rebuild one candidate island into 1+ connected components (fresh local
             // UF over its members' current touching pool contacts); clears the flag.
             void          SplitIsland(std::uint32_t islandId) { m_islandMgr.SplitIsland(*this, islandId); }
-            // Remove contact `id` from both endpoints' m_bodyContacts (dyn-dyn
-            // only; no-op for non-dyn-dyn or already-absent). Reads c BEFORE any
-            // pool Destroy frees it.
-            void DetachContactAdjacency(std::uint32_t id, const Contact& c) noexcept;
-            // The canonical pooled-contact teardown: detach adjacency + release
-            // the persistent color (while c still holds it) + pool.Destroy.
+            // The canonical pooled-contact teardown: detach island adjacency
+            // (delegated to IslandManager) + release the persistent color (while c
+            // still holds it) + pool.Destroy.
             void ReleaseAndDestroyContact(std::uint32_t id, const Contact& c) noexcept;
             // Wake every member of the body's island (set awake, reset timer).
             void          WakeIsland(std::uint32_t slot) noexcept { m_islandMgr.WakeIsland(*this, slot); }
@@ -1053,11 +1050,16 @@ namespace Arcane
                 return m_contactPool.Count();
             }
 
-            // Test invariant: true iff m_bodyContacts exactly mirrors the live
-            // dyn-dyn body contacts (every such contact's id appears once in BOTH
-            // endpoints' lists, and every id in every list is a live dyn-dyn body
-            // contact incident to that slot, with no duplicates).
-            [[nodiscard]] bool DebugValidateBodyContacts() const;
+            // Test invariant: true iff the per-body dyn-dyn contact adjacency
+            // exactly mirrors the live dyn-dyn body contacts (every such contact's
+            // id appears once in BOTH endpoints' lists, and every id in every list
+            // is a live dyn-dyn body contact incident to that slot, no duplicates).
+            // The adjacency (m_bodyContacts) is owned by IslandManager (decomp step 1
+            // Task 3); this forwards to keep the test hook's call site unchanged.
+            [[nodiscard]] bool DebugValidateBodyContacts() const
+            {
+                return m_islandMgr.DebugValidateBodyContacts(*this);
+            }
 
             // Test/inspection hook (collision-rebuild Phase 4, Task 1): true iff the
             // persistent pool holds a contact whose body SLOTS match the unordered
@@ -1221,13 +1223,10 @@ namespace Arcane
             std::vector<std::vector<std::uint32_t>> m_bodyFixtures;
 
             // Per-body dyn-dyn contact adjacency (keyed by body SoA slot), the
-            // Box2D b2ContactEdge analogue used by SplitIsland to walk only an
-            // island's own contacts. Holds the POOL IDS of each dynamic body's
-            // dyn-dyn body contacts (both endpoints carry the id). Maintained ONLY
-            // at contact create + destroy; merge/split/sleep/wake never touch it
-            // (body slots are stable -- only m_islandId changes). Mirrors the
-            // m_bodyFixtures vector-of-vectors lifecycle.
-            std::vector<std::vector<std::uint32_t>> m_bodyContacts;
+            // Per-body dyn-dyn contact adjacency (m_bodyContacts) MOVED to
+            // IslandManager (decomp step 1 Task 3): it is the split-linkage the
+            // island topology owns. The world drives it through the manager's
+            // attach/detach/clear/grow seams at the contact/body lifecycle points.
 
             // Per-body localCenter (COM in body-local frame, aggregated over
             // fixtures).  STORED but not yet consumed by integration/solver (T5).

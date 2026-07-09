@@ -18,14 +18,15 @@
 // PhysicsWorld& per method to reach the flat body/fixture/contact SoA + the
 // awake-set MECHANISM (AddToAwakeSet) it does not own. Unlike ContactManager's
 // narrow public "port seam", SplitIsland/WakeIsland need intimate world state (the
-// contact pool + joint edges + the body-contact adjacency + the awake flag/timer),
-// so PhysicsWorld befriends IslandManager -- the SAME trust boundary this code had
-// when it lived inside the world. This keeps the extraction a verbatim,
-// byte-identity-preserving move rather than a new public accessor surface.
+// contact pool + joint edges + the awake flag/timer), so PhysicsWorld befriends
+// IslandManager -- the SAME trust boundary this code had when it lived inside the
+// world. This keeps the extraction a verbatim, byte-identity-preserving move
+// rather than a new public accessor surface.
 //
-// Split-linkage adjacency (m_bodyContacts) is still owned by PhysicsWorld and read
-// through the friend here; it relocates in decomp step 2 (Task 3). The awake/
-// kinematic sets + m_awake flag + sleep-pass (Island::UpdateSleep) stay for now.
+// Split-linkage adjacency (m_bodyContacts -- the per-body dyn-dyn contact edge
+// lists SplitIsland walks) is OWNED here as of decomp step 1 Task 3; the world
+// drives it through the attach/detach/clear/grow seams below. The awake/kinematic
+// sets + m_awake flag + sleep-pass (Island::UpdateSleep) stay world-owned for now.
 //
 // PRESENTATION-FREE + C++20-clean: std + sibling Physics headers only.
 // namespace Arcane::Physics, Core style.
@@ -42,6 +43,7 @@ namespace Arcane
     namespace Physics
     {
         class PhysicsWorld; // IslandManager reaches the world SoA (befriended).
+        struct Contact;     // detach/validate seams take a Contact by ref.
 
         class IslandManager
         {
@@ -107,6 +109,33 @@ namespace Arcane
             // (Step stage 5 seam; determinism).
             void CollectSplitCandidates(std::vector<std::uint32_t>& out) const;
 
+            // ---- split-linkage adjacency (m_bodyContacts; decomp step 1 Task 3) --
+            // The per-body dyn-dyn contact edge lists SplitIsland walks. Maintained
+            // ONLY at contact create/destroy + body add/remove; merge/split/sleep/
+            // wake never touch it (body slots are stable -- only m_islandId changes).
+            // The world drives these seams (it owns the create/destroy/grow points).
+            //
+            // Grow the per-body edge-list column to `next`. Kept a DISTINCT grow from
+            // Grow() because the world sizes this column with its body-aux group
+            // (EnsureBodyAuxCapacity), not the main body SoA (EnsureCapacity) -- a
+            // 1:1 move of the original resize seam, not a relocation.
+            void GrowBodyContacts(std::uint32_t next);
+            // Drop a slot's edge list (AddBody recycle + RemoveBody defensive clear).
+            void ClearBodyContacts(std::uint32_t slot) noexcept;
+            // Record a NEW dyn-dyn solver body contact `id` on BOTH endpoints. The
+            // world gates dyn-dyn + solverRelevant at the create site (a sensor
+            // dyn-dyn pair fires events but must NOT become an island edge), then
+            // calls this to attach the island edge. Mirrors DetachContactAdjacency.
+            void AttachContactAdjacency(std::uint32_t a, std::uint32_t b, std::uint32_t id);
+            // Remove contact `id` from both endpoints' lists (dyn-dyn only; no-op for
+            // non-dyn-dyn or already-absent). Reads c BEFORE any pool Destroy frees it.
+            void DetachContactAdjacency(PhysicsWorld& w, std::uint32_t id, const Contact& c) noexcept;
+            // Test invariant: true iff m_bodyContacts exactly mirrors the live dyn-dyn
+            // body contacts (every such contact's id appears once in BOTH endpoints'
+            // lists; every id in every list is a live dyn-dyn body contact incident to
+            // that slot, no duplicates).
+            [[nodiscard]] bool DebugValidateBodyContacts(const PhysicsWorld& w) const;
+
         private:
             // SplitIsland scratch sentinel: member body slot -> local DSU index.
             static constexpr std::uint32_t kSplitLocalNone = 0xFFFFFFFFu;
@@ -121,6 +150,14 @@ namespace Arcane
             // SplitIsland scratch: member body slot -> local DSU index, O(1).
             // All-sentinel; SplitIsland writes only its members then resets them.
             std::vector<std::uint32_t>  m_splitLocalIndex;
+
+            // Box2D b2ContactEdge analogue used by SplitIsland to walk only an
+            // island's own contacts. Holds the POOL IDS of each dynamic body's
+            // dyn-dyn body contacts (both endpoints carry the id). Maintained ONLY
+            // at contact create + destroy; merge/split/sleep/wake never touch it
+            // (body slots are stable -- only m_islandId changes). Mirrors the
+            // world's m_bodyFixtures vector-of-vectors lifecycle.
+            std::vector<std::vector<std::uint32_t>> m_bodyContacts;
         };
     } // namespace Physics
 } // namespace Arcane

@@ -247,7 +247,7 @@ namespace Arcane
                     m_bodyFixtures.empty() ? 4u : m_bodyFixtures.capacity() * 2u));
 
             m_bodyFixtures.resize(next);
-            m_bodyContacts.resize(next);
+            m_islandMgr.GrowBodyContacts(next); // m_bodyContacts now IslandManager-owned
             m_localCenterX.resize(next, Real(0));
             m_localCenterY.resize(next, Real(0));
             m_bodyMass.resize(next, Real(0));
@@ -1028,7 +1028,7 @@ namespace Arcane
             // (needed by RecomputeBodyMass if AddFixture is called later).
             EnsureBodyAuxCapacity(idx + 1u);
             m_bodyFixtures[idx].clear(); // fresh slot (may be recycled)
-            m_bodyContacts[idx].clear(); // fresh slot (may be recycled)
+            m_islandMgr.ClearBodyContacts(idx); // fresh slot (may be recycled)
             m_fixedRotation[idx] = def.fixedRotation ? std::uint8_t(1) : std::uint8_t(0);
             // Record the mass override so RecomputeBodyMass (called by a later
             // AddFixture) honours it and does not silently drop it (Fix 1).
@@ -1222,7 +1222,7 @@ namespace Arcane
                     }
                 }
                 m_bodyFixtures[idx].clear();
-                m_bodyContacts[idx].clear(); // DestroyContactsForBody already drained it; defensive
+                m_islandMgr.ClearBodyContacts(idx); // DestroyContactsForBody already drained it; defensive
                 m_bodyMass[idx]     = Real(0);
                 m_bodyInertia[idx]  = Real(0);
                 m_localCenterX[idx] = Real(0);
@@ -2449,10 +2449,11 @@ namespace Arcane
                 // canonical-dynamic, so this fires exactly for dyn-dyn pairs.
                 // Gate on solverRelevant: a sensor dyn-dyn pair must NOT become
                 // an island edge (sensors fire events but must not merge islands).
+                // The GATE stays here (it reads world SoA); the attach is delegated
+                // to IslandManager, which owns the adjacency (decomp step 1 Task 3).
                 if (aDyn && bDyn && solverRelevant)
                 {
-                    m_bodyContacts[ia].push_back(r.id);
-                    m_bodyContacts[ib].push_back(r.id);
+                    m_islandMgr.AttachContactAdjacency(ia, ib, r.id);
                 }
             }
             // On a non-created HIT we leave the existing contact untouched (its
@@ -3424,77 +3425,23 @@ namespace Arcane
             m_contacts.ForEachBegunPair(fn);
         }
 
-        // ---- per-body contact adjacency helpers (G1 island-split linkage) -------
+        // ---- pooled-contact teardown (G1 island-split linkage) ------------------
         //
-        // SwapRemoveId: remove the first occurrence of `id` from `v` by
-        // swap-with-back + pop. No-op if absent. Order within m_bodyContacts is
-        // irrelevant to SplitIsland (connected components are union-order-invariant),
-        // so swap-remove is safe.
-        static void SwapRemoveId(std::vector<std::uint32_t>& v, std::uint32_t id) noexcept
-        {
-            for (std::size_t k = 0; k < v.size(); ++k)
-            {
-                if (v[k] == id) { v[k] = v.back(); v.pop_back(); return; }
-            }
-        }
-
-        void PhysicsWorld::DetachContactAdjacency(std::uint32_t id, const Contact& c) noexcept
-        {
-            // Only dyn-dyn body contacts were ever attached (see TryCreateContact).
-            if (!c.bIsBody || c.bodyA == kInvalidSlot || c.bodyB == kInvalidSlot) { return; }
-            if (TypeSlot(c.bodyA) != BodyType::Dynamic ||
-                TypeSlot(c.bodyB) != BodyType::Dynamic) { return; }
-            if (c.bodyA < m_bodyContacts.size()) { SwapRemoveId(m_bodyContacts[c.bodyA], id); }
-            if (c.bodyB < m_bodyContacts.size()) { SwapRemoveId(m_bodyContacts[c.bodyB], id); }
-        }
-
+        // The per-body dyn-dyn contact adjacency (SwapRemoveId + DetachContactAdjacency
+        // + DebugValidateBodyContacts) MOVED to IslandManager (decomp step 1 Task 3):
+        // it is the split-linkage the island topology owns. ReleaseAndDestroyContact
+        // stays here as the world-level teardown coordinator -- it detaches the island
+        // adjacency (delegated), releases the persistent color (contact-coloring, a
+        // future Step-2 collaborator), and destroys the pool slot.
         void PhysicsWorld::ReleaseAndDestroyContact(std::uint32_t id, const Contact& c) noexcept
         {
-            DetachContactAdjacency(id, c); // reads c before the pool frees the slot
+            m_islandMgr.DetachContactAdjacency(*this, id, c); // reads c before the pool frees the slot
             ReleaseContactColor(id);       // free the color while c still holds it
             m_contactPool.Destroy(id);
         }
 
-        bool PhysicsWorld::DebugValidateBodyContacts() const
-        {
-            // 1) every id in every list is a live dyn-dyn body contact incident to
-            //    that slot, with no duplicates within the list.
-            for (std::uint32_t slot = 0; slot < m_bodyContacts.size(); ++slot)
-            {
-                const std::vector<std::uint32_t>& list = m_bodyContacts[slot];
-                for (std::size_t k = 0; k < list.size(); ++k)
-                {
-                    const std::uint32_t id = list[k];
-                    for (std::size_t j = k + 1; j < list.size(); ++j)
-                    {
-                        if (list[j] == id) { return false; } // duplicate
-                    }
-                    if (!m_contactPool.Alive(id)) { return false; }
-                    const Contact& c = m_contactPool.Get(id);
-                    if (!c.bIsBody) { return false; }
-                    if (c.bodyA != slot && c.bodyB != slot) { return false; }
-                    if (TypeSlot(c.bodyA) != BodyType::Dynamic ||
-                        TypeSlot(c.bodyB) != BodyType::Dynamic) { return false; }
-                }
-            }
-            // 2) every live dyn-dyn body contact appears in BOTH endpoints' lists.
-            //    (const ForEach overload binds here; it already skips dead ids.)
-            bool ok = true;
-            m_contactPool.ForEach([&](std::uint32_t id, const Contact& c)
-            {
-                if (!c.bIsBody || c.bodyA == kInvalidSlot || c.bodyB == kInvalidSlot) { return; }
-                if (TypeSlot(c.bodyA) != BodyType::Dynamic ||
-                    TypeSlot(c.bodyB) != BodyType::Dynamic) { return; }
-                auto has = [&](std::uint32_t s) -> bool {
-                    if (s >= m_bodyContacts.size()) { return false; }
-                    const std::vector<std::uint32_t>& l = m_bodyContacts[s];
-                    for (std::uint32_t x : l) { if (x == id) { return true; } }
-                    return false;
-                };
-                if (!has(c.bodyA) || !has(c.bodyB)) { ok = false; }
-            });
-            return ok;
-        }
+        // DebugValidateBodyContacts MOVED to IslandManager (decomp step 1 Task 3);
+        // PhysicsWorld::DebugValidateBodyContacts() forwards to it (inline in .hpp).
 
         // ---- awake-set maintainers (Phase B, Task 2) ----------------------------
         //

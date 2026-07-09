@@ -81,7 +81,7 @@ namespace Arcane
             // joined by a touching dyn-dyn contact share a component; the FIRST
             // component reuses islandId, others get fresh ids. The contact walk is
             // scoped to the island's OWN contacts via per-body adjacency
-            // (w.m_bodyContacts) -> O(islandBodies + islandEdges), replacing the old
+            // (m_bodyContacts) -> O(islandBodies + islandEdges), replacing the old
             // O(poolSize x islandSize) whole-pool scan. Byte-identical components.
             if (islandId == Island::kInvalidIsland || islandId >= m_islands.size())
             {
@@ -120,7 +120,7 @@ namespace Arcane
             for (std::uint32_t i = 0; i < n; ++i)
             {
                 const std::uint32_t slot = members[i];
-                for (const std::uint32_t cid : w.m_bodyContacts[slot])
+                for (const std::uint32_t cid : m_bodyContacts[slot])
                 {
                     const Contact& c = w.m_contactPool.Get(cid);
                     if (!c.touching) { continue; }
@@ -290,6 +290,94 @@ namespace Arcane
                     out.push_back(id);
                 }
             }
+        }
+
+        // ---- split-linkage adjacency (m_bodyContacts; decomp step 1 Task 3) -----
+
+        void IslandManager::GrowBodyContacts(std::uint32_t next)
+        {
+            m_bodyContacts.resize(next);
+        }
+
+        void IslandManager::ClearBodyContacts(std::uint32_t slot) noexcept
+        {
+            m_bodyContacts[slot].clear();
+        }
+
+        void IslandManager::AttachContactAdjacency(std::uint32_t a, std::uint32_t b,
+                                                   std::uint32_t id)
+        {
+            // Per-body contact adjacency (G1 island-split linkage): a dyn-dyn body
+            // contact is an island edge -> record it on BOTH endpoints so SplitIsland
+            // can walk only this island's contacts. The world gates dyn-dyn +
+            // solverRelevant at the create site (a/b are the ORIENTED slots, bodyA
+            // canonical-dynamic) so this fires exactly for dyn-dyn solver pairs.
+            m_bodyContacts[a].push_back(id);
+            m_bodyContacts[b].push_back(id);
+        }
+
+        // SwapRemoveId: remove the first occurrence of `id` from `v` by
+        // swap-with-back + pop. No-op if absent. Order within m_bodyContacts is
+        // irrelevant to SplitIsland (connected components are union-order-invariant),
+        // so swap-remove is safe.
+        static void SwapRemoveId(std::vector<std::uint32_t>& v, std::uint32_t id) noexcept
+        {
+            for (std::size_t k = 0; k < v.size(); ++k)
+            {
+                if (v[k] == id) { v[k] = v.back(); v.pop_back(); return; }
+            }
+        }
+
+        void IslandManager::DetachContactAdjacency(PhysicsWorld& w, std::uint32_t id,
+                                                   const Contact& c) noexcept
+        {
+            // Only dyn-dyn body contacts were ever attached (see AttachContactAdjacency).
+            if (!c.bIsBody || c.bodyA == kInvalidSlot || c.bodyB == kInvalidSlot) { return; }
+            if (w.TypeSlot(c.bodyA) != BodyType::Dynamic ||
+                w.TypeSlot(c.bodyB) != BodyType::Dynamic) { return; }
+            if (c.bodyA < m_bodyContacts.size()) { SwapRemoveId(m_bodyContacts[c.bodyA], id); }
+            if (c.bodyB < m_bodyContacts.size()) { SwapRemoveId(m_bodyContacts[c.bodyB], id); }
+        }
+
+        bool IslandManager::DebugValidateBodyContacts(const PhysicsWorld& w) const
+        {
+            // 1) every id in every list is a live dyn-dyn body contact incident to
+            //    that slot, with no duplicates within the list.
+            for (std::uint32_t slot = 0; slot < m_bodyContacts.size(); ++slot)
+            {
+                const std::vector<std::uint32_t>& list = m_bodyContacts[slot];
+                for (std::size_t k = 0; k < list.size(); ++k)
+                {
+                    const std::uint32_t id = list[k];
+                    for (std::size_t j = k + 1; j < list.size(); ++j)
+                    {
+                        if (list[j] == id) { return false; } // duplicate
+                    }
+                    if (!w.m_contactPool.Alive(id)) { return false; }
+                    const Contact& c = w.m_contactPool.Get(id);
+                    if (!c.bIsBody) { return false; }
+                    if (c.bodyA != slot && c.bodyB != slot) { return false; }
+                    if (w.TypeSlot(c.bodyA) != BodyType::Dynamic ||
+                        w.TypeSlot(c.bodyB) != BodyType::Dynamic) { return false; }
+                }
+            }
+            // 2) every live dyn-dyn body contact appears in BOTH endpoints' lists.
+            //    (const ForEach overload binds here; it already skips dead ids.)
+            bool ok = true;
+            w.m_contactPool.ForEach([&](std::uint32_t id, const Contact& c)
+            {
+                if (!c.bIsBody || c.bodyA == kInvalidSlot || c.bodyB == kInvalidSlot) { return; }
+                if (w.TypeSlot(c.bodyA) != BodyType::Dynamic ||
+                    w.TypeSlot(c.bodyB) != BodyType::Dynamic) { return; }
+                auto has = [&](std::uint32_t s) -> bool {
+                    if (s >= m_bodyContacts.size()) { return false; }
+                    const std::vector<std::uint32_t>& l = m_bodyContacts[s];
+                    for (std::uint32_t x : l) { if (x == id) { return true; } }
+                    return false;
+                };
+                if (!has(c.bodyA) || !has(c.bodyB)) { ok = false; }
+            });
+            return ok;
         }
     } // namespace Physics
 } // namespace Arcane
