@@ -124,7 +124,7 @@ namespace Arcane
                 const std::uint32_t slot = members[i];
                 for (const std::uint32_t cid : m_bodyContacts[slot])
                 {
-                    const Contact& c = w.m_contactPool.Get(cid);
+                    const Contact& c = w.m_graph.Pool().Get(cid);
                     if (!c.touching) { continue; }
                     const std::uint32_t other = (c.bodyA == slot) ? c.bodyB : c.bodyA;
                     if (other >= m_splitLocalIndex.size()) { continue; }
@@ -459,8 +459,8 @@ namespace Arcane
                     {
                         if (list[j] == id) { return false; } // duplicate
                     }
-                    if (!w.m_contactPool.Alive(id)) { return false; }
-                    const Contact& c = w.m_contactPool.Get(id);
+                    if (!w.m_graph.Pool().Alive(id)) { return false; }
+                    const Contact& c = w.m_graph.Pool().Get(id);
                     if (!c.bIsBody) { return false; }
                     if (c.bodyA != slot && c.bodyB != slot) { return false; }
                     if (w.TypeSlot(c.bodyA) != BodyType::Dynamic ||
@@ -470,7 +470,7 @@ namespace Arcane
             // 2) every live dyn-dyn body contact appears in BOTH endpoints' lists.
             //    (const ForEach overload binds here; it already skips dead ids.)
             bool ok = true;
-            w.m_contactPool.ForEach([&](std::uint32_t id, const Contact& c)
+            w.m_graph.Pool().ForEach([&](std::uint32_t id, const Contact& c)
             {
                 if (!c.bIsBody || c.bodyA == kInvalidSlot || c.bodyB == kInvalidSlot) { return; }
                 if (w.TypeSlot(c.bodyA) != BodyType::Dynamic ||
