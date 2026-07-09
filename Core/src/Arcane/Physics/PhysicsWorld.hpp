@@ -914,26 +914,26 @@ namespace Arcane
             // islands). Non-members (static/kinematic or un-assigned) return a
             // high-bit-tagged slot that can never collide with a real (dense,
             // small) island id. Replaces the old per-step UF walk.
-            [[nodiscard]] std::uint32_t IslandRootOf(std::uint32_t i) const noexcept;
+            [[nodiscard]] std::uint32_t IslandRootOf(std::uint32_t i) const noexcept { return m_islandMgr.IslandRootOf(i); }
 
             // ---- island registry management (Phase A) -----------------------
             // Mint or reuse an island id (empty members, not a split candidate).
-            std::uint32_t AllocIsland();
+            std::uint32_t AllocIsland() { return m_islandMgr.AllocIsland(); }
             // Return an island id to the free list (clears members + flag).
-            void          FreeIsland(std::uint32_t id) noexcept;
+            void          FreeIsland(std::uint32_t id) noexcept { m_islandMgr.FreeIsland(id); }
             // m_islandId[slot] (or kInvalidIsland). Inline -> zero call cost.
             [[nodiscard]] std::uint32_t IslandOf(std::uint32_t slot) const noexcept
             {
-                return slot < m_islandId.size() ? m_islandId[slot] : Island::kInvalidIsland;
+                return m_islandMgr.IslandOf(slot);
             }
             // Weighted union: relabel the smaller island's members into the larger,
             // free the smaller, return the survivor id. Pass two DISTINCT live ids.
-            std::uint32_t MergeIslands(std::uint32_t idA, std::uint32_t idB);
+            std::uint32_t MergeIslands(std::uint32_t idA, std::uint32_t idB) { return m_islandMgr.MergeIslands(idA, idB); }
             // Flag an island for the deferred split pass (no-op for kInvalidIsland).
-            void          MarkSplitCandidate(std::uint32_t islandId) noexcept;
+            void          MarkSplitCandidate(std::uint32_t islandId) noexcept { m_islandMgr.MarkSplitCandidate(islandId); }
             // Rebuild one candidate island into 1+ connected components (fresh local
             // UF over its members' current touching pool contacts); clears the flag.
-            void          SplitIsland(std::uint32_t islandId);
+            void          SplitIsland(std::uint32_t islandId) { m_islandMgr.SplitIsland(*this, islandId); }
             // Remove contact `id` from both endpoints' m_bodyContacts (dyn-dyn
             // only; no-op for non-dyn-dyn or already-absent). Reads c BEFORE any
             // pool Destroy frees it.
@@ -942,7 +942,7 @@ namespace Arcane
             // the persistent color (while c still holds it) + pool.Destroy.
             void ReleaseAndDestroyContact(std::uint32_t id, const Contact& c) noexcept;
             // Wake every member of the body's island (set awake, reset timer).
-            void          WakeIsland(std::uint32_t slot) noexcept;
+            void          WakeIsland(std::uint32_t slot) noexcept { m_islandMgr.WakeIsland(*this, slot); }
 
             // ---- internals consumed by the Island sleep module (P2.4 seam) ---
             //
@@ -991,13 +991,7 @@ namespace Arcane
             void ForEachIsland(
                 FunctionRef<void(const std::vector<std::uint32_t>&)> fn) const
             {
-                for (const Island::Island& isl : m_islands)
-                {
-                    if (!isl.bodies.empty())
-                    {
-                        fn(isl.bodies);
-                    }
-                }
+                m_islandMgr.ForEachIsland(fn);
             }
             // Commit final position/angle for slot i + refresh the mover
             // broadphase AABB (solver FinalizePositions). Dynamic-only call site.
@@ -1320,16 +1314,13 @@ namespace Arcane
             std::vector<std::uint8_t>  m_bullet;              // CCD clamp (P3)
 
             // ---- persistent island registry (Phase A) -----------------------
-            //
-            // m_islandId[slot] is the body's persistent island id (Island::
-            // kInvalidIsland for Static/Kinematic or an un-assigned dynamic slot).
-            // m_islands is the id-indexed record pool; freed ids are recycled via
-            // m_islandFree. Maintained incrementally at the lifecycle seams; the
-            // per-step union-find (m_uf / UnionFindScratch) has been deleted (Task 6)
-            // -- the persistent registry IS the sole island structure.
-            std::vector<std::uint32_t>      m_islandId;   // per-body island id
-            std::vector<Island::Island>     m_islands;    // id-indexed record pool
-            std::vector<std::uint32_t>      m_islandFree; // recycled island ids
+            // MOVED to IslandManager m_islandMgr (decomp step 1): m_islandId +
+            // m_islands + m_islandFree + m_splitLocalIndex now live there, reached
+            // through the inline forwarders above (IslandOf/IslandRootOf/AllocIsland/
+            // FreeIsland/MergeIslands/MarkSplitCandidate/SplitIsland/WakeIsland/
+            // ForEachIsland) and the seam methods (Grow/CreateSingletonIsland/
+            // ClearIsland/RemoveBodyFromIsland/CollectSplitCandidates). The awake/
+            // kinematic sets below STAY here (hot SoA, read by the solver).
 
             // ---- awake-set (Phase B) ----------------------------------------
             // m_awakeBodies is the dense list of AWAKE DYNAMIC body slots (the
@@ -1359,11 +1350,8 @@ namespace Arcane
             std::vector<BroadphasePair>     m_pendingMerges;
             std::vector<std::uint32_t>      m_splitCandidates;
 
-            // SplitIsland scratch: member body slot -> local DSU index, O(1).
-            // All-sentinel; SplitIsland writes only its members then resets them,
-            // so the tail stays sentinel. Sized in EnsureCapacity.
-            static constexpr std::uint32_t kSplitLocalNone = 0xFFFFFFFFu;
-            std::vector<std::uint32_t>      m_splitLocalIndex;
+            // SplitIsland scratch (m_splitLocalIndex + kSplitLocalNone) MOVED to
+            // IslandManager (decomp step 1).
 
             // Narrowphase-MT scratch (gather -> parallel collide+flag -> serial apply).
             // m_npContacts: the gathered stable live-contact id list (Box2D's
