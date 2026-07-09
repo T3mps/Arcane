@@ -30,28 +30,31 @@ namespace Arcane::Geometry
         // Exact sign of the orientation determinant
         //   Cross(o,a,b) = (a.x-o.x)*(b.y-o.y) - (a.y-o.y)*(b.x-o.x).
         // Returns +1 (b left of o->a, CCW), -1 (right/CW), 0 (collinear) EXACTLY,
-        // so callers get the correct side even for near-collinear / large-coord
-        // inputs where the plain-T Cross rounds to the wrong side of zero.
+        // for ANY float or double input -- no coordinate-magnitude precondition --
+        // so callers get the correct side even for near-collinear / large-coord /
+        // adversarial cross-scale inputs where the plain-T Cross rounds to the wrong
+        // side of zero. (Cross<T> stays for magnitude consumers that need the value,
+        // not just the sign.)
         //
-        // float  T: promote to double. The determinant of three binary32 points is
-        //   exact in binary64 for |coord| <= 2^25 (float-minus-float is exact in
-        //   double when operand exponents are within 29; a product of two <=24-bit
-        //   significands is <=48 bits; their difference <=49 -- all < the 53-bit
-        //   mantissa). Hull/physics content (|coord| ~ 2^14) sits ~11 bits inside
-        //   this region. One straight-line double expression: no error-free
-        //   transform to break, robust under ANY /fp mode.
-        // double T: MSVC has no wider hardware float, so compute the sign EXACTLY
-        //   with error-free transforms over the EXPANDED determinant
+        // One robust kernel for both types: the sign is computed EXACTLY over the
+        // EXPANDED determinant
         //     (ax*by - ay*bx) + (ay*ox - ax*oy) + (bx*oy - by*ox)
-        //   (the o.x*o.y terms cancel), each product split by std::fma TwoProduct
-        //   and summed into a non-overlapping Shewchuk expansion whose top term
-        //   carries the true sign. Correct ONLY if the compiler neither contracts
-        //   a*b+c into an FMA nor reassociates the recovery terms -- guaranteed by
-        //   this repo's /fp:strict (see the static_assert in the .cpp-free header
-        //   note below). std::fma is single-rounding by the standard regardless.
+        //   (the o.x*o.y terms cancel) in double, each product split by std::fma
+        //   TwoProduct and summed into a non-overlapping Shewchuk expansion whose top
+        //   term carries the true sign. float inputs promote LOSSLESSLY to double and
+        //   run the identical kernel, so the returned sign is exact for any float too.
+        //   The double error-free transforms are correct ONLY if the compiler neither
+        //   contracts a*b+c into an FMA nor reassociates the recovery terms -- i.e.
+        //   under this repo's /fp:strict (the guard just above TwoSum fails the build
+        //   loudly under /fp:fast). std::fma is single-rounding by the standard
+        //   regardless of /fp mode.
 
-        template <class W>
-        constexpr int SignOf(W d) noexcept { return (d > W(0)) - (d < W(0)); }
+        // The double error-free transforms below (TwoSum/GrowExpansion) are correct
+        // only without FMA-contraction/reassociation -- i.e. under /fp:strict (this
+        // repo's mode). Fail the build loudly if someone flips Core to /fp:fast.
+#if defined(_M_FP_FAST)
+#error "Arcane::Geometry robust predicates require /fp:strict (or /fp:precise); /fp:fast breaks the error-free transforms."
+#endif
 
         // Knuth TwoSum: a+b == x+y exactly (round-to-nearest, no reassociation).
         inline void TwoSum(double a, double b, double& x, double& y) noexcept
@@ -115,20 +118,14 @@ namespace Arcane::Geometry
         template <class T>
         int Orient2d(const Pt<T>& o, const Pt<T>& a, const Pt<T>& b) noexcept
         {
-            if constexpr (std::is_same_v<T, float>)
-            {
-                const double d = (double(a.x) - double(o.x)) * (double(b.y) - double(o.y))
-                               - (double(a.y) - double(o.y)) * (double(b.x) - double(o.x));
-                return SignOf(d);
-            }
-            else if constexpr (std::is_same_v<T, double>)
-            {
-                return Orient2dExactD(o, a, b);
-            }
-            else
-            {
-                static_assert(sizeof(T) == 0, "Orient2d supports only float and double");
-            }
+            static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
+                          "Orient2d supports only float and double");
+            // float promotes LOSSLESSLY to double, and Orient2dExactD is exact for
+            // any double, so the returned sign is exact for ANY float or double
+            // input -- no coordinate-magnitude precondition (one robust kernel).
+            return Orient2dExactD(Pt<double>{ double(o.x), double(o.y) },
+                                  Pt<double>{ double(a.x), double(a.y) },
+                                  Pt<double>{ double(b.x), double(b.y) });
         }
 
         // Lexicographic order: x then y.

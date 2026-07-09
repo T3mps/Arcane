@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -200,11 +201,14 @@ TEST_CASE("Orient2d is exact for float and double", "[geometry][robust]")
         REQUIRE(Orient2d<float>({0,0}, {1,0}, {2,0}) ==  0);   // collinear
     }
 
-    SECTION("float near-collinear that naive float mis-signs")
+    SECTION("float exact sign at a 1-ULP-off-collinear point")
     {
-        // Classic incremental-orientation failure: three points that are NOT
-        // collinear, but whose plain-float cross rounds to 0 (or the wrong sign).
-        // Construction after Kettner et al.: a tiny perturbation off a diagonal.
+        // Three points exactly on a diagonal, then b nudged one ULP off it. This
+        // ASSERTION verifies the exact predicate reports collinear (0) then strictly
+        // -left (+1) at a 1-ULP-off-collinear point. It does NOT claim naive float
+        // mis-signs here -- the plain-float cross keeps the correct sign for this
+        // particular +1-ULP point (see the int64-oracle section for inputs that
+        // genuinely make the naive computation round).
         const Pt<float> o{0.5f, 0.5f};
         const Pt<float> a{12.0f, 12.0f};
         const Pt<float> b{24.0f, 24.0f};
@@ -217,6 +221,8 @@ TEST_CASE("Orient2d is exact for float and double", "[geometry][robust]")
     {
         // Double-promotion of float inputs is exact, so it MUST agree with the
         // exact-double predicate applied to the identical (exactly promoted) points.
+        // (The float path now promotes and calls the same exact-double kernel, so
+        // this is tautological -- it still verifies the lossless promotion + kernel.)
         std::mt19937 rng(0xE0155u);
         std::uniform_real_distribution<float> d(-3.0e5f, 3.0e5f);
         for (int i = 0; i < 20000; ++i)
@@ -227,10 +233,12 @@ TEST_CASE("Orient2d is exact for float and double", "[geometry][robust]")
         }
     }
 
-    SECTION("double exact where plain double rounds")
+    SECTION("double exact at 1-ULP-off-collinear points")
     {
-        // Points chosen so the true determinant is a tiny known nonzero that a
-        // plain-double (ax-ox)(by-oy)-(ay-oy)(bx-ox) rounds to 0 via cancellation.
+        // Points exactly on a diagonal, then b nudged 1 ULP each way: the exact
+        // predicate must report 0 then +1 then -1 across the collinear boundary.
+        // (These inputs are small enough that naive double is also exact here -- the
+        // int64-oracle section below carries the load-bearing "naive double rounds".)
         const double s = 1.0;
         const Pt<double> o{0.5, 0.5};
         const Pt<double> a{s + 0.5, s + 0.5};
@@ -240,6 +248,73 @@ TEST_CASE("Orient2d is exact for float and double", "[geometry][robust]")
         REQUIRE(Orient2d<double>(o, a, b) == 1);
         b.y = std::nextafter(b.y = 2*s + 0.5, -1e9);           // 1 ULP right
         REQUIRE(Orient2d<double>(o, a, b) == -1);
+    }
+
+    SECTION("double exact vs int64 oracle where naive double rounds")
+    {
+        // To make the double error-free-transform genuinely LOAD-BEARING the inputs
+        // must be near-collinear at a magnitude where naive double rounds. Fully
+        // random large coords never are (their determinant is astronomically far
+        // from zero, so naive double keeps the sign -- a vacuous test). Instead grow
+        // a UNIMODULAR difference pair (u x v == 1, an exactly-known tiny
+        // determinant) by random shears that preserve the cross product, until both
+        // vectors are long and nearly parallel. Then for a = o + u, b = o + v the
+        // determinant is exactly +/-1, yet the naive products (ax-ox)(by-oy) and
+        // (ay-oy)(bx-ox) each reach ~2^54..2^58 (> 2^53) and ROUND -- so naive double
+        // loses the sign while the int64 oracle and the exact EFT predicate keep it.
+        // All coords stay <= ~2^30 (double-exact, so Orient2d<double> sees the same
+        // points as the oracle) and every int64 product stays <= ~2^58 (< 2^63).
+        const auto aabs = [](long long v) noexcept { return v < 0 ? -v : v; };
+        const auto mag  = [&](long long x, long long y) noexcept
+                          { return aabs(x) > aabs(y) ? aabs(x) : aabs(y); };
+        const long long kGrow = 1LL << 27;   // both vectors grown past this
+        const long long kCeil = 1LL << 30;   // hard component ceiling (int64-safe products)
+
+        std::mt19937 rng(0xE0157u);
+        std::uniform_int_distribution<long long> kd(1, 5);   // random shear multiplier
+        std::uniform_int_distribution<long long> od(-(1LL << 20), 1LL << 20); // origin
+        std::uniform_int_distribution<int> flip(0, 1);       // vary det sign +/-1
+
+        int naiveDisagreements = 0;
+        for (int i = 0; i < 20000; ++i)
+        {
+            // Shear the shorter vector by the longer (adding an integer multiple of
+            // one to the other preserves u x v == 1) until both are long. Cap each
+            // grown vector at kCeil so the int64 products cannot overflow.
+            long long ux = 1, uy = 0, vx = 0, vy = 1;
+            for (int step = 0; step < 300
+                 && (mag(ux, uy) < kGrow || mag(vx, vy) < kGrow); ++step)
+            {
+                long long k = kd(rng);
+                if (mag(ux, uy) <= mag(vx, vy))
+                {
+                    if (mag(ux + k * vx, uy + k * vy) > kCeil) k = 1;
+                    ux += k * vx; uy += k * vy;
+                }
+                else
+                {
+                    if (mag(vx + k * ux, vy + k * uy) > kCeil) k = 1;
+                    vx += k * ux; vy += k * uy;
+                }
+            }
+            if (flip(rng)) { long long t; t = ux; ux = vx; vx = t; t = uy; uy = vy; vy = t; }
+
+            const long long ox = od(rng), oy = od(rng);
+            const long long ax = ox + ux, ay = oy + uy, bx = ox + vx, by = oy + vy;
+
+            const long long det = (ax - ox) * (by - oy) - (ay - oy) * (bx - ox); // exactly +/-1
+            const int oracle = (det > 0) - (det < 0);
+            const Pt<double> o{double(ox), double(oy)}, a{double(ax), double(ay)},
+                             b{double(bx), double(by)};
+            REQUIRE(Orient2d<double>(o, a, b) == oracle);
+
+            const double naive = (double(ax) - double(ox)) * (double(by) - double(oy))
+                               - (double(ay) - double(oy)) * (double(bx) - double(ox));
+            if (((naive > 0) - (naive < 0)) != oracle) ++naiveDisagreements;
+        }
+        // Prove the test actually stresses the exact path: naive double DOES mis-sign
+        // a large fraction of these (otherwise this section would be vacuous).
+        REQUIRE(naiveDisagreements > 0);
     }
 
     SECTION("antisymmetry + large-coordinate float within the exact bound")
