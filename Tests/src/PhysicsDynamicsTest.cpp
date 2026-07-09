@@ -195,7 +195,11 @@ TEST_CASE("PhysicsDynamics: linear damping decays velocity", "[physics][dynamics
         wDamp.Step(dt);
     }
     const Real terminal = g / damp + g * h;
-    REQUIRE(wDamp.Velocity(hd).y == Approx(terminal).margin(terminal * Real(0.01)));
+    // Margin 0.2% (~0.010) is comfortably below the old-vs-new fixed-point gap g*h
+    // (~0.042) yet ~100x above the converged f32 error, so this line INDEPENDENTLY
+    // catches a revert to the old damp-the-gravity terminal (g/damp), not only the
+    // recurrence loop above.
+    REQUIRE(wDamp.Velocity(hd).y == Approx(terminal).margin(terminal * Real(0.002)));
 }
 
 // ---------------------------------------------------------------------------
