@@ -12,6 +12,26 @@
 #include <algorithm>
 #include <cmath>
 
+namespace
+{
+    // Budget constants mirror SpatialGrid.cpp's anon-namespace consts (the
+    // shipped escape guard). Duplicated ON PURPOSE: SpatialGrid and SpatialHash
+    // are independent broadphase classes with different fields (SpatialGrid has
+    // an origin; SpatialHash does not), so they do not share this guard. See
+    // SpatialGrid.cpp for the full rationale of each bound.
+    //
+    // Max cells per axis a single box may span (a COUNT, not a length -- so it
+    // is scale-relative to m_cellSize). At the MKS 1 m default cell that is a
+    // ~65 km per-axis magnitude bound. Legit content is far under it; anything
+    // larger is garbage input -> drop.
+    constexpr int kMaxCellsPerAxis = 1 << 16;
+    // Total-cell budget: kMaxCellsPerAxis is only a PER-AXIS bound, so a box
+    // under it on BOTH axes can still authorize a pathological product of cell
+    // visits (~4.3e9 at the per-axis budget on each axis). 1<<22 (~4.2M) cells
+    // is generous for legit content yet catches those cases.
+    constexpr long long kMaxCellsTotal = 1LL << 22;
+}
+
 namespace Arcane
 {
     namespace Physics
@@ -25,6 +45,36 @@ namespace Arcane
             // int truncation.
             return static_cast<std::int32_t>(
                 std::floor(static_cast<double>(v) / static_cast<double>(m_cellSize)));
+        }
+
+        bool SpatialHash::SaneBox(const Aabb2& b) const noexcept
+        {
+            if (!std::isfinite(b.min.x) || !std::isfinite(b.min.y) ||
+                !std::isfinite(b.max.x) || !std::isfinite(b.max.y))
+                return false;
+            // Pre-cast magnitude bound: casting an out-of-int-range float is UB
+            // and on MSVC (SSE2 cvttsd2si) BOTH overflow directions saturate to
+            // the SAME sentinel (INT_MIN), so a huge-but-finite box (e.g. +-1e30)
+            // can make kx0 == kx1 and slip past a post-cast span check. Bounding
+            // the raw magnitude here keeps CellOf's cast below in-range.
+            // No origin member on SpatialHash (unlike SpatialGrid), so the bound
+            // is |coord|, not |coord - origin|.
+            const Real bound = static_cast<Real>(kMaxCellsPerAxis) * m_cellSize;
+            if (std::abs(b.min.x) > bound || std::abs(b.min.y) > bound ||
+                std::abs(b.max.x) > bound || std::abs(b.max.y) > bound)
+                return false;
+            // Compute the span in 64-bit to avoid int overflow in the subtraction.
+            const long long spanX = static_cast<long long>(CellOf(b.max.x)) -
+                                    static_cast<long long>(CellOf(b.min.x));
+            const long long spanY = static_cast<long long>(CellOf(b.max.y)) -
+                                    static_cast<long long>(CellOf(b.min.y));
+            if (spanX < 0 || spanY < 0) return false;                  // wrapped -> garbage
+            if (spanX > kMaxCellsPerAxis || spanY > kMaxCellsPerAxis) return false;
+            // Total-cell budget: catches a box under BOTH per-axis bounds whose
+            // product (the cell loop's actual iteration count) is still
+            // pathological. Already 64-bit, so no overflow risk in the product.
+            if ((spanX + 1) * (spanY + 1) > kMaxCellsTotal) return false;
+            return true;
         }
 
         void SpatialHash::RemoveFromBuckets(std::uint32_t id, const CellRange& r)
@@ -55,6 +105,12 @@ namespace Arcane
 
         void SpatialHash::Update(std::uint32_t id, const Aabb2& box)
         {
+            // Drop NaN / finite-but-huge / budget-blowing boxes before bucketing;
+            // Remove clears any prior registration so a body that escapes to
+            // garbage coords is de-registered rather than left stale. Mirrors
+            // SpatialGrid::Insert's guard.
+            if (!SaneBox(box)) { Remove(id); return; }
+
             const CellRange nr{ CellOf(box.min.x), CellOf(box.min.y),
                                 CellOf(box.max.x), CellOf(box.max.y) };
 
@@ -104,6 +160,11 @@ namespace Arcane
                                    std::vector<std::uint32_t>& out) const
         {
             out.clear();
+            // QueryAABB has the SAME unguarded floor->int32 cell loop as Update,
+            // so an escape/degenerate QUERY box would iterate an unbounded cell
+            // range. Guard it exactly as SpatialGrid::QueryAABB does (the stored
+            // side is already clean because Update drops insane boxes).
+            if (!SaneBox(box)) return 0;
             ++m_gen;
             const std::int32_t kx0 = CellOf(box.min.x);
             const std::int32_t ky0 = CellOf(box.min.y);

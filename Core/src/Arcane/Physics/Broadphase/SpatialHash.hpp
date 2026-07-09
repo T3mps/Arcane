@@ -83,6 +83,12 @@ namespace Arcane
             // floor(v / cs) as an int cell coordinate.
             [[nodiscard]] std::int32_t CellOf(Real v) const noexcept;
 
+            // Reject NaN / finite-but-huge boxes before CellOf's int32 cast, and
+            // any box whose cell span would blow the bucket loop. Mirrors
+            // SpatialGrid::SaneBox (the default broadphase's escape guard); this
+            // class has NO origin member, so the magnitude bound is |coord|.
+            [[nodiscard]] bool SaneBox(const Aabb2& b) const noexcept;
+
             void RemoveFromBuckets(std::uint32_t id, const CellRange& r);
 
             Real m_cellSize = Real(1);  // MKS default; see the ctor comment.
