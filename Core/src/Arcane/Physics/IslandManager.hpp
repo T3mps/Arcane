@@ -25,8 +25,11 @@
 //
 // Split-linkage adjacency (m_bodyContacts -- the per-body dyn-dyn contact edge
 // lists SplitIsland walks) is OWNED here as of decomp step 1 Task 3; the world
-// drives it through the attach/detach/clear/grow seams below. The awake/kinematic
-// sets + m_awake flag + sleep-pass (Island::UpdateSleep) stay world-owned for now.
+// drives it through the attach/detach/clear/grow seams below. The per-Step sleep
+// pass (UpdateSleep, formerly the Island:: free function) is OWNED here as of
+// decomp step 1 Task 4 -- it reaches body-slot state + the awake-set removal
+// MECHANISM (RemoveFromAwakeSet) through PhysicsWorld&. The awake/kinematic sets
+// + the m_awake flag stay world-owned (hot SoA, read by the solver).
 //
 // PRESENTATION-FREE + C++20-clean: std + sibling Physics headers only.
 // namespace Arcane::Physics, Core style.
@@ -94,6 +97,24 @@ namespace Arcane
             // Wake every member of the body's island (set awake flag + reset timer +
             // re-add to the world's awake-set).
             void          WakeIsland(PhysicsWorld& w, std::uint32_t slot) noexcept;
+
+            // ---- per-Step sleep pass (decomp step 1 Task 4) -----------------
+            // The per-Step island sleep pass (PhysicsWorld::Step stage 4). Iterates
+            // the PERSISTENT island registry (members already known -- no per-step
+            // union-find rebuild, no O(n^2) global scan): advances each awake dynamic
+            // body's idle timer by `dt` using Box2D v3's combined, extent-weighted
+            // test (a body is idle when |v| + |w|*maxExtent < its per-body
+            // sleepThreshold), then for each island sleeps it AS A UNIT iff every
+            // awake-dynamic member is past Island::kSleepTime (clearing awake +
+            // zeroing linear & angular velocity + migrating the member OUT of the
+            // world's awake-set). Reads body-slot state + the awake-set removal
+            // MECHANISM (RemoveFromAwakeSet, which STAYS world-owned hot SoA) through
+            // PhysicsWorld& w; iterates the island records it owns via ForEachIsland.
+            // Jointed dynamics are NOT pinned awake here (a joint is an island edge,
+            // so a jointed construct sleeps as a unit via island membership). No-op
+            // when the world has no dynamics. Thresholds + whole-island-unit +
+            // exact-freeze are UNCHANGED from the global-UF version this replaces.
+            void UpdateSleep(PhysicsWorld& w, Real dt);
 
             // ---- body-lifecycle seams (PhysicsWorld drives these) -----------
             // Grow the per-body columns to `next` (EnsureCapacity seam).

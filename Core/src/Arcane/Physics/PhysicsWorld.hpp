@@ -941,9 +941,9 @@ namespace Arcane
             // Wake every member of the body's island (set awake, reset timer).
             void          WakeIsland(std::uint32_t slot) noexcept { m_islandMgr.WakeIsland(*this, slot); }
 
-            // ---- internals consumed by the Island sleep module (P2.4 seam) ---
+            // ---- internals consumed by the IslandManager sleep pass (P2.4 seam) ---
             //
-            // Island::UpdateSleep reads/writes the sleep-timer SoA + flips the
+            // IslandManager::UpdateSleep reads/writes the sleep-timer SoA + flips the
             // awake flag through these slot accessors (mirroring the solver seam
             // above) so the raw vectors stay private. SetAwakeSlot(i, false) +
             // zeroing the velocities is how an island goes to sleep; the
@@ -951,7 +951,7 @@ namespace Arcane
             // per-body call cost vanishes in an optimized build.
             [[nodiscard]] Real SleepTimerSlot(std::uint32_t i) const noexcept { return m_sleepTimer[i]; }
             void SetSleepTimerSlot(std::uint32_t i, Real t) noexcept { m_sleepTimer[i] = t; }
-            // Box2D-faithful sleep test inputs (Island::UpdateSleep): maxExtent is
+            // Box2D-faithful sleep test inputs (IslandManager::UpdateSleep): maxExtent is
             // the body's COM->farthest-point distance; sleepThreshold is the per-body
             // speed gate (a body is idle when |v| + |w|*maxExtent < sleepThreshold).
             [[nodiscard]] Real MaxExtentSlot(std::uint32_t i) const noexcept { return m_maxExtent[i]; }
@@ -959,7 +959,7 @@ namespace Arcane
             // WARNING (Phase B awake-set invariant): this writes ONLY the m_awake
             // flag -- it does NOT maintain the awake-set (m_awakeBodies). The sleep
             // seam pairs SetAwakeSlot(i,false) with RemoveFromAwakeSet(i) in
-            // Island::UpdateSleep. To WAKE a body, do NOT call SetAwakeSlot(i,true)
+            // IslandManager::UpdateSleep. To WAKE a body, do NOT call SetAwakeSlot(i,true)
             // as a primitive: use Wake()/WakeIsland() (which call AddToAwakeSet), or
             // pair an explicit AddToAwakeSet(i). A raw SetAwakeSlot(i,true) on a
             // slept dynamic would leave it awake-but-not-in-the-set: the solver
@@ -971,7 +971,7 @@ namespace Arcane
                 m_awake[i] = on ? std::uint8_t(1) : std::uint8_t(0);
             }
             // Snap the prev-position to the current position for slot i.
-            // Called at the sleep seam (Island::UpdateSleep) so a body that just
+            // Called at the sleep seam (IslandManager::UpdateSleep) so a body that just
             // fell asleep has prev==pos. Required because Stage 1 will only snap
             // AWAKE dynamics after the reroute: a sleeping body is never snapped
             // by Stage 1, so without this call its prev could drift from its

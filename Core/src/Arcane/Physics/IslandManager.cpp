@@ -1,5 +1,7 @@
 #include <Arcane/Physics/IslandManager.hpp>
 
+#include <cmath>
+
 #include <Arcane/Physics/PhysicsWorld.hpp> // the world SoA + awake-set mechanism (befriended)
 
 namespace Arcane
@@ -210,6 +212,110 @@ namespace Arcane
                 w.m_sleepTimer[b] = Real(0);
                 w.AddToAwakeSet(b); // Phase B: migrate every island member back into the awake-set
             }
+        }
+
+        // ---- per-Step sleep pass (decomp step 1 Task 4) --------------------
+
+        void IslandManager::UpdateSleep(PhysicsWorld& w, Real dt)
+        {
+            const std::uint32_t count = w.Count();
+            if (count == 0)
+            {
+                return;
+            }
+
+            // NOTE: jointed dynamics are NO LONGER pinned awake. A joint is now
+            // an ISLAND EDGE (AddJoint merges the endpoints' islands; SplitIsland
+            // unions joint edges), so a jointed construct accumulates idle time
+            // like any other island and sleeps AS A UNIT via island membership.
+            // The solver skips a joint whose Dynamic endpoints are all asleep
+            // (m_jointConstraints rebuild), so a sleeping construct is frozen.
+
+            // ---- per-body idle-timer update (awake dynamics) ----------------
+            // Box2D v3 b2FinalizeBodiesTask: a body is idle when its combined
+            // linear+angular speed |v| + |w|*maxExtent is below its per-body
+            // sleepThreshold. The angular term is weighted by the body's
+            // farthest-point extent, so a slow roll counts as the (small) speed
+            // of its surface -- this is what finally lets a circle with a tiny
+            // residual roll (the never-settle blocker class) sleep, where the
+            // old separate |w| < 0.05 gate vetoed a whole island forever.
+            // Otherwise reset to 0.
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                if (!w.Alive(i) ||
+                    w.TypeSlot(i) != BodyType::Dynamic ||
+                    !w.AwakeSlot(i))
+                {
+                    continue;
+                }
+                const Vec2 v  = w.VelSlot(i);
+                const Real wv = w.AngVelSlot(i);
+                const Real sleepVel = std::sqrt(v.x * v.x + v.y * v.y)
+                                    + std::fabs(wv) * w.MaxExtentSlot(i);
+                if (sleepVel < w.SleepThresholdSlot(i))
+                {
+                    w.SetSleepTimerSlot(i, w.SleepTimerSlot(i) + dt);
+                }
+                else
+                {
+                    w.SetSleepTimerSlot(i, Real(0));
+                }
+            }
+
+            // ---- per-island sleep decision (O(island), no global scan) ------
+            // For each island: if EVERY awake-dynamic member is past kSleepTime,
+            // sleep the WHOLE island as a unit (clear awake + zero linear AND
+            // angular velocity for each member). A member already asleep is
+            // skipped (it does not veto). The per-body idle timer (reset above
+            // for movers) gates each member; a transiently over-grouped island
+            // only DELAYS sleep, never sleeps a mover -- mirrors the old
+            // global-UF behavior (which also never woke bodies on a split).
+            ForEachIsland([&](const std::vector<std::uint32_t>& bodies)
+            {
+                bool anyAwake             = false;
+                bool allIdlePastThreshold = true;
+                for (const std::uint32_t b : bodies)
+                {
+                    if (!w.Alive(b) || w.TypeSlot(b) != BodyType::Dynamic)
+                    {
+                        continue; // defensive: a stale member is ignored
+                    }
+                    if (!w.AwakeSlot(b))
+                    {
+                        continue; // already asleep -> does not veto
+                    }
+                    anyAwake = true;
+                    if (w.SleepTimerSlot(b) <= Island::kSleepTime)
+                    {
+                        allIdlePastThreshold = false;
+                        break;
+                    }
+                }
+                if (anyAwake && allIdlePastThreshold)
+                {
+                    for (const std::uint32_t b : bodies)
+                    {
+                        if (w.Alive(b) &&
+                            w.TypeSlot(b) == BodyType::Dynamic &&
+                            w.AwakeSlot(b))
+                        {
+                            w.SetAwakeSlot(b, false);
+                            w.RemoveFromAwakeSet(b); // Phase B: sleeping body migrates OUT of the awake-set
+                            w.SetVelSlot(b, Vec2(Real(0), Real(0)));
+                            w.SetAngVelSlot(b, Real(0));
+                            // Snap prev to pos so DrawPosition(alpha) is frozen
+                            // from this step onward. Required because Stage 1
+                            // only snaps AWAKE dynamics after the B4 reroute;
+                            // sleeping dynamics are skipped by both passes, so
+                            // prev must equal pos at the MOMENT the body sleeps.
+                            // (The body was awake at Stage 1 this step, so prev
+                            // was set to pre-integrate pos; now pos is settled
+                            // after the solver -- snap prev to match it.)
+                            w.SnapPrevToPos(b);
+                        }
+                    }
+                }
+            });
         }
 
         std::uint32_t IslandManager::IslandRootOf(std::uint32_t i) const noexcept

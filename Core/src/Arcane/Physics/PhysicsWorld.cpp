@@ -1665,7 +1665,7 @@ namespace Arcane
             // Pass B (ForEachAwake): AWAKE dynamic slots only.
             //   Sleeping dynamics are snapped by NEITHER pass -- their prev was
             //   set to pos at the moment they fell asleep (SnapPrevToPos in
-            //   Island::UpdateSleep), and their pos is frozen thereafter, so
+            //   IslandManager::UpdateSleep), and their pos is frozen thereafter, so
             //   prev==pos persists without any per-step work.
             //
             // WIN: sleeping dynamics (potentially the MAJORITY in a settled
@@ -1873,7 +1873,7 @@ namespace Arcane
                     }
                 }
 
-                Island::UpdateSleep(*this, dt);
+                m_islandMgr.UpdateSleep(*this, dt);
             }
 
             // ---- stage 6: events + gating + deferred flush -------------------
@@ -2297,14 +2297,14 @@ namespace Arcane
             }
             // Only a NON-IDLE (moving) mover wakes a sleeping neighbour. A body idle
             // enough to be a sleep candidate itself (same predicate as
-            // Island::UpdateSleep) must NOT wake its sleeping neighbours -- otherwise
+            // IslandManager::UpdateSleep) must NOT wake its sleeping neighbours -- otherwise
             // two near-resting bodies in different islands (a sub-millimeter gap; NOT
             // touching) ping-pong each other awake forever (each wakes the other the
             // step it sleeps). A real mover (thrown body, moving/spinning kinematic)
             // is non-idle and still wakes. (Static wakers never reach here -- this
             // loop is the mover-mover broadphase.)
             auto moverIsMoving = [&](std::uint32_t s) -> bool {
-                // Same combined test as Island::UpdateSleep: a mover "is moving"
+                // Same combined test as IslandManager::UpdateSleep: a mover "is moving"
                 // (and thus wakes a sleeping neighbour) iff it is NOT idle, i.e.
                 // |v| + |w|*maxExtent >= its sleepThreshold. Keeps the wake + sleep
                 // predicates consistent at the threshold margin.

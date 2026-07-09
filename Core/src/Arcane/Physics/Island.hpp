@@ -1,33 +1,33 @@
 #pragma once
 
-// Island: the persistent island registry + sleep module (Phase A).
+// Island: the persistent island registry RECORD + shared constants (Phase A).
 //
-// This module owns the per-Step sleep pass (UpdateSleep) over the PERSISTENT
-// island registry. The old per-step union-find graph build (M6, P2.4) has been
-// replaced by a per-island O(island) walk over the registry (members already
-// known -- no UF rebuild, no O(n^2) global scan).
+// The island TOPOLOGY (the id-indexed record pool + per-body island id + merge/
+// split) AND the per-Step sleep pass moved into IslandManager (PhysicsWorld
+// decomposition step 1, 2026-07-09). This header now provides only the pieces
+// SHARED across that boundary -- the Island record struct + the registry/sleep
+// constants (kInvalidIsland, kMaxSplitsPerStep, kSleepTime) -- which IslandManager
+// #includes. It is a data header now, not a module: it declares no functions.
 //
-// REGISTRY LIFECYCLE (maintained INCREMENTALLY at PhysicsWorld lifecycle seams):
-//   * AddBody(Dynamic)  -> AllocIsland: a new dynamic body is its own 1-body island.
-//   * touch-BEGIN       -> MergeIslands: two dynamic bodies in fresh contact merge
-//     into the larger island (weighted union, O(smaller island)).
-//   * touch-END/destroy -> MarkSplitCandidate: the island is flagged; a quota-
-//     limited deferred pass (kMaxSplitsPerStep per Step) runs SplitIsland, which
-//     re-derives the connected components via a local UF over the body's current
-//     contacts. Split pass is O(island) and amortized over a few Steps.
+// An Island is a connected component of DYNAMIC bodies joined by touching
+// dynamic-dynamic contacts (a joint is an island edge too). It SURVIVES across
+// steps and is maintained INCREMENTALLY by IslandManager at the body/contact
+// lifecycle seams:
+//   * AddBody(Dynamic)  -> a new dynamic body is its own 1-body island.
+//   * touch-BEGIN       -> the two islands merge (weighted union, O(smaller)).
+//   * touch-END/destroy -> the island is flagged a split candidate; a quota-
+//     limited deferred pass (kMaxSplitsPerStep per Step) re-derives its connected
+//     components. The split is O(island) and amortized over a few Steps.
 //   * Static/Kinematic bodies are NOT island members (they anchor; they are not
-//     island nodes -- identical to the old dynamic-dynamic-only union rule).
+//     island nodes -- the dynamic-dynamic-only union rule).
 //
-// UpdateSleep (Step stage 5): iterates the registry via PhysicsWorld::ForEachIsland,
-// advances each awake dynamic body's idle timer, then sleeps an island AS A UNIT
-// when EVERY awake-dynamic member has accumulated kSleepTime seconds of idle.
-// The thresholds and whole-island-unit-sleep behavior are UNCHANGED from the M6
-// global-UF version this replaces.
-//
-// WAKE paths live in PhysicsWorld (this module only puts islands to SLEEP):
-//   * wake-on-contact -- PhysicsWorld::WakeMoverPair (a sleeping dynamic touched
-//     by an awake mover wakes and pulls the whole island via WakeIsland).
-//   * wake-on-force   -- PhysicsWorld::ApplyImpulse / SetVelocity / Wake.
+// The per-Step sleep pass (IslandManager::UpdateSleep, Step stage 4) advances each
+// awake dynamic body's idle timer, then sleeps an island AS A UNIT when EVERY
+// awake-dynamic member has accumulated kSleepTime seconds of idle. WAKE paths live
+// in PhysicsWorld (WakeMoverPair / ApplyImpulse / SetVelocity / Wake) and
+// IslandManager::WakeIsland; the sleep pass only puts islands to SLEEP. The
+// thresholds + whole-island-unit-sleep behavior are UNCHANGED from the M6
+// global-UF version this replaced.
 //
 // DETERMINISM: merges are applied in canonical (min,max)-slot order; splits
 // iterate members by ascending slot index; ForEachIsland iterates ascending
@@ -45,8 +45,6 @@ namespace Arcane
 {
     namespace Physics
     {
-        class PhysicsWorld;        // the SoA owner; Island reads/writes through it
-
         namespace Island
         {
             // ----------------------------------------------------------------
@@ -99,24 +97,6 @@ namespace Arcane
             // Idle time a body (and every island member) must accumulate before
             // the island sleeps (Lua lines 437/442: sleepT > 0.5 seconds).
             inline constexpr Real kSleepTime = Real(0.5);
-
-            // ----------------------------------------------------------------
-            // UpdateSleep: the per-Step island sleep pass (Step stage 5).
-            // ----------------------------------------------------------------
-            //
-            // Phase A: iterates the PERSISTENT island registry (members already
-            // known -- no per-step union-find rebuild, no O(n^2) global scan).
-            // Advances each awake dynamic's idle timer by `dt`, then for each island
-            // sleeps it AS A UNIT iff every awake-dynamic member is past kSleepTime
-            // (clearing awake + zeroing linear & angular velocity).
-            //
-            // Jointed dynamics are NOT pinned awake here: a joint is an ISLAND EDGE
-            // (AddJoint merges islands; SplitIsland unions joint edges), so a jointed
-            // construct sleeps as a unit via island membership. `dt` is the full Step
-            // timestep. No-op when the world has no dynamics. Thresholds +
-            // whole-island-unit + exact-freeze are UNCHANGED from the global-UF
-            // version this replaces.
-            void UpdateSleep(PhysicsWorld& world, Real dt);
 
         } // namespace Island
     } // namespace Physics
