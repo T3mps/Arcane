@@ -58,7 +58,19 @@ namespace Arcane::Geometry
 No name collision with the physics alias: the template is `Arcane::Geometry::Vec2<T>`;
 `PhysicsTypes.hpp` (in `namespace Arcane`) flips its alias to
 `using Vec2 = Geometry::Vec2<float>;` -- alias name unchanged, physics call sites recompile
-without edits.
+without edits. ADL keeps unqualified `Dot(a, b)` etc. working from physics code (the alias
+is transparent; the argument's true type lives in `Arcane::Geometry`, so its free functions
+are found).
+
+**Same-name lookup rules (both failure modes are compile-time-loud, never silent):**
+1. Inside `namespace Arcane`, the alias SHADOWS the template: `Vec2<double>` unqualified is
+   an error ("'Vec2' is not a template"). Non-float instantiations there must qualify --
+   `Geometry::Vec2<double>` or the `Geometry::Vec2d` alias. Only the ~2 double-precision
+   physics sites are affected; bare `Vec2` (the 99% case) resolves to the float alias.
+2. `using namespace Arcane::Geometry;` in any scope that also sees `Arcane::Vec2` makes
+   unqualified `Vec2` ambiguous. POLICY: no using-directives for the Geometry namespace;
+   using-DECLARATIONS of specific names are fine. (The plan's survey confirms no such
+   directive exists today.)
 
 ### D2. NOT internally SIMD-vectorized; `Vec2<f32w>` is the wide form
 
