@@ -174,20 +174,4 @@ namespace Arcane
         std::mutex m_mutex;
         int m_cleanupCounter = 0;
     };
-
-    // Rate limit configs
-    namespace RateLimits
-    {
-        // Login: 10 attempts per minute, 30s cooldown
-        inline RateLimiter::Config Login() { return {10, 60, 30}; }
-
-        // Registration: 5 attempts per minute, 60s cooldown
-        inline RateLimiter::Config Registration() { return {5, 60, 60}; }
-
-        // Pulls: 120 per minute (~2/sec), 30s cooldown
-        inline RateLimiter::Config Pulls() { return {120, 60, 30}; }
-
-        // Add currency (debug): 30 per minute, 30s cooldown
-        inline RateLimiter::Config AddCurrency() { return {30, 60, 30}; }
-    }
 } // namespace Arcane

@@ -1,21 +1,17 @@
 #pragma once
 
 // Arcane logging system
-// Unified logging built on spdlog with multiple named loggers,
-// console + file output, and structured JSON event logging.
+// Generic engine logging built on spdlog: lazily-created string-keyed named
+// loggers over a shared console + optional rotating-file sink stack, plus the
+// JsonEscape kernel consumers use to build structured JSON log events.
+// Game/service vocabulary (categories, analytics events, log file names)
+// lives with the consumer (e.g. the Aphelyon facade in Server/Common).
 
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-
-// Audit M-V3-1 security (2026-06-03): LogSessionEvent hashes the token
-// rather than logging its prefix. picosha2 is header-only and already
-// vendored under ThirdParty; Crypto.hpp uses it but includes Logger.hpp,
-// so we depend on picosha2 directly here to avoid a circular include.
-#include "picosha2.hpp"
 
 // spdlog configuration - must be before spdlog includes
 #define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE
@@ -43,20 +39,6 @@ namespace Arcane
     };
 
     // ============================================================================
-    // Logger Categories
-    // ============================================================================
-
-    enum class LogCategory
-    {
-        Server,      // Core server operations (startup, shutdown, config)
-        Net,         // Network operations (connections, sockets, send/recv)
-        Auth,        // Authentication (login, logout, registration, sessions)
-        Gacha,       // Gacha mechanics (pulls, pity, 50/50, guarantees)
-        Data,        // Data persistence (accounts, items, banners, config files)
-        Protocol     // Protocol parsing and validation
-    };
-
-    // ============================================================================
     // Logger Class
     // ============================================================================
 
@@ -65,7 +47,7 @@ namespace Arcane
     public:
         // Initialize the logging system - call once at startup.
         // An empty logFilePath skips the rotating-file sink (console only).
-        static void Init(Level consoleLevel = Level::Info, Level fileLevel = Level::Trace, const std::string& logFilePath = "logs/gacha_server.log")
+        static void Init(Level consoleLevel = Level::Info, Level fileLevel = Level::Trace, const std::string& logFilePath = "")
         {
             if (s_initialized)
                 return;
@@ -97,19 +79,10 @@ namespace Arcane
                 }
 
                 // Remember the sink stack so lazily-created named loggers
-                // (Get(std::string_view) below) share the same outputs.
+                // (Get(std::string_view) below) share the same outputs. No
+                // named logger is created eagerly -- Get is lazy and the
+                // category vocabulary belongs to the consumer.
                 s_sinks = sinks;
-
-                // Create named loggers
-                CreateLogger("Server", sinks);
-                CreateLogger("Net", sinks);
-                CreateLogger("Auth", sinks);
-                CreateLogger("Gacha", sinks);
-                CreateLogger("Data", sinks);
-                CreateLogger("Protocol", sinks);
-
-                // Set default logger
-                spdlog::set_default_logger(s_loggers[LogCategory::Server]);
 
                 // Set global level to trace (individual sinks control filtering)
                 spdlog::set_level(spdlog::level::trace);
@@ -129,20 +102,8 @@ namespace Arcane
         static void Shutdown()
         {
             spdlog::shutdown();
-            s_loggers.clear();
             s_sinks.clear();
             s_initialized = false;
-        }
-
-        // Get a logger by category. Falls back to the default spdlog logger if the
-        // requested category is missing (e.g., Init() not yet called), so macros
-        // degrade gracefully rather than null-dereferencing.
-        static std::shared_ptr<spdlog::logger> Get(LogCategory category)
-        {
-            auto it = s_loggers.find(category);
-            if (it != s_loggers.end() && it->second)
-                return it->second;
-            return spdlog::default_logger();
         }
 
         // Generic named-logger access. Creates the logger on first use with the
@@ -159,158 +120,31 @@ namespace Arcane
             return CreateLogger(key, s_sinks).get();
         }
 
-        // Set console log level at runtime
+        // Set console log level at runtime. All named loggers share the sink
+        // objects captured at Init (s_sinks), so setting the shared sink's
+        // level covers every logger -- including lazily-created ones.
         static void SetConsoleLevel(Level level)
         {
-            for (auto& [cat, logger] : s_loggers)
-            {
-                if (!logger->sinks().empty())
-                {
-                    logger->sinks()[0]->set_level(static_cast<spdlog::level::level_enum>(level));
-                }
-            }
+            if (!s_sinks.empty())
+                s_sinks[0]->set_level(static_cast<spdlog::level::level_enum>(level));
         }
 
-        // Set file log level at runtime
+        // Set file log level at runtime (no-op when Init had no file path).
         static void SetFileLevel(Level level)
         {
-            for (auto& [cat, logger] : s_loggers)
-            {
-                if (logger->sinks().size() > 1)
-                {
-                    logger->sinks()[1]->set_level(static_cast<spdlog::level::level_enum>(level));
-                }
-            }
-        }
-
-        // Set level for a specific category
-        static void SetCategoryLevel(LogCategory category, Level level)
-        {
-            if (s_loggers.contains(category))
-            {
-                s_loggers[category]->set_level(static_cast<spdlog::level::level_enum>(level));
-            }
+            if (s_sinks.size() > 1)
+                s_sinks[1]->set_level(static_cast<spdlog::level::level_enum>(level));
         }
 
         // Check if initialized
         static bool IsInitialized() { return s_initialized; }
 
-        // ========================================================================
-        // Structured JSON Event Logging (for analytics)
-        // ========================================================================
-
-        // Log a gacha pull event as JSON
-        static void LogPullEvent(
-            const std::string& playerId,
-            const std::string& banner,
-            int pullNumber,
-            const std::string& itemId,
-            const std::string& itemName,
-            int rarity,
-            bool wasPity,
-            bool wasGuarantee,
-            bool wasFeatured,
-            bool wonFiftyFifty)
-        {
-            auto logger = Get(LogCategory::Gacha);
-            logger->info(
-                R"({{"event":"pull","player":"{}","banner":"{}","pull_num":{},"item_id":"{}","item_name":"{}","rarity":{},"pity":{},"guarantee":{},"featured":{},"won_5050":{}}})",
-                JsonEscape(playerId), JsonEscape(banner), pullNumber, JsonEscape(itemId), JsonEscape(itemName), rarity,
-                wasPity, wasGuarantee, wasFeatured, wonFiftyFifty
-            );
-        }
-
-        // Log an authentication event as JSON
-        static void LogAuthEvent(
-            const std::string& eventType,  // "login", "logout", "register"
-            const std::string& playerId,
-            const std::string& ip,
-            bool success,
-            const std::string& reason = "")
-        {
-            auto logger = Get(LogCategory::Auth);
-            if (reason.empty())
-            {
-                logger->info(
-                    R"({{"event":"{}","player":"{}","ip":"{}","success":{}}})",
-                    JsonEscape(eventType), JsonEscape(playerId), JsonEscape(ip), success
-                );
-            }
-            else
-            {
-                logger->info(
-                    R"({{"event":"{}","player":"{}","ip":"{}","success":{},"reason":"{}"}})",
-                    JsonEscape(eventType), JsonEscape(playerId), JsonEscape(ip), success, JsonEscape(reason)
-                );
-            }
-        }
-
-        // Log a session event as JSON.
-        //
-        // Audit M-V3-1 security (2026-06-03): the third argument used to be
-        // the first 8 hex chars of the raw token (= 32 bits of token
-        // entropy leaked per RPC validation). Replaced with the first 8
-        // hex chars of SHA-256(token) so the correlation property is
-        // preserved (same token -> same log marker, distinguishing two
-        // sessions of the same player) but no token bytes are exposed.
-        // SHA-256 preimage resistance means even the full set of log
-        // entries leaks nothing about the underlying token.
-        // Audit M-V4-2 security (2026-06-03): optional `reason` so the
-        // invalidate path can distinguish idle / expired / invalid /
-        // forced-logout in the structured stream. Empty reason emits no
-        // "reason" field -- backwards compatible with existing callers.
-        static void LogSessionEvent(
-            const std::string& eventType,  // "created", "expired", "validated", "invalidated"
-            const std::string& playerId,
-            const std::string& token = "",
-            const std::string& reason = "")
-        {
-            std::string tokenHashPrefix;
-            if (!token.empty())
-            {
-                std::vector<unsigned char> digest(picosha2::k_digest_size);
-                picosha2::hash256(token.begin(), token.end(), digest.begin(), digest.end());
-                tokenHashPrefix = picosha2::bytes_to_hex_string(digest).substr(0, 8);
-            }
-            auto logger = Get(LogCategory::Auth);
-            if (reason.empty())
-            {
-                logger->debug(
-                    R"({{"event":"session_{}","player":"{}","token_hash":"{}"}})",
-                    JsonEscape(eventType), JsonEscape(playerId), JsonEscape(tokenHashPrefix)
-                );
-            }
-            else
-            {
-                logger->debug(
-                    R"({{"event":"session_{}","player":"{}","token_hash":"{}","reason":"{}"}})",
-                    JsonEscape(eventType), JsonEscape(playerId), JsonEscape(tokenHashPrefix), JsonEscape(reason)
-                );
-            }
-        }
-
-        // Log a connection event as JSON
-        static void LogConnectionEvent(
-            const std::string& eventType,  // "connected", "disconnected"
-            const std::string& ip,
-            const std::string& reason = "")
-        {
-            auto logger = Get(LogCategory::Net);
-            if (reason.empty())
-            {
-                logger->info(R"({{"event":"{}","ip":"{}"}})", JsonEscape(eventType), JsonEscape(ip));
-            }
-            else
-            {
-                logger->info(R"({{"event":"{}","ip":"{}","reason":"{}"}})", JsonEscape(eventType), JsonEscape(ip), JsonEscape(reason));
-            }
-        }
-
-        // E01-4: minimal JSON string-value escaper. The structured-event
-        // methods above splice content-derived fields (player/item/banner ids
-        // and names, ip, reason) into hand-built JSON format strings; a raw
-        // '"', '\\' or control character in any of those would break the JSON
-        // and permit field/log injection into the analytics stream. Escape
+        // E01-4: minimal JSON string-value escaper. Consumers that build
+        // structured JSON log events (e.g. the Aphelyon facade's analytics
+        // methods in Server/Common) splice content-derived fields into
+        // hand-built JSON format strings; a raw '"', '\\' or control
+        // character in any of those would break the JSON and permit
+        // field/log injection into the analytics stream. Escape
         // exactly the JSON string-value special characters (matching
         // nlohmann/json dump() for ASCII: short forms for the common control
         // chars, \u00XX for the rest, plus '"' and '\\'). Kept hand-rolled so
@@ -356,74 +190,16 @@ namespace Arcane
             auto logger = std::make_shared<spdlog::logger>(name, sinks.begin(), sinks.end());
             logger->set_level(spdlog::level::trace);
             spdlog::register_logger(logger);
-
-            // Map name to category
-            if (name == "Server")      s_loggers[LogCategory::Server] = logger;
-            else if (name == "Net")    s_loggers[LogCategory::Net] = logger;
-            else if (name == "Auth")   s_loggers[LogCategory::Auth] = logger;
-            else if (name == "Gacha")  s_loggers[LogCategory::Gacha] = logger;
-            else if (name == "Data")   s_loggers[LogCategory::Data] = logger;
-            else if (name == "Protocol") s_loggers[LogCategory::Protocol] = logger;
-
             return logger;
         }
 
         static inline bool s_initialized = false;
-        static inline std::unordered_map<LogCategory, std::shared_ptr<spdlog::logger>> s_loggers;
         static inline std::vector<spdlog::sink_ptr> s_sinks;
     };
 
     // ============================================================================
     // Convenience Macros
     // ============================================================================
-
-    // Server logger
-    #define LOG_SERVER_TRACE(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Server)->trace(__VA_ARGS__)
-    #define LOG_SERVER_DEBUG(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Server)->debug(__VA_ARGS__)
-    #define LOG_SERVER_INFO(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Server)->info(__VA_ARGS__)
-    #define LOG_SERVER_WARN(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Server)->warn(__VA_ARGS__)
-    #define LOG_SERVER_ERROR(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Server)->error(__VA_ARGS__)
-    #define LOG_SERVER_CRITICAL(...) ::Arcane::Logger::Get(::Arcane::LogCategory::Server)->critical(__VA_ARGS__)
-
-    // Network logger
-    #define LOG_NET_TRACE(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Net)->trace(__VA_ARGS__)
-    #define LOG_NET_DEBUG(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Net)->debug(__VA_ARGS__)
-    #define LOG_NET_INFO(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Net)->info(__VA_ARGS__)
-    #define LOG_NET_WARN(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Net)->warn(__VA_ARGS__)
-    #define LOG_NET_ERROR(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Net)->error(__VA_ARGS__)
-    #define LOG_NET_CRITICAL(...) ::Arcane::Logger::Get(::Arcane::LogCategory::Net)->critical(__VA_ARGS__)
-
-    // Auth logger
-    #define LOG_AUTH_TRACE(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Auth)->trace(__VA_ARGS__)
-    #define LOG_AUTH_DEBUG(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Auth)->debug(__VA_ARGS__)
-    #define LOG_AUTH_INFO(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Auth)->info(__VA_ARGS__)
-    #define LOG_AUTH_WARN(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Auth)->warn(__VA_ARGS__)
-    #define LOG_AUTH_ERROR(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Auth)->error(__VA_ARGS__)
-    #define LOG_AUTH_CRITICAL(...) ::Arcane::Logger::Get(::Arcane::LogCategory::Auth)->critical(__VA_ARGS__)
-
-    // Gacha logger
-    #define LOG_GACHA_TRACE(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Gacha)->trace(__VA_ARGS__)
-    #define LOG_GACHA_DEBUG(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Gacha)->debug(__VA_ARGS__)
-    #define LOG_GACHA_INFO(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Gacha)->info(__VA_ARGS__)
-    #define LOG_GACHA_WARN(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Gacha)->warn(__VA_ARGS__)
-    #define LOG_GACHA_ERROR(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Gacha)->error(__VA_ARGS__)
-    #define LOG_GACHA_CRITICAL(...) ::Arcane::Logger::Get(::Arcane::LogCategory::Gacha)->critical(__VA_ARGS__)
-
-    // Data logger
-    #define LOG_DATA_TRACE(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Data)->trace(__VA_ARGS__)
-    #define LOG_DATA_DEBUG(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Data)->debug(__VA_ARGS__)
-    #define LOG_DATA_INFO(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Data)->info(__VA_ARGS__)
-    #define LOG_DATA_WARN(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Data)->warn(__VA_ARGS__)
-    #define LOG_DATA_ERROR(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Data)->error(__VA_ARGS__)
-    #define LOG_DATA_CRITICAL(...) ::Arcane::Logger::Get(::Arcane::LogCategory::Data)->critical(__VA_ARGS__)
-
-    // Protocol logger
-    #define LOG_PROTOCOL_TRACE(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->trace(__VA_ARGS__)
-    #define LOG_PROTOCOL_DEBUG(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->debug(__VA_ARGS__)
-    #define LOG_PROTOCOL_INFO(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->info(__VA_ARGS__)
-    #define LOG_PROTOCOL_WARN(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->warn(__VA_ARGS__)
-    #define LOG_PROTOCOL_ERROR(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->error(__VA_ARGS__)
-    #define LOG_PROTOCOL_CRITICAL(...) ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->critical(__VA_ARGS__)
 
     // Engine-core neutral logging (generic mechanisms: crypto, rate limiting,
     // protocol framing). Game/service category macros live with the consumer.
