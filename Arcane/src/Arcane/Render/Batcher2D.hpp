@@ -115,6 +115,19 @@ namespace Arcane
 
         virtual void End() = 0;
 
+        // Drops the cached texture->binding-set entry for `texture` (no-op
+        // when absent or null). Call this BEFORE releasing a texture the
+        // batcher has drawn with: the cached set holds a reference that pins
+        // the texture alive (leak), and a stale entry would be served for a
+        // DIFFERENT texture if the allocator reuses the freed address (ABA).
+        // Mirrors ImGuiNvrhiRenderer::DestroyTexture's evict-before-release
+        // order. Intended caller: whichever host/system owns dynamic texture
+        // lifetimes -- today no engine path feeds dynamically-freed textures
+        // into a batcher (the Assets facade's budget eviction releases
+        // textures, but nothing routes Assets textures here yet); the
+        // Assets/TextureTable integration must call this when it lands.
+        virtual void RemoveTexture(nvrhi::ITexture* texture) = 0;
+
         // Stats for the most recently End()ed batch.
         // Valid after End() until the next Begin(); an empty batch reports all-zero.
         virtual Batch2DStats Stats() const = 0;

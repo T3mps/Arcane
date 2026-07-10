@@ -69,6 +69,7 @@ namespace
         void Line(glm::vec2, glm::vec2, float, glm::vec4) override { ++lines; }
         void Circle(glm::vec2, float, glm::vec4) override { ++circles; }
         void End() override {}
+        void RemoveTexture(nvrhi::ITexture*) override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
     };
 }

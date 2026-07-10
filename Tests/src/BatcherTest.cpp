@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
@@ -230,4 +231,147 @@ TEST_CASE("vulkan: batcher circle and line coverage", "[gpu][vulkan]")
 {
     CheckCircleCoverage(Arcane::GraphicsBackend::Vulkan);
     CheckLineCoverage(Arcane::GraphicsBackend::Vulkan);
+}
+
+// --- RemoveTexture: binding-set cache eviction (E01-2) ---------------------
+
+namespace
+{
+    // Solid-color 2x2 RGBA8_UNORM texture (NOT sRGB: sampled value is
+    // byte/255 exactly, no transfer curve in the way of readback checks).
+    nvrhi::TextureHandle MakeSolidTexture(nvrhi::IDevice* device,
+                                          uint8_t r, uint8_t g, uint8_t b,
+                                          const char* name)
+    {
+        auto desc = nvrhi::TextureDesc()
+            .setWidth(2).setHeight(2)
+            .setFormat(nvrhi::Format::RGBA8_UNORM)
+            .setInitialState(nvrhi::ResourceStates::ShaderResource)
+            .setKeepInitialState(true)
+            .setDebugName(name);
+        nvrhi::TextureHandle tex = device->createTexture(desc);
+        REQUIRE(tex != nullptr);
+        uint8_t pixels[2 * 2 * 4];
+        for (int i = 0; i < 4; ++i)
+        {
+            pixels[i * 4 + 0] = r;
+            pixels[i * 4 + 1] = g;
+            pixels[i * 4 + 2] = b;
+            pixels[i * 4 + 3] = 255;
+        }
+        auto upload = device->createCommandList();
+        upload->open();
+        upload->writeTexture(tex, 0, 0, pixels, 2 * 4);
+        upload->close();
+        device->executeCommandList(upload);
+        return tex;
+    }
+
+    // Current external refcount of a live nvrhi resource (AddRef returns the
+    // incremented count; Release undoes the probe).
+    unsigned long RefCount(nvrhi::IResource* resource)
+    {
+        resource->AddRef();
+        return resource->Release();
+    }
+
+    // Draws `tex` over the whole 8x8 canvas and returns the (4,4) texel's R
+    // channel (0..1) from a staging readback.
+    float DrawFullscreenAndReadCenterR(GpuFixture& fx, nvrhi::ITexture* tex)
+    {
+        fx.commandList->open();
+        fx.commandList->clearTextureFloat(fx.canvas->Texture(),
+                                          nvrhi::AllSubresources,
+                                          nvrhi::Color(0, 0, 0, 1));
+        fx.batcher->Begin(fx.commandList, fx.canvas->Framebuffer(),
+                          fx.canvas->Width(), fx.canvas->Height());
+        fx.batcher->Quad(glm::vec2(0, 0), glm::vec2(8, 8), tex,
+                         glm::vec2(0, 0), glm::vec2(1, 1), glm::vec4(1.0f));
+        fx.batcher->End();
+        fx.commandList->copyTexture(fx.staging, nvrhi::TextureSlice(),
+                                    fx.canvas->Texture(), nvrhi::TextureSlice());
+        fx.Flush();
+
+        size_t rowPitch = 0;
+        const auto* pixels = static_cast<const uint8_t*>(
+            fx.device->Nvrhi()->mapStagingTexture(
+                fx.staging, nvrhi::TextureSlice(),
+                nvrhi::CpuAccessMode::Read, &rowPitch));
+        REQUIRE(pixels != nullptr);
+        const auto* texel = reinterpret_cast<const uint16_t*>(
+            pixels + 4 * rowPitch + 4 * 8);  // (4,4), RGBA16F = 8 bytes/texel
+        const float red = HalfToFloat(texel[0]);
+        fx.device->Nvrhi()->unmapStagingTexture(fx.staging);
+        fx.device->Nvrhi()->runGarbageCollection();
+        return red;
+    }
+}
+
+TEST_CASE("d3d12: batcher RemoveTexture drops the cached binding set (unpins the texture)",
+          "[gpu][d3d12][batcher]")
+{
+    GpuFixture fx(Arcane::GraphicsBackend::D3D12);
+    nvrhi::TextureHandle tex = MakeSolidTexture(
+        fx.device->Nvrhi(), 255, 0, 0, "RemoveTexRed");
+    fx.device->Nvrhi()->waitForIdle();
+    fx.device->Nvrhi()->runGarbageCollection();
+    const unsigned long baseline = RefCount(tex);
+
+    // One draw caches a binding set for the texture, which pins it alive.
+    CHECK(DrawFullscreenAndReadCenterR(fx, tex) > 0.9f);
+    fx.device->Nvrhi()->waitForIdle();
+    fx.device->Nvrhi()->runGarbageCollection();
+    CHECK(RefCount(tex) > baseline);           // pinned by the cached set
+
+    // Evict: the entry (and its pin) must go away.
+    fx.batcher->RemoveTexture(tex);
+    CHECK(RefCount(tex) == baseline);
+
+    // Absent key and null are harmless no-ops.
+    fx.batcher->RemoveTexture(tex);
+    fx.batcher->RemoveTexture(nullptr);
+
+    CHECK(Arcane::RenderErrorCount() == 0);
+}
+
+TEST_CASE("d3d12: batcher release->realloc gets a fresh binding set (no stale ABA hit)",
+          "[gpu][d3d12][batcher]")
+{
+    GpuFixture fx(Arcane::GraphicsBackend::D3D12);
+
+    // Pass 1: draw a RED texture and prove it landed.
+    nvrhi::TextureHandle texA = MakeSolidTexture(
+        fx.device->Nvrhi(), 255, 0, 0, "AbaRed");
+    const void* oldAddr = texA.Get();
+    CHECK(DrawFullscreenAndReadCenterR(fx, texA) > 0.9f);
+
+    // Release: evict-before-release (the ImGuiNvrhi::DestroyTexture order),
+    // then drop the last handle and let the device actually free it.
+    fx.batcher->RemoveTexture(texA);
+    texA = nullptr;
+    fx.device->Nvrhi()->waitForIdle();
+    fx.device->Nvrhi()->runGarbageCollection();
+
+    // Realloc an identical texture, now GREEN -- retrying a bounded number
+    // of times to coax the heap into handing back the freed address (the
+    // ABA case this hook guards; Windows LFH randomizes block reuse, so one
+    // attempt often misses). Mismatches are kept alive so every retry pulls
+    // a different block. The assertion below is correct either way; INFO
+    // records whether this run actually hit the address-reuse path.
+    std::vector<nvrhi::TextureHandle> keepAlive;
+    nvrhi::TextureHandle texB = MakeSolidTexture(
+        fx.device->Nvrhi(), 0, 255, 0, "AbaGreen");
+    for (int attempt = 0; attempt < 31 && texB.Get() != oldAddr; ++attempt)
+    {
+        keepAlive.push_back(texB);
+        texB = MakeSolidTexture(fx.device->Nvrhi(), 0, 255, 0, "AbaGreen");
+    }
+    INFO("address reused: " << (texB.Get() == oldAddr ? "yes" : "no"));
+
+    // A stale cached set for the old texture at this address would sample
+    // RED (or a destroyed resource); a fresh set samples GREEN -> R == 0.
+    CHECK(DrawFullscreenAndReadCenterR(fx, texB) < 0.1f);
+
+    fx.batcher->RemoveTexture(texB);
+    CHECK(Arcane::RenderErrorCount() == 0);
 }

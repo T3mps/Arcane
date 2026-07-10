@@ -91,6 +91,7 @@ namespace
             lastCircleRadius = radius;
         }
         void End() override {}
+        void RemoveTexture(nvrhi::ITexture*) override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
     };
 

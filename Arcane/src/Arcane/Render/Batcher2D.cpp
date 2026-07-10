@@ -275,6 +275,19 @@ namespace Arcane
                 m_commandList = nullptr;
             }
 
+            void RemoveTexture(nvrhi::ITexture* texture) override
+            {
+                // Evict-before-release (mirrors ImGuiNvrhiRenderer::
+                // DestroyTexture): dropping the entry releases the cached
+                // set's reference so the texture can actually free, and a
+                // later texture reusing this address gets a FRESH set from
+                // GetBindingSet instead of the stale one (ABA). erase() on a
+                // missing/null key is a harmless no-op. The per-Begin slot
+                // maps (m_textureSlots/m_textureSlotLookup) never outlive a
+                // frame, so this is the only cross-frame texture state.
+                m_bindingSets.erase(texture);
+            }
+
             Batch2DStats Stats() const override { return m_stats; }
 
         private:
@@ -429,10 +442,10 @@ namespace Arcane
             nvrhi::InputLayoutHandle m_inputLayout;
             nvrhi::BufferHandle m_vertexBuffer;
             nvrhi::BufferHandle m_indexBuffer;
-            // Entries are never evicted: every current texture (white + future
-            // atlases) is engine-lifetime. When M2b brings dynamic texture
-            // lifetimes, add a RemoveTexture(ITexture*) hook the asset system
-            // calls on teardown (cached sets pin their textures alive).
+            // Keyed by raw texture pointer; each cached set pins its texture
+            // alive. RemoveTexture(ITexture*) is the eviction hook -- whoever
+            // releases a texture the batcher drew with must call it FIRST
+            // (see its interface comment in Batcher2D.hpp).
             std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_bindingSets;
             std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_pipelines;
             uint64_t m_pipelineGeneration = 0;
