@@ -133,6 +133,33 @@ TEST_CASE("ProtocolLoader: reload replaces prior message state", "[protocol]")
     REQUIRE(proto.Id("Login") == kInvalidMsgId); // cleared, not merged
 }
 
+TEST_CASE("ProtocolLoader: a failed reload preserves the prior definition", "[protocol]")
+{
+    auto& proto = ProtocolLoader::Instance();
+    REQUIRE(proto.Load(WriteTemp(kValidProtocol)));
+    REQUIRE(proto.Id("Login") == 1);
+
+    // A reload that fails validation (duplicate id) must leave the loader
+    // exactly as it was: still loaded, prior messages still resolvable,
+    // version/name untouched. Replace-on-SUCCESS, never destroy-on-failure --
+    // the loader is a process singleton, so a torn state (IsLoaded() true
+    // with empty tables) would silently misroute every message.
+    const char* dupIds = R"JSON({
+        "version": 9, "name": "BadReload",
+        "settings": {
+            "default_port": 7777, "max_message_size": 65536,
+            "message_format": "x", "token_length": 64,
+            "session_lifetime_seconds": 1, "idle_timeout_seconds": 1,
+            "heartbeat_interval_seconds": 1
+        },
+        "messages": { "A": { "id": 7 }, "B": { "id": 7 } }
+    })JSON";
+    REQUIRE_FALSE(proto.Load(WriteTemp(dupIds)));
+    CHECK(proto.IsLoaded());
+    CHECK(proto.Id("Login") == 1);
+    CHECK(proto.GetVersion() == 3);
+}
+
 TEST_CASE("ProtocolLoader: missing settings section is rejected", "[protocol]")
 {
     const char* noSettings = R"JSON({ "version": 1, "name": "x", "messages": {} })JSON";

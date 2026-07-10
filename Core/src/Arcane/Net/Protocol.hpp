@@ -125,8 +125,16 @@ namespace Arcane
             try
             {
                 Json j = Json::parse(file);
-                m_version = j.value("version", 1);
-                m_name = j.value("name", "Unknown Protocol");
+
+                // Review fix (2026-07-10, Important #3): parse and validate into
+                // LOCALS, commit to members only on full success. Load REPLACES
+                // the definition on success; a FAILED (re)load leaves the prior
+                // definition fully intact -- the loader is a process singleton,
+                // and the old clear-before-validate order left a torn "loaded
+                // but empty" state that misrouted every message after a failed
+                // reload.
+                const int version = j.value("version", 1);
+                const std::string protoName = j.value("name", "Unknown Protocol");
 
                 if (!j.contains("settings") || !j["settings"].is_object())
                 {
@@ -156,33 +164,30 @@ namespace Arcane
                     return false;
                 }
 
-                m_settings.defaultPort = settings["default_port"].get<int>();
-                m_settings.maxMessageSize = settings["max_message_size"].get<int>();
-                m_settings.messageFormat = settings["message_format"].get<std::string>();
-                m_settings.tokenLength = settings["token_length"].get<int>();
-                m_settings.sessionLifetimeSeconds = settings["session_lifetime_seconds"].get<int>();
-                m_settings.idleTimeoutSeconds = settings["idle_timeout_seconds"].get<int>();
-                m_settings.heartbeatIntervalSeconds = settings["heartbeat_interval_seconds"].get<int>();
+                Settings newSettings{};
+                newSettings.defaultPort = settings["default_port"].get<int>();
+                newSettings.maxMessageSize = settings["max_message_size"].get<int>();
+                newSettings.messageFormat = settings["message_format"].get<std::string>();
+                newSettings.tokenLength = settings["token_length"].get<int>();
+                newSettings.sessionLifetimeSeconds = settings["session_lifetime_seconds"].get<int>();
+                newSettings.idleTimeoutSeconds = settings["idle_timeout_seconds"].get<int>();
+                newSettings.heartbeatIntervalSeconds = settings["heartbeat_interval_seconds"].get<int>();
 
                 // Audit M-V5-6 networking (2026-06-04): optional keys.
                 // Default to the compile-time ServerConfig values when
                 // absent so existing protocol.json files keep working
                 // without modification. Casting through int is safe --
                 // the ServerConfig constants are small (16, 2048).
-                m_settings.maxConnectionsPerIp = settings.value(
+                newSettings.maxConnectionsPerIp = settings.value(
                     "max_connections_per_ip",
                     static_cast<int>(ServerConfig::MAX_CONNECTIONS_PER_IP));
-                m_settings.maxConnectionsTotal = settings.value(
+                newSettings.maxConnectionsTotal = settings.value(
                     "max_connections_total",
                     static_cast<int>(ServerConfig::MAX_CONNECTIONS_TOTAL));
 
-                // E01-3c / reload semantics: Load REPLACES the protocol
-                // definition. Clear prior message/id/enum state so a reload
-                // does not merge into stale entries -- the loader is a process
-                // singleton that persists across reloads (and across tests).
-                m_messages.clear();
-                m_idToName.clear();
-                m_enums.clear();
+                std::unordered_map<std::string, MessageDef> newMessages;
+                std::unordered_map<int, std::string> newIdToName;
+                std::unordered_map<std::string, std::unordered_map<std::string, int>> newEnums;
 
                 if (j.contains("messages") && j["messages"].is_object())
                 {
@@ -212,8 +217,8 @@ namespace Arcane
                                 name, msg.id);
                             return false;
                         }
-                        auto dup = m_idToName.find(msg.id);
-                        if (dup != m_idToName.end())
+                        auto dup = newIdToName.find(msg.id);
+                        if (dup != newIdToName.end())
                         {
                             LOG_CORE_ERROR(
                                 "Duplicate message id {} for '{}' (already used by '{}')",
@@ -221,8 +226,8 @@ namespace Arcane
                             return false;
                         }
 
-                        m_messages[name] = msg;
-                        m_idToName[msg.id] = name;
+                        newMessages[name] = msg;
+                        newIdToName[msg.id] = name;
                     }
                 }
 
@@ -236,9 +241,18 @@ namespace Arcane
                             if (value.is_number_integer())
                                 enumMap[key] = value.get<int>();
                         }
-                        m_enums[enumName] = enumMap;
+                        newEnums[enumName] = enumMap;
                     }
                 }
+
+                // Commit -- all validation passed. Replace the definition
+                // wholesale (reload-replace, never merge).
+                m_version = version;
+                m_name = protoName;
+                m_settings = newSettings;
+                m_messages = std::move(newMessages);
+                m_idToName = std::move(newIdToName);
+                m_enums = std::move(newEnums);
 
                 LOG_CORE_INFO("Loaded v{} with {} messages", m_version, m_messages.size());
                 m_loaded = true;
