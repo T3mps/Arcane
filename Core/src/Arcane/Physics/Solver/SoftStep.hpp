@@ -46,8 +46,8 @@
 // SUPERSEDED -- the solver owns dynamic integration).
 //
 // The world just calls Solve once per Step (it does NOT drive a phase sequence).
-// The world owns the ContactConstraint pool AND the warm-start impulses (on the
-// persistent Contact); the solver owns only the per-step SoA scratch (m_bodyState
+// The world owns the ContactConstraint pool; the warm-start impulses live on the
+// graph-owned persistent Contact. The solver owns only the per-step SoA scratch (m_bodyState
 // dp/dq + the coloring buffers), reused across steps -> zero steady-state
 // allocation. Determinism: fixed iteration order -- the coloring + each color's
 // batch packing are deterministic functions of the world-built (already sorted)

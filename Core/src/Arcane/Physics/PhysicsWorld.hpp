@@ -66,7 +66,6 @@
 #include <optional>
 #include <vector>
 
-#include <Arcane/Util/BitSet.hpp>
 #include <Arcane/Util/FunctionRef.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 

@@ -464,7 +464,7 @@ namespace
     }
 
     // Wake every dynamic body, then let the caller step once more so
-    // EmitContactConstraints (PhysicsWorld.cpp) re-emits their contacts.
+    // EmitContactConstraints (ConstraintGraph.cpp) re-emits their contacts.
     //
     // MKS re-derive (MKS P6): scene 0 (BuildPlayground) is now authored in meters
     // (drops ~4.7-7.0 m under g = 10 m/s^2). Two facts set the settle count:
@@ -481,7 +481,7 @@ namespace
     //     + wake + 1 step, FirstDynamicContactBody returns a valid body.
     //
     //  2. SLEEP AWAKE-GATE (scale-independent, KEEP the wake). EmitContactConstraints
-    //     has an awake-gate (PhysicsWorld.cpp) that excludes a sleeping dynamic's
+    //     has an awake-gate (ConstraintGraph.cpp) that excludes a sleeping dynamic.s
     //     contacts from ForEachContactConstraint. Once the scene lands it genuinely
     //     sleeps, so a settled scene publishes zero live contact constraints --
     //     FirstDynamicContactBody would return kInvalidBody. The explicit

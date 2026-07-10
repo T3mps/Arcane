@@ -22,7 +22,6 @@
 #include <Arcane/Physics/Narrowphase/GeometryKernel.hpp> // AabbOverlap (QueryAABB)
 #include <Arcane/Physics/Narrowphase/Collide.hpp>        // Collide (rotation-aware fixture-pair narrowphase: contacts T5, events/overlap T7)
 #include <Arcane/Physics/Solver/SoftStep.hpp>            // SoftStep solver impl (THE solver)
-#include <Arcane/Physics/Solver/ContactColoring.hpp>     // kColorCount (persistent incremental coloring, Phase C Task 4)
 #include <Arcane/Physics/Island.hpp>                     // island sleep pass (stage 4)
 #include <Arcane/Physics/Joints/Joints.hpp>              // joint set + MakeJoint factory (P2.5)
 #include <Arcane/Physics/StepProf.hpp>                   // opt-in per-Step-phase timing (zero-cost when ARCANE_STEPPROF==0)
@@ -1690,8 +1689,8 @@ namespace Arcane
             // path is now the SOLE solver feed; GenerateContacts' per-step rebuild
             // is RETIRED. UpdateContacts does ALL the narrowphase this Step:
             //   * fixture<->fixture (mover<->mover + mover<->static-body) into the
-            //     PERSISTENT m_contactPool (created/updated/destroyed across steps),
-            //   * tile spans into the TRANSIENT m_spanContacts scratch (virtual
+            //     graph-owned PERSISTENT pool (created/updated/destroyed across steps),
+            //   * tile spans into the graph's TRANSIENT span scratch (virtual
             //     fixtures, refilled each Step).
             // EmitContactConstraints then walks BOTH into m_contactConstraints in
             // the canonical (bodyA, bodyB, fixtureA, fixtureB) order; the ids are

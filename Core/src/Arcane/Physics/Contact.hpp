@@ -98,7 +98,7 @@ namespace Arcane
             bool          eventRelevant = false;
             // PERSISTENT COLOR (collision-rebuild Phase C, Stage 2, Tasks 4-5).
             // The graph color assigned ONCE when this solver-relevant body-body
-            // contact is created (PhysicsWorld::AssignContactColor), released back
+            // contact is created (ConstraintGraph::AssignContactColor), released back
             // at destroy (ReleaseContactColor). kInvalidColor means uncolored:
             // a sensor / non-solver / span contact, an OVERFLOW contact (no free
             // color), or a fresh/recycled pool slot. CONSUMED by the solver

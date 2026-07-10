@@ -10,7 +10,7 @@
 // dynamic sharing one island -- and the very next EmitContactConstraints emitted
 // a constraint for the awake side while the sleeping side of the same contact
 // tripped the "no emitted constraint references a SLEEPING dynamic" assert
-// (PhysicsWorld.cpp, EmitContactConstraints). In a Debug build (asserts live)
+// (ConstraintGraph.cpp, EmitContactConstraints). In a Debug build (asserts live)
 // that ABORTS the process.
 //
 // The fix wakes the sleeping island at merge time so the merged island is
@@ -245,7 +245,7 @@ TEST_CASE("PhysicsIslandWakeMerge: tile-span pile with sleep keeps islands unifo
 // window DETERMINISTICALLY, so it aborts in Debug if the guard is ever removed:
 //
 //   * D_waker is added FIRST -> LOWER body slot. TryCreateContact orients the
-//     lower dynamic slot as contact bodyA (PhysicsWorld.cpp ~2412), and
+//     lower dynamic slot as contact bodyA (ConstraintGraph::TryCreateContact), and
 //     EmitContactConstraints only emits (and only asserts B) when A is AWAKE --
 //     so the AWAKE body must be A (lower slot) and the SLEEPER must be B (higher).
 //   * Both bodies settle + sleep as SINGLETON islands on the merged tile span

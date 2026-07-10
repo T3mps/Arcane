@@ -47,7 +47,7 @@ namespace Arcane
         {
             // Warm-start impulses now live on the persistent Contact, which the
             // broadphase destroys when a fixture/body is removed
-            // (PhysicsWorld::DestroyContactsForBody/Fixture), so a recycled slot
+            // (ConstraintGraph::DestroyContactsForBody/Fixture), so a recycled slot
             // inherits no stale impulse. The per-body sub-step scratch is re-zeroed
             // at the start of each Solve. Nothing slot-specific to do here; the
             // override stays only to honor the ISolver contract.
@@ -905,7 +905,7 @@ namespace Arcane
             // 3) Group the emitted constraints by their PERSISTENT contact color
             //    (Phase C, Task 4/5). The per-step greedy recolor is GONE: every
             //    solver-relevant body-body contact was colored once at create
-            //    (PhysicsWorld::AssignContactColor) and EmitContactConstraints copied
+            //    (ConstraintGraph::AssignContactColor) and EmitContactConstraints copied
             //    that color onto cc.color. A kInvalidColor constraint -- an OVERFLOW
             //    contact (the source Contact found no free color at create) OR a span
             //    (no pool home) -- goes to the scalar overflow path; everything else

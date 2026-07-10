@@ -24,7 +24,7 @@
 // The per-Step sleep pass (IslandManager::UpdateSleep, Step stage 5) advances each
 // awake dynamic body's idle timer, then sleeps an island AS A UNIT when EVERY
 // awake-dynamic member has accumulated kSleepTime seconds of idle. WAKE paths live
-// in PhysicsWorld (WakeMoverPair / ApplyImpulse / SetVelocity / Wake) and
+// in PhysicsWorld (ApplyImpulse / SetVelocity / Wake), ConstraintGraph (WakeMoverPair) and
 // IslandManager::WakeIsland; the sleep pass only puts islands to SLEEP. The
 // thresholds + whole-island-unit-sleep behavior are UNCHANGED from the M6
 // global-UF version this replaced.

@@ -39,7 +39,7 @@
 //     overlap / clear gap), so this never bites; port shapesOverlap if a later
 //     test needs inclusive edge-touch semantics.
 //   * DETERMINISM: begin/stay events come from the caller-supplied TOUCHED
-//     body-pairs -- PhysicsWorld walks the ContactPool in ascending id and
+//     body-pairs -- ConstraintGraph::CollectTouchedEventPairs walks the pool ascending-id and
 //     SORTS the touched pairs by (a,b) before calling Step (already
 //     deterministic). The END events iterate the pairs map (unordered_map ->
 //     nondeterministic order), so we COLLECT the to-end pairs, SORT them by
