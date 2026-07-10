@@ -90,22 +90,47 @@ TEST_CASE("Vec2<f32w>: wide arithmetic core compiles and bit-matches scalar lane
     Vec2<f32w> wa(Arcane::Simd::load(ax), Arcane::Simd::load(ay));
     Vec2<f32w> wb(Arcane::Simd::load(bx), Arcane::Simd::load(by));
 
+    alignas(32) float sv[W];
+    for (int i = 0; i < W; ++i)
+        sv[i] = 0.25f + float(i);
+    const f32w scale = Arcane::Simd::load(sv);
+
     const Vec2<f32w> sum  = wa + wb;
     const f32w       dot  = Dot(wa, wb);
     const f32w       crs  = Cross(wa, wb);
     const Vec2<f32w> perp = Perp(wa);
+    const Vec2<f32w> neg  = -wa;               // wide unary minus
+    const Vec2<f32w> scl  = wa * scale;        // wide vec * scalar
+    Vec2<f32w> acc = wa;                       // wide compound +=
+    acc += wb;
 
-    alignas(32) float outSumX[W], outDot[W], outCrs[W], outPerpX[W];
-    Arcane::Simd::store(outSumX, sum.x);
-    Arcane::Simd::store(outDot, dot);
-    Arcane::Simd::store(outCrs, crs);
-    Arcane::Simd::store(outPerpX, perp.x);
+    // Review fix (Minor #1): assert BOTH lanes of every 2-component result --
+    // perp.y is the negation lane ((v.y, -v.x)) and was previously unchecked.
+    alignas(32) float oSumX[W], oSumY[W], oDot[W], oCrs[W],
+                      oPerpX[W], oPerpY[W], oNegX[W], oNegY[W],
+                      oSclX[W], oSclY[W], oAccX[W], oAccY[W];
+    Arcane::Simd::store(oSumX, sum.x);   Arcane::Simd::store(oSumY, sum.y);
+    Arcane::Simd::store(oDot, dot);
+    Arcane::Simd::store(oCrs, crs);
+    Arcane::Simd::store(oPerpX, perp.x); Arcane::Simd::store(oPerpY, perp.y);
+    Arcane::Simd::store(oNegX, neg.x);   Arcane::Simd::store(oNegY, neg.y);
+    Arcane::Simd::store(oSclX, scl.x);   Arcane::Simd::store(oSclY, scl.y);
+    Arcane::Simd::store(oAccX, acc.x);   Arcane::Simd::store(oAccY, acc.y);
     for (int i = 0; i < W; ++i)
     {
         const Vec2f sa(ax[i], ay[i]), sb(bx[i], by[i]);
-        CHECK(outSumX[i]  == (sa + sb).x);
-        CHECK(outDot[i]   == Dot(sa, sb));
-        CHECK(outCrs[i]   == Cross(sa, sb));
-        CHECK(outPerpX[i] == Perp(sa).x);
+        CHECK(oSumX[i]  == (sa + sb).x);
+        CHECK(oSumY[i]  == (sa + sb).y);
+        CHECK(oDot[i]   == Dot(sa, sb));
+        CHECK(oCrs[i]   == Cross(sa, sb));
+        CHECK(oPerpX[i] == Perp(sa).x);
+        CHECK(oPerpY[i] == Perp(sa).y);
+        CHECK(oNegX[i]  == (-sa).x);
+        CHECK(oNegY[i]  == (-sa).y);
+        CHECK(oSclX[i]  == (sa * sv[i]).x);
+        CHECK(oSclY[i]  == (sa * sv[i]).y);
+        Vec2f sacc = sa; sacc += sb;
+        CHECK(oAccX[i]  == sacc.x);
+        CHECK(oAccY[i]  == sacc.y);
     }
 }

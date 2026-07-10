@@ -34,8 +34,11 @@ namespace Arcane::Geometry
     // Duck-typed numeric constraint (spec D1). Requires closure under the
     // arithmetic the Vec2 core uses; deliberately does NOT require division,
     // comparison, or construction-from-int so lane-wide types qualify.
+    // bool is excluded explicitly: bool+bool promotes to int and converts
+    // back to bool, so it would otherwise satisfy the closure requirements
+    // while producing nonsense components (review fix).
     template <typename T>
-    concept Numeric = requires(T a, T b) {
+    concept Numeric = !std::same_as<T, bool> && requires(T a, T b) {
         { a + b } -> std::convertible_to<T>;
         { a - b } -> std::convertible_to<T>;
         { a * b } -> std::convertible_to<T>;
