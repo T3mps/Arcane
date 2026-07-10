@@ -4,8 +4,10 @@
 #include <array>
 #include <cstdint>
 #include <iomanip>
+#include <istream>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "picosha2.hpp"
@@ -33,14 +35,14 @@ namespace Arcane
         // PBKDF2-HMAC-SHA256 iteration count. 200,000 puts us above the OWASP
         // 2023 floor for PBKDF2-SHA256 (600k is the current rec; 200k is the
         // lower bound still considered acceptable). Audit C5 (2026-06-02)
-        // raised this from 10,000 â€” anything hashed at the old setting is
+        // raised this from 10,000 -- anything hashed at the old setting is
         // lazy-rehashed on its next successful VerifyPassword via the helpers
-        // below (NeedsRehash, IterationsOfStoredHash) â€” the caller writes the
+        // below (NeedsRehash, IterationsOfStoredHash) -- the caller writes the
         // new hash back to storage and the upgrade happens organically per
         // user.
         // DEFER (audit L-V5-1 security, 2026-06-03, multi-cycle carry-forward):
         // OWASP 2023 PBKDF2-SHA256 recommendation is 600k. 200k is the
-        // documented lower bound — pre-launch fine; bump before Release
+        // documented lower bound -- pre-launch fine; bump before Release
         // launch (or before 2027, whichever is sooner). The lazy-rehash
         // pathway above means a bump rolls out organically per user on next
         // successful login; no migration window required.
@@ -147,57 +149,108 @@ namespace Arcane
             return result;
         }
 
-        // DEFER (audit L-V5-2 security, 2026-06-03, V3-M8 multi-cycle
-        // carry-forward): BCryptGenRandom failure falls back to
-        // std::random_device with WARN-once-per-call. On Windows + MSVC the
-        // BCrypt path effectively never fails; on a future Linux build the
-        // fallback becomes load-bearing for token + salt + dummy-hash
-        // generation. The originally-recommended fix is a startup self-test
-        // that proves BCryptGenRandom works once and refuses to start
-        // otherwise. Pre-launch on Windows the risk is zero; revisit before
-        // first non-Windows build target.
+        // RNG hardening (E03-3; closes audit DEFER L-V5-2, 2026-06-03,
+        // V3-M8 multi-cycle carry-forward).
+        //
+        // Every draw goes through a once-per-process entropy self-test
+        // latch: the first crypto RNG use pulls two ENTROPY_SAMPLE_BYTES
+        // samples and throws if they look degenerate (all-zero, stuck at
+        // one byte value, or two "independent" draws colliding). A
+        // service with a broken generator fails loudly on its first
+        // secret instead of minting predictable tokens/salts.
+        //
+        // The POSIX branch is fail-closed: a missing /dev/urandom or a
+        // short read throws instead of silently leaving the buffer tail
+        // zeroed, and the old std::random_device fallback is gone from
+        // that path (historically deterministic on some libstdc++/MinGW
+        // builds). The Windows BCrypt branch is byte-identical to the
+        // pre-E03-3 behavior (incl. its WARN + random_device fallback --
+        // BCryptGenRandom effectively never fails there).
+        //
+        // The POSIX branch cannot execute on this repo's Windows-only CI,
+        // so its read-validation decision lives in the platform-neutral
+        // ReadExactFromStream helper below, which IS unit-tested on
+        // Windows. Runtime validation on real Linux/ARM is deferred to
+        // the Linux-port milestone.
         // Audit ref: docs/superpowers/audits/2026-06-03-v5-followup-security.md
+        static constexpr size_t ENTROPY_SAMPLE_BYTES = 32;
+
         static std::vector<uint8_t> GenerateRandomBytes(size_t count)
         {
-            std::vector<uint8_t> bytes(count);
+            EnsureEntropySelfTest();
+            return GenerateRandomBytesUnchecked(count);
+        }
 
-#ifdef _WIN32
-            // Use Windows BCrypt API (CSPRNG)
-            NTSTATUS status = BCryptGenRandom(nullptr, bytes.data(), static_cast<ULONG>(count), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        // Platform-neutral core of the POSIX read path: pull exactly
+        // `count` bytes from `source` into `out`. Returns false (fail
+        // closed) when the stream is bad or delivers fewer bytes than
+        // requested -- the L-V5-2 short-read shape. Public so the
+        // fail-closed contract is unit-testable on Windows builds.
+        static bool ReadExactFromStream(std::istream& source, uint8_t* out, size_t count)
+        {
+            if (!source)
+                return false;
+            if (count == 0)
+                return true;
+            source.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(count));
+            return source.gcount() == static_cast<std::streamsize>(count);
+        }
 
-            if (!BCRYPT_SUCCESS(status))
-            {
-                LOG_AUTH_WARN("BCryptGenRandom failed, falling back to std::random_device");
-                // Fallback to std::random_device if BCrypt fails
-                std::random_device rd;
-                for (size_t i = 0; i < count; i++)
+        // Pure degeneracy predicate over two same-size RNG samples.
+        // True = reject. Each check is a <= 2^-248 event for a real
+        // CSPRNG at 32-byte samples (never flaky), while a zeroed,
+        // stuck, or echoing generator always trips one.
+        static bool EntropySamplesDegenerate(const std::vector<uint8_t>& first,
+                                             const std::vector<uint8_t>& second)
+        {
+            // Empty or size-mismatched draws did not fulfil the request.
+            if (first.empty() || first.size() != second.size())
+                return true;
+
+            // Two independent draws must not collide (echoing /
+            // fixed-seed generator).
+            if (first == second)
+                return true;
+
+            // A draw stuck at a single repeated byte value carries no
+            // entropy (0x00 being the classic short-read residue).
+            auto stuck = [](const std::vector<uint8_t>& sample) {
+                for (uint8_t b : sample)
                 {
-                    bytes[i] = static_cast<uint8_t>(rd() & 0xFF);
+                    if (b != sample.front())
+                        return false;
                 }
-            }
-#else
-            // Use /dev/urandom on Unix-like systems
-            std::ifstream urandom("/dev/urandom", std::ios::binary);
-            if (urandom)
-            {
-                urandom.read(reinterpret_cast<char*>(bytes.data()), count);
-            }
-            else
-            {
-                // Fallback to std::random_device
-                std::random_device rd;
-                for (size_t i = 0; i < count; i++)
-                {
-                    bytes[i] = static_cast<uint8_t>(rd() & 0xFF);
-                }
-            }
-#endif
+                return true;
+            };
+            return stuck(first) || stuck(second);
+        }
 
-            return bytes;
+        // Draws two samples through the platform RNG and applies the
+        // predicate. Exposed for diagnostics/tests; production
+        // enforcement is the EnsureEntropySelfTest latch below.
+        static bool EntropySelfTest()
+        {
+            const auto a = GenerateRandomBytesUnchecked(ENTROPY_SAMPLE_BYTES);
+            const auto b = GenerateRandomBytesUnchecked(ENTROPY_SAMPLE_BYTES);
+            return !EntropySamplesDegenerate(a, b);
+        }
+
+        // Once-per-process startup latch: the first RNG use runs the
+        // self-test; a degenerate RNG throws here (and keeps throwing --
+        // the verdict latches) so a service refuses to run rather than
+        // mint predictable secrets.
+        static void EnsureEntropySelfTest()
+        {
+            static const bool passed = EntropySelfTest();
+            if (!passed)
+            {
+                LOG_AUTH_CRITICAL("Crypto: RNG entropy self-test failed -- refusing to generate secrets");
+                throw std::runtime_error("Crypto: RNG entropy self-test failed");
+            }
         }
 
         // ============================================================================
-        // HMAC-SHA256 â€” public convenience for non-password use cases
+        // HMAC-SHA256 -- public convenience for non-password use cases
         // ============================================================================
         //
         // Audit M4 (2026-06-02): exposes the HMAC primitive plus a hex wrapper so
@@ -216,7 +269,7 @@ namespace Arcane
 
         // Constant-time comparison of two equal-length hex strings. Distinct
         // from ConstantTimeCompare so callers don't need to convert their hex
-        // payloads to bytes first. Different-length inputs return false fast â€”
+        // payloads to bytes first. Different-length inputs return false fast --
         // that doesn't leak anything useful since the lengths are known to the
         // attacker from the wire format.
         static bool HexEquals(const std::string& a, const std::string& b)
@@ -229,6 +282,49 @@ namespace Arcane
         }
 
     private:
+        // ============================================================================
+        // Platform RNG (raw draw -- no self-test latch)
+        // ============================================================================
+
+        // The self-test itself draws through this so it cannot recurse
+        // into the EnsureEntropySelfTest latch. Everything else should
+        // use the public, latched GenerateRandomBytes.
+        static std::vector<uint8_t> GenerateRandomBytesUnchecked(size_t count)
+        {
+            std::vector<uint8_t> bytes(count);
+
+#ifdef _WIN32
+            // Use Windows BCrypt API (CSPRNG)
+            NTSTATUS status = BCryptGenRandom(nullptr, bytes.data(), static_cast<ULONG>(count), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+
+            if (!BCRYPT_SUCCESS(status))
+            {
+                LOG_AUTH_WARN("BCryptGenRandom failed, falling back to std::random_device");
+                // Fallback to std::random_device if BCrypt fails
+                std::random_device rd;
+                for (size_t i = 0; i < count; i++)
+                {
+                    bytes[i] = static_cast<uint8_t>(rd() & 0xFF);
+                }
+            }
+#else
+            // /dev/urandom, fail closed (E03-3): a missing device or a
+            // short read must never silently yield a zero-tailed buffer,
+            // and there is deliberately NO std::random_device fallback
+            // on this path -- it has been deterministic on some
+            // libstdc++/MinGW implementations, which is worse than
+            // stopping the service.
+            std::ifstream urandom("/dev/urandom", std::ios::binary);
+            if (!ReadExactFromStream(urandom, bytes.data(), count))
+            {
+                LOG_AUTH_CRITICAL("Crypto: /dev/urandom unavailable or short read -- refusing to generate secrets");
+                throw std::runtime_error("Crypto: /dev/urandom unavailable or short read");
+            }
+#endif
+
+            return bytes;
+        }
+
         // ============================================================================
         // PBKDF2 Implementation
         // ============================================================================
@@ -391,7 +487,7 @@ namespace Arcane
                 const auto hashHex = stored.substr(secondColon + 1);
                 // Audit M-V4-6 security (2026-06-03): FromHex's loop guard
                 // `i + 1 < hex.length()` silently truncates odd-length input
-                // — a corrupted DB row would produce a short byte vector
+                // -- a corrupted DB row would produce a short byte vector
                 // that ConstantTimeCompare always rejects (different length)
                 // after a wasted PBKDF2 derivation. Reject the format up
                 // front so the caller surfaces the corruption rather than

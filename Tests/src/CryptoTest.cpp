@@ -16,7 +16,10 @@
 // hashes, and the malformed-format matrix goes through
 // IterationsOfStoredHash, which parses without deriving.
 
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Crypto/Crypto.hpp>
 
@@ -246,4 +249,95 @@ TEST_CASE("crypto: GenerateRandomBytes returns the requested count with variatio
     const auto b = Crypto::GenerateRandomBytes(32);
     REQUIRE(a.size() == 32);
     REQUIRE(a != b);
+}
+
+// ---- E03-3: RNG fail-closed hardening + entropy self-test ------------------
+//
+// The hardened /dev/urandom branch itself cannot execute on Windows, so
+// its decision logic is factored into the platform-neutral
+// ReadExactFromStream and the pure EntropySamplesDegenerate predicate,
+// both fully unit-tested here. Runtime validation of the POSIX branch
+// on real ARM/Linux hardware is deferred to the Linux-port milestone.
+
+TEST_CASE("crypto: ReadExactFromStream fails closed on short or bad sources", "[crypto]")
+{
+    // Exact-length source: fulfilled, buffer filled with source bytes.
+    {
+        std::istringstream src(std::string(8, '\x42'));
+        std::vector<uint8_t> buf(8, 0);
+        REQUIRE(Crypto::ReadExactFromStream(src, buf.data(), buf.size()));
+        REQUIRE(buf == std::vector<uint8_t>(8, 0x42));
+    }
+
+    // Longer source: takes exactly what was asked for.
+    {
+        std::istringstream src("abcdefgh");
+        std::vector<uint8_t> buf(4, 0);
+        REQUIRE(Crypto::ReadExactFromStream(src, buf.data(), buf.size()));
+        REQUIRE(buf == std::vector<uint8_t>({'a', 'b', 'c', 'd'}));
+    }
+
+    // SHORT source: the exact L-V5-2 bug shape -- the old code would
+    // silently leave the buffer tail zeroed. Must fail closed.
+    {
+        std::istringstream src("abc");
+        std::vector<uint8_t> buf(16, 0);
+        REQUIRE_FALSE(Crypto::ReadExactFromStream(src, buf.data(), buf.size()));
+    }
+
+    // Unopenable stream (failbit set), like a missing /dev/urandom.
+    {
+        std::ifstream missing("e033_no_such_file_anywhere__");
+        std::vector<uint8_t> buf(8, 0);
+        REQUIRE_FALSE(Crypto::ReadExactFromStream(missing, buf.data(), buf.size()));
+    }
+
+    // A zero-byte request against a good stream is trivially fulfilled.
+    {
+        std::istringstream src("x");
+        std::vector<uint8_t> buf(1, 0);
+        REQUIRE(Crypto::ReadExactFromStream(src, buf.data(), 0));
+    }
+}
+
+TEST_CASE("crypto: EntropySamplesDegenerate rejects stuck or echoing RNG output", "[crypto]")
+{
+    const std::vector<uint8_t> zeros(32, 0x00);
+    const std::vector<uint8_t> constant(32, 0xA5);
+    std::vector<uint8_t> varied(32);
+    for (size_t i = 0; i < varied.size(); ++i)
+        varied[i] = static_cast<uint8_t>(i * 37 + 11);
+    std::vector<uint8_t> varied2 = varied;
+    varied2[0] ^= 0xFF;
+
+    // All-zero draws: the classic unchecked-short-read residue.
+    REQUIRE(Crypto::EntropySamplesDegenerate(zeros, zeros));
+    REQUIRE(Crypto::EntropySamplesDegenerate(zeros, varied));
+    REQUIRE(Crypto::EntropySamplesDegenerate(varied, zeros));
+
+    // A draw stuck at any single byte value, not just zero.
+    REQUIRE(Crypto::EntropySamplesDegenerate(constant, varied));
+    REQUIRE(Crypto::EntropySamplesDegenerate(varied, constant));
+
+    // Two "independent" draws that collide: echoing/seeded-deterministic
+    // generator.
+    REQUIRE(Crypto::EntropySamplesDegenerate(varied, varied));
+
+    // Empty or size-mismatched draws did not fulfil the request.
+    REQUIRE(Crypto::EntropySamplesDegenerate({}, {}));
+    const std::vector<uint8_t> half(varied.begin(), varied.begin() + 16);
+    REQUIRE(Crypto::EntropySamplesDegenerate(half, varied));
+
+    // Two healthy-looking distinct draws pass.
+    REQUIRE_FALSE(Crypto::EntropySamplesDegenerate(varied, varied2));
+}
+
+TEST_CASE("crypto: the live RNG passes the startup entropy self-test", "[crypto]")
+{
+    // On this Windows/BCrypt machine the self-test must pass, the
+    // enforcement latch must not throw, and the guarded production path
+    // must keep serving bytes afterwards.
+    REQUIRE(Crypto::EntropySelfTest());
+    REQUIRE_NOTHROW(Crypto::EnsureEntropySelfTest());
+    REQUIRE(Crypto::GenerateRandomBytes(16).size() == 16);
 }
