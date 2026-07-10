@@ -59,8 +59,6 @@
 #include <cstdint>
 #include <vector>
 
-#include <glm/vec2.hpp>
-
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
 #include <Arcane/Physics/PhysicsWorld.hpp>

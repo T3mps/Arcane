@@ -9,12 +9,11 @@
 // traces). Coordinate convention (matching the Lua source): y-down screen
 // space, no rotation.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std only. Header-only; functions are
-// constexpr/inline where the math allows. Lives in namespace Arcane::Physics.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std only. Header-only;
+// functions are constexpr/inline where the math allows. Lives in namespace
+// Arcane::Physics.
 
 #include <cmath>
-
-#include <glm/vec2.hpp>
 
 #include <Arcane/Physics/PhysicsTypes.hpp>
 

@@ -15,16 +15,16 @@
 // SCALAR CHOICE (determinism, P1.0 decision): stored physics state uses f32.
 // Per-platform self-consistent determinism (fixed 60 Hz, stable iteration
 // order, /fp:precise, no fast-math) does NOT require f64. f32 halves the SoA
-// footprint and matches the renderer's vec2 width. Switching to f64 if a
-// later determinism test demands it is a ONE-TYPEDEF change here:
-//   using Real = double; using Vec2 = glm::dvec2;
-// glm exposes both widths through the same call sites, so the math headers
-// and SoA arrays follow automatically.
+// footprint. Switching to f64 if a later determinism test demands it is a
+// ONE-TYPEDEF change here:
+//   using Real = double; using Vec2 = Geometry::Vec2d;
+// Geometry::Vec2<T> exposes both widths through the same call sites, so the
+// math headers and SoA arrays follow automatically.
 
 #include <cmath>
 #include <cstdint>
 
-#include <glm/vec2.hpp>
+#include <Arcane/Geometry/Vec2.hpp>
 
 namespace Arcane
 {
@@ -37,9 +37,10 @@ namespace Arcane
         // Stored-state scalar. f32 by default (see SCALAR CHOICE above).
         using Real = float;
 
-        // 2D vector. glm::vec2 is glm::tvec2<float>; if Real switches to
-        // double, change this to glm::dvec2 in lockstep (the only edit).
-        using Vec2 = glm::vec2;
+        // 2D vector: the first-party Geometry::Vec2 (Manifold2D Phase 1 --
+        // glm severed 2026-07-10). If Real switches to double, change this
+        // to Geometry::Vec2d in lockstep (the only edit).
+        using Vec2 = Geometry::Vec2<float>;
 
         // ----------------------------------------------------------------
         // Rotation helpers (single source of truth)

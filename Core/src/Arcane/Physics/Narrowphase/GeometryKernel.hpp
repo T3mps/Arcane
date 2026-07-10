@@ -25,8 +25,6 @@
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features (this module is also
 // compiled static-CRT/C++20 in the server flavor). namespace Arcane::Physics.
 
-#include <glm/vec2.hpp>
-
 #include <Arcane/Physics/PhysicsTypes.hpp>
 #include <Arcane/Physics/Shapes.hpp>
 

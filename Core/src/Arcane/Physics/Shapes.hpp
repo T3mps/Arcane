@@ -35,8 +35,6 @@
 #include <cstdint>
 #include <vector>
 
-#include <glm/vec2.hpp>
-
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
 namespace Arcane

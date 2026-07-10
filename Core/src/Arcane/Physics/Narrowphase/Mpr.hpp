@@ -41,8 +41,6 @@
 // (Gjk.hpp, PhysicsTypes.hpp). No SDL3/NVRHI/Batcher2D/ImGui/Astra. Compiles
 // /MD (Arcane.dll) and static-CRT (ArcaneCore server flavor).
 
-#include <glm/vec2.hpp>
-
 #include <Arcane/Physics/PhysicsTypes.hpp>
 
 // Only the NarrowphaseTrace* parameter type is named here (an incomplete type
