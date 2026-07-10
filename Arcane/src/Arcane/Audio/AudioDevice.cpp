@@ -715,12 +715,14 @@ namespace Arcane::Audio
 		// Fire-and-forget reclamation: a non-looping voice registers an end-callback
 		// that flags the slot when it finishes; ReapEndedVoices frees it on the main
 		// thread. Looping voices never end, so they get no callback (and must never
-		// be auto-reaped). ended is reset here in case the slot was recycled.
+		// be auto-reaped). ended is cleared UNCONDITIONALLY: a recycled slot whose
+		// previous tenant ended must not carry a stale ended=true into a looping
+		// voice, or ReapEndedVoices would free a live loop (defense in depth --
+		// ma_sound_uninit joining the audio thread already orders the write, but
+		// the loop branch must not depend on that).
+		voiceSlot.ended.store(false, std::memory_order_release);
 		if (!desc.loop)
-		{
-			voiceSlot.ended.store(false, std::memory_order_release);
 			ma_sound_set_end_callback(&voiceSlot.sound, &Impl::OnVoiceEnd, &voiceSlot);
-		}
 
 		ma_sound_set_volume(&voiceSlot.sound, desc.volume);
 		ma_sound_set_pitch(&voiceSlot.sound, desc.pitch);

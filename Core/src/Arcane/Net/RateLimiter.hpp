@@ -25,24 +25,24 @@ namespace Arcane
     class RateLimiter
     {
     public:
-        // Audit M8 (2026-06-02) â€” hard cap on the per-key map so an IP-spray
+        // Audit M8 (2026-06-02) -- hard cap on the per-key map so an IP-spray
         // attacker can't inflate memory by churning unique keys.
         //
-        // Audit M-V2-10 (2026-06-02) â€” eviction policy switched from M8's
+        // Audit M-V2-10 (2026-06-02) -- eviction policy switched from M8's
         // pure "refuse new entry at cap" to LRU eviction (see LruCache.hpp).
         // The old policy fully blocked legit users from the limiter once a
         // unique-key spray filled the cap; legit requests came back "rate
         // limited" with no recourse. LRU eviction guarantees forward
         // progress: a new key always gets a slot, at the cost of evicting
-        // the genuinely least-recently-touched existing entry â€” exactly
+        // the genuinely least-recently-touched existing entry -- exactly
         // the entry an attacker spray hasn't re-probed. Sustained attacker
         // presence still doesn't grow memory past the cap; total churn is
         // bounded by it; legit users never lose access as a side-effect
         // of someone else's spray.
         //
-        // The 10-min idle cleanup is preserved as memory hygiene â€” keeps
+        // The 10-min idle cleanup is preserved as memory hygiene -- keeps
         // the cache size small when the service is mostly idle. The 30s
-        // AGGRESSIVE_SWEEP path that M8 added is gone (no longer needed â€”
+        // AGGRESSIVE_SWEEP path that M8 added is gone (no longer needed --
         // LRU handles cap pressure automatically).
         static constexpr std::size_t MAX_RECORDS = 10000;
 
@@ -68,8 +68,8 @@ namespace Arcane
 
             // Audit H-V3-11 (2026-06-03): use Peek (no-touch) for the
             // initial lookup and Touch() explicitly on accept branches
-            // only. Previously Get touched on every probe — including
-            // cooldown-rejected ones — which inverted M-V2-10's stated
+            // only. Previously Get touched on every probe -- including
+            // cooldown-rejected ones -- which inverted M-V2-10's stated
             // goal: a sustained attacker spray kept attacker entries at
             // MRU and pushed legit users' (older but valid) entries
             // toward eviction. The invariant now is: touch iff allow.
@@ -127,7 +127,7 @@ namespace Arcane
             std::lock_guard<std::mutex> lock(m_mutex);
             auto now = std::chrono::steady_clock::now();
 
-            // Diagnostic query â€” Peek does NOT touch the LRU position. A
+            // Diagnostic query -- Peek does NOT touch the LRU position. A
             // "how long is my cooldown?" call shouldn't refresh the
             // entry's recency relative to a genuine Allow() attempt.
             const Record* record = m_records.Peek(key);

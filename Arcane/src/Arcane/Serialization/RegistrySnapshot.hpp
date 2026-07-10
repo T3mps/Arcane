@@ -20,8 +20,10 @@
 #include <Astra/Serialization/BinaryWriter.hpp>
 #include <Astra/Serialization/SerializationError.hpp>
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <utility>
 #include <vector>
@@ -54,6 +56,13 @@ namespace Arcane::Serialization
     inline std::vector<std::byte> FrameBytes(const std::vector<std::byte>& registryBlob,
                                              const std::vector<std::byte>& resourceSection)
     {
+        // Frame-format limit: the registry-blob length field is uint32, so a
+        // blob >= 4 GiB cannot be framed -- the cast below would silently
+        // truncate the length and desync the resource-section offset on parse.
+        // Far beyond any realistic registry; assert rather than widen the format.
+        assert(registryBlob.size() <= std::numeric_limits<uint32_t>::max()
+               && "RegistrySnapshot: registry blob exceeds the uint32 frame length field");
+
         std::vector<std::byte> out;
         out.reserve(kSnapshotHeaderSize + registryBlob.size() + resourceSection.size());
         Astra::BinaryWriter w(out);
