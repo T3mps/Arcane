@@ -11,11 +11,14 @@
 #include <type_traits>    // std::is_same_v
 #include <vector>
 
-#include <glm/vec2.hpp>
+#include <Arcane/Geometry/Vec2.hpp>
 
 namespace Arcane::Geometry
 {
-    template <class T> using Pt = glm::vec<2, T>;
+    // Pt is the historical name for the hull kernel's point type; it now aliases
+    // the first-party Vec2<T> (Manifold2D Phase 1). Same layout, same .x/.y,
+    // same construction forms -- the policies compile unchanged.
+    template <class T> using Pt = Vec2<T>;
 
     namespace detail
     {
