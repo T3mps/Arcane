@@ -18,7 +18,13 @@ namespace Arcane
     // Bump on ANY change to EngineContext layout or the entry-point set/signatures.
     // v2 (2026-06-20): added the ImGui cross-DLL handoff fields below + GamePlugin_DrawUI.
     // v3 (2026-06-26): added taskExecutor (the ITaskExecutor face of the engine scheduler).
-    inline constexpr uint32_t kGamePluginABIVersion = 3;
+    // v4 (2026-07-10): foundations branch changed the cross-DLL C++ surface plugins
+    //     consume through EngineContext: Runtime::SnapshotRegistry now returns
+    //     Astra::Result (E02-4), Batcher2D gained the pure virtual RemoveTexture
+    //     mid-vtable (E01-2), and Assets gained SetDevice before GetTexture. Any of
+    //     these mismatched across the boundary is a vtable/stack smash; the version
+    //     gate must reject a cross-build pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 4;
 
     struct EngineContext
     {

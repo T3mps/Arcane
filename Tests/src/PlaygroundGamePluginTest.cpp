@@ -42,13 +42,17 @@ TEST_CASE("PlaygroundGame runs and survives a reload", "[hotreload]")
     PluginHost host(rt, std::filesystem::path("PlaygroundGame.dll"));
     REQUIRE(host.Load());
 
-    // ABI v3: the plugin reports the current ABI version; the DrawUI entry point
-    // (v2) was resolved, and EngineContext::taskExecutor was populated (v3).
+    // ABI v4: the plugin reports the current ABI version; the DrawUI entry point
+    // (v2) was resolved, EngineContext::taskExecutor was populated (v3), and v4
+    // covers the foundations-branch cross-DLL surface changes (SnapshotRegistry
+    // Result return, Batcher2D::RemoveTexture, Assets::SetDevice). The literal
+    // check below is a tripwire: bumping the ABI constant must be a conscious
+    // act that updates this test alongside PluginABI.hpp's version history.
     const Arcane::PluginVTable* vt = host.Vtable();
     REQUIRE(vt != nullptr);
     REQUIRE(vt->ABIVersion != nullptr);
     CHECK(vt->ABIVersion() == Arcane::kGamePluginABIVersion);
-    CHECK(Arcane::kGamePluginABIVersion == 3u);
+    CHECK(Arcane::kGamePluginABIVersion == 4u);
     CHECK(vt->DrawUI != nullptr);
 
     const glm::vec2 before = MoonWorldPos(rt);
