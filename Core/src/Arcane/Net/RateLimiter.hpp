@@ -11,10 +11,9 @@ namespace Arcane
 {
     // Global rate limiting toggle.
     //
-    // DEFAULT: enabled. Audit C3 (2026-06-02) â€” leaving rate limiting off in
-    // Release turned every documented limit (login, registration, pulls, debug
-    // AddCurrency) into a no-op and gave authenticated clients an unbounded
-    // mint/brute-force surface.
+    // DEFAULT: enabled. Audit C3 (2026-06-02) -- leaving rate limiting off in
+    // Release turned every documented limit into a no-op and gave
+    // authenticated clients an unbounded abuse/brute-force surface.
     //
     // To disable for local dev, pass `--no-rate-limit` on the CLI of any
     // service. That parser branch is compiled out of Release builds (NDEBUG),
@@ -32,7 +31,7 @@ namespace Arcane
         // Audit M-V2-10 (2026-06-02) â€” eviction policy switched from M8's
         // pure "refuse new entry at cap" to LRU eviction (see LruCache.hpp).
         // The old policy fully blocked legit users from the limiter once a
-        // unique-key spray filled the cap; legit logins came back "rate
+        // unique-key spray filled the cap; legit requests came back "rate
         // limited" with no recourse. LRU eviction guarantees forward
         // progress: a new key always gets a slot, at the cost of evicting
         // the genuinely least-recently-touched existing entry â€” exactly

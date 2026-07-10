@@ -5,7 +5,7 @@
 // loggers over a shared console + optional rotating-file sink stack, plus the
 // JsonEscape kernel consumers use to build structured JSON log events.
 // Game/service vocabulary (categories, analytics events, log file names)
-// lives with the consumer (e.g. the Aphelyon facade in Server/Common).
+// lives with the consumer (e.g. the server-side facade in Server/Common).
 
 #include <filesystem>
 #include <iostream>
@@ -140,8 +140,8 @@ namespace Arcane
         static bool IsInitialized() { return s_initialized; }
 
         // E01-4: minimal JSON string-value escaper. Consumers that build
-        // structured JSON log events (e.g. the Aphelyon facade's analytics
-        // methods in Server/Common) splice content-derived fields into
+        // structured JSON log events (e.g. a server facade's analytics
+        // methods) splice content-derived fields into
         // hand-built JSON format strings; a raw '"', '\\' or control
         // character in any of those would break the JSON and permit
         // field/log injection into the analytics stream. Escape

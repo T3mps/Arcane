@@ -134,7 +134,7 @@ TEST_CASE("crypto: HexEquals compares equal-length strings byte-wise", "[crypto]
     REQUIRE_FALSE(Crypto::HexEquals("0eadbeef", "deadbeef"));
 
     // Byte-wise, not case-folded: uppercase hex is NOT equal. Callers
-    // (quest-token MACs) always compare lowercase against lowercase.
+    // (on-wire signed-token MACs) always compare lowercase against lowercase.
     REQUIRE_FALSE(Crypto::HexEquals("DEADBEEF", "deadbeef"));
 
     // Length mismatch returns false (fast; lengths are public anyway).

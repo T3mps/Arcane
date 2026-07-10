@@ -44,8 +44,8 @@ namespace Arcane
         // OWASP 2023 PBKDF2-SHA256 recommendation is 600k. 200k is the
         // documented lower bound -- pre-launch fine; bump before Release
         // launch (or before 2027, whichever is sooner). The lazy-rehash
-        // pathway above means a bump rolls out organically per user on next
-        // successful login; no migration window required.
+        // pathway above means a bump rolls out organically per user on their
+        // next successful password verification; no migration window required.
         // Audit ref: docs/superpowers/audits/2026-06-03-v5-followup-security.md
         static constexpr int DEFAULT_ITERATIONS = 200000;
         static constexpr int SALT_LENGTH = 16;  // 128 bits
@@ -254,13 +254,13 @@ namespace Arcane
         // ============================================================================
         //
         // Audit M4 (2026-06-02): exposes the HMAC primitive plus a hex wrapper so
-        // callers like QuestHandlers::VerifyQuestToken can replace raw
-        // SHA-256(secret || message) (length-extension vulnerable) with a proper
-        // keyed MAC without reaching into the PBKDF2-private internals.
+        // callers can replace raw SHA-256(secret || message) (length-extension
+        // vulnerable) with a proper keyed MAC without reaching into the
+        // PBKDF2-private internals.
         //
-        // The hex variant matches the existing on-wire format used by the quest
-        // challenge token (`<tsHex>.<hash>`); pair it with HexEquals below for
-        // constant-time comparison.
+        // The hex variant suits `<tsHex>.<hash>`-style on-wire formats (e.g. a
+        // short-lived signed challenge token issued by a service); pair it with
+        // HexEquals below for constant-time comparison.
 
         static std::string HmacSha256Hex(const std::string& key, const std::string& message)
         {

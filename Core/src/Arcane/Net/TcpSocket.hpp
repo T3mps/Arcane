@@ -56,8 +56,8 @@ namespace Arcane
         // defaults. The runtime values live in TcpServerBase's
         // m_maxConnPerIp / m_maxConnTotal, populated from
         // protocol.json's settings.max_connections_per_ip /
-        // settings.max_connections_total at startup (see Auth/Account/
-        // Combat main.cpp). A protocol.json without the keys uses these
+        // settings.max_connections_total at startup (see each consuming
+        // service's main.cpp). A protocol.json without the keys uses these
         // constants -- no behavior change at default values.
         //
         // Topology assumptions baked into the per-IP cap:

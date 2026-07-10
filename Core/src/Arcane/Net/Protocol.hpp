@@ -34,9 +34,9 @@ namespace Arcane
 
     // Lenient parse -- returns an empty object on malformed input. Use only
     // when downstream validation will catch every dangerous field (e.g.
-    // Auth's username/password, read-only handlers that produce empty
-    // responses). For mutating handlers that spend currency, edit party,
-    // or otherwise change state, prefer ParseJsonStrict so a malformed
+    // credential fields the handler fully validates itself, or read-only
+    // handlers that produce empty responses). For mutating handlers that
+    // change persistent state, prefer ParseJsonStrict so a malformed
     // payload is rejected at the boundary instead of falling through to
     // defaults -- see audit M11 (2026-06-02).
     inline Json ParseJsonSafe(const std::string& str)
@@ -52,11 +52,10 @@ namespace Arcane
     }
 
     // Strict parse -- returns std::nullopt on malformed input. Mutating
-    // handlers (SetParty, AddCurrency, leveling, pulls, claim) must use
-    // this and reject with an error response on nullopt. The audit M11
-    // example: AddCurrency with malformed payload previously fell through
-    // to `amount=0` which the clamp turned into `amount=1`, silently
-    // granting one unit instead of failing loud.
+    // handlers must use this and reject with an error response on nullopt.
+    // The audit M11 example: a grant-style handler with a malformed payload
+    // previously fell through to `amount=0` which the clamp turned into
+    // `amount=1`, silently granting one unit instead of failing loud.
     inline std::optional<Json> ParseJsonStrict(const std::string& str)
     {
         try
