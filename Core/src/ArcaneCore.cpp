@@ -6,6 +6,5 @@
 #include <Arcane/Net/Protocol.hpp>
 #include <Arcane/Net/RateLimiter.hpp>
 #include <Arcane/Net/TcpSocket.hpp>
-#include <Arcane/Types/Types.hpp>
 #include <Arcane/Util/Logger.hpp>
 #include <Arcane/Util/LruCache.hpp>

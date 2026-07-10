@@ -8,7 +8,6 @@
 #include <vector>
 #include "Json.hpp"
 #include <Arcane/Util/Logger.hpp>
-#include <Arcane/Types/Types.hpp>
 #include <Arcane/Net/TcpSocket.hpp>
 
 namespace Arcane
