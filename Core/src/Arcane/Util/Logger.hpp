@@ -8,6 +8,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 // Audit M-V3-1 security (2026-06-03): LogSessionEvent hashes the token
@@ -62,31 +63,42 @@ namespace Arcane
     class Logger
     {
     public:
-        // Initialize the logging system - call once at startup
-        static void Init(Level consoleLevel = Level::Info, Level fileLevel = Level::Debug)
+        // Initialize the logging system - call once at startup.
+        // An empty logFilePath skips the rotating-file sink (console only).
+        static void Init(Level consoleLevel = Level::Info, Level fileLevel = Level::Trace, const std::string& logFilePath = "logs/gacha_server.log")
         {
             if (s_initialized)
                 return;
 
             try
             {
-                // Ensure logs directory exists
-                std::filesystem::create_directories("logs");
-
                 // Create sinks
                 auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
                 consoleSink->set_level(static_cast<spdlog::level::level_enum>(consoleLevel));
                 consoleSink->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
 
-                auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                    "logs/gacha_server.log",
-                    5 * 1024 * 1024,  // 5 MB max file size
-                    3                  // Keep 3 rotated files
-                );
-                fileSink->set_level(static_cast<spdlog::level::level_enum>(fileLevel));
-                fileSink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
+                std::vector<spdlog::sink_ptr> sinks = { consoleSink };
 
-                std::vector<spdlog::sink_ptr> sinks = { consoleSink, fileSink };
+                if (!logFilePath.empty())
+                {
+                    // Ensure the log directory exists
+                    auto logDir = std::filesystem::path(logFilePath).parent_path();
+                    if (!logDir.empty())
+                        std::filesystem::create_directories(logDir);
+
+                    auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                        logFilePath,
+                        5 * 1024 * 1024,  // 5 MB max file size
+                        3                  // Keep 3 rotated files
+                    );
+                    fileSink->set_level(static_cast<spdlog::level::level_enum>(fileLevel));
+                    fileSink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
+                    sinks.push_back(fileSink);
+                }
+
+                // Remember the sink stack so lazily-created named loggers
+                // (Get(std::string_view) below) share the same outputs.
+                s_sinks = sinks;
 
                 // Create named loggers
                 CreateLogger("Server", sinks);
@@ -118,6 +130,7 @@ namespace Arcane
         {
             spdlog::shutdown();
             s_loggers.clear();
+            s_sinks.clear();
             s_initialized = false;
         }
 
@@ -130,6 +143,20 @@ namespace Arcane
             if (it != s_loggers.end() && it->second)
                 return it->second;
             return spdlog::default_logger();
+        }
+
+        // Generic named-logger access. Creates the logger on first use with the
+        // sinks configured at Init (console always; file sink when Init was given
+        // a log file path). Category names are the CONSUMER's vocabulary -- the
+        // engine core itself logs only under "Core" (LOG_CORE_* below).
+        static spdlog::logger* Get(std::string_view name)
+        {
+            if (!IsInitialized())
+                Init();
+            std::string key(name);
+            if (auto existing = spdlog::get(key))
+                return existing.get();
+            return CreateLogger(key, s_sinks).get();
         }
 
         // Set console log level at runtime
@@ -279,7 +306,6 @@ namespace Arcane
             }
         }
 
-    private:
         // E01-4: minimal JSON string-value escaper. The structured-event
         // methods above splice content-derived fields (player/item/banner ids
         // and names, ip, reason) into hand-built JSON format strings; a raw
@@ -324,7 +350,8 @@ namespace Arcane
             return out;
         }
 
-        static void CreateLogger(const std::string& name, const std::vector<spdlog::sink_ptr>& sinks)
+    private:
+        static std::shared_ptr<spdlog::logger> CreateLogger(const std::string& name, const std::vector<spdlog::sink_ptr>& sinks)
         {
             auto logger = std::make_shared<spdlog::logger>(name, sinks.begin(), sinks.end());
             logger->set_level(spdlog::level::trace);
@@ -337,10 +364,13 @@ namespace Arcane
             else if (name == "Gacha")  s_loggers[LogCategory::Gacha] = logger;
             else if (name == "Data")   s_loggers[LogCategory::Data] = logger;
             else if (name == "Protocol") s_loggers[LogCategory::Protocol] = logger;
+
+            return logger;
         }
 
         static inline bool s_initialized = false;
         static inline std::unordered_map<LogCategory, std::shared_ptr<spdlog::logger>> s_loggers;
+        static inline std::vector<spdlog::sink_ptr> s_sinks;
     };
 
     // ============================================================================
@@ -394,5 +424,14 @@ namespace Arcane
     #define LOG_PROTOCOL_WARN(...)     ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->warn(__VA_ARGS__)
     #define LOG_PROTOCOL_ERROR(...)    ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->error(__VA_ARGS__)
     #define LOG_PROTOCOL_CRITICAL(...) ::Arcane::Logger::Get(::Arcane::LogCategory::Protocol)->critical(__VA_ARGS__)
+
+    // Engine-core neutral logging (generic mechanisms: crypto, rate limiting,
+    // protocol framing). Game/service category macros live with the consumer.
+    #define LOG_CORE_TRACE(...)    ::Arcane::Logger::Get("Core")->trace(__VA_ARGS__)
+    #define LOG_CORE_DEBUG(...)    ::Arcane::Logger::Get("Core")->debug(__VA_ARGS__)
+    #define LOG_CORE_INFO(...)     ::Arcane::Logger::Get("Core")->info(__VA_ARGS__)
+    #define LOG_CORE_WARN(...)     ::Arcane::Logger::Get("Core")->warn(__VA_ARGS__)
+    #define LOG_CORE_ERROR(...)    ::Arcane::Logger::Get("Core")->error(__VA_ARGS__)
+    #define LOG_CORE_CRITICAL(...) ::Arcane::Logger::Get("Core")->critical(__VA_ARGS__)
 
 } // namespace Arcane

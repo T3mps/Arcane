@@ -120,7 +120,7 @@ namespace Arcane
             std::ifstream file(path);
             if (!file.is_open())
             {
-                LOG_PROTOCOL_ERROR("Failed to open: {}", path);
+                LOG_CORE_ERROR("Failed to open: {}", path);
                 return false;
             }
 
@@ -132,7 +132,7 @@ namespace Arcane
 
                 if (!j.contains("settings") || !j["settings"].is_object())
                 {
-                    LOG_PROTOCOL_ERROR("Missing required 'settings' section");
+                    LOG_CORE_ERROR("Missing required 'settings' section");
                     return false;
                 }
 
@@ -141,7 +141,7 @@ namespace Arcane
                 auto requireSetting = [&](const char* name) -> bool {
                     if (!settings.contains(name))
                     {
-                        LOG_PROTOCOL_ERROR("Missing required setting: {}", name);
+                        LOG_CORE_ERROR("Missing required setting: {}", name);
                         return false;
                     }
                     return true;
@@ -209,7 +209,7 @@ namespace Arcane
                         // loud rather than misrouting messages later.
                         if (msg.id <= 0 || msg.id > 65535)
                         {
-                            LOG_PROTOCOL_ERROR(
+                            LOG_CORE_ERROR(
                                 "Message '{}' has out-of-range id {} (valid range is 1..65535)",
                                 name, msg.id);
                             return false;
@@ -217,7 +217,7 @@ namespace Arcane
                         auto dup = m_idToName.find(msg.id);
                         if (dup != m_idToName.end())
                         {
-                            LOG_PROTOCOL_ERROR(
+                            LOG_CORE_ERROR(
                                 "Duplicate message id {} for '{}' (already used by '{}')",
                                 msg.id, name, dup->second);
                             return false;
@@ -242,18 +242,18 @@ namespace Arcane
                     }
                 }
 
-                LOG_PROTOCOL_INFO("Loaded v{} with {} messages", m_version, m_messages.size());
+                LOG_CORE_INFO("Loaded v{} with {} messages", m_version, m_messages.size());
                 m_loaded = true;
                 return true;
             }
             catch (const Json::parse_error& e)
             {
-                LOG_PROTOCOL_ERROR("JSON parse error: {}", e.what());
+                LOG_CORE_ERROR("JSON parse error: {}", e.what());
                 return false;
             }
             catch (const std::exception& e)
             {
-                LOG_PROTOCOL_ERROR("Error: {}", e.what());
+                LOG_CORE_ERROR("Error: {}", e.what());
                 return false;
             }
         }

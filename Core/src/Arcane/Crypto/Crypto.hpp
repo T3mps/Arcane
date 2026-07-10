@@ -121,7 +121,7 @@ namespace Arcane
 
             if (!ParseStoredHash(storedHash, iterations, salt, expectedHash))
             {
-                LOG_AUTH_WARN("Password verification failed: malformed stored hash");
+                LOG_CORE_WARN("Password verification failed: malformed stored hash");
                 // Audit M-V3-3 (2026-06-03): burn one PBKDF2 derivation
                 // even on parse failure so a malformed stored hash (e.g.
                 // a corrupted DB row, an init-order regression of the
@@ -144,7 +144,7 @@ namespace Arcane
             bool result = ConstantTimeCompare(computedHash, expectedHash);
             if (!result)
             {
-                LOG_AUTH_DEBUG("Password verification failed: hash mismatch");
+                LOG_CORE_DEBUG("Password verification failed: hash mismatch");
             }
             return result;
         }
@@ -244,7 +244,7 @@ namespace Arcane
             static const bool passed = EntropySelfTest();
             if (!passed)
             {
-                LOG_AUTH_CRITICAL("Crypto: RNG entropy self-test failed -- refusing to generate secrets");
+                LOG_CORE_CRITICAL("Crypto: RNG entropy self-test failed -- refusing to generate secrets");
                 throw std::runtime_error("Crypto: RNG entropy self-test failed");
             }
         }
@@ -299,7 +299,7 @@ namespace Arcane
 
             if (!BCRYPT_SUCCESS(status))
             {
-                LOG_AUTH_WARN("BCryptGenRandom failed, falling back to std::random_device");
+                LOG_CORE_WARN("BCryptGenRandom failed, falling back to std::random_device");
                 // Fallback to std::random_device if BCrypt fails
                 std::random_device rd;
                 for (size_t i = 0; i < count; i++)
@@ -317,7 +317,7 @@ namespace Arcane
             std::ifstream urandom("/dev/urandom", std::ios::binary);
             if (!ReadExactFromStream(urandom, bytes.data(), count))
             {
-                LOG_AUTH_CRITICAL("Crypto: /dev/urandom unavailable or short read -- refusing to generate secrets");
+                LOG_CORE_CRITICAL("Crypto: /dev/urandom unavailable or short read -- refusing to generate secrets");
                 throw std::runtime_error("Crypto: /dev/urandom unavailable or short read");
             }
 #endif

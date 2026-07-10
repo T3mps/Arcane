@@ -88,10 +88,10 @@ namespace Arcane
                 auto cooldownEnd = record->cooldownStart + std::chrono::seconds(config.cooldownSeconds);
                 if (now < cooldownEnd)
                 {
-                    LOG_AUTH_TRACE("Rate limit: {} still in cooldown", key);
+                    LOG_CORE_TRACE("Rate limit: {} still in cooldown", key);
                     return false;   // reject: no touch
                 }
-                LOG_AUTH_DEBUG("Rate limit: {} cooldown expired, resetting", key);
+                LOG_CORE_DEBUG("Rate limit: {} cooldown expired, resetting", key);
                 *record = {now, 1, false, now};
                 m_records.Touch(key);
                 return true;
@@ -110,7 +110,7 @@ namespace Arcane
             {
                 record->inCooldown = true;
                 record->cooldownStart = now;
-                LOG_AUTH_WARN("Rate limit triggered for {}: {} attempts in {}s, cooldown {}s",
+                LOG_CORE_WARN("Rate limit triggered for {}: {} attempts in {}s, cooldown {}s",
                     key, record->attempts, config.windowSeconds, config.cooldownSeconds);
                 return false;   // reject: no touch (attacker just tripped limit)
             }

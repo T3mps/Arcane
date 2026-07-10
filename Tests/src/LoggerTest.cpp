@@ -166,3 +166,25 @@ TEST_CASE("Logger: a benign event is unchanged and still valid JSON", "[logger]"
     REQUIRE(rows[0].at("item_name").get<std::string>() == "Aria");
     REQUIRE(rows[0].at("banner").get<std::string>() == "standard");
 }
+
+TEST_CASE("Logger: JsonEscape escapes quotes, backslashes, and control chars", "[logger]")
+{
+    using Arcane::Logger;
+    CHECK(Logger::JsonEscape("plain") == "plain");
+    CHECK(Logger::JsonEscape("a\"b") == "a\\\"b");
+    CHECK(Logger::JsonEscape("a\\b") == "a\\\\b");
+    CHECK(Logger::JsonEscape("a\nb") == "a\\nb");
+}
+
+TEST_CASE("Logger: Get by name returns a usable named logger", "[logger]")
+{
+    auto* lg = Arcane::Logger::Get("Core");
+    REQUIRE(lg != nullptr);
+    CHECK(lg->name() == "Core");
+    // Same name twice = same logger (registry, not a fresh sink stack per call).
+    CHECK(Arcane::Logger::Get("Core") == lg);
+    // A second, arbitrary name also works (lazy creation).
+    auto* other = Arcane::Logger::Get("PurgeSeamProbe");
+    REQUIRE(other != nullptr);
+    CHECK(other != lg);
+}
