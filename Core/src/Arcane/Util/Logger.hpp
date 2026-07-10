@@ -10,8 +10,10 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // spdlog configuration - must be before spdlog includes
 #define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE
@@ -47,60 +49,20 @@ namespace Arcane
     public:
         // Initialize the logging system - call once at startup.
         // An empty logFilePath skips the rotating-file sink (console only).
+        // Calling Init again with a file path AFTER a console-only (auto)
+        // init upgrades in place: the file sink is installed and attached to
+        // every already-registered logger, so an early LOG_CORE_* cannot
+        // silently lock the process out of its log file.
         static void Init(Level consoleLevel = Level::Info, Level fileLevel = Level::Trace, const std::string& logFilePath = "")
         {
-            if (s_initialized)
-                return;
-
-            try
-            {
-                // Create sinks
-                auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-                consoleSink->set_level(static_cast<spdlog::level::level_enum>(consoleLevel));
-                consoleSink->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
-
-                std::vector<spdlog::sink_ptr> sinks = { consoleSink };
-
-                if (!logFilePath.empty())
-                {
-                    // Ensure the log directory exists
-                    auto logDir = std::filesystem::path(logFilePath).parent_path();
-                    if (!logDir.empty())
-                        std::filesystem::create_directories(logDir);
-
-                    auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                        logFilePath,
-                        5 * 1024 * 1024,  // 5 MB max file size
-                        3                  // Keep 3 rotated files
-                    );
-                    fileSink->set_level(static_cast<spdlog::level::level_enum>(fileLevel));
-                    fileSink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
-                    sinks.push_back(fileSink);
-                }
-
-                // Remember the sink stack so lazily-created named loggers
-                // (Get(std::string_view) below) share the same outputs. No
-                // named logger is created eagerly -- Get is lazy and the
-                // category vocabulary belongs to the consumer.
-                s_sinks = sinks;
-
-                // Set global level to trace (individual sinks control filtering)
-                spdlog::set_level(spdlog::level::trace);
-
-                // Flush on info or higher (ensures JSON events are written immediately)
-                spdlog::flush_on(spdlog::level::info);
-
-                s_initialized = true;
-            }
-            catch (const spdlog::spdlog_ex& ex)
-            {
-                std::cerr << "Logger initialization failed: " << ex.what() << std::endl;
-            }
+            std::lock_guard<std::mutex> lock(s_mutex);
+            InitUnlocked(consoleLevel, fileLevel, logFilePath);
         }
 
         // Shutdown the logging system - call at exit
         static void Shutdown()
         {
+            std::lock_guard<std::mutex> lock(s_mutex);
             spdlog::shutdown();
             s_sinks.clear();
             s_initialized = false;
@@ -110,12 +72,19 @@ namespace Arcane
         // sinks configured at Init (console always; file sink when Init was given
         // a log file path). Category names are the CONSUMER's vocabulary -- the
         // engine core itself logs only under "Core" (LOG_CORE_* below).
+        // Thread-safe: the registry lookup is spdlog-internal-locked; the
+        // create-on-miss path is serialized under s_mutex (register_logger
+        // throws on a duplicate name, so check-then-register must not race).
         static spdlog::logger* Get(std::string_view name)
         {
-            if (!IsInitialized())
-                Init();
             std::string key(name);
             if (auto existing = spdlog::get(key))
+                return existing.get();
+
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if (!s_initialized)
+                InitUnlocked(Level::Info, Level::Trace, "");
+            if (auto existing = spdlog::get(key))  // lost the create race: reuse
                 return existing.get();
             return CreateLogger(key, s_sinks).get();
         }
@@ -125,6 +94,7 @@ namespace Arcane
         // level covers every logger -- including lazily-created ones.
         static void SetConsoleLevel(Level level)
         {
+            std::lock_guard<std::mutex> lock(s_mutex);
             if (!s_sinks.empty())
                 s_sinks[0]->set_level(static_cast<spdlog::level::level_enum>(level));
         }
@@ -132,6 +102,7 @@ namespace Arcane
         // Set file log level at runtime (no-op when Init had no file path).
         static void SetFileLevel(Level level)
         {
+            std::lock_guard<std::mutex> lock(s_mutex);
             if (s_sinks.size() > 1)
                 s_sinks[1]->set_level(static_cast<spdlog::level::level_enum>(level));
         }
@@ -185,6 +156,93 @@ namespace Arcane
         }
 
     private:
+        // Body of Init; caller must hold s_mutex.
+        static void InitUnlocked(Level consoleLevel, Level fileLevel, const std::string& logFilePath)
+        {
+            if (s_initialized)
+            {
+                if (logFilePath.empty())
+                    return;  // idempotent re-init, nothing to add
+
+                if (s_sinks.size() > 1)
+                {
+                    // A file sink is already installed; keep it rather than
+                    // silently splitting the stream across two files.
+                    if (auto core = spdlog::get("Core"))
+                        core->warn("Logger::Init called again with '{}'; existing file sink kept", logFilePath);
+                    return;
+                }
+
+                // Late upgrade: something logged before the app's real Init
+                // (auto-init installed console only). Install the file sink now
+                // and attach it to every already-registered logger so the file
+                // stream is not lost for the process lifetime.
+                try
+                {
+                    auto fileSink = MakeFileSink(logFilePath, fileLevel);
+                    s_sinks.push_back(fileSink);
+                    spdlog::apply_all([&](std::shared_ptr<spdlog::logger> l) {
+                        l->sinks().push_back(fileSink);
+                    });
+                    if (auto core = spdlog::get("Core"))
+                        core->info("Logger: file sink '{}' installed late (console-only auto-init preceded Init)", logFilePath);
+                }
+                catch (const spdlog::spdlog_ex& ex)
+                {
+                    std::cerr << "Logger late file-sink install failed: " << ex.what() << std::endl;
+                }
+                return;
+            }
+
+            try
+            {
+                // Create sinks
+                auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+                consoleSink->set_level(static_cast<spdlog::level::level_enum>(consoleLevel));
+                consoleSink->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
+
+                std::vector<spdlog::sink_ptr> sinks = { consoleSink };
+
+                if (!logFilePath.empty())
+                    sinks.push_back(MakeFileSink(logFilePath, fileLevel));
+
+                // Remember the sink stack so lazily-created named loggers
+                // (Get(std::string_view) above) share the same outputs. No
+                // named logger is created eagerly -- Get is lazy and the
+                // category vocabulary belongs to the consumer.
+                s_sinks = sinks;
+
+                // Set global level to trace (individual sinks control filtering)
+                spdlog::set_level(spdlog::level::trace);
+
+                // Flush on info or higher (ensures JSON events are written immediately)
+                spdlog::flush_on(spdlog::level::info);
+
+                s_initialized = true;
+            }
+            catch (const spdlog::spdlog_ex& ex)
+            {
+                std::cerr << "Logger initialization failed: " << ex.what() << std::endl;
+            }
+        }
+
+        static spdlog::sink_ptr MakeFileSink(const std::string& logFilePath, Level fileLevel)
+        {
+            // Ensure the log directory exists
+            auto logDir = std::filesystem::path(logFilePath).parent_path();
+            if (!logDir.empty())
+                std::filesystem::create_directories(logDir);
+
+            auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                logFilePath,
+                5 * 1024 * 1024,  // 5 MB max file size
+                3                  // Keep 3 rotated files
+            );
+            fileSink->set_level(static_cast<spdlog::level::level_enum>(fileLevel));
+            fileSink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
+            return fileSink;
+        }
+
         static std::shared_ptr<spdlog::logger> CreateLogger(const std::string& name, const std::vector<spdlog::sink_ptr>& sinks)
         {
             auto logger = std::make_shared<spdlog::logger>(name, sinks.begin(), sinks.end());
@@ -194,6 +252,7 @@ namespace Arcane
         }
 
         static inline bool s_initialized = false;
+        static inline std::mutex s_mutex;
         static inline std::vector<spdlog::sink_ptr> s_sinks;
     };
 
