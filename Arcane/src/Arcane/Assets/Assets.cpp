@@ -72,8 +72,8 @@ namespace Arcane
         class AssetsImpl final : public Assets
         {
         public:
-            explicit AssetsImpl(nvrhi::IDevice* device)
-                : m_device(device)
+            AssetsImpl(nvrhi::IDevice* device, const AssetsDesc& desc)
+                : m_device(device), m_byteBudget(desc.byteBudget)
             {
             }
 
@@ -168,6 +168,7 @@ namespace Arcane
                 stbi_image_free(data);
 
                 m_textures.Put(key, tex, bytes);
+                EnforceBudget();
                 return tex;
             }
 
@@ -196,6 +197,7 @@ namespace Arcane
                 auto ptr = std::make_shared<const std::vector<uint8_t>>(
                     std::move(raw));
                 m_bytes.Put(key, ptr, sz);
+                EnforceBudget();
                 return ptr;
             }
 
@@ -236,15 +238,14 @@ namespace Arcane
                 auto ptr = std::make_shared<const nlohmann::json>(
                     std::move(doc));
                 m_json.Put(key, ptr, sz);
+                EnforceBudget();
                 return ptr;
             }
 
             AssetStats Stats() const override
             {
                 AssetStats s;
-                s.totalBytes = m_textures.TotalBytes() +
-                               m_bytes.TotalBytes() +
-                               m_json.TotalBytes();
+                s.totalBytes = TotalBytes();
                 s.count = (uint32_t)(m_textures.Count() +
                                      m_bytes.Count() +
                                      m_json.Count());
@@ -252,15 +253,77 @@ namespace Arcane
             }
 
         private:
+            uint64_t TotalBytes() const
+            {
+                return m_textures.TotalBytes() +
+                       m_bytes.TotalBytes() +
+                       m_json.TotalBytes();
+            }
+
+            // Budget sweep, run after every insert: evict the globally
+            // least-recently-used entry -- across ALL three caches, comparable
+            // via the shared recency clock -- until the facade total is back
+            // under budget. Pinned (refcounted) entries are never offered by
+            // LeastRecentEvictable and Evict refuses them; memoized failures
+            // are ~zero cost and skipped (evicting them frees nothing and
+            // destroys their do-not-retry memo). The budget is strict, so an
+            // entry larger than the whole budget is swept right back out --
+            // the caller keeps its handle (shared ownership), the cache just
+            // never settles above budget. byteBudget == 0 disables the sweep.
+            void EnforceBudget()
+            {
+                if (m_byteBudget == 0)
+                    return;
+                while (TotalBytes() > m_byteBudget)
+                {
+                    std::string key, candKey;
+                    uint64_t used = UINT64_MAX, candUsed = 0;
+                    int which = -1;
+                    if (m_textures.LeastRecentEvictable(candKey, candUsed) &&
+                        candUsed < used)
+                    {
+                        key = candKey; used = candUsed; which = 0;
+                    }
+                    if (m_bytes.LeastRecentEvictable(candKey, candUsed) &&
+                        candUsed < used)
+                    {
+                        key = candKey; used = candUsed; which = 1;
+                    }
+                    if (m_json.LeastRecentEvictable(candKey, candUsed) &&
+                        candUsed < used)
+                    {
+                        key = candKey; used = candUsed; which = 2;
+                    }
+
+                    bool evicted = false;
+                    switch (which)
+                    {
+                    case 0: evicted = m_textures.Evict(key); break;
+                    case 1: evicted = m_bytes.Evict(key); break;
+                    case 2: evicted = m_json.Evict(key); break;
+                    default: break;
+                    }
+                    if (!evicted)
+                        break;   // nothing evictable left (pinned/failures only)
+                }
+            }
+
             nvrhi::IDevice* m_device;
-            AssetCache<nvrhi::TextureHandle>  m_textures;
-            AssetCache<BytesPtr>              m_bytes;
-            AssetCache<JsonPtr>               m_json;
+            uint64_t m_byteBudget;
+
+            // ONE recency clock across the three caches (declared first: the
+            // caches capture its address) so the budget sweep can compare LRU
+            // candidates cross-cache. See AssetCache's shared-clock ctor.
+            uint64_t m_lruClock = 0;
+            AssetCache<nvrhi::TextureHandle>  m_textures{&m_lruClock};
+            AssetCache<BytesPtr>              m_bytes{&m_lruClock};
+            AssetCache<JsonPtr>               m_json{&m_lruClock};
         };
     }
 
-    std::unique_ptr<Assets> Assets::Create(nvrhi::IDevice* device)
+    std::unique_ptr<Assets> Assets::Create(nvrhi::IDevice* device,
+                                           const AssetsDesc& desc)
     {
-        return std::make_unique<AssetsImpl>(device);
+        return std::make_unique<AssetsImpl>(device, desc);
     }
 }

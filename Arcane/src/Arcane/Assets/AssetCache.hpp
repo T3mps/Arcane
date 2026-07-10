@@ -24,6 +24,23 @@ namespace Arcane
     class AssetCache
     {
     public:
+        // Default: a self-contained recency clock.
+        AssetCache() = default;
+
+        // Shared recency clock: several caches tick ONE counter, so their
+        // `used` stamps are globally comparable and a facade-level sweep can
+        // pick a true cross-cache LRU (the Assets byte-budget path).
+        explicit AssetCache(uint64_t* sharedClock)
+        {
+            if (sharedClock)
+                m_tick = sharedClock;
+        }
+
+        // Non-copyable/movable: m_tick may alias m_ownTick, and no caller
+        // needs value semantics (caches live as facade members).
+        AssetCache(const AssetCache&) = delete;
+        AssetCache& operator=(const AssetCache&) = delete;
+
         bool Has(const std::string& key) const
         {
             return m_entries.find(key) != m_entries.end();
@@ -42,7 +59,7 @@ namespace Arcane
             auto it = m_entries.find(key);
             if (it == m_entries.end() || it->second.failed)
                 return T{};
-            it->second.used = ++m_tick;
+            it->second.used = ++(*m_tick);
             return it->second.obj;
         }
 
@@ -57,7 +74,7 @@ namespace Arcane
             e.obj = std::move(obj);
             e.bytes = bytes;
             e.failed = false;
-            e.used = ++m_tick;
+            e.used = ++(*m_tick);
         }
 
         void PutFailure(const std::string& key)
@@ -68,7 +85,7 @@ namespace Arcane
             e.obj = T{};
             e.bytes = 0;
             e.failed = true;
-            e.used = ++m_tick;
+            e.used = ++(*m_tick);
         }
 
         void Acquire(const std::string& key)
@@ -113,6 +130,29 @@ namespace Arcane
             return best;
         }
 
+        // Budget-sweep candidate: the oldest unpinned entry with bytes > 0.
+        // Unlike LeastRecentKey, memoized failures (0 bytes) are skipped --
+        // evicting them frees nothing and destroys their do-not-retry memo.
+        // Writes the key + its recency stamp (comparable across caches on a
+        // shared clock) and returns true; false when nothing is evictable.
+        // O(n) scan -- same v1 tradeoff as LeastRecentKey.
+        bool LeastRecentEvictable(std::string& keyOut, uint64_t& usedOut) const
+        {
+            bool found = false;
+            uint64_t bestUsed = UINT64_MAX;
+            for (const auto& [key, e] : m_entries)
+            {
+                if (e.refs == 0 && e.bytes > 0 && e.used < bestUsed)
+                {
+                    bestUsed = e.used;
+                    keyOut = key;
+                    usedOut = e.used;
+                    found = true;
+                }
+            }
+            return found;
+        }
+
         // Drops every entry (objects + memoized failures) and resets the byte
         // total. The recency tick is left monotonic. Used when the backing
         // resource an entry depends on changes (e.g. the render device rebinds).
@@ -136,7 +176,8 @@ namespace Arcane
         };
 
         std::unordered_map<std::string, Entry> m_entries;
-        uint64_t m_tick = 0;
+        uint64_t m_ownTick = 0;
+        uint64_t* m_tick = &m_ownTick;   // own clock unless shared (see ctor)
         uint64_t m_totalBytes = 0;
     };
 }

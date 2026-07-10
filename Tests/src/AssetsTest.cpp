@@ -43,6 +43,160 @@ namespace
     }
 }
 
+TEST_CASE("assets: byte budget evicts least-recently-used entries and stays within budget", "[assets][budget]")
+{
+    // Three 40-byte files against a 100-byte budget: only two fit at a time.
+    // Device-free: budget/eviction runs on the shared facade path, exercised
+    // here through the bytes loader.
+    const auto a = WriteTestJson(std::string(40, 'a'), "arcane-assets-budget-a.bin");
+    const auto b = WriteTestJson(std::string(40, 'b'), "arcane-assets-budget-b.bin");
+    const auto c = WriteTestJson(std::string(40, 'c'), "arcane-assets-budget-c.bin");
+
+    Arcane::AssetsDesc desc;
+    desc.byteBudget = 100;
+    auto assets = Arcane::Assets::Create(nullptr, desc);
+    REQUIRE(assets != nullptr);
+
+    auto pa = assets->GetBytes(a);
+    auto pb = assets->GetBytes(b);
+    REQUIRE(pa != nullptr);
+    REQUIRE(pb != nullptr);
+    CHECK(assets->Stats().totalBytes == 80);   // both fit
+
+    CHECK(assets->GetBytes(a) == pa);          // touch A: B is now the LRU
+
+    auto pc = assets->GetBytes(c);             // 120 > 100 -> evicts B (not A)
+    REQUIRE(pc != nullptr);
+    CHECK(assets->Stats().totalBytes == 80);
+    CHECK(assets->Stats().count == 2);
+
+    CHECK(assets->GetBytes(a) == pa);          // A survived (recently used)
+    auto pb2 = assets->GetBytes(b);            // B was evicted: fresh load...
+    REQUIRE(pb2 != nullptr);
+    CHECK(pb2 != pb);                          // ...(pb still held, so a new alloc)
+    CHECK(assets->Stats().totalBytes <= 100);  // never settles over budget
+
+    std::remove(a.string().c_str());
+    std::remove(b.string().c_str());
+    std::remove(c.string().c_str());
+}
+
+TEST_CASE("assets: budget is facade-wide -- a JSON load evicts older bytes entries", "[assets][budget]")
+{
+    const auto a = WriteTestJson(std::string(40, 'a'), "arcane-assets-budget-d.bin");
+    const auto b = WriteTestJson(std::string(40, 'b'), "arcane-assets-budget-e.bin");
+    // Exactly 40 bytes of valid JSON: 7 ({"k":1}) + 33 trailing spaces
+    // (legal whitespace).
+    const auto j = WriteTestJson(R"({"k":1})" + std::string(33, ' '),
+                                 "arcane-assets-budget-f.json");
+
+    Arcane::AssetsDesc desc;
+    desc.byteBudget = 100;
+    auto assets = Arcane::Assets::Create(nullptr, desc);
+    REQUIRE(assets != nullptr);
+
+    auto pa = assets->GetBytes(a);
+    auto pb = assets->GetBytes(b);
+    REQUIRE(pa != nullptr);
+    REQUIRE(pb != nullptr);
+
+    // The JSON insert pushes the FACADE total to 120: the global LRU is the
+    // bytes entry A -- it lives in the OTHER cache, and is still evicted.
+    auto pj = assets->GetJson(j);
+    REQUIRE(pj != nullptr);
+    CHECK(assets->Stats().totalBytes == 80);
+    CHECK(assets->GetBytes(b) == pb);          // survived
+    CHECK(assets->GetJson(j) == pj);           // survived
+
+    auto pa2 = assets->GetBytes(a);            // A reloads: it was evicted
+    REQUIRE(pa2 != nullptr);
+    CHECK(pa2 != pa);
+    CHECK(assets->Stats().totalBytes <= 100);
+
+    std::remove(a.string().c_str());
+    std::remove(b.string().c_str());
+    std::remove(j.string().c_str());
+}
+
+TEST_CASE("assets: an asset larger than the whole budget is served but not cached", "[assets][budget]")
+{
+    const auto big = WriteTestJson(std::string(60, 'x'), "arcane-assets-budget-g.bin");
+
+    Arcane::AssetsDesc desc;
+    desc.byteBudget = 50;
+    auto assets = Arcane::Assets::Create(nullptr, desc);
+    REQUIRE(assets != nullptr);
+
+    // The load succeeds (the caller holds the bytes) but the budget is
+    // strict: the oversized entry is swept right back out, so the facade
+    // never settles above budget.
+    auto p1 = assets->GetBytes(big);
+    REQUIRE(p1 != nullptr);
+    CHECK(p1->size() == 60);
+    CHECK(assets->Stats().totalBytes <= 50);
+
+    auto p2 = assets->GetBytes(big);           // not cached: a fresh load
+    REQUIRE(p2 != nullptr);
+    CHECK(p2 != p1);
+    CHECK(*p2 == *p1);
+
+    std::remove(big.string().c_str());
+}
+
+TEST_CASE("assets: memoized failures are ~zero cost and survive the budget sweep", "[assets][budget]")
+{
+    const auto a = WriteTestJson(std::string(40, 'a'), "arcane-assets-budget-h.bin");
+    const auto b = WriteTestJson(std::string(40, 'b'), "arcane-assets-budget-i.bin");
+
+    Arcane::AssetsDesc desc;
+    desc.byteBudget = 50;
+    auto assets = Arcane::Assets::Create(nullptr, desc);
+    REQUIRE(assets != nullptr);
+
+    CHECK(assets->GetBytes("does/not/exist.bin") == nullptr);  // memoized, 0 bytes
+    CHECK(assets->Stats().count == 1);
+
+    auto pa = assets->GetBytes(a);
+    REQUIRE(pa != nullptr);
+    auto pb = assets->GetBytes(b);             // 80 > 50 -> evicts A...
+    REQUIRE(pb != nullptr);
+
+    // ...but NOT the failure memo: entries = {failure, B}, bytes = B only.
+    CHECK(assets->Stats().count == 2);
+    CHECK(assets->Stats().totalBytes == 40);
+
+    std::remove(a.string().c_str());
+    std::remove(b.string().c_str());
+}
+
+TEST_CASE("assets: byteBudget 0 opts out of eviction; default is 256 MiB", "[assets][budget]")
+{
+    // Documentation-lock on the default so a drive-by change trips a test.
+    CHECK(Arcane::AssetsDesc{}.byteBudget == 256ull * 1024 * 1024);
+
+    const auto a = WriteTestJson(std::string(40, 'a'), "arcane-assets-budget-j.bin");
+    const auto b = WriteTestJson(std::string(40, 'b'), "arcane-assets-budget-k.bin");
+    const auto c = WriteTestJson(std::string(40, 'c'), "arcane-assets-budget-l.bin");
+
+    Arcane::AssetsDesc desc;
+    desc.byteBudget = 0;                       // unbounded (the legacy contract)
+    auto assets = Arcane::Assets::Create(nullptr, desc);
+    REQUIRE(assets != nullptr);
+
+    auto pa = assets->GetBytes(a);
+    auto pb = assets->GetBytes(b);
+    auto pc = assets->GetBytes(c);
+    REQUIRE(pa != nullptr);
+    REQUIRE(pb != nullptr);
+    REQUIRE(pc != nullptr);
+    CHECK(assets->Stats().totalBytes == 120);  // nothing evicted
+    CHECK(assets->Stats().count == 3);
+
+    std::remove(a.string().c_str());
+    std::remove(b.string().c_str());
+    std::remove(c.string().c_str());
+}
+
 TEST_CASE("assets: GetTexture before a render device is set returns null (no crash)", "[assets]")
 {
     // Facade built device-less (the headless / before-SetRenderResources path).

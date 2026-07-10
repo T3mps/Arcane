@@ -24,10 +24,25 @@ namespace Arcane
         uint32_t count = 0;
     };
 
+    struct AssetsDesc
+    {
+        // Facade-wide byte budget across ALL caches (textures + bytes +
+        // JSON). On insert, least-recently-used unpinned entries are evicted
+        // -- cross-cache, on one shared recency clock -- until the total is
+        // back under budget. The budget is strict: an asset larger than the
+        // whole budget is served to the caller but swept right back out
+        // (never cached). Memoized failures cost ~0 bytes and are never
+        // evicted by the sweep. 0 disables eviction (unbounded, the legacy
+        // contract). Default: 256 MiB -- roughly 16 uncompressed 2048^2 RGBA
+        // atlases, generous for the 2D engine while still bounding growth.
+        uint64_t byteBudget = 256ull * 1024 * 1024;
+    };
+
     class ARCANE_API Assets
     {
     public:
-        static std::unique_ptr<Assets> Create(nvrhi::IDevice* device);
+        static std::unique_ptr<Assets> Create(nvrhi::IDevice* device,
+                                              const AssetsDesc& desc = {});
         virtual ~Assets() = default;
 
         // Bind (or rebind) the render device used for texture uploads. The facade
