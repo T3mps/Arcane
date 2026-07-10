@@ -15,7 +15,7 @@
 //   ComputeMass is UNCHANGED from M6 (closed forms per kind; validated against
 //   hand-derived analytic values). The existing test assertions still pass.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Shapes.hpp>
 

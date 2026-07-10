@@ -22,7 +22,7 @@
 // reused std containers; Update sorts in place. Output fills the caller's
 // vector via clear()+push_back (capacity preserved).
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <cstdint>
 #include <unordered_map>

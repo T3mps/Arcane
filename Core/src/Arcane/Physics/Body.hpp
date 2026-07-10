@@ -20,7 +20,7 @@
 // P2.1). Dynamic-only effects no-op on Static/Kinematic, matching the world
 // methods. (See PhysicsWorld.hpp PORT BOUNDARY.)
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // namespace Arcane::Physics, Core style.
 
 #include <Arcane/Physics/PhysicsTypes.hpp>

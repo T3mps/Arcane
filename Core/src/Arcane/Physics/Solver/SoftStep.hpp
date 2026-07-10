@@ -53,7 +53,7 @@
 // batch packing are deterministic functions of the world-built (already sorted)
 // contact array; no wall-clock; no fast-math (the workspace builds /fp:precise).
 //
-// PRESENTATION-FREE + C++20-clean: glm::vec2 + std + sibling Physics headers
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers
 // only. No SDL3/NVRHI/ImGui. namespace Arcane::Physics, Core style.
 
 #include <array>

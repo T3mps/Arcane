@@ -26,7 +26,7 @@
 // (kEpaEps), deterministic closest-edge selection, no wall-clock, no heap
 // (fixed stack arrays sized to kEpaMaxVerts).
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Narrowphase/Epa.hpp>
 

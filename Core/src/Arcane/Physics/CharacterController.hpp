@@ -50,7 +50,7 @@
 // state reused across calls (clear()+push_back preserves capacity), mirroring
 // the Lua controller's _spans / _statics / _polyScratch.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no iso/Map/world coupling. Compiles both /MD
 // (Arcane.dll) and static-CRT/C++20 (project ArcaneCore, server flavor).
 // namespace Arcane::Physics, Core style.

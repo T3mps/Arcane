@@ -24,7 +24,7 @@
 // oracle they are Prepared once with the full dt and solved each velocity
 // iteration, exactly the Lua SequentialImpulse ordering.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. namespace Arcane::Physics, Core style.
 
 #include <cstdint>

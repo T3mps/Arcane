@@ -13,7 +13,7 @@
 // convenience that creates one fixture from the BodyDef's shape + material.
 // Task 5 wires fixture-pair contact generation; this task is data-model only.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll) and
 // static-CRT/C++20 (ArcaneCore, server flavor).
 

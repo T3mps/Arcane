@@ -26,7 +26,7 @@
 // each id's tight box so pairs()/queryAABB can narrow without a back-reference
 // to the world.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <cstdint>
 #include <unordered_map>

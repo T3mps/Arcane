@@ -5,7 +5,7 @@
 // Reference: Box2D v3 manifold.c (b2CollidePolygons, b2ClipSegments) +
 //            the existing M6 Sat.cpp / Gjk.cpp for the local style.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics only.
 
 #include <Arcane/Physics/Narrowphase/Collide.hpp>
 

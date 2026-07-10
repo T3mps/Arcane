@@ -42,7 +42,7 @@
 //   NOT yet consumed by the solver -- the existing Pairs() call site is
 //   unchanged.  This is a pure add.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <cstdint>
 #include <unordered_set>

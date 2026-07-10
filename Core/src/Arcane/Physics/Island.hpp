@@ -33,7 +33,7 @@
 // iterate members by ascending slot index; ForEachIsland iterates ascending
 // island id. No wall clock, no fast math.
 //
-// PRESENTATION-FREE + C++23-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++23-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. namespace Arcane::Physics, Core style.
 
 #include <cstdint>

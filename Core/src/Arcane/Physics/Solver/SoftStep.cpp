@@ -6,7 +6,7 @@
 // v3 b2SolveContactsTask normal+friction form (separation re-evaluated each
 // sub-step from per-body position deltas).
 //
-// PRESENTATION-FREE + C++20-clean: glm::vec2 + std + sibling Physics headers.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers.
 
 #include <Arcane/Physics/Solver/SoftStep.hpp>
 

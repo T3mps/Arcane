@@ -5,7 +5,7 @@
 // sweep-based queryAABB / pairs. Output is sorted (ids ascending / pairs by
 // (a,b)) for the uniform deterministic contract.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Broadphase/SweepAndPrune.hpp>
 

@@ -33,7 +33,7 @@
 // per-insert / per-Pairs heap traffic after warmup. Pairs/QueryAABB fill the
 // caller's std::vector with clear()+push_back, which preserves capacity.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll) and
 // static-CRT/C++20 (project ArcaneCore, server flavor). namespace
 // Arcane::Physics, Core style.

@@ -29,7 +29,7 @@
 // on return. DETERMINISM: fixed caps + fixed epsilon + fixed perp-sign / vertex
 // -replace decision; no wall-clock; no heap.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Narrowphase/Mpr.hpp>
 

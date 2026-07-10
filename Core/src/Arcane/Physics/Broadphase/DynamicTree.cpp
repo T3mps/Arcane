@@ -5,7 +5,7 @@
 // index-based pool (zero steady-state heap) and the uniform deterministic
 // output contract (sorted, true-overlap pairs / sorted query ids).
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Broadphase/DynamicTree.hpp>
 

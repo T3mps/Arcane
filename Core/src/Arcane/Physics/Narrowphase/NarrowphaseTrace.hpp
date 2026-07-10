@@ -26,7 +26,7 @@
 // PhysicsWorld::DebugCollide (a side-effect-free re-run) passes a non-null
 // recorder. Determinism is therefore unaffected.
 //
-// PRESENTATION-FREE + C++20-clean: std + glm (Vec2) + sibling Physics headers
+// PRESENTATION-FREE + C++20-clean: std + Geometry::Vec2 + sibling Physics headers
 // (NarrowphaseKind + Manifold + Shapes + PhysicsTypes) only. All POD / Vec2 /
 // std::vector. No SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll)
 // and static-CRT (ArcaneCore server flavor).

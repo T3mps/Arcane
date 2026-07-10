@@ -10,7 +10,7 @@
 // helpers). All state is captured at Prepare into the joint object -> zero
 // steady-state allocation in the solve loop.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // namespace Arcane::Physics, Core style.
 
 #include <cstdint>

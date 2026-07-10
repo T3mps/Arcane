@@ -10,7 +10,7 @@
 // are the contact-manifold STRUCTS, which are the lingua franca of the
 // narrowphase: Collide(...) RETURNS a Manifold and the Solver consumes one.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features.
 
 #include <cstdint>

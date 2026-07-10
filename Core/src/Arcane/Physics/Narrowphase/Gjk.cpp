@@ -15,7 +15,7 @@
 // and the closest-point reductions on the same numeric footing as the Lua
 // reference.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Narrowphase/Gjk.hpp>
 

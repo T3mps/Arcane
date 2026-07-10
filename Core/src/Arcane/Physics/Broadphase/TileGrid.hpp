@@ -57,7 +57,7 @@
 // DETERMINISM: row-major scan, fixed PAD, integer cell math, no wall-clock, no
 // fast-math.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no iso/Map/world coupling. Also compiled
 // static-CRT/C++20 in the server flavor. namespace Arcane::Physics, Core style.
 

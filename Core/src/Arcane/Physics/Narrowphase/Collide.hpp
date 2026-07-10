@@ -57,7 +57,7 @@
 //   fixed (edge index ascending). Zero per-call heap (stack scratch only).
 //
 // PRESENTATION-FREE + dual CRT:
-//   glm + std + sibling Physics headers only. Compiles /MD (Arcane.dll) and
+//   Geometry::Vec2 + std + sibling Physics headers only. Compiles /MD (Arcane.dll) and
 //   static-CRT (ArcaneCore server flavor). C++20-clean.
 
 #include <Arcane/Physics/Narrowphase/Manifold.hpp>

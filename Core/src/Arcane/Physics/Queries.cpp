@@ -12,7 +12,7 @@
 // are coordinate-agnostic and port faithfully. See PhysicsWorld.hpp for the
 // per-method contract.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/PhysicsWorld.hpp>
 

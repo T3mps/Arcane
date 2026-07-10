@@ -7,7 +7,7 @@
 // point-constraint math routes through JointMath.hpp (the ported vat/applyAt/
 // solvePoint helpers).
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Joints/Joints.hpp>
 

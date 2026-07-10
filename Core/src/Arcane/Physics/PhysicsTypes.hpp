@@ -8,9 +8,9 @@
 // algorithms. See docs/superpowers/specs/2026-06-14-* for the milestone plan.
 //
 // PRESENTATION-FREE: this header (and everything under Arcane/Physics/) pulls
-// in only glm + the C++ standard library. No SDL3/NVRHI/Batcher2D/ImGui. It
-// must compile both /MD (into Arcane.dll) and static-CRT/C++20 (the server
-// flavor compiled as project ArcaneCore), so it stays C++20-clean.
+// in only Geometry::Vec2 + the C++ standard library. No SDL3/NVRHI/Batcher2D/
+// ImGui. It must compile both /MD (into Arcane.dll) and static-CRT/C++20 (the
+// server flavor compiled as project ArcaneCore), so it stays C++20-clean.
 //
 // SCALAR CHOICE (determinism, P1.0 decision): stored physics state uses f32.
 // Per-platform self-consistent determinism (fixed 60 Hz, stable iteration

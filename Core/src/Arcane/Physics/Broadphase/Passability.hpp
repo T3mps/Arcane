@@ -19,7 +19,7 @@
 // cell to its world AABB is the TileGrid's job (Cartesian, see TileGrid.hpp);
 // this seam only reports solidity + bounds.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no iso/Map/world coupling. Also compiled
 // static-CRT/C++20 in the server flavor. namespace Arcane::Physics, Core style.
 

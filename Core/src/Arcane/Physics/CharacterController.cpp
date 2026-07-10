@@ -4,7 +4,7 @@
 // See CharacterController.hpp for the contract + the faithful-substep PORT NOTE
 // (the Lua substep+depenetrate algorithm; NOT a true ShapeCast sweep).
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/CharacterController.hpp>
 

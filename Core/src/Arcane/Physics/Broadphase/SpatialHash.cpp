@@ -5,7 +5,7 @@
 // pairs()/queryAABB narrow to TRUE tight-box overlap (the Lua returned broad
 // candidates) and emit SORTED output, so all three strategies agree.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Broadphase/SpatialHash.hpp>
 

@@ -26,7 +26,7 @@
 //   and the full [physics] suite stays green. The new unified core data
 //   lives IN the same verts/normals vectors (now populated for all four kinds).
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features (this module is also
 // compiled static-CRT/C++20 in the server flavor). Shapes are immutable
 // value geometry -- multiple bodies can share one. Precomputed data (centroid,

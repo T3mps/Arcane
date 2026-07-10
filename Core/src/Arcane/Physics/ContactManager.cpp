@@ -6,7 +6,7 @@
 // world gate; gated -> begun=false (DROP, re-arm later); level-triggered
 // re-arm emits a fresh begin for currently-overlapping pairs.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/ContactManager.hpp>
 

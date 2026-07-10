@@ -5,7 +5,8 @@
 // SORTED + de-duped (the caller applies the tight AABB test). Bounded memory
 // (hash, not a dense array); cell coord = floor((p - origin)/tileSize).
 // DETERMINISM: cells visited row-major; output sorted+unique; no fp in the cell
-// index math beyond the floor. PRESENTATION-FREE + C++20 (glm+std+Physics only).
+// index math beyond the floor.
+// PRESENTATION-FREE + C++20 (Geometry::Vec2 + std + Physics only).
 #include <cstdint>
 #include <unordered_map>
 #include <vector>

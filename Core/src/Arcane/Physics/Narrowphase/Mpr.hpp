@@ -37,7 +37,7 @@
 // (kMprEps) + a fixed perp-sign / bracket decision; no wall-clock; no heap
 // (fixed stack scratch).
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only
 // (Gjk.hpp, PhysicsTypes.hpp). No SDL3/NVRHI/Batcher2D/ImGui/Astra. Compiles
 // /MD (Arcane.dll) and static-CRT (ArcaneCore server flavor).
 

@@ -1,8 +1,9 @@
 #pragma once
 
 // Arcane::Geometry shared predicates + the canonical-form post-processing every
-// convex-hull policy runs through. Presentation-free: glm + std only (compiles
-// /MD and static-CRT). Header-only templates; scalar-generic on T (float|double).
+// convex-hull policy runs through. Presentation-free: Geometry::Vec2 + std only
+// (compiles /MD and static-CRT). Header-only templates; scalar-generic on T
+// (float|double).
 
 #include <algorithm>
 #include <cmath>          // std::fma

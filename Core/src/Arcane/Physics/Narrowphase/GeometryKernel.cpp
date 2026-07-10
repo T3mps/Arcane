@@ -6,7 +6,7 @@
 // Physics tests). The epsilons (1e-9, 1e-12) are carried over verbatim from the
 // Lua so the branch selection matches.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 
 #include <Arcane/Physics/Narrowphase/GeometryKernel.hpp>
 

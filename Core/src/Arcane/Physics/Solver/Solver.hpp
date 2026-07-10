@@ -34,7 +34,7 @@
 // invMass/invInertia of A + B -- NOT solver-specific solved data). Each solver
 // computes its own effective masses / bias in its own prepare pass.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. namespace Arcane::Physics, Core style.
 
 #include <cstddef>

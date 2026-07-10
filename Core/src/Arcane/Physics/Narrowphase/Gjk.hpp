@@ -33,7 +33,7 @@
 // body candidates (Cast.shapeCast / rayVsBody) is P1.9 and will reuse this
 // primitive; here we expose only the per-obstacle TOI.
 //
-// PRESENTATION-FREE + C++20-clean: glm + std + sibling Physics headers only.
+// PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features (this module is also
 // compiled static-CRT/C++20 in the server flavor). namespace Arcane::Physics.
 
