@@ -68,6 +68,7 @@ workspace "Arcane"
     IncludeDir["DirectXHeaders"]   = "%{wks.location}/../ThirdParty/DirectX-Headers/include"
     IncludeDir["SDL3"]             = VCPKG_INSTALLED_MD .. "/include"
     IncludeDir["imgui"]            = "%{wks.location}/../ThirdParty/imgui"
+    IncludeDir["Manifold2D"]       = "%{wks.location}/../ThirdParty/Manifold2D/include"
 
 group "Dependencies"
     include "../ThirdParty/Catch2"
@@ -78,6 +79,7 @@ group "Dependencies"
     include "../ThirdParty/msdfgen"
     include "../ThirdParty/nvrhi"
     include "../ThirdParty/imgui"
+    include "../ThirdParty/Manifold2D"
 group ""
 
 -- ============================================================================
@@ -108,6 +110,10 @@ project "Core"
         -- M6 physics module (Arcane/Physics/) uses glm for vec2/mat. glm is
         -- header-only; adding it here keeps Core presentation-free.
         "%{IncludeDir.glm}",
+        -- Phase 2 lift: Core's still-resident Physics/Geometry will include
+        -- Manifold2D/Core primitives (FunctionRef/BitSet/Simd/WorkScheduler)
+        -- ahead of the Task 2 move.
+        "%{IncludeDir.Manifold2D}",
     }
 
     defines {
@@ -184,9 +190,10 @@ project "Arcane"
         "%{IncludeDir.imgui}",
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
+        "%{IncludeDir.Manifold2D}",
     }
 
-    links { "Core", "nvrhi", "msdfgen", "freetype", "imgui", "enkiTS" }
+    links { "Core", "nvrhi", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
 
     -- Force EVERY imgui object (incl. imgui_demo's ShowDemoWindow) into the
     -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
@@ -310,6 +317,7 @@ project "Sandbox"
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.Manifold2D}",
     }
     -- Sandbox is the first plugin to drive physics. PhysicsSystem (header-only) is
     -- instantiated in THIS module and calls Arcane::Physics::PhysicsWorld directly;
@@ -321,7 +329,7 @@ project "Sandbox"
     -- DrawPhysicsDebug through a const ref, and both modules compile the identical Core
     -- headers under identical flags (/MD, matching NDEBUG, float-strict) so the layout
     -- matches -- the same identical-layout contract the scene components already rely on.
-    links { "Arcane", "Core" }
+    links { "Arcane", "Core", "Manifold2D" }
     -- ABI v2: the plugin imports imgui from Arcane.dll (one GImGui per process), same
     -- as PlaygroundGame. The import lib arrives via "Arcane" (imgui surface is
     -- /WHOLEARCHIVE-exported there).
@@ -448,6 +456,7 @@ project "ArcaneTests"
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.Manifold2D}",
     }
 
     -- msdfgen and freetype are static libs compiled separately; the smoke test
@@ -456,7 +465,7 @@ project "ArcaneTests"
     -- imgui is NOT linked here: it is exported from Arcane.dll (IMGUI_API =
     -- dllimport below), so the test exe shares the DLL's single GImGui rather
     -- than carrying a second null context. The import lib comes via "Arcane".
-    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen" }
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D" }
 
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame", "Sandbox" }
 
