@@ -1,9 +1,9 @@
-// Arcane::BitSet (b2BitSet equivalent) unit tests.
+// Manifold2D::BitSet (b2BitSet equivalent) unit tests.
 #include <cstdint>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Util/BitSet.hpp>
-using Arcane::BitSet;
+#include <Manifold2D/Core/BitSet.hpp>
+using Manifold2D::BitSet;
 
 TEST_CASE("BitSet: set + ForEachSetBit walks ascending", "[bitset]")
 {

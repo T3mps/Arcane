@@ -1,7 +1,7 @@
 #pragma once
 
 // 2D GJK distance + closest points, surface distance, and a conservative-
-// advancement shape cast for the Arcane 2D physics narrowphase (M6, Task P1.4).
+// advancement shape cast for the Manifold2D 2D physics narrowphase (M6, Task P1.4).
 //
 // PORT NOTE: a faithful port of Client/src/physics/GJK.lua (the distance core,
 // shapeDistance, shapePolyDistance) plus the conservative-advancement `advance`
@@ -35,7 +35,7 @@
 //
 // PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features (this module is also
-// compiled static-CRT/C++20 in the server flavor). namespace Manifold2D::Physics.
+// Arcane-only, /MD. namespace Manifold2D::Physics.
 
 #include <cstdint>
 

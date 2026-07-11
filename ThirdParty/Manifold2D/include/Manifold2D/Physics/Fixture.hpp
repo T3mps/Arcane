@@ -1,6 +1,6 @@
 #pragma once
 
-// Fixture.hpp -- Box2D-style fixture layer for the Arcane 2D physics engine
+// Fixture.hpp -- Box2D-style fixture layer for the Manifold2D 2D physics engine
 // (Physics v2, Phase A, Task 4).
 //
 // A Fixture is one convex collider attached to a Body. A body owns 1..N
@@ -15,7 +15,7 @@
 //
 // PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll) and
-// static-CRT/C++20 (ArcaneCore, server flavor).
+// pure-compute (Arcane-only, /MD).
 
 #include <cstdint>
 

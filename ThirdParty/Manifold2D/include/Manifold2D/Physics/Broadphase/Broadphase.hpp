@@ -1,6 +1,6 @@
 #pragma once
 
-// Broadphase interface for the Arcane 2D physics engine (M6, Task P1.6).
+// Broadphase interface for the Manifold2D 2D physics engine (M6, Task P1.6).
 //
 // PORT + MODERNIZE: the three Lua broadphases
 // (Client/src/physics/AABBTree.lua, SpatialHash.lua, SAP.lua) share one
@@ -35,7 +35,7 @@
 //
 // PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll) and
-// static-CRT/C++20 (project ArcaneCore, server flavor). namespace
+// pure-compute (Arcane-only, /MD). namespace
 // Manifold2D::Physics, Core style.
 
 #include <cstdint>

@@ -22,7 +22,7 @@
 // compiled TU), so it needs no premake regen.
 //
 // PRESENTATION-FREE + C++20-clean: <cstdint> only. Compiles both /MD
-// (Arcane.dll) and static-CRT (ArcaneCore server flavor).
+// (Arcane.dll) and pure-compute (Arcane-only, /MD).
 
 #include <cstdint>
 

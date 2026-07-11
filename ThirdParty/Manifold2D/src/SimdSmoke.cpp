@@ -1,11 +1,10 @@
-// Pilot: a real Core TU that instantiates the SIMD wrapper, so both Core flavors
-// (Arcane.dll /MD and ArcaneCore static-CRT) compile Simd.hpp. No real behavior;
-// this keeps the header building inside the engine until the SIMD solver (next
-// spec) becomes its real consumer.
-#include <Arcane/Math/Simd.hpp>
-#include <Arcane/Math/SimdSmoke.hpp>
+// SimdSmokeSum -- a tiny end-to-end smoke over the Manifold2D::Simd wide-float
+// wrapper (sums an array via f32w). Exercised by SimdWideTests; compiling it in
+// a real TU also forces the wrapper to instantiate.
+#include <Manifold2D/Core/Simd.hpp>
+#include <Manifold2D/Core/SimdSmoke.hpp>
 
-namespace Arcane { namespace Simd {
+namespace Manifold2D { namespace Simd {
 
 float SimdSmokeSum(const float* p, int count) noexcept
 {
@@ -21,4 +20,4 @@ float SimdSmokeSum(const float* p, int count) noexcept
     return sum;
 }
 
-} } // namespace Arcane::Simd
+} } // namespace Manifold2D::Simd

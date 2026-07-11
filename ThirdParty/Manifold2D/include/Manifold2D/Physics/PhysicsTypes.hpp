@@ -1,16 +1,16 @@
 #pragma once
 
-// Core value types for the Arcane 2D physics engine (M6).
+// Core value types for the Manifold2D 2D physics engine (M6).
 //
 // PORT NOTE: this engine is a first-party port of the proven Lua physics
 // engine at Client/src/physics/*.lua. The Lua engine + its physics_harness
 // are the behavioral oracle. We port named modules; we do not invent
 // algorithms. See docs/superpowers/specs/2026-06-14-* for the milestone plan.
 //
-// PRESENTATION-FREE: this header (and everything under Arcane/Physics/) pulls
+// PRESENTATION-FREE: this header (and everything under Manifold2D/Physics/) pulls
 // in only Geometry::Vec2 + the C++ standard library. No SDL3/NVRHI/Batcher2D/
 // ImGui. It must compile both /MD (into Arcane.dll) and static-CRT/C++20 (the
-// server flavor compiled as project ArcaneCore), so it stays C++20-clean.
+// Arcane-only build).
 //
 // SCALAR CHOICE (determinism, P1.0 decision): stored physics state uses f32.
 // Per-platform self-consistent determinism (fixed 60 Hz, stable iteration
@@ -146,7 +146,7 @@ namespace Manifold2D
         inline constexpr Real kLinearSlop = Real(0.005);
 
         // Box2D v3 B2_MAX_ROTATION: max rotation per FULL step (quarter turn).
-        // constants.h:33 -> 0.25f * B2_PI. Arcane units == Box2D units.
+        // constants.h:33 -> 0.25f * B2_PI. Manifold2D units == Box2D units.
         inline constexpr Real kMaxRotation = Real(0.25) * Real(3.14159265358979323846);
 
         // Box2D v3 B2_SPECULATIVE_DISTANCE (constants.h:38): 4 * linear slop.

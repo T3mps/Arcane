@@ -29,7 +29,7 @@
 // PRESENTATION-FREE + C++20-clean: std + Geometry::Vec2 + sibling Physics headers
 // (NarrowphaseKind + Manifold + Shapes + PhysicsTypes) only. All POD / Vec2 /
 // std::vector. No SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll)
-// and static-CRT (ArcaneCore server flavor).
+// and pure-compute (Arcane-only, /MD).
 
 #include <cstdint>
 #include <vector>

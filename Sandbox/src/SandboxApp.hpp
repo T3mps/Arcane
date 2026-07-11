@@ -291,7 +291,6 @@ namespace Arcane::Sandbox
         // executor is wrapped by m_scheduler so the world sees a Manifold2D::IWorkScheduler.
         void SetExecutor(Arcane::ITaskExecutor* exec) noexcept
         {
-            m_executor = exec;
             m_scheduler.SetExecutor(exec);
         }
 
@@ -464,9 +463,9 @@ namespace Arcane::Sandbox
 
         std::size_t            m_sceneIndex = 0;
         float                  m_gravityY   = 0.0f;
-        Arcane::ITaskExecutor* m_executor   = nullptr;   // Phase D1; null -> serial default
-        // Persistent IWorkScheduler bridge for m_executor: outlives each freshly-minted
-        // PhysicsWorld (the world stores a raw scheduler pointer). Re-pointed by SetExecutor.
+        // Persistent IWorkScheduler bridge for the injected task executor: outlives each
+        // freshly-minted PhysicsWorld (the world stores a raw scheduler pointer). Re-pointed
+        // by SetExecutor.
         Arcane::ArcaneWorkScheduler m_scheduler{};
         Camera      m_camera{};      // default identity; configured in RebuildScene
         Interaction m_interaction{}; // mouse spawn/drag/throw + pan/zoom (Task 7)

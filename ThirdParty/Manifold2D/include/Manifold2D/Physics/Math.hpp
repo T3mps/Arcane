@@ -1,6 +1,6 @@
 #pragma once
 
-// Pure 2D math kernels for the Arcane physics engine (M6).
+// Pure 2D math kernels for the Manifold2D physics engine (M6).
 //
 // PORT NOTE: ported from Client/src/physics/Geometry.lua (the coordinate-
 // agnostic kernel). The Lua module was the behavioral reference; the v2 gate is

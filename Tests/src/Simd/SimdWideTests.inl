@@ -1,7 +1,7 @@
 // Shared [simd] test bodies. Included by SimdWideTest.cpp (active backend) and
 // SimdWideScalarTest.cpp (forced scalar). Width-agnostic: loops f32w::width.
-#include <Arcane/Math/Simd.hpp>
-#include <Arcane/Math/SimdSmoke.hpp>
+#include <Manifold2D/Core/Simd.hpp>
+#include <Manifold2D/Core/SimdSmoke.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -15,7 +15,7 @@
 #endif
 
 // ARCANE_SIMD_NS is defined by Simd.hpp to point at the active backend's
-// sub-namespace (e.g. ::Arcane::Simd::Avx2 or ::Arcane::Simd::Scalar).
+// sub-namespace (e.g. ::Manifold2D::Simd::Avx2 or ::Manifold2D::Simd::Scalar).
 // This avoids ODR violations when both TUs are linked into the same binary.
 namespace SimdT = ARCANE_SIMD_NS;
 
@@ -245,7 +245,7 @@ TEST_CASE("Simd[" ARCANE_SIMD_TUTAG "]: Core pilot SimdSmokeSum matches scalar s
     float data[37];
     double ref = 0.0;
     for (int i = 0; i < 37; ++i) { data[i] = float(i) * 0.5f - 4.0f; ref += data[i]; }
-    float got = Arcane::Simd::SimdSmokeSum(data, 37);
+    float got = Manifold2D::Simd::SimdSmokeSum(data, 37);
     // SoA lane-sum reorders additions -> tolerance check, not bit-exact (documents
     // that horizontal sums are order-dependent across widths).
     CHECK(std::fabs(got - static_cast<float>(ref)) <= 1e-3f * (1.0f + std::fabs(static_cast<float>(ref))));

@@ -1,7 +1,7 @@
 #pragma once
 
 // Contact.hpp -- persistent fixture-pair contact + a deduped, generation-safe
-// pool of them (Arcane 2D physics, collision rebuild Phase 3, Task 1).
+// pool of them (Manifold2D 2D physics, collision rebuild Phase 3, Task 1).
 //
 // One Contact is the durable record for a single solver-relevant overlapping
 // fixture-pair. It SURVIVES across steps (so warm-starting + per-pair manifold
@@ -20,7 +20,7 @@
 //
 // PRESENTATION-FREE + C++20-clean: std + sibling Physics headers only. No
 // SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll) and static-CRT
-// (ArcaneCore, server flavor).
+// (Arcane-only, /MD).
 
 #include <cassert>
 #include <cstddef>

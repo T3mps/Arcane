@@ -1,6 +1,6 @@
 #pragma once
 
-// Shared pure geometry kernels for the Arcane 2D physics narrowphase (M6).
+// Shared pure geometry kernels for the Manifold2D 2D physics narrowphase (M6).
 //
 // PORT NOTE: a faithful port of the pure, coordinate-agnostic kernels in
 // Client/src/physics/Geometry.lua. The Lua module was the behavioral reference;
@@ -23,7 +23,7 @@
 //
 // PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no C++23-only features (this module is also
-// compiled static-CRT/C++20 in the server flavor). namespace Manifold2D::Physics.
+// Arcane-only, /MD. namespace Manifold2D::Physics.
 
 #include <Manifold2D/Physics/PhysicsTypes.hpp>
 #include <Manifold2D/Physics/Shapes.hpp>

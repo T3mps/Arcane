@@ -1,6 +1,6 @@
 #pragma once
 
-// Static-geometry broadphase for the Arcane 2D physics engine (M6, Task P1.7).
+// Static-geometry broadphase for the Manifold2D 2D physics engine (M6, Task P1.7).
 //
 // PORT + MODERNIZE of Client/src/physics/TileGrid.lua. The Lua TileGrid stores
 // NOTHING for walls: it answers queries straight from Map cell flags and
@@ -59,7 +59,7 @@
 //
 // PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no iso/Map/world coupling. Also compiled
-// static-CRT/C++20 in the server flavor. namespace Manifold2D::Physics, Core style.
+// Arcane-only, /MD. namespace Manifold2D::Physics, Core style.
 
 #include <vector>
 

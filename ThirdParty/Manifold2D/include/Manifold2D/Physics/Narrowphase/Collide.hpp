@@ -58,7 +58,7 @@
 //
 // PRESENTATION-FREE + dual CRT:
 //   Geometry::Vec2 + std + sibling Physics headers only. Compiles /MD (Arcane.dll) and
-//   static-CRT (ArcaneCore server flavor). C++20-clean.
+//   pure-compute (Arcane-only, /MD).
 
 #include <Manifold2D/Physics/Narrowphase/Manifold.hpp>
 #include <Manifold2D/Physics/Narrowphase/NarrowphaseTrace.hpp>

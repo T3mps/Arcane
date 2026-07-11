@@ -47,7 +47,7 @@
 //
 // PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui. Compiles both /MD (Arcane.dll) and
-// static-CRT/C++20 (project ArcaneCore, server flavor). namespace
+// pure-compute (Arcane-only, /MD). namespace
 // Manifold2D::Physics, Core style.
 
 #include <cstdint>

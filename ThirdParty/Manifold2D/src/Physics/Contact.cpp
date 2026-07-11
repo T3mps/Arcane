@@ -1,4 +1,4 @@
-// Contact.cpp -- ContactPool implementation (Arcane 2D physics, Phase 3 Task 1).
+// Contact.cpp -- ContactPool implementation (Manifold2D 2D physics, Phase 3 Task 1).
 //
 // See Contact.hpp for the contract. PRESENTATION-FREE + C++20-clean.
 

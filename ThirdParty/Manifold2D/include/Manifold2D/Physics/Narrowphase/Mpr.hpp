@@ -1,6 +1,6 @@
 #pragma once
 
-// 2D MPR (Minkowski Portal Refinement / XenoCollide) for the Arcane physics
+// 2D MPR (Minkowski Portal Refinement / XenoCollide) for the Manifold2D physics
 // narrowphase (Physics v2 EPA workstream, Task 4).
 //
 // MPR is a FAST single-point deep-overlap solver over two OVERLAPPING convex
@@ -39,7 +39,7 @@
 //
 // PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only
 // (Gjk.hpp, PhysicsTypes.hpp). No SDL3/NVRHI/Batcher2D/ImGui/Astra. Compiles
-// /MD (Arcane.dll) and static-CRT (ArcaneCore server flavor).
+// /MD (Arcane.dll) and pure-compute (Arcane-only, /MD).
 
 #include <Manifold2D/Physics/PhysicsTypes.hpp>
 

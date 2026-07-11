@@ -360,7 +360,7 @@ namespace Manifold2D
                 vx += static_cast<float>(g.x * h);
                 vy += static_cast<float>(g.y * h);
                 // Clamp to max linear speed (Box2D v3 b2IntegrateVelocitiesTask,
-                // solver.c:108-114). Arcane units == Box2D units.
+                // solver.c:108-114). Manifold2D units == Box2D units.
                 const float maxLin   = static_cast<float>(w.MaxLinearVelocity());
                 const float maxLinSq = maxLin * maxLin;
                 if (vx * vx + vy * vy > maxLinSq)
