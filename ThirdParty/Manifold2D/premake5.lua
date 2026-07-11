@@ -34,10 +34,12 @@ project "Manifold2D"
 
     filter "configurations:Release"
         runtime "Release"
-        optimize "on"
+        optimize "speed"
+        symbols "on"                 -- match Core: keep symbols in Release (the solver is the hottest, most-debugged code)
         defines { "ARCANE_RELEASE", "NDEBUG" }
 
     filter "configurations:Dist"
         runtime "Release"
-        optimize "on"
+        optimize "speed"
+        symbols "off"
         defines { "ARCANE_DIST", "NDEBUG" }
