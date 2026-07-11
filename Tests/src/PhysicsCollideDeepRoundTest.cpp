@@ -33,12 +33,12 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/Narrowphase/Collide.hpp>
-#include <Arcane/Physics/Narrowphase/Manifold.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Narrowphase/Collide.hpp>
+#include <Manifold2D/Physics/Narrowphase/Manifold.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 
 using Catch::Approx;
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {

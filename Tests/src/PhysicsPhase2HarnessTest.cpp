@@ -77,7 +77,7 @@
 //   2. Cross-broadphase: Tree, Hash, Sap all produce the same hash (sorted-pairs
 //      contract -- broadphase strategy must NOT affect dynamic trajectories).
 //
-// PRESENTATION-FREE + C++20-clean. namespace Arcane::Physics helpers.
+// PRESENTATION-FREE + C++20-clean. namespace Manifold2D::Physics helpers.
 
 #include <cmath>
 #include <cstdint>
@@ -85,15 +85,15 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/Body.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Joints/Joints.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Body.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Joints/Joints.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
-namespace Arcane { namespace Physics { namespace Phase2Harness {
+namespace Manifold2D { namespace Physics { namespace Phase2Harness {
 
     // -------------------------------------------------------------------------
     // Hash helper: mirrors the harness formula verbatim (and the P1.11 port).
@@ -213,9 +213,9 @@ namespace Arcane { namespace Physics { namespace Phase2Harness {
         return hash;
     }
 
-} } } // namespace Arcane::Physics::Phase2Harness
+} } } // namespace Manifold2D::Physics::Phase2Harness
 
-using namespace Arcane::Physics::Phase2Harness;
+using namespace Manifold2D::Physics::Phase2Harness;
 
 // ---------------------------------------------------------------------------
 // 1. Run-twice determinism (SoftStep, DynamicTree broadphase).

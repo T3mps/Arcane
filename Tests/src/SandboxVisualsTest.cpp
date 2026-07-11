@@ -23,7 +23,7 @@
 
 #include "../../Sandbox/src/Scenes.hpp"
 
-#include <Arcane/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Scene/Components.hpp>
@@ -85,8 +85,8 @@ TEST_CASE("Sandbox: compound scene authors no body sprites (outline-unify)", "[s
     // them on the first PhysicsSystem fixedUpdate; path-B builders create world
     // bodies directly), so install one before building.
     Arcane::PhysicsResource physRes;
-    Arcane::Physics::WorldDef wd;   // MKS defaults (gravity +10, sleepThreshold 0.05, ...)
-    physRes.world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
+    Manifold2D::Physics::WorldDef wd;   // MKS defaults (gravity +10, sleepThreshold 0.05, ...)
+    physRes.world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
     const int idx = SceneIndexByName("Compound bodies");
@@ -112,8 +112,8 @@ TEST_CASE("Sandbox: compound bodies render as collider outlines (DrawPhysicsDebu
     Arcane::RegisterPhysicsComponents(reg);
 
     Arcane::PhysicsResource physRes;
-    Arcane::Physics::WorldDef wd;   // MKS defaults (gravity +10, sleepThreshold 0.05, ...)
-    physRes.world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
+    Manifold2D::Physics::WorldDef wd;   // MKS defaults (gravity +10, sleepThreshold 0.05, ...)
+    physRes.world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
     reg.SetResource<Arcane::PhysicsResource>(std::move(physRes));
 
     const int idx = SceneIndexByName("Compound bodies");
@@ -169,7 +169,7 @@ TEST_CASE("Sandbox: compound bodies render as collider outlines (DrawPhysicsDebu
 TEST_CASE("Sandbox: stress scene builds kStressBodyCount bodies (volume/variety/agitators)",
           "[sandbox]")
 {
-    namespace Phys = Arcane::Physics;
+    namespace Phys = Manifold2D::Physics;
 
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg{components};
@@ -225,7 +225,7 @@ TEST_CASE("Sandbox: stress scene builds kStressBodyCount bodies (volume/variety/
 TEST_CASE("Sandbox: stress scene stays bounded after 30 steps (calibrated subset)",
           "[sandbox]")
 {
-    namespace Phys = Arcane::Physics;
+    namespace Phys = Manifold2D::Physics;
 
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg{components};

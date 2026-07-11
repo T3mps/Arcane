@@ -21,17 +21,17 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Jobs/JobSystem.hpp>
-#include <Arcane/Physics/Body.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Body.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
 #include <Arcane/Render/Device.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {

@@ -29,13 +29,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/Broadphase/Broadphase.hpp>
-#include <Arcane/Physics/Broadphase/Passability.hpp>
-#include <Arcane/Physics/Broadphase/TileGrid.hpp>
-#include <Arcane/Physics/Narrowphase/Gjk.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Broadphase/Broadphase.hpp>
+#include <Manifold2D/Physics/Broadphase/Passability.hpp>
+#include <Manifold2D/Physics/Broadphase/TileGrid.hpp>
+#include <Manifold2D/Physics/Narrowphase/Gjk.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 using Catch::Approx;
 
 namespace

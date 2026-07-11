@@ -9,16 +9,16 @@
 //
 // Executor-injection pattern mirrors SolverMtInvarianceTest exactly.
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Broadphase/Passability.hpp> // GridPassability (span-path MT scene)
-#include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Broadphase/Passability.hpp> // GridPassability (span-path MT scene)
+#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <cstdint>
 #include <vector>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {
@@ -148,7 +148,7 @@ namespace
     // and return a flat vector of (pos.x, pos.y, angle) per dynamic-body handle.
     // This is the byte-identity oracle: same scene, different executor.
     template<typename Builder>
-    std::vector<Real> RunCapture(Arcane::ITaskExecutor* exec, Builder&& build)
+    std::vector<Real> RunCapture(Manifold2D::IWorkScheduler* exec, Builder&& build)
     {
         WorldDef wd;
         PhysicsWorld w(wd);
@@ -260,7 +260,7 @@ namespace
     // it the span-merge MT path (per-worker span Collide -> concat -> stable_sort
     // by awakeIndex) is never exercised under multiple workers. The grid is owned
     // here (passability is a borrowed pointer) and must outlive the world.
-    std::vector<Real> RunCaptureSpans(Arcane::ITaskExecutor* exec)
+    std::vector<Real> RunCaptureSpans(Manifold2D::IWorkScheduler* exec)
     {
         GridPassability grid(kSpanGridW, kSpanGridH);
         // Thick full-width floor (rows 40..43).
@@ -319,7 +319,7 @@ namespace
 
 TEST_CASE("Narrowphase MT == serial: state bit-identical", "[physics][mt]")
 {
-    Arcane::SerialTaskExecutor serial;
+    Manifold2D::SerialWorkScheduler serial;
     Arcane::JobSystem           one(1);
     Arcane::JobSystem           many(0); // 0 = all cores
 
@@ -334,10 +334,14 @@ TEST_CASE("Narrowphase MT == serial: state bit-identical", "[physics][mt]")
         WARN("single worker: MT thief path not exercised this run");
     }
 
+    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
+    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor());
+    Arcane::ArcaneWorkScheduler manySched(*manyEx);
+
     // Capture with three executor configurations.
-    const std::vector<Real> a = RunCapture(&serial,             BuildChurn);
-    const std::vector<Real> b = RunCapture(one.TaskExecutor(),  BuildChurn);
-    const std::vector<Real> c = RunCapture(manyEx,              BuildChurn);
+    const std::vector<Real> a = RunCapture(&serial,    BuildChurn);
+    const std::vector<Real> b = RunCapture(&oneSched,  BuildChurn);
+    const std::vector<Real> c = RunCapture(&manySched, BuildChurn);
 
     // Sizes must match before element-wise comparison.
     REQUIRE(a.size() == b.size());
@@ -358,7 +362,7 @@ TEST_CASE("Narrowphase MT == serial: state bit-identical", "[physics][mt]")
 TEST_CASE("Narrowphase span-path create MT == serial: state bit-identical",
           "[physics][mt]")
 {
-    Arcane::SerialTaskExecutor serial;
+    Manifold2D::SerialWorkScheduler serial;
     Arcane::JobSystem           one(1);
     Arcane::JobSystem           many(0); // 0 = all cores
 
@@ -370,10 +374,14 @@ TEST_CASE("Narrowphase span-path create MT == serial: state bit-identical",
         WARN("single worker: MT span-merge path not exercised this run");
     }
 
+    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
+    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor());
+    Arcane::ArcaneWorkScheduler manySched(*manyEx);
+
     // Capture with three executor configurations (serial / 1-worker / all-cores).
     const std::vector<Real> a = RunCaptureSpans(&serial);
-    const std::vector<Real> b = RunCaptureSpans(one.TaskExecutor());
-    const std::vector<Real> c = RunCaptureSpans(manyEx);
+    const std::vector<Real> b = RunCaptureSpans(&oneSched);
+    const std::vector<Real> c = RunCaptureSpans(&manySched);
 
     // Sizes must match before element-wise comparison.
     REQUIRE(a.size() == b.size());
@@ -401,7 +409,7 @@ TEST_CASE("Narrowphase span-path create MT == serial: state bit-identical",
 
 TEST_CASE("Narrowphase create MT == serial: state bit-identical", "[physics][mt]")
 {
-    Arcane::SerialTaskExecutor serial;
+    Manifold2D::SerialWorkScheduler serial;
     Arcane::JobSystem           one(1);
     Arcane::JobSystem           many(0); // 0 = all cores
 
@@ -413,10 +421,14 @@ TEST_CASE("Narrowphase create MT == serial: state bit-identical", "[physics][mt]
         WARN("single worker: MT thief path not exercised this run");
     }
 
+    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
+    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor());
+    Arcane::ArcaneWorkScheduler manySched(*manyEx);
+
     // Capture with three executor configurations (serial / 1-worker / all-cores).
-    const std::vector<Real> a = RunCapture(&serial,             BuildCreateHeavy);
-    const std::vector<Real> b = RunCapture(one.TaskExecutor(),  BuildCreateHeavy);
-    const std::vector<Real> c = RunCapture(manyEx,              BuildCreateHeavy);
+    const std::vector<Real> a = RunCapture(&serial,    BuildCreateHeavy);
+    const std::vector<Real> b = RunCapture(&oneSched,  BuildCreateHeavy);
+    const std::vector<Real> c = RunCapture(&manySched, BuildCreateHeavy);
 
     // Sizes must match before element-wise comparison.
     REQUIRE(a.size() == b.size());

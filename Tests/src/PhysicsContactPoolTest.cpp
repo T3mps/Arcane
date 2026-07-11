@@ -3,9 +3,9 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/Contact.hpp>
+#include <Manifold2D/Physics/Contact.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 TEST_CASE("ContactPool dedups by fixture-slot pair and is generation-safe", "[physics]")
 {

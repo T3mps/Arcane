@@ -30,7 +30,7 @@ namespace Arcane::Sandbox
 
 #include <span>
 
-#include <Arcane/Physics/PhysicsTypes.hpp>   // Physics::BodyType
+#include <Manifold2D/Physics/PhysicsTypes.hpp>   // Phys::BodyType
 
 #include <Astra/Entity/Entity.hpp>           // Astra::Entity (a using-alias -- can't fwd-declare)
 
@@ -41,6 +41,9 @@ namespace Astra { class Registry; }
 
 namespace Arcane::Sandbox
 {
+    // Physics types were lifted to the standalone Manifold2D library (Phase 2).
+    namespace Phys = Manifold2D::Physics;
+
     // -------------------------------------------------------------------------
     // Public spawn builders (Task 7): the SAME Astra-component body authoring the
     // scene builders use (LocalTransform + WorldTransform + RigidBody2D +
@@ -55,22 +58,22 @@ namespace Arcane::Sandbox
     // `density` scales the body mass (HUD spawn knob, Task 8); defaults to 1.
     Astra::Entity SpawnBox(Astra::Registry& reg, Astra::Entity root,
                            glm::vec2 pos, glm::vec2 halfExtents,
-                           Physics::BodyType type, glm::vec4 tint,
+                           Phys::BodyType type, glm::vec4 tint,
                            float density = 1.0f);
 
     // Dynamic/static circle: a Circle-fixture body. Returns the created entity.
     // `density` scales the body mass (HUD spawn knob, Task 8); defaults to 1.
     Astra::Entity SpawnCircle(Astra::Registry& reg, Astra::Entity root,
                               glm::vec2 pos, float radius,
-                              Physics::BodyType type, glm::vec4 tint,
+                              Phys::BodyType type, glm::vec4 tint,
                               float density = 1.0f);
 
     // Dynamic/static capsule: an upright pill body. `radius` is both the end-cap
     // radius AND the segment half-length (total height = 4*radius, a clean 2:1 pill).
-    // Mirrors SpawnBox/SpawnCircle; uses Physics::MakeCapsule via a Capsule fixture.
+    // Mirrors SpawnBox/SpawnCircle; uses Phys::MakeCapsule via a Capsule fixture.
     Astra::Entity SpawnCapsule(Astra::Registry& reg, Astra::Entity root,
                                glm::vec2 pos, float radius,
-                               Physics::BodyType type, glm::vec4 tint,
+                               Phys::BodyType type, glm::vec4 tint,
                                float density = 1.0f);
 
     // One scene: a human-readable name + a builder that fills the Registry.

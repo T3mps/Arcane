@@ -10,14 +10,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 
 #include <glm/glm.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {

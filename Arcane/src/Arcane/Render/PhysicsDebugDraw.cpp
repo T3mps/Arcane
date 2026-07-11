@@ -24,18 +24,22 @@
 #include <unordered_map>
 #include <vector>
 
-#include <Arcane/Physics/Broadphase/Broadphase.hpp>       // BroadphasePair, Aabb2
-#include <Arcane/Physics/Broadphase/DynamicTree.hpp>      // FixtureBroadphaseTree / ForEachLeaf
-#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>      // ResidencyGrid / ForEachCell
-#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseKind + NarrowphaseTrace
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/Solver/Solver.hpp>               // ContactConstraint
+#include <Manifold2D/Physics/Broadphase/Broadphase.hpp>       // BroadphasePair, Aabb2
+#include <Manifold2D/Physics/Broadphase/DynamicTree.hpp>      // FixtureBroadphaseTree / ForEachLeaf
+#include <Manifold2D/Physics/Broadphase/SpatialGrid.hpp>      // ResidencyGrid / ForEachCell
+#include <Manifold2D/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseKind + NarrowphaseTrace
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Solver/Solver.hpp>               // ContactConstraint
 #include <Arcane/Render/Batcher2D.hpp>
 
 namespace Arcane
 {
+    // Physics types were lifted to the standalone Manifold2D library (Phase 2).
+    // Alias so the overlay code below reads Phys:: for the Manifold2D::Physics types.
+    namespace Phys = Manifold2D::Physics;
+
     namespace
     {
         // ---- port of PhysicsDebug.lua color constants -----------------------
@@ -68,7 +72,7 @@ namespace Arcane
         // Apply the camera to a world-space position -> canvas position.
         // CANONICAL transform (matches RenderSubmissionSystem +
         // Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.
-        inline glm::vec2 ToScreen(const Physics::Vec2& wpos,
+        inline glm::vec2 ToScreen(const Phys::Vec2& wpos,
                                   const glm::vec2& offset,
                                   float zoom)
         {
@@ -78,7 +82,7 @@ namespace Arcane
 
         // Draw an AABB outline using four lines.
         inline void DrawAabbOutline(Batcher2D& b,
-                                    const Physics::Aabb& aabb,
+                                    const Phys::Aabb& aabb,
                                     const glm::vec2& off,
                                     float zoom,
                                     float thickness,
@@ -132,17 +136,17 @@ namespace Arcane
         // colored by the narrowphase path that produced it (a glance tells you
         // which collide branch fired). Separated never draws (no points), but it
         // gets a neutral grey so the lookup is total.
-        inline glm::vec4 ManifoldColor(Physics::NarrowphaseKind kind)
+        inline glm::vec4 ManifoldColor(Phys::NarrowphaseKind kind)
         {
             switch (kind)
             {
-                case Physics::NarrowphaseKind::CircleCircle:    return { 1.00f, 0.30f, 0.30f, 1.0f }; // red
-                case Physics::NarrowphaseKind::CircleVsPolygon: return { 1.00f, 0.65f, 0.15f, 1.0f }; // orange
-                case Physics::NarrowphaseKind::Capsule:         return { 1.00f, 1.00f, 0.25f, 1.0f }; // yellow
-                case Physics::NarrowphaseKind::SatPolygon:      return { 0.30f, 1.00f, 0.45f, 1.0f }; // green
-                case Physics::NarrowphaseKind::Epa:             return { 0.40f, 0.70f, 1.00f, 1.0f }; // blue
-                case Physics::NarrowphaseKind::Mpr:             return { 0.80f, 0.45f, 1.00f, 1.0f }; // violet
-                case Physics::NarrowphaseKind::Separated:
+                case Phys::NarrowphaseKind::CircleCircle:    return { 1.00f, 0.30f, 0.30f, 1.0f }; // red
+                case Phys::NarrowphaseKind::CircleVsPolygon: return { 1.00f, 0.65f, 0.15f, 1.0f }; // orange
+                case Phys::NarrowphaseKind::Capsule:         return { 1.00f, 1.00f, 0.25f, 1.0f }; // yellow
+                case Phys::NarrowphaseKind::SatPolygon:      return { 0.30f, 1.00f, 0.45f, 1.0f }; // green
+                case Phys::NarrowphaseKind::Epa:             return { 0.40f, 0.70f, 1.00f, 1.0f }; // blue
+                case Phys::NarrowphaseKind::Mpr:             return { 0.80f, 0.45f, 1.00f, 1.0f }; // violet
+                case Phys::NarrowphaseKind::Separated:
                 default:                                        return { 0.70f, 0.70f, 0.70f, 1.0f }; // grey
             }
         }
@@ -150,9 +154,9 @@ namespace Arcane
         // World-space center of mass as a glm::vec2: bodyPos + R(angle) *
         // localCenter. For a single-fixture body localCenter is (0,0), so the
         // COM is the origin. (Named ComWorldF to avoid colliding with the Core
-        // Physics::WorldCom that `using namespace Physics` pulls in.)
-        inline glm::vec2 ComWorldF(const Physics::Vec2& pos, float angle,
-                                   const Physics::Vec2& localCenter)
+        // Phys::WorldCom that `using namespace Phys` pulls in.)
+        inline glm::vec2 ComWorldF(const Phys::Vec2& pos, float angle,
+                                   const Phys::Vec2& localCenter)
         {
             const glm::vec2 lc(static_cast<float>(localCenter.x),
                                static_cast<float>(localCenter.y));
@@ -186,13 +190,13 @@ namespace Arcane
         constexpr glm::vec4 kColTraceNormal{ 1.00f, 0.25f, 1.00f, 1.0f }; // magenta normal arrow
         constexpr glm::vec4 kColTracePoint { 1.00f, 1.00f, 1.00f, 1.0f }; // white contact disc
 
-        // Transform a Physics::Vec2 in the shape's LOCAL frame through a
-        // Physics::Transform (rotation + position) to world, then to screen.
-        inline glm::vec2 ShapeLocalToScreen(const Physics::Vec2& local,
-                                            const Physics::Transform& xf,
+        // Transform a Phys::Vec2 in the shape's LOCAL frame through a
+        // Phys::Transform (rotation + position) to world, then to screen.
+        inline glm::vec2 ShapeLocalToScreen(const Phys::Vec2& local,
+                                            const Phys::Transform& xf,
                                             const glm::vec2& off, float zoom)
         {
-            const Physics::Vec2 w = xf.position + Physics::RotateVec(xf.rotation, local);
+            const Phys::Vec2 w = xf.position + Phys::RotateVec(xf.rotation, local);
             return glm::vec2(static_cast<float>(w.x), static_cast<float>(w.y)) * zoom + off;
         }
 
@@ -203,8 +207,8 @@ namespace Arcane
         //   * circle core  (<= 1 vert)        -> a single disc at the vert center.
         // verts are local; xf places them in the world. A radius>0 on a poly is the
         // collision skin, drawn as end discs at each vert for visual fidelity.
-        void DrawTraceShape(Batcher2D& b, const Physics::Shape& s,
-                            const Physics::Transform& xf, const glm::vec2& off,
+        void DrawTraceShape(Batcher2D& b, const Phys::Shape& s,
+                            const Phys::Transform& xf, const glm::vec2& off,
                             float zoom, float thick, const glm::vec4& col)
         {
             const float r = static_cast<float>(s.radius) * zoom;
@@ -242,11 +246,11 @@ namespace Arcane
     // DrawPhysicsDebug
     // -------------------------------------------------------------------------
 
-    void DrawPhysicsDebug(const Physics::PhysicsWorld& world,
+    void DrawPhysicsDebug(const Phys::PhysicsWorld& world,
                           Batcher2D& batcher,
                           const PhysicsDebugDrawOptions& opts)
     {
-        using namespace Physics;
+        using namespace Phys;
 
         const glm::vec2& off     = opts.cameraOffset;
         const float      zoom    = opts.zoom;
@@ -455,7 +459,7 @@ namespace Arcane
         // mover broadphase -- guarded.
         if (opts.drawFixtureTree)
         {
-            if (const Physics::DynamicTree* tree = world.FixtureBroadphaseTree())
+            if (const Phys::DynamicTree* tree = world.FixtureBroadphaseTree())
             {
                 // id -> tight AABB center (world space), filled during the leaf walk.
                 std::unordered_map<std::uint32_t, glm::vec2> centers;
@@ -473,9 +477,9 @@ namespace Arcane
                 // Candidate-pair links: a teal line between the two fixtures' AABB
                 // centers. Pairs() keys are FIXTURE slots (same id space as the
                 // leaves), so the id->center map resolves both ends.
-                std::vector<Physics::BroadphasePair> pairs;
+                std::vector<Phys::BroadphasePair> pairs;
                 world.FixtureBroadphase().Pairs(pairs);
-                for (const Physics::BroadphasePair& p : pairs)
+                for (const Phys::BroadphasePair& p : pairs)
                 {
                     const auto ia = centers.find(p.a);
                     if (ia == centers.end()) continue;
@@ -512,16 +516,16 @@ namespace Arcane
         // vs residency (warm amber) read differently when both are on.
         if (opts.drawResidencyGrid)
         {
-            const Physics::SpatialGrid& grid = world.ResidencyGrid();
+            const Phys::SpatialGrid& grid = world.ResidencyGrid();
             const float ts = static_cast<float>(grid.TileSize());
-            const Physics::Vec2 gorg = grid.Origin();
+            const Phys::Vec2 gorg = grid.Origin();
             grid.ForEachCell(
                 [&](int cx, int cy, const std::vector<std::uint32_t>&)
                 {
                     Aabb2 cell;
-                    cell.min = Physics::Vec2(gorg.x + static_cast<float>(cx) * ts,
+                    cell.min = Phys::Vec2(gorg.x + static_cast<float>(cx) * ts,
                                              gorg.y + static_cast<float>(cy) * ts);
-                    cell.max = Physics::Vec2(cell.min.x + ts, cell.min.y + ts);
+                    cell.max = Phys::Vec2(cell.min.x + ts, cell.min.y + ts);
                     DrawAabbOutline(batcher, cell, off, zoom, thick, kColResidencyGrid);
                 });
         }
@@ -538,12 +542,12 @@ namespace Arcane
         if (opts.drawManifolds)
         {
             world.ForEachContactConstraint(
-                [&](const Physics::ContactConstraint& cc)
+                [&](const Phys::ContactConstraint& cc)
                 {
-                    if (cc.bodyA == Physics::kInvalidSlot)
+                    if (cc.bodyA == Phys::kInvalidSlot)
                         return; // defensive: A is always a real dynamic slot
 
-                    const Physics::Vec2 posA   = world.PosSlot(cc.bodyA);
+                    const Phys::Vec2 posA   = world.PosSlot(cc.bodyA);
                     const float         angA    = static_cast<float>(
                         world.GetAngle(world.HandleOf(cc.bodyA)));
                     const glm::vec2 comA = ComWorldF(
@@ -576,7 +580,7 @@ namespace Arcane
     // DrawNarrowphaseWorldOverlay (Slice B)
     // -------------------------------------------------------------------------
 
-    void DrawNarrowphaseWorldOverlay(const Physics::NarrowphaseTrace& trace,
+    void DrawNarrowphaseWorldOverlay(const Phys::NarrowphaseTrace& trace,
                                      int stepIndex,
                                      Batcher2D& batcher,
                                      glm::vec2 cameraOffset,
@@ -584,7 +588,7 @@ namespace Arcane
                                      float lineThickness,
                                      float emphasis)
     {
-        using namespace Physics;
+        using namespace Phys;
 
         const glm::vec2& off  = cameraOffset;
         const float      thick = lineThickness;

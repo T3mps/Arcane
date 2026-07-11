@@ -5,11 +5,11 @@
 #include <algorithm>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Body.hpp>
-#include <Arcane/Physics/Broadphase/Broadphase.hpp> // BroadphasePair, AabbOverlap
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Body.hpp>
+#include <Manifold2D/Physics/Broadphase/Broadphase.hpp> // BroadphasePair, AabbOverlap
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {
@@ -214,7 +214,7 @@ TEST_CASE("Fixture broadphase pair removed after bodies separate (move)", "[phys
 }
 
 #include <random>
-#include <Arcane/Physics/Broadphase/DynamicTree.hpp>
+#include <Manifold2D/Physics/Broadphase/DynamicTree.hpp>
 
 // The incrementally-maintained pair set (move buffer) must equal a full Pairs()
 // recompute AND the brute-force O(n^2) set, after EVERY mutation, across a long

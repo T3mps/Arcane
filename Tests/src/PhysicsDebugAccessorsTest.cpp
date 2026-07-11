@@ -10,15 +10,15 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/Body.hpp>
-#include <Arcane/Physics/Broadphase/Broadphase.hpp>
-#include <Arcane/Physics/Broadphase/DynamicTree.hpp>
-#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>
-#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Solver/Solver.hpp>
+#include <Manifold2D/Physics/Body.hpp>
+#include <Manifold2D/Physics/Broadphase/Broadphase.hpp>
+#include <Manifold2D/Physics/Broadphase/DynamicTree.hpp>
+#include <Manifold2D/Physics/Broadphase/SpatialGrid.hpp>
+#include <Manifold2D/Physics/Narrowphase/NarrowphaseTrace.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Solver/Solver.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 TEST_CASE("Debug accessors enumerate broadphase + contacts", "[physics][debugviz]")
 {

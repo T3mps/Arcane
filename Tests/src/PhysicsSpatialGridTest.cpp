@@ -7,10 +7,10 @@
 #include <random>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>
-#include <Arcane/Physics/Broadphase/Broadphase.hpp> // AabbOverlap
+#include <Manifold2D/Physics/Broadphase/SpatialGrid.hpp>
+#include <Manifold2D/Physics/Broadphase/Broadphase.hpp> // AabbOverlap
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {
@@ -98,8 +98,8 @@ TEST_CASE("SpatialGrid query == brute-force after tight filter", "[physics][grid
     }
 }
 
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 
 TEST_CASE("StaticCandidates static-body set unchanged by grid reroute", "[physics][grid]")
 {

@@ -12,11 +12,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <Arcane/Physics/Math.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Math.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
 
 using Catch::Approx;
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {

@@ -1,15 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {
     // ~800 dynamic boxes over a floor, 50 steps while settling -> many moving
     // proxies/step (UpdatePairs work-list > grain -> real broadphase MT).
-    std::vector<float> RunActivePile(Arcane::ITaskExecutor* exec, int steps)
+    std::vector<float> RunActivePile(Manifold2D::IWorkScheduler* exec, int steps)
     {
         WorldDef wd; // gravityY inherits the MKS default (+10)
         PhysicsWorld w(wd); w.SetExecutor(exec);
@@ -31,10 +31,12 @@ namespace
 
 TEST_CASE("broadphase thread-count invariance: serial == enki(1) == enki(N)", "[physics][determinism][broadmt]")
 {
-    Arcane::SerialTaskExecutor serial; Arcane::JobSystem one(1); Arcane::JobSystem many(0);
+    Manifold2D::SerialWorkScheduler serial; Arcane::JobSystem one(1); Arcane::JobSystem many(0);
+    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
+    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor()); Arcane::ArcaneWorkScheduler manySched(*many.TaskExecutor());
     const auto a=RunActivePile(&serial,50);
-    const auto b=RunActivePile(one.TaskExecutor(),50);
-    const auto c=RunActivePile(many.TaskExecutor(),50);
+    const auto b=RunActivePile(&oneSched,50);
+    const auto c=RunActivePile(&manySched,50);
     INFO("workers=" << many.TaskExecutor()->WorkerCount());
     if (many.TaskExecutor()->WorkerCount() <= 1u) WARN("single worker: broadphase MT path not exercised this run");
     REQUIRE(a.size()==b.size()); REQUIRE(a==b); REQUIRE(a==c);

@@ -3,7 +3,7 @@
 // skipped). Guards the interactive "pause to inspect" path + the perf claim.
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -21,10 +21,10 @@ namespace
         RegisterSceneComponents(reg);
         RegisterPhysicsComponents(reg);
 
-        Physics::WorldDef wd;
+        Manifold2D::Physics::WorldDef wd;
         reg.SetResource(PhysicsResource{
-            std::make_unique<Physics::PhysicsWorld>(wd), {} });
-        auto add = [&](glm::vec2 pos, glm::vec2 half, Physics::BodyType t) {
+            std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd), {} });
+        auto add = [&](glm::vec2 pos, glm::vec2 half, Manifold2D::Physics::BodyType t) {
             Astra::Entity e = reg.CreateEntity();
             LocalTransform lt; lt.position = pos;
             reg.AddComponent<LocalTransform>(e, lt);
@@ -32,13 +32,13 @@ namespace
             RigidBody2D rb; rb.type = t; rb.fixedRotation = true;
             reg.AddComponent<RigidBody2D>(e, rb);
             Collider2D col; Fixture fx;
-            fx.kind = Physics::ShapeKind::Aabb; fx.halfW = half.x; fx.halfH = half.y;
+            fx.kind = Manifold2D::Physics::ShapeKind::Aabb; fx.halfW = half.x; fx.halfH = half.y;
             col.fixtures.push_back(fx);
             reg.AddComponent<Collider2D>(e, col);
             reg.AddComponent<PhysicsBodyRef>(e, PhysicsBodyRef{});
         };
-        add({0.0f, 10.0f}, {20.0f, 2.0f}, Physics::BodyType::Static);
-        add({0.0f, 7.9f}, { 2.0f, 2.0f}, Physics::BodyType::Dynamic); // resting/overlapping
+        add({0.0f, 10.0f}, {20.0f, 2.0f}, Manifold2D::Physics::BodyType::Static);
+        add({0.0f, 7.9f}, { 2.0f, 2.0f}, Manifold2D::Physics::BodyType::Dynamic); // resting/overlapping
     }
 }
 

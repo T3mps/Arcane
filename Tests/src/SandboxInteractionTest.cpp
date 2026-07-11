@@ -34,8 +34,8 @@
 #include "../../Sandbox/src/SandboxApp.hpp"   // PolygonDraftResource + PolygonDraftRenderSystem
 
 #include <Arcane/Input/InputSnapshot.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
 #include <Arcane/Render/Batcher2D.hpp>        // Arcane::Batcher2D virtual interface
 
 #include <Arcane/Scene/Components.hpp>
@@ -54,7 +54,7 @@ using Catch::Approx;
 
 namespace
 {
-    namespace Phys = Arcane::Physics;
+    namespace Phys = Manifold2D::Physics;
     namespace Sbx  = Arcane::Sandbox;
 
     constexpr float kDt       = 1.0f / 60.0f;

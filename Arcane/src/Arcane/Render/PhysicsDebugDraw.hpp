@@ -24,15 +24,18 @@
 
 #include <cstdint>
 
+// Physics types were lifted to the standalone Manifold2D library (Phase 2);
+// forward-declare them in their own namespace (this header only needs the types
+// by reference in the function signatures below).
+namespace Manifold2D::Physics
+{
+    class PhysicsWorld;
+    struct NarrowphaseTrace;
+}
+
 namespace Arcane
 {
     class Batcher2D;
-
-    namespace Physics
-    {
-        class PhysicsWorld;
-        struct NarrowphaseTrace;
-    }
 
     // Options for DrawPhysicsDebug.
     struct PhysicsDebugDrawOptions
@@ -148,7 +151,7 @@ namespace Arcane
     //   * drawComMarkers   -> a small cross at each dynamic body's world COM.
     //   * drawOrientations -> a short tick along the body's local +x (rotation).
     ARCANE_API void DrawPhysicsDebug(
-        const Arcane::Physics::PhysicsWorld& world,
+        const Manifold2D::Physics::PhysicsWorld& world,
         Batcher2D& batcher,
         const PhysicsDebugDrawOptions& opts = {});
 
@@ -174,7 +177,7 @@ namespace Arcane
     // (Epa/Mpr/SatPolygon); pass -1 (or for analytic kinds) to draw no per-step
     // emphasis. The caller brackets batcher.Begin()/End() (this only submits primitives).
     ARCANE_API void DrawNarrowphaseWorldOverlay(
-        const Arcane::Physics::NarrowphaseTrace& trace,
+        const Manifold2D::Physics::NarrowphaseTrace& trace,
         int stepIndex,
         Batcher2D& batcher,
         glm::vec2 cameraOffset,

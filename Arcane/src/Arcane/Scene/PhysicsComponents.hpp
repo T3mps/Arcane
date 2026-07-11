@@ -35,8 +35,8 @@
 // Registration: RegisterPhysicsComponents(ComponentRegistry&) and the overload
 // taking Registry& mirror the RegisterSceneComponents pattern in SceneModule.hpp.
 
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Reflection/Reflection.hpp>
@@ -49,6 +49,11 @@
 
 namespace Arcane
 {
+    // Physics types were lifted to the standalone Manifold2D library (Phase 2).
+    // Alias so the authored-component code below reads Phys:: for the engine's
+    // Manifold2D::Physics types.
+    namespace Phys = Manifold2D::Physics;
+
     // -------------------------------------------------------------------------
     // RigidBody2D
     // -------------------------------------------------------------------------
@@ -57,7 +62,7 @@ namespace Arcane
     // script-driven and must not be pushed by dynamic bodies).
     struct RigidBody2D
     {
-        Physics::BodyType type          = Physics::BodyType::Kinematic;
+        Phys::BodyType type          = Phys::BodyType::Kinematic;
         glm::vec2         velocity      {0.0f, 0.0f};
         float             mass          = 0.0f;      // 0 => density-derived
         float             linearDamping = 0.0f;
@@ -86,7 +91,7 @@ namespace Arcane
     struct Fixture
     {
         // Shape discriminator + scalar params (three shapes, matching P3.2 style).
-        Physics::ShapeKind kind      = Physics::ShapeKind::Circle;
+        Phys::ShapeKind kind      = Phys::ShapeKind::Circle;
         float              radius    = 0.5f;   // Circle/Capsule radius
         float              halfLen   = 0.0f;   // Capsule half-length
         float              halfW     = 0.5f;   // Aabb half-width
@@ -139,17 +144,18 @@ namespace Arcane
     // path skips it (matches WorldTransform::matrix treatment in Components.hpp).
     struct PhysicsBodyRef
     {
-        Physics::BodyHandle handle{};   // default = kInvalidBody (index=0, gen=0)
+        Phys::BodyHandle handle{};   // default = kInvalidBody (index=0, gen=0)
     };
 
 } // namespace Arcane
 
-// Enum reflection blocks -- at namespace scope (Arcane::Physics), so the
-// macro argument is a simple identifier (no :: in the token-paste).
+// Enum reflection blocks -- at namespace scope (Manifold2D::Physics, where
+// BodyType/ShapeKind now live after the Phase 2 lift), so the macro argument is
+// a simple identifier (no :: in the token-paste).
 // BodyType and ShapeKind are reflected here (in the Arcane.dll module that
 // owns physics components) so the visitFields seam can serialize them by name
 // on the JSON path and the MetaRegistry knows their string->value mappings.
-namespace Arcane::Physics
+namespace Manifold2D::Physics
 {
     ASTRA_REFLECT_ENUM(BodyType)
         ASTRA_REFLECT_ENUM_VALUE(BodyType, Static)
@@ -166,7 +172,7 @@ namespace Arcane::Physics
         // later task adds a verts field (or a separate PolygonCollider2D component).
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Polygon)
     ASTRA_END_REFLECT_ENUM()
-} // namespace Arcane::Physics
+} // namespace Manifold2D::Physics
 
 // Component type reflection blocks -- at namespace scope (design rule: every
 // engine component is ASTRA_REFLECT-annotated from day one).

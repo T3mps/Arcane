@@ -45,10 +45,10 @@
 
 #include "Scenes.hpp"
 
-#include <Arcane/Physics/Body.hpp>
-#include <Arcane/Physics/Joints/Joints.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Body.hpp>
+#include <Manifold2D/Physics/Joints/Joints.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -68,6 +68,9 @@
 
 namespace Arcane::Sandbox
 {
+    // Physics types were lifted to the standalone Manifold2D library (Phase 2).
+    namespace Phys = Manifold2D::Physics;
+
     namespace
     {
         // ---- shared palette ---------------------------------------------------------
@@ -99,7 +102,7 @@ namespace Arcane::Sandbox
         // The sprite size tracks the half-extents so the quad matches the collider.
         Astra::Entity MakeBox(Astra::Registry& reg, Astra::Entity root,
                               glm::vec2 pos, glm::vec2 halfExtents,
-                              Physics::BodyType type, glm::vec4 tint,
+                              Phys::BodyType type, glm::vec4 tint,
                               float restitution = 0.1f, float friction = 0.4f,
                               float density = 1.0f)
         {
@@ -117,7 +120,7 @@ namespace Arcane::Sandbox
             Arcane::Collider2D col;
             {
                 Arcane::Fixture fx;
-                fx.kind        = Physics::ShapeKind::Aabb;
+                fx.kind        = Phys::ShapeKind::Aabb;
                 fx.halfW       = halfExtents.x;
                 fx.halfH       = halfExtents.y;
                 fx.density     = density;
@@ -143,7 +146,7 @@ namespace Arcane::Sandbox
         // Path-A circle (Circle fixture). Circles may rotate freely as Dynamic.
         Astra::Entity MakeCircle(Astra::Registry& reg, Astra::Entity root,
                                  glm::vec2 pos, float radius,
-                                 Physics::BodyType type, glm::vec4 tint,
+                                 Phys::BodyType type, glm::vec4 tint,
                                  float restitution = 0.2f, float density = 1.0f)
         {
             Astra::Entity e = reg.CreateEntity();
@@ -159,7 +162,7 @@ namespace Arcane::Sandbox
             Arcane::Collider2D col;
             {
                 Arcane::Fixture fx;
-                fx.kind        = Physics::ShapeKind::Circle;
+                fx.kind        = Phys::ShapeKind::Circle;
                 fx.radius      = radius;
                 fx.density     = density;
                 fx.friction    = 0.4f;
@@ -180,7 +183,7 @@ namespace Arcane::Sandbox
         // inflated by `radius`. Dynamic capsules may rotate (the core is a 2-vert segment).
         Astra::Entity MakeCapsule(Astra::Registry& reg, Astra::Entity root,
                                   glm::vec2 pos, float halfLen, float radius,
-                                  Physics::BodyType type, glm::vec4 tint)
+                                  Phys::BodyType type, glm::vec4 tint)
         {
             Astra::Entity e = reg.CreateEntity();
 
@@ -195,7 +198,7 @@ namespace Arcane::Sandbox
             Arcane::Collider2D col;
             {
                 Arcane::Fixture fx;
-                fx.kind        = Physics::ShapeKind::Capsule;
+                fx.kind        = Phys::ShapeKind::Capsule;
                 fx.halfLen     = halfLen;
                 fx.radius      = radius;
                 fx.density     = 1.0f;
@@ -222,7 +225,7 @@ namespace Arcane::Sandbox
                                 float halfW = 8.8f, float halfH = 0.36f)
         {
             return MakeBox(reg, root, glm::vec2(centerX, topY + halfH),
-                           glm::vec2(halfW, halfH), Physics::BodyType::Static, kStatic);
+                           glm::vec2(halfW, halfH), Phys::BodyType::Static, kStatic);
         }
 
         // =============================================================================
@@ -231,7 +234,7 @@ namespace Arcane::Sandbox
 
         // The live PhysicsWorld owned by the PhysicsResource the plugin installed before
         // calling the builder. Never null on the build path (the plugin mints it first).
-        Physics::PhysicsWorld* World(Astra::Registry& reg)
+        Phys::PhysicsWorld* World(Astra::Registry& reg)
         {
             PhysicsResource* res = reg.GetResource<PhysicsResource>();
             return (res && res->world) ? res->world.get() : nullptr;
@@ -239,97 +242,97 @@ namespace Arcane::Sandbox
 
         // World-direct static box (4-vert polygon core under Aabb). Used as the floor/anchor
         // for the world-direct scenes so floor + dynamics share one creation path/timing.
-        Physics::BodyHandle WorldStaticBox(Physics::PhysicsWorld& w, glm::vec2 pos,
+        Phys::BodyHandle WorldStaticBox(Phys::PhysicsWorld& w, glm::vec2 pos,
                                            glm::vec2 halfExtents)
         {
-            Physics::BodyDef def;
-            def.type     = Physics::BodyType::Static;
-            def.position = Physics::Vec2(pos.x, pos.y);
-            def.shape    = Physics::MakeAabb(halfExtents.x, halfExtents.y);
-            def.friction = Physics::Real(0.5);
+            Phys::BodyDef def;
+            def.type     = Phys::BodyType::Static;
+            def.position = Phys::Vec2(pos.x, pos.y);
+            def.shape    = Phys::MakeAabb(halfExtents.x, halfExtents.y);
+            def.friction = Phys::Real(0.5);
             return w.AddBody(def);
         }
 
         // World-direct DYNAMIC convex polygon box at a NONZERO angle. A rotating box must be a
         // polygon (a dynamic Aabb trips the fixedRotation invariant); the polygon core lets it
         // settle flat under gravity. `angle` is the release orientation in radians.
-        Physics::BodyHandle WorldPolygonBox(Physics::PhysicsWorld& w, glm::vec2 pos,
+        Phys::BodyHandle WorldPolygonBox(Phys::PhysicsWorld& w, glm::vec2 pos,
                                             glm::vec2 halfExtents, float angle,
                                             float density = 1.0f)
         {
             const float hw = halfExtents.x, hh = halfExtents.y;
             // CCW box corners in local space (the factory normalizes winding + bakes normals).
-            const std::vector<Physics::Vec2> verts = {
-                Physics::Vec2(-hw, -hh), Physics::Vec2( hw, -hh),
-                Physics::Vec2( hw,  hh), Physics::Vec2(-hw,  hh),
+            const std::vector<Phys::Vec2> verts = {
+                Phys::Vec2(-hw, -hh), Phys::Vec2( hw, -hh),
+                Phys::Vec2( hw,  hh), Phys::Vec2(-hw,  hh),
             };
 
-            Physics::BodyDef def;
-            def.type     = Physics::BodyType::Dynamic;
-            def.position = Physics::Vec2(pos.x, pos.y);
-            def.shape    = Physics::MakePolygon(verts);
-            def.density  = Physics::Real(density);
-            def.friction = Physics::Real(0.5);
-            def.restitution = Physics::Real(0.05);
-            Physics::BodyHandle h = w.AddBody(def);
-            w.SetAngle(h, Physics::Real(angle));   // release at a nonzero angle
+            Phys::BodyDef def;
+            def.type     = Phys::BodyType::Dynamic;
+            def.position = Phys::Vec2(pos.x, pos.y);
+            def.shape    = Phys::MakePolygon(verts);
+            def.density  = Phys::Real(density);
+            def.friction = Phys::Real(0.5);
+            def.restitution = Phys::Real(0.05);
+            Phys::BodyHandle h = w.AddBody(def);
+            w.SetAngle(h, Phys::Real(angle));   // release at a nonzero angle
             return h;
         }
 
         // World-direct DYNAMIC convex triangle (3-vert polygon) -- a second polygon shape for
         // the mixed-shapes scene so the unified core handles >4-gon-free convex shapes too.
-        Physics::BodyHandle WorldTriangle(Physics::PhysicsWorld& w, glm::vec2 pos, float size)
+        Phys::BodyHandle WorldTriangle(Phys::PhysicsWorld& w, glm::vec2 pos, float size)
         {
-            const std::vector<Physics::Vec2> verts = {
-                Physics::Vec2(-size, size), Physics::Vec2(size, size),
-                Physics::Vec2(Physics::Real(0), -size),
+            const std::vector<Phys::Vec2> verts = {
+                Phys::Vec2(-size, size), Phys::Vec2(size, size),
+                Phys::Vec2(Phys::Real(0), -size),
             };
-            Physics::BodyDef def;
-            def.type     = Physics::BodyType::Dynamic;
-            def.position = Physics::Vec2(pos.x, pos.y);
-            def.shape    = Physics::MakePolygon(verts);
-            def.density  = Physics::Real(1);
-            def.friction = Physics::Real(0.5);
+            Phys::BodyDef def;
+            def.type     = Phys::BodyType::Dynamic;
+            def.position = Phys::Vec2(pos.x, pos.y);
+            def.shape    = Phys::MakePolygon(verts);
+            def.density  = Phys::Real(1);
+            def.friction = Phys::Real(0.5);
             return w.AddBody(def);
         }
 
         // World-direct DYNAMIC circle/capsule (path B) for scenes that mix world-direct
         // polygons with round bodies in the SAME creation pass (so all share creation timing).
-        Physics::BodyHandle WorldCircle(Physics::PhysicsWorld& w, glm::vec2 pos, float r)
+        Phys::BodyHandle WorldCircle(Phys::PhysicsWorld& w, glm::vec2 pos, float r)
         {
-            Physics::BodyDef def;
-            def.type     = Physics::BodyType::Dynamic;
-            def.position = Physics::Vec2(pos.x, pos.y);
-            def.shape    = Physics::MakeCircle(Physics::Real(r));
-            def.density  = Physics::Real(1);
-            def.friction = Physics::Real(0.4);
-            def.restitution = Physics::Real(0.15);
+            Phys::BodyDef def;
+            def.type     = Phys::BodyType::Dynamic;
+            def.position = Phys::Vec2(pos.x, pos.y);
+            def.shape    = Phys::MakeCircle(Phys::Real(r));
+            def.density  = Phys::Real(1);
+            def.friction = Phys::Real(0.4);
+            def.restitution = Phys::Real(0.15);
             return w.AddBody(def);
         }
 
         // World-direct DYNAMIC regular convex n-gon (path B). `sides` in [3..8]; verts
         // placed on a circle of `radius` starting at `angle` radians. Density + friction
         // tuned for the stress scene (flowing, light mass). Sibling of WorldTriangle.
-        Physics::BodyHandle WorldNgon(Physics::PhysicsWorld& w, glm::vec2 pos,
+        Phys::BodyHandle WorldNgon(Phys::PhysicsWorld& w, glm::vec2 pos,
                                       float radius, int sides, float angle,
                                       float density = 0.08f)
         {
             sides = (sides < 3) ? 3 : (sides > 8 ? 8 : sides);
-            std::vector<Physics::Vec2> verts;
+            std::vector<Phys::Vec2> verts;
             verts.reserve(static_cast<std::size_t>(sides));
             const float step = 2.0f * static_cast<float>(std::numbers::pi) / static_cast<float>(sides);
             for (int k = 0; k < sides; ++k)
             {
                 const float a = angle + k * step;
-                verts.push_back(Physics::Vec2(radius * std::cos(a), radius * std::sin(a)));
+                verts.push_back(Phys::Vec2(radius * std::cos(a), radius * std::sin(a)));
             }
-            Physics::BodyDef def;
-            def.type        = Physics::BodyType::Dynamic;
-            def.position    = Physics::Vec2(pos.x, pos.y);
-            def.shape       = Physics::MakePolygon(verts);
-            def.density     = Physics::Real(density);
-            def.friction    = Physics::Real(0.35f);
-            def.restitution = Physics::Real(0.05f);
+            Phys::BodyDef def;
+            def.type        = Phys::BodyType::Dynamic;
+            def.position    = Phys::Vec2(pos.x, pos.y);
+            def.shape       = Phys::MakePolygon(verts);
+            def.density     = Phys::Real(density);
+            def.friction    = Phys::Real(0.35f);
+            def.restitution = Phys::Real(0.05f);
             return w.AddBody(def);
         }
 
@@ -340,7 +343,7 @@ namespace Arcane::Sandbox
         // BODY-LOCAL frame (relative to `center`). The whisk spins at `omega` rad/s.
         // With radius=5.6 and omega=1.9 the tip speed is ~10.64 m/s; at 60 Hz each
         // wire advances ~0.177 m per step, below wire diameter 0.30 m -- no tunnelling.
-        Physics::BodyHandle Whisk(Physics::PhysicsWorld& w, glm::vec2 center,
+        Phys::BodyHandle Whisk(Phys::PhysicsWorld& w, glm::vec2 center,
                                   float radius, float omega)
         {
             constexpr int   kLoops    = 6;
@@ -353,12 +356,12 @@ namespace Arcane::Sandbox
             const float hubR = R * 0.12f;       // central hub radius
 
             // First fixture is the hub circle (placed at the body origin = center).
-            Physics::BodyDef def;
-            def.type     = Physics::BodyType::Kinematic;
-            def.position = Physics::Vec2(center.x, center.y);
-            def.shape    = Physics::MakeCircle(Physics::Real(hubR));
-            def.friction = Physics::Real(0.3f);
-            Physics::BodyHandle h = w.AddBody(def);
+            Phys::BodyDef def;
+            def.type     = Phys::BodyType::Kinematic;
+            def.position = Phys::Vec2(center.x, center.y);
+            def.shape    = Phys::MakeCircle(Phys::Real(hubR));
+            def.friction = Phys::Real(0.3f);
+            Phys::BodyHandle h = w.AddBody(def);
 
             // Lambda: add one thin-box segment as a fixture (verts already in local frame).
             auto AddSegment = [&](glm::vec2 P, glm::vec2 Q)
@@ -373,16 +376,16 @@ namespace Arcane::Sandbox
                 const glm::vec2 P0 = P - d * kWireHalf;
                 const glm::vec2 Q0 = Q + d * kWireHalf;
 
-                const std::vector<Physics::Vec2> verts = {
-                    Physics::Vec2(P0.x + perp.x * kWireHalf, P0.y + perp.y * kWireHalf),
-                    Physics::Vec2(Q0.x + perp.x * kWireHalf, Q0.y + perp.y * kWireHalf),
-                    Physics::Vec2(Q0.x - perp.x * kWireHalf, Q0.y - perp.y * kWireHalf),
-                    Physics::Vec2(P0.x - perp.x * kWireHalf, P0.y - perp.y * kWireHalf),
+                const std::vector<Phys::Vec2> verts = {
+                    Phys::Vec2(P0.x + perp.x * kWireHalf, P0.y + perp.y * kWireHalf),
+                    Phys::Vec2(Q0.x + perp.x * kWireHalf, Q0.y + perp.y * kWireHalf),
+                    Phys::Vec2(Q0.x - perp.x * kWireHalf, Q0.y - perp.y * kWireHalf),
+                    Phys::Vec2(P0.x - perp.x * kWireHalf, P0.y - perp.y * kWireHalf),
                 };
-                Physics::FixtureDef fd;
-                fd.shape       = Physics::MakePolygon(verts);
-                fd.friction    = Physics::Real(0.3f);
-                fd.restitution = Physics::Real(0.0f);
+                Phys::FixtureDef fd;
+                fd.shape       = Phys::MakePolygon(verts);
+                fd.friction    = Phys::Real(0.3f);
+                fd.restitution = Phys::Real(0.0f);
                 w.AddFixture(h, fd);
             };
 
@@ -417,7 +420,7 @@ namespace Arcane::Sandbox
                 AddSegment(B1,  H);
             }
 
-            w.SetAngVelSlot(h.index, Physics::Real(omega));
+            w.SetAngVelSlot(h.index, Phys::Real(omega));
             return h;
         }
 
@@ -433,23 +436,23 @@ namespace Arcane::Sandbox
             // past the 1280x720 canvas -- bigger reads better at zoom-to-fit.
             // Floor + 2 walls framing the arena.
             MakeBox(reg, root, glm::vec2(6.4f, 8.2f), glm::vec2(7.6f, 0.36f),
-                    Physics::BodyType::Static, kStatic);
+                    Phys::BodyType::Static, kStatic);
             MakeBox(reg, root, glm::vec2(-0.8f, 5.6f), glm::vec2(0.36f, 3.0f),
-                    Physics::BodyType::Static, kStatic);
+                    Phys::BodyType::Static, kStatic);
             MakeBox(reg, root, glm::vec2(13.6f, 5.6f), glm::vec2(0.36f, 3.0f),
-                    Physics::BodyType::Static, kStatic);
+                    Phys::BodyType::Static, kStatic);
 
             // 5 dynamics: 3 boxes + 2 circles (meter-scale variety preserved).
             MakeBox(reg, root, glm::vec2(4.4f, 1.2f), glm::vec2(0.54f, 0.54f),
-                    Physics::BodyType::Dynamic, kOrange);
+                    Phys::BodyType::Dynamic, kOrange);
             MakeBox(reg, root, glm::vec2(6.4f, 0.4f),  glm::vec2(0.66f, 0.42f),
-                    Physics::BodyType::Dynamic, kBlue);
+                    Phys::BodyType::Dynamic, kBlue);
             MakeBox(reg, root, glm::vec2(8.6f, 0.9f),  glm::vec2(0.46f, 0.46f),
-                    Physics::BodyType::Dynamic, kGreen);
+                    Phys::BodyType::Dynamic, kGreen);
             MakeCircle(reg, root, glm::vec2(5.4f, 2.6f), 0.50f,
-                       Physics::BodyType::Dynamic, kGold);
+                       Phys::BodyType::Dynamic, kGold);
             MakeCircle(reg, root, glm::vec2(7.6f, 2.0f), 0.58f,
-                       Physics::BodyType::Dynamic, kMagenta);
+                       Phys::BodyType::Dynamic, kMagenta);
         }
 
         // =============================================================================
@@ -473,7 +476,7 @@ namespace Arcane::Sandbox
                 const float cy = kTopSurf - kHalf - i * (2.0f * kHalf + kGap);
                 const glm::vec4 tint = (i % 2 == 0) ? kBlue : kOrange;
                 MakeBox(reg, root, glm::vec2(kCenterX, cy), glm::vec2(kHalf, kHalf),
-                        Physics::BodyType::Dynamic, tint, 0.0f, 0.6f);
+                        Phys::BodyType::Dynamic, tint, 0.0f, 0.6f);
             }
         }
 
@@ -503,7 +506,7 @@ namespace Arcane::Sandbox
                     const float cx = startX + c * kSpacing;
                     const glm::vec4 tint = ((r + c) % 2 == 0) ? kGreen : kTeal;
                     MakeBox(reg, root, glm::vec2(cx, rowY), glm::vec2(kHalf, kHalf),
-                            Physics::BodyType::Dynamic, tint, 0.0f, 0.7f);
+                            Phys::BodyType::Dynamic, tint, 0.0f, 0.7f);
                 }
             }
         }
@@ -520,59 +523,59 @@ namespace Arcane::Sandbox
             // A static "ceiling" anchor body (drawn as an outline by the overlay,
             // like every other body now). LARGER SCALE (Item C): wider + thicker.
             MakeBox(reg, root, glm::vec2(6.4f, 0.9f), glm::vec2(5.6f, 0.18f),
-                    Physics::BodyType::Static, kStatic);
+                    Phys::BodyType::Static, kStatic);
 
-            Physics::PhysicsWorld* w = World(reg);
+            Phys::PhysicsWorld* w = World(reg);
             if (!w) return;
 
             // Meter-scale bobs + drops + spacing (variety preserved).
             constexpr float kBobR = 0.28f;
 
             // --- REVOLUTE pendulum: a static hub + a bob pinned at the hub, swinging. ------
-            const Physics::BodyHandle hub = WorldStaticBox(*w, glm::vec2(3.6f, 1.3f),
+            const Phys::BodyHandle hub = WorldStaticBox(*w, glm::vec2(3.6f, 1.3f),
                                                            glm::vec2(0.14f, 0.14f));
-            const Physics::BodyHandle bob = WorldCircle(*w, glm::vec2(3.6f, 3.6f), kBobR);
+            const Phys::BodyHandle bob = WorldCircle(*w, glm::vec2(3.6f, 3.6f), kBobR);
             {
-                Physics::JointDef jd;
-                jd.kind   = Physics::JointKind::Revolute;
+                Phys::JointDef jd;
+                jd.kind   = Phys::JointKind::Revolute;
                 jd.a      = hub;
                 jd.b      = bob;
-                jd.anchor = Physics::Vec2(3.6f, 1.3f);
+                jd.anchor = Phys::Vec2(3.6f, 1.3f);
                 w->AddJoint(jd);
             }
 
             // --- DISTANCE link: a second bob hangs from the same hub at a fixed length. -----
-            const Physics::BodyHandle distBob = WorldCircle(*w, glm::vec2(5.2f, 3.4f), kBobR);
+            const Phys::BodyHandle distBob = WorldCircle(*w, glm::vec2(5.2f, 3.4f), kBobR);
             {
-                Physics::JointDef jd;
-                jd.kind   = Physics::JointKind::Distance;
+                Phys::JointDef jd;
+                jd.kind   = Phys::JointKind::Distance;
                 jd.a      = hub;
                 jd.b      = distBob;
-                jd.length = Physics::Real(2.3);
+                jd.length = Phys::Real(2.3);
                 w->AddJoint(jd);
             }
 
             // --- WELD pair: a static post + a body rigidly welded to it (stays put). --------
-            const Physics::BodyHandle post   = WorldStaticBox(*w, glm::vec2(8.2f, 1.3f),
+            const Phys::BodyHandle post   = WorldStaticBox(*w, glm::vec2(8.2f, 1.3f),
                                                               glm::vec2(0.14f, 0.14f));
-            const Physics::BodyHandle welded = WorldCircle(*w, glm::vec2(8.9f, 1.3f), kBobR);
+            const Phys::BodyHandle welded = WorldCircle(*w, glm::vec2(8.9f, 1.3f), kBobR);
             {
-                Physics::JointDef jd;
-                jd.kind   = Physics::JointKind::Weld;
+                Phys::JointDef jd;
+                jd.kind   = Phys::JointKind::Weld;
                 jd.a      = post;
                 jd.b      = welded;
-                jd.anchor = Physics::Vec2(8.9f, 1.3f);
+                jd.anchor = Phys::Vec2(8.9f, 1.3f);
                 w->AddJoint(jd);
             }
 
             // --- PRISMATIC slider: a body constrained to a horizontal axis off the post. ----
-            const Physics::BodyHandle slider = WorldCircle(*w, glm::vec2(10.0f, 1.3f), kBobR);
+            const Phys::BodyHandle slider = WorldCircle(*w, glm::vec2(10.0f, 1.3f), kBobR);
             {
-                Physics::JointDef jd;
-                jd.kind = Physics::JointKind::Prismatic;
+                Phys::JointDef jd;
+                jd.kind = Phys::JointKind::Prismatic;
                 jd.a    = post;
                 jd.b    = slider;
-                jd.axis = Physics::Vec2(1.0f, 0.0f);   // horizontal slide axis
+                jd.axis = Phys::Vec2(1.0f, 0.0f);   // horizontal slide axis
                 w->AddJoint(jd);
             }
             // Nudge the slider along its axis so it visibly slides (no perp drift under gravity).
@@ -580,10 +583,10 @@ namespace Arcane::Sandbox
             // the px impulse (8000) on a ~2463-unit-mass bob implied dv ~ 3.3 px/s, which at
             // meters is ~0.033 m/s -- invisible. kNudgeDv gives a clearly visible slide, well
             // under the 400 m/s cap. WorldCircle uses density 1, so mass = 1 * pi * r^2.
-            constexpr Physics::Real kNudgeDv = Physics::Real(1.5);   // target slide speed (m/s)
-            const Physics::Real     kPi      = static_cast<Physics::Real>(std::numbers::pi);
-            const Physics::Real     bobMass  = Physics::Real(1) * kPi * kBobR * kBobR;  // density 1
-            w->ApplyImpulse(slider, Physics::Vec2(bobMass * kNudgeDv, Physics::Real(0)));
+            constexpr Phys::Real kNudgeDv = Phys::Real(1.5);   // target slide speed (m/s)
+            const Phys::Real     kPi      = static_cast<Phys::Real>(std::numbers::pi);
+            const Phys::Real     bobMass  = Phys::Real(1) * kPi * kBobR * kBobR;  // density 1
+            w->ApplyImpulse(slider, Phys::Vec2(bobMass * kNudgeDv, Phys::Real(0)));
         }
 
         // =============================================================================
@@ -597,7 +600,7 @@ namespace Arcane::Sandbox
         {
             Astra::Entity root = MakeRoot(reg);
 
-            Physics::PhysicsWorld* w = World(reg);
+            Phys::PhysicsWorld* w = World(reg);
             if (!w) return;
 
             // World-direct static floor (the real collision surface). LARGER SCALE
@@ -627,7 +630,7 @@ namespace Arcane::Sandbox
             // A THIN tall static wall on the right -- the thing the bullet must not
             // tunnel. LARGER SCALE (Item C): taller wall, further away, still thin.
             MakeBox(reg, root, glm::vec2(11.2f, 6.6f), glm::vec2(0.09f, 1.5f),
-                    Physics::BodyType::Static, kStatic);
+                    Phys::BodyType::Static, kStatic);
 
             // The bullet: a fast box fired right at the wall. fixedRotation (Aabb) +
             // bullet=true (enables the GJK-TOI CCD clamp) + a high +X authored velocity.
@@ -637,7 +640,7 @@ namespace Arcane::Sandbox
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
-            rb.type          = Physics::BodyType::Dynamic;
+            rb.type          = Phys::BodyType::Dynamic;
             rb.fixedRotation = true;
             rb.bullet        = true;                     // CCD: speculative + sweep clamp
             rb.velocity      = glm::vec2(70.0f, 0.0f);   // ~70 m/s: per-step travel 1.17 m >>
@@ -647,7 +650,7 @@ namespace Arcane::Sandbox
             Arcane::Collider2D col;
             {
                 Arcane::Fixture fx;
-                fx.kind        = Physics::ShapeKind::Aabb;
+                fx.kind        = Phys::ShapeKind::Aabb;
                 fx.halfW       = 0.18f;
                 fx.halfH       = 0.18f;
                 fx.density     = 4.0f;     // heavy: keeps momentum into the wall
@@ -683,19 +686,19 @@ namespace Arcane::Sandbox
                 reg.AddComponent<Arcane::LocalTransform>(e, lt);
                 reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
-                Arcane::RigidBody2D rb; rb.type = Physics::BodyType::Dynamic;  // free to rotate
+                Arcane::RigidBody2D rb; rb.type = Phys::BodyType::Dynamic;  // free to rotate
                 reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
                 Arcane::Collider2D col;
                 {
                     // LARGER SCALE (Item C): bigger lobes + a bigger COM offset.
                     Arcane::Fixture core;            // light central lobe at the origin
-                    core.kind = Physics::ShapeKind::Circle;
+                    core.kind = Phys::ShapeKind::Circle;
                     core.radius = 0.34f; core.density = 0.5f; core.friction = 0.5f;
                     col.fixtures.push_back(core);
 
                     Arcane::Fixture heavy;           // heavy lobe offset to one side
-                    heavy.kind = Physics::ShapeKind::Circle;
+                    heavy.kind = Phys::ShapeKind::Circle;
                     heavy.radius = 0.42f; heavy.density = 4.0f; heavy.friction = 0.5f;
                     heavy.localPos = glm::vec2(heavySign * 0.74f, 0.0f);   // off-COM mass
                     col.fixtures.push_back(heavy);
@@ -728,24 +731,24 @@ namespace Arcane::Sandbox
             // Bowl floor + two tall side walls (Aabb statics). LARGER SCALE (Item C):
             // a wide deep bowl so the mixed pile has room to interact.
             MakeBox(reg, root, glm::vec2(6.4f, 8.2f), glm::vec2(5.6f, 0.36f),
-                    Physics::BodyType::Static, kStatic);
+                    Phys::BodyType::Static, kStatic);
             MakeBox(reg, root, glm::vec2(1.2f, 6.8f), glm::vec2(0.36f, 1.8f),
-                    Physics::BodyType::Static, kStatic);
+                    Phys::BodyType::Static, kStatic);
             MakeBox(reg, root, glm::vec2(11.6f, 6.8f), glm::vec2(0.36f, 1.8f),
-                    Physics::BodyType::Static, kStatic);
+                    Phys::BodyType::Static, kStatic);
 
             // Path-A round bodies (circles + capsules, meter-scale variety).
             MakeCircle(reg, root, glm::vec2(5.2f, 1.4f), 0.44f,
-                       Physics::BodyType::Dynamic, kGold);
+                       Phys::BodyType::Dynamic, kGold);
             MakeCircle(reg, root, glm::vec2(7.6f, 0.9f), 0.36f,
-                       Physics::BodyType::Dynamic, kBlue);
+                       Phys::BodyType::Dynamic, kBlue);
             MakeCapsule(reg, root, glm::vec2(6.0f, 2.6f), 0.56f, 0.28f,
-                        Physics::BodyType::Dynamic, kTeal);
+                        Phys::BodyType::Dynamic, kTeal);
             MakeCapsule(reg, root, glm::vec2(8.2f, 3.2f), 0.44f, 0.24f,
-                        Physics::BodyType::Dynamic, kGreen);
+                        Phys::BodyType::Dynamic, kGreen);
 
             // Path-B polygons (a tilted box + a triangle) sharing the same world.
-            if (Physics::PhysicsWorld* w = World(reg))
+            if (Phys::PhysicsWorld* w = World(reg))
             {
                 WorldStaticBox(*w, glm::vec2(6.4f, 8.2f), glm::vec2(5.6f, 0.36f));
                 WorldPolygonBox(*w, glm::vec2(5.8f, 4.0f), glm::vec2(0.54f, 0.40f), 0.5f);
@@ -821,7 +824,7 @@ namespace Arcane::Sandbox
             const float kSpawnLeft   = kArenaLeft;
 
             // ---- arena: floor + 2 tall walls + 2 angled corner fillets -------------
-            Physics::PhysicsWorld* w = World(reg);
+            Phys::PhysicsWorld* w = World(reg);
             if (!w) return;
 
             // Floor.
@@ -849,21 +852,21 @@ namespace Arcane::Sandbox
                     const float ca = std::cos(angle);
                     const float sa = std::sin(angle);
                     // Rotated box corners in LOCAL body frame.
-                    const std::vector<Physics::Vec2> v = {
-                        Physics::Vec2((-kFiltHalfL)*ca - (-kFiltHalfT)*sa,
+                    const std::vector<Phys::Vec2> v = {
+                        Phys::Vec2((-kFiltHalfL)*ca - (-kFiltHalfT)*sa,
                                       (-kFiltHalfL)*sa + (-kFiltHalfT)*ca),
-                        Physics::Vec2(( kFiltHalfL)*ca - (-kFiltHalfT)*sa,
+                        Phys::Vec2(( kFiltHalfL)*ca - (-kFiltHalfT)*sa,
                                       ( kFiltHalfL)*sa + (-kFiltHalfT)*ca),
-                        Physics::Vec2(( kFiltHalfL)*ca - ( kFiltHalfT)*sa,
+                        Phys::Vec2(( kFiltHalfL)*ca - ( kFiltHalfT)*sa,
                                       ( kFiltHalfL)*sa + ( kFiltHalfT)*ca),
-                        Physics::Vec2((-kFiltHalfL)*ca - ( kFiltHalfT)*sa,
+                        Phys::Vec2((-kFiltHalfL)*ca - ( kFiltHalfT)*sa,
                                       (-kFiltHalfL)*sa + ( kFiltHalfT)*ca),
                     };
-                    Physics::BodyDef fd;
-                    fd.type     = Physics::BodyType::Static;
-                    fd.position = Physics::Vec2(cx, cy);
-                    fd.shape    = Physics::MakePolygon(v);
-                    fd.friction = Physics::Real(0.4f);
+                    Phys::BodyDef fd;
+                    fd.type     = Phys::BodyType::Static;
+                    fd.position = Phys::Vec2(cx, cy);
+                    fd.shape    = Phys::MakePolygon(v);
+                    fd.friction = Phys::Real(0.4f);
                     w->AddBody(fd);
                 };
 
@@ -916,14 +919,14 @@ namespace Arcane::Sandbox
                     const float hw = sz;
                     const float hh = sz * (0.5f + 0.5f * (static_cast<float>(i % 3) / 2.0f));
                     MakeBox(reg, root, pos, glm::vec2(hw, hh),
-                            Physics::BodyType::Dynamic, tint,
+                            Phys::BodyType::Dynamic, tint,
                             /*restitution=*/0.05f, /*friction=*/0.35f, /*density=*/0.07f);
                 }
                 else if (w_val < 45)
                 {
                     // Circle (path-A).
                     MakeCircle(reg, root, pos, sz,
-                               Physics::BodyType::Dynamic, tint,
+                               Phys::BodyType::Dynamic, tint,
                                /*restitution=*/0.1f, /*density=*/0.07f);
                 }
                 else if (w_val < 65)
@@ -932,7 +935,7 @@ namespace Arcane::Sandbox
                     const float halfLen = sz * 0.6f;
                     const float radius  = sz * 0.4f;
                     MakeCapsule(reg, root, pos, halfLen, radius,
-                                Physics::BodyType::Dynamic, tint);
+                                Phys::BodyType::Dynamic, tint);
                 }
                 else if (w_val < 90)
                 {
@@ -944,22 +947,22 @@ namespace Arcane::Sandbox
                 {
                     // Compound (world-direct 2-fixture body: a circle + offset lobe).
                     // The off-origin lobe shifts the COM so the body tips and tumbles.
-                    Physics::BodyDef cdef;
-                    cdef.type        = Physics::BodyType::Dynamic;
-                    cdef.position    = Physics::Vec2(pos.x, pos.y);
-                    cdef.shape       = Physics::MakeCircle(Physics::Real(sz * 0.55f));
-                    cdef.density     = Physics::Real(0.07f);
-                    cdef.friction    = Physics::Real(0.35f);
-                    cdef.restitution = Physics::Real(0.05f);
-                    Physics::BodyHandle ch = w->AddBody(cdef);
+                    Phys::BodyDef cdef;
+                    cdef.type        = Phys::BodyType::Dynamic;
+                    cdef.position    = Phys::Vec2(pos.x, pos.y);
+                    cdef.shape       = Phys::MakeCircle(Phys::Real(sz * 0.55f));
+                    cdef.density     = Phys::Real(0.07f);
+                    cdef.friction    = Phys::Real(0.35f);
+                    cdef.restitution = Phys::Real(0.05f);
+                    Phys::BodyHandle ch = w->AddBody(cdef);
 
                     // Offset lobe: smaller circle at (+sz*0.8, 0) in body frame.
-                    Physics::FixtureDef lfd;
-                    lfd.shape       = Physics::MakeCircle(Physics::Real(sz * 0.35f));
-                    lfd.localPos    = Physics::Vec2(sz * 0.8f, 0.0f);
-                    lfd.density     = Physics::Real(0.07f);
-                    lfd.friction    = Physics::Real(0.35f);
-                    lfd.restitution = Physics::Real(0.05f);
+                    Phys::FixtureDef lfd;
+                    lfd.shape       = Phys::MakeCircle(Phys::Real(sz * 0.35f));
+                    lfd.localPos    = Phys::Vec2(sz * 0.8f, 0.0f);
+                    lfd.density     = Phys::Real(0.07f);
+                    lfd.friction    = Phys::Real(0.35f);
+                    lfd.restitution = Phys::Real(0.05f);
                     w->AddFixture(ch, lfd);
 
                     (void)tint; // outline-only; tint unused
@@ -1019,7 +1022,7 @@ namespace Arcane::Sandbox
 
     Astra::Entity SpawnBox(Astra::Registry& reg, Astra::Entity root,
                            glm::vec2 pos, glm::vec2 halfExtents,
-                           Physics::BodyType type, glm::vec4 tint,
+                           Phys::BodyType type, glm::vec4 tint,
                            float density)
     {
         return MakeBox(reg, ResolveRoot(reg, root), pos, halfExtents, type, tint,
@@ -1028,7 +1031,7 @@ namespace Arcane::Sandbox
 
     Astra::Entity SpawnCircle(Astra::Registry& reg, Astra::Entity root,
                               glm::vec2 pos, float radius,
-                              Physics::BodyType type, glm::vec4 tint,
+                              Phys::BodyType type, glm::vec4 tint,
                               float density)
     {
         return MakeCircle(reg, ResolveRoot(reg, root), pos, radius, type, tint,
@@ -1037,7 +1040,7 @@ namespace Arcane::Sandbox
 
     Astra::Entity SpawnCapsule(Astra::Registry& reg, Astra::Entity root,
                                glm::vec2 pos, float radius,
-                               Physics::BodyType type, glm::vec4 tint,
+                               Phys::BodyType type, glm::vec4 tint,
                                float density)
     {
         // Upright pill: radius = end-cap radius, halfLen = radius (VERTICAL segment).
@@ -1061,7 +1064,7 @@ namespace Arcane::Sandbox
         Arcane::Collider2D col;
         {
             Arcane::Fixture fx;
-            fx.kind        = Physics::ShapeKind::Capsule;
+            fx.kind        = Phys::ShapeKind::Capsule;
             fx.halfLen     = radius;   // upright pill: segment half-length == end-cap radius
             fx.radius      = radius;
             fx.density     = density;

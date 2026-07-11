@@ -17,9 +17,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -73,10 +73,10 @@ namespace
         // restitution/push/hash-grid knobs are all left at the MKS engine
         // defaults (PhysicsWorld.hpp: gravityX=0, sleepThreshold=0.05,
         // restitutionThreshold=1, contactPushMaxVelocity=3, hashCellSize=1).
-        Arcane::Physics::WorldDef wd;
+        Manifold2D::Physics::WorldDef wd;
         wd.gravityY = kGravityY;
         reg.SetResource(Arcane::PhysicsResource{
-            std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
+            std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd),
             {}
         });
 
@@ -96,14 +96,14 @@ namespace
             reg.AddComponent<Arcane::WorldTransform>(dyn, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
-            rb.type = Arcane::Physics::BodyType::Dynamic;
+            rb.type = Manifold2D::Physics::BodyType::Dynamic;
             reg.AddComponent<Arcane::RigidBody2D>(dyn, rb);
 
             // Single-fixture Collider2D (circle r=0.5).
             Arcane::Collider2D col;
             {
                 Arcane::Fixture fx;
-                fx.kind   = Arcane::Physics::ShapeKind::Circle;
+                fx.kind   = Manifold2D::Physics::ShapeKind::Circle;
                 fx.radius = 0.5f;
                 col.fixtures.push_back(fx);
             }
@@ -121,7 +121,7 @@ namespace
             reg.AddComponent<Arcane::WorldTransform>(kin, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
-            rb.type     = Arcane::Physics::BodyType::Kinematic;
+            rb.type     = Manifold2D::Physics::BodyType::Kinematic;
             rb.velocity = glm::vec2(kKinSpeed, 0.0f);
             reg.AddComponent<Arcane::RigidBody2D>(kin, rb);
 
@@ -129,7 +129,7 @@ namespace
             Arcane::Collider2D col;
             {
                 Arcane::Fixture fx;
-                fx.kind   = Arcane::Physics::ShapeKind::Circle;
+                fx.kind   = Manifold2D::Physics::ShapeKind::Circle;
                 fx.radius = 0.5f;
                 col.fixtures.push_back(fx);
             }
@@ -312,11 +312,11 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     // BOTH gravity axes are explicitly zeroed as a deliberate scene statement
     // (the engine default is gravityY=+10); the sleep/restitution/push/hash-grid
     // knobs are left at the MKS engine defaults (see BuildScene above).
-    Arcane::Physics::WorldDef wd;
+    Manifold2D::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
     wd.gravityX = 0.0f;
     reg.SetResource(Arcane::PhysicsResource{
-        std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
+        std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd),
         {}
     });
 
@@ -339,14 +339,14 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
         Arcane::RigidBody2D rb;
-        rb.type = Arcane::Physics::BodyType::Kinematic;
+        rb.type = Manifold2D::Physics::BodyType::Kinematic;
         reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
         Arcane::Collider2D col;
         // fixture 0
         {
             Arcane::Fixture fx;
-            fx.kind     = Arcane::Physics::ShapeKind::Circle;
+            fx.kind     = Manifold2D::Physics::ShapeKind::Circle;
             fx.radius   = 0.5f;
             fx.localPos = glm::vec2(0.0f, 0.0f);
             fx.density  = 1.0f;
@@ -356,7 +356,7 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
         // fixture 1
         {
             Arcane::Fixture fx;
-            fx.kind      = Arcane::Physics::ShapeKind::Aabb;
+            fx.kind      = Manifold2D::Physics::ShapeKind::Aabb;
             fx.halfW     = 0.3f;
             fx.halfH     = 0.3f;
             fx.localPos  = glm::vec2(2.0f, 0.0f);
@@ -382,7 +382,7 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     REQUIRE(res->entityToBody.count(e) == 1);
 
     // Check that exactly 2 fixtures were registered on this body.
-    const Arcane::Physics::BodyHandle bh = res->entityToBody.at(e);
+    const Manifold2D::Physics::BodyHandle bh = res->entityToBody.at(e);
     REQUIRE(res->world->IsValid(bh));
     CHECK(res->world->FixtureCount(bh) == 2u);
 
@@ -419,11 +419,11 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     // Zero-g is a deliberate scene statement now that the engine default is
     // gravityY=+10; gravityX and the sleep/restitution/push/hash-grid knobs
     // are left at the MKS engine defaults (see BuildScene above).
-    Arcane::Physics::WorldDef wd;
+    Manifold2D::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
     wd.gravityX = 0.0f;
     reg.SetResource(Arcane::PhysicsResource{
-        std::make_unique<Arcane::Physics::PhysicsWorld>(wd),
+        std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd),
         {}
     });
 
@@ -452,13 +452,13 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
         Arcane::RigidBody2D rb;
-        rb.type = Arcane::Physics::BodyType::Kinematic;
+        rb.type = Manifold2D::Physics::BodyType::Kinematic;
         reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
         Arcane::Collider2D col;
         {
             Arcane::Fixture fx;
-            fx.kind         = Arcane::Physics::ShapeKind::Circle;
+            fx.kind         = Manifold2D::Physics::ShapeKind::Circle;
             fx.radius       = 0.1f;
             fx.localPos     = glm::vec2(kLx, kLy);
             fx.localAngle   = 0.0f;
@@ -481,14 +481,14 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     REQUIRE(res != nullptr);
     REQUIRE(res->entityToBody.count(e) == 1);
 
-    const Arcane::Physics::BodyHandle bh = res->entityToBody.at(e);
+    const Manifold2D::Physics::BodyHandle bh = res->entityToBody.at(e);
     REQUIRE(res->world->IsValid(bh));
 
     // Exactly 1 fixture (single-fixture Collider2D).
     REQUIRE(res->world->FixtureCount(bh) == 1u);
 
     // Get the primary fixture handle via index 0.
-    const Arcane::Physics::FixtureHandle fh0 = res->world->GetBodyFixture(bh, 0u);
+    const Manifold2D::Physics::FixtureHandle fh0 = res->world->GetBodyFixture(bh, 0u);
     REQUIRE(res->world->IsValid(fh0));
 
     // Assert the authored filter flowed through.
@@ -499,7 +499,7 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     // Assert the authored local-xf flowed through:
     //   body at origin (0,0), angle 0 -> worldPos = (0,0) + R(0)*(0.3,0) = (0.3,0).
     // BEFORE the fix this would return (0,0) because localPos was hardcoded to (0,0).
-    const Arcane::Physics::Vec2 worldPos = res->world->GetFixtureWorldPos(fh0);
+    const Manifold2D::Physics::Vec2 worldPos = res->world->GetFixtureWorldPos(fh0);
     CHECK(static_cast<double>(worldPos.x) == Approx(static_cast<double>(kLx)).margin(1e-4));
     CHECK(static_cast<double>(worldPos.y) == Approx(static_cast<double>(kLy)).margin(1e-4));
 }

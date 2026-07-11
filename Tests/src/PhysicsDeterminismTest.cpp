@@ -60,7 +60,7 @@
 //   1. Anti-tunnel: bullet bodies did NOT pass through the thin wall (CCD gate).
 //   2. Run-twice identical (SoftStep): same hash both runs; hash != 0.
 //
-// PRESENTATION-FREE + C++20-clean. namespace Arcane::Physics helpers.
+// PRESENTATION-FREE + C++20-clean. namespace Manifold2D::Physics helpers.
 // Mirror structure + doc-comment style of PhysicsPhase2HarnessTest.cpp.
 
 #include <cmath>
@@ -68,15 +68,15 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/Body.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Joints/Joints.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Body.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Joints/Joints.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
-namespace Arcane { namespace Physics { namespace P34Determinism {
+namespace Manifold2D { namespace Physics { namespace P34Determinism {
 
     // -------------------------------------------------------------------------
     // Scene constants.
@@ -456,9 +456,9 @@ namespace Arcane { namespace Physics { namespace P34Determinism {
         return hash;
     }
 
-} } } // namespace Arcane::Physics::P34Determinism
+} } } // namespace Manifold2D::Physics::P34Determinism
 
-using namespace Arcane::Physics::P34Determinism;
+using namespace Manifold2D::Physics::P34Determinism;
 
 // ---------------------------------------------------------------------------
 // 1. Anti-tunnel sub-assert: prove the CCD path is actually exercised.

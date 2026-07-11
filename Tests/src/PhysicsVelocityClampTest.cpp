@@ -2,11 +2,11 @@
 // WorldDef.maxLinearVelocity; angular speed clamped to kMaxRotation * invDt.
 #include <cmath>
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 TEST_CASE("Linear velocity is clamped to maxLinearVelocity", "[physics][clamp]")
 {

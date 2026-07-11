@@ -33,7 +33,7 @@
 
 #include "Camera.hpp"
 
-#include <Arcane/Physics/PhysicsTypes.hpp>   // BodyHandle, kInvalidBody
+#include <Manifold2D/Physics/PhysicsTypes.hpp>   // BodyHandle, kInvalidBody
 
 #include <cstdint>
 #include <vector>
@@ -43,7 +43,7 @@
 namespace Astra { class Registry; }
 
 namespace Arcane { struct InputSnapshot; }
-namespace Arcane::Physics { class PhysicsWorld; }
+namespace Manifold2D::Physics { class PhysicsWorld; }
 
 namespace Arcane::Sandbox
 {
@@ -142,7 +142,7 @@ namespace Arcane::Sandbox
         // convert the cursor->body offset into a drive velocity for the mouse-spring).
         // Camera mutations (pan/zoom) happen here so the caller can push the camera
         // AFTER Tick in the same frame.
-        void Tick(Astra::Registry& reg, Arcane::Physics::PhysicsWorld& world,
+        void Tick(Astra::Registry& reg, Manifold2D::Physics::PhysicsWorld& world,
                   Camera& camera, const Arcane::InputSnapshot& input, float dt);
 
         // Mouse-wheel zoom-to-cursor. Called ONCE PER FRAME from SandboxApp::Update
@@ -159,7 +159,7 @@ namespace Arcane::Sandbox
         // world.IsValid guard.
         void ClearGrab() noexcept
         {
-            m_grabbed        = Arcane::Physics::kInvalidBody;
+            m_grabbed        = Manifold2D::Physics::kInvalidBody;
             m_prevButtons    = 0;
             m_havePrevMouse  = false;
         }
@@ -204,7 +204,7 @@ namespace Arcane::Sandbox
         // factory needs >= 3 verts. On success creates the body in `world`, clears the
         // point list, and returns true. The body is positioned at the points' centroid
         // (so it rotates about its center) with the verts authored relative to it.
-        bool SpawnPolygon(Arcane::Physics::PhysicsWorld& world);
+        bool SpawnPolygon(Manifold2D::Physics::PhysicsWorld& world);
 
         // ---- NARROWPHASE INSPECTOR SUBJECT (grab-to-select, always on) -------------
         // The inspector's "subject" is the body of the shape you GRAB TO DRAG -- it is a
@@ -216,19 +216,19 @@ namespace Arcane::Sandbox
         //
         // TakeSubjectGrab returns the grabbed body handle exactly once (consumes the
         // request) and kInvalidBody when no body was grabbed this frame.
-        [[nodiscard]] Arcane::Physics::BodyHandle TakeSubjectGrab() noexcept
+        [[nodiscard]] Manifold2D::Physics::BodyHandle TakeSubjectGrab() noexcept
         {
-            const Arcane::Physics::BodyHandle h = m_subjectGrab;
-            m_subjectGrab = Arcane::Physics::kInvalidBody;
+            const Manifold2D::Physics::BodyHandle h = m_subjectGrab;
+            m_subjectGrab = Manifold2D::Physics::kInvalidBody;
             return h;
         }
 
         // ---- introspection (test hooks; also handy for a future HUD) ---------------
         [[nodiscard]] bool IsGrabbing() const noexcept
         {
-            return m_grabbed != Arcane::Physics::kInvalidBody;
+            return m_grabbed != Manifold2D::Physics::kInvalidBody;
         }
-        [[nodiscard]] Arcane::Physics::BodyHandle GrabbedHandleForTest() const noexcept
+        [[nodiscard]] Manifold2D::Physics::BodyHandle GrabbedHandleForTest() const noexcept
         {
             return m_grabbed;
         }
@@ -239,7 +239,7 @@ namespace Arcane::Sandbox
         // over static/kinematic bodies, which are not grabbable). Uses OverlapShape. The
         // probe radius is kPickRadiusPx converted to world through the camera zoom, so
         // the pick affordance is a fixed screen-px size that does not shrink zoomed out.
-        Arcane::Physics::BodyHandle PickBodyAt(Arcane::Physics::PhysicsWorld& world,
+        Manifold2D::Physics::BodyHandle PickBodyAt(Manifold2D::Physics::PhysicsWorld& world,
                                                glm::vec2 worldPt,
                                                const Camera& camera) const;
 
@@ -249,7 +249,7 @@ namespace Arcane::Sandbox
         bool         m_havePrevMouse = false;    // first frame has no valid prev cursor
 
         // The grabbed body (kInvalidBody = nothing grabbed).
-        Arcane::Physics::BodyHandle m_grabbed = Arcane::Physics::kInvalidBody;
+        Manifold2D::Physics::BodyHandle m_grabbed = Manifold2D::Physics::kInvalidBody;
 
         // The grab point in the body's LOCAL frame, captured at the press edge:
         //   localAnchor = R(-angle) * (clickWorld - bodyOrigin).
@@ -276,12 +276,12 @@ namespace Arcane::Sandbox
         bool m_prevEsc       = false;   // SDLK_ESCAPE was down last frame
 
         // Pooled scratch for OverlapShape candidate handles (reused; no per-frame alloc).
-        mutable std::vector<Arcane::Physics::BodyHandle> m_overlapScratch;
+        mutable std::vector<Manifold2D::Physics::BodyHandle> m_overlapScratch;
 
         // ---- narrowphase inspector subject (grab-to-select) ------------------------
         // One-shot: the body the grab path grabbed this frame (kInvalidBody = none).
         // Set where Tick assigns m_grabbed on a body pick; consumed by SandboxApp via
         // TakeSubjectGrab after Tick. Grabbing empty space leaves it kInvalidBody.
-        Arcane::Physics::BodyHandle m_subjectGrab = Arcane::Physics::kInvalidBody;
+        Manifold2D::Physics::BodyHandle m_subjectGrab = Manifold2D::Physics::kInvalidBody;
     };
 }

@@ -29,8 +29,9 @@
 #include "Interaction.hpp"                  // mouse spawn/drag/throw + pan/zoom (Task 7)
 
 #include <Arcane/Jobs/TaskExecutor.hpp>     // ITaskExecutor (Phase D1 executor injection)
-#include <Arcane/Physics/Fixture.hpp>          // FixtureHandle, kInvalidFixture (subject + partner fixtures)
-#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseTrace (inspector recorder)
+#include <Arcane/Jobs/ArcaneWorkScheduler.hpp> // bridges ITaskExecutor -> Manifold2D::IWorkScheduler
+#include <Manifold2D/Physics/Fixture.hpp>          // FixtureHandle, kInvalidFixture (subject + partner fixtures)
+#include <Manifold2D/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseTrace (inspector recorder)
 #include <Arcane/Render/Batcher2D.hpp>        // Batcher2D virtual interface (Circle call)
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>   // PhysicsResource (owns the PhysicsWorld)
@@ -123,7 +124,7 @@ namespace Arcane::Sandbox
     struct ContactView
     {
         std::uint32_t                     partnerBodyId = 0;  // partner BodyHandle.index
-        Arcane::Physics::NarrowphaseTrace trace{};            // subject-vs-partner re-run
+        Manifold2D::Physics::NarrowphaseTrace trace{};            // subject-vs-partner re-run
     };
 
     // -------------------------------------------------------------------------
@@ -143,7 +144,7 @@ namespace Arcane::Sandbox
     struct SandboxInspectorResource
     {
         bool                           hasSubject  = false;   // a valid subject this frame
-        Arcane::Physics::FixtureHandle subject     = Arcane::Physics::kInvalidFixture;
+        Manifold2D::Physics::FixtureHandle subject     = Manifold2D::Physics::kInvalidFixture;
         std::uint32_t                  subjectBody = 0;       // subject BodyHandle.index
         std::vector<ContactView>       contacts;              // ALL of the subject's contacts
         int                            selectedIndex = -1;    // focused contact (-1 = none)
@@ -286,8 +287,13 @@ namespace Arcane::Sandbox
         void Configure(float gravityY) noexcept { m_gravityY = gravityY; }
 
         // Phase D1: inject the task executor that each (re)built PhysicsWorld will use.
-        // nullptr -> the world's owned SerialTaskExecutor (deterministic default).
-        void SetExecutor(Arcane::ITaskExecutor* exec) noexcept { m_executor = exec; }
+        // nullptr -> the world's owned serial default (deterministic). The engine
+        // executor is wrapped by m_scheduler so the world sees a Manifold2D::IWorkScheduler.
+        void SetExecutor(Arcane::ITaskExecutor* exec) noexcept
+        {
+            m_executor = exec;
+            m_scheduler.SetExecutor(exec);
+        }
 
         // Build the current scene index into `reg` from scratch (fresh PhysicsResource +
         // builder). Called by GamePlugin_Init on a fresh boot (after the components are
@@ -385,14 +391,14 @@ namespace Arcane::Sandbox
         [[nodiscard]] bool HasSubject() const noexcept { return m_subjectValid; }
 
         // The subject fixture handle (valid only when HasSubject()); the HUD shows its ids.
-        [[nodiscard]] Arcane::Physics::FixtureHandle Subject() const noexcept { return m_subjectFixture; }
-        [[nodiscard]] Arcane::Physics::BodyHandle    SubjectBody() const noexcept { return m_subjectBody; }
+        [[nodiscard]] Manifold2D::Physics::FixtureHandle Subject() const noexcept { return m_subjectFixture; }
+        [[nodiscard]] Manifold2D::Physics::BodyHandle    SubjectBody() const noexcept { return m_subjectBody; }
 
         // Set the subject to body `bh`'s primary fixture (fixture 0). No-op (clears the
         // subject) for a stale/fixtureless body. Called by FixedUpdate from the grab
         // request; also directly callable by tests. Re-enumerates contacts on the next
         // UpdateAndPublishInspector. Switching bodies resets the selection + step state.
-        void SetSubjectBody(Astra::Registry& reg, Arcane::Physics::BodyHandle bh);
+        void SetSubjectBody(Astra::Registry& reg, Manifold2D::Physics::BodyHandle bh);
 
         // Drop the subject (the HUD "Clear subject" button / an invalid subject).
         void ClearSubject() noexcept;
@@ -407,7 +413,7 @@ namespace Arcane::Sandbox
         // contact's trace (an idle/empty trace when there are no contacts).
         [[nodiscard]] int SelectedIndex() const noexcept { return m_selectedIndex; }
         void SetSelectedIndex(int i) noexcept;
-        [[nodiscard]] const Arcane::Physics::NarrowphaseTrace& SelectedTrace() const noexcept;
+        [[nodiscard]] const Manifold2D::Physics::NarrowphaseTrace& SelectedTrace() const noexcept;
 
         // The step index over the SELECTED contact's recorded iterations (the HUD slider
         // writes it; clamped to RecordedStepCount() for the selected trace's kind; 0 ->
@@ -459,6 +465,9 @@ namespace Arcane::Sandbox
         std::size_t            m_sceneIndex = 0;
         float                  m_gravityY   = 0.0f;
         Arcane::ITaskExecutor* m_executor   = nullptr;   // Phase D1; null -> serial default
+        // Persistent IWorkScheduler bridge for m_executor: outlives each freshly-minted
+        // PhysicsWorld (the world stores a raw scheduler pointer). Re-pointed by SetExecutor.
+        Arcane::ArcaneWorkScheduler m_scheduler{};
         Camera      m_camera{};      // default identity; configured in RebuildScene
         Interaction m_interaction{}; // mouse spawn/drag/throw + pan/zoom (Task 7)
 
@@ -477,8 +486,8 @@ namespace Arcane::Sandbox
 
         // ---- narrowphase inspector (subject model, always on) ----------------------
         bool m_subjectValid = false;  // a valid subject is set (re-validated each step)
-        Arcane::Physics::FixtureHandle m_subjectFixture = Arcane::Physics::kInvalidFixture;
-        Arcane::Physics::BodyHandle    m_subjectBody    = Arcane::Physics::kInvalidBody;
+        Manifold2D::Physics::FixtureHandle m_subjectFixture = Manifold2D::Physics::kInvalidFixture;
+        Manifold2D::Physics::BodyHandle    m_subjectBody    = Manifold2D::Physics::kInvalidBody;
         int  m_selectedIndex  = -1;   // focused contact index (-1 = subject has none)
         // Stable selection: re-resolve the focused contact by PARTNER ID across frames
         // (the contact list order can shift). m_hasSelectedPartner gates the lookup --
@@ -497,7 +506,7 @@ namespace Arcane::Sandbox
 
         // An empty idle trace returned by SelectedTrace() when there are no contacts (so
         // the HUD inset has something safe to read; fit-to-bounds handles no geometry).
-        Arcane::Physics::NarrowphaseTrace m_idleTrace{};
+        Manifold2D::Physics::NarrowphaseTrace m_idleTrace{};
 
         // The Minkowski-inset render target. Lazily created on first use from the host's
         // device + ShaderLibrary (Runtime render-resources bridge); null in a headless

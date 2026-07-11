@@ -3,12 +3,12 @@
 // docs/superpowers/specs/2026-07-02-arcane-physics-mks-units-design.md #3.
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Broadphase/DynamicTree.hpp>
-#include <Arcane/Physics/Broadphase/SpatialGrid.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Broadphase/DynamicTree.hpp>
+#include <Manifold2D/Physics/Broadphase/SpatialGrid.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 using Catch::Approx;
 
 TEST_CASE("WorldDef defaults are Box2D v3 MKS", "[physics][mks]")

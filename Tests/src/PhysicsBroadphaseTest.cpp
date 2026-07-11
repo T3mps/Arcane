@@ -22,12 +22,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/Broadphase/Broadphase.hpp>
-#include <Arcane/Physics/Broadphase/DynamicTree.hpp>
-#include <Arcane/Physics/Broadphase/SpatialHash.hpp>
-#include <Arcane/Physics/Broadphase/SweepAndPrune.hpp>
+#include <Manifold2D/Physics/Broadphase/Broadphase.hpp>
+#include <Manifold2D/Physics/Broadphase/DynamicTree.hpp>
+#include <Manifold2D/Physics/Broadphase/SpatialHash.hpp>
+#include <Manifold2D/Physics/Broadphase/SweepAndPrune.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {

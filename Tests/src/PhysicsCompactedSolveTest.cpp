@@ -3,11 +3,11 @@
 #include <cstdint>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/Body.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-using namespace Arcane::Physics;
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Body.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+using namespace Manifold2D::Physics;
 namespace {
     constexpr Real kStep = Real(1) / Real(60);
     BodyHandle AddFloor(PhysicsWorld& w, Vec2 pos, Real hw, Real hh) {

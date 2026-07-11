@@ -36,14 +36,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/CharacterController.hpp>
-#include <Arcane/Physics/Broadphase/Passability.hpp>
-#include <Arcane/Physics/Narrowphase/GeometryKernel.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/CharacterController.hpp>
+#include <Manifold2D/Physics/Broadphase/Passability.hpp>
+#include <Manifold2D/Physics/Narrowphase/GeometryKernel.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 using Catch::Approx;
 
 namespace

@@ -5,12 +5,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Geometry/ConvexHull.hpp>
-#include <Arcane/Geometry/detail/Predicates.hpp>
+#include <Manifold2D/Geometry/ConvexHull.hpp>
+#include <Manifold2D/Geometry/detail/Predicates.hpp>
 
-using Arcane::Geometry::ConvexHull;
-using Arcane::Geometry::MonotoneChain;
-using Pt = Arcane::Geometry::Pt<float>;
+using Manifold2D::Geometry::ConvexHull;
+using Manifold2D::Geometry::MonotoneChain;
+using Pt = Manifold2D::Geometry::Pt<float>;
 
 namespace
 {
@@ -97,27 +97,27 @@ namespace
 
 TEST_CASE("GrahamScan agrees with MonotoneChain", "[geometry]")
 {
-    AgreesWithMonotone<Arcane::Geometry::GrahamScan>("graham");
+    AgreesWithMonotone<Manifold2D::Geometry::GrahamScan>("graham");
 }
 
 TEST_CASE("JarvisMarch agrees with MonotoneChain", "[geometry]")
 {
-    AgreesWithMonotone<Arcane::Geometry::JarvisMarch>("jarvis");
+    AgreesWithMonotone<Manifold2D::Geometry::JarvisMarch>("jarvis");
 }
 
 TEST_CASE("QuickHull agrees with MonotoneChain", "[geometry]")
 {
-    AgreesWithMonotone<Arcane::Geometry::QuickHull>("quickhull");
+    AgreesWithMonotone<Manifold2D::Geometry::QuickHull>("quickhull");
 }
 
 TEST_CASE("Chan agrees with MonotoneChain", "[geometry]")
 {
-    AgreesWithMonotone<Arcane::Geometry::Chan>("chan");
+    AgreesWithMonotone<Manifold2D::Geometry::Chan>("chan");
 }
 
 TEST_CASE("KirkpatrickSeidel agrees with MonotoneChain", "[geometry]")
 {
-    AgreesWithMonotone<Arcane::Geometry::KirkpatrickSeidel>("kps");
+    AgreesWithMonotone<Manifold2D::Geometry::KirkpatrickSeidel>("kps");
 }
 
 #include <random>   // (catch2 + Predicates already included at the top of this file)
@@ -125,21 +125,21 @@ TEST_CASE("KirkpatrickSeidel agrees with MonotoneChain", "[geometry]")
 namespace
 {
     template <class T>
-    std::vector<Arcane::Geometry::Pt<T>> RandomCloud(std::mt19937& rng, int n)
+    std::vector<Manifold2D::Geometry::Pt<T>> RandomCloud(std::mt19937& rng, int n)
     {
         std::uniform_int_distribution<int> d(-500, 500);   // integer-valued: exact in float
-        std::vector<Arcane::Geometry::Pt<T>> v;
+        std::vector<Manifold2D::Geometry::Pt<T>> v;
         v.reserve(n);
         for (int i = 0; i < n; ++i)
-            v.push_back(Arcane::Geometry::Pt<T>(T(d(rng)), T(d(rng))));
+            v.push_back(Manifold2D::Geometry::Pt<T>(T(d(rng)), T(d(rng))));
         return v;
     }
 
     template <class T>
-    void AllSixAgree(const std::vector<Arcane::Geometry::Pt<T>>& cloud)
+    void AllSixAgree(const std::vector<Manifold2D::Geometry::Pt<T>>& cloud)
     {
-        using namespace Arcane::Geometry;
-        std::span<const Arcane::Geometry::Pt<T>> s(cloud);   // fully-qualified: the
+        using namespace Manifold2D::Geometry;
+        std::span<const Manifold2D::Geometry::Pt<T>> s(cloud);   // fully-qualified: the
         // file-scope `using Pt = Pt<float>` alias otherwise makes `Pt<T>` ambiguous.
         const auto ref = ConvexHull<MonotoneChain, T>(s);
         REQUIRE(ConvexHull<GrahamScan, T>(s)        == ref);
@@ -155,11 +155,11 @@ namespace
     // float Cross failed to strip), this still trips. This is the E01-5 payoff check
     // AllSixAgree alone does not perform.
     template <class T>
-    void AllSixAgreeExact(const std::vector<Arcane::Geometry::Pt<T>>& cloud)
+    void AllSixAgreeExact(const std::vector<Manifold2D::Geometry::Pt<T>>& cloud)
     {
-        using namespace Arcane::Geometry;
+        using namespace Manifold2D::Geometry;
         AllSixAgree<T>(cloud);
-        std::span<const Arcane::Geometry::Pt<T>> s(cloud);
+        std::span<const Manifold2D::Geometry::Pt<T>> s(cloud);
         const auto h = ConvexHull<MonotoneChain, T>(s);
         if (h.size() < 3) return;   // all-collinear degenerate draw
         REQUIRE(detail::SignedArea2<T>(h) > T(0));
@@ -184,12 +184,12 @@ TEST_CASE("All six convex-hull algorithms agree on random clouds", "[geometry]")
 
 TEST_CASE("ConvexHull output obeys the canonical contract", "[geometry]")
 {
-    using namespace Arcane::Geometry;
+    using namespace Manifold2D::Geometry;
     std::mt19937 rng(0x1234u);
     for (int trial = 0; trial < 200; ++trial)
     {
         const auto cloud = RandomCloud<float>(rng, 3 + (trial % 50));
-        std::span<const Arcane::Geometry::Pt<float>> s(cloud);   // fully-qualified (see above)
+        std::span<const Manifold2D::Geometry::Pt<float>> s(cloud);   // fully-qualified (see above)
         const auto h = ConvexHull<MonotoneChain, float>(s);
         if (h.size() < 3) continue;   // degenerate (all-collinear draw)
 
@@ -212,8 +212,8 @@ TEST_CASE("ConvexHull output obeys the canonical contract", "[geometry]")
 // E01-5: the robust orientation predicate must return the EXACT sign.
 TEST_CASE("Orient2d is exact for float and double", "[geometry][robust]")
 {
-    using Arcane::Geometry::Pt;
-    using Arcane::Geometry::detail::Orient2d;
+    using Manifold2D::Geometry::Pt;
+    using Manifold2D::Geometry::detail::Orient2d;
 
     SECTION("basic float orientation")
     {
@@ -364,7 +364,7 @@ TEST_CASE("All six hull policies agree on degenerate + near-collinear clouds",
         std::mt19937 rng(seed);
         std::uniform_real_distribution<float> t(-scale, scale);
         std::uniform_int_distribution<int>    jig(-2, 2);
-        std::vector<Arcane::Geometry::Pt<float>> v;
+        std::vector<Manifold2D::Geometry::Pt<float>> v;
         const float m = 0.37f, c = 1.5f;
         for (int i = 0; i < 200; ++i)
         {
@@ -389,9 +389,9 @@ TEST_CASE("All six hull policies agree on degenerate + near-collinear clouds",
     auto collinearRuns = [](std::uint32_t seed) {
         std::mt19937 rng(seed);
         std::uniform_int_distribution<int> pick(0, 3);
-        std::vector<Arcane::Geometry::Pt<float>> corners =
+        std::vector<Manifold2D::Geometry::Pt<float>> corners =
             {{0,0},{100,0},{100,100},{0,100}};
-        std::vector<Arcane::Geometry::Pt<float>> v = corners;
+        std::vector<Manifold2D::Geometry::Pt<float>> v = corners;
         std::uniform_real_distribution<float> u(0.0f, 1.0f);
         for (int i = 0; i < 300; ++i)                    // interior edge points + dups
         {
@@ -412,7 +412,7 @@ TEST_CASE("All six hull policies agree on degenerate + near-collinear clouds",
     auto intCloud = [](std::uint32_t seed) {
         std::mt19937 rng(seed);
         std::uniform_int_distribution<int> d(-500, 500);
-        std::vector<Arcane::Geometry::Pt<double>> v;
+        std::vector<Manifold2D::Geometry::Pt<double>> v;
         for (int i = 0; i < 300; ++i) v.push_back({double(d(rng)), double(d(rng))});
         return v;
     };
@@ -428,10 +428,10 @@ TEST_CASE("All six hull policies agree on degenerate + near-collinear clouds",
 // the old code -- its job is to LOCK the exact-winding guarantee going forward.)
 TEST_CASE("Canonical winding is exact for large-coordinate hulls", "[geometry][robust]")
 {
-    using Arcane::Geometry::Pt;
-    using Arcane::Geometry::ConvexHull;
-    using Arcane::Geometry::MonotoneChain;
-    using Arcane::Geometry::detail::Orient2d;
+    using Manifold2D::Geometry::Pt;
+    using Manifold2D::Geometry::ConvexHull;
+    using Manifold2D::Geometry::MonotoneChain;
+    using Manifold2D::Geometry::detail::Orient2d;
 
     // A thin, large-coordinate quad. Its true signed area is far from zero, but a
     // float shoelace of ~1e6-scale products loses low bits; the winding decision
@@ -469,9 +469,9 @@ TEST_CASE("Canonical winding is exact for large-coordinate hulls", "[geometry][r
 TEST_CASE("QuickHull keeps every exact-gated vertex at large-coordinate spread",
           "[geometry][robust]")
 {
-    using Arcane::Geometry::Pt;
-    using Arcane::Geometry::QuickHull;
-    using Arcane::Geometry::detail::Orient2d;
+    using Manifold2D::Geometry::Pt;
+    using Manifold2D::Geometry::QuickHull;
+    using Manifold2D::Geometry::detail::Orient2d;
 
     const Pt<float> A{-0x1.f3ef380000000p+23f, -0x1.051daa0000000p+23f}; // ~(-1.638e7,-8.556e6)
     const Pt<float> B{-0x1.d0428e0000000p-5f,   0x1.62ce7e0000000p-3f};  // ~(-0.0567, 0.1732)

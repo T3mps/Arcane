@@ -5,12 +5,12 @@
 #include <cstring>
 #include <type_traits>
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Geometry/Vec2.hpp>
-#include <Arcane/Math/Simd.hpp>
+#include <Manifold2D/Geometry/Vec2.hpp>
+#include <Manifold2D/Core/Simd.hpp>
 
-using Arcane::Geometry::Vec2;
-using Arcane::Geometry::Vec2f;
-using Arcane::Geometry::Vec2d;
+using Manifold2D::Geometry::Vec2;
+using Manifold2D::Geometry::Vec2f;
+using Manifold2D::Geometry::Vec2d;
 
 TEST_CASE("Vec2: layout and trait parity with glm::vec2", "[geometry]")
 {
@@ -56,7 +56,7 @@ TEST_CASE("Vec2: operator set matches the surveyed physics usage", "[geometry]")
 
 TEST_CASE("Vec2: free-function expression-order KATs", "[geometry]")
 {
-    using namespace Arcane::Geometry;
+    using namespace Manifold2D::Geometry;
     const Vec2f a(1.0f, 2.0f), b(3.0f, 5.0f);
     CHECK(Dot(a, b) == 13.0f);            // 1*3 + 2*5
     CHECK(Cross(a, b) == -1.0f);          // 1*5 - 2*3
@@ -73,10 +73,10 @@ TEST_CASE("Vec2: free-function expression-order KATs", "[geometry]")
 
 TEST_CASE("Vec2<f32w>: wide arithmetic core compiles and bit-matches scalar lanes", "[geometry][simd]")
 {
-    using Arcane::Simd::f32w;
+    using Manifold2D::Simd::f32w;
     // Wide-lane construction/extraction uses the house Simd API: the lane
     // count is f32w::width and load/store are the free functions
-    // Arcane::Simd::load / Arcane::Simd::store over alignas(32) arrays
+    // Manifold2D::Simd::load / Manifold2D::Simd::store over alignas(32) arrays
     // (see Simd.hpp + SimdWideTests.inl). The assertion logic is pinned:
     // every lane of the wide result equals the scalar computation on that
     // lane's inputs.
@@ -87,13 +87,13 @@ TEST_CASE("Vec2<f32w>: wide arithmetic core compiles and bit-matches scalar lane
         ax[i] = 1.0f + float(i); ay[i] = 2.0f - float(i);
         bx[i] = 0.5f * float(i); by[i] = 3.0f + float(i);
     }
-    Vec2<f32w> wa(Arcane::Simd::load(ax), Arcane::Simd::load(ay));
-    Vec2<f32w> wb(Arcane::Simd::load(bx), Arcane::Simd::load(by));
+    Vec2<f32w> wa(Manifold2D::Simd::load(ax), Manifold2D::Simd::load(ay));
+    Vec2<f32w> wb(Manifold2D::Simd::load(bx), Manifold2D::Simd::load(by));
 
     alignas(32) float sv[W];
     for (int i = 0; i < W; ++i)
         sv[i] = 0.25f + float(i);
-    const f32w scale = Arcane::Simd::load(sv);
+    const f32w scale = Manifold2D::Simd::load(sv);
 
     const Vec2<f32w> sum  = wa + wb;
     const f32w       dot  = Dot(wa, wb);
@@ -109,13 +109,13 @@ TEST_CASE("Vec2<f32w>: wide arithmetic core compiles and bit-matches scalar lane
     alignas(32) float oSumX[W], oSumY[W], oDot[W], oCrs[W],
                       oPerpX[W], oPerpY[W], oNegX[W], oNegY[W],
                       oSclX[W], oSclY[W], oAccX[W], oAccY[W];
-    Arcane::Simd::store(oSumX, sum.x);   Arcane::Simd::store(oSumY, sum.y);
-    Arcane::Simd::store(oDot, dot);
-    Arcane::Simd::store(oCrs, crs);
-    Arcane::Simd::store(oPerpX, perp.x); Arcane::Simd::store(oPerpY, perp.y);
-    Arcane::Simd::store(oNegX, neg.x);   Arcane::Simd::store(oNegY, neg.y);
-    Arcane::Simd::store(oSclX, scl.x);   Arcane::Simd::store(oSclY, scl.y);
-    Arcane::Simd::store(oAccX, acc.x);   Arcane::Simd::store(oAccY, acc.y);
+    Manifold2D::Simd::store(oSumX, sum.x);   Manifold2D::Simd::store(oSumY, sum.y);
+    Manifold2D::Simd::store(oDot, dot);
+    Manifold2D::Simd::store(oCrs, crs);
+    Manifold2D::Simd::store(oPerpX, perp.x); Manifold2D::Simd::store(oPerpY, perp.y);
+    Manifold2D::Simd::store(oNegX, neg.x);   Manifold2D::Simd::store(oNegY, neg.y);
+    Manifold2D::Simd::store(oSclX, scl.x);   Manifold2D::Simd::store(oSclY, scl.y);
+    Manifold2D::Simd::store(oAccX, acc.x);   Manifold2D::Simd::store(oAccY, acc.y);
     for (int i = 0; i < W; ++i)
     {
         const Vec2f sa(ax[i], ay[i]), sb(bx[i], by[i]);

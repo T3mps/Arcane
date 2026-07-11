@@ -27,10 +27,10 @@
 #include "../../Sandbox/src/Scenes.hpp"
 
 #include <Arcane/Input/InputSnapshot.hpp>
-#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>  // NarrowphaseTrace (subject contacts)
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Solver/Solver.hpp>   // ContactConstraint (subject enumeration)
+#include <Manifold2D/Physics/Narrowphase/NarrowphaseTrace.hpp>  // NarrowphaseTrace (subject contacts)
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Solver/Solver.hpp>   // ContactConstraint (subject enumeration)
 
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -49,7 +49,7 @@ using Catch::Approx;
 
 namespace
 {
-    namespace Phys = Arcane::Physics;
+    namespace Phys = Manifold2D::Physics;
     namespace Sbx  = Arcane::Sandbox;
 
     constexpr float kGravityY = 10.0f;   // MKS: +10 m/s^2 (matches the WorldDef default)

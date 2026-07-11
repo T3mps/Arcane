@@ -9,8 +9,8 @@
 
 #include <Arcane/Base/Runtime.hpp>              // device + shaders bridge (inset canvas source)
 #include <Arcane/Input/InputSnapshot.hpp>       // InputSnapshot (fed to the interaction layer)
-#include <Arcane/Physics/PhysicsWorld.hpp>      // PhysicsWorld + WorldDef (fresh world per scene)
-#include <Arcane/Physics/Solver/Solver.hpp>     // ContactConstraint (pick-nearest-contact)
+#include <Manifold2D/Physics/PhysicsWorld.hpp>      // PhysicsWorld + WorldDef (fresh world per scene)
+#include <Manifold2D/Physics/Solver/Solver.hpp>     // ContactConstraint (pick-nearest-contact)
 #include <Arcane/Render/OffscreenCanvas.hpp>    // OffscreenCanvas (Minkowski inset target)
 #include <Arcane/Render/ShaderLibrary.hpp>      // ShaderLibrary (OffscreenCanvas::Create arg)
 #include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsResource + PhysicsSystem (sandbox-owned step)
@@ -42,12 +42,12 @@ namespace Arcane::Sandbox
         // the previous world (and all its bodies) is destroyed -- nothing leaks into the new
         // scene. Mirrors EnsurePhysicsResource in Sandbox.cpp but unconditionally replaces.
         void InstallFreshPhysicsResource(Astra::Registry& reg, float gravityY,
-                                         Arcane::ITaskExecutor* exec = nullptr)
+                                         Manifold2D::IWorkScheduler* sched = nullptr)
         {
-            Arcane::Physics::WorldDef wd;
+            Manifold2D::Physics::WorldDef wd;
             wd.gravityY = gravityY;   // MKS: caller-supplied (SandboxApp::m_gravityY, HUD-editable)
-            auto world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
-            world->SetExecutor(exec);   // Phase D1: wire executor (null -> serial default)
+            auto world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
+            world->SetExecutor(sched);  // Phase D1: wire scheduler (null -> serial default)
             reg.SetResource(Arcane::PhysicsResource{ std::move(world), {} });
         }
     }
@@ -77,7 +77,7 @@ namespace Arcane::Sandbox
 
         // 2. Mint a fresh PhysicsResource so the new scene's bodies start from an empty
         //    world + empty entity<->body map (no stale handles from the old scene).
-        InstallFreshPhysicsResource(reg, m_gravityY, m_executor);
+        InstallFreshPhysicsResource(reg, m_gravityY, &m_scheduler);
 
         // 3. Run the target builder -- it repopulates entities and re-sets SceneRoot.
         scenes[m_sceneIndex].build(reg);
@@ -118,8 +118,8 @@ namespace Arcane::Sandbox
     void SandboxApp::ClearSubject() noexcept
     {
         m_subjectValid      = false;
-        m_subjectFixture    = Arcane::Physics::kInvalidFixture;
-        m_subjectBody       = Arcane::Physics::kInvalidBody;
+        m_subjectFixture    = Manifold2D::Physics::kInvalidFixture;
+        m_subjectBody       = Manifold2D::Physics::kInvalidBody;
         m_selectedIndex     = -1;
         m_hasSelectedPartner = false;
         m_selectedPartnerId = 0;
@@ -128,9 +128,9 @@ namespace Arcane::Sandbox
         m_contacts.clear();   // keeps capacity (incl. per-contact trace vectors)
     }
 
-    void SandboxApp::SetSubjectBody(Astra::Registry& reg, Arcane::Physics::BodyHandle bh)
+    void SandboxApp::SetSubjectBody(Astra::Registry& reg, Manifold2D::Physics::BodyHandle bh)
     {
-        namespace Phys = Arcane::Physics;
+        namespace Phys = Manifold2D::Physics;
         PhysicsResource* phys = reg.GetResource<PhysicsResource>();
         if (!phys || !phys->world || !phys->world->IsValid(bh))
         {
@@ -165,7 +165,7 @@ namespace Arcane::Sandbox
         m_inspectorPlay      = false;
     }
 
-    const Arcane::Physics::NarrowphaseTrace& SandboxApp::SelectedTrace() const noexcept
+    const Manifold2D::Physics::NarrowphaseTrace& SandboxApp::SelectedTrace() const noexcept
     {
         if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_contacts.size()))
             return m_contacts[static_cast<std::size_t>(m_selectedIndex)].trace;
@@ -178,8 +178,8 @@ namespace Arcane::Sandbox
         // contact's kind: Epa -> epaSnapshots, Mpr -> mprSnapshots, SatPolygon -> satAxes.
         // Analytic kinds (CircleCircle / CircleVsPolygon / Capsule / Separated) record no
         // per-iteration series -> 0 (the HUD disables the slider with a note).
-        using K = Arcane::Physics::NarrowphaseKind;
-        const Arcane::Physics::NarrowphaseTrace& t = SelectedTrace();
+        using K = Manifold2D::Physics::NarrowphaseKind;
+        const Manifold2D::Physics::NarrowphaseTrace& t = SelectedTrace();
         switch (t.kind)
         {
             case K::Epa:        return static_cast<int>(t.epaSnapshots.size());
@@ -213,7 +213,7 @@ namespace Arcane::Sandbox
 
     void SandboxApp::UpdateAndPublishInspector(Astra::Registry& reg)
     {
-        namespace Phys = Arcane::Physics;
+        namespace Phys = Manifold2D::Physics;
 
         m_contacts.clear();   // reuse storage (capacity, incl. per-contact trace vectors)
 
@@ -447,8 +447,8 @@ namespace Arcane::Sandbox
         // when its normal grab grabbed a body this frame). Grabbing a body sets it as the
         // subject (its primary fixture); grabbing empty space raises no request, so the
         // subject persists. SetSubjectBody re-validates + resets selection on a switch.
-        if (const Arcane::Physics::BodyHandle grabbed = m_interaction.TakeSubjectGrab();
-            grabbed != Arcane::Physics::kInvalidBody)
+        if (const Manifold2D::Physics::BodyHandle grabbed = m_interaction.TakeSubjectGrab();
+            grabbed != Manifold2D::Physics::kInvalidBody)
             SetSubjectBody(reg, grabbed);
 
         // Inspector: re-validate the subject, enumerate ALL its active contacts (re-run

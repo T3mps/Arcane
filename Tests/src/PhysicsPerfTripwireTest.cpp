@@ -18,11 +18,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/Body.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Body.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 TEST_CASE("PhysicsPerf: dense broadphase step stays fast at MKS", "[perf][physics]")
 {

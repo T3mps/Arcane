@@ -7,12 +7,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp> // Catch::Approx (span-feed rest tolerance)
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Body.hpp>
-#include <Arcane/Physics/Broadphase/Passability.hpp> // GridPassability (span feed test)
-#include <Arcane/Physics/Solver/Solver.hpp> // ContactConstraint
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Body.hpp>
+#include <Manifold2D/Physics/Broadphase/Passability.hpp> // GridPassability (span feed test)
+#include <Manifold2D/Physics/Solver/Solver.hpp> // ContactConstraint
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 TEST_CASE("Persistent contact survives across steps + destroys on separation", "[physics]")
 {

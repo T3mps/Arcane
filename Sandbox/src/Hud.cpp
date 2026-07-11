@@ -13,7 +13,7 @@
 #include "SandboxApp.hpp"
 #include "Scenes.hpp"
 
-#include <Arcane/Physics/Narrowphase/NarrowphaseTrace.hpp>  // NarrowphaseTrace + snapshots (inspector)
+#include <Manifold2D/Physics/Narrowphase/NarrowphaseTrace.hpp>  // NarrowphaseTrace + snapshots (inspector)
 #include <Arcane/Render/Batcher2D.hpp>      // Batcher2D (Minkowski inset draw lambda)
 #include <Arcane/Render/OffscreenCanvas.hpp> // OffscreenCanvas (inset target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // PhysicsResource (live body/contact counts)
@@ -63,9 +63,9 @@ namespace Arcane::Sandbox
 
         // ---- narrowphase-inspector helpers (Slice B, Task 5) --------------------
 
-        const char* KindName(Arcane::Physics::NarrowphaseKind k)
+        const char* KindName(Manifold2D::Physics::NarrowphaseKind k)
         {
-            using K = Arcane::Physics::NarrowphaseKind;
+            using K = Manifold2D::Physics::NarrowphaseKind;
             switch (k)
             {
                 case K::Separated:       return "Separated";
@@ -103,11 +103,11 @@ namespace Arcane::Sandbox
 
         // Build the fit transform from the trace's Minkowski geometry for the current
         // step (epa polytope / gjk seed / mpr portal) + the ORIGIN, padded ~10%.
-        MinkowskiFit BuildFit(const Arcane::Physics::NarrowphaseTrace& t, int step,
+        MinkowskiFit BuildFit(const Manifold2D::Physics::NarrowphaseTrace& t, int step,
                               float w, float h)
         {
             glm::vec2 lo{0.0f, 0.0f}, hi{0.0f, 0.0f};   // always include the origin
-            using K = Arcane::Physics::NarrowphaseKind;
+            using K = Manifold2D::Physics::NarrowphaseKind;
 
             // GJK seed (single terminal simplex) -- always drawn alongside.
             for (const auto& s : t.gjkSnapshots)
@@ -167,10 +167,10 @@ namespace Arcane::Sandbox
         // Homogenized: ONLY Batcher2D primitives, no ImDrawList. Coordinates are inset
         // pixels (y down -- the OffscreenCanvas convention).
         void DrawMinkowskiInset(Batcher2D& b,
-                                const Arcane::Physics::NarrowphaseTrace& t,
+                                const Manifold2D::Physics::NarrowphaseTrace& t,
                                 int step, float w, float h)
         {
-            using K = Arcane::Physics::NarrowphaseKind;
+            using K = Manifold2D::Physics::NarrowphaseKind;
             const MinkowskiFit fit = BuildFit(t, step, w, h);
 
             constexpr glm::vec4 kCrosshair{0.80f, 0.80f, 0.88f, 1.0f};  // origin (brighter)
@@ -638,7 +638,7 @@ namespace Arcane::Sandbox
             const uint32_t ihE = static_cast<uint32_t>(std::max(64.0f, availE.y));
             if (Arcane::OffscreenCanvas* ocE = app.EnsureInspectorCanvas(iwE, ihE))
             {
-                const Arcane::Physics::NarrowphaseTrace& te = app.SelectedTrace();
+                const Manifold2D::Physics::NarrowphaseTrace& te = app.SelectedTrace();
                 const float fwE = static_cast<float>(ocE->Width());
                 const float fhE = static_cast<float>(ocE->Height());
                 ocE->Draw(
@@ -657,7 +657,7 @@ namespace Arcane::Sandbox
         }
 
         // Max penetration depth over a trace's manifold (the shared "depth" label value).
-        auto MaxDepth = [](const Arcane::Physics::NarrowphaseTrace& t) {
+        auto MaxDepth = [](const Manifold2D::Physics::NarrowphaseTrace& t) {
             float d = 0.0f;
             for (int pi = 0; pi < t.manifold.pointCount; ++pi)
                 d = std::max(d, static_cast<float>(t.manifold.points[pi].separation));
@@ -672,7 +672,7 @@ namespace Arcane::Sandbox
 
         char curLabel[96];
         {
-            const Arcane::Physics::NarrowphaseTrace& ts = contacts[static_cast<std::size_t>(sel)].trace;
+            const Manifold2D::Physics::NarrowphaseTrace& ts = contacts[static_cast<std::size_t>(sel)].trace;
             std::snprintf(curLabel, sizeof(curLabel), "vs body #%u - %s - depth %.2f",
                           contacts[static_cast<std::size_t>(sel)].partnerBodyId,
                           KindName(ts.kind), static_cast<double>(MaxDepth(ts)));
@@ -683,7 +683,7 @@ namespace Arcane::Sandbox
         {
             for (int i = 0; i < contactCount; ++i)
             {
-                const Arcane::Physics::NarrowphaseTrace& ti = contacts[static_cast<std::size_t>(i)].trace;
+                const Manifold2D::Physics::NarrowphaseTrace& ti = contacts[static_cast<std::size_t>(i)].trace;
                 char lbl[96];
                 std::snprintf(lbl, sizeof(lbl), "vs body #%u - %s - depth %.2f",
                               contacts[static_cast<std::size_t>(i)].partnerBodyId,
@@ -697,7 +697,7 @@ namespace Arcane::Sandbox
         }
 
         // ---- SELECTED contact: kind, normal, depth, pointCount -----------------
-        const Arcane::Physics::NarrowphaseTrace& t = app.SelectedTrace();
+        const Manifold2D::Physics::NarrowphaseTrace& t = app.SelectedTrace();
         ImGui::Text("Kind: %s", KindName(t.kind));
         ImGui::Text("Normal (B->A): (%.3f, %.3f)",
                     static_cast<double>(t.manifold.normal.x),

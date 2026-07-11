@@ -18,9 +18,9 @@
 #include <limits>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/Broadphase/SpatialHash.hpp>
+#include <Manifold2D/Physics/Broadphase/SpatialHash.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {

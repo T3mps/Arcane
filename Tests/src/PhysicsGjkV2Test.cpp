@@ -30,17 +30,17 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Physics/Narrowphase/Gjk.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/Narrowphase/Gjk.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 
 using Catch::Approx;
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {
     constexpr double kTol = 1e-3;
     // Pi at f64 for hand-derived values (distinct name to avoid ambiguity
-    // with Arcane::Physics::kPi which is a Real/f32 in scope via using).
+    // with Manifold2D::Physics::kPi which is a Real/f32 in scope via using).
     constexpr double kPiD64 = 3.14159265358979323846;
 
     // Rotate + translate a shape's core verts into world space.

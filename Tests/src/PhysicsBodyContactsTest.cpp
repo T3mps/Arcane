@@ -5,13 +5,13 @@
 // m_bodyContacts mirrors the live dyn-dyn body contacts exactly. This guards the
 // create/destroy/recycle maintenance independently of SplitIsland.
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/PhysicsTypes.hpp>
-#include <Arcane/Physics/Shapes.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 #include <cstdint>
 #include <vector>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 namespace
 {

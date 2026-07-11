@@ -12,6 +12,7 @@
 #include "SandboxApp.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>  // bridges ITaskExecutor -> Manifold2D::IWorkScheduler
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -20,7 +21,7 @@
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
 
-#include <Arcane/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Component/ComponentRegistry.hpp>
@@ -48,16 +49,22 @@ namespace
     Arcane::Sandbox::SandboxApp  g_app{};
     Astra::Entity                g_root{};
 
+    // Persistent IWorkScheduler bridge for the engine executor: outlives each
+    // world minted below (the world stores a raw scheduler pointer). Re-pointed
+    // per-call from g_ctx->taskExecutor (null -> the world's serial default).
+    Arcane::ArcaneWorkScheduler  g_scheduler{};
+
     // Install the PhysicsResource (the PhysicsWorld + entity<->body map) on the registry
     // if it isn't already present. PhysicsSystem reads this resource each fixed step.
     void EnsurePhysicsResource(Astra::Registry& reg)
     {
         if (reg.GetResource<Arcane::PhysicsResource>()) return;
-        Arcane::Physics::WorldDef wd;
+        Manifold2D::Physics::WorldDef wd;
         wd.gravityY = kGravityY;   // MKS: +10 m/s^2 (the WorldDef default; the rest inherit it)
-        auto world = std::make_unique<Arcane::Physics::PhysicsWorld>(wd);
+        auto world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
         // Phase D1: wire executor (g_ctx is always valid here; LoadState is called after Init).
-        world->SetExecutor(g_ctx ? g_ctx->taskExecutor : nullptr);
+        g_scheduler.SetExecutor(g_ctx ? g_ctx->taskExecutor : nullptr);
+        world->SetExecutor(&g_scheduler);
         reg.SetResource(Arcane::PhysicsResource{ std::move(world), {} });
     }
 

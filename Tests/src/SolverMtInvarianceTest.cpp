@@ -1,13 +1,13 @@
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <array>
 #include <cstdint>
-#include <Arcane/Physics/Solver/BodyState.hpp>
-#include <Arcane/Physics/Solver/SolverStages.hpp>
+#include <Manifold2D/Physics/Solver/BodyState.hpp>
+#include <Manifold2D/Physics/Solver/SolverStages.hpp>
 
-using namespace Arcane::Physics;
+using namespace Manifold2D::Physics;
 
 TEST_CASE("PhysicsWorld accepts an executor and steps with it (serial default)", "[physics][solvermt]")
 {
@@ -15,7 +15,7 @@ TEST_CASE("PhysicsWorld accepts an executor and steps with it (serial default)",
     wd.gravityX = Real(0); // zero-g: API-mechanics test, no physics content
     wd.gravityY = Real(0);
     PhysicsWorld w(wd);
-    Arcane::SerialTaskExecutor serial;
+    Manifold2D::SerialWorkScheduler serial;
     w.SetExecutor(&serial);                 // explicit serial
     REQUIRE(w.Executor() == &serial);       // always-non-null invariant: returns the injected executor
     w.Step(1.0f / 60.0f);                   // must not crash; serial path unchanged
@@ -48,7 +48,7 @@ namespace
     // boxes spawn at negative Y (above the floor) -- same convention as
     // PhysicsAwakeSetTest. Returns (x, y, angle, vx, vy) per body after `steps`:
     // serial == enki(1) == enki(N), byte-identical across executors/thread counts.
-    std::vector<float> RunPile(Arcane::ITaskExecutor* exec, int steps)
+    std::vector<float> RunPile(Manifold2D::IWorkScheduler* exec, int steps)
     {
         WorldDef wd; // gravityY inherits the MKS default (+10)
         PhysicsWorld w(wd);
@@ -107,13 +107,16 @@ namespace
 
 TEST_CASE("solver thread-count invariance: serial == enki(1) == enki(N)", "[physics][determinism][solvermt]")
 {
-    Arcane::SerialTaskExecutor serial;
+    Manifold2D::SerialWorkScheduler serial;
     Arcane::JobSystem one(1);
     Arcane::JobSystem many(0);
+    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
+    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor());
+    Arcane::ArcaneWorkScheduler manySched(*many.TaskExecutor());
 
-    const auto a = RunPile(&serial,          120);
-    const auto b = RunPile(one.TaskExecutor(), 120);
-    const auto c = RunPile(many.TaskExecutor(), 120);
+    const auto a = RunPile(&serial,    120);
+    const auto b = RunPile(&oneSched,  120);
+    const auto c = RunPile(&manySched, 120);
 
     INFO("workers=" << many.TaskExecutor()->WorkerCount());
     REQUIRE(many.TaskExecutor()->WorkerCount() >= 1);
@@ -128,9 +131,9 @@ TEST_CASE("solver thread-count invariance: serial == enki(1) == enki(N)", "[phys
 
 TEST_CASE("BodyState is a 32-byte 32-aligned AoS row", "[physics][solvermt]")
 {
-    STATIC_REQUIRE(sizeof(Arcane::Physics::BodyState) == 32);
-    STATIC_REQUIRE(alignof(Arcane::Physics::BodyState) == 32);
-    Arcane::Physics::BodyStateStore s; s.Resize(33);
+    STATIC_REQUIRE(sizeof(Manifold2D::Physics::BodyState) == 32);
+    STATIC_REQUIRE(alignof(Manifold2D::Physics::BodyState) == 32);
+    Manifold2D::Physics::BodyStateStore s; s.Resize(33);
     REQUIRE(reinterpret_cast<std::uintptr_t>(s.data()) % 32u == 0u);  // aligned storage
 }
 
@@ -140,7 +143,7 @@ TEST_CASE("BodyState is a 32-byte 32-aligned AoS row", "[physics][solvermt]")
 // drive the stage's completionCount up to blockCount.
 TEST_CASE("ExecuteStage visits every block exactly once (serial main)", "[physics][solvermt]")
 {
-    using namespace Arcane::Physics;
+    using namespace Manifold2D::Physics;
     std::array<SolverBlock, 5> blk{};            // 5 blocks
     for (int i = 0; i < 5; ++i) { blk[i].begin = i; blk[i].end = i + 1; blk[i].syncIndex.store(0); }
     SolverStage st{}; st.type = StageType::IntegrateVelocities; st.blocks = blk.data(); st.blockCount = 5;

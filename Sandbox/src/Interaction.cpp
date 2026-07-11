@@ -13,10 +13,10 @@
 #include "Interaction.hpp"
 #include "Scenes.hpp"
 
-#include <Arcane/Geometry/ConvexHull.hpp>
+#include <Manifold2D/Geometry/ConvexHull.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
-#include <Arcane/Physics/PhysicsWorld.hpp>
-#include <Arcane/Physics/Shapes.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
+#include <Manifold2D/Physics/Shapes.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -31,7 +31,7 @@ namespace Arcane::Sandbox
 {
     namespace
     {
-        namespace Phys = Arcane::Physics;
+        namespace Phys = Manifold2D::Physics;
 
         constexpr std::uint8_t kLMB = 0x1;   // mouseButtons bit0
         constexpr std::uint8_t kRMB = 0x2;   // mouseButtons bit1
@@ -345,7 +345,7 @@ namespace Arcane::Sandbox
         // so any click order -- even non-convex / self-crossing -- yields a valid convex
         // collider. Geometry::Pt<float> IS glm::vec2 (glm::vec<2,float>), so the span is
         // a zero-copy view of m_polygonPoints with no conversion overhead.
-        namespace Geo = Arcane::Geometry;
+        namespace Geo = Manifold2D::Geometry;
         const std::vector<Geo::Pt<float>> hull =
             Geo::ConvexHull<Geo::MonotoneChain, float>(
                 std::span<const Geo::Pt<float>>(
