@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
-#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>
-#include <Arcane/Jobs/JobSystem.hpp>
+#include "Support/TestWorkScheduler.hpp"
+#include <thread>
 #include <array>
 #include <cstdint>
 #include <Manifold2D/Physics/Solver/BodyState.hpp>
@@ -108,19 +108,19 @@ namespace
 TEST_CASE("solver thread-count invariance: serial == enki(1) == enki(N)", "[physics][determinism][solvermt]")
 {
     Manifold2D::SerialWorkScheduler serial;
-    Arcane::JobSystem one(1);
-    Arcane::JobSystem many(0);
-    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
-    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor());
-    Arcane::ArcaneWorkScheduler manySched(*many.TaskExecutor());
+    // Drive Manifold2D through a std::thread pool via the IWorkScheduler seam
+    // (test-only; the library creates no threads). serial == 1 worker == N workers.
+    const std::uint32_t hw = std::thread::hardware_concurrency();
+    Manifold2D::Testing::TestWorkScheduler oneSched(1);
+    Manifold2D::Testing::TestWorkScheduler manySched(hw > 1u ? hw : 2u);
 
     const auto a = RunPile(&serial,    120);
     const auto b = RunPile(&oneSched,  120);
     const auto c = RunPile(&manySched, 120);
 
-    INFO("workers=" << many.TaskExecutor()->WorkerCount());
-    REQUIRE(many.TaskExecutor()->WorkerCount() >= 1);
-    if (many.TaskExecutor()->WorkerCount() <= 1u)
+    INFO("workers=" << manySched.WorkerCount());
+    REQUIRE(manySched.WorkerCount() >= 1);
+    if (manySched.WorkerCount() <= 1u)
     {
         WARN("single worker: MT thief path not exercised this run");
     }

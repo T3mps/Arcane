@@ -13,8 +13,8 @@
 #include <Manifold2D/Physics/Shapes.hpp>
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
 #include <Manifold2D/Physics/Broadphase/Passability.hpp> // GridPassability (span-path MT scene)
-#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>
-#include <Arcane/Jobs/JobSystem.hpp>
+#include "Support/TestWorkScheduler.hpp"
+#include <thread>
 #include <cstdint>
 #include <vector>
 
@@ -320,23 +320,19 @@ namespace
 TEST_CASE("Narrowphase MT == serial: state bit-identical", "[physics][mt]")
 {
     Manifold2D::SerialWorkScheduler serial;
-    Arcane::JobSystem           one(1);
-    Arcane::JobSystem           many(0); // 0 = all cores
-
-    auto* manyEx = many.TaskExecutor();
+    // Drive Manifold2D through a std::thread pool via the IWorkScheduler seam (test-only).
+    const std::uint32_t hw = std::thread::hardware_concurrency();
+    Manifold2D::Testing::TestWorkScheduler oneSched(1);
+    Manifold2D::Testing::TestWorkScheduler manySched(hw > 1u ? hw : 2u);
 
     // Surface the worker-count signal before any capture run so that a
     // single-core machine's "MT path not truly exercised" warning appears
     // in the run preamble rather than after a misleading green comparison.
-    INFO("workers (many) = " << manyEx->WorkerCount());
-    if (manyEx->WorkerCount() <= 1u)
+    INFO("workers (many) = " << manySched.WorkerCount());
+    if (manySched.WorkerCount() <= 1u)
     {
         WARN("single worker: MT thief path not exercised this run");
     }
-
-    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
-    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor());
-    Arcane::ArcaneWorkScheduler manySched(*manyEx);
 
     // Capture with three executor configurations.
     const std::vector<Real> a = RunCapture(&serial,    BuildChurn);
@@ -363,20 +359,16 @@ TEST_CASE("Narrowphase span-path create MT == serial: state bit-identical",
           "[physics][mt]")
 {
     Manifold2D::SerialWorkScheduler serial;
-    Arcane::JobSystem           one(1);
-    Arcane::JobSystem           many(0); // 0 = all cores
+    // Drive Manifold2D through a std::thread pool via the IWorkScheduler seam (test-only).
+    const std::uint32_t hw = std::thread::hardware_concurrency();
+    Manifold2D::Testing::TestWorkScheduler oneSched(1);
+    Manifold2D::Testing::TestWorkScheduler manySched(hw > 1u ? hw : 2u);
 
-    auto* manyEx = many.TaskExecutor();
-
-    INFO("workers (many) = " << manyEx->WorkerCount());
-    if (manyEx->WorkerCount() <= 1u)
+    INFO("workers (many) = " << manySched.WorkerCount());
+    if (manySched.WorkerCount() <= 1u)
     {
         WARN("single worker: MT span-merge path not exercised this run");
     }
-
-    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
-    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor());
-    Arcane::ArcaneWorkScheduler manySched(*manyEx);
 
     // Capture with three executor configurations (serial / 1-worker / all-cores).
     const std::vector<Real> a = RunCaptureSpans(&serial);
@@ -410,20 +402,16 @@ TEST_CASE("Narrowphase span-path create MT == serial: state bit-identical",
 TEST_CASE("Narrowphase create MT == serial: state bit-identical", "[physics][mt]")
 {
     Manifold2D::SerialWorkScheduler serial;
-    Arcane::JobSystem           one(1);
-    Arcane::JobSystem           many(0); // 0 = all cores
+    // Drive Manifold2D through a std::thread pool via the IWorkScheduler seam (test-only).
+    const std::uint32_t hw = std::thread::hardware_concurrency();
+    Manifold2D::Testing::TestWorkScheduler oneSched(1);
+    Manifold2D::Testing::TestWorkScheduler manySched(hw > 1u ? hw : 2u);
 
-    auto* manyEx = many.TaskExecutor();
-
-    INFO("workers (many) = " << manyEx->WorkerCount());
-    if (manyEx->WorkerCount() <= 1u)
+    INFO("workers (many) = " << manySched.WorkerCount());
+    if (manySched.WorkerCount() <= 1u)
     {
         WARN("single worker: MT thief path not exercised this run");
     }
-
-    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
-    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor());
-    Arcane::ArcaneWorkScheduler manySched(*manyEx);
 
     // Capture with three executor configurations (serial / 1-worker / all-cores).
     const std::vector<Real> a = RunCapture(&serial,    BuildCreateHeavy);

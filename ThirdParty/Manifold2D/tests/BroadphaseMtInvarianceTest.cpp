@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
-#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>
-#include <Arcane/Jobs/JobSystem.hpp>
+#include "Support/TestWorkScheduler.hpp"
+#include <thread>
 
 using namespace Manifold2D::Physics;
 
@@ -31,13 +31,15 @@ namespace
 
 TEST_CASE("broadphase thread-count invariance: serial == enki(1) == enki(N)", "[physics][determinism][broadmt]")
 {
-    Manifold2D::SerialWorkScheduler serial; Arcane::JobSystem one(1); Arcane::JobSystem many(0);
-    // Drive Manifold2D with the engine's enki pool through the IWorkScheduler adapter.
-    Arcane::ArcaneWorkScheduler oneSched(*one.TaskExecutor()); Arcane::ArcaneWorkScheduler manySched(*many.TaskExecutor());
+    Manifold2D::SerialWorkScheduler serial;
+    // Drive Manifold2D through a std::thread pool via the IWorkScheduler seam (test-only).
+    const std::uint32_t hw = std::thread::hardware_concurrency();
+    Manifold2D::Testing::TestWorkScheduler oneSched(1);
+    Manifold2D::Testing::TestWorkScheduler manySched(hw > 1u ? hw : 2u);
     const auto a=RunActivePile(&serial,50);
     const auto b=RunActivePile(&oneSched,50);
     const auto c=RunActivePile(&manySched,50);
-    INFO("workers=" << many.TaskExecutor()->WorkerCount());
-    if (many.TaskExecutor()->WorkerCount() <= 1u) WARN("single worker: broadphase MT path not exercised this run");
+    INFO("workers=" << manySched.WorkerCount());
+    if (manySched.WorkerCount() <= 1u) WARN("single worker: broadphase MT path not exercised this run");
     REQUIRE(a.size()==b.size()); REQUIRE(a==b); REQUIRE(a==c);
 }
