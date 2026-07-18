@@ -550,6 +550,10 @@ project "ArcaneTests"
         -- test exe so the [grimoire] unit test drives it directly, mirroring the
         -- Sandbox helper-unit pattern above.
         "%{wks.location}/Grimoire/src/ConsoleBuffer.cpp",
+        -- Task 4: ViewportInput (pure input-gating predicates for the scene-in-a-
+        -- panel viewport) source-compiles into the test exe so the [grimoire] unit
+        -- tests drive it directly, same pattern as ConsoleBuffer above.
+        "%{wks.location}/Grimoire/src/ViewportInput.cpp",
     }
 
     includedirs {

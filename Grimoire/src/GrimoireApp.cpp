@@ -1,13 +1,16 @@
 // GrimoireApp: Init -> MainLoop -> Shutdown. Reuses Loom's host-boot helpers
 // (GpuContext/FramePerf/LoomConfig) by source-compile and hosts Sandbox.dll via
 // the lifted Arcane::PluginHost. The frame loop advances the sim through the
-// RunLoop and draws an editor shell straight to the backbuffer -- a full-viewport
-// dockspace (Grimoire::BeginDockSpace) hosting a Sim toolbar (play/pause/step +
-// time-scale) and a Console panel fed by a callback sink on Arcane::Log::Engine()
-// (no scene->tonemap->backbuffer pass yet -- that arrives with the viewport panel
-// in a later task). The render plumbing + teardown order live in GpuContext
-// (m_gpu). The teardown CONTRACT is encoded in the GrimoireApp member
-// declaration order -- see GrimoireApp.hpp.
+// RunLoop, renders the scene into an OffscreenCanvas (the same canvas->batcher->
+// tonemap path Loom drives, into a panel texture instead of the backbuffer), and
+// draws an editor shell -- a full-viewport dockspace (Grimoire::BeginDockSpace)
+// hosting a Sim toolbar (play/pause/step + time-scale), a Console panel fed by a
+// callback sink on Arcane::Log::Engine(), and a dockable Viewport panel showing
+// the scene texture. Scene input (camera pan/zoom, click-pick) is gated on the
+// Viewport panel's hover/focus and the cursor is remapped into viewport-local
+// pixels before the plugin sees it (see ViewportInput.hpp). The render plumbing
+// + teardown order live in GpuContext (m_gpu). The teardown CONTRACT is encoded
+// in the GrimoireApp member declaration order -- see GrimoireApp.hpp.
 
 #include "GrimoireApp.hpp"
 #include "EditorPanels.hpp"
@@ -99,6 +102,17 @@ namespace Grimoire
             return false;
         }
 
+        // Scene-in-a-panel viewport: an OffscreenCanvas running the SAME
+        // canvas->batcher->tonemap path Loom drives, into a panel texture instead
+        // of the backbuffer. The device is up by here in both the interactive host
+        // and a headless `--frames N` run (which only differs in the audio backend).
+        m_viewport = Arcane::OffscreenCanvas::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
+        if (!m_viewport)
+        {
+            ARC_ERROR("Grimoire: OffscreenCanvas create failed");
+            return false;
+        }
+
         return true;
     }
 
@@ -137,7 +151,29 @@ namespace Grimoire
                 const Arcane::InputSnapshot snap =
                     m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(),
                                               m_gpu->Imgui().WantCaptureMouse());
-                m_runtime->SetInputSnapshot(snap);
+
+                // The plugin only sees scene-relevant input when the Viewport panel
+                // is active (hovered/focused), with the cursor remapped into
+                // viewport-local pixels (m_viewportRect/m_viewportActive are set at
+                // the end of the PREVIOUS frame's ImGui pass -- see below). Otherwise
+                // zero the mouse buttons/scroll so the plugin's camera does not pan
+                // and spawn/drag does not fire while editing panels.
+                Arcane::InputSnapshot pluginSnap = snap;
+                float lx = 0, ly = 0;
+                const bool inViewport =
+                    m_viewportActive &&
+                    Grimoire::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, lx, ly);
+                if (inViewport)
+                {
+                    pluginSnap.mouseX = lx;      // plugin camera works in viewport-local px
+                    pluginSnap.mouseY = ly;      // (panel size == offscreen size => scale 1)
+                }
+                else
+                {
+                    pluginSnap.mouseButtons = 0;
+                    pluginSnap.wheelY       = 0.0f;
+                }
+                m_runtime->SetInputSnapshot(pluginSnap);
                 m_gpu->Input().Update(frameDt, snap);
             }
 
@@ -154,11 +190,35 @@ namespace Grimoire
                 m_runtime->AudioSystem().Update(simDt);
             }
 
-            // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel.
+            // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path Loom
+            // drives, but into a panel texture). SetRenderContext writes RenderContext2D
+            // in Arcane.dll and applies the plugin's stored camera; SubmitRender runs the
+            // render scheduler (sprite submission + physics debug overlay) into this
+            // batcher. Runs BEFORE ImGui builds the Viewport panel's Image so the texture
+            // is ready when ImGui samples it at backbuffer-render time.
+            m_viewport->Draw(
+                [&](Arcane::Batcher2D& b)
+                {
+                    m_runtime->SetRenderContext(&b);
+                    m_runtime->Loop().SubmitRender();
+                },
+                glm::vec4(0.02f, 0.02f, 0.04f, 1.0f));
+
+            // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
+            // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Grimoire::BeginDockSpace();
             Grimoire::DrawSimTimeToolbar(m_runtime->Loop());
             Grimoire::DrawConsolePanel(m_console);
+
+            Grimoire::ViewportPanelResult vp =
+                Grimoire::DrawViewportPanel(m_viewport->TextureId(),
+                                            m_viewport->Width(), m_viewport->Height());
+            if (vp.desiredW != m_viewport->Width() || vp.desiredH != m_viewport->Height())
+                m_viewport->Resize(vp.desiredW, vp.desiredH);
+            m_viewportRect   = vp.imageRect;
+            m_viewportActive = Grimoire::SceneInputActive(vp.hovered, vp.focused);
+
             const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
             if (vtUI && vtUI->DrawUI) vtUI->DrawUI();
 

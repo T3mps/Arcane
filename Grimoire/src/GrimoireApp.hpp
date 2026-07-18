@@ -12,9 +12,11 @@
 #include <GpuContext.hpp>
 #include <FramePerf.hpp>
 #include "ConsoleBuffer.hpp"
+#include "ViewportInput.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Render/OffscreenCanvas.hpp>
 
 namespace Astra { class TypeContext; }
 
@@ -40,5 +42,14 @@ namespace Grimoire
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
         ConsoleBuffer                     m_console{512};
+
+        // Scene-in-a-panel viewport: the same canvas->batcher->tonemap path Loom
+        // drives the backbuffer with, rendered into a panel texture instead. Resized
+        // to the Viewport panel's content region each frame; input into the plugin
+        // is gated on m_viewportActive and remapped through m_viewportRect (see
+        // ViewportInput.hpp + MainLoop's input block).
+        std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
+        Grimoire::ViewportRect                   m_viewportRect{};
+        bool                                      m_viewportActive = false;
     };
 }

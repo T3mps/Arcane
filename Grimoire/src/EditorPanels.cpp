@@ -50,4 +50,21 @@ namespace Grimoire
             ImGui::SetScrollHereY(1.0f);   // autoscroll while pinned to bottom
         ImGui::End();
     }
+
+    ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH)
+    {
+        ViewportPanelResult r;
+        ImGui::Begin("Viewport");
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        r.desiredW = avail.x > 0 ? static_cast<uint32_t>(avail.x) : 1;
+        r.desiredH = avail.y > 0 ? static_cast<uint32_t>(avail.y) : 1;
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        if (textureId != 0 && texW > 0 && texH > 0)
+            ImGui::Image((ImTextureID)textureId, ImVec2((float)texW, (float)texH));
+        r.imageRect = ViewportRect{ origin.x, origin.y, (float)texW, (float)texH };
+        r.hovered = ImGui::IsWindowHovered();
+        r.focused = ImGui::IsWindowFocused();
+        ImGui::End();
+        return r;
+    }
 }
