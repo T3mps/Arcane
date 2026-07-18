@@ -190,6 +190,15 @@ namespace Grimoire
                 m_runtime->AudioSystem().Update(simDt);
             }
 
+            // Apply the viewport panel's size from LAST frame BEFORE rendering the scene,
+            // so this frame's ImGui::Image() captures a texture that is not destroyed later
+            // in the same frame (OffscreenCanvas::Resize synchronously frees the old texture).
+            if (m_pendingViewportW != 0 && m_pendingViewportH != 0 &&
+                (m_pendingViewportW != m_viewport->Width() || m_pendingViewportH != m_viewport->Height()))
+            {
+                m_viewport->Resize(m_pendingViewportW, m_pendingViewportH);
+            }
+
             // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path Loom
             // drives, but into a panel texture). SetRenderContext writes RenderContext2D
             // in Arcane.dll and applies the plugin's stored camera; SubmitRender runs the
@@ -214,10 +223,10 @@ namespace Grimoire
             Grimoire::ViewportPanelResult vp =
                 Grimoire::DrawViewportPanel(m_viewport->TextureId(),
                                             m_viewport->Width(), m_viewport->Height());
-            if (vp.desiredW != m_viewport->Width() || vp.desiredH != m_viewport->Height())
-                m_viewport->Resize(vp.desiredW, vp.desiredH);
-            m_viewportRect   = vp.imageRect;
-            m_viewportActive = Grimoire::SceneInputActive(vp.hovered, vp.focused);
+            m_pendingViewportW = vp.desiredW;
+            m_pendingViewportH = vp.desiredH;
+            m_viewportRect     = vp.imageRect;
+            m_viewportActive   = Grimoire::SceneInputActive(vp.hovered, vp.focused);
 
             const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
             if (vtUI && vtUI->DrawUI) vtUI->DrawUI();

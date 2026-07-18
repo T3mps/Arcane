@@ -51,5 +51,15 @@ namespace Grimoire
         std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
         Grimoire::ViewportRect                   m_viewportRect{};
         bool                                      m_viewportActive = false;
+
+        // Deferred resize: the Viewport panel's content-region size measured LAST
+        // frame, applied at the START of THIS frame (before m_viewport->Draw). This
+        // mirrors the m_viewportRect/m_viewportActive one-frame lag above -- it avoids
+        // a same-frame use-after-free where OffscreenCanvas::Resize (called right after
+        // ImGui::Image bakes the current texture pointer into this frame's draw list)
+        // synchronously frees that very texture before ImGui replays the draw list at
+        // Render time. See MainLoop for the full sequencing rationale.
+        std::uint32_t m_pendingViewportW = 0;
+        std::uint32_t m_pendingViewportH = 0;
     };
 }
