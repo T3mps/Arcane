@@ -1,15 +1,15 @@
 #pragma once
 
-// ArcaneWorkScheduler: bridges the engine's Arcane::ITaskExecutor to Manifold2D's
-// injected Manifold2D::IWorkScheduler seam (Manifold2D owns its threading
-// interface; Arcane supplies the enkiTS-backed implementation). The dependency
-// arrow runs one way -- host (Arcane) -> Manifold2D -- so this small forwarding
-// copy lives on the Arcane side. It wraps a (nullable) Arcane::ITaskExecutor and
-// forwards ParallelFor, translating the callback because the FunctionRef types
-// differ across the two libraries.
+// ArcaneWorkScheduler: bridges the engine's Arcane::ITaskExecutor to the shared
+// Mosaic::IWorkScheduler data-parallel seam (Mosaic owns the canonical threading
+// interface; Manifold2D consumes it, and Arcane supplies the enkiTS-backed
+// implementation). The dependency arrow runs one way -- host (Arcane) -> Mosaic
+// -- so this small forwarding copy lives on the Arcane side. It wraps a
+// (nullable) Arcane::ITaskExecutor and forwards ParallelFor, translating the
+// callback because the FunctionRef types differ across the two libraries.
 //
 // Null executor == the deterministic serial default: it runs the whole range
-// inline as worker 0, byte-identical to Manifold2D::SerialWorkScheduler and to
+// inline as worker 0, byte-identical to Mosaic::SerialWorkScheduler and to
 // PhysicsWorld's built-in serial fallback. This lets a consumer hand the world a
 // single persistent adapter (whose backing executor may be null in a headless
 // host) without a separate null branch at every call site.
@@ -20,14 +20,14 @@
 
 #include <Arcane/Jobs/TaskExecutor.hpp>
 
-#include <Manifold2D/Core/WorkScheduler.hpp>
+#include <Mosaic/Jobs/WorkScheduler.hpp>
 
 #include <cstddef>
 #include <cstdint>
 
 namespace Arcane
 {
-    class ArcaneWorkScheduler final : public Manifold2D::IWorkScheduler
+    class ArcaneWorkScheduler final : public Mosaic::IWorkScheduler
     {
     public:
         ArcaneWorkScheduler() noexcept = default;
@@ -39,12 +39,12 @@ namespace Arcane
         void SetExecutor(Arcane::ITaskExecutor* exec) noexcept { m_exec = exec; }
 
         void ParallelFor(std::size_t count, std::size_t minBatch,
-                         Manifold2D::FunctionRef<void(std::size_t, std::size_t,
-                                                      std::uint32_t)> fn) override
+                         Mosaic::FunctionRef<void(std::size_t, std::size_t,
+                                                  std::uint32_t)> fn) override
         {
             if (m_exec == nullptr)
             {
-                // Serial fallback == Manifold2D::SerialWorkScheduler: run the whole
+                // Serial fallback == Mosaic::SerialWorkScheduler: run the whole
                 // range inline as worker 0. count==0 is a no-op.
                 if (count != 0) fn(0, count, 0);
                 return;

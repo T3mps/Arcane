@@ -69,6 +69,7 @@ workspace "Arcane"
     IncludeDir["SDL3"]             = VCPKG_INSTALLED_MD .. "/include"
     IncludeDir["imgui"]            = "%{wks.location}/../ThirdParty/imgui"
     IncludeDir["Manifold2D"]       = "%{wks.location}/../ThirdParty/Manifold2D/include"
+    IncludeDir["Mosaic"]           = "%{wks.location}/../ThirdParty/Mosaic/include"
 
 group "Dependencies"
     include "../ThirdParty/Catch2"
@@ -113,6 +114,7 @@ project "Core"
         -- Manifold2D/Core primitives (FunctionRef/BitSet/Simd/WorkScheduler)
         -- ahead of the Task 2 move.
         "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.Mosaic}",
     }
 
     defines {
@@ -168,7 +170,7 @@ project "Manifold2D"
         "%{wks.location}/../ThirdParty/Manifold2D/src/**.cpp",
     }
 
-    includedirs { "%{IncludeDir.Manifold2D}" }
+    includedirs { "%{IncludeDir.Manifold2D}", "%{IncludeDir.Mosaic}" }
 
     defines { "_CRT_SECURE_NO_WARNINGS" }
 
@@ -242,6 +244,7 @@ project "Arcane"
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.Mosaic}",
     }
 
     links { "Core", "nvrhi", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
@@ -369,6 +372,7 @@ project "Sandbox"
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.imgui}",
         "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.Mosaic}",
     }
     -- Sandbox is the first plugin to drive physics. PhysicsSystem (header-only) is
     -- instantiated in THIS module and calls Arcane::Physics::PhysicsWorld directly;
@@ -508,6 +512,7 @@ project "ArcaneTests"
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.imgui}",
         "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.Mosaic}",
     }
 
     -- msdfgen and freetype are static libs compiled separately; the smoke test
