@@ -461,6 +461,60 @@ project "Loom"
     filter {}
 
 -- ============================================================================
+-- Grimoire: the editor shell (Grimoire.exe). Engine boot + RunLoop + PluginHost
+-- + ImGui docking shell. Hosts Sandbox.dll by default. Reuses Loom's host-boot
+-- helpers (GpuContext/FramePerf/LoomConfig) by source-compile -- host-to-host
+-- reuse, NOT an Arcane->Grimoire dependency. Consumes only ARCANE_API otherwise.
+-- ============================================================================
+project "Grimoire"
+    location "Grimoire"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    files {
+        "%{prj.location}/src/**.cpp",
+        "%{prj.location}/src/**.hpp",
+        -- Loom host-boot helpers, source-shared (same pattern as ArcaneTests).
+        "%{wks.location}/Loom/src/GpuContext.cpp",
+        "%{wks.location}/Loom/src/LoomConfig.cpp",
+    }
+    includedirs {
+        "%{prj.location}/src",
+        "%{wks.location}/Loom/src",      -- GpuContext.hpp / FramePerf.hpp / LoomConfig.hpp
+        "%{wks.location}/Arcane/src",
+        "%{IncludeDir.Core}",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.nvrhi}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.imgui}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+        "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.Mosaic}",
+    }
+    links { "Core", "Arcane" }
+    dependson { "Sandbox" }
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Sandbox/Sandbox.dll" "%{cfg.buildtarget.directory}/Sandbox.dll"',
+        '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data"',
+        '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
+    }
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus" }
+    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter {}
+
+-- ============================================================================
 -- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links Core
 -- directly -- Core links into exactly ONE module per process.
 -- ============================================================================
