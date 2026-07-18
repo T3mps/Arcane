@@ -12,7 +12,7 @@
 #include "SandboxApp.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>  // bridges ITaskExecutor -> Manifold2D::IWorkScheduler
+#include <Arcane/Jobs/ArcaneWorkScheduler.hpp>  // bridges ITaskExecutor -> Mosaic::IWorkScheduler
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -105,23 +105,24 @@ extern "C"
         auto creg = ctx->engine->Components();
         creg->ReRegisterComponent<Arcane::LocalTransform>();
         creg->ReRegisterComponent<Arcane::WorldTransform>();
+        creg->ReRegisterComponent<Arcane::PreviousTransform>();
         creg->ReRegisterComponent<Arcane::SpriteRenderer>();
         creg->ReRegisterComponent<Arcane::RigidBody2D>();
         creg->ReRegisterComponent<Arcane::Collider2D>();
         creg->ReRegisterComponent<Arcane::PhysicsBodyRef>();
 
         // 3. Register systems (functors in this module).
-        //    fixedUpdate: ONLY TransformPropagationSystem. The PHYSICS STEP is now
-        //                 SANDBOX-OWNED (Task 8 sim-control): SandboxApp::FixedUpdate
-        //                 drives a PhysicsSystem invocation with a controllable dt
-        //                 (pause/single-step/time-scale). RunLoop runs that plugin hook
-        //                 BEFORE this scheduler, so physics still writes LocalTransform
-        //                 before propagation derives WorldTransform (ordering preserved).
-        //                 Propagation stays in the scheduler so a FROZEN scene still
-        //                 propagates + renders each frame.
+        //    fixedUpdate: EMPTY of engine systems. The PHYSICS STEP is the sandbox's
+        //                 RunLoop plugin-fixed hook (SandboxApp::FixedUpdate); RunLoop now
+        //                 owns pause/single-step/time-scale and GATES this whole phase, so
+        //                 nothing that must run while paused may live here.
+        //    update:      TransformPropagationSystem. Propagation runs once per frame -- the
+        //                 update phase always runs, even paused -- AFTER the fixed steps, so
+        //                 both a stepped body and a body authored while frozen get their
+        //                 LocalTransform -> WorldTransform derived for the render phase.
         //    render: sprites first, then the physics-debug overlay on top.
         auto& sch = ctx->engine->Schedulers();
-        sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
+        sch.update.AddSystem<Arcane::TransformPropagationSystem>();
         sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
         sch.render.AddSystem<Arcane::Sandbox::PhysicsDebugRenderSystem>();
         sch.render.AddSystem<Arcane::Sandbox::PolygonDraftRenderSystem>();
@@ -139,6 +140,10 @@ extern "C"
         // Minkowski-inset OffscreenCanvas from the host's device + ShaderLibrary (Runtime
         // render-resources bridge). Null device in a headless host -> the inset is skipped.
         g_app.SetRuntime(ctx->engine);
+        // Epic 04: forward the HUD's pause/single-step/time-scale to the engine RunLoop
+        // (the one clock that gates the fixed phase). The app holds this pointer and
+        // delegates its sim-time methods to it.
+        g_app.SetLoop(&ctx->engine->Loop());
         if (!reg.GetResource<Arcane::SceneRoot>())
             g_app.BuildInitialScene(reg);
         CacheRoot(reg);
@@ -149,21 +154,21 @@ extern "C"
 
     GAME_API void GamePlugin_FixedUpdate(double dt)
     {
-        // Pumps the SceneControl side channel (a pending scene switch/reset rebuilds here,
-        // BEFORE the engine fixedUpdate scheduler), runs the Task-7 mouse-interaction layer
-        // (spawn/drag/throw + pan/zoom) on the per-frame input snapshot, then drives the
-        // physics step itself (Task 8: SandboxApp owns the PhysicsSystem step so the HUD can
-        // pause/single-step/time-scale it -- see SandboxApp::FixedUpdate). Input() returns the
-        // latest snapshot the host (Loom) stored.
+        // The pause-gated sim step. RunLoop (which owns pause/single-step/time-scale) calls
+        // this ONLY for the fixed steps that actually run; SandboxApp::FixedUpdate just drives
+        // the PhysicsSystem step at the canonical dt. All per-frame authoring/interaction is
+        // in Update. Input is unused here now (interaction moved to Update) but kept in the
+        // signature for the hook contract.
         g_app.FixedUpdate(g_ctx->engine->Registry(), dt, g_ctx->engine->Input());
     }
 
     GAME_API void GamePlugin_Update(double dt, double alpha)
     {
-        // Input() is the per-host-frame snapshot (sampled once per frame, same source
-        // FixedUpdate reads). Update consumes the mouse wheel here -- once per frame --
-        // so wheel-zoom is smooth (see SandboxApp::Update / Interaction::ApplyWheelZoom).
-        g_app.Update(dt, alpha, g_ctx->engine->Input());
+        // The every-frame hook (runs even while paused): the SceneControl pump, the Task-7
+        // mouse-interaction layer (spawn/drag/throw + pan/zoom), the inspector, polygon
+        // authoring, a mint-only pass while frozen, and wheel-zoom -- everything that must
+        // keep working while the sim is paused. Input() is the per-host-frame snapshot.
+        g_app.Update(g_ctx->engine->Registry(), dt, alpha, g_ctx->engine->Input());
 
         // Push the plugin-owned camera to the engine BEFORE render: SetRenderContext
         // (called by the host after this Update phase) writes it into RenderContext2D,

@@ -42,7 +42,7 @@ namespace Arcane::Sandbox
         // the previous world (and all its bodies) is destroyed -- nothing leaks into the new
         // scene. Mirrors EnsurePhysicsResource in Sandbox.cpp but unconditionally replaces.
         void InstallFreshPhysicsResource(Astra::Registry& reg, float gravityY,
-                                         Manifold2D::IWorkScheduler* sched = nullptr)
+                                         Mosaic::IWorkScheduler* sched = nullptr)
         {
             Manifold2D::Physics::WorldDef wd;
             wd.gravityY = gravityY;   // MKS: caller-supplied (SandboxApp::m_gravityY, HUD-editable)
@@ -57,9 +57,33 @@ namespace Arcane::Sandbox
     SandboxApp::SandboxApp()  = default;
     SandboxApp::~SandboxApp() = default;
 
+    // Sim-time control forwards to the engine RunLoop (Epic 04). Null-safe: with no loop
+    // wired (a CPU path that never drives frames) the sandbox reports running/real-time.
+    void SandboxApp::SetPaused(bool p) noexcept
+    {
+        if (m_loop) m_loop->SetPaused(p);
+    }
+
+    bool SandboxApp::IsPaused() const noexcept
+    {
+        return m_loop && m_loop->IsPaused();
+    }
+
+    void SandboxApp::RequestSingleStep() noexcept
+    {
+        if (m_loop) m_loop->RequestSingleStep();
+    }
+
     void SandboxApp::SetTimeScale(float s) noexcept
     {
-        m_timeScale = std::clamp(s, kMinTimeScale, kMaxTimeScale);
+        // RunLoop only clamps to >= 0; keep the sandbox's sane upper/lower bound so a huge
+        // scale cannot flood a frame with fixed steps.
+        if (m_loop) m_loop->SetTimeScale(std::clamp(s, kMinTimeScale, kMaxTimeScale));
+    }
+
+    float SandboxApp::TimeScale() const noexcept
+    {
+        return m_loop ? static_cast<float>(m_loop->TimeScale()) : 1.0f;
     }
 
     void SandboxApp::RebuildScene(Astra::Registry& reg, std::size_t index)
@@ -78,6 +102,11 @@ namespace Arcane::Sandbox
         // 2. Mint a fresh PhysicsResource so the new scene's bodies start from an empty
         //    world + empty entity<->body map (no stale handles from the old scene).
         InstallFreshPhysicsResource(reg, m_gravityY, &m_scheduler);
+
+        // 2b. Fresh render-interpolation buffer (Epic 04.2): drop the previous scene's
+        //     per-body prev poses so the first frame of the new scene never lerps from a
+        //     dead body. PhysicsSystem repopulates it on the first stepped frame.
+        reg.SetResource<Arcane::PhysicsInterpBuffer>(Arcane::PhysicsInterpBuffer{});
 
         // 3. Run the target builder -- it repopulates entities and re-sets SceneRoot.
         scenes[m_sceneIndex].build(reg);
@@ -403,11 +432,32 @@ namespace Arcane::Sandbox
         RebuildScene(reg, m_sceneIndex);
     }
 
-    void SandboxApp::FixedUpdate(Astra::Registry& reg, double /*dt*/,
-                                 const Arcane::InputSnapshot& input)
+    void SandboxApp::FixedUpdate(Astra::Registry& reg, double dt,
+                                 const Arcane::InputSnapshot& /*input*/)
     {
-        // Pump the SceneControl side channel BEFORE anything else (RunLoop calls this
-        // plugin hook first), so a rebuild lands on a clean registry, never mid-step.
+        // The pause-gated SIM step (Epic 04). RunLoop -- which owns pause / single-step /
+        // time-scale -- calls this ONLY for the fixed steps that actually run (0 while
+        // paused; N per frame under time-scale), at the CANONICAL fixed dt. Time-scale
+        // changes how MANY steps run, never the step size, so the step stays deterministic.
+        // Everything else the sandbox does per frame -- scene-switch pump, interaction,
+        // inspector, polygon authoring, mint-while-frozen -- moved to Update, which runs
+        // every frame even while paused.
+        PhysicsResource* phys = reg.GetResource<PhysicsResource>();
+        if (!phys || !phys->world) return;
+
+        PhysicsSystem physics(static_cast<float>(dt));   // CREATE/SYNC + Step(dt) + write-back
+        physics(reg);
+    }
+
+    void SandboxApp::Update(Astra::Registry& reg, double /*dt*/, double /*alpha*/,
+                            const Arcane::InputSnapshot& input)
+    {
+        // The EVERY-FRAME hook -- runs even while the sim is frozen (RunLoop gates only the
+        // fixed phase). All authoring/interaction that must keep working while paused lives
+        // here. RunLoop runs this AFTER the fixed phase, so a grab's drive velocity set here
+        // integrates on the NEXT fixed step (a mouse-joint's inherent ~1-frame latency).
+
+        // Pump the SceneControl side channel FIRST so a rebuild lands on a clean registry.
         // A reset takes precedence over a switch; both are one-shot (cleared on consume).
         if (SceneControl* ctrl = reg.GetResource<SceneControl>())
         {
@@ -425,44 +475,36 @@ namespace Arcane::Sandbox
             }
         }
 
-        // Keep the render-overlay resource in lockstep with the HUD-owned flags every
-        // step (a HUD checkbox edit between frames reaches PhysicsDebugRenderSystem).
+        // Keep the render-overlay resource in lockstep with the HUD-owned flags every frame
+        // (a HUD checkbox edit between frames reaches PhysicsDebugRenderSystem).
         PublishDebug(reg);
 
         PhysicsResource* phys = reg.GetResource<PhysicsResource>();
         if (!phys || !phys->world)
         {
             UpdateAndPublishInspector(reg);   // still publish (a missing world clears the subject)
+            m_interaction.ApplyWheelZoom(m_camera, input);
             return;
         }
 
-        // Task 7: the mouse-interaction layer runs on the (possibly just-rebuilt) scene
-        // BEFORE the physics step -- spawned entities are materialized by the step's CREATE
-        // pass; a grabbed body's drive velocity is set so it integrates this step; camera
-        // pan/zoom is in place before Update pushes the camera. Interaction runs even while
-        // PAUSED (spawn/grab/pan still respond; the step below just won't advance the sim).
+        // The mouse-interaction layer (spawn / grab / drag / pan). Runs every frame
+        // regardless of pause, so bodies can be arranged/spawned while the sim is frozen.
         m_interaction.Tick(reg, *phys->world, m_camera, input, kFixedDt);
 
-        // Inspector subject: consume the grab-to-select request (raised by the Interaction
-        // when its normal grab grabbed a body this frame). Grabbing a body sets it as the
-        // subject (its primary fixture); grabbing empty space raises no request, so the
-        // subject persists. SetSubjectBody re-validates + resets selection on a switch.
+        // Inspector subject: consume a grab-to-select request (raised when the interaction
+        // grabbed a body this frame); grabbing empty space keeps the current subject.
         if (const Manifold2D::Physics::BodyHandle grabbed = m_interaction.TakeSubjectGrab();
             grabbed != Manifold2D::Physics::kInvalidBody)
             SetSubjectBody(reg, grabbed);
 
-        // Inspector: re-validate the subject, enumerate ALL its active contacts (re-run
-        // the narrowphase for each), and publish the inspector resource (for the world
-        // overlay). Placed AFTER Tick so a fresh grab this frame is reflected immediately,
-        // and BEFORE the step's early returns so it runs whether paused or running. The
-        // ContactConstraint pool it scans is the previous step's -- the valid post-Step
-        // window. DebugCollide is pure: it reads the live world, writes the reused traces.
+        // Inspector: re-validate the subject, enumerate ALL its active contacts (re-run the
+        // narrowphase for each), and publish the inspector resource for the world overlay.
+        // The ContactConstraint pool it scans is the last step's -- the valid post-Step window.
         UpdateAndPublishInspector(reg);
 
         // Mirror the in-progress polygon draft into the render-read resource so
-        // PolygonDraftRenderSystem can draw the clicked vertices. Published ONLY when
-        // shape == Polygon -- switching to Box/Circle/Capsule hides stray markers while
-        // the in-progress points are retained internally for when Polygon is resumed.
+        // PolygonDraftRenderSystem can draw the clicked vertices. Published ONLY when shape
+        // == Polygon -- switching away hides stray markers while the points are retained.
         if (!reg.GetResource<PolygonDraftResource>())
             reg.SetResource(PolygonDraftResource{});
         if (m_interaction.IsPolygonMode())
@@ -470,57 +512,26 @@ namespace Arcane::Sandbox
         else
             reg.GetResource<PolygonDraftResource>()->worldPoints.clear();
 
-        // ITEM 2: commit a HUD-requested polygon on the LIVE world (deferred out of the
-        // render phase). World-direct -> it renders via DrawPhysicsDebug (no entity).
-        // Runs even while paused (authoring geometry shouldn't need a running sim).
+        // Commit a HUD-requested polygon on the LIVE world (deferred out of the render phase).
+        // World-direct -> it renders via DrawPhysicsDebug (no entity).
         if (m_requestPolygonSpawn)
         {
             m_requestPolygonSpawn = false;
             m_interaction.SpawnPolygon(*phys->world);
         }
 
-        // ---- SANDBOX-OWNED PHYSICS STEP (Task 8 sim-control) -----------------------
-        // PhysicsSystem is no longer in the engine fixedUpdate scheduler; the sandbox
-        // drives it here so pause/single-step/time-scale can gate + scale the dt. RunLoop
-        // runs this plugin hook BEFORE the engine fixedUpdate scheduler (which still holds
-        // TransformPropagationSystem), so physics writes LocalTransform before propagation
-        // derives WorldTransform -- the ordering the engine path guaranteed is preserved.
-        //
-        // PAUSED: skip the step (the scene stays frozen but still renders + propagates).
-        // SINGLE-STEP: while paused, run exactly one tick then re-pause (one-shot flag).
-        // TIME-SCALE: feed the PhysicsSystem a scaled dt (a larger/smaller fixed tick).
-        const bool runThisStep = !m_paused || m_singleStep;
-        if (!runThisStep)
+        // While PAUSED the fixed phase (and its PhysicsSystem CREATE pass) does not run, so
+        // mint here: materialize a body spawned this frame + write back its pose WITHOUT
+        // stepping, so a spawned-while-frozen body appears at its spawn location. When
+        // running, the fixed-phase step already did CREATE/SYNC + write-back.
+        if (m_loop && m_loop->IsPaused())
         {
-            // Frozen: mint a paused-spawned body + write back its pose, but DO
-            // NOT step (skip the narrowphase + solve entirely -> pausing the dense
-            // stress scene instantly recovers FPS).
             PhysicsSystem mintOnly(kFixedDt, /*stepWorld=*/false);
             mintOnly(reg);
-            return;
         }
 
-        const bool wasSingleStep = m_singleStep;
-        m_singleStep = false;                       // consume the one-shot request
-
-        const float stepDt = kFixedDt * m_timeScale;
-        PhysicsSystem physics(stepDt);
-        physics(reg);                               // CREATE/SYNC + Step(stepDt) + write-back
-
-        if (wasSingleStep)
-            m_paused = true;                        // re-pause after the single step
-    }
-
-    void SandboxApp::Update(double /*dt*/, double /*alpha*/,
-                            const Arcane::InputSnapshot& input)
-    {
-        // Variable-rate (once-per-host-frame) work. Mouse-wheel zoom is consumed HERE
-        // -- not in FixedUpdate's Tick -- because the wheel delta is a per-frame
-        // accumulated impulse: the fixed-step Tick runs 0..N times per host frame, so
-        // consuming it there drops notches (no fixed step that frame) or doubles them
-        // (several). Update runs exactly once per host frame, matching the wheel's
-        // sampling cadence, so the zoom is smooth. The camera is pushed to the engine
-        // by the plugin immediately after this.
+        // Camera wheel-zoom: consumed once per frame here (matches the wheel's per-frame
+        // sampling cadence). The camera is pushed to the engine by the plugin right after this.
         m_interaction.ApplyWheelZoom(m_camera, input);
     }
 

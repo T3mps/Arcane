@@ -39,6 +39,19 @@ namespace Arcane
         glm::mat3 matrix{1.0f};             // computed by TransformPropagationSystem; never authored
     };
 
+    // PreviousTransform (Epic 04.2): an entity's LOCAL pose at the previous fixed
+    // step, captured by PhysicsSystem write-back before it overwrites LocalTransform.
+    // RenderSubmissionSystem draws at lerp(previous -> current, alpha) for smooth
+    // slow-mo. Decomposed (position + angle) so rotation interpolates on the shortest
+    // arc, NOT by lerping matrix components. Purely derived render state: an entity
+    // opts into interpolation by carrying it; absent -> the sprite snaps to the latest
+    // step (unchanged).
+    struct PreviousTransform
+    {
+        glm::vec2 position{0.0f, 0.0f};
+        float     rotation = 0.0f;          // radians
+    };
+
     // The primitive a SpriteRenderer draws. Lets the ONE canonical 2D submission
     // path (RenderSubmissionSystem) render filled circles + capsules, not just
     // rectangles -- so a body's sprite can MATCH its collider shape (a circle
@@ -77,6 +90,14 @@ namespace Arcane
     ASTRA_REFLECT_TYPE(WorldTransform)
         ASTRA_REFLECT_FIELD(WorldTransform, matrix)
             ASTRA_REFLECT_ATTR(Serializable, false)
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(PreviousTransform)
+        ASTRA_REFLECT_FIELD(PreviousTransform, position)
+            ASTRA_REFLECT_ATTR(Serializable, false)
+        ASTRA_REFLECT_FIELD(PreviousTransform, rotation)
+            ASTRA_REFLECT_ATTR(Serializable, false)
+            ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_ENUM(SpriteShape)

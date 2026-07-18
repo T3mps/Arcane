@@ -29,7 +29,7 @@
 #include "Interaction.hpp"                  // mouse spawn/drag/throw + pan/zoom (Task 7)
 
 #include <Arcane/Jobs/TaskExecutor.hpp>     // ITaskExecutor (Phase D1 executor injection)
-#include <Arcane/Jobs/ArcaneWorkScheduler.hpp> // bridges ITaskExecutor -> Manifold2D::IWorkScheduler
+#include <Arcane/Jobs/ArcaneWorkScheduler.hpp> // bridges ITaskExecutor -> Mosaic::IWorkScheduler
 #include <Manifold2D/Physics/Fixture.hpp>          // FixtureHandle, kInvalidFixture (subject + partner fixtures)
 #include <Manifold2D/Physics/Narrowphase/NarrowphaseTrace.hpp> // NarrowphaseTrace (inspector recorder)
 #include <Arcane/Render/Batcher2D.hpp>        // Batcher2D virtual interface (Circle call)
@@ -48,7 +48,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
-namespace Arcane { struct InputSnapshot; class OffscreenCanvas; class Runtime; }
+namespace Arcane { struct InputSnapshot; class OffscreenCanvas; class Runtime; class RunLoop; }
 
 namespace Arcane::Sandbox
 {
@@ -201,6 +201,14 @@ namespace Arcane::Sandbox
             {
                 opts.drawContacts = true;
             }
+
+            // Render interpolation (Epic 04.2): smooth the overlay between fixed steps
+            // by the RunLoop alpha carried in RenderContext2D. The buffer is populated
+            // by PhysicsSystem each step; absent / !captured -> DrawPhysicsDebug draws
+            // at the current pose (no interp).
+            opts.interp = reg.GetResource<PhysicsInterpBuffer>();
+            opts.alpha  = ctx->alpha;
+
             DrawPhysicsDebug(*phys->world, *ctx->batcher, opts);
 
             // ---- Slice B: subject narrowphase WORLD overlay ---------------------
@@ -288,7 +296,7 @@ namespace Arcane::Sandbox
 
         // Phase D1: inject the task executor that each (re)built PhysicsWorld will use.
         // nullptr -> the world's owned serial default (deterministic). The engine
-        // executor is wrapped by m_scheduler so the world sees a Manifold2D::IWorkScheduler.
+        // executor is wrapped by m_scheduler so the world sees a Mosaic::IWorkScheduler.
         void SetExecutor(Arcane::ITaskExecutor* exec) noexcept
         {
             m_scheduler.SetExecutor(exec);
@@ -307,18 +315,22 @@ namespace Arcane::Sandbox
         // Rebuild the CURRENT scene index from scratch (same clean path as SetScene).
         void Reset(Astra::Registry& reg);
 
-        // Per-frame hooks. FixedUpdate (Task 8) is where the SANDBOX OWNS the physics
-        // step: it pumps the SceneControl side channel (a pending reset/switch rebuilds
-        // here, on a clean registry), runs the mouse-interaction layer on `input`, then
-        // -- UNLESS PAUSED -- steps the PhysicsWorld via a PhysicsSystem invocation with a
-        // CONTROLLABLE dt (time-scaled; a single-step request runs exactly one tick then
-        // re-pauses). PhysicsSystem is NO LONGER in the engine fixedUpdate scheduler; only
-        // TransformPropagationSystem stays there (RunLoop runs this plugin hook BEFORE that
-        // scheduler, so physics still writes LocalTransform before propagation derives
-        // WorldTransform -- the ordering the engine path guaranteed is preserved). The
-        // render systems run every frame so a frozen scene still draws + propagates.
+        // Per-frame hooks (Epic 04: engine RunLoop owns sim-time control).
+        //
+        // FixedUpdate is the PAUSE-GATED sim step: RunLoop calls it ONLY for the fixed
+        // steps that actually run (0 while paused; N per frame scaled by time-scale), at
+        // the canonical fixed dt. It does one thing -- drive the PhysicsSystem step. It is
+        // the RunLoop plugin-fixed hook, so it runs BEFORE the engine fixedUpdate scheduler.
+        //
+        // Update is the EVERY-FRAME hook (runs even while paused): the SceneControl pump,
+        // debug-flag publish, the mouse-interaction layer, the inspector, polygon authoring,
+        // a mint-only pass while paused (so a body spawned while frozen still materializes),
+        // and camera wheel-zoom. All the authoring/interaction that must keep working while
+        // the sim is frozen lives here, NOT in the gated fixed phase. TransformPropagation
+        // runs in the engine UPDATE scheduler (see Sandbox Init) so a frozen scene still
+        // derives WorldTransform for the render phase.
         void FixedUpdate(Astra::Registry& reg, double dt, const Arcane::InputSnapshot& input);
-        void Update(double dt, double alpha, const Arcane::InputSnapshot& input);
+        void Update(Astra::Registry& reg, double dt, double alpha, const Arcane::InputSnapshot& input);
 
         // Draw the ImGui control panel (Task 8). Called by GamePlugin_DrawUI (the host
         // calls it between ImGuiLayer BeginFrame/Render). Forwards to Hud::Draw. Defined
@@ -327,21 +339,27 @@ namespace Arcane::Sandbox
 
         std::size_t CurrentScene() const noexcept { return m_sceneIndex; }
 
-        // ---- HUD-bound sim controls (Task 8) ---------------------------------------
-        // The HUD writes these; FixedUpdate reads them to gate/scale the physics step.
+        // ---- HUD-bound sim controls (Epic 04) --------------------------------------
+        // Sim-time control is OWNED BY the engine RunLoop; these forward to it so the HUD
+        // drives the one engine clock, and RunLoop's fixed-phase gating applies uniformly.
+        // The loop pointer is injected via SetLoop (production: Runtime::Loop(); tests: a
+        // fixture-owned RunLoop). All null-safe: with no loop wired the sandbox reports
+        // running/real-time (the CPU test path that never drives frames sees a live sim).
 
-        // Pause gates the physics step (the scene still renders + propagates frozen).
-        void SetPaused(bool p) noexcept { m_paused = p; }
-        [[nodiscard]] bool IsPaused() const noexcept { return m_paused; }
+        // Injected by the host at load (Sandbox Init) / by the test fixture.
+        void SetLoop(Arcane::RunLoop* loop) noexcept { m_loop = loop; }
 
-        // Request exactly ONE physics tick on the next FixedUpdate, then re-pause.
-        // Only meaningful while paused (a running sim steps every frame anyway).
-        void RequestSingleStep() noexcept { m_singleStep = true; }
+        void SetPaused(bool p) noexcept;
+        [[nodiscard]] bool IsPaused() const noexcept;
 
-        // Time-scale multiplies the physics dt (1 = real time, 0.5 = half, 2 = double).
-        // Clamped to a sane range so a huge scale cannot blow the solver up in one step.
+        // Request exactly ONE canonical fixed step on the next frame, then stay paused.
+        void RequestSingleStep() noexcept;
+
+        // Time-scale (1 = real time, 0.5 = half, 2 = double). Scales the sim clock, not the
+        // step dt (the fixed step stays deterministic). Clamped to the sandbox's sane range
+        // so a huge value cannot flood the frame with steps.
         void  SetTimeScale(float s) noexcept;
-        [[nodiscard]] float TimeScale() const noexcept { return m_timeScale; }
+        [[nodiscard]] float TimeScale() const noexcept;
 
         // Gravity (world units/s^2, +Y down). PhysicsWorld has no runtime gravity setter
         // (gravity is baked at construction), so this only records the value; the HUD
@@ -470,12 +488,13 @@ namespace Arcane::Sandbox
         Camera      m_camera{};      // default identity; configured in RebuildScene
         Interaction m_interaction{}; // mouse spawn/drag/throw + pan/zoom (Task 7)
 
-        // ---- sim controls (Task 8) -------------------------------------------------
-        bool  m_paused     = false;
-        bool  m_singleStep = false;   // one-shot: run exactly one tick then re-pause
-        float m_timeScale  = 1.0f;    // physics dt multiplier (clamped in SetTimeScale)
+        // ---- sim controls (Epic 04) ------------------------------------------------
+        // The engine RunLoop owns pause / single-step / time-scale; the sandbox forwards
+        // the HUD to it via this pointer (Runtime::Loop() in production, a fixture-owned
+        // RunLoop in tests). Null until SetLoop is called.
+        Arcane::RunLoop* m_loop = nullptr;
 
-        // One-shot HUD request: commit the in-progress polygon on the next FixedUpdate
+        // One-shot HUD request: commit the in-progress polygon on the next frame
         // (deferred out of the render phase so the world AddBody never races the
         // render-phase DrawPhysicsDebug read). Consumed + cleared when handled.
         bool  m_requestPolygonSpawn = false;

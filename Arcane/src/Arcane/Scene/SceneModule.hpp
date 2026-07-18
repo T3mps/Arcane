@@ -20,6 +20,7 @@ namespace Arcane
     {
         creg.RegisterComponent<LocalTransform>();
         creg.RegisterComponent<WorldTransform>();
+        creg.RegisterComponent<PreviousTransform>();
         creg.RegisterComponent<SpriteRenderer>();
     }
 

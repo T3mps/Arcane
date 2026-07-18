@@ -193,8 +193,12 @@ namespace Arcane
         // resolves here against the shared context; the host never touches a scene TypeID.
         // The camera comes from the STORED plugin camera (SetCamera) -- the host is
         // camera-agnostic. Defaults (offset (0,0), zoom 1) are the identity transform.
+        // Epic 04.2: carry the render alpha so RenderSubmissionSystem +
+        // DrawPhysicsDebug can interpolate poses between fixed steps. Runtime owns
+        // the RunLoop, so this needs no plugin-ABI surface.
         m_impl->registry->SetResource<RenderContext2D>(
-            RenderContext2D{batcher, m_impl->cameraOffset, m_impl->cameraZoom});
+            RenderContext2D{batcher, m_impl->cameraOffset, m_impl->cameraZoom,
+                            static_cast<float>(Loop().Alpha())});
     }
 
     Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const

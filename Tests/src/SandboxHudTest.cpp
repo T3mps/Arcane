@@ -5,13 +5,15 @@
 // valid context and NewFrame does not assert. The gate is two-fold:
 //
 //   1. DrawUI runs headless without tripping an ImGui assert / crashing.
-//   2. The HUD-bound state on SandboxApp actually DRIVES SandboxApp behavior --
-//      a paused step is skipped, a single-step runs exactly one tick then
-//      re-pauses, the time-scale scales the dt, the debug-draw flags reach the
-//      render options, and the spawn knobs reach the Interaction. These are
-//      asserted by driving the SandboxApp state directly (the same fields the
-//      HUD's widgets bind to) and observing the simulation outcome, NOT by
-//      faking ImGui input (headless ImGui cannot synthesize clicks).
+//   2. The HUD-bound state actually DRIVES the simulation. Sim-time control is the
+//      engine RunLoop's (Epic 04); the sandbox forwards the HUD to it (SetLoop), so
+//      the fixture drives a real RunLoop and asserts the integration: a paused loop
+//      runs zero fixed steps, a single-step runs exactly one canonical tick then stays
+//      paused, a >1 time-scale runs more fixed steps per real frame, the debug-draw
+//      flags reach the render options, and the spawn knobs reach the Interaction. These
+//      are asserted by driving the HUD-bound state directly (the same fields the widgets
+//      bind to) and observing the outcome, NOT by faking ImGui input (headless ImGui
+//      cannot synthesize clicks).
 //
 // Like SandboxInteractionTest, the pure Sandbox helper TUs (SandboxApp.cpp +
 // Hud.cpp + Interaction.cpp + Scenes.cpp) compile straight into ArcaneTests
@@ -37,6 +39,8 @@
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Sim/RunLoop.hpp>            // engine sim-time control (Epic 04)
+#include <Arcane/Sim/SystemSchedulers.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -95,12 +99,18 @@ namespace
             std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg{components};
         Sbx::SandboxApp app;
+        // Epic 04: a real engine RunLoop drives the fixture's frames exactly as Loom does,
+        // so the sandbox's HUD sim-time controls (pause/single-step/time-scale, forwarded
+        // to this loop via SetLoop) exercise RunLoop's actual fixed-phase gating.
+        Arcane::SystemSchedulers sch{nullptr};   // null -> sequential executor
+        Arcane::RunLoop          loop{reg, sch};
 
         Fixture()
         {
             Arcane::RegisterSceneComponents(reg);
             Arcane::RegisterPhysicsComponents(reg);
             app.Configure(kGravityY);
+            app.SetLoop(&loop);           // HUD sim-time control forwards to this loop
             app.BuildInitialScene(reg);   // scene 0 (Playground): floor + walls + dynamics
         }
 
@@ -109,11 +119,25 @@ namespace
             return *reg.GetResource<Arcane::PhysicsResource>()->world;
         }
 
-        // One frame of the plugin-owned fixed step (no interaction input).
-        void Step()
+        // One engine frame through the RunLoop -- the pause-gated fixed step(s) then the
+        // every-frame Update -- exactly as Loom drives the plugin. Honors the sim-time
+        // controls (a paused loop runs zero fixed steps). `input` feeds both hooks.
+        void Frame(const Arcane::InputSnapshot& input = Arcane::InputSnapshot{})
         {
-            Arcane::InputSnapshot input{};
-            app.FixedUpdate(reg, 1.0 / 60.0, input);
+            loop.Advance(1.0 / 60.0,
+                [&](double dt){ app.FixedUpdate(reg, dt, input); },
+                [&](double dt, double a){ app.Update(reg, dt, a, input); });
+        }
+
+        // A no-input frame: advance the sim one step (materialize / settle).
+        void Step() { Frame(); }
+
+        // Drive the interaction/authoring layer directly (it lives in Update now and runs
+        // every frame regardless of pause). A following Step() materializes any spawn via
+        // the fixed-step CREATE pass; while paused the Update mint-only pass materializes it.
+        void Interact(const Arcane::InputSnapshot& input)
+        {
+            app.Update(reg, 1.0 / 60.0, 0.0, input);
         }
 
         // Total Y displacement of the FIRST dynamic body across `n` steps -- a proxy
@@ -199,13 +223,15 @@ TEST_CASE("Hud: single-step advances exactly one tick while paused", "[sandbox]"
 }
 
 // ---------------------------------------------------------------------------
-// (d) Time-scale: a >1 time-scale advances the sim FARTHER per real step than 1x
-//     (the dt fed to the physics step is scaled).
+// (d) Time-scale: a >1 time-scale advances the SIM CLOCK faster, so more canonical
+//     fixed steps run per real frame (Epic 04: RunLoop scales the accumulator input,
+//     NOT the step dt -- the step stays deterministic). The 3x world runs ~3x the
+//     steps over the same real time and so falls farther.
 // ---------------------------------------------------------------------------
-TEST_CASE("Hud: time-scale scales the simulated dt", "[sandbox]")
+TEST_CASE("Hud: time-scale runs more fixed steps per real frame", "[sandbox]")
 {
-    // Two identical worlds; one at 1x, one at 3x. After the same number of real
-    // steps the 3x world has fallen farther (a larger effective dt per step).
+    // Two identical worlds; one at 1x, one at 3x. Over the same number of real frames
+    // the 3x world takes ~3x as many fixed steps and has fallen farther.
     Fixture a;
     Fixture b;
     a.Step();  b.Step();   // both materialize bodies first
@@ -213,8 +239,8 @@ TEST_CASE("Hud: time-scale scales the simulated dt", "[sandbox]")
     a.app.SetTimeScale(1.0f);
     b.app.SetTimeScale(3.0f);
 
-    const float dropA = std::abs(a.FirstDynamicYAfter(20));
-    const float dropB = std::abs(b.FirstDynamicYAfter(20));
+    const float dropA = std::abs(a.FirstDynamicYAfter(20));   // ~20 fixed steps
+    const float dropB = std::abs(b.FirstDynamicYAfter(20));   // ~60 fixed steps (< the 5/frame clamp)
     CHECK(dropB > dropA * 1.5f);   // 3x time-scale clearly outpaces 1x
 }
 
@@ -271,7 +297,7 @@ TEST_CASE("Hud: rich-overlay debug flags round-trip through the options", "[sand
     // Run a render-driven publish (FixedUpdate mirrors the flags into the resource);
     // the gate is "no crash + the resource carries the HUD's choices".
     Arcane::InputSnapshot idle{};
-    REQUIRE_NOTHROW(f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle));
+    REQUIRE_NOTHROW(f.Interact(idle));
     const auto* res = f.reg.GetResource<Sbx::SandboxDebugDraw>();
     REQUIRE(res != nullptr);
     CHECK_FALSE(res->drawVelocities);
@@ -299,12 +325,13 @@ TEST_CASE("Hud: spawn knobs select the spawned shape", "[sandbox]")
     const glm::vec2 sc = f.app.Cam().WorldToScreen(wt);
     Arcane::InputSnapshot release{};
     release.mouseX = sc.x; release.mouseY = sc.y;
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, release);   // released baseline (no edge)
+    f.Interact(release);   // released baseline (no edge)
 
     Arcane::InputSnapshot press{};
     press.mouseX = sc.x; press.mouseY = sc.y; press.mouseButtons = 0x1;  // LMB
     const std::uint32_t before = f.Physics().Count();
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);     // spawn + step materializes it
+    f.Interact(press);     // spawn (interaction, in Update)
+    f.Step();              // the fixed-step CREATE pass materializes it into the world
 
     // A new body exists and it is a Circle (the selected spawn shape), near the world
     // target (one gravity step at g=10 nudges it ~1.4 mm). Tolerances are meters.
@@ -341,10 +368,10 @@ TEST_CASE("Hud: polygon mode collects clicks and spawns a polygon body", "[sandb
     for (const auto& p : pts)
     {
         Arcane::InputSnapshot rel{}; rel.mouseX = p[0]; rel.mouseY = p[1];
-        f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
+        f.Interact(rel);
         Arcane::InputSnapshot press{}; press.mouseX = p[0]; press.mouseY = p[1];
         press.mouseButtons = 0x1;   // LMB
-        f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);
+        f.Interact(press);
     }
     CHECK(f.app.PolygonPointCount() == 3);
 
@@ -352,7 +379,7 @@ TEST_CASE("Hud: polygon mode collects clicks and spawns a polygon body", "[sandb
     const std::uint32_t before = f.Physics().Count();
     f.app.RequestPolygonSpawn();
     Arcane::InputSnapshot idle{};
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
 
     CHECK(f.Physics().Count() == before + 1);   // one world-direct polygon body
     CHECK(f.app.PolygonPointCount() == 0);       // points cleared after the commit
@@ -412,17 +439,17 @@ TEST_CASE("Hud: draft markers suppressed when shape is not Polygon", "[sandbox]"
     for (const auto& p : pts)
     {
         Arcane::InputSnapshot rel{}; rel.mouseX = p[0]; rel.mouseY = p[1];
-        f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
+        f.Interact(rel);
         Arcane::InputSnapshot press{}; press.mouseX = p[0]; press.mouseY = p[1];
         press.mouseButtons = 0x1;
-        f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);
+        f.Interact(press);
     }
     CHECK(f.app.PolygonPointCount() == 3);
 
     // Switch to Box: draft resource should publish empty list.
     f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Box;
     Arcane::InputSnapshot idle{};
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
 
     const auto* draft = f.reg.GetResource<Arcane::Sandbox::PolygonDraftResource>();
     REQUIRE(draft != nullptr);
@@ -430,7 +457,7 @@ TEST_CASE("Hud: draft markers suppressed when shape is not Polygon", "[sandbox]"
 
     // Points are RETAINED internally; switching back to Polygon re-publishes them.
     f.app.SpawnConfigMut().shape = Sbx::SpawnShape::Polygon;
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
     draft = f.reg.GetResource<Arcane::Sandbox::PolygonDraftResource>();
     REQUIRE(draft != nullptr);
     CHECK(draft->worldPoints.size() == 3);   // retained + re-published
@@ -534,7 +561,7 @@ TEST_CASE("Inspector: grabbing a body sets/persists/clears the subject", "[sandb
 
     // It persists across an idle FixedUpdate (no new grab).
     Arcane::InputSnapshot idle{};
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
     CHECK(f.app.HasSubject());
 
     // Clear subject drops it.
@@ -561,7 +588,7 @@ TEST_CASE("Inspector: subject enumerates its contacts and publishes the resource
 
     // Publish the resource (FixedUpdate enumerates + mirrors the inspector state).
     Arcane::InputSnapshot idle{};
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
 
     // The subject is touching at least one partner (a settled body on the floor).
     REQUIRE_FALSE(f.app.Contacts().empty());
@@ -595,7 +622,7 @@ TEST_CASE("Inspector: selection defaults to the deepest contact", "[sandbox]")
     f.app.SetSubjectBody(f.reg, body);
 
     Arcane::InputSnapshot idle{};
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
 
     REQUIRE_FALSE(f.app.Contacts().empty());
     const int sel = f.app.SelectedIndex();
@@ -627,7 +654,7 @@ TEST_CASE("Inspector: selection defaults to the deepest contact", "[sandbox]")
         f.app.SetSelectedIndex(other);
         CHECK(f.app.SelectedIndex() == other);
         // Stable by id: another enumerate (paused -> same contacts) keeps the partner.
-        f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+        f.Interact(idle);
         REQUIRE(f.app.SelectedIndex() >= 0);
         CHECK(f.app.Contacts()[static_cast<std::size_t>(f.app.SelectedIndex())].partnerBodyId == otherId);
     }
@@ -651,7 +678,7 @@ TEST_CASE("Inspector: step index clamps to the selected contact's count", "[sand
     f.app.SetSubjectBody(f.reg, body);
 
     Arcane::InputSnapshot idle{};
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
     REQUIRE_FALSE(f.app.Contacts().empty());
 
     const int n = f.app.RecordedStepCount();
@@ -690,21 +717,21 @@ TEST_CASE("Inspector: a grab through FixedUpdate sets the subject; empty grab ke
 
     // Released baseline, then an LMB press ON the body.
     Arcane::InputSnapshot rel{}; rel.mouseX = bpScreen.x; rel.mouseY = bpScreen.y;
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
+    f.Interact(rel);
 
     Arcane::InputSnapshot press{}; press.mouseX = bpScreen.x;
     press.mouseY = bpScreen.y; press.mouseButtons = 0x1;   // LMB
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);
+    f.Interact(press);
 
     REQUIRE(f.app.HasSubject());                 // the grab set the subject
     const std::uint32_t subjBody = f.app.SubjectBody().index;
 
     // Release, then an LMB press on FAR EMPTY space: no body grabbed -> subject unchanged.
     Arcane::InputSnapshot rel2{}; rel2.mouseX = bpScreen.x; rel2.mouseY = bpScreen.y;
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel2);
+    f.Interact(rel2);
     Arcane::InputSnapshot emptyPress{}; emptyPress.mouseX = -9000.0f; emptyPress.mouseY = -9000.0f;
     emptyPress.mouseButtons = 0x1;
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, emptyPress);
+    f.Interact(emptyPress);
 
     CHECK(f.app.HasSubject());                   // subject persisted across the empty grab
     CHECK(f.app.SubjectBody().index == subjBody);
@@ -728,7 +755,7 @@ TEST_CASE("Inspector: headless inset is null and the HUD draws safely", "[sandbo
     REQUIRE(body != Phys::kInvalidBody);
     f.app.SetSubjectBody(f.reg, body);
     Arcane::InputSnapshot idle{};
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
 
     // No Runtime injected (the CPU harness never calls SetRuntime) -> no device ->
     // no OffscreenCanvas is created (the inset is a render-only nicety).
@@ -773,9 +800,9 @@ TEST_CASE("Inspector: a subject touching nothing is crash-safe", "[sandbox]")
     const glm::vec2 spawnWorld{50.0f, -50.0f};
     const glm::vec2 spawnScreen = f.app.Cam().WorldToScreen(spawnWorld);
     Arcane::InputSnapshot rel{};  rel.mouseX = spawnScreen.x; rel.mouseY = spawnScreen.y;
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, rel);
+    f.Interact(rel);
     Arcane::InputSnapshot press{}; press.mouseX = spawnScreen.x; press.mouseY = spawnScreen.y; press.mouseButtons = 0x1;
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, press);   // spawn + one mint step (paused: no fall)
+    f.Interact(press);   // paused spawn: interaction + the Update mint-only pass materialize it (no fall)
 
     // Find the isolated body near the spawn point and make it the subject.
     Phys::BodyHandle isolated = Phys::kInvalidBody;
@@ -791,7 +818,7 @@ TEST_CASE("Inspector: a subject touching nothing is crash-safe", "[sandbox]")
 
     f.app.SetSubjectBody(f.reg, isolated);
     Arcane::InputSnapshot idle{};
-    f.app.FixedUpdate(f.reg, 1.0 / 60.0, idle);
+    f.Interact(idle);
 
     CHECK(f.app.HasSubject());            // valid subject...
     CHECK(f.app.Contacts().empty());      // ...touching nothing

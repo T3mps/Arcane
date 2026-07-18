@@ -27,9 +27,18 @@
 //      - Store the BodyHandle in PhysicsBodyRef and entityToBody.
 //      Entities with an empty fixtures list are skipped (no body to create).
 //
+//   2.5 CAPTURE PREVIOUS POSES (Epic 04.2, opt-in) -- if PhysicsInterpBuffer is
+//      present as a resource, snapshot every live body's PRE-STEP world pose
+//      into it (indexed by PhysicsWorld body slot). Skipped when paused
+//      (stepWorld=false). Consumed by DrawPhysicsDebug for the debug overlay.
+//
 //   3. STEP -- world->Step(m_fixedDt). Physics advances one fixed tick.
 //
-//   4. WRITE-BACK -- for each tracked entity write:
+//   4. WRITE-BACK -- for each tracked entity:
+//      - (Epic 04.2, opt-in) if the entity carries a PreviousTransform, stash
+//        the about-to-be-overwritten LocalTransform pose into it first, so
+//        RenderSubmissionSystem can lerp prev -> current by render alpha.
+//      - Then write:
 //        world->Position(handle) -> LocalTransform.position
 //        world->GetAngle(handle) -> LocalTransform.rotation
 //      (Also writes Velocity back into RigidBody2D.velocity for Dynamic bodies.)
@@ -41,8 +50,11 @@
 // dependency that the scheduler respects.
 //
 // Determinism contract: fixed dt, stable view iteration (Astra guarantees
-// archetype-stable order), no wall-clock, /fp:precise (workspace rule), no
-// per-step heap allocation (only entity-add/remove touches the map).
+// archetype-stable order), no wall-clock, /fp:precise (workspace rule). No
+// per-step heap allocation on the entity<->body map (only entity-add/remove
+// touches it); the opt-in PhysicsInterpBuffer's prev.resize(n) in PASS 2.5 is
+// a no-op once its capacity settles at steady-state body count, but it is
+// still called every step when that resource is present.
 //
 // Header-only: the simulation Registry is owned by the host module; systems
 // that touch it must instantiate in that module (see SystemSchedulers.hpp).
@@ -54,6 +66,7 @@
 
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
 
 #include <Astra/Entity/Entity.hpp>
 #include <Astra/Registry/Registry.hpp>
@@ -160,7 +173,7 @@ namespace Arcane
     // -------------------------------------------------------------------------
     struct PhysicsSystem
         : Astra::SystemTraits<Astra::Reads<Collider2D>,
-                              Astra::Writes<LocalTransform, PhysicsBodyRef, RigidBody2D>>
+                              Astra::Writes<LocalTransform, PreviousTransform, PhysicsBodyRef, RigidBody2D>>
     {
         // fixedDt: the fixed timestep (seconds) forwarded to PhysicsWorld::Step.
         // Determinism contract: callers MUST pass the same constant every tick.
@@ -302,6 +315,42 @@ namespace Arcane
             }
 
             // ------------------------------------------------------------------
+            // PASS 2.5: CAPTURE PREVIOUS POSES (Epic 04.2 render interpolation).
+            // Snapshot every live body's PRE-STEP world pose into PhysicsInterpBuffer
+            // (opt-in resource; skipped if absent). Captured before Step so prev ==
+            // the step-N-1 pose; multiple steps/frame leave prev = second-to-last.
+            // Gated on m_stepWorld: a paused/mint-only pass does not step, so the
+            // buffer (and the render alpha) stay frozen -> a frozen scene renders
+            // static. Iterates the WORLD (not ECS) so world-direct joint/polygon
+            // bodies with no entity are covered too.
+            // ------------------------------------------------------------------
+            if (m_stepWorld)
+            {
+                if (PhysicsInterpBuffer* interp = reg.GetResource<PhysicsInterpBuffer>())
+                {
+                    const std::uint32_t n = world.Count();
+                    interp->prev.resize(n);
+                    for (std::uint32_t i = 0; i < n; ++i)
+                    {
+                        if (world.Alive(i))
+                        {
+                            const Phys::BodyHandle h = world.HandleOf(i);
+                            const Phys::Vec2       p = world.PosSlot(i);
+                            interp->prev[i] = InterpPose{
+                                glm::vec2(static_cast<float>(p.x), static_cast<float>(p.y)),
+                                static_cast<float>(world.GetAngle(h)),
+                                h.generation };
+                        }
+                        else
+                        {
+                            interp->prev[i].generation = 0;   // dead slot never matches
+                        }
+                    }
+                    interp->captured = true;
+                }
+            }
+
+            // ------------------------------------------------------------------
             // PASS 3: STEP -- advance the world by one fixed timestep.
             // Skipped when paused (stepWorld=false): no narrowphase, no solve.
             // ------------------------------------------------------------------
@@ -315,13 +364,34 @@ namespace Arcane
             // ------------------------------------------------------------------
             {
                 auto view = reg.CreateView<PhysicsBodyRef, LocalTransform, RigidBody2D>();
-                view.ForEach([&](Astra::Entity   /*entity*/,
+                view.ForEach([&](Astra::Entity   entity,
                                  PhysicsBodyRef& ref,
                                  LocalTransform& lt,
                                  RigidBody2D&    rb)
                 {
                     if (ref.handle == Phys::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))          return;
+
+                    // Render interpolation (Epic 04.2): stash the pose we are about to
+                    // overwrite as this entity's PREVIOUS step pose (opt-in via the
+                    // PreviousTransform component), so RenderSubmissionSystem can lerp
+                    // prev -> current by alpha. Captured before the write below, so prev
+                    // == the step-N-1 pose (multiple steps/frame leave prev = second-to-
+                    // last, matching the physics pose buffer).
+                    // Gated on m_stepWorld -- mirrors the PASS 2.5 interp-buffer capture:
+                    // on a paused/mint-only pass the world does not step, so lt does not
+                    // change; capturing here would set prev==current and make a paused
+                    // Path-B sprite snap to the current pose instead of holding the same
+                    // sub-step-interpolated pose the debug overlay shows. Gating keeps
+                    // prev frozen at the true step-(N-1) pose while paused.
+                    if (m_stepWorld)
+                    {
+                        if (PreviousTransform* pt = reg.GetComponent<PreviousTransform>(entity))
+                        {
+                            pt->position = lt.position;
+                            pt->rotation = lt.rotation;
+                        }
+                    }
 
                     const Phys::Vec2 pos = world.Position(ref.handle);
                     lt.position = glm::vec2(pos.x, pos.y);

@@ -27,7 +27,7 @@
 namespace Arcane
 {
     struct RenderSubmissionSystem
-        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer>>
+        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, PreviousTransform>>
     {
         void operator()(Astra::Registry& reg)
         {
@@ -36,17 +36,32 @@ namespace Arcane
             const TextureTable* textures = reg.GetResource<TextureTable>();
 
             auto view = reg.CreateView<WorldTransform, SpriteRenderer>();
-            view.ForEach([&](Astra::Entity, WorldTransform& world, SpriteRenderer& sprite)
+            view.ForEach([&](Astra::Entity e, WorldTransform& world, SpriteRenderer& sprite)
             {
                 const glm::mat3& m = world.matrix;
-                const glm::vec2 worldPos(m[2].x, m[2].y);
+                glm::vec2       worldPos(m[2].x, m[2].y);
                 const glm::vec2 worldScale(glm::length(glm::vec2(m[0])),
                                            glm::length(glm::vec2(m[1])));
                 // World rotation from the first basis column (matches
                 // LocalTransform::ToMatrix: m[0] = (c*scale.x, s*scale.x)). The
                 // camera applies a uniform zoom (no rotation), so the screen-space
                 // sprite rotates by the same angle as its physics body.
-                const float worldRot = std::atan2(m[0].y, m[0].x);
+                float worldRot = std::atan2(m[0].y, m[0].x);
+
+                // Render interpolation (Epic 04.2): if the entity carries a
+                // PreviousTransform (its prior fixed-step local pose, captured by
+                // PhysicsSystem write-back), draw at lerp(prev -> current, alpha) for
+                // smooth slow-mo. Rotation uses shortest-arc AngleLerp. Treats the
+                // entity's local pose as its world pose -- exact for a flat / identity-
+                // rooted physics entity (the case today). No PreviousTransform -> the
+                // unchanged snap-to-step path.
+                if (const PreviousTransform* prev = reg.GetComponent<PreviousTransform>(e))
+                {
+                    const float a = ctx->alpha;
+                    worldPos = glm::vec2(Lerp(prev->position.x, worldPos.x, a),
+                                         Lerp(prev->position.y, worldPos.y, a));
+                    worldRot = AngleLerp(prev->rotation, worldRot, a);
+                }
                 // Apply the camera (screen = world * zoom + offset; matches
                 // Sandbox::Camera::WorldToScreen and DrawPhysicsDebug exactly, so
                 // sprites + the physics-debug overlay pan/zoom together): scale the

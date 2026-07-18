@@ -36,6 +36,11 @@ namespace Manifold2D::Physics
 namespace Arcane
 {
     class Batcher2D;
+    // Render interpolation buffer (Epic 04.2, defined in Scene/SceneResources.hpp).
+    // Only referenced here through a pointer (PhysicsDebugDrawOptions::interp), so
+    // a forward declaration is sufficient -- keeps this header free of the
+    // Astra/Scene include chain (see the boundary note above).
+    struct PhysicsInterpBuffer;
 
     // Options for DrawPhysicsDebug.
     struct PhysicsDebugDrawOptions
@@ -125,6 +130,17 @@ namespace Arcane
         // is ADDITIVE to the legacy center-to-center `drawContacts` line; both can
         // be on at once.
         bool drawManifolds = false;
+
+        // ---- render interpolation (Epic 04.2) -------------------------------
+        // When `interp` is set (per-body previous-step poses from PhysicsSystem)
+        // each body's outline / COM / orientation / velocity origin is drawn at
+        // lerp(prev, current, alpha). Null -> current step pose (unchanged). A
+        // per-body generation mismatch (recycled slot) falls back to current.
+        // The per-body AABB (drawAabbs), contacts, and the broadphase overlays
+        // (drawFixtureTree / drawStaticGrid / drawResidencyGrid / drawManifolds)
+        // are NOT interpolated -- they stay at the current step by spec.
+        const PhysicsInterpBuffer* interp = nullptr;
+        float                      alpha  = 0.0f;   // RunLoop::Alpha() in [0,1)
     };
 
     // Submit physics debug geometry to `batcher`.

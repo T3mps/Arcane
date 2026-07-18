@@ -33,6 +33,7 @@
 #include <Manifold2D/Physics/Shapes.hpp>
 #include <Manifold2D/Physics/Solver/Solver.hpp>               // ContactConstraint
 #include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Scene/SceneResources.hpp>   // PhysicsInterpBuffer + InterpPose + Lerp/AngleLerp (Epic 04.2)
 
 namespace Arcane
 {
@@ -264,11 +265,27 @@ namespace Arcane
                 continue;
 
             const Shape&    s      = world.ShapeSlot(i);
-            const Vec2      wpos   = world.PosSlot(i);
             const BodyType  btype  = world.TypeSlot(i);
             const bool      sensor = world.SensorSlot(i);
             const bool      awake  = world.AwakeSlot(i);
-            const glm::vec2 spos   = ToScreen(wpos, off, zoom);
+
+            // Render pose (Epic 04.2): the live post-step pose, optionally blended
+            // from the previous step's pose by opts.alpha for smooth slow-mo. The
+            // generation gate rejects a recycled slot (stale prev). Computed ONCE and
+            // reused for the outline, AABB, COM, orientation, and velocity origin.
+            const BodyHandle h        = world.HandleOf(i);
+            Vec2             wpos     = world.PosSlot(i);
+            float            bodyAngle = static_cast<float>(world.GetAngle(h));
+            if (opts.interp && opts.interp->captured
+                && i < opts.interp->prev.size()
+                && opts.interp->prev[i].generation == h.generation)
+            {
+                const InterpPose& pp = opts.interp->prev[i];
+                wpos = Vec2(static_cast<Real>(Lerp(pp.position.x, static_cast<float>(wpos.x), opts.alpha)),
+                            static_cast<Real>(Lerp(pp.position.y, static_cast<float>(wpos.y), opts.alpha)));
+                bodyAngle = AngleLerp(pp.angle, bodyAngle, opts.alpha);
+            }
+            const glm::vec2 spos = ToScreen(wpos, off, zoom);
 
             // ---- color selection (port of PhysicsDebug.lua lines 29-34) ----
             glm::vec4 col;
@@ -321,7 +338,7 @@ namespace Arcane
                     // freely in v2, so rotate the local geometry by the body angle
                     // (mirrors the Polygon case): rotate the local point, then scale
                     // by zoom (rotation + uniform scale commute) and offset by spos.
-                    const float angle = static_cast<float>(world.GetAngle(world.HandleOf(i)));
+                    const float angle = bodyAngle;
                     const float hl = static_cast<float>(s.halfLen); // local units
                     const float rl = static_cast<float>(s.radius);  // local units
                     const float r  = rl * zoom;                     // screen radius
@@ -358,7 +375,7 @@ namespace Arcane
                     // Draw one line per edge; transform verts by body position + angle.
                     if (s.verts.empty())
                         break;
-                    const float angle = static_cast<float>(world.GetAngle(world.HandleOf(i)));
+                    const float angle = bodyAngle;
                     const std::size_t vc = s.verts.size();
                     for (std::size_t e = 0; e < vc; ++e)
                     {
@@ -390,7 +407,7 @@ namespace Arcane
             // All three overlays anchor on the body's WORLD center of mass so a
             // compound (off-origin COM) body reads correctly. The COM is in the
             // same world*zoom+offset screen space as the outline above.
-            const float     angle = static_cast<float>(world.GetAngle(world.HandleOf(i)));
+            const float     angle = bodyAngle;
             const glm::vec2 comW  = ComWorldF(wpos, angle, world.LocalCenterSlot(i));
             const glm::vec2 comS  = comW * zoom + off;
 

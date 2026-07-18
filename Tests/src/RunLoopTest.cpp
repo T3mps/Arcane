@@ -97,3 +97,89 @@ TEST_CASE("RunLoop runs a fixed-rate scheduler and clamps spikes", "[sim][runloo
     CHECK(loop.Alpha() >= 0.0);
     CHECK(loop.Alpha() < 1.0);
 }
+
+// ---- sim-time control (Epic 04): pause / single-step / time-scale -----------
+
+TEST_CASE("RunLoop paused: fixed phase frozen, Update still runs", "[sim][runloop]")
+{
+    Astra::Registry reg;
+    reg.SetResource<Ticks>(Ticks{});
+    Arcane::SystemSchedulers sch(nullptr);
+    sch.fixedUpdate.AddSystem<IncrementTicks>();
+    Arcane::RunLoop loop(reg, sch);
+
+    loop.SetPaused(true);
+    CHECK(loop.IsPaused());
+
+    int updates = 0;
+    for (int i = 0; i < 60; ++i)
+        loop.Advance(1.0 / 60.0, {}, [&](double, double){ ++updates; });
+
+    CHECK(reg.GetResource<Ticks>()->fixed == 0);  // no fixed steps while paused
+    CHECK(updates == 60);                          // ...but the Update phase ran every frame
+}
+
+TEST_CASE("RunLoop single-step: exactly one canonical fixed step while paused", "[sim][runloop]")
+{
+    Astra::Registry reg;
+    reg.SetResource<Ticks>(Ticks{});
+    Arcane::SystemSchedulers sch(nullptr);
+    sch.fixedUpdate.AddSystem<IncrementTicks>();
+    Arcane::RunLoop loop(reg, sch);
+
+    loop.SetPaused(true);
+    for (int i = 0; i < 10; ++i) loop.Advance(1.0 / 60.0);
+    CHECK(reg.GetResource<Ticks>()->fixed == 0);   // frozen
+
+    loop.RequestSingleStep();
+    loop.Advance(1.0 / 60.0);
+    CHECK(reg.GetResource<Ticks>()->fixed == 1);   // exactly one step
+
+    loop.Advance(1.0 / 60.0);                       // the request was one-shot
+    CHECK(reg.GetResource<Ticks>()->fixed == 1);   // still one; no lingering step
+    CHECK(loop.IsPaused());                          // and still paused
+}
+
+TEST_CASE("RunLoop time-scale scales the sim clock, not the step dt", "[sim][runloop]")
+{
+    auto stepsOverOneRealSecond = [](double scale)
+    {
+        Astra::Registry reg;
+        reg.SetResource<Ticks>(Ticks{});
+        Arcane::SystemSchedulers sch(nullptr);
+        sch.fixedUpdate.AddSystem<IncrementTicks>();
+        Arcane::RunLoop loop(reg, sch);
+        loop.SetTimeScale(scale);
+        for (int i = 0; i < 60; ++i) loop.Advance(1.0 / 60.0);  // 1s of real time
+        return reg.GetResource<Ticks>()->fixed;
+    };
+
+    CHECK(stepsOverOneRealSecond(1.0) >= 58);
+    CHECK(stepsOverOneRealSecond(1.0) <= 62);
+    // 0.5x: the sim clock runs at half real time -> ~30 canonical steps in one real second.
+    CHECK(stepsOverOneRealSecond(0.5) >= 28);
+    CHECK(stepsOverOneRealSecond(0.5) <= 32);
+    // 2x: ~2 fixed ticks accumulate per real frame (< the 5-step clamp), so ~120 steps.
+    CHECK(stepsOverOneRealSecond(2.0) >= 116);
+    CHECK(stepsOverOneRealSecond(2.0) <= 124);
+    // 0x: the sim clock is stalled entirely.
+    CHECK(stepsOverOneRealSecond(0.0) == 0);
+}
+
+TEST_CASE("RunLoop unpause does not burst catch-up steps", "[sim][runloop]")
+{
+    Astra::Registry reg;
+    reg.SetResource<Ticks>(Ticks{});
+    Arcane::SystemSchedulers sch(nullptr);
+    sch.fixedUpdate.AddSystem<IncrementTicks>();
+    Arcane::RunLoop loop(reg, sch);
+
+    loop.SetPaused(true);
+    for (int i = 0; i < 600; ++i) loop.Advance(1.0 / 60.0);  // 10 real seconds, paused
+    CHECK(reg.GetResource<Ticks>()->fixed == 0);
+
+    loop.SetPaused(false);
+    loop.Advance(1.0 / 60.0);                                 // one real frame after unpause
+    // Paused frames accumulated NOTHING, so there is no 600-step debt to burn down.
+    CHECK(reg.GetResource<Ticks>()->fixed <= 1);
+}
