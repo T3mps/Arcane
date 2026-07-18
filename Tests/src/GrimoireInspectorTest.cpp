@@ -23,6 +23,14 @@ TEST_CASE("ClassifyField maps arithmetic/bool fields, ReadOnly otherwise", "[gri
         if (k == Grimoire::FieldKind::Float || k == Grimoire::FieldKind::Int32) sawFloatOrInt = true;
     }
     CHECK(sawFloatOrInt);
+
+    // tint is a glm::vec4 -- no Vec4 editor exists, so it must classify ReadOnly
+    // rather than being silently misclassified (regression coverage for the
+    // now-removed size==1-arithmetic bool fallback).
+    const Astra::FieldInfo* tintField = nullptr;
+    for (const Astra::FieldInfo& f : meta->fields) if (f.name == "tint") tintField = &f;
+    REQUIRE(tintField != nullptr);
+    CHECK(Grimoire::ClassifyField(*tintField) == Grimoire::FieldKind::ReadOnly);
 }
 
 TEST_CASE("ApplyIntEdit writes through reflection to the live component", "[grimoire]")

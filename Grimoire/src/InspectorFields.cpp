@@ -37,11 +37,6 @@ namespace Grimoire
         if (f.typeHash == kVec2) return FieldKind::Vec2;
         if (f.typeHash == kVec3) return FieldKind::Vec3;
 
-        // Documented fallback (brief): if a bool field ever failed to match kBool
-        // above (it won't, per the note), still classify it as Bool rather than
-        // silently falling through to ReadOnly.
-        if (f.size == 1 && f.isArithmetic) return FieldKind::Bool;
-
         return FieldKind::ReadOnly;
     }
 
