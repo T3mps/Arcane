@@ -489,10 +489,9 @@ project "ArcaneTests"
         "%{wks.location}/Sandbox/src/Hud.cpp",
         -- LoomConfig (the typed Loom CLI result over Arcane::Cli) compiles into the
         -- test exe so [loom] round-trips Parse without loading the Loom binary.
+        -- Module/Plugin/PluginHost moved into Arcane/Plugin (Arcane.dll, ARCANE_API);
+        -- the test exe now consumes them via the "Arcane" link, not source-compiled.
         "%{wks.location}/Loom/src/LoomConfig.cpp",
-        "%{wks.location}/Loom/src/Module.cpp",
-        "%{wks.location}/Loom/src/Plugin.cpp",
-        "%{wks.location}/Loom/src/PluginHost.cpp",
     }
 
     includedirs {

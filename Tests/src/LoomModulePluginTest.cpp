@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include <Module.hpp>
-#include <Plugin.hpp>
+#include <Arcane/Plugin/Module.hpp>
+#include <Arcane/Plugin/Plugin.hpp>
 
 #include <Arcane/Plugin/PluginABI.hpp>
 
@@ -9,7 +9,7 @@
 
 TEST_CASE("Loom Module loads a dynamic library and resolves symbols", "[loom][module]")
 {
-    auto module = Module::Load(std::filesystem::path("HotReloadPluginV1.dll"));
+    auto module = Arcane::Module::Load(std::filesystem::path("HotReloadPluginV1.dll"));
 
     REQUIRE(module.has_value());
     CHECK(module->IsLoaded());
@@ -20,7 +20,7 @@ TEST_CASE("Loom Module loads a dynamic library and resolves symbols", "[loom][mo
 
 TEST_CASE("Loom Plugin resolves the current game plugin ABI", "[loom][plugin]")
 {
-    auto plugin = Plugin::Load(std::filesystem::path("HotReloadPluginV1.dll"));
+    auto plugin = Arcane::Plugin::Load(std::filesystem::path("HotReloadPluginV1.dll"));
 
     REQUIRE(plugin.has_value());
     CHECK(plugin->IsLoaded());
@@ -36,7 +36,7 @@ TEST_CASE("Loom Plugin resolves the current game plugin ABI", "[loom][plugin]")
 
 TEST_CASE("Loom Plugin rejects modules that do not satisfy the game plugin ABI", "[loom][plugin]")
 {
-    auto plugin = Plugin::Load(std::filesystem::path("HotReloadPluginBad.dll"));
+    auto plugin = Arcane::Plugin::Load(std::filesystem::path("HotReloadPluginBad.dll"));
 
     CHECK_FALSE(plugin.has_value());
 }

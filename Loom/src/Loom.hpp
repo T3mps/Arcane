@@ -10,8 +10,8 @@
 #include "LoomConfig.hpp"
 #include "GpuContext.hpp"
 #include "FramePerf.hpp"
-#include "PluginHost.hpp"
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/PluginHost.hpp>
 namespace Astra { class TypeContext; }
 class Loom
 {
@@ -28,7 +28,7 @@ private:
     Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
     // engaged by Init() before MainLoop()/Shutdown() touch them (bare -> deref is safe).
     std::optional<Arcane::Runtime>    m_runtime;      // destructs before m_gpu
-    std::optional<PluginHost>         m_plugin;       // destructs before m_runtime
+    std::optional<Arcane::PluginHost> m_plugin;       // destructs before m_runtime
     FramePerf                         m_perf;
     std::uint64_t                     m_frameCount = 0;
 };

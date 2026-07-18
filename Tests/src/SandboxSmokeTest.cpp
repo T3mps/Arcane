@@ -29,7 +29,7 @@
 #include <Arcane/Render/ShaderLibrary.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
-#include <PluginHost.hpp>
+#include <Arcane/Plugin/PluginHost.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -63,7 +63,7 @@ namespace
 
     // Step `n` fixed frames then submit ONE render frame; assert the GPU stayed clean.
     // Returns the batcher's quad count so the caller can spot-check scene 0's sprite floor.
-    std::uint32_t StepAndRender(Arcane::Runtime& rt, PluginHost& host,
+    std::uint32_t StepAndRender(Arcane::Runtime& rt, Arcane::PluginHost& host,
                                 Arcane::RenderDevice& device, Arcane::Canvas& canvas,
                                 Arcane::Batcher2D& batcher, int n)
     {
@@ -106,7 +106,7 @@ namespace
         // Inject the process-wide shared TypeContext so the test exe, Arcane.dll,
         // and the plugin all resolve component/resource TypeIDs from the same slot table.
         Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
-        PluginHost host(rt, std::filesystem::path("Sandbox.dll"));
+        Arcane::PluginHost host(rt, std::filesystem::path("Sandbox.dll"));
         REQUIRE(host.Load());   // plugin registers physics/scene components + systems + builds scene 0
 
         const Arcane::PluginVTable* vt = host.Vtable();

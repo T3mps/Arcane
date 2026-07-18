@@ -1,4 +1,4 @@
-#include "Plugin.hpp"
+#include <Arcane/Plugin/Plugin.hpp>
 
 #include <cstdint>
 #include <utility>
@@ -6,12 +6,12 @@
 namespace
 {
     template<typename T>
-    T Resolve(Module& module, const char* name) noexcept
+    T Resolve(Arcane::Module& module, const char* name) noexcept
     {
         return reinterpret_cast<T>(module.Symbol(name));
     }
 
-    bool ResolveGamePluginAbi(Module& module, Arcane::PluginVTable& out) noexcept
+    bool ResolveGamePluginAbi(Arcane::Module& module, Arcane::PluginVTable& out) noexcept
     {
         out.ABIVersion = Resolve<std::uint32_t(*)()>(module, Arcane::PluginEntry::kABIVersion);
         out.Init = Resolve<bool(*)(Arcane::EngineContext*)>(module, Arcane::PluginEntry::kInit);
@@ -32,20 +32,23 @@ namespace
     }
 }
 
-Plugin::Plugin(Module module, Arcane::PluginVTable vtable) noexcept
-    : m_module(std::move(module)), m_vtable(vtable)
+namespace Arcane
 {
-}
+    Plugin::Plugin(Module module, PluginVTable vtable) noexcept
+        : m_module(std::move(module)), m_vtable(vtable)
+    {
+    }
 
-std::optional<Plugin> Plugin::Load(std::filesystem::path path)
-{
-    std::optional<Module> module = Module::Load(std::move(path));
-    if (!module)
-        return std::nullopt;
+    std::optional<Plugin> Plugin::Load(std::filesystem::path path)
+    {
+        std::optional<Module> module = Module::Load(std::move(path));
+        if (!module)
+            return std::nullopt;
 
-    Arcane::PluginVTable vtable{};
-    if (!ResolveGamePluginAbi(*module, vtable))
-        return std::nullopt;
+        PluginVTable vtable{};
+        if (!ResolveGamePluginAbi(*module, vtable))
+            return std::nullopt;
 
-    return Plugin(std::move(*module), vtable);
+        return Plugin(std::move(*module), vtable);
+    }
 }
