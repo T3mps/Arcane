@@ -13,6 +13,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <Mosaic/Log.hpp>
+
 namespace Arcane::Log
 {
     ARCANE_API void Init(spdlog::level::level_enum level = spdlog::level::info);
@@ -20,6 +22,16 @@ namespace Arcane::Log
 
     // Never returns null: lazily calls Init() with defaults if needed.
     ARCANE_API spdlog::logger* Engine();
+
+    // Mosaic diagnostics: the log SINK that forwards Mosaic/Manifold2D/Astra
+    // records into the engine logger (Engine()). Defined in Log.cpp so it lives
+    // once, in Arcane.dll, routing every module's records to one spdlog instance.
+    ARCANE_API Mosaic::LogSink MosaicSink() noexcept;
+
+    // Install the sink into the CALLING module's Mosaic storage. Inline on
+    // purpose: Mosaic's g_logSink is a per-module inline atomic, so each module
+    // (Arcane.dll, Loom.exe, the plugin, tests) installs into its own copy.
+    inline void InstallMosaicSink() noexcept { Mosaic::SetLogSink(MosaicSink(), nullptr); }
 }
 
 #define ARC_TRACE(...)    ::Arcane::Log::Engine()->trace(__VA_ARGS__)

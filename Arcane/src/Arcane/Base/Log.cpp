@@ -2,7 +2,42 @@
 
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#include <Mosaic/Log.hpp>
+
 #include <mutex>
+
+namespace
+{
+    spdlog::level::level_enum ToSpd(Mosaic::LogLevel l) noexcept
+    {
+        switch (l)
+        {
+            case Mosaic::LogLevel::Trace:    return spdlog::level::trace;
+            case Mosaic::LogLevel::Debug:    return spdlog::level::debug;
+            case Mosaic::LogLevel::Info:     return spdlog::level::info;
+            case Mosaic::LogLevel::Warn:     return spdlog::level::warn;
+            case Mosaic::LogLevel::Error:    return spdlog::level::err;
+            case Mosaic::LogLevel::Critical: return spdlog::level::critical;
+            case Mosaic::LogLevel::Off:      return spdlog::level::off;
+        }
+        return spdlog::level::info;
+    }
+
+    // noexcept sink: forward into the engine logger. category + message are fmt
+    // ARGUMENTS (literal format) so a stray {} in a message cannot fmt-inject.
+    void MosaicLogSinkImpl(const Mosaic::LogRecord& r, void* /*user*/) noexcept
+    {
+        try
+        {
+            Arcane::Log::Engine()->log(
+                spdlog::source_loc{r.location.file_name(),
+                                   static_cast<int>(r.location.line()),
+                                   r.location.function_name()},
+                ToSpd(r.level), "[{}] {}", r.category, r.message);
+        }
+        catch (...) {}
+    }
+}
 
 namespace Arcane::Log
 {
@@ -38,4 +73,6 @@ namespace Arcane::Log
         Init();
         return s_engine.get();
     }
+
+    Mosaic::LogSink MosaicSink() noexcept { return &MosaicLogSinkImpl; }
 }

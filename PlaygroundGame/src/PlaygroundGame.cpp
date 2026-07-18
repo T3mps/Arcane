@@ -4,6 +4,8 @@
 
 #include "GameApi.hpp"
 
+#include <Arcane/Base/Assert.hpp>
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Scene/Components.hpp>
@@ -84,6 +86,8 @@ extern "C"
     GAME_API bool GamePlugin_Init(Arcane::EngineContext* ctx)
     {
         Astra::SetTypeContext(ctx->typeContext);   // 1. shared context in THIS module
+        Arcane::Log::InstallMosaicSink();
+        Arcane::Assert::InstallMosaicHandler();
         g_ctx = ctx;
 
         // ABI v2: adopt the host's ImGui context + allocators so DrawUI (called by the

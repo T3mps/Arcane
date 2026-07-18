@@ -2,6 +2,7 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>
+#include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
@@ -137,7 +138,14 @@ namespace Arcane
     };
 
     Runtime::Runtime(Astra::TypeContext* externalContext, bool enableAudioDevice)
-        : m_impl(std::make_unique<Impl>(externalContext, enableAudioDevice)) {}
+        : m_impl(std::make_unique<Impl>(externalContext, enableAudioDevice))
+    {
+        // Mosaic diagnostics: install the log sink + assert handler into THIS module
+        // (Arcane.dll) so Astra/Manifold2D/Mosaic code running here routes to the
+        // engine logger. Each module installs its own (per-module Mosaic storage).
+        Arcane::Log::InstallMosaicSink();
+        Arcane::Assert::InstallMosaicHandler();
+    }
     Runtime::~Runtime() = default;   // do not reset the module slot: a later Runtime re-installs
 
     Astra::Registry&  Runtime::Registry()   noexcept { return *m_impl->registry; }

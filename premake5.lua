@@ -332,6 +332,8 @@ project "PlaygroundGame"
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.Mosaic}",
     }
     links { "Arcane" }
     -- ABI v2: the plugin draws ImGui via the host's exported context. imgui is exported
@@ -372,6 +374,7 @@ project "Sandbox"
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.imgui}",
         "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.spdlog}",
         "%{IncludeDir.Mosaic}",
     }
     -- Sandbox is the first plugin to drive physics. PhysicsSystem (header-only) is
@@ -431,6 +434,7 @@ project "Loom"
         "%{IncludeDir.imgui}",
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
+        "%{IncludeDir.Mosaic}",
     }
     -- Core is linked directly (alongside the Arcane DLL) so Loom's own TUs can call
     -- un-exported Core APIs -- LoomConfig.cpp uses Arcane::Cli, which is header-only
