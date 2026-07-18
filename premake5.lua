@@ -546,6 +546,10 @@ project "ArcaneTests"
         -- Module/Plugin/PluginHost moved into Arcane/Plugin (Arcane.dll, ARCANE_API);
         -- the test exe now consumes them via the "Arcane" link, not source-compiled.
         "%{wks.location}/Loom/src/LoomConfig.cpp",
+        -- Task 3: ConsoleBuffer (Grimoire's log ring buffer) source-compiles into the
+        -- test exe so the [grimoire] unit test drives it directly, mirroring the
+        -- Sandbox helper-unit pattern above.
+        "%{wks.location}/Grimoire/src/ConsoleBuffer.cpp",
     }
 
     includedirs {
@@ -553,6 +557,7 @@ project "ArcaneTests"
         "%{wks.location}/Arcane/src",
         "%{wks.location}/Sandbox/src",   -- Interaction.hpp / Scenes.hpp / Camera.hpp for the [sandbox] tests
         "%{wks.location}/Loom/src",      -- LoomConfig.hpp for the [loom] test
+        "%{wks.location}/Grimoire/src",  -- ConsoleBuffer.hpp for the [grimoire] test
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",

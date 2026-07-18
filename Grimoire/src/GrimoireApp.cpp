@@ -1,13 +1,16 @@
 // GrimoireApp: Init -> MainLoop -> Shutdown. Reuses Loom's host-boot helpers
 // (GpuContext/FramePerf/LoomConfig) by source-compile and hosts Sandbox.dll via
 // the lifted Arcane::PluginHost. The frame loop advances the sim through the
-// RunLoop and draws a placeholder ImGui window straight to the backbuffer (no
-// scene->tonemap->backbuffer pass yet -- that arrives with the viewport panel
+// RunLoop and draws an editor shell straight to the backbuffer -- a full-viewport
+// dockspace (Grimoire::BeginDockSpace) hosting a Sim toolbar (play/pause/step +
+// time-scale) and a Console panel fed by a callback sink on Arcane::Log::Engine()
+// (no scene->tonemap->backbuffer pass yet -- that arrives with the viewport panel
 // in a later task). The render plumbing + teardown order live in GpuContext
 // (m_gpu). The teardown CONTRACT is encoded in the GrimoireApp member
 // declaration order -- see GrimoireApp.hpp.
 
 #include "GrimoireApp.hpp"
+#include "EditorPanels.hpp"
 
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
@@ -19,6 +22,8 @@
 
 #include <nvrhi/nvrhi.h>
 #include <imgui.h>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/callback_sink.h>
 
 #include <chrono>
 #include <cstdint>
@@ -45,6 +50,12 @@ namespace Grimoire
         }
 
         ARC_INFO("{} -- Grimoire host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
+
+        // Editor shell: enable ImGui docking (the placeholder single window becomes
+        // a dockspace + panels in MainLoop) and route the engine logger into the
+        // Console panel's ring buffer.
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        InstallConsoleSink();
 
         // The TypeContext is the process-wide type-identity singleton shared across
         // Grimoire.exe, Arcane.dll, and every loaded plugin. It is intentionally
@@ -91,6 +102,16 @@ namespace Grimoire
         return true;
     }
 
+    void GrimoireApp::InstallConsoleSink()
+    {
+        auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
+            [this](const spdlog::details::log_msg& m)
+            {
+                m_console.Push(std::string(m.payload.data(), m.payload.size()));
+            });
+        Arcane::Log::Engine()->sinks().push_back(cb);
+    }
+
     void GrimoireApp::MainLoop()
     {
         auto simPrev = std::chrono::steady_clock::now();
@@ -133,15 +154,11 @@ namespace Grimoire
                 m_runtime->AudioSystem().Update(simDt);
             }
 
-            // ImGui: placeholder editor window (dockspace + panels arrive in later tasks).
+            // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel.
             m_gpu->Imgui().BeginFrame();
-            {
-                ImGui::Begin("Grimoire");
-                ImGui::Text("Backend: %s", Arcane::ToString(m_gpu->Device().Backend()));
-                ImGui::Text("Plugin gen: %u", m_plugin->Generation());
-                ImGui::Text("Paused: %s", m_runtime->Loop().IsPaused() ? "yes" : "no");
-                ImGui::End();
-            }
+            Grimoire::BeginDockSpace();
+            Grimoire::DrawSimTimeToolbar(m_runtime->Loop());
+            Grimoire::DrawConsolePanel(m_console);
             const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
             if (vtUI && vtUI->DrawUI) vtUI->DrawUI();
 

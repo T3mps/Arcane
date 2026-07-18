@@ -11,6 +11,7 @@
 #include <LoomConfig.hpp>
 #include <GpuContext.hpp>
 #include <FramePerf.hpp>
+#include "ConsoleBuffer.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
@@ -29,6 +30,7 @@ namespace Grimoire
         bool Init();
         void MainLoop();
         void Shutdown();
+        void InstallConsoleSink();   // attach a callback sink on Arcane::Log::Engine() -> m_console
 
         LoomConfig                        m_config;
         std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST
@@ -37,5 +39,6 @@ namespace Grimoire
         std::optional<Arcane::PluginHost> m_plugin;                 // destructs before m_runtime
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
+        ConsoleBuffer                     m_console{512};
     };
 }
