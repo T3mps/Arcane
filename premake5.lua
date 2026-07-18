@@ -558,6 +558,11 @@ project "ArcaneTests"
         -- source-compiles into the test exe so the [grimoire] unit tests drive it
         -- directly, same pattern as ConsoleBuffer/ViewportInput above.
         "%{wks.location}/Grimoire/src/EntityList.cpp",
+        -- Task 6: InspectorFields (reflected field classification + pure write-backs
+        -- for the Inspector panel) source-compiles into the test exe so the
+        -- [grimoire] unit tests drive it directly -- no ImGui dependency, same
+        -- pattern as ConsoleBuffer/ViewportInput/EntityList above.
+        "%{wks.location}/Grimoire/src/InspectorFields.cpp",
     }
 
     includedirs {

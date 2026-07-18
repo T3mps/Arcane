@@ -37,4 +37,8 @@ namespace Grimoire
     // List every live entity; clicking a row selects it. Labels rows by id
     // ("Entity <id> (v<version>)") since no Name component exists yet.
     void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel);
+
+    // Show the selected entity's components (via Registry::InspectEntity) and edit
+    // reflected fields in place; unsupported types render read-only.
+    void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel);
 }
