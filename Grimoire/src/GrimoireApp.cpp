@@ -228,6 +228,8 @@ namespace Grimoire
             m_viewportRect     = vp.imageRect;
             m_viewportActive   = Grimoire::SceneInputActive(vp.hovered, vp.focused);
 
+            Grimoire::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
+
             const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
             if (vtUI && vtUI->DrawUI) vtUI->DrawUI();
 

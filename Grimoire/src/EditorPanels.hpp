@@ -4,10 +4,12 @@
 #include <cstdint>
 
 namespace Arcane { class RunLoop; }
+namespace Astra { class Registry; }
 
 namespace Grimoire
 {
     class ConsoleBuffer;
+    struct SelectionContext;
 
     // Host a full-viewport dockspace (call once per frame between ImGui BeginFrame
     // and the panel Begin/End calls). Enables initial docking of child windows.
@@ -31,4 +33,8 @@ namespace Grimoire
     // Draw the scene texture into a dockable Viewport window; report its rect,
     // hover/focus, and the content-region size the offscreen canvas should match.
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH);
+
+    // List every live entity; clicking a row selects it. Labels rows by id
+    // ("Entity <id> (v<version>)") since no Name component exists yet.
+    void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel);
 }

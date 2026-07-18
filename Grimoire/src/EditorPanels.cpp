@@ -1,9 +1,15 @@
 #include "EditorPanels.hpp"
 #include "ConsoleBuffer.hpp"
+#include "EntityList.hpp"
+#include "SelectionContext.hpp"
 
 #include <Arcane/Sim/RunLoop.hpp>
 
+#include <Astra/Registry/Registry.hpp>
+
 #include <imgui.h>
+
+#include <cstdio>
 
 namespace Grimoire
 {
@@ -66,5 +72,20 @@ namespace Grimoire
         r.focused = ImGui::IsWindowFocused();
         ImGui::End();
         return r;
+    }
+
+    void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel)
+    {
+        ImGui::Begin("Hierarchy");
+        for (Astra::Entity e : Grimoire::CollectEntities(registry))
+        {
+            char label[64];
+            std::snprintf(label, sizeof(label), "Entity %u (v%u)",
+                          (unsigned)e.GetID(), (unsigned)e.GetVersion());
+            const bool isSel = sel.HasSelection() && sel.selected.GetValue() == e.GetValue();
+            if (ImGui::Selectable(label, isSel))
+                sel.Select(e);
+        }
+        ImGui::End();
     }
 }

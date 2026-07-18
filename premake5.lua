@@ -554,6 +554,10 @@ project "ArcaneTests"
         -- panel viewport) source-compiles into the test exe so the [grimoire] unit
         -- tests drive it directly, same pattern as ConsoleBuffer above.
         "%{wks.location}/Grimoire/src/ViewportInput.cpp",
+        -- Task 5: EntityList (entity enumeration for the Hierarchy panel)
+        -- source-compiles into the test exe so the [grimoire] unit tests drive it
+        -- directly, same pattern as ConsoleBuffer/ViewportInput above.
+        "%{wks.location}/Grimoire/src/EntityList.cpp",
     }
 
     includedirs {

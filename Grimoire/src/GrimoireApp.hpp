@@ -12,6 +12,7 @@
 #include <GpuContext.hpp>
 #include <FramePerf.hpp>
 #include "ConsoleBuffer.hpp"
+#include "SelectionContext.hpp"
 #include "ViewportInput.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
@@ -42,6 +43,10 @@ namespace Grimoire
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
         ConsoleBuffer                     m_console{512};
+
+        // The one selected-entity source of truth, shared by the Hierarchy panel
+        // (and, later, the Inspector + viewport pick -- see SelectionContext.hpp).
+        Grimoire::SelectionContext m_selection;
 
         // Scene-in-a-panel viewport: the same canvas->batcher->tonemap path Loom
         // drives the backbuffer with, rendered into a panel texture instead. Resized
