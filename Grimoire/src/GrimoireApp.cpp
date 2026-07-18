@@ -20,8 +20,11 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
+#include <Arcane/Scene/EntityPick.hpp>   // Arcane::PickEntitiesAt (viewport click-pick)
 
 #include <Astra/Core/TypeContext.hpp>
+
+#include <glm/glm.hpp>
 
 #include <nvrhi/nvrhi.h>
 #include <imgui.h>
@@ -227,6 +230,36 @@ namespace Grimoire
             m_pendingViewportH = vp.desiredH;
             m_viewportRect     = vp.imageRect;
             m_viewportActive   = Grimoire::SceneInputActive(vp.hovered, vp.focused);
+
+            // Viewport click-pick: unproject the viewport-local click through the
+            // plugin's stored camera (screen = world * zoom + offset) and select the
+            // front-most sprite-OBB hit. Alt-click on the same stack cycles down it.
+            if (vp.clicked)
+            {
+                const glm::vec2 camOff  = m_runtime->CameraOffset();
+                const float     camZoom = m_runtime->CameraZoom();
+                const glm::vec2 world =
+                    (glm::vec2(vp.clickLocalX, vp.clickLocalY) - camOff) / camZoom;
+                std::vector<Astra::Entity> hits =
+                    Arcane::PickEntitiesAt(m_runtime->Registry(), world);
+                if (hits.empty())
+                {
+                    m_selection.Clear();
+                }
+                else if (vp.altHeld && !m_selection.pickCandidates.empty() &&
+                         m_selection.pickCandidates == hits)
+                {
+                    // alt-click on the same stack: cycle to the next entity under the cursor.
+                    m_selection.pickCycle = (m_selection.pickCycle + 1) % hits.size();
+                    m_selection.Select(hits[m_selection.pickCycle]);
+                }
+                else
+                {
+                    m_selection.pickCandidates = hits;
+                    m_selection.pickCycle = 0;
+                    m_selection.Select(hits.front());
+                }
+            }
 
             Grimoire::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
             Grimoire::DrawInspectorPanel(m_runtime->Registry(), m_selection);

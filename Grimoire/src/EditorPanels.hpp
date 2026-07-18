@@ -28,6 +28,10 @@ namespace Grimoire
         bool         focused = false;
         uint32_t     desiredW = 0;  // content-region size (for OffscreenCanvas::Resize)
         uint32_t     desiredH = 0;
+        bool         clicked = false;       // left-click landed inside the image this frame
+        bool         altHeld  = false;      // alt modifier at click time (cycle stack)
+        float        clickLocalX = 0.0f;    // viewport-local px of the click
+        float        clickLocalY = 0.0f;
     };
 
     // Draw the scene texture into a dockable Viewport window; report its rect,

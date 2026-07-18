@@ -74,6 +74,21 @@ namespace Grimoire
         r.imageRect = ViewportRect{ origin.x, origin.y, (float)texW, (float)texH };
         r.hovered = ImGui::IsWindowHovered();
         r.focused = ImGui::IsWindowFocused();
+
+        // Capture a left-click that lands inside the image, in viewport-local px
+        // (origin = image top-left). GrimoireApp unprojects it through the plugin
+        // camera and drives the entity pick; alt cycles the stacked candidates.
+        if (r.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            const ImVec2 m = ImGui::GetMousePos();
+            const float lx = m.x - origin.x, ly = m.y - origin.y;
+            if (lx >= 0 && ly >= 0 && lx < (float)texW && ly < (float)texH)
+            {
+                r.clicked = true;
+                r.altHeld = ImGui::GetIO().KeyAlt;
+                r.clickLocalX = lx; r.clickLocalY = ly;
+            }
+        }
         ImGui::End();
         return r;
     }
