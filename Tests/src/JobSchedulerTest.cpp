@@ -19,7 +19,7 @@ namespace
 TEST_CASE("enkiTS work scheduler drives Astra parallel iteration", "[jobs]")
 {
     Arcane::JobSystem jobs;
-    std::shared_ptr<Astra::IWorkScheduler> sched = jobs.WorkScheduler();
+    std::shared_ptr<Mosaic::IWorkScheduler> sched = jobs.WorkScheduler();
     REQUIRE(sched != nullptr);
     REQUIRE(sched->WorkerCount() >= 1);
 

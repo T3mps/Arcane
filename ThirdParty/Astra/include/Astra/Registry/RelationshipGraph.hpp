@@ -131,14 +131,28 @@ namespace Astra
         /**
          * Check if 'ancestor' is an ancestor of 'entity' in the parent hierarchy.
          * Used to detect cycles before setting a parent relationship.
+         *
+         * Cycle-safe by construction: SetParent() normally can't create a cycle
+         * (it calls this function first and refuses if one would result), but a
+         * corrupt/crafted save loads m_parents directly via Deserialize() with no
+         * cycle check, so a cyclic map (e.g. A->B->A) can reach this traversal at
+         * runtime. The step cap below bounds the walk to at most m_parents.Size()
+         * hops: a valid (acyclic) chain can't revisit a node, so it can't exceed
+         * the number of parent entries, meaning the cap never rejects a real
+         * ancestor query -- it only terminates a walk that has cycled past every
+         * possible entry, which is impossible without a cycle.
          */
         bool IsAncestorOf(Entity ancestor, Entity entity) const
         {
             Entity current = GetParent(entity);
+            size_t steps = 0;
+            const size_t limit = m_parents.Size();
             while (current.IsValid())
             {
                 if (current == ancestor)
                     return true;
+                if (++steps > limit)
+                    return false;   // cycle in the parent map -- bail with a defined result
                 current = GetParent(current);
             }
             return false;
@@ -146,16 +160,14 @@ namespace Astra
 
         void SetParent(Entity child, Entity parent)
         {
-            ASTRA_ASSERT(child != parent, "Entity cannot be its own parent");
-            ASTRA_ASSERT(child.IsValid() && parent.IsValid(), "Invalid entity in relationship");
-
-            // Silently ignore invalid operations in release builds
+            // Caller-recoverable inputs: rejected gracefully in ALL configs.
+            // (Asserting here made the Debug suite abort on tests that verify
+            // the rejection contract; asserts are reserved for internal invariants.)
             if (!child.IsValid() || !parent.IsValid() || child == parent)
                 return;
 
-            // Check for circular hierarchy: if child is an ancestor of parent,
-            // setting parent as child's parent would create a cycle
-            ASTRA_ASSERT(!IsAncestorOf(child, parent), "Circular hierarchy detected: child is an ancestor of parent");
+            // Rejecting a cycle: if child is an ancestor of parent, setting
+            // parent as child's parent would create a cycle.
             if (IsAncestorOf(child, parent))
                 return;
 
@@ -227,10 +239,7 @@ namespace Astra
         
         void AddLink(Entity a, Entity b)
         {
-            ASTRA_ASSERT(a != b, "Entity cannot link to itself");
-            ASTRA_ASSERT(a.IsValid() && b.IsValid(), "Invalid entity in link");
-            
-            // Silently ignore invalid operations in release builds
+            // Caller-recoverable inputs: rejected gracefully in ALL configs.
             if (!a.IsValid() || !b.IsValid() || a == b)
                 return;
             
@@ -458,12 +467,24 @@ namespace Astra
             // Read parent-child relationships
             uint32_t parentCount;
             reader(parentCount);
-            
+
             if (reader.HasError())
             {
                 return Result<RelationshipGraph, SerializationError>::Err(reader.GetError());
             }
-            
+
+            // Bound parentCount against the remaining buffer via the reader's
+            // width-agnostic count-bound helper (parentCount is a uint32_t on
+            // disk; Serialize above writes it via writer(static_cast<uint32_t>(
+            // m_parents.Size()))). Each parent-child pair's fixed on-disk
+            // footprint is child.GetValue() + parent.GetValue(), both
+            // Entity::StorageType, written unconditionally per pair below.
+            constexpr uint64_t kMinBytesPerParentRecord = sizeof(Entity::StorageType) * 2;
+            if (reader.CountExceedsRemaining(parentCount, kMinBytesPerParentRecord))
+            {
+                return Result<RelationshipGraph, SerializationError>::Err(SerializationError::CorruptedData);
+            }
+
             graph.m_parents.Reserve(parentCount);
             
             for (uint32_t i = 0; i < parentCount; ++i)
@@ -485,12 +506,24 @@ namespace Astra
             // Read children mappings
             uint32_t parentWithChildrenCount;
             reader(parentWithChildrenCount);
-            
+
             if (reader.HasError())
             {
                 return Result<RelationshipGraph, SerializationError>::Err(reader.GetError());
             }
-            
+
+            // Bound parentWithChildrenCount against the remaining buffer using the
+            // same helper; it is a uint32_t on disk (Serialize writes
+            // static_cast<uint32_t>(m_children.Size())). Each entry's guaranteed
+            // fixed prefix is parent.GetValue() (Entity::StorageType) + childCount
+            // (uint32_t); the children themselves are variable-length (including
+            // possibly zero).
+            constexpr uint64_t kMinBytesPerChildrenRecord = sizeof(Entity::StorageType) + sizeof(uint32_t);
+            if (reader.CountExceedsRemaining(parentWithChildrenCount, kMinBytesPerChildrenRecord))
+            {
+                return Result<RelationshipGraph, SerializationError>::Err(SerializationError::CorruptedData);
+            }
+
             graph.m_children.Reserve(parentWithChildrenCount);
             
             for (uint32_t i = 0; i < parentWithChildrenCount; ++i)
@@ -500,12 +533,23 @@ namespace Astra
                 
                 uint32_t childCount;
                 reader(childCount);
-                
+
                 if (reader.HasError())
                 {
                     return Result<RelationshipGraph, SerializationError>::Err(reader.GetError());
                 }
-                
+
+                // Bound childCount against the remaining buffer using the same
+                // helper; it is a uint32_t on disk (Serialize writes
+                // static_cast<uint32_t>(children.size())). Each child's fixed
+                // on-disk footprint is child.GetValue() (Entity::StorageType),
+                // written unconditionally per child in the loop below.
+                constexpr uint64_t kMinBytesPerChild = sizeof(Entity::StorageType);
+                if (reader.CountExceedsRemaining(childCount, kMinBytesPerChild))
+                {
+                    return Result<RelationshipGraph, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+
                 Entity parent(parentValue);
                 auto& children = graph.m_children[parent];
                 children.reserve(childCount);
@@ -527,12 +571,24 @@ namespace Astra
             // Read link relationships
             uint32_t linkedEntityCount;
             reader(linkedEntityCount);
-            
+
             if (reader.HasError())
             {
                 return Result<RelationshipGraph, SerializationError>::Err(reader.GetError());
             }
-            
+
+            // Bound linkedEntityCount against the remaining buffer using the same
+            // helper; it is a uint32_t on disk (Serialize writes
+            // static_cast<uint32_t>(m_links.Size())). Each entry's guaranteed
+            // fixed prefix is entity.GetValue() (Entity::StorageType) + linkCount
+            // (uint32_t); the links themselves are variable-length (including
+            // possibly zero).
+            constexpr uint64_t kMinBytesPerLinkedEntityRecord = sizeof(Entity::StorageType) + sizeof(uint32_t);
+            if (reader.CountExceedsRemaining(linkedEntityCount, kMinBytesPerLinkedEntityRecord))
+            {
+                return Result<RelationshipGraph, SerializationError>::Err(SerializationError::CorruptedData);
+            }
+
             graph.m_links.Reserve(linkedEntityCount);
             
             for (uint32_t i = 0; i < linkedEntityCount; ++i)
@@ -542,12 +598,23 @@ namespace Astra
                 
                 uint32_t linkCount;
                 reader(linkCount);
-                
+
                 if (reader.HasError())
                 {
                     return Result<RelationshipGraph, SerializationError>::Err(reader.GetError());
                 }
-                
+
+                // Bound linkCount against the remaining buffer using the same
+                // helper; it is a uint32_t on disk (Serialize writes
+                // static_cast<uint32_t>(links.size())). Each link's fixed
+                // on-disk footprint is linked.GetValue() (Entity::StorageType),
+                // written unconditionally per link in the loop below.
+                constexpr uint64_t kMinBytesPerLink = sizeof(Entity::StorageType);
+                if (reader.CountExceedsRemaining(linkCount, kMinBytesPerLink))
+                {
+                    return Result<RelationshipGraph, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+
                 Entity entity(entityValue);
                 auto& links = graph.m_links[entity];
                 links.reserve(linkCount);
@@ -646,11 +713,12 @@ namespace Astra
             while (it != m_parents.end())
             {
                 current = it->second;
-                
-                // Cycle detection
-                if (!visited.Insert(current).second)
+
+                // Cycle detection. A corrupt save can install a cyclic parent map (Deserialize
+                // writes it directly, unlike SetParent which rejects cycles), so this is a
+                // recoverable condition, not a fatal invariant: report once, then bail gracefully.
+                if (!ASTRA_ENSURE(visited.Insert(current).second, "Cycle detected in parent-child relationships"))
                 {
-                    ASTRA_ASSERT(false, "Cycle detected in parent-child relationships");
                     break;
                 }
                 

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
+#include <thread>
 #include <Astra/Astra.hpp>
-#include "TestComponents.hpp"
+#include "../TestComponents.hpp"
 
 using namespace Astra;
 using namespace Astra::Test;
@@ -344,8 +345,107 @@ TEST_F(CommandBufferTest, ExtendedRelationshipCommands)
     // Remove all remaining children
     cmdBuffer->RemoveAllChildren(realParent);
     cmdBuffer->Execute();
-    
+
     // Verify all children removed
     auto finalChildren = registry->GetChildren(realParent);
     EXPECT_EQ(finalChildren.size(), 0u);
+}
+
+TEST_F(CommandBufferTest, RollbackPreservesCommittedEntities)
+{
+    // Entity e is created and committed to an archetype (via AddComponent)
+    // *before* a later command in the same buffer fails. DestroyEntity is
+    // recorded with Entity::Invalid(), which is accepted at record time but
+    // rejected by ExecuteDestroyEntity at Execute() time, aborting the
+    // buffer partway through and invoking RollbackAllocatedEntities().
+    Entity e = cmdBuffer->CreateEntity();
+    cmdBuffer->AddComponent(e, Position{1.0f, 2.0f, 3.0f});
+    cmdBuffer->DestroyEntity(Entity::Invalid());
+
+    auto result = cmdBuffer->Execute();
+    ASSERT_TRUE(result.IsErr());
+
+    // e was already committed to an archetype earlier in this same Execute()
+    // call; the rollback of not-yet-committed allocated entities must not
+    // touch it, so it must remain a live, valid entity with its component.
+    EXPECT_TRUE(registry->IsValid(e));
+    EXPECT_TRUE(registry->HasComponent<Position>(e));
+}
+
+TEST_F(CommandBufferTest, ExecuteSortedAppliesInKeyOrderNotRecordOrder)
+{
+    // Entities are created directly on the registry-owning thread (CreateEntity
+    // must not be recorded from worker threads); only the deferred re-parent
+    // commands below are recorded from worker threads.
+    Entity child = registry->CreateEntity();
+    Entity parentA = registry->CreateEntity();
+    Entity parentB = registry->CreateEntity();
+
+    ParallelCommandBuffer parallelBuffer(registry.get());
+
+    // Both threads are launched before either is joined so their OS thread
+    // identities are guaranteed to be live simultaneously -- if t1 were
+    // joined before t2 started, the OS would be free to recycle t1's thread
+    // id for t2, collapsing both into the same per-worker buffer slot and
+    // spuriously failing the GetThreadCount()==2 assertion below.
+
+    // Worker thread 1 records SetParent(child, parentA) FIRST (record order 0,
+    // its buffer's own arrival order) but stamps it with a HIGHER sort key ->
+    // under key-order flush this must apply SECOND.
+    std::thread t1([&]()
+    {
+        auto& buf = parallelBuffer.GetThreadBuffer();
+        buf.SetNextSortKey(SortKey{5, 0, 0});
+        buf.SetParent(child, parentA);
+    });
+
+    // Worker thread 2 records SetParent(child, parentB) SECOND (a later wall-
+    // clock record, and a distinct worker buffer) but stamps it with a LOWER
+    // sort key -> under key-order flush this must apply FIRST.
+    std::thread t2([&]()
+    {
+        auto& buf = parallelBuffer.GetThreadBuffer();
+        buf.SetNextSortKey(SortKey{1, 0, 0});
+        buf.SetParent(child, parentB);
+    });
+
+    t1.join();
+    t2.join();
+
+    ASSERT_EQ(parallelBuffer.GetThreadCount(), 2u);
+
+    auto result = parallelBuffer.ExecuteSorted();
+    ASSERT_TRUE(result.IsOk());
+
+    // Key order (ascending insertionOrder) applies the key=1 command
+    // (SetParent parentB) first, then the key=5 command (SetParent parentA)
+    // second -- last-write-wins means parentA is the final parent. Plain
+    // record/arrival order would have applied parentA first and parentB
+    // second, leaving parentB as the final parent instead. Asserting parentA
+    // therefore distinguishes a genuine key-order flush from a record-order
+    // flush.
+    EXPECT_EQ(registry->GetParent(child), parentA);
+}
+
+TEST_F(CommandBufferTest, RollbackDestroysOnlyUncommittedEntities)
+{
+    // White-box check on the commit-tracking split itself: create three
+    // entities (all committed via CreateEntity executing successfully),
+    // then fail a fourth command. All three must survive since they were
+    // all committed before the failure point, regardless of how many.
+    Entity e1 = cmdBuffer->CreateEntity();
+    Entity e2 = cmdBuffer->CreateEntity();
+    Entity e3 = cmdBuffer->CreateEntity();
+    cmdBuffer->AddComponent(e1, Position{1.0f, 2.0f, 3.0f});
+    cmdBuffer->AddComponent(e2, Position{4.0f, 5.0f, 6.0f});
+    cmdBuffer->AddComponent(e3, Position{7.0f, 8.0f, 9.0f});
+    cmdBuffer->DestroyEntity(Entity::Invalid());
+
+    auto result = cmdBuffer->Execute();
+    ASSERT_TRUE(result.IsErr());
+
+    EXPECT_TRUE(registry->IsValid(e1));
+    EXPECT_TRUE(registry->IsValid(e2));
+    EXPECT_TRUE(registry->IsValid(e3));
+    EXPECT_EQ(registry->Size(), 3u);
 }

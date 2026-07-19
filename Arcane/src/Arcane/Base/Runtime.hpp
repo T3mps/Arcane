@@ -21,7 +21,8 @@
 #include <vector>
 
 namespace nvrhi { class IDevice; }
-namespace Astra { class Registry; class ComponentRegistry; class TypeContext; class IWorkScheduler; }
+namespace Astra { class Registry; class ComponentRegistry; class TypeContext; }
+namespace Mosaic { struct IWorkScheduler; }   // the shared data-parallel seam (Astra aliases this)
 
 namespace Arcane
 {
@@ -55,7 +56,7 @@ namespace Arcane
         SystemSchedulers&       Schedulers()    noexcept;
         RunLoop&                Loop()          noexcept;
         Astra::TypeContext*     TypeContext()   noexcept;
-        Astra::IWorkScheduler*  WorkScheduler() noexcept;
+        Mosaic::IWorkScheduler* WorkScheduler() noexcept;
         ITaskExecutor*          TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
         std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
         Assets&                 AssetsFacade() noexcept;

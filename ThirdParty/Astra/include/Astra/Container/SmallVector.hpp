@@ -336,25 +336,36 @@ namespace Astra
         iterator insert(const_iterator pos, size_type count, const T& value)
         {
             size_type offset = pos - cbegin();
-            
+
             if (count == 0)
                 return begin() + offset;
-                
+
+            // Copy first: `value` may alias an element about to be shifted.
+            T valueCopy(value);
+
             if (m_size + count > capacity())
                 Grow(m_size + count);
-                
+
             iterator it = begin() + offset;
-            
-            // Move existing elements
-            if (it != end())
+            size_type tail = m_size - offset;
+
+            if (count < tail)
             {
-                std::move_backward(it, end(), end() + count);
+                // Move-construct the last `count` elements into raw space,
+                // shift the rest with move-assignment, then assign the gap.
+                std::uninitialized_move(end() - count, end(), end());
+                std::move_backward(it, end() - count, end());
+                std::fill_n(it, count, valueCopy);
             }
-            
-            // Insert new elements
-            std::uninitialized_fill_n(it, count, value);
+            else
+            {
+                // Whole tail lands in raw space beyond the current end.
+                std::uninitialized_move(it, end(), it + count);
+                std::fill_n(it, tail, valueCopy);
+                std::uninitialized_fill_n(it + tail, count - tail, valueCopy);
+            }
+
             m_size += count;
-            
             return it;
         }
         
@@ -362,30 +373,29 @@ namespace Astra
         iterator emplace(const_iterator pos, Args&&... args)
         {
             size_type offset = pos - cbegin();
-            
+
+            // Materialize before any Grow/shift: the argument may alias an element
+            // that reallocation frees or that the shift below moves. std::vector
+            // makes v.emplace(pos, v[j]) well-defined.
+            T tmp(std::forward<Args>(args)...);
+
             if (m_size == capacity())
                 Grow(m_size + 1);
-                
+
             iterator it = begin() + offset;
-            
+
             if (it == end())
             {
-                // Construct at end
-                std::construct_at(end(), std::forward<Args>(args)...);
+                std::construct_at(end(), std::move(tmp));
             }
             else
             {
-                // Move last element
                 std::construct_at(end(), std::move(back()));
-                
-                // Move elements
                 std::move_backward(it, end() - 1, end());
-                
-                // Destroy and reconstruct
                 std::destroy_at(it);
-                std::construct_at(it, std::forward<Args>(args)...);
+                std::construct_at(it, std::move(tmp));
             }
-            
+
             ++m_size;
             return it;
         }
@@ -429,9 +439,18 @@ namespace Astra
         reference emplace_back(Args&&... args)
         {
             if (m_size == capacity())
+            {
+                // Grow() frees the current buffer; materialize the (possibly
+                // self-aliasing) argument before that storage disappears, so
+                // v.push_back(v[i]) is well-defined as std::vector guarantees.
+                T tmp(std::forward<Args>(args)...);
                 Grow(m_size + 1);
-                
-            std::construct_at(end(), std::forward<Args>(args)...);
+                std::construct_at(end(), std::move(tmp));
+            }
+            else
+            {
+                std::construct_at(end(), std::forward<Args>(args)...);
+            }
             ++m_size;
             return back();
         }

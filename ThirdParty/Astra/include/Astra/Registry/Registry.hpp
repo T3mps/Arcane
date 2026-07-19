@@ -2,7 +2,6 @@
 
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <span>
 #include <tuple>
@@ -52,34 +51,38 @@ namespace Astra
             m_archetypeManager(std::make_shared<ArchetypeManager>(m_componentRegistry, config.chunkPoolConfig)),
             m_relationshipGraph(std::make_shared<RelationshipGraph>()),
             m_resourceStorage(m_componentRegistry, config.resourceStorageConfig),
-            m_workScheduler(config.workScheduler)
+            m_workScheduler(config.workScheduler),
+            m_config(config)
         {}
-        
+
         Registry(const EntityManager::Config& entityConfig, const ArchetypeChunkPool::Config& chunkConfig) :
             m_entityManager(entityConfig),
             m_componentRegistry(std::make_shared<ComponentRegistry>()),
             m_archetypeManager(std::make_shared<ArchetypeManager>(m_componentRegistry, chunkConfig)),
             m_relationshipGraph(std::make_shared<RelationshipGraph>()),
             m_resourceStorage(m_componentRegistry),
-            m_workScheduler(nullptr)
+            m_workScheduler(nullptr),
+            m_config{entityConfig, chunkConfig, {}, nullptr}
         {}
-        
+
         Registry(std::shared_ptr<ComponentRegistry> componentRegistry, const Config& config = {}) :
             m_entityManager(config.entityManagerConfig),
             m_componentRegistry(std::move(componentRegistry)),
             m_archetypeManager(std::make_shared<ArchetypeManager>(m_componentRegistry, config.chunkPoolConfig)),
             m_relationshipGraph(std::make_shared<RelationshipGraph>()),
             m_resourceStorage(m_componentRegistry, config.resourceStorageConfig),
-            m_workScheduler(config.workScheduler)
+            m_workScheduler(config.workScheduler),
+            m_config(config)
         {}
-        
+
         explicit Registry(const Registry& other, const Config& config = {}) :
             m_entityManager(config.entityManagerConfig),
             m_componentRegistry(other.m_componentRegistry),
             m_archetypeManager(std::make_shared<ArchetypeManager>(m_componentRegistry, config.chunkPoolConfig)),
             m_relationshipGraph(std::make_shared<RelationshipGraph>()),
             m_resourceStorage(m_componentRegistry, config.resourceStorageConfig),
-            m_workScheduler(config.workScheduler)
+            m_workScheduler(config.workScheduler),
+            m_config(config)
         {}
 
         ~Registry() = default;
@@ -88,6 +91,8 @@ namespace Astra
         Entity CreateEntity()
         {
             Entity entity = m_entityManager.Create();
+            if (!entity.IsValid()) ASTRA_UNLIKELY
+                return Entity::Invalid();
             
             // Use AddEntity for default-constructed components
             m_archetypeManager->AddEntity<Components...>(entity);
@@ -114,6 +119,8 @@ namespace Astra
         Entity CreateEntityWith(Components&&... components)
         {
             Entity entity = m_entityManager.Create();
+            if (!entity.IsValid()) ASTRA_UNLIKELY
+                return Entity::Invalid();
             
             // Use AddEntityWith for components with values
             m_archetypeManager->AddEntityWith(entity, std::forward<Components>(components)...);
@@ -139,14 +146,20 @@ namespace Astra
             if (count == 0 || outEntities.size() < count)
                 return;
             
-            m_entityManager.CreateBatch(count, outEntities.begin());
+            size_t created = m_entityManager.CreateBatch(count, outEntities.begin());
+            for (size_t i = created; i < count; ++i)
+            {
+                outEntities[i] = Entity::Invalid();
+            }
+            if (created == 0) ASTRA_UNLIKELY
+                return;
             
             // Use unified batch AddEntities - handles archetype selection internally
-            m_archetypeManager->AddEntities<Components...>(outEntities.subspan(0, count));
+            m_archetypeManager->AddEntities<Components...>(outEntities.subspan(0, created));
             
             if (m_signalManager.IsSignalEnabled(Signal::EntityCreated))
             {
-                for (size_t i = 0; i < count; ++i)
+                for (size_t i = 0; i < created; ++i)
                 {
                     m_signalManager.Emit<Events::EntityCreated>(outEntities[i]);
                 }
@@ -156,7 +169,7 @@ namespace Astra
             {
                 if (m_signalManager.IsSignalEnabled(Signal::ComponentAdded))
                 {
-                    for (size_t i = 0; i < count; ++i)
+                    for (size_t i = 0; i < created; ++i)
                     {
                         ((m_signalManager.Emit<Events::ComponentAdded>(outEntities[i], TypeID<Components>::Value(), nullptr)), ...);
                     }
@@ -170,12 +183,19 @@ namespace Astra
             if (count == 0 || outEntities.size() < count)
                 return;
             
-            m_entityManager.CreateBatch(count, outEntities.begin());
-            m_archetypeManager->AddEntitiesWith<Components...>(outEntities.subspan(0, count), std::forward<Generator>(generator));
+            size_t created = m_entityManager.CreateBatch(count, outEntities.begin());
+            for (size_t i = created; i < count; ++i)
+            {
+                outEntities[i] = Entity::Invalid();
+            }
+            if (created == 0) ASTRA_UNLIKELY
+                return;
+
+            m_archetypeManager->AddEntitiesWith<Components...>(outEntities.subspan(0, created), std::forward<Generator>(generator));
             
             if (m_signalManager.IsSignalEnabled(Signal::EntityCreated))
             {
-                for (size_t i = 0; i < count; ++i)
+                for (size_t i = 0; i < created; ++i)
                 {
                     m_signalManager.Emit<Events::EntityCreated>(outEntities[i]);
                 }
@@ -183,7 +203,7 @@ namespace Astra
             
             if (m_signalManager.IsSignalEnabled(Signal::ComponentAdded))
             {
-                for (size_t i = 0; i < count; ++i)
+                for (size_t i = 0; i < created; ++i)
                 {
                     ((m_signalManager.Emit<Events::ComponentAdded>(outEntities[i], TypeID<Components>::Value(), nullptr)), ...);
                 }
@@ -282,36 +302,48 @@ namespace Astra
         {
             if (!m_entityManager.IsValid(entity))
                 return false;
-            
+
             T* component = m_archetypeManager->GetComponent<T>(entity);
-            bool removed = m_archetypeManager->RemoveComponent<T>(entity);
-            
-            if (removed && component)
-            {
-                m_signalManager.Emit<Events::ComponentRemoved>(entity, TypeID<T>::Value(), component);
-            }
-            
-            return removed;
+            if (!component)
+                return false;
+
+            // Emit BEFORE removal: the pointer is only valid until the entity
+            // migrates. Handlers must not retain it past their invocation.
+            m_signalManager.Emit<Events::ComponentRemoved>(entity, TypeID<T>::Value(), component);
+
+            return m_archetypeManager->RemoveComponent<T>(entity);
         }
         
         template<Component T>
         void AddComponents(std::span<Entity> entities, const T& component)
         {
-            m_archetypeManager->AddComponents<T>(entities, component);
+            if (entities.empty())
+                return;
+
+            SmallVector<Entity, 256> validEntities;
+            validEntities.reserve(entities.size());
+            for (Entity entity : entities)
+            {
+                if (m_entityManager.IsValid(entity))
+                {
+                    validEntities.push_back(entity);
+                }
+            }
+            if (validEntities.empty())
+                return;
+
+            m_archetypeManager->AddComponents<T>(validEntities, component);
             
             // Emit signals for all entities if enabled
             if (m_signalManager.IsSignalEnabled(Signal::ComponentAdded))
             {
                 ComponentID componentId = TypeID<T>::Value();
-                for (Entity entity : entities)
+                for (Entity entity : validEntities)
                 {
-                    if (m_entityManager.IsValid(entity))
+                    T* comp = m_archetypeManager->GetComponent<T>(entity);
+                    if (comp)
                     {
-                        T* comp = m_archetypeManager->GetComponent<T>(entity);
-                        if (comp)
-                        {
-                            m_signalManager.Emit<Events::ComponentAdded>(entity, componentId, comp);
-                        }
+                        m_signalManager.Emit<Events::ComponentAdded>(entity, componentId, comp);
                     }
                 }
             }
@@ -361,14 +393,12 @@ namespace Astra
             if (entities.empty())
                 return 0;
             
-            // Filter out invalid entities and collect components for signals
+            // Filter out invalid entities
             SmallVector<Entity, 256> validEntities;
-            SmallVector<T*, 256> componentsToRemove;
             validEntities.reserve(entities.size());
-            
+
             if (m_signalManager.IsSignalEnabled(Signal::ComponentRemoved))
             {
-                componentsToRemove.reserve(entities.size());
                 for (Entity entity : entities)
                 {
                     if (m_entityManager.IsValid(entity))
@@ -376,8 +406,9 @@ namespace Astra
                         T* component = m_archetypeManager->GetComponent<T>(entity);
                         if (component)
                         {
+                            // Emit before removal — see RemoveComponent.
+                            m_signalManager.Emit<Events::ComponentRemoved>(entity, TypeID<T>::Value(), component);
                             validEntities.push_back(entity);
-                            componentsToRemove.push_back(component);
                         }
                     }
                 }
@@ -392,23 +423,12 @@ namespace Astra
                     }
                 }
             }
-            
+
             if (validEntities.empty())
                 return 0;
-            
+
             // Batch remove components
-            size_t removedCount = m_archetypeManager->RemoveComponents<T>(validEntities);
-            
-            // Emit signals if enabled
-            if (m_signalManager.IsSignalEnabled(Signal::ComponentRemoved))
-            {
-                for (size_t i = 0; i < removedCount && i < componentsToRemove.size(); ++i)
-                {
-                    m_signalManager.Emit<Events::ComponentRemoved>(validEntities[i], TypeID<T>::Value(), componentsToRemove[i]);
-                }
-            }
-            
-            return removedCount;
+            return m_archetypeManager->RemoveComponents<T>(validEntities);
         }
 
         template<Component T>
@@ -531,16 +551,13 @@ namespace Astra
                 }
             }
 
-            bool result = m_archetypeManager->RemoveComponentByID(entity, componentId);
-
-            if (result && m_signalManager.IsSignalEnabled(Signal::ComponentRemoved))
+            if (componentPtr && m_signalManager.IsSignalEnabled(Signal::ComponentRemoved))
             {
-                // Note: componentPtr points to now-invalid memory after removal,
-                // matching the behavior of the templated RemoveComponent
+                // Emit BEFORE removal so the pointer is still valid.
                 m_signalManager.Emit<Events::ComponentRemoved>(entity, componentId, componentPtr);
             }
 
-            return result;
+            return m_archetypeManager->RemoveComponentByID(entity, componentId);
         }
 
         /**
@@ -654,13 +671,11 @@ namespace Astra
             const ComponentMask& mask = record->archetype->GetMask();
 
             // Iterate through all registered components and check if entity has them
-            for (const auto& [id, desc] : m_componentRegistry->GetAllComponentIDs())
+            m_componentRegistry->ForEachComponent([&](ComponentID id, const ComponentDescriptor& desc)
             {
                 if (mask.Test(id))
-                {
                     result.push_back(&desc);
-                }
-            }
+            });
 
             return result;
         }
@@ -700,28 +715,28 @@ namespace Astra
                 return result;
 
             // Iterate through all registered components and collect info
-            for (const auto& [id, desc] : m_componentRegistry->GetAllComponentIDs())
+            m_componentRegistry->ForEachComponent([&](ComponentID id, const ComponentDescriptor& desc)
             {
-                if (mask.Test(id))
+                if (!mask.Test(id))
+                    return;
+
+                ComponentInfo info;
+                info.descriptor = &desc;
+                info.meta = desc.meta;  // May be nullptr if type is not reflected
+
+                // Get component data pointer
+                void* compArray = chunks[record->location.GetChunkIndex()]->GetComponentArrayByID(id);
+                if (compArray && desc.size > 0)
                 {
-                    ComponentInfo info;
-                    info.descriptor = &desc;
-                    info.meta = desc.meta;  // May be nullptr if type is not reflected
-
-                    // Get component data pointer
-                    void* compArray = chunks[record->location.GetChunkIndex()]->GetComponentArrayByID(id);
-                    if (compArray && desc.size > 0)
-                    {
-                        info.data = static_cast<std::byte*>(compArray) + record->location.GetEntityIndex() * desc.size;
-                    }
-                    else
-                    {
-                        info.data = nullptr;  // Empty component
-                    }
-
-                    result.push_back(info);
+                    info.data = static_cast<std::byte*>(compArray) + record->location.GetEntityIndex() * desc.size;
                 }
-            }
+                else
+                {
+                    info.data = nullptr;  // Empty component
+                }
+
+                result.push_back(info);
+            });
 
             return result;
         }
@@ -985,17 +1000,9 @@ namespace Astra
         
         void Clear()
         {
-            if (m_signalManager.IsSignalEnabled(Signal::EntityDestroyed))
-            {
-                // TODO: Consider if we want to emit signals during Clear()
-            }
-            
-            m_archetypeManager = std::make_shared<ArchetypeManager>(m_componentRegistry);
-
+            m_archetypeManager->Clear();   // in place -- keeps cached Views/Relations valid
             m_relationshipGraph->Clear();
-            
             m_entityManager.Clear();
-            
         }
 
         ASTRA_NODISCARD std::size_t Size() const noexcept
@@ -1420,7 +1427,8 @@ namespace Astra
             m_entityManager.Serialize(writer);
             m_archetypeManager->Serialize(writer);
             m_relationshipGraph->Serialize(writer);
-            
+            m_resourceStorage.Serialize(writer);   // format v2 resource block
+
             // Finalize with checksum
             writer.FinalizeHeader();
             
@@ -1453,7 +1461,8 @@ namespace Astra
             m_entityManager.Serialize(writer);
             m_archetypeManager->Serialize(writer);
             m_relationshipGraph->Serialize(writer);
-            
+            m_resourceStorage.Serialize(writer);   // format v2 resource block
+
             // Finalize with checksum
             writer.FinalizeHeader();
             
@@ -1462,6 +1471,11 @@ namespace Astra
                 Result<std::vector<std::byte>, SerializationError>::Ok(std::move(buffer));
         }
 
+        // Load validates structural integrity enough to fail cleanly -- returning
+        // Err(SerializationError) -- on truncated, corrupt, or version-skewed input, without
+        // out-of-bounds access, unbounded allocation, or hangs. It is NOT a security boundary:
+        // it does not guarantee rejection of every maliciously-crafted archive, and callers must
+        // not load saves from untrusted sources without their own validation.
         static Result<std::unique_ptr<Registry>, SerializationError> Load(const std::filesystem::path& path, std::shared_ptr<ComponentRegistry> componentRegistry)
         {
             BinaryReader reader(path);
@@ -1533,7 +1547,7 @@ namespace Astra
             registry->m_entityManager = std::move(*(*managerResult.GetValue()));
             
             // Create new ArchetypeManager with the component registry and deserialize into it
-            registry->m_archetypeManager = std::make_shared<ArchetypeManager>(componentRegistry);
+            registry->m_archetypeManager = std::make_shared<ArchetypeManager>(componentRegistry, config.chunkPoolConfig);
             if (!registry->m_archetypeManager->Deserialize(reader))
             {
                 return Result<std::unique_ptr<Registry>, SerializationError>::Err(SerializationError::CorruptedData);
@@ -1546,7 +1560,16 @@ namespace Astra
                 return Result<std::unique_ptr<Registry>, SerializationError>::Err(*graphResult.GetError());
             }
             registry->m_relationshipGraph = std::make_shared<RelationshipGraph>(std::move(*graphResult.GetValue()));
-            
+
+            // Resource block exists from format v2 onward.
+            if (reader.GetVersion() >= 2)
+            {
+                if (!registry->m_resourceStorage.Deserialize(reader))
+                {
+                    return Result<std::unique_ptr<Registry>, SerializationError>::Err(SerializationError::UnknownComponent);
+                }
+            }
+
             // Verify checksum
             auto checksumResult = reader.VerifyChecksum();
             if (checksumResult.IsErr())
@@ -1564,5 +1587,6 @@ namespace Astra
         SignalManager m_signalManager;
         ResourceStorage m_resourceStorage;
         std::shared_ptr<IWorkScheduler> m_workScheduler;  // null = sequential inline fallback
+        Config m_config;   // retained so Clear()/Load() preserve pool + storage policy
     };
 }

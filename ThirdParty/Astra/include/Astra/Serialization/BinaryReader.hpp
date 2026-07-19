@@ -129,7 +129,9 @@ namespace Astra
             // Update checksum if enabled and we're past the header
             if (m_checksumEnabled && m_position >= m_headerSize && m_headerSize > 0)
             {
-                m_runningChecksum = Checksum::CRC32(data, size, m_runningChecksum);
+                m_runningChecksum = m_usePortableChecksum
+                    ? Checksum::Portable(data, size, m_runningChecksum)
+                    : Checksum::CRC32(data, size, m_runningChecksum);   // v1 archives, same-ISA only
             }
             
             m_position += size;
@@ -167,6 +169,7 @@ namespace Astra
             }
             
             m_version = header.version;
+            m_usePortableChecksum = (m_version >= 2);
             m_headerSize = sizeof(BinaryHeader);
             m_expectedChecksum = header.dataChecksum;
             m_runningChecksum = 0;  // Reset checksum after reading header
@@ -200,6 +203,11 @@ namespace Astra
             if (compressedSize == 0)
             {
                 // Data is uncompressed
+                if (originalSize > Remaining())
+                {
+                    m_error = SerializationError::CorruptedData;
+                    return Result<std::vector<uint8_t>, SerializationError>::Err(SerializationError::CorruptedData);
+                }
                 std::vector<uint8_t> data(originalSize);
                 ReadBytes(data.data(), originalSize);
                 
@@ -212,7 +220,22 @@ namespace Astra
             }
             else
             {
-                // Data is compressed
+                // Data is compressed. Bound compressedSize against the remaining
+                // buffer BEFORE allocating -- unlike the uncompressed branch above,
+                // this branch used to allocate std::vector<uint8_t>(compressedSize)
+                // first and only let the ReadBytes call below discover the
+                // truncation. compressedSize is a raw uint32_t straight off the
+                // wire, so a corrupted save can claim up to ~4GB: the allocation
+                // (and its zero-init) happened regardless of how few bytes actually
+                // remained, before any bounds check got a chance to reject it. The
+                // compressed bytes must be present in the buffer for a valid save,
+                // so this can never false-reject a legitimate one.
+                if (compressedSize > Remaining())
+                {
+                    m_error = SerializationError::CorruptedData;
+                    return Result<std::vector<uint8_t>, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+
                 std::vector<uint8_t> compressedData(compressedSize);
                 ReadBytes(compressedData.data(), compressedSize);
                 
@@ -270,17 +293,17 @@ namespace Astra
          */
         BinaryReader& operator()(std::string& str)
         {
-            size_t len;
+            uint64_t len;
             (*this)(len);
-            
+
             if (len > m_size - m_position)
             {
                 m_error = SerializationError::CorruptedData;
                 return *this;
             }
-            
-            str.resize(len);
-            ReadBytes(str.data(), len);
+
+            str.resize(static_cast<size_t>(len));
+            ReadBytes(str.data(), static_cast<size_t>(len));
             return *this;
         }
         
@@ -290,15 +313,15 @@ namespace Astra
         template<typename T>
         BinaryReader& operator()(std::vector<T>& vec)
         {
-            size_t size;
+            uint64_t size;
             (*this)(size);
-            
+
             // Sanity check to prevent huge allocations
             // For POD types, we can check the exact size needed
             // For non-POD types, just check that we have some data left
             if constexpr (std::is_trivially_copyable_v<T>)
             {
-                if (size * sizeof(T) > (m_size - m_position))
+                if (size > (m_size - m_position) / sizeof(T))
                 {
                     m_error = SerializationError::CorruptedData;
                     return *this;
@@ -308,27 +331,27 @@ namespace Astra
             {
                 // For non-POD types, just check for reasonable size
                 // We can't know the actual serialized size without reading
-                const size_t maxReasonableSize = 1000000; // 1 million elements max
+                const uint64_t maxReasonableSize = 1000000; // 1 million elements max
                 if (size > maxReasonableSize)
                 {
                     m_error = SerializationError::CorruptedData;
                     return *this;
                 }
             }
-            
+
             vec.clear();
-            vec.reserve(size);
-            
+            vec.reserve(static_cast<size_t>(size));
+
             if constexpr (std::is_trivially_copyable_v<T>)
             {
                 // Read all at once for POD types
-                vec.resize(size);
-                ReadBytes(vec.data(), size * sizeof(T));
+                vec.resize(static_cast<size_t>(size));
+                ReadBytes(vec.data(), static_cast<size_t>(size) * sizeof(T));
             }
             else
             {
                 // Read one by one for complex types
-                for (size_t i = 0; i < size; ++i)
+                for (uint64_t i = 0; i < size; ++i)
                 {
                     T item;
                     (*this)(item);
@@ -418,19 +441,19 @@ namespace Astra
         template<typename K, typename V, typename Compare, typename Allocator>
         BinaryReader& operator()(std::map<K, V, Compare, Allocator>& map)
         {
-            size_t size;
+            uint64_t size;
             (*this)(size);
-            
+
             // Sanity check
-            const size_t maxMapSize = 10000000; // 10 million entries max
+            const uint64_t maxMapSize = 10000000; // 10 million entries max
             if (size > maxMapSize)
             {
                 m_error = SerializationError::CorruptedData;
                 return *this;
             }
-            
+
             map.clear();
-            for (size_t i = 0; i < size; ++i)
+            for (uint64_t i = 0; i < size; ++i)
             {
                 K key;
                 V value;
@@ -447,20 +470,20 @@ namespace Astra
         template<typename K, typename V, typename Hash, typename Equal, typename Allocator>
         BinaryReader& operator()(std::unordered_map<K, V, Hash, Equal, Allocator>& map)
         {
-            size_t size;
+            uint64_t size;
             (*this)(size);
-            
+
             // Sanity check
-            const size_t maxMapSize = 10000000; // 10 million entries max
+            const uint64_t maxMapSize = 10000000; // 10 million entries max
             if (size > maxMapSize)
             {
                 m_error = SerializationError::CorruptedData;
                 return *this;
             }
-            
+
             map.clear();
-            map.reserve(size);
-            for (size_t i = 0; i < size; ++i)
+            map.reserve(static_cast<size_t>(size));
+            for (uint64_t i = 0; i < size; ++i)
             {
                 K key;
                 V value;
@@ -477,19 +500,19 @@ namespace Astra
         template<typename T, typename Compare, typename Allocator>
         BinaryReader& operator()(std::set<T, Compare, Allocator>& set)
         {
-            size_t size;
+            uint64_t size;
             (*this)(size);
-            
+
             // Sanity check
-            const size_t maxSetSize = 10000000; // 10 million entries max
+            const uint64_t maxSetSize = 10000000; // 10 million entries max
             if (size > maxSetSize)
             {
                 m_error = SerializationError::CorruptedData;
                 return *this;
             }
-            
+
             set.clear();
-            for (size_t i = 0; i < size; ++i)
+            for (uint64_t i = 0; i < size; ++i)
             {
                 T item;
                 (*this)(item);
@@ -505,20 +528,20 @@ namespace Astra
         template<typename T, typename Hash, typename Equal, typename Allocator>
         BinaryReader& operator()(std::unordered_set<T, Hash, Equal, Allocator>& set)
         {
-            size_t size;
+            uint64_t size;
             (*this)(size);
-            
+
             // Sanity check
-            const size_t maxSetSize = 10000000; // 10 million entries max
+            const uint64_t maxSetSize = 10000000; // 10 million entries max
             if (size > maxSetSize)
             {
                 m_error = SerializationError::CorruptedData;
                 return *this;
             }
-            
+
             set.clear();
-            set.reserve(size);
-            for (size_t i = 0; i < size; ++i)
+            set.reserve(static_cast<size_t>(size));
+            for (uint64_t i = 0; i < size; ++i)
             {
                 T item;
                 (*this)(item);
@@ -528,6 +551,21 @@ namespace Astra
             return *this;
         }
         
+        // Bytes not yet consumed. Invariant m_position <= m_size (ReadBytes enforces it) → no underflow.
+        [[nodiscard]] size_t Remaining() const noexcept { return m_size - m_position; }
+
+        // True if a count of `count` elements, each at least `minBytesPerElement` on disk, cannot fit in
+        // what remains -- i.e. the count is impossible for this buffer. Overflow-safe (divide, not multiply).
+        // N elements need at least N*minBytesPerElement bytes downstream, so N > Remaining()/per cannot be
+        // real; this is the standard "length <= remaining" length-prefix validation rule, applied at
+        // whatever width the on-disk count field actually is (every real count on the wire is a uint32_t,
+        // not the uint64_t this used to force via a dedicated read) after the caller has already read it.
+        [[nodiscard]] bool CountExceedsRemaining(uint64_t count, size_t minBytesPerElement) const noexcept
+        {
+            const size_t per = (minBytesPerElement == 0) ? 1 : minBytesPerElement;
+            return count > static_cast<uint64_t>(Remaining() / per);
+        }
+
         /**
          * Read a component hash
          */
@@ -670,10 +708,17 @@ namespace Astra
         requires std::is_trivially_copyable_v<T>
         T Peek()
         {
-            T value;
+            T value{};
             size_t savedPos = m_position;
+            uint32_t savedChecksum = m_runningChecksum;   // Peek must not contaminate the checksum
             (*this)(value);
+            if (m_data.empty() && m_file.is_open())
+            {
+                // File mode: rewind the stream cursor too.
+                m_file.seekg(static_cast<std::streamoff>(savedPos), std::ios::beg);
+            }
             m_position = savedPos;
+            m_runningChecksum = savedChecksum;
             return value;
         }
         
@@ -741,6 +786,7 @@ namespace Astra
         // Checksum support
         bool m_checksumEnabled;
         uint32_t m_runningChecksum;
+        bool m_usePortableChecksum = true;
         uint32_t m_expectedChecksum;
         size_t m_headerSize;
         

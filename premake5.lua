@@ -676,6 +676,7 @@ local function test_plugin(name, defs)
             "%{IncludeDir.nvrhi}",
             "%{IncludeDir.Astra}",
             "%{IncludeDir.enkiTS}",
+            "%{IncludeDir.Mosaic}",   -- Astra headers now #include <Mosaic/...> (Mosaic-seam adoption)
         }
         links { "Arcane" }
         defines (defs)

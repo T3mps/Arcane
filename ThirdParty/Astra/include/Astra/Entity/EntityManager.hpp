@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -29,7 +28,7 @@ namespace Astra
         {
             EntityTable::Config tableConfig;
             
-            Config(IDType segmentSize = 65536) :
+            Config(IDType segmentSize = EntityTable::Config::DEFAULT_ENTITIES_PER_SEGMENT) :
                 tableConfig(segmentSize)
             {}
         };
@@ -64,20 +63,28 @@ namespace Astra
             return Entity(id, version);
         }
 
+        // Creates up to `count` entities; returns how many were actually
+        // created (can be < count when the ID space is exhausted). Only the
+        // first `return-value` slots of the output are written.
         template<typename OutputIt>
-        void CreateBatch(std::size_t count, OutputIt out) noexcept
+        std::size_t CreateBatch(std::size_t count, OutputIt out) noexcept
         {
             if (count == 0)
-                ASTRA_UNLIKELY return;
+                ASTRA_UNLIKELY return 0;
             
             // For small batches, simple loop is fine
             if (count < 32) ASTRA_LIKELY
             {
+                std::size_t created = 0;
                 for (std::size_t i = 0; i < count; ++i)
                 {
-                    *out++ = Create();
+                    Entity e = Create();
+                    if (!e.IsValid()) ASTRA_UNLIKELY
+                        break;
+                    *out++ = e;
+                    ++created;
                 }
-                return;
+                return created;
             }
             
             // Large batch: allocate IDs in batch
@@ -93,6 +100,7 @@ namespace Astra
                 m_table.SetVersion(id, version);
                 *out++ = Entity(id, version);
             }
+            return allocated;
         }
 
         bool Destroy(Entity entity) noexcept
@@ -293,7 +301,7 @@ namespace Astra
             writer(m_config.tableConfig.entitiesPerSegmentMask);
             writer(m_config.tableConfig.releaseThreshold);
             writer(m_config.tableConfig.autoRelease);
-            writer(m_config.tableConfig.maxEmptySegments);
+            writer(static_cast<uint64_t>(m_config.tableConfig.maxEmptySegments));
             
             // Write ID stack state
             writer(m_idStack.GetNextID());
@@ -330,13 +338,108 @@ namespace Astra
             reader(manager->m_config.tableConfig.entitiesPerSegmentMask);
             reader(manager->m_config.tableConfig.releaseThreshold);
             reader(manager->m_config.tableConfig.autoRelease);
-            reader(manager->m_config.tableConfig.maxEmptySegments);
-            
+            uint64_t maxEmptySegments;
+            reader(maxEmptySegments);
+            manager->m_config.tableConfig.maxEmptySegments = static_cast<size_t>(maxEmptySegments);
+
             if (reader.HasError())
             {
                 return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(reader.GetError());
             }
-            
+
+            // Validate the segment-config trio BEFORE anything derives sizing or
+            // indexing from it. EntityTable::GetOrCreateSegment computes
+            // `segIdx = id >> entitiesPerSegmentShift` and then resizes
+            // m_segmentIndex to segIdx + 1, and Segment allocates
+            // `versions[entitiesPerSegment]` with ToLocal(id) = id - baseID guarded
+            // only by an ASTRA_ASSERT (compiled out in Release/Dist). A valid save
+            // (EntityManager::Serialize above) always writes a mutually consistent
+            // triple: entitiesPerSegment is a power of two, shift ==
+            // log2(entitiesPerSegment), and mask == entitiesPerSegment - 1.
+            // Corrupting any one of the three decouples segment sizing from
+            // indexing and can otherwise drive a multi-GB m_segmentIndex resize, a
+            // heap OOB write into Segment::versions[], or the ToLocal fail-fast --
+            // none of which is recoverable once reached. Reject unless all of the
+            // following hold, mirroring the reader's existing failure convention.
+            {
+                const IDType entitiesPerSegment = manager->m_config.tableConfig.entitiesPerSegment;
+                const IDType entitiesPerSegmentShift = manager->m_config.tableConfig.entitiesPerSegmentShift;
+                const IDType entitiesPerSegmentMask = manager->m_config.tableConfig.entitiesPerSegmentMask;
+
+                // (1) entitiesPerSegment must be nonzero and a power of two.
+                const bool isPowerOfTwo = entitiesPerSegment != 0 &&
+                    (entitiesPerSegment & static_cast<IDType>(entitiesPerSegment - 1)) == 0;
+
+                // (2) entitiesPerSegmentShift must be a valid shift amount for
+                // IDType (otherwise `1 << shift` and `id >> shift` are UB) and must
+                // reproduce entitiesPerSegment exactly. Short-circuits before the
+                // shift so an out-of-range amount is never evaluated.
+                constexpr size_t kIDTypeBits = sizeof(IDType) * 8;
+                const bool shiftInRange = entitiesPerSegmentShift < kIDTypeBits;
+                const bool shiftMatches = shiftInRange &&
+                    static_cast<IDType>(IDType{1} << entitiesPerSegmentShift) == entitiesPerSegment;
+
+                // (3) entitiesPerSegmentMask must be entitiesPerSegment - 1.
+                const bool maskMatches = entitiesPerSegmentMask == static_cast<IDType>(entitiesPerSegment - 1);
+
+                // (4) Absolute sanity cap so a consistent-but-absurd triple can't
+                // drive a huge per-segment allocation (entitiesPerSegment *
+                // sizeof(VersionType) bytes for Segment::versions[]). This bounds
+                // ONLY that one per-segment allocation, not the segment machinery
+                // generally -- in particular it says nothing about how large
+                // m_segmentIndex (ID -> segment lookup table) can grow, since that
+                // is driven by id >> entitiesPerSegmentShift, not by
+                // entitiesPerSegment itself. m_segmentIndex growth is bounded
+                // separately by the kMaxSegmentsOnLoad segIdx cap applied to every
+                // restored id below. EntityTable::Config::DEFAULT_ENTITIES_PER_SEGMENT
+                // is 65536 (64K, the default 32-bit-ID/8-bit-version build); this cap
+                // leaves comfortable headroom above that (and above any smaller
+                // ID-space clamp for narrower ID configurations) while still keeping
+                // the resulting allocation sane. Widened to uint64_t for the
+                // comparison so this is correct across every IDType width the
+                // library supports (16/32/64-bit), not just the default 32-bit one.
+                constexpr uint64_t kMaxEntitiesPerSegment = uint64_t{1} << 22; // 4,194,304
+                const bool withinSanityCap = static_cast<uint64_t>(entitiesPerSegment) <= kMaxEntitiesPerSegment;
+
+                // (5) Lower bound: entitiesPerSegment must be at least the floor
+                // EntityTable::Config's converting constructor clamps every
+                // legitimately-constructed table to (see EntityTable.hpp -- 1024,
+                // or the whole ID space if narrower). The trio-consistency checks
+                // above accept a fully self-consistent but absurdly small triple
+                // like {entitiesPerSegment=1, shift=0, mask=0} -- a save can never
+                // legitimately produce one, since Serialize always writes whatever
+                // EntityTable::Config the table was actually constructed with, and
+                // that constructor never produces a value below this floor. With
+                // shift==0, `id >> shift == id`, so a small-but-legitimate id
+                // already makes segIdx == id -- this is the primary defense against
+                // that (the kMaxSegmentsOnLoad segIdx cap below is the redundant
+                // second layer, since it also catches this same triple once any
+                // restored id is large enough).
+                constexpr uint64_t kMinEntitiesPerSegment =
+                    std::min<uint64_t>(1024, static_cast<uint64_t>(Entity::ID_MASK) + 1ull);
+                const bool aboveFloor = static_cast<uint64_t>(entitiesPerSegment) >= kMinEntitiesPerSegment;
+
+                if (!isPowerOfTwo || !shiftMatches || !maskMatches || !withinSanityCap || !aboveFloor)
+                {
+                    return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+            }
+
+            // Bounds the segment index a restored id can create (see the segIdx
+            // checks in the recycled-entry and alive-entity restore loops below).
+            // EntityTable::GetOrCreateSegment computes segIdx = id >>
+            // entitiesPerSegmentShift and resizes m_segmentIndex (a
+            // std::vector<size_t>) to segIdx + 1 -- unbounded by the segment-config
+            // validation above, since that only constrains entitiesPerSegment
+            // (see point (4)'s comment), not how large id >> shift can get. A valid
+            // save allocates ids densely from 0, and entitiesPerSegment is always
+            // >= the Config clamp floor (1024, enforced by check (5) above), so a
+            // legitimate save's max segIdx is at most (max id) / 1024 -- for every
+            // IDType width the library supports (16/32/64-bit), that is far below
+            // this cap. Set well above any real save's segIdx while still bounding
+            // the resize to a sane size (~1M entries * 8 bytes/entry = ~8MB).
+            constexpr uint64_t kMaxSegmentsOnLoad = uint64_t{1} << 20; // 1,048,576 segments
+
             // Read ID stack state
             IDType nextFreshID;
             reader(nextFreshID);
@@ -344,27 +447,88 @@ namespace Astra
             // Read recycled entries
             uint32_t recycledCount;
             reader(recycledCount);
+
+            if (reader.HasError())
+            {
+                return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(reader.GetError());
+            }
+
+            // Bound recycledCount against the remaining buffer via the reader's
+            // width-agnostic count-bound helper (recycledCount is a uint32_t on
+            // disk; Serialize above writes it via writer(static_cast<uint32_t>(
+            // recycledEntries.size()))). Each recycled entry's fixed on-disk
+            // footprint is id(IDType) + nextVersion(VersionType), written
+            // unconditionally per entry in the loop below.
+            constexpr uint64_t kMinBytesPerRecycledEntry = sizeof(IDType) + sizeof(VersionType);
+            if (reader.CountExceedsRemaining(recycledCount, kMinBytesPerRecycledEntry))
+            {
+                return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
+            }
+
             std::vector<EntityIDStack::RecycledEntry> recycledEntries;
             recycledEntries.reserve(recycledCount);
-            
+
             for (uint32_t i = 0; i < recycledCount; ++i)
             {
                 IDType id;
                 VersionType nextVersion;
                 reader(id);
                 reader(nextVersion);
+
+                // Reject a corrupted id before it can be handed back out by a
+                // later Allocate() and flow into EntityTable::SetVersion /
+                // GetOrCreateSegment: those compute segIdx = id >> shift and
+                // index/resize m_segmentIndex by it, and Segment::ToLocal's
+                // bounds check is only an ASTRA_ASSERT (compiled out in
+                // Release/Dist). A legitimately-recycled id is always <
+                // Entity::ID_MASK -- Allocate()/AllocateBatch() never hand out
+                // ID_MASK itself, it's reserved as the "IDs exhausted"
+                // sentinel -- so anything >= ID_MASK cannot come from a valid
+                // save.
+                if (id >= Entity::ID_MASK)
+                {
+                    return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+
+                // Bound the segment index this id would create if it were ever
+                // recycled back out and reached EntityTable::SetVersion /
+                // GetOrCreateSegment (segIdx = id >> entitiesPerSegmentShift,
+                // which then resizes m_segmentIndex to segIdx + 1). This loop
+                // itself never touches EntityTable -- RestoreRecycledEntries
+                // below only feeds the free-id stack -- but a corrupt id (or an
+                // abnormally small-but-internally-consistent segment config, see
+                // check (5) above) must not be allowed to re-enter circulation
+                // only to explode the very next time it's handed out by
+                // Allocate(). entitiesPerSegmentShift is already range-validated
+                // above, so the shift itself is well-defined.
+                if ((static_cast<uint64_t>(id) >> manager->m_config.tableConfig.entitiesPerSegmentShift) >= kMaxSegmentsOnLoad)
+                {
+                    return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+
                 recycledEntries.push_back({id, nextVersion});
             }
-            
+
             // Read table state
             uint32_t aliveCount;
             reader(aliveCount);
-            
+
             if (reader.HasError())
             {
                 return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(reader.GetError());
             }
-            
+
+            // Bound aliveCount against the remaining buffer using the same helper;
+            // aliveCount is a uint32_t on disk (Serialize writes
+            // static_cast<uint32_t>(m_table.AliveCount())) and each alive-entity
+            // record's fixed on-disk footprint is id(IDType) + version(VersionType),
+            // written unconditionally per entity in the loop below.
+            constexpr uint64_t kMinBytesPerAliveEntity = sizeof(IDType) + sizeof(VersionType);
+            if (reader.CountExceedsRemaining(aliveCount, kMinBytesPerAliveEntity))
+            {
+                return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
+            }
+
             // Recreate table with the restored configuration (not default)
             manager->m_table = EntityTable(manager->m_config.tableConfig);
             
@@ -384,7 +548,34 @@ namespace Astra
                 {
                     return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(reader.GetError());
                 }
-                
+
+                // Reject before SetVersion(id, ...) resolves/creates a segment
+                // and indexes into it -- see the recycled-entry check above
+                // for why a legitimate id must be < Entity::ID_MASK. Without
+                // this, a corrupted id near IDType max makes
+                // Segment::Contains's `id < baseID + capacity` overflow-wrap,
+                // firing Segment::ToLocal's ASTRA_ASSERT (an uncatchable abort
+                // in Debug) or, if it happened to pass, driving an enormous
+                // m_segmentIndex resize.
+                if (id >= Entity::ID_MASK)
+                {
+                    return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+
+                // Bound the segment index this id would create: a corrupt id (or
+                // an abnormally small-but-internally-consistent segment config,
+                // see check (5) above) must not drive m_segmentIndex.resize()
+                // below to an unbounded size. A valid save allocates ids
+                // densely, so segIdx stays tiny; this cap keeps the index
+                // allocation bounded across every IDType width, without ever
+                // rejecting a legitimate save (see kMaxSegmentsOnLoad's comment
+                // above). entitiesPerSegmentShift is already range-validated
+                // above, so the shift itself is well-defined.
+                if ((static_cast<uint64_t>(id) >> manager->m_config.tableConfig.entitiesPerSegmentShift) >= kMaxSegmentsOnLoad)
+                {
+                    return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+
                 manager->m_table.SetVersion(id, version);
             }
             

@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
-#include <cassert>
 
 #include "../Core/Base.hpp"
 #include "../Core/Memory.hpp"
@@ -30,21 +29,24 @@ namespace Astra
         
         struct Config
         {
-            IDType entitiesPerSegment = 65536;      // 64K entities = 64KB per segment (must be power of 2)
-            IDType entitiesPerSegmentShift = 16;    // log2(65536) for fast division
-            IDType entitiesPerSegmentMask = 65535;  // 65536 - 1 for fast modulo
+            static constexpr IDType DEFAULT_ENTITIES_PER_SEGMENT =
+                static_cast<IDType>(std::min<uint64_t>(65536ull, static_cast<uint64_t>(Entity::ID_MASK) + 1ull));
+
+            IDType entitiesPerSegment = DEFAULT_ENTITIES_PER_SEGMENT;      // 64K entities = 64KB per segment (must be power of 2)
+            IDType entitiesPerSegmentShift = static_cast<IDType>(std::countr_zero(DEFAULT_ENTITIES_PER_SEGMENT));    // log2(entitiesPerSegment) for fast division
+            IDType entitiesPerSegmentMask = static_cast<IDType>(DEFAULT_ENTITIES_PER_SEGMENT - 1);  // entitiesPerSegment - 1 for fast modulo
             float releaseThreshold = 0.1f;          // Release when <10% used
             bool autoRelease = true;                // Auto-release empty segments
             size_t maxEmptySegments = 2;            // Keep some empty segments ready
             size_t maxPooledSegments = 4;           // Maximum segments to keep in pool for reuse
             bool useHugePages = true;                // Try to use huge pages for initial allocation
-            
-            Config(IDType segmentSize = 65536)
+
+            Config(IDType segmentSize = DEFAULT_ENTITIES_PER_SEGMENT)
             {
-                entitiesPerSegment = segmentSize > 0 ? std::bit_floor(segmentSize) : 1;
-                entitiesPerSegment = std::max(IDType(1024), entitiesPerSegment);
+                entitiesPerSegment = segmentSize > 0 ? std::bit_floor(segmentSize) : IDType(1);
+                entitiesPerSegment = std::max(static_cast<IDType>(std::min<uint64_t>(1024, static_cast<uint64_t>(Entity::ID_MASK) + 1ull)), entitiesPerSegment);
                 entitiesPerSegmentShift = static_cast<IDType>(std::countr_zero(entitiesPerSegment));
-                entitiesPerSegmentMask = entitiesPerSegment - 1;
+                entitiesPerSegmentMask = static_cast<IDType>(entitiesPerSegment - 1);
             }
         };
 
@@ -438,7 +440,13 @@ namespace Astra
 
             bool Contains(IDType id) const noexcept
             {
-                return id >= baseID && id < baseID + capacity;
+                // id - baseID (not baseID + capacity) avoids overflow-wrapping
+                // when baseID is near IDType max: the short-circuited id >=
+                // baseID guarantees id - baseID cannot itself underflow, so
+                // this is equivalent to the old check for every id/baseID
+                // pair that doesn't overflow, and correct for the pairs that
+                // would have.
+                return id >= baseID && (id - baseID) < capacity;
             }
 
             size_t ToLocal(IDType id) const noexcept

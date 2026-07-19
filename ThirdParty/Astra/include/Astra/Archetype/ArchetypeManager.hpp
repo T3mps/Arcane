@@ -61,6 +61,9 @@ namespace Astra
         template<Component... Components>
         void AddEntity(Entity entity)
         {
+            if (!entity.IsValid()) ASTRA_UNLIKELY
+                return;
+
             Archetype* archetype;
             if constexpr (sizeof...(Components) == 0)
             {
@@ -85,6 +88,9 @@ namespace Astra
         void AddEntityWith(Entity entity, Components&&... components)
         {
             static_assert(sizeof...(Components) > 0, "AddEntityWith requires at least one component");
+
+            if (!entity.IsValid()) ASTRA_UNLIKELY
+                return;
             
             Archetype* archetype = GetOrCreateArchetype<std::decay_t<Components>...>();
             EntityLocation location = archetype->AddEntityWith(entity, std::forward<Components>(components)...);
@@ -103,6 +109,32 @@ namespace Astra
             size_t count = entities.size();
             if (count == 0) ASTRA_UNLIKELY
                 return;
+
+            SmallVector<Entity, 256> validStorage;
+            bool anyInvalid = false;
+            for (Entity e : entities)
+            {
+                if (!e.IsValid())
+                {
+                    anyInvalid = true;
+                    break;
+                }
+            }
+            if (anyInvalid) ASTRA_UNLIKELY
+            {
+                validStorage.reserve(entities.size());
+                for (Entity e : entities)
+                {
+                    if (e.IsValid())
+                    {
+                        validStorage.push_back(e);
+                    }
+                }
+                if (validStorage.empty())
+                    return;
+                entities = std::span<const Entity>(validStorage.data(), validStorage.size());
+                count = entities.size();
+            }
 
             Archetype* archetype;
             if constexpr (sizeof...(Components) == 0)
@@ -233,7 +265,9 @@ namespace Astra
             
             EntityRecord& oldLoc = it->second;
             ComponentID componentId = TypeID<T>::Value();
-            
+            if (componentId >= MAX_COMPONENTS) ASTRA_UNLIKELY
+                return nullptr;   // registration refused (ID-space exhausted): typed-path parity with the ByID guard
+
             if (oldLoc.archetype->GetMask().Test(componentId)) ASTRA_UNLIKELY
                 return nullptr;
                 
@@ -250,9 +284,6 @@ namespace Astra
         template<Component T, typename... Args>
         void AddComponents(std::span<Entity> entities, Args&&... args)
         {
-#ifdef ASTRA_BUILD_DEBUG
-            printf("ArchetypeManager::AddComponents called with %zu entities\n", entities.size());
-#endif
             if (entities.empty())
                 return;
 
@@ -261,51 +292,14 @@ namespace Astra
                 return;
             registry->RegisterComponent<T>();
             ComponentID componentID = TypeID<T>::Value();
+            if (componentID >= MAX_COMPONENTS) ASTRA_UNLIKELY
+                return;   // registration refused (ID-space exhausted): typed-path parity with the ByID guard
 
-            // First, ensure all entities exist in the archetype system
-            // Entities not in the map need to be added to the root archetype
-            SmallVector<Entity, 256> newEntities;
-            for (Entity entity : entities)
-            {
-                auto it = m_entityMap.find(entity);
-                if (it == m_entityMap.end())
-                {
-                    newEntities.push_back(entity);
-#ifdef ASTRA_BUILD_DEBUG
-                    printf("  Entity %u not in map, will add to root\n", entity.GetID());
-#endif
-                }
-                else
-                {
-#ifdef ASTRA_BUILD_DEBUG
-                    printf("  Entity %u already in archetype %p\n", entity.GetID(), it->second.archetype);
-#endif
-                }
-            }
-            
-            // Add new entities to root archetype
-            if (!newEntities.empty())
-            {
-#ifdef ASTRA_BUILD_DEBUG
-                printf("  Adding %zu new entities to root archetype\n", newEntities.size());
-#endif
-                auto locations = m_rootArchetype->AddEntities(newEntities);
-                for (size_t i = 0; i < locations.size(); ++i)
-                {
-                    m_entityMap[newEntities[i]] = EntityRecord{m_rootArchetype, locations[i]};
-                }
-            }
-
-            // Group entities by archetype, including newly added ones
-            auto batches = GroupEntitiesByArchetype(entities, 
+            auto batches = GroupEntitiesByArchetype(entities,
                 [componentID](Archetype* arch)
                 {
                     return !arch->GetMask().Test(componentID);
                 });
-
-#ifdef ASTRA_BUILD_DEBUG
-            printf("  Grouped into %zu archetype batches\n", batches.Size());
-#endif
 
             // Process each archetype group
             for (auto& [srcArchetype, entityBatch] : batches)
@@ -563,9 +557,59 @@ namespace Astra
         {
             return m_chunkPool.GetStats();
         }
-        
+
         ArchetypeChunkPool& GetChunkPool() { return m_chunkPool; }
-        
+
+        // Monotonic count of archetype-SET changes: a new archetype being
+        // created, or an empty archetype removed during defragmentation. This
+        // does NOT count entity add/remove/destroy or component transitions that
+        // stay within already-existing archetypes. Used as a best-effort Debug
+        // tripwire by the built-in ParallelExecutor and for View cache
+        // invalidation. Read-only; single-writer.
+        ASTRA_NODISCARD uint32_t GetStructuralChangeCounter() const noexcept
+        {
+            return m_structuralChangeCounter.load(std::memory_order_acquire);
+        }
+
+        /**
+         * Resets the manager to a freshly-constructed state IN PLACE: every
+         * archetype (including the old root) is destroyed, the entity map,
+         * archetype map, and edge-graph caches are emptied, and a brand-new
+         * empty-mask root archetype is created and registered exactly as the
+         * constructor does. The ComponentRegistry (weak_ptr) and the chunk
+         * pool (and its configured chunk size) are left untouched so Clear()
+         * keeps honoring the pool config the manager was constructed with.
+         *
+         * This is done in place - the ArchetypeManager object identity never
+         * changes - so any View/Relations already holding a shared_ptr to
+         * this manager keep pointing at a live, valid object instead of a
+         * discarded one. Bumping both counters below signals those cached
+         * views that everything changed AND that cached Archetype* pointers
+         * are stale, so they fully re-collect (see View::EnsureArchetypes).
+         */
+        void Clear()
+        {
+            m_entityMap.clear();
+            m_archetypeMap.Clear();
+            m_edgeGraph.Clear();
+            m_archetypes.clear();  // destroys every archetype, incl. the old root
+
+            auto rootArchetype = std::make_unique<Archetype>(ComponentMask{});
+            m_rootArchetype = rootArchetype.get();
+            m_rootArchetype->m_chunkPool = &m_chunkPool;
+            m_rootArchetype->Initialize({});
+
+            ArchetypeEntry entry;
+            entry.archetype = std::move(rootArchetype);
+            entry.creationGeneration = 0;  // Root archetype is generation 0
+            m_archetypes.push_back(std::move(entry));
+
+            m_generation = 1;  // matches the NSDMI a freshly constructed manager starts with
+
+            m_structuralChangeCounter.fetch_add(1, std::memory_order_release);
+            m_archetypeRemovalCounter.fetch_add(1, std::memory_order_release);
+        }
+
         // Options for archetype defragmentation
         struct DefragmentOptions
         {
@@ -681,7 +725,15 @@ namespace Astra
                     [](const ArchetypeEntry& entry) { return !entry.archetype; }),
                 m_archetypes.end()
             );
-            
+
+            if (removed > 0)
+            {
+                // Views cache raw Archetype*: signal both "something changed"
+                // and "pointers may be stale" so they rebuild from scratch.
+                m_structuralChangeCounter.fetch_add(1, std::memory_order_release);
+                m_archetypeRemovalCounter.fetch_add(1, std::memory_order_release);
+            }
+
             return removed;
         }
         
@@ -692,8 +744,11 @@ namespace Astra
             writer(static_cast<uint32_t>(m_archetypes.size()));
             writer(static_cast<uint32_t>(m_entityMap.size()));
             
-            // Write each archetype (skip root archetype at index 0)
-            for (size_t i = 1; i < m_archetypes.size(); ++i)
+            // Write each archetype, including the root (zero-component) archetype
+            // at index 0 - its entities must round-trip through Save/Load just
+            // like any other archetype's, or they become dangling entity-map
+            // entries after Load (invisible to iteration, UB on later removal).
+            for (size_t i = 0; i < m_archetypes.size(); ++i)
             {
                 const auto& entry = m_archetypes[i];
                 
@@ -705,7 +760,7 @@ namespace Astra
                 
                 // Write metrics
                 // Write entity count for validation
-                writer(entry.archetype->GetEntityCount());
+                writer(static_cast<uint64_t>(entry.archetype->GetEntityCount()));
             }
             
             // Write entity-to-archetype mappings
@@ -743,10 +798,35 @@ namespace Astra
             // Read storage metadata
             uint32_t archetypeCount, entityCount;
             reader(archetypeCount)(entityCount);
-            
+
             if (reader.HasError())
                 return false;
-            
+
+            // Bound archetypeCount against the remaining buffer via the reader's
+            // width-agnostic count-bound helper (archetypeCount is a uint32_t on
+            // disk; Serialize above writes it via writer(static_cast<uint32_t>(
+            // m_archetypes.size()))). Each archetype record's guaranteed fixed
+            // prefix: a uint32_t index, the ComponentMask words,
+            // Archetype::Serialize's own unconditional fixed fields (entityCount,
+            // entitiesPerChunk, chunkCount, descriptorCount), and the trailing
+            // per-archetype entityCount written after it; the chunks/descriptors
+            // themselves are variable-length.
+            constexpr uint64_t kMinBytesPerArchetype =
+                sizeof(uint32_t) +                                        // archetype index
+                ComponentMask::WORD_COUNT * sizeof(ComponentMask::Word) + // mask
+                sizeof(uint64_t) + sizeof(uint64_t) +                     // entityCount, entitiesPerChunk
+                sizeof(uint32_t) + sizeof(uint32_t) +                     // chunkCount, descriptorCount
+                sizeof(uint64_t);                                         // trailing per-archetype entity count
+            if (reader.CountExceedsRemaining(archetypeCount, kMinBytesPerArchetype))
+                return false;
+
+            // Same bound for entityCount, sized to an entity-map record's fixed
+            // on-disk fields: entity + archetypeIndex(4) + chunkIndex(4) +
+            // entityIndex(4), all written unconditionally per entity below.
+            constexpr uint64_t kMinBytesPerEntityRecord = sizeof(Entity) + sizeof(uint32_t) * 3;
+            if (reader.CountExceedsRemaining(entityCount, kMinBytesPerEntityRecord))
+                return false;
+
             // Reserve space
             m_archetypes.reserve(archetypeCount);
             m_entityMap.reserve(entityCount);
@@ -758,14 +838,30 @@ namespace Astra
                 return false;  // Registry destroyed
             registry->GetAllDescriptors(registryDescriptors);
             
-            // Read each archetype
-            std::vector<uint32_t> archetypeIndices;
-            for (uint32_t i = 1; i < archetypeCount; ++i)
+            // Read each archetype, including the root (zero-component) archetype
+            // written at index 0 (format v3+). The constructor already created a
+            // fresh, empty root archetype (m_archetypes[0], pointed to by
+            // m_rootArchetype) before Deserialize ran, so index 0 must repopulate
+            // that EXISTING entry in place rather than push a second root -
+            // m_rootArchetype and m_archetypeMap must keep referring to exactly
+            // one root archetype.
+            //
+            // Version gate: archives written before v3 (format v2 and earlier)
+            // do not contain a root-archetype record at all - their archetypeCount
+            // covers only the non-root archetypes starting at index 1. Starting
+            // the read loop at 1 for those archives reproduces the pre-v3 reader
+            // exactly (root stays empty, same as when it was written), instead of
+            // misreading the first non-root record's bytes as a root record.
+            const uint32_t firstArchetypeIndex = (reader.GetVersion() >= 3) ? 0u : 1u;
+            for (uint32_t i = firstArchetypeIndex; i < archetypeCount; ++i)
             {
+                // The on-disk archetype index isn't otherwise used by this loop
+                // (i drives it, and the root-vs-non-root branch below keys off
+                // i == 0) -- read it only to stay in sync with the wire format
+                // Archetype::Serialize's caller writes it against.
                 uint32_t index;
                 reader(index);
-                archetypeIndices.push_back(index);
-                
+
                 // Deserialize the archetype
                 auto archetypeResult = Archetype::Deserialize(reader, registryDescriptors, &m_chunkPool);
                 if (archetypeResult.IsErr() || reader.HasError())
@@ -773,18 +869,29 @@ namespace Astra
                     return false;
                 }
                 auto archetype = std::move(*archetypeResult.GetValue());
-                
+
                 // Read metrics
                 // Read entity count for validation
-                size_t entityCount;
+                uint64_t entityCount;
                 reader(entityCount);
-                
-                // Add to storage
-                ArchetypeEntry entry;
-                entry.archetype = std::move(archetype);
-                
-                m_archetypeMap[entry.archetype->GetMask()] = entry.archetype.get();
-                m_archetypes.push_back(std::move(entry));
+
+                if (i == 0)
+                {
+                    // Repopulate the pre-existing root archetype entry instead of
+                    // appending a new one.
+                    m_archetypes[0].archetype = std::move(archetype);
+                    m_rootArchetype = m_archetypes[0].archetype.get();
+                    m_archetypeMap[m_rootArchetype->GetMask()] = m_rootArchetype;
+                }
+                else
+                {
+                    // Add to storage
+                    ArchetypeEntry entry;
+                    entry.archetype = std::move(archetype);
+
+                    m_archetypeMap[entry.archetype->GetMask()] = entry.archetype.get();
+                    m_archetypes.push_back(std::move(entry));
+                }
             }
             
             // Read entity-to-archetype mappings
@@ -796,17 +903,29 @@ namespace Astra
                 uint32_t entityIndex;
                 
                 reader(entity)(archetypeIndex)(chunkIndex)(entityIndex);
-                
+
                 if (reader.HasError())
                     return false;
-                
-                if (archetypeIndex < m_archetypes.size())
-                {
-                    EntityRecord location;
-                    location.archetype = m_archetypes[archetypeIndex].archetype.get();
-                    location.location = EntityLocation(chunkIndex, entityIndex);
-                    m_entityMap[entity] = location;
-                }
+
+                // By this point every archetype (and its chunks) from the loop
+                // above already exists, so chunkIndex/entityIndex can be validated
+                // against the real chunk layout instead of stored raw - a corrupt
+                // index here would otherwise make a later GetComponent/iteration
+                // index a chunk or slot out of bounds (OOB read/write). A bad
+                // archetypeIndex used to be silently skipped; now it fails the
+                // whole load like any other corrupted record.
+                if (archetypeIndex >= m_archetypes.size())
+                    return false;
+
+                Archetype* arch = m_archetypes[archetypeIndex].archetype.get();
+                if (chunkIndex >= arch->GetChunkCount() ||
+                    entityIndex >= arch->GetChunkEntityCount(chunkIndex))
+                    return false;
+
+                EntityRecord location;
+                location.archetype = arch;
+                location.location = EntityLocation(chunkIndex, entityIndex);
+                m_entityMap[entity] = location;
             }
             
             return !reader.HasError();
@@ -1024,8 +1143,14 @@ namespace Astra
             {
                 auto& dstComp = dstComponents[dstIdx];
                 const auto& dstArrayInfo = dstChunk->m_componentArrays[dstComp.id];
+
+                if (dstArrayInfo.base == nullptr) ASTRA_UNLIKELY
+                {
+                    continue;  // empty component: nothing to construct or move
+                }
+
                 void* dstPtr = static_cast<std::byte*>(dstArrayInfo.base) + dstEntityIdx * dstArrayInfo.stride;
-                
+
                 if (dstComp.id == newComponentId) ASTRA_UNLIKELY
                 {
                     new (dstPtr) T(std::forward<Args>(args)...);
@@ -1118,10 +1243,6 @@ namespace Astra
         template<typename PostMoveOp>
         void BatchMoveEntitiesInternal(Archetype* srcArchetype, Archetype* dstArchetype, SmallVector<std::pair<Entity, EntityLocation>, 8>& entityBatch, PostMoveOp&& postMoveOp)
         {
-#ifdef ASTRA_BUILD_DEBUG
-            printf("BatchMoveEntitiesInternal: Moving %zu entities from archetype %p to %p\n", 
-                   entityBatch.size(), srcArchetype, dstArchetype);
-#endif
             // Check if already sorted (common case for batch-created entities)
             bool needsSort = false;
             for (size_t i = 1; i < entityBatch.size(); ++i)
@@ -1154,21 +1275,19 @@ namespace Astra
             // Use new batch move infrastructure
             std::vector<EntityLocation> newLocations = dstArchetype->BatchMoveEntitiesFrom(
                 entitiesToAdd, *srcArchetype, srcLocations);
-            
-#ifdef ASTRA_BUILD_DEBUG
-            printf("  BatchMoveEntitiesFrom returned %zu locations (expected %zu)\n", 
-                   newLocations.size(), entityBatch.size());
-#endif
-            
+
             // Check if the operation succeeded (non-empty result means success)
             if (newLocations.empty() && !entityBatch.empty())
             {
-                // Failed to allocate chunks - cannot proceed with batch operation
-                // This is a critical failure as we cannot guarantee entity integrity
-#ifdef ASTRA_BUILD_DEBUG
-                printf("  ERROR: Failed to allocate chunks for batch move!\n");
-#endif
-                ASTRA_ASSERT(false, "Failed to allocate chunks for batch move operation");
+                // Chunk-pool exhaustion is a recoverable allocation failure, not an
+                // invariant violation - it must not abort in any config (mirrors the
+                // "if (!chunk) return ..." bails elsewhere in Archetype.hpp). At this
+                // point BatchMoveEntitiesFrom has failed before mutating dstArchetype
+                // (no entities placed, m_entityCount/m_chunks untouched) and
+                // srcArchetype/m_entityMap haven't been touched yet either (the
+                // post-move op, entity-map update, and RemoveEntities all happen
+                // below) - so bailing here leaves entityBatch exactly as it was
+                // before the call, and the batch simply remains in srcArchetype.
                 return;
             }
             
@@ -1261,6 +1380,12 @@ namespace Astra
             {
                 auto& dstComp = dstComponents[dstIdx];
                 const auto& dstArrayInfo = dstChunk->m_componentArrays[dstComp.id];
+
+                if (dstArrayInfo.base == nullptr) ASTRA_UNLIKELY
+                {
+                    continue;  // empty component: nothing to construct or move
+                }
+
                 void* dstPtr = static_cast<std::byte*>(dstArrayInfo.base) + dstEntityIdx * dstArrayInfo.stride;
 
                 if (dstComp.id == newComponentId) ASTRA_UNLIKELY
@@ -1323,6 +1448,7 @@ namespace Astra
         Archetype* m_rootArchetype = nullptr;
         
         std::atomic<uint32_t> m_structuralChangeCounter{0};  // Fast path check
+        std::atomic<uint32_t> m_archetypeRemovalCounter{0};  // Bumped when archetypes are deleted; views must fully re-collect
         uint32_t m_generation = 1;  // Generation counter for new archetypes
 
         template<typename... QueryArgs>

@@ -234,7 +234,9 @@ namespace
     // like SandboxHudTest.cpp's Fixture).
     void EnsureSandboxPhysicsResource(Astra::Registry& reg)
     {
-        if (reg.GetResource<Arcane::PhysicsResource>()) return;
+        // Astra snapshot format v2 round-trips resources -> restore reinstalls a world-less
+        // PhysicsResource shell; rebuild the world whenever it is missing (mirror of Sandbox.cpp).
+        if (auto* res = reg.GetResource<Arcane::PhysicsResource>(); res && res->world) return;
         Phys::WorldDef wd;
         wd.gravityY = kSandboxGravityY;
         auto world = std::make_unique<Phys::PhysicsWorld>(wd);

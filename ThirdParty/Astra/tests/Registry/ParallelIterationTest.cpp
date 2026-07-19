@@ -56,12 +56,12 @@ namespace
                 std::make_shared<Astra::Testing::TestWorkerPool>();
             std::atomic<int> calls{0};
             void ParallelFor(size_t count, size_t minBatch,
-                             const std::function<void(size_t, size_t)>& fn) override
+                             Mosaic::FunctionRef<void(size_t, size_t, uint32_t)> fn) override
             {
                 calls.fetch_add(1);
                 inner->ParallelFor(count, minBatch, fn);
             }
-            size_t WorkerCount() const noexcept override { return inner->WorkerCount(); }
+            uint32_t WorkerCount() const noexcept override { return inner->WorkerCount(); }
         };
 
         auto sched = std::make_shared<CountingScheduler>();
@@ -108,8 +108,8 @@ namespace
 
         // Two distinct typed systems (lambda taking Registry& does not satisfy
         // LambdaLike in Astra — use explicit System structs instead).
-        scheduler.AddSystem<CountingSystem<0>>(ran);
-        scheduler.AddSystem<CountingSystem<1>>(ran);
+        (void)scheduler.AddSystem<CountingSystem<0>>(ran);
+        (void)scheduler.AddSystem<CountingSystem<1>>(ran);
 
         Astra::ParallelExecutor executor(std::make_shared<Astra::Testing::TestWorkerPool>());
         scheduler.Execute(registry, &executor);

@@ -8,7 +8,8 @@
 
 #include <cstdint>
 
-namespace Astra { class TypeContext; class IWorkScheduler; class BinaryWriter; class BinaryReader; }
+namespace Astra { class TypeContext; class BinaryWriter; class BinaryReader; }
+namespace Mosaic { struct IWorkScheduler; }   // the shared data-parallel seam (Astra aliases this)
 
 namespace Arcane
 {
@@ -24,13 +25,17 @@ namespace Arcane
     //     mid-vtable (E01-2), and Assets gained SetDevice before GetTexture. Any of
     //     these mismatched across the boundary is a vtable/stack smash; the version
     //     gate must reject a cross-build pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 4;
+    // v5 (2026-07-19): the re-vendored Astra migrated its threading seam to
+    //     Mosaic, so workScheduler is now Mosaic::IWorkScheduler (per-lane worker id
+    //     + FunctionRef callback) -- a DIFFERENT vtable than the prior Astra-native
+    //     IWorkScheduler. A stale plugin would vtable-mismatch; reject the pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 5;
 
     struct EngineContext
     {
         uint32_t               abiVersion;     // == kGamePluginABIVersion at the host
         Astra::TypeContext*    typeContext;    // plugin calls Astra::SetTypeContext(this) FIRST
-        Astra::IWorkScheduler* workScheduler;  // the one engine enkiTS adapter (shared instance)
+        Mosaic::IWorkScheduler* workScheduler; // the one engine enkiTS adapter (shared instance)
         Arcane::ITaskExecutor* taskExecutor;   // SAME enki pool, worker-index ParallelFor (physics/general)
         Arcane::Runtime*       engine;         // registry, schedulers, snapshot/restore, render ctx
 

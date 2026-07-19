@@ -17,7 +17,7 @@ namespace Arcane
     class Simulation
     {
     public:
-        explicit Simulation(std::shared_ptr<Astra::IWorkScheduler> sched)
+        explicit Simulation(std::shared_ptr<Mosaic::IWorkScheduler> sched)
             : m_sched(std::move(sched))
             , m_registry(MakeConfig(m_sched))
             , m_schedulers(m_sched) {}
@@ -26,14 +26,14 @@ namespace Arcane
         SystemSchedulers&  Schedulers() noexcept { return m_schedulers; }
 
     private:
-        static Astra::Registry::Config MakeConfig(std::shared_ptr<Astra::IWorkScheduler> s)
+        static Astra::Registry::Config MakeConfig(std::shared_ptr<Mosaic::IWorkScheduler> s)
         {
             Astra::Registry::Config cfg;
             cfg.workScheduler = std::move(s);
             return cfg;
         }
 
-        std::shared_ptr<Astra::IWorkScheduler> m_sched;
+        std::shared_ptr<Mosaic::IWorkScheduler> m_sched;
         Astra::Registry  m_registry;
         SystemSchedulers m_schedulers;
     };

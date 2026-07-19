@@ -44,7 +44,7 @@ namespace Arcane
     struct Runtime::Impl
     {
         JobSystem                                   jobs;
-        std::shared_ptr<Astra::IWorkScheduler>      sched;
+        std::shared_ptr<Mosaic::IWorkScheduler>     sched;
         std::unique_ptr<Astra::TypeContext>         ownedContext;   // null when an external one is injected
         Astra::TypeContext*                         context = nullptr;
         std::shared_ptr<Astra::ComponentRegistry>   components;
@@ -152,7 +152,7 @@ namespace Arcane
     SystemSchedulers& Runtime::Schedulers() noexcept { return *m_impl->schedulers; }
     RunLoop&          Runtime::Loop()       noexcept { return *m_impl->loop; }
     Astra::TypeContext*    Runtime::TypeContext()   noexcept { return m_impl->context; }
-    Astra::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
+    Mosaic::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
     ITaskExecutor*         Runtime::TaskExecutor()  noexcept { return m_impl->jobs.TaskExecutor(); }
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
     Assets& Runtime::AssetsFacade() noexcept { return *m_impl->assets; }

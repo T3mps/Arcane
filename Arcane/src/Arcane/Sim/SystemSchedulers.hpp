@@ -24,7 +24,7 @@ namespace Arcane
         Astra::ParallelExecutor executor;     // enkiTS-backed; null scheduler -> sequential
 
         // sched may be null (sequential inline execution -- fine for tests/headless).
-        explicit SystemSchedulers(std::shared_ptr<Astra::IWorkScheduler> sched)
+        explicit SystemSchedulers(std::shared_ptr<Mosaic::IWorkScheduler> sched)
             : executor(std::move(sched)) {}
     };
 }

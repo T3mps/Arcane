@@ -8,6 +8,7 @@ workspace "Astra"
     
     IncludeDir = {}
     IncludeDir["Astra"] = "include"
+    IncludeDir["Mosaic"] = "ThirdParty/Mosaic/include"
     IncludeDir["GoogleTest"] = "vendor/GoogleTest/googletest/include"
     IncludeDir["GoogleMock"] = "vendor/GoogleTest/googlemock/include"
     IncludeDir["GoogleBenchmark"] = "vendor/GoogleBenchmark/include"
@@ -48,10 +49,17 @@ workspace "Astra"
                 "tests/**.hpp",
                 "tests/**.cpp"
             }
-            
+
+            removefiles
+            {
+                "tests/Compile/**.hpp",
+                "tests/Compile/**.cpp"
+            }
+
             includedirs
             {
                 "%{IncludeDir.Astra}",
+                "%{IncludeDir.Mosaic}",
                 "%{IncludeDir.GoogleTest}",
                 "%{IncludeDir.GoogleMock}"
             }
@@ -139,6 +147,7 @@ workspace "Astra"
             includedirs
             {
                 "%{IncludeDir.Astra}",
+                "%{IncludeDir.Mosaic}",
                 "%{IncludeDir.GoogleBenchmark}",
                 "benchmark",  -- For local includes
                 "tests"       -- Reference pool reuse in benchmark tasks
@@ -247,6 +256,39 @@ workspace "Astra"
                 filter { "configurations:Dist", "system:linux or system:macosx" }
                     buildoptions { "-O3", "-flto", "-fomit-frame-pointer" }
                     linkoptions { "-flto", "-s" }  -- -s strips symbols
-                    
+
+        -- Compile checks: alternate entity widths must keep building.
+        local function astraCompileCheck(name, sourceFile)
+            project(name)
+                kind "ConsoleApp"
+                language "C++"
+                cppdialect "C++20"
+                staticruntime "on"
+                location "ide"
+                targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+                objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+                files { sourceFile }
+                includedirs { "%{IncludeDir.Astra}", "%{IncludeDir.Mosaic}" }
+                filter "system:windows"
+                    systemversion "latest"
+                    buildoptions { "/Zc:__cplusplus", "/arch:AVX", "/bigobj" }
+                    defines { "__SSE2__", "__SSE4_2__" }
+                    links { "advapi32" }
+                filter "system:linux"
+                    links { "pthread" }
+                    buildoptions { "-mavx" }
+                filter "configurations:Debug"
+                    runtime "Debug"
+                    symbols "on"
+                    defines { "ASTRA_BUILD_DEBUG" }
+                filter "configurations:Release or configurations:Dist"
+                    runtime "Release"
+                    optimize "speed"
+                    defines { "NDEBUG" }
+                filter {}
+        end
+        astraCompileCheck("AstraCompile16", "tests/Compile/Entity16Main.cpp")
+        astraCompileCheck("AstraCompile64", "tests/Compile/Entity64Main.cpp")
+
     group ""
     

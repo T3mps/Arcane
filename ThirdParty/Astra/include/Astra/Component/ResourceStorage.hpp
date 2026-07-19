@@ -91,13 +91,16 @@ namespace Astra
         ASTRA_NODISCARD T* Get() noexcept
         {
             ComponentID id = TypeID<T>::Value();
+            if (id >= MAX_COMPONENTS) ASTRA_UNLIKELY
+                return nullptr;
             uint16_t index = m_sparse[id];
             if (index == INVALID_INDEX) [[unlikely]]
                 return nullptr;
 
             ASTRA_ASSERT(index < m_resources.size(), "Invalid resource index");
             auto& slot = m_resources[index];
-            ASTRA_ASSERT(slot.isValid, "Invalid resource slot");
+            if (!slot.isValid) ASTRA_UNLIKELY
+                return nullptr;
 
             // Return pointer to resource data
             return reinterpret_cast<T*>(slot.isHeap ? slot.storage.heapPtr : slot.storage.inlineData);
@@ -107,13 +110,16 @@ namespace Astra
         ASTRA_NODISCARD const T* Get() const noexcept
         {
             ComponentID id = TypeID<T>::Value();
+            if (id >= MAX_COMPONENTS) ASTRA_UNLIKELY
+                return nullptr;
             uint16_t index = m_sparse[id];
             if (index == INVALID_INDEX) [[unlikely]]
                 return nullptr;
 
             ASTRA_ASSERT(index < m_resources.size(), "Invalid resource index");
             const auto& slot = m_resources[index];
-            ASTRA_ASSERT(slot.isValid, "Invalid resource slot");
+            if (!slot.isValid) ASTRA_UNLIKELY
+                return nullptr;
 
             // Return pointer to resource data
             return reinterpret_cast<const T*>(slot.isHeap ? slot.storage.heapPtr : slot.storage.inlineData);
@@ -124,7 +130,12 @@ namespace Astra
         {
 
             ComponentID id = TypeID<T>::Value();
-            ASTRA_ASSERT(id < MAX_COMPONENTS, "Component ID out of range");
+            if (id >= MAX_COMPONENTS) ASTRA_UNLIKELY
+                return nullptr;
+
+            auto registry = m_componentRegistry.lock();
+            if (!registry) ASTRA_UNLIKELY
+                return nullptr;
 
             uint16_t index = m_sparse[id];
 
@@ -133,20 +144,19 @@ namespace Astra
                 // New resource - allocate slot
                 index = static_cast<uint16_t>(m_resources.size());
                 ASTRA_ASSERT(index < INVALID_INDEX, "Too many resources");
-                
+
                 m_sparse[id] = index;
                 m_resources.emplace_back();
 
                 auto& slot = m_resources[index];
                 slot.id = id;
                 slot.size = sizeof(T);
-                
-                auto registry = m_componentRegistry.lock();
-                ASTRA_ASSERT(registry, "Component registry expired");
+
                 registry->RegisterComponent<T>();
-                slot.descriptor = registry->GetComponentDescriptor(id);
-                ASTRA_ASSERT(slot.descriptor, "Failed to get component descriptor");
-                slot.isValid = true;
+                const ComponentDescriptor* desc = registry->GetComponentDescriptor(id);
+                if (!desc) ASTRA_UNLIKELY
+                    return nullptr;
+                slot.descriptor = *desc;
 
                 // Decide between inline storage and heap allocation
                 if constexpr (sizeof(T) <= SBO_SIZE)
@@ -160,18 +170,25 @@ namespace Astra
                     // Allocate from heap
                     slot.isHeap = true;
                     AllocResult result = AllocateMemory(sizeof(T), alignof(T));
-                    ASTRA_ASSERT(result.ptr, "Failed to allocate memory for resource");
+                    if (!result.ptr) ASTRA_UNLIKELY
+                        return nullptr;
                     slot.storage.heapPtr = result.ptr;
                     new (slot.storage.heapPtr) T(std::forward<T>(resource));
                 }
+
+                // Only mark the slot valid once its storage is fully established —
+                // a failed heap allocation above must leave the slot invalid so
+                // teardown never frees a garbage pointer. (Mirrors SetByID/Deserialize.)
+                slot.isValid = true;
             }
             else
             {
                 // Update existing resource
                 auto& slot = m_resources[index];
-                ASTRA_ASSERT(slot.isValid, "Invalid resource slot");
+                if (!slot.isValid) ASTRA_UNLIKELY
+                    return nullptr;
                 ASTRA_ASSERT(slot.size == sizeof(T), "Resource size mismatch");
-                
+
                 // Update existing resource
                 T* existing = reinterpret_cast<T*>(slot.isHeap ? slot.storage.heapPtr : slot.storage.inlineData);
                 *existing = std::forward<T>(resource);
@@ -199,7 +216,12 @@ namespace Astra
         {
 
             ComponentID id = TypeID<T>::Value();
-            ASTRA_ASSERT(id < MAX_COMPONENTS, "Component ID out of range");
+            if (id >= MAX_COMPONENTS) ASTRA_UNLIKELY
+                return nullptr;
+
+            auto registry = m_componentRegistry.lock();
+            if (!registry) ASTRA_UNLIKELY
+                return nullptr;
 
             uint16_t index = m_sparse[id];
 
@@ -208,20 +230,19 @@ namespace Astra
                 // New resource - allocate slot
                 index = static_cast<uint16_t>(m_resources.size());
                 ASTRA_ASSERT(index < INVALID_INDEX, "Too many resources");
-                
+
                 m_sparse[id] = index;
                 m_resources.emplace_back();
 
                 auto& slot = m_resources[index];
                 slot.id = id;
                 slot.size = sizeof(T);
-                
-                auto registry = m_componentRegistry.lock();
-                ASTRA_ASSERT(registry, "Component registry expired");
+
                 registry->RegisterComponent<T>();
-                slot.descriptor = registry->GetComponentDescriptor(id);
-                ASTRA_ASSERT(slot.descriptor, "Failed to get component descriptor");
-                slot.isValid = true;
+                const ComponentDescriptor* desc = registry->GetComponentDescriptor(id);
+                if (!desc) ASTRA_UNLIKELY
+                    return nullptr;
+                slot.descriptor = *desc;
 
                 // Decide between inline storage and heap allocation
                 if constexpr (sizeof(T) <= SBO_SIZE)
@@ -235,31 +256,35 @@ namespace Astra
                     // Allocate from heap and construct in-place
                     slot.isHeap = true;
                     AllocResult result = AllocateMemory(sizeof(T), alignof(T));
-                    ASTRA_ASSERT(result.ptr, "Failed to allocate memory for resource");
+                    if (!result.ptr) ASTRA_UNLIKELY
+                        return nullptr;
                     slot.storage.heapPtr = result.ptr;
                     new (slot.storage.heapPtr) T(std::forward<Args>(args)...);
                 }
+
+                // Only mark the slot valid once its storage is fully established —
+                // a failed heap allocation above must leave the slot invalid so
+                // teardown never frees a garbage pointer. (Mirrors SetByID/Deserialize.)
+                slot.isValid = true;
             }
             else
             {
                 // Update existing resource - destroy old and construct new
                 auto& slot = m_resources[index];
-                ASTRA_ASSERT(slot.isValid, "Invalid resource slot");
+                if (!slot.isValid) ASTRA_UNLIKELY
+                    return nullptr;
                 ASTRA_ASSERT(slot.size == sizeof(T), "Resource size mismatch");
-                
-                // Destroy existing resource
-                if (slot.descriptor)
+
+                // Destroy existing resource (slot is valid, so its descriptor is set)
+                if (slot.isHeap)
                 {
-                    if (slot.isHeap)
-                    {
-                        slot.descriptor->Destruct(slot.storage.heapPtr);
-                    }
-                    else
-                    {
-                        slot.descriptor->Destruct(slot.storage.inlineData);
-                    }
+                    slot.descriptor.Destruct(slot.storage.heapPtr);
                 }
-                
+                else
+                {
+                    slot.descriptor.Destruct(slot.storage.inlineData);
+                }
+
                 // Construct new resource in-place
                 T* existing = reinterpret_cast<T*>(slot.isHeap ? slot.storage.heapPtr : slot.storage.inlineData);
                 new (existing) T(std::forward<Args>(args)...);
@@ -288,19 +313,16 @@ namespace Astra
             if (!slot.isValid)
                 return;
 
-            // Destruct the resource
-            if (slot.descriptor)
+            // Destruct the resource (slot is valid, so its descriptor value is set)
+            if (slot.isHeap)
             {
-                if (slot.isHeap)
-                {
-                    slot.descriptor->Destruct(slot.storage.heapPtr);
-                    FreeMemory(slot.storage.heapPtr, slot.size);
-                    slot.storage.heapPtr = nullptr;
-                }
-                else
-                {
-                    slot.descriptor->Destruct(slot.storage.inlineData);
-                }
+                slot.descriptor.Destruct(slot.storage.heapPtr);
+                FreeMemory(slot.storage.heapPtr, slot.size);
+                slot.storage.heapPtr = nullptr;
+            }
+            else
+            {
+                slot.descriptor.Destruct(slot.storage.inlineData);
             }
             
             slot.isValid = false;
@@ -321,17 +343,17 @@ namespace Astra
         {
             for (auto& slot : m_resources)
             {
-                if (slot.isValid && slot.descriptor)
+                if (slot.isValid)
                 {
                     if (slot.isHeap)
                     {
-                        slot.descriptor->Destruct(slot.storage.heapPtr);
+                        slot.descriptor.Destruct(slot.storage.heapPtr);
                         FreeMemory(slot.storage.heapPtr, slot.size);
                         slot.storage.heapPtr = nullptr;
                     }
                     else
                     {
-                        slot.descriptor->Destruct(slot.storage.inlineData);
+                        slot.descriptor.Destruct(slot.storage.inlineData);
                     }
                     slot.isValid = false;
                 }
@@ -440,13 +462,19 @@ namespace Astra
         ASTRA_NODISCARD std::vector<const ComponentDescriptor*> GetAllResources() const
         {
             std::vector<const ComponentDescriptor*> result;
+            auto registry = m_componentRegistry.lock();
+            if (!registry)
+                return result;
             result.reserve(m_resources.size());
 
             for (const auto& slot : m_resources)
             {
-                if (slot.isValid && slot.descriptor)
+                if (slot.isValid)
                 {
-                    result.push_back(slot.descriptor);
+                    // Return the registry's stable descriptor pointer, not a pointer into
+                    // the (relocatable) resource vector's by-value slot copy.
+                    if (const ComponentDescriptor* desc = registry->GetComponentDescriptor(slot.id))
+                        result.push_back(desc);
                 }
             }
 
@@ -526,8 +554,7 @@ namespace Astra
                 auto& slot = m_resources[index];
                 slot.id = id;
                 slot.size = static_cast<uint16_t>(desc->size);
-                slot.descriptor = desc;
-                slot.isValid = true;
+                slot.descriptor = *desc;
 
                 // Decide between inline storage and heap allocation
                 if (desc->size <= SBO_SIZE)
@@ -544,6 +571,11 @@ namespace Astra
                     slot.storage.heapPtr = result.ptr;
                     desc->ConstructWith(slot.storage.heapPtr, data);
                 }
+
+                // Only mark the slot valid once its storage is fully established —
+                // a failed heap allocation above must leave the slot invalid so
+                // teardown never frees a garbage pointer. (Mirrors Deserialize.)
+                slot.isValid = true;
             }
             else
             {
@@ -594,19 +626,16 @@ namespace Astra
             if (!slot.isValid)
                 return false;
 
-            // Destruct the resource
-            if (slot.descriptor)
+            // Destruct the resource (slot is valid, so its descriptor value is set)
+            if (slot.isHeap)
             {
-                if (slot.isHeap)
-                {
-                    slot.descriptor->Destruct(slot.storage.heapPtr);
-                    FreeMemory(slot.storage.heapPtr, slot.size);
-                    slot.storage.heapPtr = nullptr;
-                }
-                else
-                {
-                    slot.descriptor->Destruct(slot.storage.inlineData);
-                }
+                slot.descriptor.Destruct(slot.storage.heapPtr);
+                FreeMemory(slot.storage.heapPtr, slot.size);
+                slot.storage.heapPtr = nullptr;
+            }
+            else
+            {
+                slot.descriptor.Destruct(slot.storage.inlineData);
             }
 
             slot.isValid = false;
@@ -625,6 +654,97 @@ namespace Astra
             return true;
         }
 
+        // ====================== Serialization (archive v2+) ======================
+
+        void Serialize(BinaryWriter& writer) const
+        {
+            uint32_t count = 0;
+            for (const auto& slot : m_resources)
+            {
+                if (slot.isValid) ++count;
+            }
+            writer(count);
+
+            for (const auto& slot : m_resources)
+            {
+                if (!slot.isValid) continue;
+                writer(slot.descriptor.hash);
+                void* data = slot.isHeap
+                    ? slot.storage.heapPtr
+                    : const_cast<void*>(static_cast<const void*>(slot.storage.inlineData));
+                slot.descriptor.serializeVersioned(writer, data);
+            }
+        }
+
+        // Restores resources previously written by Serialize. Every stored
+        // type must already be registered in the ComponentRegistry (looked up
+        // by stable hash); returns false on unknown types or stream errors.
+        bool Deserialize(BinaryReader& reader)
+        {
+            uint32_t count = 0;
+            reader(count);
+            if (reader.HasError()) return false;
+
+            auto registry = m_componentRegistry.lock();
+            if (!registry) return false;
+
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                uint64_t hash = 0;
+                reader(hash);
+                if (reader.HasError()) return false;
+
+                const ComponentDescriptor* desc = registry->GetComponentDescriptorByHash(hash);
+                if (!desc || desc->id >= MAX_COMPONENTS)
+                    return false;   // caller maps this to UnknownComponent
+
+                // Allocate a slot (same layout policy as SetByID)…
+                uint16_t index = m_sparse[desc->id];
+                void* dst = nullptr;
+                if (index == INVALID_INDEX)
+                {
+                    index = static_cast<uint16_t>(m_resources.size());
+                    if (index >= INVALID_INDEX) return false;
+                    m_sparse[desc->id] = index;
+                    m_resources.emplace_back();
+
+                    auto& slot = m_resources[index];
+                    slot.id = desc->id;
+                    slot.size = static_cast<uint16_t>(desc->size);
+                    slot.descriptor = *desc;
+
+                    if (desc->size <= SBO_SIZE)
+                    {
+                        slot.isHeap = false;
+                        dst = slot.storage.inlineData;
+                    }
+                    else
+                    {
+                        slot.isHeap = true;
+                        AllocResult result = AllocateMemory(desc->size, desc->alignment);
+                        if (!result.ptr) return false;
+                        slot.storage.heapPtr = result.ptr;
+                        dst = result.ptr;
+                    }
+                    // Only mark the slot valid once its storage is fully
+                    // established — a failed heap allocation above must leave
+                    // the slot invalid so teardown never frees a garbage pointer.
+                    slot.isValid = true;
+                    // …default-construct, then deserialize over it.
+                    desc->DefaultConstruct(dst);
+                }
+                else
+                {
+                    auto& slot = m_resources[index];
+                    dst = slot.isHeap ? slot.storage.heapPtr : slot.storage.inlineData;
+                }
+
+                if (!desc->deserializeVersioned(reader, dst))
+                    return false;
+            }
+            return !reader.HasError();
+        }
+
     private:
         struct ResourceSlot
         {
@@ -635,13 +755,62 @@ namespace Astra
             };
             
             Storage storage;
-            const ComponentDescriptor* descriptor;  // Pointer instead of value (8 vs 48 bytes)
+            ComponentDescriptor descriptor;  // Stored BY VALUE: teardown Destruct() must not
+                                             // depend on the ComponentRegistry outliving this
+                                             // slot, and a pointer-into-registry was a
+                                             // dangling-pointer hazard across a rehash.
             ComponentID id;
             uint16_t size;      // Actual size of the resource
             bool isHeap : 1;    // true if using heapPtr, false if using inlineData
             bool isValid : 1;   // true if slot contains valid resource
-            
-            ResourceSlot() : descriptor(nullptr), id(0), size(0), isHeap(false), isValid(false) {}
+
+            ResourceSlot() : descriptor{}, id(0), size(0), isHeap(false), isValid(false) {}
+
+            ResourceSlot(ResourceSlot&& other) noexcept :
+                descriptor(other.descriptor), id(other.id), size(other.size),
+                isHeap(other.isHeap), isValid(other.isValid)
+            {
+                if (isValid && !isHeap)
+                {
+                    descriptor.MoveConstruct(storage.inlineData, other.storage.inlineData);
+                    descriptor.Destruct(other.storage.inlineData);
+                }
+                else
+                {
+                    storage.heapPtr = other.storage.heapPtr;
+                }
+                other.isValid = false;
+                other.storage.heapPtr = nullptr;
+            }
+
+            ResourceSlot& operator=(ResourceSlot&& other) noexcept
+            {
+                if (this != &other)
+                {
+                    if (isValid)
+                    {
+                        void* mine = isHeap ? storage.heapPtr : static_cast<void*>(storage.inlineData);
+                        descriptor.Destruct(mine);
+                        if (isHeap) FreeMemory(storage.heapPtr, size);
+                    }
+                    descriptor = other.descriptor; id = other.id; size = other.size;
+                    isHeap = other.isHeap; isValid = other.isValid;
+                    if (isValid && !isHeap)
+                    {
+                        descriptor.MoveConstruct(storage.inlineData, other.storage.inlineData);
+                        descriptor.Destruct(other.storage.inlineData);
+                    }
+                    else
+                    {
+                        storage.heapPtr = other.storage.heapPtr;
+                    }
+                    other.isValid = false;
+                    other.storage.heapPtr = nullptr;
+                }
+                return *this;
+            }
+            ResourceSlot(const ResourceSlot&) = delete;
+            ResourceSlot& operator=(const ResourceSlot&) = delete;
         };
 
         static constexpr uint16_t INVALID_INDEX = std::numeric_limits<uint16_t>::max();

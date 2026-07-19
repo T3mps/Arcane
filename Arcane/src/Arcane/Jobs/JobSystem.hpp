@@ -33,7 +33,7 @@ namespace Arcane
 
         // The shared enkiTS-backed scheduler. Inject the SAME pointer into every
         // module / registry / executor that needs parallelism.
-        std::shared_ptr<Astra::IWorkScheduler> WorkScheduler() const;
+        std::shared_ptr<Mosaic::IWorkScheduler> WorkScheduler() const;
 
         // The SAME enki pool as WorkScheduler(), exposed through the engine's
         // ITaskExecutor seam (worker-index-aware ParallelFor; FunctionRef callback).

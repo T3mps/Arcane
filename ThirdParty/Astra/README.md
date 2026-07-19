@@ -227,6 +227,8 @@ for (auto [entity, pos, vel] : view)
 }
 ```
 
+Structural mutation (create/destroy entity, add/remove component) during `ForEach` is unsupported; to change entity structure while iterating, record the changes into a `CommandBuffer` and call `Execute()` after the loop.
+
 ### Query Modifiers
 
 - `Not<T>` - Exclude entities with component T
@@ -269,7 +271,7 @@ for (Astra::Entity linked : relations.GetLinks()) {
 Optimize entity creation and destruction:
 
 ```cpp
-// Default-construct 1000 entities (Position + Velocity zeroed)
+// Default-construct 1000 entities (value-initialized: NSDMIs apply, PODs zeroed)
 std::vector<Astra::Entity> enemies(1000);
 registry.CreateEntities<Position, Velocity>(1000, enemies);
 
@@ -285,6 +287,19 @@ registry.CreateEntitiesWith<Position, Velocity>(1000, enemies,
 // Batch destroy
 registry.DestroyEntities(enemies);
 ```
+
+## Behavioral Contracts (3.4)
+
+The following behaviors are guaranteed across all build configurations (Debug, Release, Dist):
+
+- Default-constructed components are **value-initialized** in every build configuration (NSDMIs apply; trivially-default-constructible types are zeroed) — single and batch creation agree.
+- `Events::ComponentRemoved` fires **before** removal; the component pointer is valid only during the handler.
+- CommandBuffer payloads support component alignment up to 16 bytes (compile-time enforced); component storage supports alignment up to 64 bytes. Over-aligned components must use direct Registry APIs.
+- `CommandBuffer::CreateEntity`/`CreateEntities` allocate at record time and must be recorded only from the Registry-owning thread; all other commands may be recorded from workers via `ParallelCommandBuffer`.
+- Invalid entity handles (exhaustion) and destroyed handles never enter component storage; batch creation reports how many entities were actually created and marks unfulfilled slots `Entity::Invalid()`.
+- Archives are format v2: ISA-portable checksums, fixed-width sizes, and **resources are persisted**. v1 archives load (64-bit producers; checksum verified only on the producing ISA family).
+- Views may be cached across frames: they observe entities added to pre-existing archetypes and survive `Defragment()`.
+- Recoverable inputs (cycles, self-links, invalid entities) are rejected gracefully in all configs — Debug no longer asserts on them.
 
 ## Advanced Features
 
@@ -310,6 +325,36 @@ Astra::Registry::Config config;
 config.workScheduler = scheduler;
 Astra::Registry registry(config);
 ```
+
+#### System scheduling contract (built-in `SystemScheduler`)
+
+The built-in scheduler is an **opt-in convenience**, not a guarantee. When you
+inject an `IWorkScheduler` and use `ParallelExecutor`, it groups systems that
+declare **disjoint** component masks and runs them concurrently. The rules:
+
+- **Declared masks are a promise of purity.** A system in a multi-member
+  parallel group must touch only the components in its `Reads`/`Writes` and must
+  perform **no** structural changes (create/destroy entity, add/remove
+  component). In Debug, an undeclared structural change trips an assert.
+- **`Astra::Exclusive`** — mark a system that does structural changes or reaches
+  outside its declared masks. It runs in its own solo group (nothing concurrent):
+
+  ```cpp
+  struct SpawnSystem : Astra::SystemTraits<Astra::Writes<Position>, Astra::Exclusive>
+  {
+      void operator()(Astra::Registry& r) { r.CreateEntity<Position>(); /* safe: solo */ }
+  };
+  ```
+
+- **Ordering.** Only component-mask dependencies are honored. Within a parallel
+  group, order is concurrent and unspecified. Independent systems are **not**
+  reordered across insertion order (the plan is insertion-order-stable, and
+  `SequentialExecutor` and `ParallelExecutor` produce identical observable
+  order). A hidden dependency between two mask-independent systems in the same
+  group (through a resource, event, or side effect) is a *system-order
+  ambiguity* and is not honored — express it via masks.
+- **Registration** (`AddSystem`) returns `Result<void, SystemError>` and must
+  not race `Execute` (single-writer, like the `Registry` itself).
 
 ### Memory Configuration
 

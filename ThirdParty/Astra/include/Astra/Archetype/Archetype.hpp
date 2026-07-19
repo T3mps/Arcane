@@ -3,13 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cassert>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <functional>
-#include <iostream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -154,6 +152,25 @@ namespace Astra
 
             size_t chunkSize = m_chunkPool ? m_chunkPool->GetChunkSize() : ArchetypeChunkPool::DEFAULT_CHUNK_SIZE;
             size_t remainingSpace = chunkSize > alignmentOverhead ? chunkSize - alignmentOverhead : 0;
+
+            // A single entity's footprint must fit in the usable chunk space. The old
+            // code clamped m_entitiesPerChunk to 1 and proceeded even when perEntitySize
+            // exceeded remainingSpace, so writing that one entity's components later
+            // overflowed past the chunk's actual allocation into neighboring memory.
+            // There is no valid per-chunk layout for this component set at this chunk
+            // size: refuse to initialize instead of clamping-and-overflowing. Leave
+            // m_initialized == false and m_entitiesPerChunk == 0 (its constructed
+            // default) and create no chunk; GetOrCreateChunk() and the batch-add paths
+            // check m_entitiesPerChunk == 0 and refuse to create a chunk that could
+            // never legally hold even one entity, so callers degrade gracefully
+            // (entity creation succeeds but the entity never gets this component)
+            // instead of overflowing.
+            if (perEntitySize > remainingSpace) ASTRA_UNLIKELY
+            {
+                m_initialized = false;
+                return;
+            }
+
             size_t maxEntities = perEntitySize > 0 ? remainingSpace / perEntitySize : 256;
 
             // Round down to nearest power of 2 for fast modulo/division operations
@@ -204,6 +221,13 @@ namespace Astra
             size_t remainingCapacity = GetRemainingCapacity();
             if (count > remainingCapacity) ASTRA_UNLIKELY
             {
+                if (m_entitiesPerChunk == 0) ASTRA_UNLIKELY
+                {
+                    // See GetOrCreateChunk(): this archetype never found a valid
+                    // per-chunk layout and can never hold an entity.
+                    return locations;
+                }
+
                 size_t additionalNeeded = count - remainingCapacity;
                 size_t newChunksNeeded = (additionalNeeded + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
 
@@ -266,6 +290,13 @@ namespace Astra
             size_t remainingCapacity = GetRemainingCapacity();
             if (count > remainingCapacity) ASTRA_UNLIKELY
             {
+                if (m_entitiesPerChunk == 0) ASTRA_UNLIKELY
+                {
+                    // See GetOrCreateChunk(): this archetype never found a valid
+                    // per-chunk layout and can never hold an entity.
+                    return locations;
+                }
+
                 size_t additionalNeeded = count - remainingCapacity;
                 size_t newChunksNeeded = (additionalNeeded + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
 
@@ -454,7 +485,12 @@ namespace Astra
             {
                 ComponentID id = dstDesc.id;
                 const auto& dstInfo = dstArrays[id];
-                
+
+                if (dstInfo.base == nullptr) ASTRA_UNLIKELY
+                {
+                    continue;  // empty component: presence is carried by the mask
+                }
+
                 void* dstPtr = static_cast<std::byte*>(dstInfo.base) + dstEntityIndex * dstInfo.stride;
 
                 const auto& srcInfo = srcArrays[id];
@@ -524,9 +560,8 @@ namespace Astra
             // Batch construct component in each chunk
             for (auto& [chunkIndex, indices] : chunkBatches)
             {
-                ASTRA_ASSERT(chunkIndex < m_chunks.size(), "Chunk index out of bounds");
-                if (chunkIndex >= m_chunks.size()) ASTRA_UNLIKELY
-                    continue;  // Skip invalid chunk indices in Release builds
+                if (!ASTRA_ENSURE(chunkIndex < m_chunks.size(), "Chunk index out of bounds")) ASTRA_UNLIKELY
+                    continue;  // Skip invalid chunk indices
                 m_chunks[chunkIndex]->BatchConstructComponent<T>(indices, value);
             }
         }
@@ -632,17 +667,17 @@ namespace Astra
             {
                 writer(m_mask.Data()[i]);
             }
-            writer(m_entityCount);
-            writer(m_entitiesPerChunk);
+            writer(static_cast<uint64_t>(m_entityCount));
+            writer(static_cast<uint64_t>(m_entitiesPerChunk));
             writer(static_cast<uint32_t>(m_chunks.size()));
-            
+
             // Write component descriptors
             writer(static_cast<uint32_t>(m_componentDescriptors.size()));
             for (const auto& desc : m_componentDescriptors)
             {
                 writer(desc.hash);  // Write stable hash instead of runtime ID
-                writer(desc.size);
-                writer(desc.alignment);
+                writer(static_cast<uint64_t>(desc.size));
+                writer(static_cast<uint64_t>(desc.alignment));
                 writer(desc.version);
             }
             
@@ -723,8 +758,8 @@ namespace Astra
                 return ResultType::Err(reader.GetError());
             }
 
-            size_t entityCount;
-            size_t entitiesPerChunk;
+            uint64_t entityCount;
+            uint64_t entitiesPerChunk;
             uint32_t chunkCount;
             reader(entityCount);
             reader(entitiesPerChunk);
@@ -735,16 +770,41 @@ namespace Astra
                 return ResultType::Err(reader.GetError());
             }
 
+            // Bound chunkCount against the remaining buffer via the reader's
+            // width-agnostic count-bound helper (chunkCount is a uint32_t on disk;
+            // Archetype::Serialize writes it via writer(static_cast<uint32_t>(...))).
+            // Each chunk's only guaranteed fixed prefix is its 4-byte chunkEntityCount
+            // field; everything after it is variable-length.
+            if (reader.CountExceedsRemaining(chunkCount, sizeof(uint32_t)))
+            {
+                return ResultType::Err(SerializationError::CorruptedData);
+            }
+
             // Read component descriptors
             uint32_t descriptorCount;
             reader(descriptorCount);
+
+            if (reader.HasError())
+            {
+                return ResultType::Err(reader.GetError());
+            }
+
+            // Same bound, sized to a descriptor entry's fixed on-disk fields:
+            // hash(8) + size(8) + alignment(8) + version(4) = 28 bytes, written
+            // unconditionally by Archetype::Serialize for every descriptor.
+            constexpr uint64_t kMinBytesPerDescriptor = sizeof(uint64_t) * 3 + sizeof(uint32_t);
+            if (reader.CountExceedsRemaining(descriptorCount, kMinBytesPerDescriptor))
+            {
+                return ResultType::Err(SerializationError::CorruptedData);
+            }
+
             std::vector<ComponentDescriptor> descriptors;
             descriptors.reserve(descriptorCount);
 
             for (uint32_t i = 0; i < descriptorCount; ++i)
             {
                 uint64_t hash;
-                size_t size, alignment;
+                uint64_t size, alignment;
                 uint32_t version;
                 reader(hash)(size)(alignment)(version);
 
@@ -765,6 +825,45 @@ namespace Astra
                     // Component not registered - cannot deserialize
                     // The component with this hash needs to be registered before deserialization
                     return ResultType::Err(SerializationError::UnknownComponent);
+                }
+            }
+
+            // Validate that the saved per-chunk layout fits the pool we will
+            // allocate from — a save produced with a larger chunkSize must
+            // fail cleanly instead of overflowing chunk memory.
+            {
+                size_t perEntitySize = 0;
+                size_t nonEmptyComponents = 0;
+                for (const auto& d : descriptors)
+                {
+                    if (d.size == 0) continue;
+                    perEntitySize += d.size;
+                    ++nonEmptyComponents;
+                }
+                size_t alignmentOverhead = nonEmptyComponents > 1
+                    ? (nonEmptyComponents - 1) * CACHE_LINE_SIZE
+                    : 0;
+                size_t poolChunkSize = componentPool ? componentPool->GetChunkSize()
+                                                     : ArchetypeChunkPool::DEFAULT_CHUNK_SIZE;
+                if (static_cast<size_t>(entitiesPerChunk) * perEntitySize + alignmentOverhead > poolChunkSize)
+                {
+                    return ResultType::Err(SerializationError::SizeMismatch);
+                }
+
+                // The guard above is vacuous for a zero-component (or all-empty-
+                // component) archetype: perEntitySize == 0 makes the product 0
+                // regardless of entitiesPerChunk, so it never rejects anything.
+                // Every registry always carries such a root archetype, so this is
+                // not an edge case. Chunk::Chunk unconditionally does
+                // m_entities.reserve(entitiesPerChunk) for the entity-handle array,
+                // independent of component count, so bound entitiesPerChunk against
+                // that array's own footprint fitting in the chunk regardless of
+                // perEntitySize -- otherwise a corrupted entitiesPerChunk drives an
+                // unbounded reserve() that throws std::bad_alloc uncaught out of
+                // Registry::Load.
+                if (static_cast<uint64_t>(entitiesPerChunk) > static_cast<uint64_t>(poolChunkSize) / std::max<size_t>(1, sizeof(Entity)))
+                {
+                    return ResultType::Err(SerializationError::SizeMismatch);
                 }
             }
 
@@ -793,8 +892,21 @@ namespace Astra
                     return ResultType::Err(reader.GetError());
                 }
 
+                // A chunk cannot legally hold more entities than the pool chunk it
+                // will be allocated from (entitiesPerChunk, already validated above
+                // to fit the pool's chunk size). Without this guard, a corrupted or
+                // crafted chunkEntityCount drives the entity-add loop and the
+                // component-array reads below into writing past the end of the
+                // chunk's fixed-size heap arena -- and AddEntity's own capacity
+                // check is an ASTRA_ASSERT, which compiles out in Release/Dist,
+                // leaving the overflow live in shipping builds.
+                if (chunkEntityCount > entitiesPerChunk)
+                {
+                    return ResultType::Err(SerializationError::CorruptedData);
+                }
+
                 // Create new chunk
-                auto chunk = componentPool ? componentPool->CreateChunk(entitiesPerChunk, descriptors) : nullptr;
+                auto chunk = componentPool ? componentPool->CreateChunk(static_cast<size_t>(entitiesPerChunk), descriptors) : nullptr;
                 if (!chunk)
                 {
                     // Out of memory - cannot continue
@@ -873,7 +985,7 @@ namespace Astra
                 archetype->m_chunks.push_back(std::move(chunk));
             }
 
-            archetype->m_entityCount = entityCount;
+            archetype->m_entityCount = static_cast<size_t>(entityCount);
 
             return ResultType::Ok(std::move(archetype));
         }
@@ -1039,6 +1151,13 @@ namespace Astra
             size_t remainingCapacity = GetRemainingCapacity();
             if (count > remainingCapacity) ASTRA_UNLIKELY
             {
+                if (m_entitiesPerChunk == 0) ASTRA_UNLIKELY
+                {
+                    // See GetOrCreateChunk(): this archetype never found a valid
+                    // per-chunk layout and can never hold an entity.
+                    return {};
+                }
+
                 size_t additionalNeeded = count - remainingCapacity;
                 size_t newChunksNeeded = (additionalNeeded + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
 
@@ -1216,8 +1335,17 @@ namespace Astra
         
         std::pair<size_t, bool> GetOrCreateChunk()
         {
+            if (m_entitiesPerChunk == 0) ASTRA_UNLIKELY
+            {
+                // Initialize() never found a valid per-chunk layout for this component
+                // set (single-entity footprint exceeds the usable chunk space) - refuse
+                // to create a chunk that could never legally hold even one entity
+                // instead of overflowing into neighboring memory.
+                return {INVALID_CHUNK_INDEX, false};
+            }
+
             size_t chunkIndex = m_firstNonFullChunkIndex;
-            
+
             if (chunkIndex < m_chunks.size() && !m_chunks[chunkIndex]->IsFull()) ASTRA_LIKELY
             {
                 return {chunkIndex, false};
@@ -1305,11 +1433,11 @@ namespace Astra
                 for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
                 {
                     const auto& srcInfo = srcArrays[id];
-                    if (!srcInfo.isValid)
+                    if (!srcInfo.isValid || srcInfo.base == nullptr)
                     {
                         continue;
                     }
-                    
+
                     void* srcPtr = static_cast<std::byte*>(srcInfo.base) + srcEntityIndex * srcInfo.stride;
                     void* destPtr = static_cast<std::byte*>(destArrays[id].base) + destEntityIndex * destArrays[id].stride;
                     

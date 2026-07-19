@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -231,8 +230,8 @@ namespace Astra
                     
                     const auto& dstInfo = m_componentArrays[id];
                     const auto& srcInfo = srcChunk.m_componentArrays[id];
-                    
-                    if (!dstInfo.isValid || !srcInfo.isValid) continue;
+
+                    if (!dstInfo.isValid || !srcInfo.isValid || dstInfo.base == nullptr || srcInfo.base == nullptr) continue;
                     
                     if (dstInfo.descriptor.is_trivially_copyable && AreIndicesContiguous(dstIndices) && AreIndicesContiguous(srcIndices))
                     {
@@ -283,8 +282,10 @@ namespace Astra
                 if (!info.isValid)
                     return;
 
-                // Safety check: ensure base pointer is valid for non-empty components
-                if (info.base == nullptr && info.stride > 0) ASTRA_UNLIKELY
+                // Empty (tag) components have no storage (base==nullptr, stride==0);
+                // their presence is carried by the archetype mask. Any null base
+                // means there is nothing to construct — never form a pointer from it.
+                if (info.base == nullptr) ASTRA_UNLIKELY
                     return;
                 
                 // Debug validation
@@ -358,14 +359,14 @@ namespace Astra
                     for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
                     {
                         const auto& info = m_componentArrays[id];
-                        if (!info.isValid)
+                        if (!info.isValid || info.base == nullptr)
                         {
-                            continue;
+                            continue;  // empty (tag) component: no storage to touch
                         }
-                        
+
                         void* dstPtr = static_cast<std::byte*>(info.base) + index * info.stride;
                         void* srcPtr = static_cast<std::byte*>(info.base) + lastIndex * info.stride;
-                        
+
                         // Destruct destination, move from source
                         info.descriptor.Destruct(dstPtr);
                         info.descriptor.MoveConstruct(dstPtr, srcPtr);
@@ -377,11 +378,11 @@ namespace Astra
                     for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
                     {
                         const auto& info = m_componentArrays[id];
-                        if (!info.isValid)
+                        if (!info.isValid || info.base == nullptr)
                         {
-                            continue;
+                            continue;  // empty (tag) component: no storage to touch
                         }
-                        
+
                         void* ptr = static_cast<std::byte*>(info.base) + lastIndex * info.stride;
                         info.descriptor.Destruct(ptr);
                     }
@@ -804,11 +805,11 @@ namespace Astra
                 auto& block = m_blocks[idx];
                 
                 // Double-check that block is truly empty (use acquire to synchronize with Release operations)
+                // A chunk was acquired after our initial check -- expected under concurrent
+                // Acquire/Release, not a guard failure. Skip the block and move on.
                 size_t blockUsed = block.usedChunks.load(std::memory_order_acquire);
-                ASTRA_ASSERT(blockUsed == 0, "Attempting to release non-empty block");
                 if (blockUsed != 0) ASTRA_UNLIKELY
                 {
-                    // Skip this block if it's not actually empty - a chunk was acquired after our initial check
                     continue;
                 }
                 
@@ -968,15 +969,18 @@ namespace Astra
             size_t chunksToAllocate = std::min(m_config.chunksPerBlock, remainingCapacity);
             size_t blockSize = chunksToAllocate * m_config.chunkSize;
             
-            // Ensure proper alignment for SIMD operations (32-byte for AVX)
-            constexpr size_t SIMD_ALIGNMENT = 32;
+            // Blocks are cache-line aligned; chunk bases inherit this, so the
+            // strongest alignment a component array can rely on is
+            // CACHE_LINE_SIZE (64). (Windows VirtualAlloc gives 64KB anyway;
+            // this matters on the POSIX posix_memalign fallback.)
+            constexpr size_t BLOCK_ALIGNMENT = CACHE_LINE_SIZE;
             AllocFlags flags = AllocFlags::ZeroMem;
             if (m_config.useHugePages)
             {
                 flags = flags | AllocFlags::HugePages;
             }
-            
-            AllocResult result = AllocateMemory(blockSize, SIMD_ALIGNMENT, flags);
+
+            AllocResult result = AllocateMemory(blockSize, BLOCK_ALIGNMENT, flags);
             if (!result.ptr) ASTRA_UNLIKELY
                 return false;
             

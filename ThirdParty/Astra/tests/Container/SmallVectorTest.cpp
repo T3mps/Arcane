@@ -687,3 +687,125 @@ TEST_F(SmallVectorTest, DeductionGuide)
     EXPECT_EQ(sv2.size(), 1u);
     EXPECT_EQ(sv2[0], "hello");
 }
+
+// Insert-fill of a non-trivial type must not move_backward/fill into
+// uninitialized storage. Exercises the count >= tail (else) path of
+// insert(pos, count, value).
+TEST_F(SmallVectorTest, InsertFillWithNonTrivialType)
+{
+    Astra::SmallVector<std::string, 4> v;
+    v.push_back("a");
+    v.push_back("b");
+    v.push_back("c");
+    // Insert 3 copies at offset 1: tail = 3 - 1 = 2, count = 3, so
+    // count >= tail — the whole tail lands in raw space beyond the current end.
+    v.insert(v.begin() + 1, 3, std::string("X"));
+    ASSERT_EQ(v.size(), 6u);
+    EXPECT_EQ(v[0], "a");
+    EXPECT_EQ(v[1], "X");
+    EXPECT_EQ(v[2], "X");
+    EXPECT_EQ(v[3], "X");
+    EXPECT_EQ(v[4], "b");
+    EXPECT_EQ(v[5], "c");
+}
+
+TEST_F(SmallVectorTest, InsertFillCountLessThanTail)
+{
+    // 5 elements, insert 2 at offset 1: tail = 5 - 1 = 4, count = 2, so
+    // count < tail — exercises the std::move_backward path of insert(pos, count, value).
+    Astra::SmallVector<std::string, 4> v;
+    for (const char* s : { "a", "b", "c", "d", "e" }) v.push_back(s);
+    ASSERT_EQ(v.size(), 5u);
+
+    v.insert(v.begin() + 1, 2, std::string("X"));
+
+    ASSERT_EQ(v.size(), 7u);
+    EXPECT_EQ(v[0], "a");
+    EXPECT_EQ(v[1], "X");
+    EXPECT_EQ(v[2], "X");
+    EXPECT_EQ(v[3], "b");
+    EXPECT_EQ(v[4], "c");
+    EXPECT_EQ(v[5], "d");
+    EXPECT_EQ(v[6], "e");
+}
+
+namespace {
+// Move-observable, lifetime-counted element for self-aliasing tests.
+struct AliasProbe
+{
+    static inline int liveCount = 0;
+    static constexpr int kMovedFrom = -1;
+    int value = 0;
+
+    AliasProbe() { ++liveCount; }
+    explicit AliasProbe(int v) : value(v) { ++liveCount; }
+    AliasProbe(const AliasProbe& o) : value(o.value) { ++liveCount; }
+    AliasProbe(AliasProbe&& o) noexcept : value(o.value) { o.value = kMovedFrom; ++liveCount; }
+    AliasProbe& operator=(const AliasProbe& o) { value = o.value; return *this; }
+    AliasProbe& operator=(AliasProbe&& o) noexcept { value = o.value; o.value = kMovedFrom; return *this; }
+    ~AliasProbe() { --liveCount; }
+};
+} // namespace
+
+// SBO -> heap reallocation: v.push_back(v[0]) must copy the original value,
+// not read the moved-from inline slot. (Deterministic RED pre-fix: kMovedFrom.)
+TEST_F(SmallVectorTest, SelfAliasingPushBackForcesReallocation)
+{
+    Astra::SmallVector<AliasProbe, 4> v;
+    for (int i = 0; i < 4; ++i)
+        v.push_back(AliasProbe(i));           // inline full: size == capacity == 4
+    ASSERT_EQ(v.size(), 4u);
+    ASSERT_EQ(v.capacity(), 4u);
+
+    v.push_back(v[0]);                        // self-alias, forces reallocation
+    EXPECT_GT(v.capacity(), 4u);              // grew off inline storage
+    ASSERT_EQ(v.size(), 5u);
+    EXPECT_EQ(v.back().value, 0);             // original value, not kMovedFrom
+    for (int i = 0; i < 4; ++i)
+        EXPECT_EQ(v[i].value, i);             // pre-existing elements intact
+}
+
+// Already-heap buffer: reallocation frees the storage the argument points into.
+TEST_F(SmallVectorTest, SelfAliasingEmplaceBackHeapRealloc)
+{
+    Astra::SmallVector<AliasProbe, 2> v;
+    for (int i = 0; i < 3; ++i)
+        v.emplace_back(i);                    // 3rd add forces SBO -> heap
+    while (v.size() < v.capacity())
+        v.emplace_back(static_cast<int>(v.size()));  // fill exactly to capacity
+    ASSERT_EQ(v.size(), v.capacity());
+
+    v.emplace_back(v[0]);                     // self-alias, heap realloc frees old buffer
+    EXPECT_EQ(v.back().value, 0);             // must be 0, not freed-memory garbage
+}
+
+// Middle insert shifts elements before the argument is read.
+TEST_F(SmallVectorTest, SelfAliasingMiddleInsert)
+{
+    Astra::SmallVector<AliasProbe, 8> v;
+    for (int i = 0; i < 6; ++i)
+        v.push_back(AliasProbe(i));           // 0..5, spare capacity (no realloc)
+
+    v.insert(v.begin() + 2, v[5]);            // insert a copy of v[5] at index 2
+    ASSERT_EQ(v.size(), 7u);
+    EXPECT_EQ(v[2].value, 5);                 // inserted value correct
+    EXPECT_EQ(v[0].value, 0);
+    EXPECT_EQ(v[1].value, 1);
+    EXPECT_EQ(v[3].value, 2);                 // original v[2] shifted right
+    EXPECT_EQ(v[6].value, 5);                 // original v[5] shifted right
+}
+
+// No leak / no double-free across self-aliasing reallocation + middle insert.
+TEST_F(SmallVectorTest, SelfAliasingNoLeakOrDoubleFree)
+{
+    AliasProbe::liveCount = 0;
+    {
+        Astra::SmallVector<AliasProbe, 4> v;
+        for (int i = 0; i < 4; ++i)
+            v.push_back(AliasProbe(i));
+        v.push_back(v[0]);                    // self-alias + realloc
+        v.emplace(v.begin() + 1, v[3]);       // self-alias middle insert
+        EXPECT_GT(AliasProbe::liveCount, 0);
+    }
+    EXPECT_EQ(AliasProbe::liveCount, 0);      // every construction matched by a destruction
+}

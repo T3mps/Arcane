@@ -10,6 +10,7 @@
 #include "../Archetype/Archetype.hpp"
 #include "../Archetype/ArchetypeManager.hpp"
 #include "../Component/Component.hpp"
+#include "../Core/Base.hpp"
 #include "../Core/WorkScheduler.hpp"
 #include "../Entity/Entity.hpp"
 #include "Query.hpp"
@@ -47,6 +48,7 @@ namespace Astra
             CollectArchetypes();
             m_lastRefreshCounter = m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire);
             m_lastGeneration = m_archetypeManager->m_generation;
+            m_lastRemovalCounter = m_archetypeManager->m_archetypeRemovalCounter.load(std::memory_order_acquire);
         }
         
         /**
@@ -58,21 +60,55 @@ namespace Astra
             return m_archetypeManager != nullptr;
         }
 
+        /**
+         * Invoke func(Entity, Components&...) for every entity matching this View.
+         *
+         * CONTRACT: structural mutation is NOT supported during this call. Do not
+         * create or destroy entities, or add/remove components, from within func --
+         * the Archetype/chunk pointers this loop walks are captured up front and are
+         * not re-validated mid-iteration, so a direct structural change here is
+         * undefined behavior. In-place edits to already-present component VALUES
+         * (e.g. `pos.x += 1`) are fine.
+         *
+         * To change entity structure while iterating, record the changes into a
+         * `CommandBuffer` and call `Execute()` AFTER this loop returns. Recording
+         * into a CommandBuffer does not itself touch the ArchetypeManager, so a
+         * properly deferred CommandBuffer never trips the Debug guard below.
+         *
+         * In Debug builds this is additionally enforced by an ASTRA_ASSERT that
+         * compares the ArchetypeManager's structural-change counter before and
+         * after the loop; the check (and the counter read) is compiled out
+         * entirely in Release/Dist builds, so this contract carries zero Release
+         * cost.
+         */
         template<typename Func>
         ASTRA_FORCEINLINE void ForEach(Func&& func)
         {
             if (!m_archetypeManager) ASTRA_UNLIKELY
                 return;  // Registry destroyed
-            
+
             EnsureArchetypes();
-            
+
+#ifdef ASTRA_BUILD_DEBUG
+            // Captured AFTER EnsureArchetypes() so its own (legitimate) refresh
+            // of the counter is never mistaken for an in-loop structural change.
+            const uint32_t debugStartStructuralChangeCounter =
+                m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire);
+#endif
+
             if (m_archetypes.empty()) ASTRA_UNLIKELY
                 return;
-            
+
             for (Archetype* archetype : m_archetypes)
             {
                 ForEachImpl(archetype, std::forward<Func>(func), RequiredTypes{}, OptionalTypes{});
             }
+
+#ifdef ASTRA_BUILD_DEBUG
+            ASTRA_ASSERT(m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire) == debugStartStructuralChangeCounter,
+                "Structural mutation (create/destroy entity, add/remove component) detected during View::ForEach. "
+                "Defer structural changes into a CommandBuffer and call Execute() after the loop.");
+#endif
         }
         
         template<typename Func>
@@ -129,7 +165,7 @@ namespace Astra
             }
 
             m_scheduler->ParallelFor(chunkWork.size(), MIN_CHUNKS_PER_THREAD,
-                [&](size_t begin, size_t end)
+                [&](size_t begin, size_t end, uint32_t /*worker*/)
                 {
                     for (size_t w = begin; w < end; ++w)
                     {
@@ -138,20 +174,152 @@ namespace Astra
                     }
                 });
         }
-        
-        ASTRA_NODISCARD size_t Size() const noexcept
+
+        /**
+         * Like ParallelForEach, but threads a per-chunk sub-context to the body
+         * (Theme B2 Phase B, Task 3 -- the machinery behind
+         * SystemContext::ParallelForEach). For each unit of chunk work at FLAT
+         * chunkWork index `w`, builds `auto sub = factory(w);` and invokes
+         * `body(entity, components..., sub)` for every entity in that chunk. The
+         * factory runs ON the worker executing the chunk, so a sub-context whose
+         * recorder is a per-thread CommandBuffer records into THAT worker's own
+         * buffer.
+         *
+         * DETERMINISM (critical): the factory argument is the FLAT chunkWork
+         * index `w`, NOT the per-archetype chunk index (chunkWork[w].second). In
+         * a multi-archetype view chunk 0 of archetype A and chunk 0 of archetype
+         * B share the per-archetype index 0, so stamping that would give two
+         * chunks the same {insertionOrder, 0, ...} key -- and since each
+         * sub-context restarts its recordSequence at 0, their commands would
+         * collide and the flush's stable-sort tiebreak would be non-
+         * deterministic. The flat `w` is globally unique across the whole view
+         * AND deterministic (chunkWork is built by iterating the
+         * deterministically-sorted archetypes x their chunks in order). The
+         * per-archetype chunk index is still what selects the actual chunk.
+         *
+         * Additive sibling of ParallelForEach: REUSES ParallelForEachChunkImpl
+         * for the chunk walk (both the no-optional ForEachChunk path and the
+         * optional InvokeEntityCallback path invoke the callback as
+         * `(entity, component-refs..., [optional ptrs...])`, which the wrapper
+         * adapts by appending `sub`). Does NOT modify ParallelForEach itself.
+         *
+         * Unlike ParallelForEach, the null-scheduler / below-threshold case does
+         * NOT delegate to ForEach (which has neither a per-chunk sub-context nor
+         * a chunk index): it builds chunkWork unconditionally and walks it INLINE
+         * IN FLAT ORDER, which is deterministic. The per-chunk work is factored
+         * into one `runChunk(w)` local used by both the scheduler-dispatch and
+         * the inline path so the two can't drift.
+         *
+         * RETURNS the number of chunk-work items processed (chunkWork.size()) --
+         * i.e. the count of distinct flat indices `w` in [0, chunkWork.size())
+         * the factory could have been called with, IDENTICAL on the scheduler-
+         * dispatch and inline paths (both process the whole chunkWork). Every
+         * early-return path returns 0. SystemContext::ParallelForEach uses this
+         * to advance its per-scope iterationIndex band by exactly the number of
+         * distinct iterationIndex values this call could have stamped, keeping
+         * deferred-command SortKeys globally unique across sequential calls.
+         * Callers that ignore the return value are unaffected (additive).
+         */
+        template<typename Factory, typename Body>
+        ASTRA_FORCEINLINE size_t ParallelForEachWithContext(Factory&& factory, Body&& body)
         {
+            if (!m_archetypeManager) ASTRA_UNLIKELY
+                return 0;  // Registry destroyed
+
+            EnsureArchetypes();
+
+            if (m_archetypes.empty()) ASTRA_UNLIKELY
+                return 0;
+
+            size_t quickCount = 0;
+            for (Archetype* archetype : m_archetypes)
+            {
+                quickCount += archetype->GetEntityCount();
+            }
+
+            // Build the chunk work list unconditionally (see method doc): both
+            // the parallel-dispatch and the inline fallback path need it, and
+            // the per-archetype chunk index it carries.
+            std::vector<std::pair<Archetype*, size_t>> chunkWork;
+            size_t estimatedChunks = (quickCount / AVG_ENTITIES_PER_CHUNK) + m_archetypes.size();
+            chunkWork.reserve(estimatedChunks);
+            size_t totalMatchingEntities = 0;
+
+            for (Archetype* archetype : m_archetypes)
+            {
+                size_t chunkCount = archetype->GetChunkCount();
+                for (size_t i = 0; i < chunkCount; ++i)
+                {
+                    size_t chunkEntityCount = archetype->GetChunkEntityCount(i);
+                    if (chunkEntityCount > 0)
+                    {
+                        chunkWork.emplace_back(archetype, i);
+                        totalMatchingEntities += chunkEntityCount;
+                    }
+                }
+            }
+
+            if (chunkWork.empty()) ASTRA_UNLIKELY
+                return 0;
+
+            // Per-chunk work, shared by the scheduler-dispatch and inline paths
+            // so they can't drift. `w` is the FLAT chunkWork index -- the
+            // iterationIndex stamped into the sub-context; chunkWork[w].second is
+            // the per-archetype chunk index selecting the actual chunk.
+            auto runChunk = [&](size_t w)
+            {
+                auto [archetype, chunkIndex] = chunkWork[w];
+                auto sub = factory(static_cast<uint32_t>(w));
+                auto wrapped = [&body, &sub](Astra::Entity e, auto&&... comps)
+                {
+                    body(e, std::forward<decltype(comps)>(comps)..., sub);
+                };
+                ParallelForEachChunkImpl(archetype, chunkIndex, wrapped, RequiredTypes{}, OptionalTypes{});
+            };
+
+            // No scheduler, or workload below the parallel thresholds: walk every
+            // chunk inline, in flat order -- deterministic, no thread fan-out.
+            if (!m_scheduler ||
+                quickCount < MIN_ENTITIES_QUICK_CHECK ||
+                totalMatchingEntities < MIN_ENTITIES_FOR_PARALLEL ||
+                chunkWork.size() < MIN_CHUNKS_FOR_PARALLEL)
+            {
+                for (size_t w = 0; w < chunkWork.size(); ++w)
+                {
+                    runChunk(w);
+                }
+                return chunkWork.size();
+            }
+
+            m_scheduler->ParallelFor(chunkWork.size(), MIN_CHUNKS_PER_THREAD,
+                [&](size_t begin, size_t end, uint32_t /*worker*/)
+                {
+                    for (size_t w = begin; w < end; ++w)
+                    {
+                        runChunk(w);
+                    }
+                });
+            return chunkWork.size();
+        }
+
+        ASTRA_NODISCARD size_t Size() noexcept
+        {
+            if (!m_archetypeManager) ASTRA_UNLIKELY
+                return 0;  // Registry destroyed
+
+            EnsureArchetypes();
+
             size_t total = 0;
-            for (const auto* archetype : m_archetypes)
+            for (Archetype* archetype : m_archetypes)
             {
                 total += archetype->GetEntityCount();
             }
             return total;
         }
 
-        ASTRA_NODISCARD bool Empty() const noexcept
+        ASTRA_NODISCARD bool Empty() noexcept
         {
-            return m_archetypes.empty();
+            return Size() == 0;
         }
 
         // ============= Range-based for loop support =============
@@ -196,55 +364,57 @@ namespace Astra
         {
             if (!m_archetypeManager) ASTRA_UNLIKELY
                 return;  // Registry destroyed
-            
+
             uint32_t currentCounter = m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire);
             if (m_lastRefreshCounter == currentCounter)
             {
                 return;
             }
-            
-            if (m_lastGeneration == 0)
+
+            uint32_t removalCounter = m_archetypeManager->m_archetypeRemovalCounter.load(std::memory_order_acquire);
+            if (m_lastGeneration == 0 || removalCounter != m_lastRemovalCounter)
             {
+                // Archetypes were removed (or first refresh): cached pointers
+                // may be stale — rebuild the whole list.
                 CollectArchetypes();
+                m_lastRemovalCounter = removalCounter;
             }
             else
             {
                 auto newArchetypes = m_archetypeManager->GetArchetypesSince(m_lastGeneration);
                 for (Archetype* arch : newArchetypes)
                 {
-                    if (arch->GetEntityCount() == 0) ASTRA_UNLIKELY
-                    {
-                        continue;
-                    }
                     if (QueryBuilder::Matches(arch->GetMask()))
                     {
                         m_archetypes.push_back(arch);
                     }
                 }
-                
                 std::sort(m_archetypes.begin(), m_archetypes.end(), ArchetypeEntityCountComparator{});
             }
-            
+
             m_lastRefreshCounter = currentCounter;
             m_lastGeneration = m_archetypeManager->m_generation;
         }
-        
+
         void CollectArchetypes()
         {
+            m_archetypes.clear();
             if (!m_archetypeManager) ASTRA_UNLIKELY
             {
-                m_archetypes.clear();
                 return;  // Registry destroyed
             }
-            
+
             auto archetypes = m_archetypeManager->GetArchetypes();
             const size_t queryComponentCount = QueryBuilder::GetRequiredMask().Count();
-            
+
             m_archetypes.reserve(archetypes.size());
-            
+
             for (Archetype* archetype : archetypes)
             {
-                if (archetype->GetEntityCount() == 0 || archetype->GetComponentCount() < queryComponentCount) ASTRA_UNLIKELY
+                // NOTE: empty archetypes are deliberately KEPT — they may gain
+                // entities later without any archetype-creation event, and
+                // iterating an empty archetype is free (zero-count chunks).
+                if (archetype->GetComponentCount() < queryComponentCount) ASTRA_UNLIKELY
                 {
                     continue;
                 }
@@ -253,7 +423,7 @@ namespace Astra
                     m_archetypes.push_back(archetype);
                 }
             }
-            
+
             std::sort(m_archetypes.begin(), m_archetypes.end(), ArchetypeEntityCountComparator{});
         }
 
@@ -364,5 +534,6 @@ namespace Astra
 
         uint32_t m_lastRefreshCounter = 0;
         uint32_t m_lastGeneration = 0;
+        uint32_t m_lastRemovalCounter = 0;
     };
 } // namespace Astra

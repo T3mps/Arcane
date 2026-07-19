@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <string_view>
 #include <type_traits>
 
@@ -20,49 +23,30 @@ namespace Astra
     class ComponentRegistry
     {
     public:
-        // Pre-reserve m_components/m_hashToID past the point where any future
-        // RegisterComponent<T>() insertion could ever trigger a FlatMap rehash.
-        //
-        // GetComponentDescriptor() returns `&it->second` -- a pointer INTO the
-        // FlatMap's open-addressed slot array. Callers are expected (and, in
-        // practice, required -- see ResourceStorage::ResourceSlot::descriptor)
-        // to CACHE that pointer past the call that obtained it: Set()/Emplace()
-        // stash it once at first registration and dereference it again on every
-        // later destroy/reconstruct, all the way through ~ResourceStorage().
-        // FlatMap (Container/FlatMap.hpp) is a Swiss-table-style open-addressed
-        // map, NOT pointer-stable across growth: Rehash() allocates a brand-new
-        // m_slots array and moves every live entry into it, so any earlier
-        // `&it->second` becomes a dangling pointer into freed memory the moment
-        // a LATER RegisterComponent<U>() (for any unrelated type U) pushes the
-        // map's load factor over MAX_LOAD_FACTOR. In practice this fires the
-        // instant a consumer registers past MIN_CAPACITY*MAX_LOAD_FACTOR (~14)
-        // distinct component/resource types on one registry -- routine for any
-        // real ECS module (scene + physics components + half a dozen lazily-
-        // registered singleton resources) -- and the dangling read only faults
-        // much later, when something finally destructs the stale slot (e.g. a
-        // whole Registry going out of scope), far from the registration that
-        // actually invalidated the pointer. ComponentID is hard-bounded to
-        // < MAX_COMPONENTS everywhere in this codebase (ResourceStorage asserts
-        // it on every insert), so this map can never hold more than
-        // MAX_COMPONENTS live entries; reserving comfortably past that ceiling
-        // (with headroom for MAX_LOAD_FACTOR) guarantees NO rehash -- and thus
-        // no pointer invalidation -- for the registry's entire lifetime. This
-        // is the same pointer-stability guarantee m_componentNames already gets
-        // from std::deque (see the comment below), applied here by reserving
-        // past the architectural ceiling instead of switching containers.
         ComponentRegistry()
         {
-            m_components.Reserve(MAX_COMPONENTS * 2);
+            // m_hashToID (hash -> id) holds at most MAX_COMPONENTS entries and is
+            // never erased; reserve past the ceiling so registration never
+            // rehashes it. Descriptor POINTER stability is guaranteed structurally
+            // by m_components being a fixed directly-indexed array (see the member
+            // declaration), so GetComponentDescriptor() pointers stay valid for the
+            // registry's life no matter how many types register.
             m_hashToID.Reserve(MAX_COMPONENTS * 2);
         }
 
         template<Component T>
         void RegisterComponent()
         {
-            ComponentID id = TypeID<T>::Value();
-            if (m_components.Contains(id))
+            const ComponentID id = TypeID<T>::Value();
+            if (id >= MAX_COMPONENTS) ASTRA_UNLIKELY  // guard before indexing m_registered
                 return;
-            RegisterComponentImpl<T>(id);
+            if (m_registered[id].load(std::memory_order_acquire))
+                return;                                // warm path: lock-free
+            std::lock_guard<std::mutex> lock(m_registrationMutex);
+            if (m_registered[id].load(std::memory_order_relaxed))
+                return;                                // double-check under lock
+            RegisterComponentImpl<T>(id);              // may refuse (over-aligned) -- that's fine
+            m_registered[id].store(true, std::memory_order_release);  // "attempt resolved for id"
         }
 
         // Hot-reload path: rebuilds the descriptor unconditionally so its function
@@ -71,24 +55,32 @@ namespace Astra
         template<Component T>
         void ReRegisterComponent()
         {
-            RegisterComponentImpl<T>(TypeID<T>::Value());
+            const ComponentID id = TypeID<T>::Value();
+            if (id >= MAX_COMPONENTS) ASTRA_UNLIKELY
+                return;
+            std::lock_guard<std::mutex> lock(m_registrationMutex);
+            RegisterComponentImpl<T>(id);
+            m_registered[id].store(true, std::memory_order_release);
         }
 
+        // Bulk, single-threaded setup path: do NOT call from workers. Each
+        // per-type RegisterComponent() below re-locks m_registrationMutex, so
+        // this must NOT hold the lock across the fan-out (std::mutex is
+        // non-recursive -- that would deadlock).
         template<Component... Components>
         void RegisterComponents()
         {
             constexpr size_t count = sizeof...(Components);
             if (count == 0) return;
 
-            m_components.Reserve(m_components.Size() + count);
-
             (RegisterComponent<Components>(), ...);
         }
         
         ASTRA_NODISCARD const ComponentDescriptor* GetComponentDescriptor(ComponentID id) const
         {
-            auto it = m_components.Find(id);
-            return it != m_components.end() ? &it->second : nullptr;
+            // Directly-indexed, pointer-stable: &m_components[id] never moves for
+            // the registry's lifetime, so callers may cache it safely.
+            return (id < MAX_COMPONENTS && m_present.Test(id)) ? &m_components[id] : nullptr;
         }
         
         ASTRA_NODISCARD const ComponentDescriptor* GetComponentDescriptorByHash(uint64_t hash) const
@@ -107,38 +99,63 @@ namespace Astra
             return Result<ComponentID, std::string_view>::Ok(it->second);
         }
 
-        ASTRA_NODISCARD const FlatMap<ComponentID, ComponentDescriptor>& GetAllComponentIDs() const
+        // Invokes fn(ComponentID, const ComponentDescriptor&) for every registered
+        // component in ascending id order. Replaces the former GetAllComponentIDs()
+        // that leaked the internal container (and its unstable FlatMap iterators).
+        template<typename Fn>
+        void ForEachComponent(Fn&& fn) const
         {
-            return m_components;
+            for (size_t id = 0; id < MAX_COMPONENTS; ++id)
+                if (m_present.Test(id))
+                    fn(static_cast<ComponentID>(id), m_components[id]);
         }
-        
+
         ASTRA_NODISCARD size_t Size() const
         {
-            return m_components.Size();
+            return m_present.Count();
         }
 
         void GetAllDescriptors(std::vector<ComponentDescriptor>& descriptors) const
         {
             descriptors.clear();
-            if (m_components.Empty())
-                return;
-
-            descriptors.reserve(m_components.Size());
-            for (const auto& [id, desc] : m_components)
-            {
-                descriptors.push_back(desc);
-            }
+            descriptors.reserve(m_present.Count());
+            for (size_t id = 0; id < MAX_COMPONENTS; ++id)
+                if (m_present.Test(id))
+                    descriptors.push_back(m_components[id]);
         }
 
     private:
         template<Component T>
         void RegisterComponentImpl(ComponentID id)
         {
+            ASTRA_ASSERT(id < MAX_COMPONENTS,
+                         "Component ID space exhausted (MAX_COMPONENTS); raise ASTRA_MAX_COMPONENTS");
+            if (id >= MAX_COMPONENTS) ASTRA_UNLIKELY
+            {
+                // Refuse registration so failure is observable (descriptor
+                // lookup returns nullptr; Registry::AddComponent returns
+                // nullptr) instead of silently corrupting ComponentMask bits.
+                return;
+            }
+
             ComponentDescriptor desc;
             desc.id = id;
             // Empty components should report size 0 to avoid memory allocation
             desc.size = std::is_empty_v<T> ? 0 : sizeof(T);
             desc.alignment = std::is_empty_v<T> ? 1 : alignof(T);
+            // All-config guard: chunk storage can only honor alignments up to
+            // CACHE_LINE_SIZE; refuse registration so failure is observable
+            // (descriptor lookup returns nullptr; Registry::AddComponent returns
+            // nullptr) instead of handing back a descriptor the storage will
+            // misalign. Must run BEFORE the ASTRA_ASSERT below so Debug builds
+            // degrade the same way as Release/Dist (mirrors FieldInfo.hpp's
+            // Get/Set/GetPtr guard-before-assert ordering).
+            if (desc.alignment > CACHE_LINE_SIZE) ASTRA_UNLIKELY
+            {
+                return;
+            }
+            ASTRA_ASSERT(desc.alignment <= CACHE_LINE_SIZE,
+                         "Component alignment above 64 bytes is not supported by chunk storage");
 
             desc.hash = TypeID<T>::Hash();
 
@@ -171,6 +188,7 @@ namespace Astra
             desc.is_copy_constructible = std::is_copy_constructible_v<T>;
             desc.is_nothrow_move_constructible = std::is_nothrow_move_constructible_v<T>;
             desc.is_nothrow_default_constructible = std::is_nothrow_default_constructible_v<T>;
+            desc.is_trivially_default_constructible = std::is_trivially_default_constructible_v<T>;
             desc.is_empty = std::is_empty_v<T>;
 
             desc.defaultConstruct = &DefaultConstruct<T>;
@@ -208,8 +226,9 @@ namespace Astra
                 MetaRegistry::Instance().LinkToComponent(desc.hash, id);
             }
 
-            // operator[] overwrites via assignment if key already exists
+            // Directly indexed; the array slot is pointer-stable for life.
             m_components[id] = desc;
+            m_present.Set(id);
             m_hashToID[desc.hash] = id;
         }
 
@@ -297,10 +316,26 @@ namespace Astra
             }
         }
 
-        FlatMap<ComponentID, ComponentDescriptor> m_components;
-        FlatMap<uint64_t, ComponentID> m_hashToID;
+        // Descriptors live in a directly-indexed, POINTER-STABLE array: ComponentID
+        // is a dense 0..MAX_COMPONENTS-1 index (ComponentMask bit == ComponentID),
+        // so a hash map keyed by it was both slower and unstable -- a FlatMap rehash
+        // moved the slot a cached descriptor pointer referenced, dangling it (the
+        // ResourceStorage teardown segfault). A fixed array never moves, so every
+        // GetComponentDescriptor() pointer stays valid for the registry's life.
+        std::array<ComponentDescriptor, MAX_COMPONENTS> m_components{};
+        ComponentMask m_present;  // which ids in m_components hold a registered descriptor
+        FlatMap<uint64_t, ComponentID> m_hashToID;  // hash -> id (sparse; stays a hash map)
         // Use deque instead of vector to prevent pointer invalidation when adding new names.
         // Vector reallocation would invalidate all c_str() pointers stored in ComponentDescriptor::name
         std::deque<std::string> m_componentNames;
+
+        // First-registration guard. m_registered[id] is set once per type; the
+        // warm path is a lock-free acquire-load (replacing the old Contains()
+        // lookup). m_registrationMutex serializes the one-time cold path so two
+        // workers first-registering different types can't race the containers.
+        // non-copyable: holds a registration mutex + atomics (ComponentRegistry
+        // is only ever held via std::shared_ptr; never copied/moved by value).
+        std::mutex m_registrationMutex;
+        std::atomic<bool> m_registered[MAX_COMPONENTS] = {};
     };
 }

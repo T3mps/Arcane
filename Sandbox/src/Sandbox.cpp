@@ -60,7 +60,10 @@ namespace
     // if it isn't already present. PhysicsSystem reads this resource each fixed step.
     void EnsurePhysicsResource(Astra::Registry& reg)
     {
-        if (reg.GetResource<Arcane::PhysicsResource>()) return;
+        // Astra snapshot format v2 round-trips resources: RestoreRegistry now reinstalls a
+        // (no-op-serialized) world-less PhysicsResource shell, so a bare presence check would
+        // skip re-establishing the world after a Stop. Rebuild whenever the world is missing.
+        if (auto* res = reg.GetResource<Arcane::PhysicsResource>(); res && res->world) return;
         Manifold2D::Physics::WorldDef wd;
         wd.gravityY = kGravityY;   // MKS: +10 m/s^2 (the WorldDef default; the rest inherit it)
         auto world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
