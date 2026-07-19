@@ -3,20 +3,22 @@
 #include "ViewportInput.hpp"
 #include <cstdint>
 
-namespace Arcane { class RunLoop; }
+namespace Arcane { class RunLoop; class Runtime; }
 namespace Astra { class Registry; }
 
 namespace Grimoire
 {
     class ConsoleBuffer;
+    class PlaySession;
     struct SelectionContext;
 
     // Host a full-viewport dockspace (call once per frame between ImGui BeginFrame
     // and the panel Begin/End calls). Enables initial docking of child windows.
     void BeginDockSpace();
 
-    // Play/Pause/Step buttons + a time-scale slider, driving the RunLoop.
-    void DrawSimTimeToolbar(Arcane::RunLoop& loop);
+    // Play/Stop (play-in-editor: snapshot on Play, restore on Stop) + Pause/Step
+    // buttons + a time-scale slider, driving the RunLoop.
+    void DrawSimTimeToolbar(Arcane::RunLoop& loop, PlaySession& play, Arcane::Runtime& runtime);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);

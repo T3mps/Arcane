@@ -12,6 +12,7 @@
 #include <GpuContext.hpp>
 #include <FramePerf.hpp>
 #include "ConsoleBuffer.hpp"
+#include "PlayMode.hpp"
 #include "SelectionContext.hpp"
 #include "ViewportInput.hpp"
 
@@ -43,6 +44,12 @@ namespace Grimoire
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
         ConsoleBuffer                     m_console{512};
+
+        // Play-in-editor (Task 8): Edit|Play state machine. Play() snapshots the
+        // registry + unpauses the RunLoop; Stop() restores the snapshot + re-pauses.
+        // Grimoire boots in Edit (see Init: the RunLoop is paused right after the
+        // plugin loads).
+        Grimoire::PlaySession m_play;
 
         // The one selected-entity source of truth, shared by the Hierarchy panel
         // (and, later, the Inspector + viewport pick -- see SelectionContext.hpp).

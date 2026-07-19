@@ -105,6 +105,10 @@ namespace Grimoire
             return false;
         }
 
+        // Task 8: Grimoire boots in Edit mode -- the sim starts paused. Play (m_play)
+        // unpauses it; Stop restores the snapshot and re-pauses.
+        m_runtime->Loop().SetPaused(true);
+
         // Scene-in-a-panel viewport: an OffscreenCanvas running the SAME
         // canvas->batcher->tonemap path Loom drives, into a panel texture instead
         // of the backbuffer. The device is up by here in both the interactive host
@@ -220,7 +224,7 @@ namespace Grimoire
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Grimoire::BeginDockSpace();
-            Grimoire::DrawSimTimeToolbar(m_runtime->Loop());
+            Grimoire::DrawSimTimeToolbar(m_runtime->Loop(), m_play, *m_runtime);
             Grimoire::DrawConsolePanel(m_console);
 
             Grimoire::ViewportPanelResult vp =

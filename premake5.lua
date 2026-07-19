@@ -563,6 +563,11 @@ project "ArcaneTests"
         -- [grimoire] unit tests drive it directly -- no ImGui dependency, same
         -- pattern as ConsoleBuffer/ViewportInput/EntityList above.
         "%{wks.location}/Grimoire/src/InspectorFields.cpp",
+        -- Task 8: PlayMode (play-in-editor snapshot/restore state machine)
+        -- source-compiles into the test exe so the [grimoire] round-trip test
+        -- drives it directly against a real Arcane::Runtime, same pattern as
+        -- ConsoleBuffer/ViewportInput/EntityList/InspectorFields above.
+        "%{wks.location}/Grimoire/src/PlayMode.cpp",
     }
 
     includedirs {

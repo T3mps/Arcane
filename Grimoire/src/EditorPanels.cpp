@@ -2,8 +2,10 @@
 #include "ConsoleBuffer.hpp"
 #include "EntityList.hpp"
 #include "InspectorFields.hpp"
+#include "PlayMode.hpp"
 #include "SelectionContext.hpp"
 
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 
 #include <Astra/Reflection/FieldVisitor.hpp>
@@ -35,11 +37,19 @@ namespace Grimoire
         ImGui::End();
     }
 
-    void DrawSimTimeToolbar(Arcane::RunLoop& loop)
+    void DrawSimTimeToolbar(Arcane::RunLoop& loop, PlaySession& play, Arcane::Runtime& runtime)
     {
         ImGui::Begin("Sim");
-        const bool paused = loop.IsPaused();
-        if (ImGui::Button(paused ? "Play" : "Pause")) loop.SetPaused(!paused);
+        if (play.IsPlaying())
+        {
+            if (ImGui::Button("Stop")) play.Stop(runtime);
+        }
+        else
+        {
+            if (ImGui::Button("Play")) play.Play(runtime);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(loop.IsPaused() ? "Resume" : "Pause")) loop.SetPaused(!loop.IsPaused());
         ImGui::SameLine();
         if (ImGui::Button("Step")) loop.RequestSingleStep();
         ImGui::SameLine();
