@@ -176,6 +176,15 @@ namespace Grimoire
                 {
                     pluginSnap.mouseX = lx;      // plugin camera works in viewport-local px
                     pluginSnap.mouseY = ly;      // (panel size == offscreen size => scale 1)
+                    // The Viewport panel IS the world surface: from the scene's point of
+                    // view the cursor is in the world, not over a HUD widget. The sampled
+                    // wantCaptureMouse is true (the cursor is over an ImGui window -- the
+                    // Viewport), which the plugin uses to SUPPRESS camera pan/zoom + world
+                    // interaction. Clear it so RMB-pan and wheel-zoom work in the viewport.
+                    // (When the plugin's own HUD floats over the viewport and is hovered,
+                    // ImGui's hover z-order makes the Viewport window not-hovered ->
+                    // inViewport is false -> the suppression below still applies.)
+                    pluginSnap.wantCaptureMouse = false;
                 }
                 else
                 {
@@ -226,7 +235,7 @@ namespace Grimoire
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Grimoire::BeginDockSpace();
-            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime);
+            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable());
             Grimoire::DrawConsolePanel(m_console);
 
             Grimoire::ViewportPanelResult vp =

@@ -3,7 +3,7 @@
 #include "ViewportInput.hpp"
 #include <cstdint>
 
-namespace Arcane { class RunLoop; class Runtime; }
+namespace Arcane { class RunLoop; class Runtime; struct PluginVTable; }
 namespace Astra { class Registry; }
 
 namespace Grimoire
@@ -17,11 +17,14 @@ namespace Grimoire
     void BeginDockSpace();
 
     // Play/Stop (play-in-editor: snapshot on Play, restore on Stop) + Pause/Step
-    // buttons + a time-scale slider, driving the RunLoop. Does NOT take a
+    // buttons + a time-scale slider, driving the RunLoop. `plugin` is the hosted
+    // plugin's vtable (may be null): Play/Stop route through its SaveState/LoadState
+    // so the plugin re-establishes its native resources on restore. Does NOT take a
     // RunLoop& parameter: play.Stop() -> Runtime::RestoreRegistry destroys and
     // replaces the RunLoop, so the loop is fetched fresh from `runtime` AFTER
     // the Play/Stop handling to avoid a dangling reference.
-    void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime);
+    void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
+                            const Arcane::PluginVTable* plugin);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);

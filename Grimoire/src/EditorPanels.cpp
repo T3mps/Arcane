@@ -37,16 +37,17 @@ namespace Grimoire
         ImGui::End();
     }
 
-    void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime)
+    void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
+                            const Arcane::PluginVTable* plugin)
     {
         ImGui::Begin("Sim");
         if (play.IsPlaying())
         {
-            if (ImGui::Button("Stop")) play.Stop(runtime);
+            if (ImGui::Button("Stop")) play.Stop(runtime, plugin);
         }
         else
         {
-            if (ImGui::Button("Play")) play.Play(runtime);
+            if (ImGui::Button("Play")) play.Play(runtime, plugin);
         }
         // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
         // replaces m_impl->loop on Stop, so a reference taken before this point

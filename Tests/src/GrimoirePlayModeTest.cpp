@@ -16,10 +16,15 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
+
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Registry/Registry.hpp>
+#include <Astra/Serialization/BinaryReader.hpp>
+#include <Astra/Serialization/BinaryWriter.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
@@ -96,6 +101,60 @@ TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[grimoi
 
     // A second Stop while already stopped is a no-op success.
     CHECK(play.Stop(runtime));
+    CHECK(play.Mode() == Grimoire::EditorMode::Edit);
+    CHECK(runtime.Loop().IsPaused());
+}
+
+namespace
+{
+    // Minimal fake plugin vtable: SaveState writes a marker, LoadState reads it back.
+    // Proves PlaySession routes Play/Stop through the plugin's SaveState/LoadState when
+    // a vtable is supplied -- the fix for the Stop crash, where the plugin must
+    // re-establish its own native resources (physics world) that the raw registry
+    // snapshot omits. Counters live in a struct so each test run resets them locally.
+    int g_fakeSaveCalls = 0;
+    int g_fakeLoadCalls = 0;
+
+    void FakeSaveState(Astra::BinaryWriter& w)
+    {
+        ++g_fakeSaveCalls;
+        w(static_cast<std::uint64_t>(0xABCD));
+    }
+
+    bool FakeLoadState(Astra::BinaryReader& r)
+    {
+        ++g_fakeLoadCalls;
+        std::uint64_t marker = 0;
+        r(marker);
+        return !r.HasError() && marker == 0xABCD;
+    }
+}
+
+TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present", "[grimoire]")
+{
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+
+    Arcane::PluginVTable vt{};
+    vt.SaveState = &FakeSaveState;
+    vt.LoadState = &FakeLoadState;
+
+    g_fakeSaveCalls = 0;
+    g_fakeLoadCalls = 0;
+
+    Grimoire::PlaySession play;
+
+    // Play routes through the plugin's SaveState (NOT Runtime::SnapshotRegistry), so the
+    // plugin captures its own scene incl. native resources; then it unpauses the loop.
+    REQUIRE(play.Play(runtime, &vt));
+    CHECK(g_fakeSaveCalls == 1);
+    CHECK(g_fakeLoadCalls == 0);
+    CHECK(play.IsPlaying());
+    CHECK_FALSE(runtime.Loop().IsPaused());
+
+    // Stop routes through the plugin's LoadState (which re-establishes native resources
+    // after RestoreRegistry -- what Grimoire cannot do itself); then it re-pauses.
+    REQUIRE(play.Stop(runtime, &vt));
+    CHECK(g_fakeLoadCalls == 1);
     CHECK(play.Mode() == Grimoire::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
 }
