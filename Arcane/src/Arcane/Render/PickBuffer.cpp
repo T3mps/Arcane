@@ -152,6 +152,46 @@ namespace Arcane
                 m_device->executeCommandList(m_commandList);
             }
 
+            Astra::Entity Pick(Astra::Registry& registry, const PickView& view,
+                               glm::vec2 pixel) override
+            {
+                // Out-of-range (incl. clicks outside the viewport) -> background.
+                if (!m_target || !m_staging ||
+                    pixel.x < 0.0f || pixel.y < 0.0f ||
+                    pixel.x >= (float)m_width || pixel.y >= (float)m_height)
+                    return Astra::Entity{};
+
+                const uint32_t px = (uint32_t)pixel.x;
+                const uint32_t py = (uint32_t)pixel.y;
+
+                // Render the id pass (rebuilds the id target + the id<->entity
+                // table), then copy the single pixel under the cursor out.
+                RenderIdPass(registry, view);
+
+                m_commandList->open();
+                m_commandList->copyTexture(
+                    m_staging, nvrhi::TextureSlice(),
+                    m_target, nvrhi::TextureSlice().setOrigin(px, py)
+                                  .setWidth(1).setHeight(1));
+                m_commandList->close();
+                m_device->executeCommandList(m_commandList);
+                m_device->waitForIdle();   // one synchronous stall per click
+
+                uint32_t id = 0;
+                size_t rowPitch = 0;
+                if (const auto* mapped = static_cast<const uint32_t*>(
+                        m_device->mapStagingTexture(m_staging, nvrhi::TextureSlice(),
+                                                    nvrhi::CpuAccessMode::Read, &rowPitch)))
+                {
+                    id = mapped[0];
+                    m_device->unmapStagingTexture(m_staging);
+                }
+                m_device->runGarbageCollection();
+
+                // id 0 -> invalid (background); id k -> the k-th drawn entity.
+                return PickEntityForId(m_drawables, id);
+            }
+
             nvrhi::ITexture* IdTarget() const override { return m_target; }
 
             void Resize(uint32_t width, uint32_t height) override

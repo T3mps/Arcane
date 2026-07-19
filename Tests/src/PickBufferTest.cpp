@@ -462,3 +462,56 @@ TEST_CASE("vulkan: entity_id pass writes front-most ids to covered pixels",
 {
     CheckIdPass(Arcane::GraphicsBackend::Vulkan);
 }
+
+namespace
+{
+    // Task 4: the public Pick() API -- render the id pass + read back the 1x1
+    // pixel under the cursor + map the id to its entity. Background and
+    // out-of-range clicks return an invalid entity; overlaps pick the front-most.
+    void CheckPick(Arcane::GraphicsBackend backend)
+    {
+        constexpr uint32_t kSize = 128;
+        Arcane::RenderDeviceDesc desc;
+        desc.backend = backend;
+        auto device = Arcane::RenderDevice::Create(desc);
+        REQUIRE(device != nullptr);
+        auto shaders = Arcane::ShaderLibrary::Create(device->Nvrhi(), backend, "shaders");
+        REQUIRE(shaders != nullptr);
+        auto pick = Arcane::PickBuffer::Create(device->Nvrhi(), *shaders, kSize, kSize);
+        REQUIRE(pick != nullptr);
+
+        const Arcane::PickView view{ {0.0f, 0.0f}, 10.0f };
+
+        // Two Aabb colliders at distinct canvas pixels.
+        auto reg = MakePickRegistry();
+        const Astra::Entity a = SpawnAabbBody(*reg, {3.0f, 4.0f}, 0.5f, 0.5f); // ->(30,40)
+        const Astra::Entity b = SpawnAabbBody(*reg, {9.0f, 9.0f}, 0.5f, 0.5f); // ->(90,90)
+
+        CHECK(pick->Pick(*reg, view, {30.0f, 40.0f}).GetValue() == a.GetValue());
+        CHECK(pick->Pick(*reg, view, {90.0f, 90.0f}).GetValue() == b.GetValue());
+        CHECK_FALSE(pick->Pick(*reg, view, {60.0f, 60.0f}).IsValid());     // background
+        CHECK_FALSE(pick->Pick(*reg, view, {999.0f, 999.0f}).IsValid());   // out of range
+
+        // Overlap: the front-most (later-drawn) entity is returned.
+        auto reg2 = MakePickRegistry();
+        const Astra::Entity back  = SpawnAabbBody(*reg2, {6.0f, 6.0f}, 1.0f, 1.0f);
+        const Astra::Entity front = SpawnAabbBody(*reg2, {6.0f, 6.0f}, 1.0f, 1.0f);
+        (void)back;
+        CHECK(pick->Pick(*reg2, view, {60.0f, 60.0f}).GetValue() == front.GetValue());
+
+        device->Nvrhi()->runGarbageCollection();
+        CHECK(Arcane::RenderErrorCount() == 0);
+    }
+}
+
+TEST_CASE("d3d12: Pick returns the entity under a pixel, invalid on background",
+          "[gpu][pick][d3d12]")
+{
+    CheckPick(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("vulkan: Pick returns the entity under a pixel, invalid on background",
+          "[gpu][pick][vulkan]")
+{
+    CheckPick(Arcane::GraphicsBackend::Vulkan);
+}

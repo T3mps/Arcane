@@ -17,9 +17,13 @@
 // calls Pick() on a viewport click; the engine holds no editor state.
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Render/PickEmit.hpp>   // PickView
+#include <Arcane/Render/PickEmit.hpp>   // PickView, PickDrawable
+
+#include <Astra/Entity/Entity.hpp>
 
 #include <nvrhi/nvrhi.h>
+
+#include <glm/vec2.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -41,6 +45,16 @@ namespace Arcane
                                                   uint32_t width, uint32_t height);
 
         virtual ~PickBuffer() = default;
+
+        // THE click-pick primary API: render the entity-id pass and return the
+        // entity whose silhouette covers `pixel` (viewport-local, y-down, matching
+        // the canvas). Returns an INVALID Astra::Entity when the pixel is
+        // background (id 0) or out of range -- an editor clears its selection on
+        // an empty-space click. `view` is the same world->canvas transform the
+        // scene render uses. One synchronous GPU stall per call (on-demand; not a
+        // per-frame path).
+        virtual Astra::Entity Pick(Astra::Registry& registry, const PickView& view,
+                                   glm::vec2 pixel) = 0;
 
         // Render the entity-id pass for the current scene into the id target:
         // clears it to 0, then draws every pickable silhouette (CollectPickables
