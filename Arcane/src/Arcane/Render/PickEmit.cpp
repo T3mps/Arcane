@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 namespace Arcane
@@ -56,32 +57,50 @@ namespace Arcane
         }
 
         // ---- PASS 2: physics colliders ---------------------------------------
-        // One PickDrawable per Fixture on every live tracked body. Polygon
-        // fixtures carry no authored vertex array on Fixture (see
-        // PhysicsComponents.hpp) -- v1 approximates with the fixture's
-        // halfW/halfH box fields, per design spec SS8.2 ("Polygon -> Box using
-        // its AABB for v1").
+        // One PickDrawable per Fixture on every live tracked body, iterated via
+        // an archetype-stable View<Collider2D, PhysicsBodyRef> -- NOT the
+        // PhysicsResource::entityToBody unordered_map. The drawable index IS the
+        // hit-proxy id (id = index+1), so the order must be DETERMINISTIC: the
+        // same rule PhysicsSystem's create pass follows ("order must not depend on
+        // unordered_map hash/bucket layout"). The body pose is read from the live
+        // PhysicsWorld via PhysicsBodyRef::handle so the silhouette registers with
+        // the physics-debug overlay; fixture dims + local offset are scaled by
+        // PhysicsBodyRef::appliedScale (the scale the create pass baked into the
+        // body's fixtures, mirroring MakeScaledShape / MakeFixtureDef) so a scaled
+        // body picks at its drawn size. Polygon fixtures carry no authored vertex
+        // array (see PhysicsComponents.hpp) -- v1 approximates with the fixture's
+        // halfW/halfH box, per design spec SS8.2 ("Polygon -> Box using its AABB").
         PhysicsResource* res = registry.GetResource<PhysicsResource>();
         if (!res || !res->world)
             return;
 
         Phys::PhysicsWorld& world = *res->world;
-        for (const auto& [entity, handle] : res->entityToBody)
+
+        auto colliderView = registry.CreateView<Collider2D, PhysicsBodyRef>();
+        colliderView.ForEach([&](Astra::Entity entity, Collider2D& col, PhysicsBodyRef& ref)
         {
-            if (!world.IsValid(handle))
-                continue;
+            if (ref.handle == Phys::kInvalidBody) return;
+            if (!world.IsValid(ref.handle))       return;
 
-            const Collider2D* col = registry.GetComponent<Collider2D>(entity);
-            if (!col)
-                continue;
-
-            const Phys::Vec2 bp = world.Position(handle);
+            const Phys::Vec2 bp = world.Position(ref.handle);
             const glm::vec2  bodyPos(static_cast<float>(bp.x), static_cast<float>(bp.y));
-            const float      bodyAngle = static_cast<float>(world.GetAngle(handle));
+            const float      bodyAngle = static_cast<float>(world.GetAngle(ref.handle));
 
-            for (const Fixture& fx : col->fixtures)
+            // Scale the create pass baked into this body's fixtures (identity
+            // unless the entity carries an authored LocalTransform.scale). Mirrors
+            // PhysicsSystem::MakeScaledShape: per-axis for Aabb, |sx| length /
+            // |sy| radius for Capsule, max(|sx|,|sy|) for Circle.
+            const glm::vec2 scale = ref.appliedScale;
+            const float     sx    = std::abs(scale.x);
+            const float     sy    = std::abs(scale.y);
+            const float     sMax  = std::max(sx, sy);
+
+            for (const Fixture& fx : col.fixtures)
             {
-                const glm::vec2 worldCenter  = bodyPos + RotateVec(fx.localPos, bodyAngle);
+                // Fixture local offset scales per-axis with the body's baked scale
+                // (signed, matching MakeFixtureDef), then rotates into world space.
+                const glm::vec2 localScaled(fx.localPos.x * scale.x, fx.localPos.y * scale.y);
+                const glm::vec2 worldCenter  = bodyPos + RotateVec(localScaled, bodyAngle);
                 const float     fixtureAngle = bodyAngle + fx.localAngle;
                 const glm::vec2 canvasCenter = worldCenter * view.worldToScreenScale + view.offset;
 
@@ -94,27 +113,27 @@ namespace Arcane
                 {
                 case Phys::ShapeKind::Circle:
                     d.kind   = PickDrawable::Kind::Circle;
-                    d.radius = fx.radius * view.worldToScreenScale;
+                    d.radius = fx.radius * sMax * view.worldToScreenScale;
                     break;
                 case Phys::ShapeKind::Capsule:
                     d.kind    = PickDrawable::Kind::Capsule;
-                    d.halfLen = fx.halfLen * view.worldToScreenScale;
-                    d.radius  = fx.radius * view.worldToScreenScale;
+                    d.halfLen = fx.halfLen * sx * view.worldToScreenScale;
+                    d.radius  = fx.radius  * sy * view.worldToScreenScale;
                     break;
                 case Phys::ShapeKind::Aabb:
                     d.kind        = PickDrawable::Kind::Box;
-                    d.halfExtents = glm::vec2(fx.halfW, fx.halfH) * view.worldToScreenScale;
+                    d.halfExtents = glm::vec2(fx.halfW * sx, fx.halfH * sy) * view.worldToScreenScale;
                     break;
                 case Phys::ShapeKind::Polygon:
                     // v1: no vertex data available -- fall back to the fixture's
-                    // halfW/halfH box fields as its AABB stand-in.
+                    // halfW/halfH box fields (scaled) as its AABB stand-in.
                     d.kind        = PickDrawable::Kind::Box;
-                    d.halfExtents = glm::vec2(fx.halfW, fx.halfH) * view.worldToScreenScale;
+                    d.halfExtents = glm::vec2(fx.halfW * sx, fx.halfH * sy) * view.worldToScreenScale;
                     break;
                 }
 
                 out.push_back(d);
             }
-        }
+        });
     }
 }

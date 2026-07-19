@@ -69,14 +69,18 @@ namespace Arcane
     //      column, angle = atan2 of the local-x column, half-extents = size*0.5
     //      scaled by the column magnitudes -- LocalTransform.scale baked into
     //      the world matrix), then projected to canvas via `view`.
-    //   2. Colliders -- one PickDrawable per Fixture, for every live entry in
-    //      the registry's PhysicsResource::entityToBody map (iteration order
-    //      is unordered_map order -- not guaranteed stable across runs; the
-    //      only ordering guarantee this file makes is sprites-before-colliders).
-    // Documented choice: sprites are collected first, then colliders. Physics
-    // colliders are read via registry.GetResource<PhysicsResource>(); if absent
-    // (no physics world attached to this registry), only sprites are collected
-    // -- not an error.
+    //   2. Colliders -- one PickDrawable per Fixture, iterated via an
+    //      archetype-stable View<Collider2D, PhysicsBodyRef> (DETERMINISTIC:
+    //      the id assignment id=index+1 must not depend on unordered_map hash
+    //      order -- the same rule PhysicsSystem's create pass follows). The body
+    //      pose comes from the live PhysicsWorld via PhysicsBodyRef::handle;
+    //      fixture dims + local offset are scaled by PhysicsBodyRef::appliedScale
+    //      so a scaled body's silhouette matches its drawn collider.
+    // Documented choice: sprites are collected first (back), then colliders
+    // (front) -- later drawables win a contested pixel in the id pass, so a
+    // collider picks over an underlying sprite. Physics colliders are read via
+    // registry.GetResource<PhysicsResource>(); if absent (no physics world on
+    // this registry), only sprites are collected -- not an error.
     ARCANE_API void CollectPickables(Astra::Registry& registry, const PickView& view,
                                      std::vector<PickDrawable>& out);
 

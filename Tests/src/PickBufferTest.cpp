@@ -82,12 +82,17 @@ namespace
     // Mints a kinematic body with a single Aabb fixture at `pos`, via the real
     // PhysicsSystem create pass (stepWorld=false: registers the body and
     // writes it back without stepping, so it stays exactly at `pos`).
-    Astra::Entity SpawnAabbBody(Astra::Registry& reg, glm::vec2 pos, float halfW, float halfH)
+    // `scale` is baked into the body's fixtures by the create pass (it sets
+    // PhysicsBodyRef::appliedScale = lt.scale) -- used to prove CollectPickables
+    // scales the silhouette to match the drawn collider.
+    Astra::Entity SpawnAabbBody(Astra::Registry& reg, glm::vec2 pos, float halfW, float halfH,
+                                glm::vec2 scale = glm::vec2(1.0f, 1.0f))
     {
         const Astra::Entity e = reg.CreateEntity();
 
         Arcane::LocalTransform lt;
         lt.position = pos;
+        lt.scale    = scale;
         reg.AddComponent<Arcane::LocalTransform>(e, lt);
 
         Arcane::RigidBody2D rb;
@@ -164,4 +169,67 @@ TEST_CASE("id->entity table maps 1-based, 0 is background", "[pick]")
     CHECK(Arcane::PickEntityForId(table, 1).GetValue() == e0.GetValue());
     CHECK(Arcane::PickEntityForId(table, 2).GetValue() == e1.GetValue());
     CHECK_FALSE(Arcane::PickEntityForId(table, 3).IsValid());   // out of range
+}
+
+// The silhouette must match the DRAWN collider, which the physics create pass
+// bakes at lt.scale (MakeScaledShape) -- so a scaled body has to pick at its
+// scaled size, not its authored size. Aabb scales per-axis (halfW*|sx|,
+// halfH*|sy|), mirroring PhysicsSystem::MakeScaledShape.
+TEST_CASE("CollectPickables scales a collider silhouette by the body's baked scale", "[pick]")
+{
+    auto reg = MakePickRegistry();
+
+    // 10 px per world-meter, no offset.
+    const Arcane::PickView view{ {0.0f, 0.0f}, 10.0f };
+
+    // Aabb halfW=0.5 halfH=0.25 at body pos (1,1), authored scale (2,4). The
+    // create pass bakes appliedScale=(2,4); the silhouette half-extents scale to
+    //   world half = (0.5*2, 0.25*4) = (1.0, 1.0); canvas = *10 = (10, 10).
+    const Astra::Entity e = SpawnAabbBody(*reg, {1.0f, 1.0f}, 0.5f, 0.25f, {2.0f, 4.0f});
+
+    std::vector<Arcane::PickDrawable> out;
+    Arcane::CollectPickables(*reg, view, out);
+
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].entity.GetValue() == e.GetValue());
+    CHECK(out[0].kind == Arcane::PickDrawable::Kind::Box);
+    CHECK(out[0].center.x == Approx(10.0f));       // (1,1)*10
+    CHECK(out[0].center.y == Approx(10.0f));
+    CHECK(out[0].halfExtents.x == Approx(10.0f));  // 0.5 * 2 * 10
+    CHECK(out[0].halfExtents.y == Approx(10.0f));  // 0.25 * 4 * 10
+}
+
+// The drawable index IS the hit-proxy id (id = index+1), so the collection order
+// must be DETERMINISTIC and must not depend on unordered_map hash layout. Pins
+// the documented contract: sprites first (back), then colliders (front), stable
+// across repeated collections.
+TEST_CASE("CollectPickables orders sprites before colliders, deterministically", "[pick]")
+{
+    auto reg = MakePickRegistry();
+    const Arcane::PickView view{ {0.0f, 0.0f}, 1.0f };
+
+    const Astra::Entity sprite    = SpawnSprite(*reg, {0.0f, 0.0f}, {1.0f, 1.0f});
+    const Astra::Entity colliderA = SpawnAabbBody(*reg, {1.0f, 0.0f}, 0.5f, 0.5f);
+    const Astra::Entity colliderB = SpawnAabbBody(*reg, {2.0f, 0.0f}, 0.5f, 0.5f);
+
+    std::vector<Arcane::PickDrawable> out;
+    Arcane::CollectPickables(*reg, view, out);
+
+    REQUIRE(out.size() == 3);
+    CHECK(out[0].entity.GetValue() == sprite.GetValue());   // sprite first (back)
+
+    // Both colliders appear exactly once, after the sprite (order between the two
+    // is archetype-stable; assert set membership to stay robust to that detail).
+    const bool colsPresent =
+        (out[1].entity.GetValue() == colliderA.GetValue() && out[2].entity.GetValue() == colliderB.GetValue()) ||
+        (out[1].entity.GetValue() == colliderB.GetValue() && out[2].entity.GetValue() == colliderA.GetValue());
+    CHECK(colsPresent);
+
+    // Determinism: a second collection yields the identical ordering.
+    std::vector<Arcane::PickDrawable> out2;
+    Arcane::CollectPickables(*reg, view, out2);
+    REQUIRE(out2.size() == 3);
+    CHECK(out2[0].entity.GetValue() == out[0].entity.GetValue());
+    CHECK(out2[1].entity.GetValue() == out[1].entity.GetValue());
+    CHECK(out2[2].entity.GetValue() == out[2].entity.GetValue());
 }
