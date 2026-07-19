@@ -20,6 +20,42 @@ namespace Astra
     class ComponentRegistry
     {
     public:
+        // Pre-reserve m_components/m_hashToID past the point where any future
+        // RegisterComponent<T>() insertion could ever trigger a FlatMap rehash.
+        //
+        // GetComponentDescriptor() returns `&it->second` -- a pointer INTO the
+        // FlatMap's open-addressed slot array. Callers are expected (and, in
+        // practice, required -- see ResourceStorage::ResourceSlot::descriptor)
+        // to CACHE that pointer past the call that obtained it: Set()/Emplace()
+        // stash it once at first registration and dereference it again on every
+        // later destroy/reconstruct, all the way through ~ResourceStorage().
+        // FlatMap (Container/FlatMap.hpp) is a Swiss-table-style open-addressed
+        // map, NOT pointer-stable across growth: Rehash() allocates a brand-new
+        // m_slots array and moves every live entry into it, so any earlier
+        // `&it->second` becomes a dangling pointer into freed memory the moment
+        // a LATER RegisterComponent<U>() (for any unrelated type U) pushes the
+        // map's load factor over MAX_LOAD_FACTOR. In practice this fires the
+        // instant a consumer registers past MIN_CAPACITY*MAX_LOAD_FACTOR (~14)
+        // distinct component/resource types on one registry -- routine for any
+        // real ECS module (scene + physics components + half a dozen lazily-
+        // registered singleton resources) -- and the dangling read only faults
+        // much later, when something finally destructs the stale slot (e.g. a
+        // whole Registry going out of scope), far from the registration that
+        // actually invalidated the pointer. ComponentID is hard-bounded to
+        // < MAX_COMPONENTS everywhere in this codebase (ResourceStorage asserts
+        // it on every insert), so this map can never hold more than
+        // MAX_COMPONENTS live entries; reserving comfortably past that ceiling
+        // (with headroom for MAX_LOAD_FACTOR) guarantees NO rehash -- and thus
+        // no pointer invalidation -- for the registry's entire lifetime. This
+        // is the same pointer-stability guarantee m_componentNames already gets
+        // from std::deque (see the comment below), applied here by reserving
+        // past the architectural ceiling instead of switching containers.
+        ComponentRegistry()
+        {
+            m_components.Reserve(MAX_COMPONENTS * 2);
+            m_hashToID.Reserve(MAX_COMPONENTS * 2);
+        }
+
         template<Component T>
         void RegisterComponent()
         {
