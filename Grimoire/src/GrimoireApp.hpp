@@ -20,6 +20,8 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 
+#include <spdlog/sinks/callback_sink.h>
+
 namespace Astra { class TypeContext; }
 
 namespace Grimoire
@@ -44,6 +46,11 @@ namespace Grimoire
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
         ConsoleBuffer                     m_console{512};
+        // Handle to the callback sink pushed onto Arcane::Log::Engine() in
+        // InstallConsoleSink(); erased at the top of Shutdown() so the sink cannot
+        // fire (and Push into a destroyed m_console) during member teardown -- e.g.
+        // ~GpuContext's Vulkan device destruction logs validation messages.
+        std::shared_ptr<spdlog::sinks::callback_sink_mt> m_consoleSink;
 
         // Play-in-editor (Task 8): Edit|Play state machine. Play() snapshots the
         // registry + unpauses the RunLoop; Stop() restores the snapshot + re-pauses.

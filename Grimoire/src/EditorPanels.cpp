@@ -37,7 +37,7 @@ namespace Grimoire
         ImGui::End();
     }
 
-    void DrawSimTimeToolbar(Arcane::RunLoop& loop, PlaySession& play, Arcane::Runtime& runtime)
+    void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime)
     {
         ImGui::Begin("Sim");
         if (play.IsPlaying())
@@ -48,6 +48,10 @@ namespace Grimoire
         {
             if (ImGui::Button("Play")) play.Play(runtime);
         }
+        // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
+        // replaces m_impl->loop on Stop, so a reference taken before this point
+        // (e.g. at the call site) would dangle for the rest of this frame.
+        Arcane::RunLoop& loop = runtime.Loop();
         ImGui::SameLine();
         if (ImGui::Button(loop.IsPaused() ? "Resume" : "Pause")) loop.SetPaused(!loop.IsPaused());
         ImGui::SameLine();

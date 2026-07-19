@@ -17,8 +17,11 @@ namespace Grimoire
     void BeginDockSpace();
 
     // Play/Stop (play-in-editor: snapshot on Play, restore on Stop) + Pause/Step
-    // buttons + a time-scale slider, driving the RunLoop.
-    void DrawSimTimeToolbar(Arcane::RunLoop& loop, PlaySession& play, Arcane::Runtime& runtime);
+    // buttons + a time-scale slider, driving the RunLoop. Does NOT take a
+    // RunLoop& parameter: play.Stop() -> Runtime::RestoreRegistry destroys and
+    // replaces the RunLoop, so the loop is fetched fresh from `runtime` AFTER
+    // the Play/Stop handling to avoid a dangling reference.
+    void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);

@@ -31,6 +31,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/callback_sink.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -130,6 +131,7 @@ namespace Grimoire
             {
                 m_console.Push(std::string(m.payload.data(), m.payload.size()));
             });
+        m_consoleSink = cb;
         Arcane::Log::Engine()->sinks().push_back(cb);
     }
 
@@ -224,7 +226,7 @@ namespace Grimoire
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Grimoire::BeginDockSpace();
-            Grimoire::DrawSimTimeToolbar(m_runtime->Loop(), m_play, *m_runtime);
+            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime);
             Grimoire::DrawConsolePanel(m_console);
 
             Grimoire::ViewportPanelResult vp =
@@ -294,6 +296,19 @@ namespace Grimoire
 
     void GrimoireApp::Shutdown()
     {
+        // Deregister the console sink FIRST, before anything below can log through
+        // Arcane::Log::Engine(). m_console is declared before m_runtime/m_plugin/m_gpu
+        // in GrimoireApp.hpp, so it destructs BEFORE them; if the sink outlived this
+        // point, a log emitted during ~GpuContext's Vulkan device teardown (validation
+        // messages) would invoke the callback and Push into an already-destroyed
+        // m_console deque.
+        if (m_consoleSink)
+        {
+            auto& sinks = Arcane::Log::Engine()->sinks();
+            sinks.erase(std::remove(sinks.begin(), sinks.end(), m_consoleSink), sinks.end());
+            m_consoleSink.reset();
+        }
+
         // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
         // the guard covers a future partial-init/destructor path.
         if (m_gpu) m_gpu->Device().Nvrhi()->waitForIdle();
