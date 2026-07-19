@@ -199,6 +199,36 @@ namespace Arcane
     }
 
     // -------------------------------------------------------------------------
+    // RebuildScaledFixtures: rebuild every fixture of `bh` at (descriptor x scale),
+    // preserving the body pose. Adds the new scaled fixtures BEFORE dropping the old
+    // ones, so the body never transiently holds zero fixtures (sidesteps any
+    // "body must keep >= 1 fixture" invariant). AddFixture / DropFixture recompute
+    // body mass internally. The body is not moved, so pose is preserved.
+    // -------------------------------------------------------------------------
+    inline void RebuildScaledFixtures(Phys::PhysicsWorld& world, Phys::BodyHandle bh,
+                                      const Collider2D& col, glm::vec2 scale)
+    {
+        // Capture current fixtures BEFORE adding new ones (their indices are stable
+        // until we mutate; the new fixtures append after them).
+        const std::uint32_t n = world.FixtureCount(bh);
+        std::vector<Phys::FixtureHandle> old;
+        old.reserve(n);
+        for (std::uint32_t i = 0; i < n; ++i)
+            old.push_back(world.GetBodyFixture(bh, i));
+
+        // Add authored fixtures at the new scaled dims.
+        for (const Fixture& f : col.fixtures)
+        {
+            Phys::FixtureDef fd = MakeFixtureDef(f, scale);
+            world.AddFixture(bh, fd);
+        }
+
+        // Drop the pre-rebuild fixtures.
+        for (Phys::FixtureHandle fh : old)
+            world.DropFixture(fh);
+    }
+
+    // -------------------------------------------------------------------------
     // PhysicsSystem (M6 Physics-v2 T6)
     // -------------------------------------------------------------------------
     struct PhysicsSystem
@@ -388,11 +418,21 @@ namespace Arcane
                 view.ForEach([&](Astra::Entity   /*entity*/,
                                  PhysicsBodyRef&  ref,
                                  LocalTransform&  lt,
-                                 Collider2D&      /*col*/,
+                                 Collider2D&      col,
                                  RigidBody2D&     /*rb*/)
                 {
                     if (ref.handle == Phys::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))       return;
+
+                    // SCALE: rebuild fixtures when lt.scale changed. Exact compare --
+                    // physics never writes scale, so appliedScale can't drift; this
+                    // both detects the edit and suppresses per-frame re-rebuild. Runs
+                    // before the pose branch (rebuild does not move the body).
+                    if (lt.scale != ref.appliedScale)
+                    {
+                        RebuildScaledFixtures(world, ref.handle, col, lt.scale);
+                        ref.appliedScale = lt.scale;
+                    }
 
                     // POS/ROT: stateless author reconcile.
                     const Phys::Vec2 bp = world.Position(ref.handle);

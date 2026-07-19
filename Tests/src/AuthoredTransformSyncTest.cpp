@@ -239,3 +239,108 @@ TEST_CASE("paused author move works on a static body", "[transform-sync]")
     // If this FAILS (SetPosition no-ops on Static), the reconcile pass must
     // remove+re-add the static body at the authored pose for Static bodies.
 }
+
+// ===========================================================================
+// Task 3: paused scale -> collider rebuild
+// ===========================================================================
+
+TEST_CASE("paused scale-up rebuilds fixtures at effective size, pose preserved", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {2,3}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+
+    reg.GetComponent<LocalTransform>(e)->scale = glm::vec2(2.0f, 2.0f);
+    paused(reg);                                   // reconcile: rebuild fixtures
+
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle bh = res->entityToBody.at(e);
+    CHECK(res->world->FixtureCount(bh) == 1u);     // count preserved across rebuild
+    const glm::vec2 he = Fixture0HalfExtents(reg);
+    CHECK(he.x == Approx(1.0f).margin(1e-4f));      // 0.5 * 2
+    CHECK(he.y == Approx(1.0f).margin(1e-4f));
+    const Phys::Vec2 bp = res->world->Position(bh); // body did not move
+    CHECK(static_cast<float>(bp.x) == Approx(2.0f).margin(1e-4f));
+    CHECK(static_cast<float>(bp.y) == Approx(3.0f).margin(1e-4f));
+    CHECK(reg.GetComponent<PhysicsBodyRef>(e)->appliedScale == glm::vec2(2.0f, 2.0f));
+}
+
+TEST_CASE("paused non-uniform scale rebuilds per-axis", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    reg.GetComponent<LocalTransform>(e)->scale = glm::vec2(3.0f, 1.0f);
+    paused(reg);
+    const glm::vec2 he = Fixture0HalfExtents(reg);
+    CHECK(he.x == Approx(1.5f).margin(1e-4f));      // 0.5 * 3
+    CHECK(he.y == Approx(0.5f).margin(1e-4f));      // 0.5 * 1
+}
+
+TEST_CASE("unchanged scale does not rebuild fixtures (no compounding)", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    reg.GetComponent<LocalTransform>(e)->scale = glm::vec2(2.0f, 2.0f);
+    paused(reg);                                   // rebuild once
+
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle bh = res->entityToBody.at(e);
+    const Phys::FixtureHandle before = res->world->GetBodyFixture(bh, 0u);
+    for (int i = 0; i < 3; ++i) paused(reg);       // scale unchanged -> no rebuild
+    const Phys::FixtureHandle after = res->world->GetBodyFixture(bh, 0u);
+
+    // appliedScale suppresses re-rebuild: the fixture identity is unchanged.
+    // (FixtureHandle is a {index, generation} slot handle, like BodyHandle.)
+    CHECK(before.index == after.index);
+    CHECK(before.generation == after.generation);
+    // Dims did not compound.
+    const glm::vec2 he = Fixture0HalfExtents(reg);
+    CHECK(he.x == Approx(1.0f).margin(1e-4f));
+    CHECK(he.y == Approx(1.0f).margin(1e-4f));
+}
+
+TEST_CASE("mint at scale then reconcile does not double-apply", "[transform-sync]")
+{
+    Astra::Registry reg;
+    BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic, {2.0f,2.0f});
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);                                   // CREATE bakes scale 2 (he == 1.0)
+    paused(reg);                                   // reconcile: scale unchanged -> no rebuild
+    const glm::vec2 he = Fixture0HalfExtents(reg);
+    CHECK(he.x == Approx(1.0f).margin(1e-4f));      // NOT 2.0 (no double-scale)
+    CHECK(he.y == Approx(1.0f).margin(1e-4f));
+}
+
+TEST_CASE("body still steps after a scale rebuild", "[transform-sync]")
+{
+    Astra::Registry reg;
+    // Gravity on for this one: prove the rebuilt body is a live dynamic body.
+    RegisterSceneComponents(reg);
+    RegisterPhysicsComponents(reg);
+    Phys::WorldDef wd; wd.gravityX = 0.0f; wd.gravityY = 10.0f;
+    reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
+    Astra::Entity e = reg.CreateEntity();
+    LocalTransform lt; lt.position = {0,0};
+    reg.AddComponent<LocalTransform>(e, lt);
+    reg.AddComponent<WorldTransform>(e, WorldTransform{});
+    RigidBody2D rb; rb.type = Phys::BodyType::Dynamic; rb.fixedRotation = true;  // dynamic AABB invariant
+    reg.AddComponent<RigidBody2D>(e, rb);
+    Collider2D col; Fixture fx; fx.kind = Phys::ShapeKind::Aabb; fx.halfW = 0.5f; fx.halfH = 0.5f;
+    col.fixtures.push_back(fx);
+    reg.AddComponent<Collider2D>(e, col);
+    reg.AddComponent<PhysicsBodyRef>(e, PhysicsBodyRef{});
+
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    reg.GetComponent<LocalTransform>(e)->scale = glm::vec2(2.0f, 2.0f);
+    paused(reg);                                   // rebuild fixtures
+
+    PhysicsSystem play(kDt, /*stepWorld=*/true);
+    for (int i = 0; i < 10; ++i) play(reg);        // must fall under gravity
+    CHECK(reg.GetComponent<LocalTransform>(e)->position.y > 0.1f);
+}
