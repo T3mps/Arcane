@@ -17,11 +17,14 @@
 // calls Pick() on a viewport click; the engine holds no editor state.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Render/PickEmit.hpp>   // PickView
 
 #include <nvrhi/nvrhi.h>
 
 #include <cstdint>
 #include <memory>
+
+namespace Astra { class Registry; }
 
 namespace Arcane
 {
@@ -39,9 +42,23 @@ namespace Arcane
 
         virtual ~PickBuffer() = default;
 
+        // Render the entity-id pass for the current scene into the id target:
+        // clears it to 0, then draws every pickable silhouette (CollectPickables
+        // order -- back-to-front, front-most LAST) tagged with its 1-based id, so
+        // the front-most entity wins a contested pixel. Also rebuilds the internal
+        // id<->entity table Pick() looks up. `view` is the same world->canvas
+        // transform the scene render uses. This is BOTH the render half of Pick()
+        // and the per-frame hover-highlight seam (spec S7).
+        virtual void RenderIdPass(Astra::Registry& registry, const PickView& view) = 0;
+
+        // The R32_UINT id render target (valid after Create; rebuilt on Resize).
+        // Exposed for readback / a future id-buffer visualization; Pick() reads a
+        // single pixel from it internally. (Pick() is added in Task 4.)
+        virtual nvrhi::ITexture* IdTarget() const = 0;
+
         // Tears down and rebuilds the id target at the new size. No-op on a zero
         // dimension or an unchanged size. The 1x1 staging texture is size-
-        // independent, so it is not rebuilt. (Pick() is added in Task 4.)
+        // independent, so it is not rebuilt.
         virtual void Resize(uint32_t width, uint32_t height) = 0;
 
         virtual uint32_t Width()  const = 0;

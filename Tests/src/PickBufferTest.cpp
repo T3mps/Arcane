@@ -3,6 +3,7 @@
 // CPU-only ([pick]), no GPU: exercises CollectPickables (sprite + collider
 // emitters) and the id<->entity table (PickEntityForId).
 
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -357,4 +358,107 @@ TEST_CASE("vulkan: PickBuffer builds and resizes its id target",
           "[gpu][pick][vulkan]")
 {
     CheckPickBufferSkeleton(Arcane::GraphicsBackend::Vulkan);
+}
+
+namespace
+{
+    // Copy the full R32_UINT id target into a row-major vector<uint32_t>,
+    // handling the staging row pitch.
+    std::vector<uint32_t> ReadIdTarget(nvrhi::IDevice* nv, nvrhi::ITexture* target,
+                                       uint32_t size)
+    {
+        auto stagingDesc = nvrhi::TextureDesc()
+            .setWidth(size).setHeight(size)
+            .setFormat(nvrhi::Format::R32_UINT)
+            .setDebugName("IdReadback");
+        nvrhi::StagingTextureHandle staging =
+            nv->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
+        REQUIRE(staging != nullptr);
+
+        nvrhi::CommandListHandle cl = nv->createCommandList();
+        cl->open();
+        cl->copyTexture(staging, nvrhi::TextureSlice(), target, nvrhi::TextureSlice());
+        cl->close();
+        nv->executeCommandList(cl);
+        nv->waitForIdle();
+
+        size_t rowPitch = 0;
+        const auto* bytes = static_cast<const uint8_t*>(nv->mapStagingTexture(
+            staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
+        REQUIRE(bytes != nullptr);
+        std::vector<uint32_t> out(static_cast<size_t>(size) * size);
+        for (uint32_t y = 0; y < size; ++y)
+            std::memcpy(&out[static_cast<size_t>(y) * size],
+                        bytes + static_cast<size_t>(y) * rowPitch,
+                        static_cast<size_t>(size) * sizeof(uint32_t));
+        nv->unmapStagingTexture(staging);
+        return out;
+    }
+
+    // Task 3: the entity_id pass rasterizes each pickable silhouette tagged with
+    // its 1-based id, background stays 0, and overlaps resolve front-most. Reads
+    // back the FULL target and samples known pixels. nvrhi normalizes the render-
+    // target Y orientation across backends, so target[y][x] == canvas pixel (x,y).
+    void CheckIdPass(Arcane::GraphicsBackend backend)
+    {
+        constexpr uint32_t kSize = 128;
+        Arcane::RenderDeviceDesc desc;
+        desc.backend = backend;
+        auto device = Arcane::RenderDevice::Create(desc);
+        REQUIRE(device != nullptr);
+        nvrhi::IDevice* nv = device->Nvrhi();
+
+        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "shaders");
+        REQUIRE(shaders != nullptr);
+        auto pick = Arcane::PickBuffer::Create(nv, *shaders, kSize, kSize);
+        REQUIRE(pick != nullptr);
+
+        // 10 px per world-meter, no offset.
+        const Arcane::PickView view{ {0.0f, 0.0f}, 10.0f };
+
+        // --- non-overlapping: two Aabb colliders at distinct canvas pixels -----
+        {
+            auto reg = MakePickRegistry();
+            const Astra::Entity a = SpawnAabbBody(*reg, {3.0f, 4.0f}, 0.5f, 0.5f); // ->(30,40)
+            const Astra::Entity b = SpawnAabbBody(*reg, {9.0f, 9.0f}, 0.5f, 0.5f); // ->(90,90)
+            (void)a; (void)b;
+
+            pick->RenderIdPass(*reg, view);
+            const std::vector<uint32_t> px = ReadIdTarget(nv, pick->IdTarget(), kSize);
+            auto At = [&](uint32_t x, uint32_t y) { return px[static_cast<size_t>(y) * kSize + x]; };
+
+            // No sprites; two colliders in creation order -> ids 1 and 2.
+            CHECK(At(30, 40) == 1u);   // body A center
+            CHECK(At(90, 90) == 2u);   // body B center
+            CHECK(At(60, 60) == 0u);   // gap between them -> background
+        }
+
+        // --- overlapping: front-most (later-drawn) id wins the pixel -----------
+        {
+            auto reg = MakePickRegistry();
+            const Astra::Entity back  = SpawnAabbBody(*reg, {6.0f, 6.0f}, 1.0f, 1.0f);
+            const Astra::Entity front = SpawnAabbBody(*reg, {6.0f, 6.0f}, 1.0f, 1.0f);
+            (void)back; (void)front;
+
+            pick->RenderIdPass(*reg, view);
+            const std::vector<uint32_t> px = ReadIdTarget(nv, pick->IdTarget(), kSize);
+            // `front` is collected second -> id 2 -> drawn last -> wins (60,60).
+            CHECK(px[static_cast<size_t>(60) * kSize + 60] == 2u);
+        }
+
+        nv->runGarbageCollection();
+        CHECK(Arcane::RenderErrorCount() == 0);
+    }
+}
+
+TEST_CASE("d3d12: entity_id pass writes front-most ids to covered pixels",
+          "[gpu][pick][d3d12]")
+{
+    CheckIdPass(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("vulkan: entity_id pass writes front-most ids to covered pixels",
+          "[gpu][pick][vulkan]")
+{
+    CheckIdPass(Arcane::GraphicsBackend::Vulkan);
 }

@@ -30,6 +30,8 @@ call :compile imgui   vs_main vs_6_5 imgui_vs   || exit /b 1
 call :compile imgui   ps_main ps_6_5 imgui_ps   || exit /b 1
 call :compile tonemap vs_main vs_6_5 tonemap_vs || exit /b 1
 call :compile tonemap ps_main ps_6_5 tonemap_ps || exit /b 1
+call :compile entity_id vs_main vs_6_5 entity_id_vs || exit /b 1
+call :compile entity_id ps_main ps_6_5 entity_id_ps || exit /b 1
 echo Shaders compiled to %OUT%
 exit /b 0
 
