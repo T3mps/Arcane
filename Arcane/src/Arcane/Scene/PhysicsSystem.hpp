@@ -74,7 +74,9 @@
 
 #include <glm/vec2.hpp>
 
+#include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -121,37 +123,48 @@ namespace Arcane
     };
 
     // -------------------------------------------------------------------------
-    // MakeFixtureDef: build a Core::FixtureDef from a scene-layer Fixture desc.
+    // MakeScaledShape: build a Manifold2D Shape from a Fixture descriptor scaled
+    // by an authored LocalTransform.scale. Aabb scales per-axis exact; Circle uses
+    // max(|sx|,|sy|) (a circle has no distinguished axis; max never shrinks below
+    // the larger authored axis); Capsule scales its length by |sx| and radius by
+    // |sy| (a scalar-radius capsule is approximate under non-uniform scale -- the
+    // round caps stay circular; documented in the design spec). Uniform scale is
+    // exact for every shape.
+    // -------------------------------------------------------------------------
+    inline Phys::Shape MakeScaledShape(const Fixture& f, glm::vec2 scale)
+    {
+        const float sx   = std::abs(scale.x);
+        const float sy   = std::abs(scale.y);
+        const float sMax = std::max(sx, sy);
+        switch (f.kind)
+        {
+        case Phys::ShapeKind::Circle:  return Phys::MakeCircle(f.radius * sMax);
+        case Phys::ShapeKind::Capsule: return Phys::MakeCapsule(f.halfLen * sx, f.radius * sy);
+        case Phys::ShapeKind::Aabb:    return Phys::MakeAabb(f.halfW * sx, f.halfH * sy);
+        case Phys::ShapeKind::Polygon:
+            assert(false && "PhysicsSystem: ShapeKind::Polygon not supported");
+            return Phys::MakeCircle(f.radius * sMax);
+        }
+        return Phys::MakeCircle(f.radius * sMax);
+    }
+
+    // -------------------------------------------------------------------------
+    // MakeFixtureDef: build a Core::FixtureDef from a scene-layer Fixture desc,
+    // scaled by the entity's authored LocalTransform.scale (default identity).
     // -------------------------------------------------------------------------
     // Helper shared by the body-primary and AddFixture paths. Inline to keep
     // PhysicsSystem.hpp header-only.
-    inline Phys::FixtureDef MakeFixtureDef(const Fixture& f)
+    inline Phys::FixtureDef MakeFixtureDef(const Fixture& f,
+                                           glm::vec2 scale = glm::vec2(1.0f, 1.0f))
     {
         Phys::FixtureDef fd;
 
-        // Shape geometry.
-        switch (f.kind)
-        {
-        case Phys::ShapeKind::Circle:
-            fd.shape = Phys::MakeCircle(f.radius);
-            break;
-        case Phys::ShapeKind::Capsule:
-            fd.shape = Phys::MakeCapsule(f.halfLen, f.radius);
-            break;
-        case Phys::ShapeKind::Aabb:
-            fd.shape = Phys::MakeAabb(f.halfW, f.halfH);
-            break;
-        case Phys::ShapeKind::Polygon:
-            // Polygon authored verts are out of scope (Fixture carries no vertex
-            // array). Assert in Debug; fall back to circle so the entity doesn't
-            // silently disappear from the simulation.
-            assert(false && "PhysicsSystem: ShapeKind::Polygon not supported");
-            fd.shape = Phys::MakeCircle(f.radius);
-            break;
-        }
+        // Shape geometry (scaled).
+        fd.shape = MakeScaledShape(f, scale);
 
-        // Local transform.
-        fd.localPos   = Phys::Vec2(f.localPos.x, f.localPos.y);
+        // Local transform. Offset scales per-axis with the entity's scale (signed,
+        // so a mirrored scale mirrors the offset); localAngle is unaffected.
+        fd.localPos   = Phys::Vec2(f.localPos.x * scale.x, f.localPos.y * scale.y);
         fd.localAngle = static_cast<Phys::Real>(f.localAngle);
 
         // Material.
@@ -251,23 +264,8 @@ namespace Arcane
                     def.type     = rb.type;
                     def.position = Phys::Vec2(lt.position.x, lt.position.y);
 
-                    // Translate fixture[0] shape descriptor -> Core::Shape.
-                    switch (fx0.kind)
-                    {
-                    case Phys::ShapeKind::Circle:
-                        def.shape = Phys::MakeCircle(fx0.radius);
-                        break;
-                    case Phys::ShapeKind::Capsule:
-                        def.shape = Phys::MakeCapsule(fx0.halfLen, fx0.radius);
-                        break;
-                    case Phys::ShapeKind::Aabb:
-                        def.shape = Phys::MakeAabb(fx0.halfW, fx0.halfH);
-                        break;
-                    case Phys::ShapeKind::Polygon:
-                        assert(false && "PhysicsSystem: ShapeKind::Polygon not supported");
-                        def.shape = Phys::MakeCircle(fx0.radius);
-                        break;
-                    }
+                    // Primary fixture shape, scaled by the authored LocalTransform.scale.
+                    def.shape = MakeScaledShape(fx0, lt.scale);
 
                     // Material + filter + local transform from fixture[0].
                     // T6 fix: categoryBits / maskBits / localPos / localAngle were
@@ -280,7 +278,8 @@ namespace Arcane
                     def.density       = static_cast<Phys::Real>(fx0.density);
                     def.categoryBits  = fx0.categoryBits;
                     def.maskBits      = fx0.maskBits;
-                    def.localPos      = Phys::Vec2(fx0.localPos.x, fx0.localPos.y);
+                    def.localPos      = Phys::Vec2(fx0.localPos.x * lt.scale.x,
+                                                   fx0.localPos.y * lt.scale.y);
                     def.localAngle    = static_cast<Phys::Real>(fx0.localAngle);
 
                     // Body-level dynamics from RigidBody2D.
@@ -300,7 +299,7 @@ namespace Arcane
                     // one physics fixture per authored Fixture descriptor.
                     for (std::size_t i = 1; i < col.fixtures.size(); ++i)
                     {
-                        Phys::FixtureDef fd = MakeFixtureDef(col.fixtures[i]);
+                        Phys::FixtureDef fd = MakeFixtureDef(col.fixtures[i], lt.scale);
                         world.AddFixture(handle, fd);
                     }
 
@@ -310,6 +309,7 @@ namespace Arcane
                         world.SetVelocity(handle, Phys::Vec2(rb.velocity.x, rb.velocity.y));
 
                     ref.handle           = handle;
+                    ref.appliedScale     = lt.scale;
                     entityToBody[entity] = handle;
                 });
             }

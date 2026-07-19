@@ -145,6 +145,15 @@ namespace Arcane
     struct PhysicsBodyRef
     {
         Phys::BodyHandle handle{};   // default = kInvalidBody (index=0, gen=0)
+
+        // Runtime baseline: the lt.scale most recently baked into this body's
+        // fixtures. The paused reconcile pass rebuilds fixtures when lt.scale
+        // diverges from this. Serializable(false), re-seeded on load exactly as
+        // `handle` is; the physics world exposes no fixture-dims read-back, so
+        // this cached baseline is how a scale change is detected (Unity/Unreal
+        // "baked scale" model). Still trivially copyable (glm::vec2 is POD) ->
+        // the binary snapshot path memcpies it harmlessly.
+        glm::vec2 appliedScale{1.0f, 1.0f};
     };
 
 } // namespace Arcane
@@ -217,6 +226,8 @@ namespace Arcane
 
     ASTRA_REFLECT_TYPE(PhysicsBodyRef)
         ASTRA_REFLECT_FIELD(PhysicsBodyRef, handle)
+            ASTRA_REFLECT_ATTR(Serializable, false)
+        ASTRA_REFLECT_FIELD(PhysicsBodyRef, appliedScale)
             ASTRA_REFLECT_ATTR(Serializable, false)
     ASTRA_END_REFLECT_TYPE()
 } // namespace Arcane
