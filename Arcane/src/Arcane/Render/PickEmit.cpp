@@ -28,7 +28,7 @@ namespace Arcane
                           std::vector<PickDrawable>& out)
     {
         // ---- PASS 1: sprites -------------------------------------------------
-        // Same OBB derivation as PickEntitiesAt (EntityPick.cpp): the world
+        // Same OBB derivation as the retired CPU sprite-OBB pick: the world
         // matrix's translation column (matrix[2]) is the world-space center;
         // the local-x column's angle is the world rotation; the column
         // magnitudes are the baked LocalTransform.scale (LocalTransform::ToMatrix

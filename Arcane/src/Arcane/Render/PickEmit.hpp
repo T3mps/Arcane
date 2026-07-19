@@ -65,7 +65,7 @@ namespace Arcane
     //   1. Sprites  -- entities with (WorldTransform, SpriteRenderer), in the
     //      registry's view iteration order (archetype-stable). One Quad per
     //      entity, derived from the world matrix + SpriteRenderer::size (same
-    //      OBB math as PickEntitiesAt in EntityPick.cpp: center = translation
+    //      OBB math the retired CPU sprite-OBB pick used: center = translation
     //      column, angle = atan2 of the local-x column, half-extents = size*0.5
     //      scaled by the column magnitudes -- LocalTransform.scale baked into
     //      the world matrix), then projected to canvas via `view`.

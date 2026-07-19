@@ -20,7 +20,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
-#include <Arcane/Scene/EntityPick.hpp>   // Arcane::PickEntitiesAt (viewport click-pick)
+#include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 
 #include <Astra/Core/TypeContext.hpp>
 
@@ -121,6 +121,14 @@ namespace Grimoire
             return false;
         }
 
+        // GPU hit-proxy picker, sized to match the viewport (resized together).
+        m_pick = Arcane::PickBuffer::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
+        if (!m_pick)
+        {
+            ARC_ERROR("Grimoire: PickBuffer create failed");
+            return false;
+        }
+
         return true;
     }
 
@@ -215,6 +223,7 @@ namespace Grimoire
                 (m_pendingViewportW != m_viewport->Width() || m_pendingViewportH != m_viewport->Height()))
             {
                 m_viewport->Resize(m_pendingViewportW, m_pendingViewportH);
+                m_pick->Resize(m_pendingViewportW, m_pendingViewportH);
             }
 
             // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path Loom
@@ -246,34 +255,23 @@ namespace Grimoire
             m_viewportRect     = vp.imageRect;
             m_viewportActive   = Grimoire::SceneInputActive(vp.hovered, vp.focused);
 
-            // Viewport click-pick: unproject the viewport-local click through the
-            // plugin's stored camera (screen = world * zoom + offset) and select the
-            // front-most sprite-OBB hit. Alt-click on the same stack cycles down it.
+            // Viewport click-pick: GPU hit-proxy. Render every pickable entity's
+            // silhouette into the id buffer and read back the pixel under the
+            // viewport-local click. `view` is the SAME world->canvas transform the
+            // scene render uses (m_runtime's camera == RenderContext2D), so the id
+            // silhouettes register pixel-for-pixel with what is drawn. An invalid
+            // result (background / outside the viewport) clears the selection.
             if (vp.clicked)
             {
-                const glm::vec2 camOff  = m_runtime->CameraOffset();
-                const float     camZoom = m_runtime->CameraZoom();
-                const glm::vec2 world =
-                    (glm::vec2(vp.clickLocalX, vp.clickLocalY) - camOff) / camZoom;
-                std::vector<Astra::Entity> hits =
-                    Arcane::PickEntitiesAt(m_runtime->Registry(), world);
-                if (hits.empty())
-                {
-                    m_selection.Clear();
-                }
-                else if (vp.altHeld && !m_selection.pickCandidates.empty() &&
-                         m_selection.pickCandidates == hits)
-                {
-                    // alt-click on the same stack: cycle to the next entity under the cursor.
-                    m_selection.pickCycle = (m_selection.pickCycle + 1) % hits.size();
-                    m_selection.Select(hits[m_selection.pickCycle]);
-                }
+                const Arcane::PickView view{ m_runtime->CameraOffset(),
+                                             m_runtime->CameraZoom() };
+                const Astra::Entity picked = m_pick->Pick(
+                    m_runtime->Registry(), view,
+                    glm::vec2(vp.clickLocalX, vp.clickLocalY));
+                if (picked.IsValid())
+                    m_selection.Select(picked);
                 else
-                {
-                    m_selection.pickCandidates = hits;
-                    m_selection.pickCycle = 0;
-                    m_selection.Select(hits.front());
-                }
+                    m_selection.Clear();
             }
 
             Grimoire::DrawHierarchyPanel(m_runtime->Registry(), m_selection);

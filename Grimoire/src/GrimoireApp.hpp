@@ -19,6 +19,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
+#include <Arcane/Render/PickBuffer.hpp>
 
 #include <spdlog/sinks/callback_sink.h>
 
@@ -70,6 +71,13 @@ namespace Grimoire
         std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
         Grimoire::ViewportRect                   m_viewportRect{};
         bool                                      m_viewportActive = false;
+
+        // GPU hit-proxy picker, a sibling of m_viewport: created and resized at the
+        // same size, it renders each pickable entity's silhouette into an R32_UINT
+        // id buffer and reads back the pixel under a viewport click to select the
+        // entity there (sprites + physics colliders; front-most wins). Replaces the
+        // CPU sprite-OBB PickEntitiesAt. See PickBuffer.hpp.
+        std::unique_ptr<Arcane::PickBuffer>       m_pick;
 
         // Deferred resize: the Viewport panel's content-region size measured LAST
         // frame, applied at the START of THIS frame (before m_viewport->Draw). This
