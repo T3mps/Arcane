@@ -148,6 +148,23 @@ namespace Arcane
         return Phys::MakeCircle(f.radius * sMax);
     }
 
+    // Author-edit detection tolerances. pos in meters, rot in radians. Small: they
+    // only guard against SetAngle->GetAngle normalization round-trip noise, not any
+    // meaningful author nudge (a real gizmo/inspector edit is orders larger).
+    inline constexpr float kAuthorPosEps = 1e-5f;
+    inline constexpr float kAuthorRotEps = 1e-5f;
+
+    // Shortest-arc absolute angle difference (radians).
+    inline float AngleDelta(float a, float b)
+    {
+        constexpr float kPi  = 3.14159265358979323846f;
+        constexpr float kTau = 6.28318530717958647692f;
+        float d = a - b;
+        while (d >  kPi) d -= kTau;
+        while (d < -kPi) d += kTau;
+        return std::abs(d);
+    }
+
     // -------------------------------------------------------------------------
     // MakeFixtureDef: build a Core::FixtureDef from a scene-layer Fixture desc,
     // scaled by the entity's authored LocalTransform.scale (default identity).
@@ -356,6 +373,41 @@ namespace Arcane
             // ------------------------------------------------------------------
             if (m_stepWorld)
                 world.Step(m_fixedDt);
+
+            // ------------------------------------------------------------------
+            // PASS 3.5: AUTHOR RECONCILE (paused only). When the sim is frozen the
+            // AUTHOR owns pos/rot: push a diverged LocalTransform edit into the body
+            // BEFORE PASS 4 reflects the (now-matching) body pose back. Stateless --
+            // a paused body cannot move itself, so the live body pose is the baseline
+            // and any divergence is an author edit. Skipped while stepping (Play =
+            // body owns pos/rot; PASS 4 drives lt as before). Scale handled in Task 3.
+            // ------------------------------------------------------------------
+            if (!m_stepWorld)
+            {
+                auto view = reg.CreateView<PhysicsBodyRef, LocalTransform, Collider2D, RigidBody2D>();
+                view.ForEach([&](Astra::Entity   /*entity*/,
+                                 PhysicsBodyRef&  ref,
+                                 LocalTransform&  lt,
+                                 Collider2D&      /*col*/,
+                                 RigidBody2D&     /*rb*/)
+                {
+                    if (ref.handle == Phys::kInvalidBody) return;
+                    if (!world.IsValid(ref.handle))       return;
+
+                    // POS/ROT: stateless author reconcile.
+                    const Phys::Vec2 bp = world.Position(ref.handle);
+                    const float      ba = static_cast<float>(world.GetAngle(ref.handle));
+                    if (std::abs(lt.position.x - static_cast<float>(bp.x)) > kAuthorPosEps ||
+                        std::abs(lt.position.y - static_cast<float>(bp.y)) > kAuthorPosEps ||
+                        AngleDelta(lt.rotation, ba) > kAuthorRotEps)
+                    {
+                        world.SetPosition(ref.handle, Phys::Vec2(lt.position.x, lt.position.y));
+                        world.SetAngle(ref.handle, static_cast<Phys::Real>(lt.rotation));
+                        world.SetVelocity(ref.handle, Phys::Vec2(0.0f, 0.0f));
+                        world.SetAngularVelocity(ref.handle, static_cast<Phys::Real>(0));
+                    }
+                });
+            }
 
             // ------------------------------------------------------------------
             // PASS 4: WRITE-BACK -- propagate post-step poses to LocalTransform.

@@ -135,3 +135,107 @@ TEST_CASE("create scales multi-fixture local offsets per-axis", "[transform-sync
     CHECK(static_cast<float>(wp.x) == Approx(4.0f).margin(1e-4f));
     CHECK(static_cast<float>(wp.y) == Approx(0.0f).margin(1e-4f));
 }
+
+// ===========================================================================
+// Task 2: paused pos/rot stateless reconcile (PASS 3.5)
+// ===========================================================================
+
+TEST_CASE("paused author move teleports body, zeroes velocity, is not stomped", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);                                   // mint at (0,0)
+
+    // Author moves the entity while paused (as a gizmo/inspector edit would).
+    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(5.0f, 5.0f);
+    paused(reg);                                   // reconcile: body <- lt, then write-back
+
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle bh = res->entityToBody.at(e);
+    const Phys::Vec2 bp = res->world->Position(bh);
+    const Phys::Vec2 bv = res->world->Velocity(bh);
+    CHECK(static_cast<float>(bp.x) == Approx(5.0f).margin(1e-4f));
+    CHECK(static_cast<float>(bp.y) == Approx(5.0f).margin(1e-4f));
+    CHECK(static_cast<float>(bv.x) == Approx(0.0f).margin(1e-4f));
+    CHECK(static_cast<float>(bv.y) == Approx(0.0f).margin(1e-4f));
+    // Not stomped back to (0,0) by the same frame's write-back.
+    const glm::vec2 lp = reg.GetComponent<LocalTransform>(e)->position;
+    CHECK(lp.x == Approx(5.0f).margin(1e-4f));
+    CHECK(lp.y == Approx(5.0f).margin(1e-4f));
+}
+
+TEST_CASE("paused author rotate sets body angle, is not stomped", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+
+    reg.GetComponent<LocalTransform>(e)->rotation = 1.0f;   // radians
+    paused(reg);
+
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle bh = res->entityToBody.at(e);
+    CHECK(static_cast<float>(res->world->GetAngle(bh)) == Approx(1.0f).margin(1e-4f));
+    CHECK(reg.GetComponent<LocalTransform>(e)->rotation == Approx(1.0f).margin(1e-4f));
+}
+
+TEST_CASE("author-while-paused then play resumes from authored pose", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(3.0f, 0.0f);
+    paused(reg);                                   // reconcile pushes (3,0) into the body
+
+    PhysicsSystem play(kDt, /*stepWorld=*/true);
+    play(reg);                                     // stepping resumes from (3,0), no snap-back
+
+    const glm::vec2 lp = reg.GetComponent<LocalTransform>(e)->position;
+    CHECK(lp.x == Approx(3.0f).margin(1e-3f));     // kinematic, zero velocity -> stays at 3
+    CHECK(lp.y == Approx(0.0f).margin(1e-3f));
+}
+
+TEST_CASE("play mode ignores author lt edits (body owns pose)", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
+    PhysicsSystem play(kDt, /*stepWorld=*/true);
+    play(reg);                                     // mint + step; body at ~origin
+
+    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(9.0f, 9.0f); // bogus author edit
+    play(reg);                                     // Play: PASS 4 overwrites lt from the body
+
+    const glm::vec2 lp = reg.GetComponent<LocalTransform>(e)->position;
+    CHECK(lp.x == Approx(0.0f).margin(1e-3f));     // body owns; edit discarded
+    CHECK(lp.y == Approx(0.0f).margin(1e-3f));
+}
+
+TEST_CASE("untouched paused body is not spuriously teleported", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {2,3}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    for (int i = 0; i < 5; ++i) paused(reg);       // no author edits between ticks
+
+    const glm::vec2 lp = reg.GetComponent<LocalTransform>(e)->position;
+    CHECK(lp.x == Approx(2.0f).margin(1e-4f));
+    CHECK(lp.y == Approx(3.0f).margin(1e-4f));
+}
+
+TEST_CASE("paused author move works on a static body", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Static);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(4.0f, 0.0f);
+    paused(reg);
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::Vec2 bp = res->world->Position(res->entityToBody.at(e));
+    CHECK(static_cast<float>(bp.x) == Approx(4.0f).margin(1e-4f));
+    // If this FAILS (SetPosition no-ops on Static), the reconcile pass must
+    // remove+re-add the static body at the authored pose for Static bodies.
+}
