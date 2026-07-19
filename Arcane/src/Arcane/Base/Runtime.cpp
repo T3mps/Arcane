@@ -256,7 +256,10 @@ namespace Arcane
             return false;
 
         m_impl->registry = std::move(loaded);
-        m_impl->loop = std::make_unique<RunLoop>(*m_impl->registry, *m_impl->schedulers, m_impl->loopCfg);
+        // Rebind the EXISTING loop to the swapped registry rather than recreating it:
+        // a cached RunLoop* (a plugin that stored Loop() at init, a host toolbar) must
+        // not dangle across a restore. Same observable loop state as a fresh loop.
+        m_impl->loop->Rebind(*m_impl->registry);
         return true;
     }
 
@@ -267,7 +270,9 @@ namespace Arcane
         Astra::Registry::Config cfg;
         cfg.workScheduler = m_impl->sched;
         m_impl->registry = std::make_unique<Astra::Registry>(m_impl->components, cfg);
-        m_impl->loop = std::make_unique<RunLoop>(*m_impl->registry, *m_impl->schedulers, m_impl->loopCfg);
+        // Rebind the existing loop (keep the object stable so cached RunLoop* holders
+        // do not dangle) -- see RestoreRegistry.
+        m_impl->loop->Rebind(*m_impl->registry);
     }
 
     void Runtime::ClearSystems()

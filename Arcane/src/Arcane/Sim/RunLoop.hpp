@@ -91,6 +91,24 @@ namespace Arcane
 
         double Alpha() const noexcept { return m_alpha; }
 
+        // Rebind to a different registry WITHOUT recreating the loop. Runtime::
+        // RestoreRegistry / ResetRegistry swap the live registry and must keep this
+        // SAME RunLoop object, so a cached RunLoop* (e.g. a plugin that stored
+        // Runtime::Loop() at init, or a host toolbar) does not dangle across a restore.
+        // Resets the transient accumulator/alpha + sim-time state to a fresh loop's
+        // defaults -- the same observable state recreating the loop produced -- so the
+        // ONLY behavior change is that the object identity is preserved. The kept
+        // schedulers + Config are unchanged (a restore keeps both).
+        void Rebind(Astra::Registry& registry) noexcept
+        {
+            m_registry    = &registry;
+            m_accumulator = 0.0;
+            m_alpha       = 0.0;
+            m_paused      = false;
+            m_timeScale   = 1.0;
+            m_singleStep  = false;
+        }
+
     private:
         // The fixed phase for one real frame, under sim-time control. pluginFixed may
         // be null (the no-callback Advance) or point at the host's std::function.

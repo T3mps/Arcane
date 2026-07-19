@@ -89,6 +89,34 @@ TEST_CASE("Runtime snapshot/restore preserves state AND the scheduler", "[runtim
     CHECK(sum.load() == 7 * kN);     // values survived (== 7, not the mutated 0)
 }
 
+TEST_CASE("Runtime RestoreRegistry keeps the RunLoop object stable", "[runtime]")
+{
+    // A restore swaps the live registry, which the RunLoop references. It MUST rebind
+    // the existing loop in place, NOT destroy + recreate it: consumers cache the
+    // RunLoop* handed out by Runtime::Loop() at init (a plugin's SetLoop, a host
+    // toolbar), and recreating would leave every such pointer dangling -> a
+    // use-after-free the next time they touch it. This pins the "same object survives a
+    // restore" invariant.
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Counter>();
+    rt.Registry().CreateEntityWith(Counter{7});
+
+    Arcane::RunLoop* before = &rt.Loop();
+    rt.Loop().SetPaused(true);           // observable pre-restore state
+
+    auto snapResult = rt.SnapshotRegistry();
+    REQUIRE(snapResult.IsOk());
+    REQUIRE(rt.RestoreRegistry(*snapResult.GetValue()));
+
+    Arcane::RunLoop* after = &rt.Loop();
+    CHECK(before == after);              // SAME object -> a cached RunLoop* stays valid
+    CHECK_FALSE(after->IsPaused());      // rebind resets transient sim-time state to defaults
+
+    // ResetRegistry holds the same invariant.
+    rt.ResetRegistry();
+    CHECK(&rt.Loop() == before);
+}
+
 TEST_CASE("Runtime ClearSystems empties all phase schedulers", "[runtime]")
 {
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
