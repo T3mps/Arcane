@@ -441,6 +441,14 @@ namespace Arcane
                         std::abs(lt.position.y - static_cast<float>(bp.y)) > kAuthorPosEps ||
                         AngleDelta(lt.rotation, ba) > kAuthorRotEps)
                     {
+                        // SetPosition + SetAngle are BOTH load-bearing for a moved STATIC
+                        // body: SetPosition updates the pose but NOT the static broadphase
+                        // tree; SetAngle re-registers it from the already-updated position.
+                        // Keep SetAngle unconditional -- gating it (e.g. "skip when rotation
+                        // unchanged") would leave a moved static collider with a stale proxy
+                        // that never refreshes. Velocity is zeroed unconditionally ("don't
+                        // fling on resume") -- for a Kinematic body with authored rb.velocity
+                        // this is a SPEC #1 design consequence (velocity re-apply is a non-goal).
                         world.SetPosition(ref.handle, Phys::Vec2(lt.position.x, lt.position.y));
                         world.SetAngle(ref.handle, static_cast<Phys::Real>(lt.rotation));
                         world.SetVelocity(ref.handle, Phys::Vec2(0.0f, 0.0f));

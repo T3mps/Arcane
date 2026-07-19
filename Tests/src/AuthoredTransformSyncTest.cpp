@@ -344,3 +344,56 @@ TEST_CASE("body still steps after a scale rebuild", "[transform-sync]")
     for (int i = 0; i < 10; ++i) play(reg);        // must fall under gravity
     CHECK(reg.GetComponent<LocalTransform>(e)->position.y > 0.1f);
 }
+
+// ---- review-coverage follow-ups -------------------------------------------
+
+TEST_CASE("paused author move zeroes a moving body's velocity", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    // Author a non-zero velocity so the reconcile's zeroing is actually observable
+    // (without this, a default (0,0) velocity would pass even if SetVelocity(0) were gone).
+    reg.GetComponent<RigidBody2D>(e)->velocity = glm::vec2(3.0f, -2.0f);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);                                   // mint applies the authored velocity
+
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle bh = res->entityToBody.at(e);
+    REQUIRE(static_cast<float>(res->world->Velocity(bh).x) == Approx(3.0f).margin(1e-4f));  // present pre-move
+
+    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(5.0f, 0.0f);  // author move
+    paused(reg);                                   // reconcile teleports + zeroes velocity
+
+    const Phys::Vec2 bv = res->world->Velocity(bh);
+    CHECK(static_cast<float>(bv.x) == Approx(0.0f).margin(1e-4f));   // "don't fling on resume"
+    CHECK(static_cast<float>(bv.y) == Approx(0.0f).margin(1e-4f));
+}
+
+TEST_CASE("create scales a circle by the representative (max) axis", "[transform-sync]")
+{
+    Astra::Registry reg;
+    RegisterSceneComponents(reg);
+    RegisterPhysicsComponents(reg);
+    Phys::WorldDef wd; wd.gravityX = 0.0f; wd.gravityY = 0.0f;
+    reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
+
+    Astra::Entity e = reg.CreateEntity();
+    LocalTransform lt; lt.position = {0.0f, 0.0f}; lt.scale = {3.0f, 1.0f};  // non-uniform
+    reg.AddComponent<LocalTransform>(e, lt);
+    reg.AddComponent<WorldTransform>(e, WorldTransform{});
+    RigidBody2D rb; rb.type = Phys::BodyType::Kinematic;   // circle: no dynamic-AABB constraint
+    reg.AddComponent<RigidBody2D>(e, rb);
+    Collider2D col; Fixture fx; fx.kind = Phys::ShapeKind::Circle; fx.radius = 0.5f;
+    col.fixtures.push_back(fx);
+    reg.AddComponent<Collider2D>(e, col);
+    reg.AddComponent<PhysicsBodyRef>(e, PhysicsBodyRef{});
+
+    PhysicsSystem sys(kDt, /*stepWorld=*/false);
+    sys(reg);
+
+    // Circle uses radius * max(|sx|,|sy|) = 0.5 * 3 -> a circle's world AABB is square,
+    // so both half-extents are 1.5 (NOT 1.5 x 0.5 -- a circle has no distinguished axis).
+    const glm::vec2 he = Fixture0HalfExtents(reg);
+    CHECK(he.x == Approx(1.5f).margin(1e-4f));
+    CHECK(he.y == Approx(1.5f).margin(1e-4f));
+}
