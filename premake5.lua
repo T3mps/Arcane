@@ -80,6 +80,7 @@ group "Dependencies"
     include "../ThirdParty/msdfgen"
     include "../ThirdParty/nvrhi"
     include "../ThirdParty/imgui"
+    include "../ThirdParty/Manifold2D"
 group ""
 
 -- ============================================================================
@@ -125,58 +126,6 @@ project "Core"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
-
-    filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
-        runtime "Debug"
-        symbols "on"
-
-    filter "configurations:Release"
-        defines { "ARCANE_RELEASE", "NDEBUG" }
-        runtime "Release"
-        optimize "speed"
-        symbols "on"
-
-    filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
-        runtime "Release"
-        optimize "speed"
-        symbols "off"
-
--- ============================================================================
--- Manifold2D: the standalone 2D physics + geometry library, developed in its
--- own repo (github.com/T3mps/Manifold2D, source at D:\dev\starworks\Manifold2D)
--- and synced into ThirdParty/Manifold2D. Aphelyon builds it via this inline
--- project (pointing at the vendored include/ + src/, exactly as it consumes
--- Astra) rather than the vendored standalone-workspace premake5.lua, which is
--- inert here. /MD (engine boundary), /fp:strict + /arch:AVX2 (determinism +
--- SIMD), C++23. The physics test suite lives in the standalone repo; Aphelyon
--- keeps only a link-smoke (Tests/src/Manifold2DLinkSmokeTest.cpp).
--- ============================================================================
-project "Manifold2D"
-    location "Manifold2D"
-    kind "StaticLib"
-    language "C++"
-    cppdialect "C++23"
-    staticruntime "off"
-    floatingpoint "Strict"
-
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-
-    files {
-        "%{wks.location}/../ThirdParty/Manifold2D/include/**.hpp",
-        "%{wks.location}/../ThirdParty/Manifold2D/include/**.inl",
-        "%{wks.location}/../ThirdParty/Manifold2D/src/**.cpp",
-    }
-
-    includedirs { "%{IncludeDir.Manifold2D}", "%{IncludeDir.Mosaic}" }
-
-    defines { "_CRT_SECURE_NO_WARNINGS" }
-
-    filter "system:windows"
-        systemversion "latest"
-        buildoptions { "/Zc:__cplusplus", "/bigobj", "/arch:AVX2" }
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
