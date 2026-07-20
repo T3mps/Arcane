@@ -18,11 +18,14 @@
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
+#include <Arcane/Scene/Components.hpp>   // Arcane::LocalTransform (gizmo drag target)
 
 #include <Astra/Core/TypeContext.hpp>
+#include <Astra/Registry/Registry.hpp>   // Registry::InspectEntity/GetComponent (gizmo descriptor resolve)
 
 #include <glm/glm.hpp>
 
@@ -49,6 +52,26 @@ namespace Grimoire
         constexpr uint32_t kScRShift = 229;  // SDL_SCANCODE_RSHIFT
         constexpr uint32_t kScY      = 28;   // SDL_SCANCODE_Y
         constexpr uint32_t kScZ      = 29;   // SDL_SCANCODE_Z
+
+        // Gizmo mode-switch keybind scancodes (see MainLoop's input block). No
+        // conflict with the Sandbox plugin's camera (RMB-pan + wheel-zoom only).
+        constexpr uint32_t kScW = 26;   // SDL_SCANCODE_W
+        constexpr uint32_t kScE = 8;    // SDL_SCANCODE_E
+        constexpr uint32_t kScR = 21;   // SDL_SCANCODE_R
+
+        // Resolve the ComponentDescriptor for LocalTransform on `e`, for bracketing
+        // a gizmo drag into the undo stack via CommandStack::SnapshotComponent.
+        // Mirrors EditorPanels.cpp's Inspector loop (InspectEntity + meta->typeName
+        // match) -- namespace-qualified, matching how ASTRA_REFLECT_TYPE registers it.
+        const Astra::ComponentDescriptor* FindLocalTransformDescriptor(Astra::Registry& reg, Astra::Entity e)
+        {
+            for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
+            {
+                if (ci.meta && ci.meta->typeName == "Arcane::LocalTransform")
+                    return ci.descriptor;
+            }
+            return nullptr;
+        }
     }
 
     GrimoireApp::GrimoireApp(LoomConfig cfg)
@@ -86,6 +109,17 @@ namespace Grimoire
         // Heap-leaking is the correct production pattern for a long-running host;
         // the OS reclaims all process memory on exit anyway.
         m_typeContext = new Astra::TypeContext();
+        // Install the shared context in THIS module too (Grimoire.exe is a separate
+        // binary from Arcane.dll -- Astra::GetTypeContext()/SetTypeContext() resolve
+        // through a PER-MODULE static slot, by design; Runtime::Impl's ctor installs
+        // the same m_typeContext for Arcane.dll's own slot, see Runtime.cpp). Required
+        // BEFORE the gizmo interaction code's TypeID<Arcane::LocalTransform>::Value()
+        // lookups (Registry::GetComponent<LocalTransform> in MainLoop) -- without this,
+        // Grimoire.exe's first TypeID<T>::Value() call would silently fall back to its
+        // own empty module-local DefaultTypeContext() instead of the shared one, so
+        // GetComponent<LocalTransform> would resolve against the WRONG ComponentID
+        // (always-miss at best, aliasing a different component's bytes at worst).
+        Astra::SetTypeContext(m_typeContext);
         // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
         // until quit). The scripted "Grimoire --frames N" GPU-verify is headless -> false
         // -> miniaudio's null backend (no real device grabbed on a CI box).
@@ -183,6 +217,11 @@ namespace Grimoire
 
             // Input sample (before ImGui BeginFrame so capture flags are set).
             {
+                // Cleared here, set below if a gizmo drag starts or ends THIS frame --
+                // the click-pick block (later, after ImGui builds the Viewport panel)
+                // checks it to avoid treating a gizmo-handle click as a selection change.
+                m_gizmoCapturedClick = false;
+
                 const auto now = std::chrono::steady_clock::now();
                 const double frameDt = std::chrono::duration<double>(now - lastFrameTime).count();
                 lastFrameTime = now;
@@ -249,6 +288,116 @@ namespace Grimoire
                     m_prevUndoKeyDown = undoKeyDown;
                     m_prevRedoKeyDown = redoKeyDown;
                 }
+
+                // Gizmo mode keys: W=Translate, E=Rotate, R=Scale (SDL_SCANCODE_W/E/R --
+                // no conflict with the Sandbox plugin's camera, which uses RMB-pan +
+                // wheel-zoom only). Edge-triggered off the raw hardware snapshot, same
+                // pattern as the undo/redo keybinds above. Edit-mode + viewport-focus
+                // only, so typing/clicking in another panel never changes the gizmo mode.
+                {
+                    const bool wDown = snap.ScancodeDown(kScW);
+                    const bool eDown = snap.ScancodeDown(kScE);
+                    const bool rDown = snap.ScancodeDown(kScR);
+                    const bool keysActive = !m_play.IsPlaying() && !snap.wantCaptureKeyboard && m_viewportActive;
+                    if (keysActive && wDown && !m_prevKeyW) m_gizmoMode = Arcane::GizmoMode::Translate;
+                    if (keysActive && eDown && !m_prevKeyE) m_gizmoMode = Arcane::GizmoMode::Rotate;
+                    if (keysActive && rDown && !m_prevKeyR) m_gizmoMode = Arcane::GizmoMode::Scale;
+                    m_prevKeyW = wDown;
+                    m_prevKeyE = eDown;
+                    m_prevKeyR = rDown;
+                }
+
+                // Transform-gizmo interaction: hit-test + drag against the selected
+                // entity's LocalTransform, bracketed into the undo stack (one drag =
+                // one undo step -- Begin/SnapshotComponent on press, Commit on release;
+                // a no-move drag self-drops since Commit only pushes if bytes changed).
+                // mouseScreen is viewport-local px (lx/ly computed above), the same
+                // space CameraOffset/CameraZoom register in, so the gizmo aligns
+                // pixel-for-pixel with the scene (mirrors the click-pick's PickView
+                // below). LMB edges are tracked unconditionally each frame (like the
+                // mode keys above) so a button already held before the cursor enters
+                // the viewport is never misread as a fresh press. Deliberately does
+                // NOT gate on snap.wantCaptureMouse -- it is true over the viewport
+                // image by design (see the pluginSnap comment above); `inViewport`
+                // already folds in m_viewportActive.
+                {
+                    const bool lmbDown          = (snap.mouseButtons & 0x1u) != 0;
+                    const bool mousePressedLeft  = lmbDown && !m_prevLmbDown;
+                    const bool mouseReleasedLeft = !lmbDown && m_prevLmbDown;
+                    const glm::vec2 mouseScreen(lx, ly);
+                    const bool ctrlHeld = snap.ScancodeDown(kScLCtrl) || snap.ScancodeDown(kScRCtrl);
+
+                    const bool gizmoActive = !m_play.IsPlaying() && m_selection.HasSelection() && inViewport;
+                    Astra::Registry*        regPtr = nullptr;
+                    Arcane::LocalTransform* lt     = nullptr;
+                    if (gizmoActive)
+                    {
+                        regPtr = &m_runtime->Registry();
+                        lt = regPtr->GetComponent<Arcane::LocalTransform>(m_selection.selected);
+                    }
+
+                    if (lt)
+                    {
+                        const Astra::Entity sel = m_selection.selected;
+                        const Arcane::GizmoTransform gt{ lt->position, lt->rotation, lt->scale };
+                        const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
+
+                        if (!m_gizmoDrag.active)
+                        {
+                            m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, mouseScreen);
+                            if (m_gizmoHovered != Arcane::GizmoAxis::None && mousePressedLeft)
+                            {
+                                // Resolve the LocalTransform descriptor for the undo
+                                // snapshot; skip starting a drag if it cannot be found
+                                // (defensive -- should not happen for a reflected component).
+                                const Astra::ComponentDescriptor* desc =
+                                    FindLocalTransformDescriptor(*regPtr, sel);
+                                if (desc)
+                                {
+                                    m_undo->Begin("Gizmo");
+                                    m_undo->SnapshotComponent(sel, desc);
+                                    m_gizmoDrag.active           = true;
+                                    m_gizmoDrag.axis             = m_gizmoHovered;
+                                    m_gizmoDrag.start            = gt;
+                                    m_gizmoDrag.mouseStartScreen = mouseScreen;
+                                    m_gizmoCapturedClick         = true;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            Arcane::GizmoSnap gsnap;
+                            gsnap.enabled = ctrlHeld;
+                            const Arcane::GizmoTransform nt = Arcane::ApplyDrag(
+                                m_gizmoMode, m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
+                                m_gizmoDrag.mouseStartScreen, mouseScreen, gsnap);
+                            lt->position = nt.position;
+                            lt->rotation = nt.rotation;
+                            lt->scale    = nt.scale;
+
+                            if (mouseReleasedLeft)
+                            {
+                                m_undo->Commit();   // no-move drag self-drops (after == before)
+                                m_gizmoDrag           = {};
+                                m_gizmoCapturedClick  = true;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        m_gizmoHovered = Arcane::GizmoAxis::None;
+                        // Defensive: selection lost, entity deleted, or the component
+                        // vanished mid-drag -- cancel the open transaction rather than
+                        // leaving it dangling (Cancel discards without pushing a step).
+                        if (m_gizmoDrag.active)
+                        {
+                            m_undo->Cancel();
+                            m_gizmoDrag = {};
+                        }
+                    }
+
+                    m_prevLmbDown = lmbDown;
+                }
             }
 
             // Sim advance through the RunLoop with the plugin callbacks interleaved.
@@ -285,6 +434,26 @@ namespace Grimoire
                 {
                     m_runtime->SetRenderContext(&b);
                     m_runtime->Loop().SubmitRender();
+
+                    // Transform gizmo, drawn AFTER the scene submit so it renders on
+                    // top. Frame ordering guarantees the input block above already ran
+                    // this frame, so m_gizmoHovered/m_gizmoDrag and the live
+                    // LocalTransform read here are current. Edit-mode + has-selection
+                    // only (mirrors the interaction gate; no viewport-hover requirement
+                    // here -- the gizmo should stay visible while e.g. the mouse is over
+                    // the Inspector, just not be interactable there).
+                    if (!m_play.IsPlaying() && m_selection.HasSelection())
+                    {
+                        Arcane::LocalTransform* lt = m_runtime->Registry().GetComponent<Arcane::LocalTransform>(
+                            m_selection.selected);
+                        if (lt)
+                        {
+                            const Arcane::GizmoTransform gt{ lt->position, lt->rotation, lt->scale };
+                            const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
+                            Arcane::Draw(b, m_gizmoMode, m_gizmoSpace, gt, view, m_gizmoHovered,
+                                        m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
+                        }
+                    }
                 },
                 glm::vec4(0.02f, 0.02f, 0.04f, 1.0f));
 
@@ -292,7 +461,8 @@ namespace Grimoire
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Grimoire::BeginDockSpace();
-            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable(), *m_undo);
+            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable(), *m_undo,
+                                         m_gizmoMode, m_gizmoSpace);
             Grimoire::DrawConsolePanel(m_console);
 
             Grimoire::ViewportPanelResult vp =
@@ -309,7 +479,10 @@ namespace Grimoire
             // scene render uses (m_runtime's camera == RenderContext2D), so the id
             // silhouettes register pixel-for-pixel with what is drawn. An invalid
             // result (background / outside the viewport) clears the selection.
-            if (vp.clicked)
+            // Suppressed when this frame's click was already consumed by the gizmo
+            // (pressed/released a handle) or a drag is still in progress -- otherwise
+            // clicking/using a handle would also re-pick and disturb the selection.
+            if (vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active)
             {
                 const Arcane::PickView view{ m_runtime->CameraOffset(),
                                              m_runtime->CameraZoom() };

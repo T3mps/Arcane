@@ -2,6 +2,7 @@
 
 #include "ViewportInput.hpp"
 #include <Arcane/Edit/CommandStack.hpp>
+#include <Arcane/Edit/Gizmo.hpp>
 #include <cstdint>
 
 namespace Arcane { class RunLoop; class Runtime; struct PluginVTable; }
@@ -19,7 +20,9 @@ namespace Grimoire
 
     // Play/Stop (play-in-editor: snapshot on Play, restore on Stop) + Pause/Step
     // buttons + a time-scale slider, driving the RunLoop, plus Undo/Redo buttons
-    // over `undo` (enabled from CanUndo/CanRedo, tooltip shows the label).
+    // over `undo` (enabled from CanUndo/CanRedo, tooltip shows the label), plus
+    // transform-gizmo mode (T/R/S radio buttons) and space (Global/Local toggle)
+    // controls driving `mode`/`space` in place.
     // `plugin` is the hosted plugin's vtable (may be null): Play/Stop route
     // through its SaveState/LoadState so the plugin re-establishes its native
     // resources on restore. Entering Play clears `undo`'s history (play-time
@@ -30,7 +33,8 @@ namespace Grimoire
     // dangling reference.
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                             const Arcane::PluginVTable* plugin,
-                            Arcane::CommandStack& undo);
+                            Arcane::CommandStack& undo,
+                            Arcane::GizmoMode& mode, Arcane::GizmoSpace& space);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);

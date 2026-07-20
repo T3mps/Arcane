@@ -39,7 +39,8 @@ namespace Grimoire
 
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                             const Arcane::PluginVTable* plugin,
-                            Arcane::CommandStack& undo)
+                            Arcane::CommandStack& undo,
+                            Arcane::GizmoMode& mode, Arcane::GizmoSpace& space)
     {
         ImGui::Begin("Sim");
         if (play.IsPlaying())
@@ -79,6 +80,21 @@ namespace Grimoire
         if (ImGui::Button("Redo")) undo.Redo();
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && undo.CanRedo()) ImGui::SetTooltip("Redo %s", undo.RedoLabel());
+
+        // Transform-gizmo mode (Translate/Rotate/Scale) + space (Global/Local).
+        // Mirrors the W/E/R keybinds in GrimoireApp's MainLoop input block.
+        ImGui::SameLine(); ImGui::TextUnformatted("|"); ImGui::SameLine();
+        if (ImGui::RadioButton("T", mode == Arcane::GizmoMode::Translate)) mode = Arcane::GizmoMode::Translate;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("R", mode == Arcane::GizmoMode::Rotate))    mode = Arcane::GizmoMode::Rotate;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("S", mode == Arcane::GizmoMode::Scale))     mode = Arcane::GizmoMode::Scale;
+        ImGui::SameLine();
+        {
+            bool local = (space == Arcane::GizmoSpace::Local);
+            if (ImGui::Checkbox("Local", &local))
+                space = local ? Arcane::GizmoSpace::Local : Arcane::GizmoSpace::World;
+        }
 
         ImGui::End();
     }

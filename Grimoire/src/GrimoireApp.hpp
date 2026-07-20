@@ -18,6 +18,7 @@
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
+#include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
@@ -76,6 +77,36 @@ namespace Grimoire
         // across frames -- see MainLoop's input block).
         bool m_prevUndoKeyDown = false;
         bool m_prevRedoKeyDown = false;
+
+        // Transform-gizmo state (Edit-mode; drives the Viewport handles). Mode/
+        // space persist across frames and selection changes; m_gizmoHovered is
+        // recomputed every frame the gizmo is interactable (cleared otherwise) so
+        // Draw's highlight always matches this frame's cursor. m_gizmoDrag spans
+        // the mouse-down..mouse-up gesture; `start` is the pre-drag GizmoTransform
+        // so ApplyDrag recomputes from origin each frame (no accumulation drift).
+        Arcane::GizmoMode  m_gizmoMode    = Arcane::GizmoMode::Translate;
+        Arcane::GizmoSpace m_gizmoSpace   = Arcane::GizmoSpace::World;
+        Arcane::GizmoAxis  m_gizmoHovered = Arcane::GizmoAxis::None;
+        struct GizmoDrag
+        {
+            bool                   active = false;
+            Arcane::GizmoAxis      axis   = Arcane::GizmoAxis::None;
+            Arcane::GizmoTransform start;
+            glm::vec2              mouseStartScreen{0.0f, 0.0f};
+        } m_gizmoDrag;
+
+        // W/E/R mode-key edge-tracking (same pattern as m_prevUndoKeyDown/
+        // m_prevRedoKeyDown above).
+        bool m_prevKeyW = false;
+        bool m_prevKeyE = false;
+        bool m_prevKeyR = false;
+        // Left-mouse edge-tracking, shared by the gizmo press/release detection.
+        bool m_prevLmbDown = false;
+        // Set for the remainder of THIS frame when a gizmo drag starts or ends,
+        // so the click-pick block (later in MainLoop) does not also treat the
+        // same click as a selection change. Reset at the top of the input block
+        // each frame.
+        bool m_gizmoCapturedClick = false;
 
         // Scene-in-a-panel viewport: the same canvas->batcher->tonemap path Loom
         // drives the backbuffer with, rendered into a panel texture instead. Resized
