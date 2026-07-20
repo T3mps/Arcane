@@ -203,6 +203,8 @@ namespace Arcane
               const GizmoTransform& t, const GizmoView& view,
               GizmoAxis hovered, GizmoAxis active)
     {
+        batcher.SetLayer(0xFFFF, 0xFFFF);   // gizmo composites on top of the scene (max layer/order)
+
         const glm::vec2 pivot = WorldToScreen(view, t.position);
         const GizmoSpace axisSpace = (mode == GizmoMode::Scale) ? GizmoSpace::Local : space;
         const glm::vec2 dirX = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::X));

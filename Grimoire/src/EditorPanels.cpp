@@ -85,10 +85,13 @@ namespace Grimoire
         // Mirrors the W/E/R keybinds in GrimoireApp's MainLoop input block.
         ImGui::SameLine(); ImGui::TextUnformatted("|"); ImGui::SameLine();
         if (ImGui::RadioButton("T", mode == Arcane::GizmoMode::Translate)) mode = Arcane::GizmoMode::Translate;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Translate (W)");
         ImGui::SameLine();
         if (ImGui::RadioButton("R", mode == Arcane::GizmoMode::Rotate))    mode = Arcane::GizmoMode::Rotate;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rotate (E)");
         ImGui::SameLine();
         if (ImGui::RadioButton("S", mode == Arcane::GizmoMode::Scale))     mode = Arcane::GizmoMode::Scale;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale (R)");
         ImGui::SameLine();
         {
             bool local = (space == Arcane::GizmoSpace::Local);
