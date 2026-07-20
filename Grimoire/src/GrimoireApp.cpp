@@ -39,6 +39,18 @@
 
 namespace Grimoire
 {
+    namespace
+    {
+        // Undo/redo keybind scancodes (see MainLoop's input block). Hoisted to file
+        // scope -- pure cleanup, values unchanged (verified against SDL_scancode.h).
+        constexpr uint32_t kScLCtrl  = 224;  // SDL_SCANCODE_LCTRL
+        constexpr uint32_t kScRCtrl  = 228;  // SDL_SCANCODE_RCTRL
+        constexpr uint32_t kScLShift = 225;  // SDL_SCANCODE_LSHIFT
+        constexpr uint32_t kScRShift = 229;  // SDL_SCANCODE_RSHIFT
+        constexpr uint32_t kScY      = 28;   // SDL_SCANCODE_Y
+        constexpr uint32_t kScZ      = 29;   // SDL_SCANCODE_Z
+    }
+
     GrimoireApp::GrimoireApp(LoomConfig cfg)
         : m_config(std::move(cfg)), m_perf(m_config.perf) {}
 
@@ -225,13 +237,6 @@ namespace Grimoire
                 // the same suppression point InputActions::ResolveControl uses.
                 // Edit-mode only: Play routes all input to the plugin.
                 {
-                    constexpr uint32_t kScLCtrl  = 224;  // SDL_SCANCODE_LCTRL
-                    constexpr uint32_t kScRCtrl  = 228;  // SDL_SCANCODE_RCTRL
-                    constexpr uint32_t kScLShift = 225;  // SDL_SCANCODE_LSHIFT
-                    constexpr uint32_t kScRShift = 229;  // SDL_SCANCODE_RSHIFT
-                    constexpr uint32_t kScY      = 28;   // SDL_SCANCODE_Y
-                    constexpr uint32_t kScZ      = 29;   // SDL_SCANCODE_Z
-
                     const bool ctrl  = snap.ScancodeDown(kScLCtrl) || snap.ScancodeDown(kScRCtrl);
                     const bool shift = snap.ScancodeDown(kScLShift) || snap.ScancodeDown(kScRShift);
                     const bool undoKeyDown = ctrl && !shift && snap.ScancodeDown(kScZ);
@@ -318,7 +323,7 @@ namespace Grimoire
             }
 
             Grimoire::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
-            Grimoire::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo);
+            Grimoire::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo, !m_play.IsPlaying());
 
             const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
             if (vtUI && vtUI->DrawUI) vtUI->DrawUI();

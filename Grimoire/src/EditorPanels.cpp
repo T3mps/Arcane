@@ -50,8 +50,11 @@ namespace Grimoire
         {
             // Entering Play clears the undo history: play-time mutation is
             // discarded on Stop (PlaySession restores the pre-Play snapshot),
-            // so those edits must not linger as undoable Edit-mode steps.
-            if (ImGui::Button("Play")) { play.Play(runtime, plugin); undo.Clear(); }
+            // so those edits must not linger as undoable Edit-mode steps. Only
+            // clear when Play actually started -- Play() can fail (plugin
+            // SaveState/Runtime::SnapshotRegistry error) and leave the session
+            // in Edit, in which case the Edit-mode history must survive.
+            if (ImGui::Button("Play")) { if (play.Play(runtime, plugin)) undo.Clear(); }
         }
         // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
         // replaces m_impl->loop on Stop, so a reference taken before this point
@@ -238,7 +241,7 @@ namespace Grimoire
     }
 
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo)
+                            Arcane::CommandStack& undo, bool editMode)
     {
         ImGui::Begin("Inspector");
         if (!sel.HasSelection())
@@ -258,7 +261,10 @@ namespace Grimoire
             if (ImGui::CollapsingHeader(typeName.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             {
                 ImGuiFieldVisitor visitor;
-                visitor.stack      = &undo;
+                // Null while Play is running: BeginGestureIfActivated/EndGesture both
+                // early-return on a null stack, so gesture bracketing is fully inert
+                // (no Begin, no Commit/Cancel) against the live simulating registry.
+                visitor.stack      = editMode ? &undo : nullptr;
                 visitor.entity     = sel.selected;
                 visitor.descriptor = ci.descriptor;
                 visitor.typeName   = typeName;

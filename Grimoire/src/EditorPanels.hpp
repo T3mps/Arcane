@@ -60,7 +60,13 @@ namespace Grimoire
     // reflected fields in place; unsupported types render read-only. Each field
     // edit gesture is bracketed into `undo` (Begin+SnapshotComponent on first
     // activation, Commit on release-after-edit, Cancel on a pure click) so every
-    // Inspector edit becomes a Ctrl+Z/Y-undoable step.
+    // Inspector edit becomes a Ctrl+Z/Y-undoable step -- but ONLY when `editMode`
+    // is true. While Play is running, `editMode` is false and the visitor's stack
+    // pointer is left null, so the gesture bracketing fully no-ops (no Begin, no
+    // Commit/Cancel): a play-time edit must not write against the live simulating
+    // registry through the Edit-mode undo stack (Stop's Runtime::RestoreRegistry
+    // swaps the registry back but does not touch the stack, so a stale entry here
+    // would let a later Ctrl+Z overwrite the restored value with play-time bytes).
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo);
+                            Arcane::CommandStack& undo, bool editMode);
 }
