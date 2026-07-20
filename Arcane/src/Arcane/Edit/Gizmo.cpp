@@ -13,18 +13,14 @@ namespace Arcane
 
         glm::vec2 WorldToScreen(const GizmoView& v, glm::vec2 world)
         {
-            const float s = v.zoom * v.pixelsPerMeter;
-            const glm::vec2 c = v.viewportOriginPx + v.viewportSizePx * 0.5f;
-            const glm::vec2 d = (world - v.cameraOffset) * s;
-            return glm::vec2(c.x + d.x, c.y - d.y);   // screen-Y down
+            return world * v.worldToScreenScale + v.cameraOffset;
         }
 
         glm::vec2 ScreenToWorld(const GizmoView& v, glm::vec2 screen)
         {
-            const float s = v.zoom * v.pixelsPerMeter;
-            const glm::vec2 c = v.viewportOriginPx + v.viewportSizePx * 0.5f;
-            const glm::vec2 d(screen.x - c.x, -(screen.y - c.y));
-            return v.cameraOffset + (s > kEps ? d / s : glm::vec2(0.0f));
+            return v.worldToScreenScale > kEps
+                       ? (screen - v.cameraOffset) / v.worldToScreenScale
+                       : glm::vec2(0.0f);
         }
 
         glm::vec2 AxisDirWorld(GizmoAxis axis)

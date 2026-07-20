@@ -14,16 +14,13 @@ using Catch::Matchers::WithinAbs;
 
 namespace
 {
-    // Simple view: center (400,300), 100 px/world-unit, no camera offset, Y-flip.
-    // worldToScreen(w) = (400 + w.x*100, 300 - w.y*100).
+    // Simple view: origin (400,300), 100 px per world-unit, no Y-flip (matches the
+    // engine canonical screen = world*scale + offset). worldToScreen(w) = (400 + w.x*100, 300 + w.y*100).
     Arcane::GizmoView MakeView()
     {
         Arcane::GizmoView v;
-        v.cameraOffset = glm::vec2(0.0f, 0.0f);
-        v.zoom = 1.0f;
-        v.pixelsPerMeter = 100.0f;
-        v.viewportOriginPx = glm::vec2(0.0f, 0.0f);
-        v.viewportSizePx = glm::vec2(800.0f, 600.0f);
+        v.cameraOffset        = glm::vec2(400.0f, 300.0f);
+        v.worldToScreenScale  = 100.0f;
         return v;
     }
 }
@@ -41,10 +38,10 @@ TEST_CASE("Gizmo ApplyDrag: translate world axis + center", "[gizmo]")
     CHECK_THAT(rx.position.x, WithinAbs(0.5f, 1e-4f));
     CHECK_THAT(rx.position.y, WithinAbs(0.0f, 1e-4f));
 
-    // Center: mouse (400,300)->(450,250) == world (0,0)->(0.5,0.5).
+    // Center: mouse (400,300)->(450,350) == world (0,0)->(0.5,0.5).
     Arcane::GizmoTransform rc = Arcane::ApplyDrag(
         Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, Arcane::GizmoAxis::Center,
-        start, v, glm::vec2(400, 300), glm::vec2(450, 250), noSnap);
+        start, v, glm::vec2(400, 300), glm::vec2(450, 350), noSnap);
     CHECK_THAT(rc.position.x, WithinAbs(0.5f, 1e-4f));
     CHECK_THAT(rc.position.y, WithinAbs(0.5f, 1e-4f));
 }
@@ -59,7 +56,7 @@ TEST_CASE("Gizmo ApplyDrag: translate local axis rotates the direction", "[gizmo
     // Drag world delta (0.5, 0.3); local-X = (0,1) so only the Y component projects.
     Arcane::GizmoTransform r = Arcane::ApplyDrag(
         Arcane::GizmoMode::Translate, Arcane::GizmoSpace::Local, Arcane::GizmoAxis::X,
-        start, v, glm::vec2(400, 300), glm::vec2(450, 270), noSnap);
+        start, v, glm::vec2(400, 300), glm::vec2(450, 330), noSnap);
     CHECK_THAT(r.position.x, WithinAbs(0.0f, 1e-4f));
     CHECK_THAT(r.position.y, WithinAbs(0.3f, 1e-4f));
 }
@@ -73,14 +70,14 @@ TEST_CASE("Gizmo ApplyDrag: rotate delta-angle + snap", "[gizmo]")
     // Mouse from world (1,0) [angle 0] to (0,1) [angle +90deg].
     Arcane::GizmoTransform r = Arcane::ApplyDrag(
         Arcane::GizmoMode::Rotate, Arcane::GizmoSpace::World, Arcane::GizmoAxis::Center,
-        start, v, glm::vec2(500, 300), glm::vec2(400, 200), noSnap);
+        start, v, glm::vec2(500, 300), glm::vec2(400, 400), noSnap);
     CHECK_THAT(r.rotation, WithinAbs(3.14159265f * 0.5f, 1e-3f));
 
     // Snap 15deg: rotate ~20deg -> 15deg. cos/sin(20deg)=(0.9397,0.3420).
     Arcane::GizmoSnap snap; snap.enabled = true; snap.rotationDeg = 15.0f;
     Arcane::GizmoTransform rs = Arcane::ApplyDrag(
         Arcane::GizmoMode::Rotate, Arcane::GizmoSpace::World, Arcane::GizmoAxis::Center,
-        start, v, glm::vec2(500, 300), glm::vec2(400 + 93.97f, 300 - 34.20f), snap);
+        start, v, glm::vec2(500, 300), glm::vec2(400 + 93.97f, 300 + 34.20f), snap);
     CHECK_THAT(rs.rotation, WithinAbs(3.14159265f / 12.0f, 1e-3f));   // 15deg
 }
 
@@ -126,9 +123,9 @@ TEST_CASE("Gizmo HitTest: translate axes, center, and miss", "[gizmo]")
     // On the +X arrow (pivot .. pivot+~80px right).
     CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
                           glm::vec2(450, 300)) == Arcane::GizmoAxis::X);
-    // On the +Y arrow (screen-up = -Y screen).
+    // On the +Y arrow (screen-down = +Y screen, no flip).
     CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
-                          glm::vec2(400, 260)) == Arcane::GizmoAxis::Y);
+                          glm::vec2(400, 340)) == Arcane::GizmoAxis::Y);
     // On the center handle (priority over axes).
     CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
                           glm::vec2(401, 301)) == Arcane::GizmoAxis::Center);

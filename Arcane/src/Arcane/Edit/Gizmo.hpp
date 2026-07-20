@@ -28,14 +28,14 @@ namespace Arcane
         glm::vec2 scale{1.0f, 1.0f};
     };
 
-    // World<->screen for the viewport. Fill from the viewport camera (Grimoire).
+    // World<->screen for the viewport. MIRRORS Arcane::PickView (Render/PickEmit.hpp)
+    // and the engine's single canonical transform: screen_px = world * worldToScreenScale
+    // + cameraOffset (NO Y-flip, NO centering). Fill from the viewport camera:
+    // cameraOffset = Runtime::CameraOffset(), worldToScreenScale = Runtime::CameraZoom().
     struct GizmoView
     {
-        glm::vec2 cameraOffset{0.0f, 0.0f};   // world point at the viewport center
-        float     zoom = 1.0f;
-        float     pixelsPerMeter = 100.0f;
-        glm::vec2 viewportOriginPx{0.0f, 0.0f};
-        glm::vec2 viewportSizePx{0.0f, 0.0f};
+        glm::vec2 cameraOffset{0.0f, 0.0f};       // screen-space translation, canvas px
+        float     worldToScreenScale = 1.0f;      // px per world-meter (== Runtime::CameraZoom())
     };
 
     struct GizmoSnap
