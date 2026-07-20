@@ -327,7 +327,14 @@ namespace Grimoire
                     const glm::vec2 mouseScreen(lx, ly);
                     const bool ctrlHeld = snap.ScancodeDown(kScLCtrl) || snap.ScancodeDown(kScRCtrl);
 
-                    const bool gizmoActive = !m_play.IsPlaying() && m_selection.HasSelection() && inViewport;
+                    // An in-progress drag must keep tracking (and commit on release)
+                    // even after the cursor leaves the viewport rect -- only a FRESH
+                    // drag requires the cursor in-viewport. Aborting a live drag on
+                    // viewport-exit would strand the LocalTransform at a mid-drag value
+                    // with no undo record (CommandStack::Cancel does not revert), so
+                    // viewport-exit is deliberately NOT an abort.
+                    const bool gizmoActive = !m_play.IsPlaying() && m_selection.HasSelection() &&
+                                             (m_gizmoDrag.active || inViewport);
                     Astra::Registry*        regPtr = nullptr;
                     Arcane::LocalTransform* lt     = nullptr;
                     if (gizmoActive)
@@ -344,51 +351,69 @@ namespace Grimoire
 
                         if (!m_gizmoDrag.active)
                         {
-                            m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, mouseScreen);
-                            if (m_gizmoHovered != Arcane::GizmoAxis::None && mousePressedLeft)
+                            // Hover + drag-start only when the cursor is over the viewport.
+                            if (inViewport)
                             {
-                                // Resolve the LocalTransform descriptor for the undo
-                                // snapshot; skip starting a drag if it cannot be found
-                                // (defensive -- should not happen for a reflected component).
-                                const Astra::ComponentDescriptor* desc =
-                                    FindLocalTransformDescriptor(*regPtr, sel);
-                                if (desc)
+                                m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, mouseScreen);
+                                if (m_gizmoHovered != Arcane::GizmoAxis::None && mousePressedLeft)
                                 {
-                                    m_undo->Begin("Gizmo");
-                                    m_undo->SnapshotComponent(sel, desc);
-                                    m_gizmoDrag.active           = true;
-                                    m_gizmoDrag.axis             = m_gizmoHovered;
-                                    m_gizmoDrag.start            = gt;
-                                    m_gizmoDrag.mouseStartScreen = mouseScreen;
-                                    m_gizmoCapturedClick         = true;
+                                    // A press on a handle owns the click regardless of
+                                    // whether the descriptor resolves, so it never falls
+                                    // through to the click-pick below.
+                                    m_gizmoCapturedClick = true;
+                                    const Astra::ComponentDescriptor* desc =
+                                        FindLocalTransformDescriptor(*regPtr, sel);
+                                    if (desc)
+                                    {
+                                        m_undo->Begin("Gizmo");
+                                        m_undo->SnapshotComponent(sel, desc);
+                                        m_gizmoDrag.active           = true;
+                                        m_gizmoDrag.axis             = m_gizmoHovered;
+                                        m_gizmoDrag.start            = gt;
+                                        m_gizmoDrag.mouseStartScreen = mouseScreen;
+                                    }
                                 }
+                            }
+                            else
+                            {
+                                m_gizmoHovered = Arcane::GizmoAxis::None;
                             }
                         }
                         else
                         {
+                            // Current cursor in viewport-local px, EXTRAPOLATED past the
+                            // rect edges (ToViewportLocal writes lx/ly even when it returns
+                            // false) so the drag keeps tracking while the cursor is outside
+                            // the viewport. Recomputed here because the shared lx/ly are
+                            // only written when m_viewportActive is set.
+                            float dragLx = 0.0f, dragLy = 0.0f;
+                            Grimoire::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, dragLx, dragLy);
+                            const glm::vec2 dragMouse(dragLx, dragLy);
+
                             Arcane::GizmoSnap gsnap;
                             gsnap.enabled = ctrlHeld;
                             const Arcane::GizmoTransform nt = Arcane::ApplyDrag(
                                 m_gizmoMode, m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
-                                m_gizmoDrag.mouseStartScreen, mouseScreen, gsnap);
+                                m_gizmoDrag.mouseStartScreen, dragMouse, gsnap);
                             lt->position = nt.position;
                             lt->rotation = nt.rotation;
                             lt->scale    = nt.scale;
+                            m_gizmoHovered = m_gizmoDrag.axis;   // keep the active handle highlighted
 
                             if (mouseReleasedLeft)
                             {
                                 m_undo->Commit();   // no-move drag self-drops (after == before)
-                                m_gizmoDrag           = {};
-                                m_gizmoCapturedClick  = true;
+                                m_gizmoDrag          = {};
+                                m_gizmoCapturedClick = true;
                             }
                         }
                     }
                     else
                     {
                         m_gizmoHovered = Arcane::GizmoAxis::None;
-                        // Defensive: selection lost, entity deleted, or the component
-                        // vanished mid-drag -- cancel the open transaction rather than
-                        // leaving it dangling (Cancel discards without pushing a step).
+                        // Only reached with an active drag when the entity/component
+                        // genuinely vanished (deleted/deselected mid-drag) -- discard the
+                        // now-meaningless transaction.
                         if (m_gizmoDrag.active)
                         {
                             m_undo->Cancel();
