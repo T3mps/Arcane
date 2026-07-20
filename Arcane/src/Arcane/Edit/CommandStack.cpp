@@ -6,8 +6,8 @@
 
 namespace Arcane
 {
-    CommandStack::CommandStack(Astra::Registry& registry, std::size_t maxDepth)
-        : m_registry(registry), m_maxDepth(maxDepth ? maxDepth : 1)
+    CommandStack::CommandStack(std::function<Astra::Registry&()> resolve, std::size_t maxDepth)
+        : m_resolve(std::move(resolve)), m_maxDepth(maxDepth ? maxDepth : 1)
     {
     }
 
@@ -31,7 +31,7 @@ namespace Arcane
                 return;
         m_pending.push_back(Pending{
             entity, descriptor,
-            ComponentEditCommand::Snapshot(m_registry, entity, descriptor) });
+            ComponentEditCommand::Snapshot(m_resolve(), entity, descriptor) });
     }
 
     void CommandStack::Commit()
@@ -43,11 +43,11 @@ namespace Arcane
         for (Pending& p : m_pending)
         {
             std::vector<std::byte> after =
-                ComponentEditCommand::Snapshot(m_registry, p.entity, p.descriptor);
+                ComponentEditCommand::Snapshot(m_resolve(), p.entity, p.descriptor);
             if (after == p.before)
                 continue;   // unchanged -> drop
             txn.commands.push_back(std::make_unique<ComponentEditCommand>(
-                m_registry, p.entity, p.descriptor,
+                m_resolve, p.entity, p.descriptor,
                 std::move(p.before), std::move(after), m_openLabel));
         }
         m_open = false;

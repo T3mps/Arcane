@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -20,10 +21,18 @@ namespace Astra { class Registry; struct ComponentDescriptor; }
 
 namespace Arcane
 {
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4251)  // std::function/deque/vector/string members on a dll-exported class: benign under /MD (shared CRT heap)
+#endif
     class ARCANE_API CommandStack
     {
     public:
-        explicit CommandStack(Astra::Registry& registry, std::size_t maxDepth = 100);
+        // `resolve` returns the CURRENT live registry each call (see
+        // ComponentEditCommand's ctor comment) -- the stack never caches a
+        // Registry& itself, so it survives Runtime::RestoreRegistry/ResetRegistry
+        // swapping the registry object out from under it.
+        explicit CommandStack(std::function<Astra::Registry&()> resolve, std::size_t maxDepth = 100);
 
         // Non-copyable: m_undo/m_redo hold move-only ICommand transactions, and
         // this class is dllexport'd -- MSVC eagerly instantiates implicit
@@ -61,8 +70,8 @@ namespace Arcane
             std::vector<std::byte>            before;
         };
 
-        Astra::Registry& m_registry;
-        std::size_t      m_maxDepth;
+        std::function<Astra::Registry&()> m_resolve;
+        std::size_t                       m_maxDepth;
 
         std::deque<Transaction> m_undo;
         std::deque<Transaction> m_redo;
@@ -71,6 +80,9 @@ namespace Arcane
         std::string          m_openLabel;
         std::vector<Pending> m_pending;
     };
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
     // RAII form for single-scope edits (gizmo drag-commit, programmatic
     // multi-edit). Commits in the dtor unless Cancel() was called. NOT for the

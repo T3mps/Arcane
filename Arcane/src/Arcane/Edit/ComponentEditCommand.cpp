@@ -10,12 +10,12 @@
 
 namespace Arcane
 {
-    ComponentEditCommand::ComponentEditCommand(Astra::Registry& registry, Astra::Entity entity,
+    ComponentEditCommand::ComponentEditCommand(std::function<Astra::Registry&()> resolve, Astra::Entity entity,
                                                const Astra::ComponentDescriptor* descriptor,
                                                std::vector<std::byte> before,
                                                std::vector<std::byte> after,
                                                std::string label)
-        : m_registry(registry), m_entity(entity), m_descriptor(descriptor),
+        : m_resolve(std::move(resolve)), m_entity(entity), m_descriptor(descriptor),
           m_before(std::move(before)), m_after(std::move(after)), m_label(std::move(label))
     {
     }
@@ -41,7 +41,7 @@ namespace Arcane
     {
         if (!m_descriptor || !m_descriptor->deserialize || blob.empty())
             return;
-        void* instance = m_registry.GetComponentByHash(m_entity, m_descriptor->hash);
+        void* instance = m_resolve().GetComponentByHash(m_entity, m_descriptor->hash);
         if (!instance)
             return;   // entity/component gone -> safe no-op
         Astra::BinaryReader reader{std::span<const std::byte>(blob)};

@@ -61,7 +61,7 @@ TEST_CASE("ComponentEditCommand restores a component before/after via reflection
     std::vector<std::byte> after = Arcane::ComponentEditCommand::Snapshot(*reg, e, desc);
     REQUIRE(before != after);
 
-    Arcane::ComponentEditCommand cmd(*reg, e, desc, before, after, "Edit LocalTransform");
+    Arcane::ComponentEditCommand cmd([&reg]() -> Astra::Registry& { return *reg; }, e, desc, before, after, "Edit LocalTransform");
 
     cmd.Undo();
     CHECK(reg->GetComponent<Arcane::LocalTransform>(e)->position.x == 1.0f);
@@ -80,7 +80,7 @@ TEST_CASE("ComponentEditCommand no-ops on a deleted entity", "[edit]")
     REQUIRE(desc != nullptr);
 
     std::vector<std::byte> before = Arcane::ComponentEditCommand::Snapshot(*reg, e, desc);
-    Arcane::ComponentEditCommand cmd(*reg, e, desc, before, before, "noop");
+    Arcane::ComponentEditCommand cmd([&reg]() -> Astra::Registry& { return *reg; }, e, desc, before, before, "noop");
 
     reg->DestroyEntity(e);
     CHECK_NOTHROW(cmd.Undo());   // re-resolve returns null -> safe no-op
@@ -95,7 +95,7 @@ TEST_CASE("CommandStack: one-gesture transaction undo/redo + redo cleared on new
     reg->AddComponent<Arcane::LocalTransform>(e, lt);
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::LocalTransform");
 
-    Arcane::CommandStack stack(*reg);
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
 
     // Gesture: Begin -> Snapshot (before) -> mutate -> Commit (after).
     stack.Begin("move");
@@ -129,7 +129,7 @@ TEST_CASE("CommandStack: empty / no-op transaction is not pushed", "[edit]")
     reg->AddComponent<Arcane::LocalTransform>(e, Arcane::LocalTransform{});
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::LocalTransform");
 
-    Arcane::CommandStack stack(*reg);
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
     stack.Begin("noop");
     stack.SnapshotComponent(e, desc);     // no mutation
     stack.Commit();                        // before == after -> nothing pushed
@@ -150,18 +150,70 @@ TEST_CASE("CommandStack: a transaction groups two components into one undo step"
     const Astra::ComponentDescriptor* dLt = DescriptorFor(*reg, e, "Arcane::LocalTransform");
     const Astra::ComponentDescriptor* dSr = DescriptorFor(*reg, e, "Arcane::SpriteRenderer");
 
-    Arcane::CommandStack stack(*reg);
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
     stack.Begin("multi");
-    stack.SnapshotComponent(e, dLt);
+    stack.SnapshotComponent(e, dLt);      // captures before = 0
     stack.SnapshotComponent(e, dSr);
-    stack.SnapshotComponent(e, dLt);      // idempotent: second touch is a no-op
-    reg->GetComponent<Arcane::LocalTransform>(e)->position = glm::vec2(3.0f, 0.0f);
+    // Discriminating idempotency check: mutate BETWEEN the two dLt touches. If
+    // SnapshotComponent were NOT idempotent (re-captured on the second touch),
+    // the recorded `before` would be this x=3 value and Undo would restore
+    // x=3 instead of the true original x=0.
+    reg->GetComponent<Arcane::LocalTransform>(e)->position.x = 3.0f;
+    stack.SnapshotComponent(e, dLt);      // idempotent: MUST NOT re-capture x=3
+    reg->GetComponent<Arcane::LocalTransform>(e)->position.x = 7.0f;
     reg->GetComponent<Arcane::SpriteRenderer>(e)->sortingLayer = 4;
     stack.Commit();
 
     stack.Undo();                          // ONE undo reverts BOTH
-    CHECK(reg->GetComponent<Arcane::LocalTransform>(e)->position.x == 0.0f);
+    CHECK(reg->GetComponent<Arcane::LocalTransform>(e)->position.x == 0.0f);   // fails if 2nd touch re-snapshotted
     CHECK(reg->GetComponent<Arcane::SpriteRenderer>(e)->sortingLayer == 0);
+}
+
+TEST_CASE("CommandStack: survives a registry object swap (resolver, no dangling Registry&)", "[edit]")
+{
+    // The regression guard for the Critical defect: a command committed
+    // BEFORE a registry swap must not hold a dangling Astra::Registry&. The
+    // resolver re-reads the CURRENT `reg` pointer on every call, so it always
+    // targets whichever registry object is live, mirroring how a real
+    // Runtime::RestoreRegistry/ResetRegistry swap replaces the registry object
+    // out from under a long-lived CommandStack/ComponentEditCommand.
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::LocalTransform>(e, Arcane::LocalTransform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::LocalTransform");
+
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    // Commit one edit on the pre-swap registry.
+    stack.Begin("pre-swap edit");
+    stack.SnapshotComponent(e, desc);
+    reg->GetComponent<Arcane::LocalTransform>(e)->position = glm::vec2(1.0f, 0.0f);
+    stack.Commit();
+    REQUIRE(stack.CanUndo());
+
+    // Swap: frees the OLD registry object the pre-swap command captured
+    // through the resolver. Under the old cached-Registry& design, the next
+    // Undo would dereference freed memory (UAF). Under the resolver design it
+    // resolves the NEW registry.
+    reg = MakeReg();
+
+    // The pre-swap entity does not exist in the new registry -> GetComponentByHash
+    // returns null -> Restore is a safe no-op. No crash = the win.
+    CHECK_NOTHROW(stack.Undo());
+
+    // Positive path: the stack must operate on the SWAPPED-IN registry, not a
+    // stale one.
+    const Astra::Entity e2 = reg->CreateEntity();
+    reg->AddComponent<Arcane::LocalTransform>(e2, Arcane::LocalTransform{});
+    const Astra::ComponentDescriptor* desc2 = DescriptorFor(*reg, e2, "Arcane::LocalTransform");
+
+    stack.Begin("post-swap edit");
+    stack.SnapshotComponent(e2, desc2);
+    reg->GetComponent<Arcane::LocalTransform>(e2)->position.x = 5.0f;
+    stack.Commit();
+
+    stack.Undo();
+    CHECK(reg->GetComponent<Arcane::LocalTransform>(e2)->position.x == 0.0f);
 }
 
 TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
@@ -171,7 +223,7 @@ TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
     reg->AddComponent<Arcane::LocalTransform>(e, Arcane::LocalTransform{});
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::LocalTransform");
 
-    Arcane::CommandStack stack(*reg, /*maxDepth*/ 2);
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; }, /*maxDepth*/ 2);
     for (int i = 1; i <= 3; ++i)
     {
         stack.Begin("e");
