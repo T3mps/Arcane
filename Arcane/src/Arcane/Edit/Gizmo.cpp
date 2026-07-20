@@ -1,4 +1,5 @@
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/Render/Batcher2D.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -54,6 +55,15 @@ namespace Arcane
         constexpr float kRingRadiusPx = 64.0f;   // rotate ring radius
         constexpr float kRingBandPx   = 8.0f;    // rotate ring pick band
 
+        // Draw-only screen-constant pixel sizes.
+        constexpr float kShaftThicknessPx    = 2.0f;    // axis shaft line
+        constexpr float kRingThicknessPx     = 2.0f;    // rotate ring polyline
+        constexpr int   kRingSegments        = 48;      // ring polyline segment count
+        constexpr float kArrowHeadLenPx      = 14.0f;   // translate arrowhead stub length
+        constexpr float kArrowHeadThicknessPx = 7.0f;   // translate arrowhead stub thickness
+        constexpr float kScaleBoxHalfPx      = 5.0f;    // scale end-handle box half-extent
+        constexpr float kTau                 = 6.28318530717958647692f;
+
         // Screen-space unit direction of a world axis at the pivot (handles Y-flip).
         glm::vec2 AxisDirScreen(const GizmoView& v, glm::vec2 pivotWorld, glm::vec2 dirWorld)
         {
@@ -70,6 +80,19 @@ namespace Arcane
             const float len2 = glm::dot(ab, ab);
             const float u = len2 > kEps ? glm::clamp(glm::dot(p - a, ab) / len2, 0.0f, 1.0f) : 0.0f;
             return glm::length(p - (a + u * ab));
+        }
+
+        // X=red, Y=green, Center=yellow; brightened when hovered/active.
+        glm::vec4 AxisColor(GizmoAxis axis, GizmoAxis hovered, GizmoAxis active)
+        {
+            glm::vec4 base(0.85f, 0.2f, 0.2f, 1.0f);            // X
+            if (axis == GizmoAxis::Y)      base = glm::vec4(0.2f, 0.85f, 0.2f, 1.0f);
+            if (axis == GizmoAxis::Center) base = glm::vec4(0.9f, 0.85f, 0.2f, 1.0f);
+            const bool hot = (axis == hovered) || (axis == active);
+            return hot ? glm::vec4(glm::min(base.x * 1.4f, 1.0f),
+                                   glm::min(base.y * 1.4f, 1.0f),
+                                   glm::min(base.z * 1.4f, 1.0f), 1.0f)
+                       : base;
         }
     }
 
@@ -178,5 +201,59 @@ namespace Arcane
         if (DistToSegment(mouseScreen, pivot, pivot + dirX * kAxisLenPx) <= kHitThreshPx) return GizmoAxis::X;
         if (DistToSegment(mouseScreen, pivot, pivot + dirY * kAxisLenPx) <= kHitThreshPx) return GizmoAxis::Y;
         return GizmoAxis::None;
+    }
+
+    void Draw(Batcher2D& batcher, GizmoMode mode, GizmoSpace space,
+              const GizmoTransform& t, const GizmoView& view,
+              GizmoAxis hovered, GizmoAxis active)
+    {
+        const glm::vec2 pivot = WorldToScreen(view, t.position);
+        const GizmoSpace axisSpace = (mode == GizmoMode::Scale) ? GizmoSpace::Local : space;
+        const glm::vec2 dirX = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::X));
+        const glm::vec2 dirY = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::Y));
+
+        if (mode == GizmoMode::Rotate)
+        {
+            // Ring outline: no ring/circle-outline primitive exists, so approximate
+            // the outline as a closed polyline of thin Line segments.
+            const glm::vec4 ringColor = AxisColor(GizmoAxis::Center, hovered, active);
+            for (int i = 0; i < kRingSegments; ++i)
+            {
+                const float a0 = kTau * static_cast<float>(i) / static_cast<float>(kRingSegments);
+                const float a1 = kTau * static_cast<float>(i + 1) / static_cast<float>(kRingSegments);
+                const glm::vec2 p0 = pivot + glm::vec2(std::cos(a0), std::sin(a0)) * kRingRadiusPx;
+                const glm::vec2 p1 = pivot + glm::vec2(std::cos(a1), std::sin(a1)) * kRingRadiusPx;
+                batcher.Line(p0, p1, kRingThicknessPx, ringColor);
+            }
+            return;
+        }
+
+        // Axis X + Y: shaft line + head (arrow for Translate, box for Scale).
+        const glm::vec2 tipX = pivot + dirX * kAxisLenPx;
+        const glm::vec2 tipY = pivot + dirY * kAxisLenPx;
+        const glm::vec4 colorX = AxisColor(GizmoAxis::X, hovered, active);
+        const glm::vec4 colorY = AxisColor(GizmoAxis::Y, hovered, active);
+        batcher.Line(pivot, tipX, kShaftThicknessPx, colorX);
+        batcher.Line(pivot, tipY, kShaftThicknessPx, colorY);
+
+        if (mode == GizmoMode::Translate)
+        {
+            // No filled-triangle primitive: approximate each arrowhead as a
+            // short, thicker Line segment straddling the axis tip.
+            batcher.Line(tipX - dirX * kArrowHeadLenPx * 0.5f, tipX + dirX * kArrowHeadLenPx * 0.5f,
+                        kArrowHeadThicknessPx, colorX);
+            batcher.Line(tipY - dirY * kArrowHeadLenPx * 0.5f, tipY + dirY * kArrowHeadLenPx * 0.5f,
+                        kArrowHeadThicknessPx, colorY);
+        }
+        else   // Scale
+        {
+            const glm::vec2 boxHalf(kScaleBoxHalfPx, kScaleBoxHalfPx);
+            batcher.Rect(tipX - boxHalf, boxHalf * 2.0f, colorX);
+            batcher.Rect(tipY - boxHalf, boxHalf * 2.0f, colorY);
+        }
+
+        // Center box.
+        const glm::vec2 centerHalf(kCenterHalfPx, kCenterHalfPx);
+        batcher.Rect(pivot - centerHalf, centerHalf * 2.0f, AxisColor(GizmoAxis::Center, hovered, active));
     }
 }
