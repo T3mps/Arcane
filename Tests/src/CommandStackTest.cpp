@@ -177,7 +177,27 @@ TEST_CASE("CommandStack: survives a registry object swap (resolver, no dangling 
     // targets whichever registry object is live, mirroring how a real
     // Runtime::RestoreRegistry/ResetRegistry swap replaces the registry object
     // out from under a long-lived CommandStack/ComponentEditCommand.
-    auto reg = MakeReg();
+    //
+    // Deliberately NOT MakeReg() here: that helper builds a brand-new
+    // Astra::ComponentRegistry per call, and this test's pre-swap command
+    // captures a `desc` pointer into the OLD registry's descriptor array via
+    // `m_descriptor`. `reg = MakeReg()` would free that ComponentRegistry
+    // (the Registry is its sole owner) out from under the still-live
+    // `m_descriptor`, so the CHECK_NOTHROW(stack.Undo()) below would read
+    // freed memory -- UB, and harsher than production. Production's
+    // Runtime::ResetRegistry/RestoreRegistry keep the SAME shared
+    // Astra::ComponentRegistry across a registry-object swap (only the
+    // Registry object is replaced; see Runtime.cpp), so descriptors never
+    // dangle there. Mirror that here: one shared ComponentRegistry, two
+    // Registry objects. RegisterComponent<T> is idempotent (guarded by a
+    // per-id atomic flag living on the ComponentRegistry -- see
+    // ComponentRegistry.hpp), so registering scene components once, before
+    // the swap, is enough; the post-swap Registry inherits the registration
+    // through the shared ComponentRegistry, exactly as ResetRegistry does not
+    // re-register component types after swapping in a fresh Registry object.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    auto reg = std::make_unique<Astra::Registry>(components);
+    Arcane::RegisterSceneComponents(*reg);
     const Astra::Entity e = reg->CreateEntity();
     reg->AddComponent<Arcane::LocalTransform>(e, Arcane::LocalTransform{});
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::LocalTransform");
@@ -191,11 +211,13 @@ TEST_CASE("CommandStack: survives a registry object swap (resolver, no dangling 
     stack.Commit();
     REQUIRE(stack.CanUndo());
 
-    // Swap: frees the OLD registry object the pre-swap command captured
-    // through the resolver. Under the old cached-Registry& design, the next
-    // Undo would dereference freed memory (UAF). Under the resolver design it
-    // resolves the NEW registry.
-    reg = MakeReg();
+    // Swap: frees the OLD registry OBJECT the pre-swap command captured
+    // through the resolver (still the regression guard for the dangling-
+    // Registry& defect). The SAME shared ComponentRegistry survives the swap,
+    // so `desc`/`m_descriptor` stay valid -- no freed-descriptor read. Under
+    // the old cached-Registry& design, the next Undo would dereference freed
+    // memory (UAF). Under the resolver design it resolves the NEW registry.
+    reg = std::make_unique<Astra::Registry>(components);
 
     // The pre-swap entity does not exist in the new registry -> GetComponentByHash
     // returns null -> Restore is a safe no-op. No crash = the win.
