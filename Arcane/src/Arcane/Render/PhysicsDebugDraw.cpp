@@ -241,6 +241,76 @@ namespace Arcane
             }
         }
 
+        // Draw one shape's outline centered at world position `wc` (world units),
+        // rotated by `angle` (radians), in the world*zoom+offset screen space.
+        // EVERY kind rotates -- this is where the Aabb case was fixed (it used to
+        // draw an axis-aligned box regardless of the body angle, unlike the
+        // Capsule/Polygon cases). Matches the per-shape look of the old inline
+        // dispatch (circle disc / capsule end-caps + side lines / box + polygon
+        // edge loops); only the Aabb rotation is new.
+        void DrawShapeOutlineRotated(Batcher2D& b, const Phys::Shape& s,
+                                     const Phys::Vec2& wc, float angle,
+                                     const glm::vec2& off, float zoom,
+                                     float thick, const glm::vec4& col)
+        {
+            const glm::vec2 spos = ToScreen(wc, off, zoom);
+            // Local point (shape frame) -> screen: rotate by `angle`, then scale
+            // by zoom (rotation + uniform scale commute) and offset by spos.
+            const auto P = [&](float lx, float ly) {
+                return spos + Rotate2D(glm::vec2(lx, ly), angle) * zoom;
+            };
+
+            switch (s.kind)
+            {
+                case Phys::ShapeKind::Circle:
+                    // Rotation-invariant disc.
+                    b.Circle(spos, static_cast<float>(s.radius) * zoom, col);
+                    break;
+
+                case Phys::ShapeKind::Capsule:
+                {
+                    const float hl = static_cast<float>(s.halfLen);
+                    const float rl = static_cast<float>(s.radius);
+                    const float r  = rl * zoom;
+                    b.Circle(P(-hl, 0.0f), r, col);  // rotated end caps
+                    b.Circle(P( hl, 0.0f), r, col);
+                    b.Line(P(-hl, -rl), P(hl, -rl), thick, col); // rotated side lines
+                    b.Line(P(-hl,  rl), P(hl,  rl), thick, col);
+                    break;
+                }
+
+                case Phys::ShapeKind::Aabb:
+                {
+                    // Oriented box: rotate the four corners by `angle` (the fix).
+                    const float hw = static_cast<float>(s.halfW);
+                    const float hh = static_cast<float>(s.halfH);
+                    const glm::vec2 tl = P(-hw, -hh);
+                    const glm::vec2 tr = P( hw, -hh);
+                    const glm::vec2 br = P( hw,  hh);
+                    const glm::vec2 bl = P(-hw,  hh);
+                    b.Line(tl, tr, thick, col);
+                    b.Line(tr, br, thick, col);
+                    b.Line(br, bl, thick, col);
+                    b.Line(bl, tl, thick, col);
+                    break;
+                }
+
+                case Phys::ShapeKind::Polygon:
+                {
+                    const std::size_t vc = s.verts.size();
+                    for (std::size_t e = 0; e < vc; ++e)
+                    {
+                        const Phys::Vec2& va = s.verts[e];
+                        const Phys::Vec2& vb = s.verts[(e + 1) % vc];
+                        b.Line(P(static_cast<float>(va.x), static_cast<float>(va.y)),
+                               P(static_cast<float>(vb.x), static_cast<float>(vb.y)),
+                               thick, col);
+                    }
+                    break;
+                }
+            }
+        }
+
     } // anonymous namespace
 
     // -------------------------------------------------------------------------
@@ -285,7 +355,6 @@ namespace Arcane
                             static_cast<Real>(Lerp(pp.position.y, static_cast<float>(wpos.y), opts.alpha)));
                 bodyAngle = AngleLerp(pp.angle, bodyAngle, opts.alpha);
             }
-            const glm::vec2 spos = ToScreen(wpos, off, zoom);
 
             // ---- color selection (port of PhysicsDebug.lua lines 29-34) ----
             glm::vec4 col;
@@ -318,81 +387,45 @@ namespace Arcane
                 col = kColKinematic;
             }
 
-            // ---- shape dispatch (port of PhysicsDebug.lua lines 34-44) -----
-            switch (s.kind)
+            // ---- per-fixture shape outlines --------------------------------
+            //
+            // Outline each of the body's fixtures at its LIVE (scaled) shape and
+            // local pose, placed by the interp-blended body pose (wpos/bodyAngle).
+            // This fixes three things the old single-ShapeSlot dispatch got wrong:
+            //   * rotated boxes -- every kind now rotates (the Aabb case used to
+            //     draw an axis-aligned box regardless of angle);
+            //   * scaled bodies -- per-fixture shapes are rebuilt by the paused
+            //     scale reconcile (AddFixture + DropFixture), whereas the single
+            //     m_shape/ShapeSlot is captured once at AddBody and goes stale;
+            //   * multi-fixture (compound) bodies -- every fixture is drawn, not
+            //     just the primary shape.
+            // A fixture-less body (world-direct legacy path) falls back to the
+            // single ShapeSlot at the body pose (also rotated now).
+            const std::uint32_t fxCount = world.FixtureCount(h);
+            if (fxCount == 0u)
             {
-                case ShapeKind::Circle:
+                DrawShapeOutlineRotated(batcher, s, wpos, bodyAngle,
+                                        off, zoom, thick, col);
+            }
+            else
+            {
+                const float bc = std::cos(bodyAngle);
+                const float bs = std::sin(bodyAngle);
+                for (std::uint32_t fxi = 0; fxi < fxCount; ++fxi)
                 {
-                    // Lua: lg.circle("line", x, y, s.r)
-                    // Batcher2D::Circle is a filled SDF circle -- acceptable for
-                    // debug; the filled disc at low alpha still reads as an
-                    // outline at debug scale.
-                    batcher.Circle(spos, static_cast<float>(s.radius) * zoom, col);
-                    break;
-                }
-
-                case ShapeKind::Capsule:
-                {
-                    // Two end circles + two side lines. Capsule: segment
-                    // (-halfLen,0)-(+halfLen,0) inflated by radius. Capsules rotate
-                    // freely in v2, so rotate the local geometry by the body angle
-                    // (mirrors the Polygon case): rotate the local point, then scale
-                    // by zoom (rotation + uniform scale commute) and offset by spos.
-                    const float angle = bodyAngle;
-                    const float hl = static_cast<float>(s.halfLen); // local units
-                    const float rl = static_cast<float>(s.radius);  // local units
-                    const float r  = rl * zoom;                     // screen radius
-                    const auto P = [&](float lx, float ly) {
-                        return spos + Rotate2D(glm::vec2(lx, ly), angle) * zoom;
-                    };
-                    batcher.Circle(P(-hl, 0.0f), r, col);  // end caps at the rotated
-                    batcher.Circle(P( hl, 0.0f), r, col);  // segment endpoints
-                    batcher.Line(P(-hl, -rl), P(hl, -rl), thick, col); // side lines at
-                    batcher.Line(P(-hl,  rl), P(hl,  rl), thick, col); // +/- radius, rotated
-                    break;
-                }
-
-                case ShapeKind::Aabb:
-                {
-                    // Lua: lg.rectangle("line", x-hw, y-hh, hw*2, hh*2)
-                    // Four lines forming the box outline.
-                    const float hw = static_cast<float>(s.halfW) * zoom;
-                    const float hh = static_cast<float>(s.halfH) * zoom;
-                    const glm::vec2 tl(spos.x - hw, spos.y - hh);
-                    const glm::vec2 tr(spos.x + hw, spos.y - hh);
-                    const glm::vec2 br(spos.x + hw, spos.y + hh);
-                    const glm::vec2 bl(spos.x - hw, spos.y + hh);
-                    batcher.Line(tl, tr, thick, col);
-                    batcher.Line(tr, br, thick, col);
-                    batcher.Line(br, bl, thick, col);
-                    batcher.Line(bl, tl, thick, col);
-                    break;
-                }
-
-                case ShapeKind::Polygon:
-                {
-                    // Lua: lg.push(); lg.translate(x,y); lg.polygon("line", s.verts); lg.pop()
-                    // Draw one line per edge; transform verts by body position + angle.
-                    if (s.verts.empty())
-                        break;
-                    const float angle = bodyAngle;
-                    const std::size_t vc = s.verts.size();
-                    for (std::size_t e = 0; e < vc; ++e)
-                    {
-                        const Vec2& va = s.verts[e];
-                        const Vec2& vb = s.verts[(e + 1) % vc];
-                        // Rotate the local vert, then scale by zoom (rotation +
-                        // uniform scale commute) so the polygon matches the
-                        // world*zoom+offset transform of spos.
-                        const glm::vec2 a = spos + Rotate2D(
-                            glm::vec2(static_cast<float>(va.x),
-                                      static_cast<float>(va.y)), angle) * zoom;
-                        const glm::vec2 b2 = spos + Rotate2D(
-                            glm::vec2(static_cast<float>(vb.x),
-                                      static_cast<float>(vb.y)), angle) * zoom;
-                        batcher.Line(a, b2, thick, col);
-                    }
-                    break;
+                    const FixtureHandle fh = world.GetBodyFixture(h, fxi);
+                    if (!world.IsValid(fh))
+                        continue;
+                    const Shape& fs = world.GetFixtureShape(fh);
+                    const Vec2   lp = world.GetFixtureLocalPos(fh);
+                    const float  la = static_cast<float>(world.GetFixtureLocalAngle(fh));
+                    // Fixture world center: interp-blended body pose + rotated
+                    // local offset (world units; DrawShapeOutlineRotated applies
+                    // zoom + offset).
+                    const Vec2 fwc(static_cast<Real>(wpos.x + bc * lp.x - bs * lp.y),
+                                   static_cast<Real>(wpos.y + bs * lp.x + bc * lp.y));
+                    DrawShapeOutlineRotated(batcher, fs, fwc, bodyAngle + la,
+                                            off, zoom, thick, col);
                 }
             }
 
