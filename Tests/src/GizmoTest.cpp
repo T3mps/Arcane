@@ -117,3 +117,38 @@ TEST_CASE("Gizmo ApplyDrag: scale ratio, uniform, clamp, snap", "[gizmo]")
         start, v, glm::vec2(500, 300), glm::vec2(400 + 137.0f, 300), snap);
     CHECK_THAT(rsn.scale.x, WithinAbs(1.4f, 1e-4f));
 }
+
+TEST_CASE("Gizmo HitTest: translate axes, center, and miss", "[gizmo]")
+{
+    const Arcane::GizmoView v = MakeView();
+    Arcane::GizmoTransform t;                      // pivot screen (400,300)
+
+    // On the +X arrow (pivot .. pivot+~80px right).
+    CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
+                          glm::vec2(450, 300)) == Arcane::GizmoAxis::X);
+    // On the +Y arrow (screen-up = -Y screen).
+    CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
+                          glm::vec2(400, 260)) == Arcane::GizmoAxis::Y);
+    // On the center handle (priority over axes).
+    CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
+                          glm::vec2(401, 301)) == Arcane::GizmoAxis::Center);
+    // Off-gizmo.
+    CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
+                          glm::vec2(700, 300)) == Arcane::GizmoAxis::None);
+}
+
+TEST_CASE("Gizmo HitTest: rotate ring band, scale axes", "[gizmo]")
+{
+    const Arcane::GizmoView v = MakeView();
+    Arcane::GizmoTransform t;                      // pivot screen (400,300)
+
+    // Rotate: ring radius ~64px -> a point ~64px from pivot hits (reported Center).
+    CHECK(Arcane::HitTest(Arcane::GizmoMode::Rotate, Arcane::GizmoSpace::World, t, v,
+                          glm::vec2(464, 300)) == Arcane::GizmoAxis::Center);
+    // Rotate: near the pivot (inside the ring) misses.
+    CHECK(Arcane::HitTest(Arcane::GizmoMode::Rotate, Arcane::GizmoSpace::World, t, v,
+                          glm::vec2(410, 300)) == Arcane::GizmoAxis::None);
+    // Scale: on the +X handle.
+    CHECK(Arcane::HitTest(Arcane::GizmoMode::Scale, Arcane::GizmoSpace::Local, t, v,
+                          glm::vec2(450, 300)) == Arcane::GizmoAxis::X);
+}

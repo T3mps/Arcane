@@ -47,6 +47,30 @@ namespace Arcane
         {
             return step > kEps ? std::round(v / step) * step : v;
         }
+
+        constexpr float kAxisLenPx    = 80.0f;   // arrow / scale-handle length
+        constexpr float kHitThreshPx  = 8.0f;    // axis segment pick radius
+        constexpr float kCenterHalfPx = 8.0f;    // center box half-extent
+        constexpr float kRingRadiusPx = 64.0f;   // rotate ring radius
+        constexpr float kRingBandPx   = 8.0f;    // rotate ring pick band
+
+        // Screen-space unit direction of a world axis at the pivot (handles Y-flip).
+        glm::vec2 AxisDirScreen(const GizmoView& v, glm::vec2 pivotWorld, glm::vec2 dirWorld)
+        {
+            const glm::vec2 a = WorldToScreen(v, pivotWorld);
+            const glm::vec2 b = WorldToScreen(v, pivotWorld + dirWorld);
+            const glm::vec2 d = b - a;
+            const float len = glm::length(d);
+            return len > kEps ? d / len : glm::vec2(1.0f, 0.0f);
+        }
+
+        float DistToSegment(glm::vec2 p, glm::vec2 a, glm::vec2 b)
+        {
+            const glm::vec2 ab = b - a;
+            const float len2 = glm::dot(ab, ab);
+            const float u = len2 > kEps ? glm::clamp(glm::dot(p - a, ab) / len2, 0.0f, 1.0f) : 0.0f;
+            return glm::length(p - (a + u * ab));
+        }
     }
 
     GizmoTransform ApplyDrag(GizmoMode mode, GizmoSpace space, GizmoAxis axis,
@@ -128,5 +152,31 @@ namespace Arcane
             }
         }
         return r;
+    }
+
+    GizmoAxis HitTest(GizmoMode mode, GizmoSpace space,
+                      const GizmoTransform& t, const GizmoView& view, glm::vec2 mouseScreen)
+    {
+        const glm::vec2 pivot = WorldToScreen(view, t.position);
+
+        if (mode == GizmoMode::Rotate)
+        {
+            const float d = glm::length(mouseScreen - pivot);
+            return std::fabs(d - kRingRadiusPx) <= kRingBandPx ? GizmoAxis::Center : GizmoAxis::None;
+        }
+
+        // Center handle wins on overlap.
+        if (std::fabs(mouseScreen.x - pivot.x) <= kCenterHalfPx &&
+            std::fabs(mouseScreen.y - pivot.y) <= kCenterHalfPx)
+            return GizmoAxis::Center;
+
+        // Scale axes are always local; translate axes follow `space`.
+        const GizmoSpace axisSpace = (mode == GizmoMode::Scale) ? GizmoSpace::Local : space;
+        const glm::vec2 dirX = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::X));
+        const glm::vec2 dirY = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::Y));
+
+        if (DistToSegment(mouseScreen, pivot, pivot + dirX * kAxisLenPx) <= kHitThreshPx) return GizmoAxis::X;
+        if (DistToSegment(mouseScreen, pivot, pivot + dirY * kAxisLenPx) <= kHitThreshPx) return GizmoAxis::Y;
+        return GizmoAxis::None;
     }
 }
