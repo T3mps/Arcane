@@ -49,13 +49,18 @@ namespace Grimoire
         }
         else
         {
-            // Entering Play clears the undo history: play-time mutation is
-            // discarded on Stop (PlaySession restores the pre-Play snapshot),
-            // so those edits must not linger as undoable Edit-mode steps. Only
-            // clear when Play actually started -- Play() can fail (plugin
-            // SaveState/Runtime::SnapshotRegistry error) and leave the session
-            // in Edit, in which case the Edit-mode history must survive.
-            if (ImGui::Button("Play")) { if (play.Play(runtime, plugin)) undo.Clear(); }
+            // Edit-mode undo/redo history now SURVIVES a Play/Stop cycle -- it is
+            // no longer cleared on Play. Play-time mutation is discarded on Stop
+            // (PlaySession restores the pre-Play snapshot), so it never lingers
+            // as an undoable step; edits made WHILE Playing are never captured
+            // in the first place (the Inspector visitor's stack is null and the
+            // gizmo is !IsPlaying()-gated), so `undo` only ever holds Edit-mode
+            // edits. Those edits' entities survive the Stop-time registry swap
+            // because Runtime::RestoreRegistry rides Astra::Registry::Save()/
+            // Load(), which round-trips the EntityManager and so preserves
+            // entity ids/versions -- a pre-Play undo entry still resolves (and
+            // reverts correctly) against the post-Stop registry object.
+            if (ImGui::Button("Play")) play.Play(runtime, plugin);
         }
         // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
         // replaces m_impl->loop on Stop, so a reference taken before this point

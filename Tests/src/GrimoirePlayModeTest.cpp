@@ -26,6 +26,7 @@
 #include <Astra/Serialization/BinaryWriter.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
@@ -90,6 +91,90 @@ TEST_CASE("Play snapshots and Stop restores the authored registry", "[grimoire]"
         if (Arcane::SpriteRenderer* s = restored.GetComponent<Arcane::SpriteRenderer>(le))
         { CHECK(s->sortingLayer == 3); found = true; }
     CHECK(found);
+}
+
+namespace
+{
+    // The component descriptor for `typeName` on `entity`, via the same
+    // InspectEntity path the Inspector/CommandStackTest use. TypeMeta::typeName
+    // is namespace-qualified (e.g. "Arcane::LocalTransform").
+    const Astra::ComponentDescriptor* DescriptorFor(Astra::Registry& reg,
+                                                    Astra::Entity e, const char* typeName)
+    {
+        for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
+            if (ci.meta && ci.meta->typeName == typeName)
+                return ci.descriptor;
+        return nullptr;
+    }
+}
+
+// Regression guard for dropping the undo.Clear() on Play (EditorPanels.cpp):
+// an Edit-mode CommandStack entry committed BEFORE Play must still Undo/Redo
+// correctly AFTER a Play->mutate->Stop round-trip, even though Stop swaps in a
+// brand-new Astra::Registry object (Runtime::RestoreRegistry). This only works
+// because Registry::Save()/Load() (which SnapshotRegistry/RestoreRegistry ride)
+// round-trip the EntityManager and so preserve entity ids/versions -- the same
+// property Sandbox.cpp's GamePlugin_LoadState relies on to re-resolve SceneRoot
+// by saved id after a restore. If this test fails, that assumption is false and
+// clearing the undo stack on Play was NOT safe to drop.
+TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[grimoire]")
+{
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Astra::Registry& reg = runtime.Registry();
+    Arcane::RegisterSceneComponents(reg);
+
+    const Astra::Entity e = reg.CreateEntity();
+    Arcane::LocalTransform lt;
+    lt.position = glm::vec2(1.0f, 0.0f);
+    reg.AddComponent<Arcane::LocalTransform>(e, lt);
+
+    const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::LocalTransform");
+    REQUIRE(desc != nullptr);
+
+    // Resolver-based CommandStack (survives a registry-object swap; see
+    // CommandStackTest.cpp's swap regression case), bound to THIS Runtime.
+    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); });
+
+    // Edit-mode edit, committed BEFORE Play: before={1,0}, after={5,0}.
+    stack.Begin("edit");
+    stack.SnapshotComponent(e, desc);
+    reg.GetComponent<Arcane::LocalTransform>(e)->position = glm::vec2(5.0f, 0.0f);
+    stack.Commit();
+    REQUIRE(stack.CanUndo());
+
+    // Play: snapshot captures the authored {5,0} state.
+    auto snap = runtime.SnapshotRegistry();
+    REQUIRE(snap.IsOk());
+
+    // Play-time mutation: never captured by the stack (the Inspector/gizmo
+    // gate capture to Edit mode) -- Stop must discard this, not undo it.
+    runtime.Registry().GetComponent<Arcane::LocalTransform>(e)->position = glm::vec2(99.0f, 99.0f);
+
+    // Stop: restore swaps in a NEW registry object built from the snapshot.
+    REQUIRE(runtime.RestoreRegistry(*snap.GetValue()));
+
+    // The restore preserved the entity id and its authored {5,0} value.
+    Arcane::LocalTransform* lt2 = runtime.Registry().GetComponent<Arcane::LocalTransform>(e);
+    REQUIRE(lt2 != nullptr);
+    CHECK(lt2->position.x == 5.0f);
+    CHECK(lt2->position.y == 0.0f);
+
+    // The core claim: the pre-Play undo entry still resolves and reverts
+    // correctly across the registry swap.
+    REQUIRE(stack.CanUndo());
+    stack.Undo();
+    Arcane::LocalTransform* afterUndo = runtime.Registry().GetComponent<Arcane::LocalTransform>(e);
+    REQUIRE(afterUndo != nullptr);
+    CHECK(afterUndo->position.x == 1.0f);
+    CHECK(afterUndo->position.y == 0.0f);
+
+    // Redo survives too.
+    REQUIRE(stack.CanRedo());
+    stack.Redo();
+    Arcane::LocalTransform* afterRedo = runtime.Registry().GetComponent<Arcane::LocalTransform>(e);
+    REQUIRE(afterRedo != nullptr);
+    CHECK(afterRedo->position.x == 5.0f);
+    CHECK(afterRedo->position.y == 0.0f);
 }
 
 TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[grimoire]")
