@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ViewportInput.hpp"
+#include <Arcane/Edit/CommandStack.hpp>
 #include <cstdint>
 
 namespace Arcane { class RunLoop; class Runtime; struct PluginVTable; }
@@ -17,14 +18,19 @@ namespace Grimoire
     void BeginDockSpace();
 
     // Play/Stop (play-in-editor: snapshot on Play, restore on Stop) + Pause/Step
-    // buttons + a time-scale slider, driving the RunLoop. `plugin` is the hosted
-    // plugin's vtable (may be null): Play/Stop route through its SaveState/LoadState
-    // so the plugin re-establishes its native resources on restore. Does NOT take a
-    // RunLoop& parameter: play.Stop() -> Runtime::RestoreRegistry destroys and
-    // replaces the RunLoop, so the loop is fetched fresh from `runtime` AFTER
-    // the Play/Stop handling to avoid a dangling reference.
+    // buttons + a time-scale slider, driving the RunLoop, plus Undo/Redo buttons
+    // over `undo` (enabled from CanUndo/CanRedo, tooltip shows the label).
+    // `plugin` is the hosted plugin's vtable (may be null): Play/Stop route
+    // through its SaveState/LoadState so the plugin re-establishes its native
+    // resources on restore. Entering Play clears `undo`'s history (play-time
+    // mutation is discarded on Stop, so it must not be undoable from Edit
+    // afterwards). Does NOT take a RunLoop& parameter: play.Stop() ->
+    // Runtime::RestoreRegistry destroys and replaces the RunLoop, so the loop
+    // is fetched fresh from `runtime` AFTER the Play/Stop handling to avoid a
+    // dangling reference.
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin);
+                            const Arcane::PluginVTable* plugin,
+                            Arcane::CommandStack& undo);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);
@@ -51,6 +57,10 @@ namespace Grimoire
     void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel);
 
     // Show the selected entity's components (via Registry::InspectEntity) and edit
-    // reflected fields in place; unsupported types render read-only.
-    void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel);
+    // reflected fields in place; unsupported types render read-only. Each field
+    // edit gesture is bracketed into `undo` (Begin+SnapshotComponent on first
+    // activation, Commit on release-after-edit, Cancel on a pure click) so every
+    // Inspector edit becomes a Ctrl+Z/Y-undoable step.
+    void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
+                            Arcane::CommandStack& undo);
 }

@@ -38,7 +38,8 @@ namespace Grimoire
     }
 
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin)
+                            const Arcane::PluginVTable* plugin,
+                            Arcane::CommandStack& undo)
     {
         ImGui::Begin("Sim");
         if (play.IsPlaying())
@@ -47,7 +48,10 @@ namespace Grimoire
         }
         else
         {
-            if (ImGui::Button("Play")) play.Play(runtime, plugin);
+            // Entering Play clears the undo history: play-time mutation is
+            // discarded on Stop (PlaySession restores the pre-Play snapshot),
+            // so those edits must not linger as undoable Edit-mode steps.
+            if (ImGui::Button("Play")) { play.Play(runtime, plugin); undo.Clear(); }
         }
         // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
         // replaces m_impl->loop on Stop, so a reference taken before this point
@@ -61,6 +65,18 @@ namespace Grimoire
         float scale = static_cast<float>(loop.TimeScale());
         if (ImGui::SliderFloat("time-scale", &scale, 0.0f, 2.0f, "%.2f"))
             loop.SetTimeScale(scale);
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!undo.CanUndo());
+        if (ImGui::Button("Undo")) undo.Undo();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && undo.CanUndo()) ImGui::SetTooltip("Undo %s", undo.UndoLabel());
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!undo.CanRedo());
+        if (ImGui::Button("Redo")) undo.Redo();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && undo.CanRedo()) ImGui::SetTooltip("Redo %s", undo.RedoLabel());
+
         ImGui::End();
     }
 
@@ -129,9 +145,39 @@ namespace Grimoire
         // pure InspectorFields writers (kept ImGui-free so the write-back is unit-
         // testable). Unsupported/compound types (e.g. glm::mat3, enums) render
         // disabled text -- never crash, never silently misinterpret bytes.
+        //
+        // Each field's edit gesture is bracketed into the undo stack: the first
+        // frame a widget activates (ImGui::IsItemActivated(), BEFORE the edit
+        // applies) opens a transaction and snapshots the owning component's
+        // pre-edit bytes; the widget's release closes it -- Commit() if the value
+        // actually changed (IsItemDeactivatedAfterEdit), Cancel() on a pure click
+        // (IsItemDeactivated with no edit) so a no-op click never leaks an empty
+        // undo step.
         struct ImGuiFieldVisitor : Astra::IFieldVisitor
         {
+            Arcane::CommandStack*             stack = nullptr;
+            Astra::Entity                     entity{};
+            const Astra::ComponentDescriptor* descriptor = nullptr;
+            std::string                       typeName;
+
             bool IsWriting() const noexcept override { return true; }
+
+            void BeginGestureIfActivated(const std::string& field)
+            {
+                if (stack && ImGui::IsItemActivated())
+                {
+                    stack->Begin("Edit " + typeName + "." + field);
+                    stack->SnapshotComponent(entity, descriptor);
+                }
+            }
+
+            void EndGesture()
+            {
+                if (!stack) return;
+                if (ImGui::IsItemDeactivatedAfterEdit()) stack->Commit();
+                else if (ImGui::IsItemDeactivated())     stack->Cancel();
+            }
+
             void Visit(const Astra::FieldInfo& f, void* instance) override
             {
                 ImGui::PushID(static_cast<int>(f.nameHash));
@@ -141,33 +187,41 @@ namespace Grimoire
                     case Grimoire::FieldKind::Bool:
                     {
                         bool v = f.Get<bool>(instance);
-                        if (ImGui::Checkbox(label.c_str(), &v)) Grimoire::ApplyBoolEdit(f, instance, v);
+                        bool changed = ImGui::Checkbox(label.c_str(), &v);
+                        BeginGestureIfActivated(label);
+                        if (changed) Grimoire::ApplyBoolEdit(f, instance, v);
                         break;
                     }
                     case Grimoire::FieldKind::Int32:
                     {
                         int v = f.Get<int32_t>(instance);
-                        if (ImGui::DragInt(label.c_str(), &v)) Grimoire::ApplyIntEdit(f, instance, v);
+                        bool changed = ImGui::DragInt(label.c_str(), &v);
+                        BeginGestureIfActivated(label);
+                        if (changed) Grimoire::ApplyIntEdit(f, instance, v);
                         break;
                     }
                     case Grimoire::FieldKind::Float:
                     {
                         float v = f.Get<float>(instance);
-                        if (ImGui::DragFloat(label.c_str(), &v, 0.1f)) Grimoire::ApplyFloatEdit(f, instance, v);
+                        bool changed = ImGui::DragFloat(label.c_str(), &v, 0.1f);
+                        BeginGestureIfActivated(label);
+                        if (changed) Grimoire::ApplyFloatEdit(f, instance, v);
                         break;
                     }
                     case Grimoire::FieldKind::Vec2:
                     {
                         glm::vec2 v = f.Get<glm::vec2>(instance);
-                        if (ImGui::DragFloat2(label.c_str(), &v.x, 0.1f))
-                            if (glm::vec2* p = f.GetPtr<glm::vec2>(instance)) *p = v;
+                        bool changed = ImGui::DragFloat2(label.c_str(), &v.x, 0.1f);
+                        BeginGestureIfActivated(label);
+                        if (changed) if (glm::vec2* p = f.GetPtr<glm::vec2>(instance)) *p = v;
                         break;
                     }
                     case Grimoire::FieldKind::Vec3:
                     {
                         glm::vec3 v = f.Get<glm::vec3>(instance);
-                        if (ImGui::DragFloat3(label.c_str(), &v.x, 0.1f))
-                            if (glm::vec3* p = f.GetPtr<glm::vec3>(instance)) *p = v;
+                        bool changed = ImGui::DragFloat3(label.c_str(), &v.x, 0.1f);
+                        BeginGestureIfActivated(label);
+                        if (changed) if (glm::vec3* p = f.GetPtr<glm::vec3>(instance)) *p = v;
                         break;
                     }
                     case Grimoire::FieldKind::ReadOnly:
@@ -177,12 +231,14 @@ namespace Grimoire
                         ImGui::EndDisabled();
                         break;
                 }
+                EndGesture();
                 ImGui::PopID();
             }
         };
     }
 
-    void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel)
+    void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
+                            Arcane::CommandStack& undo)
     {
         ImGui::Begin("Inspector");
         if (!sel.HasSelection())
@@ -202,6 +258,10 @@ namespace Grimoire
             if (ImGui::CollapsingHeader(typeName.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             {
                 ImGuiFieldVisitor visitor;
+                visitor.stack      = &undo;
+                visitor.entity     = sel.selected;
+                visitor.descriptor = ci.descriptor;
+                visitor.typeName   = typeName;
                 ci.descriptor->visitFields(ci.data, visitor);
             }
         }

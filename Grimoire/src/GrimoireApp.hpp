@@ -17,6 +17,7 @@
 #include "ViewportInput.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
@@ -62,6 +63,19 @@ namespace Grimoire
         // The one selected-entity source of truth, shared by the Hierarchy panel
         // (and, later, the Inspector + viewport pick -- see SelectionContext.hpp).
         Grimoire::SelectionContext m_selection;
+
+        // Editor undo/redo history (Edit-mode; cleared on Play). Constructed in
+        // Init once the runtime's registry exists; optional so it can be built
+        // after m_runtime. Declared AFTER m_runtime/m_plugin so it destructs
+        // BEFORE them -- its resolver lambda captures `&*m_runtime` (a raw
+        // Runtime*, dereferenced fresh each call), so it must not outlive it.
+        std::optional<Arcane::CommandStack> m_undo;
+
+        // Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y edge-tracking for the undo/redo keybinds
+        // (InputSnapshot only reports held-state, not rising-edge; tracked here
+        // across frames -- see MainLoop's input block).
+        bool m_prevUndoKeyDown = false;
+        bool m_prevRedoKeyDown = false;
 
         // Scene-in-a-panel viewport: the same canvas->batcher->tonemap path Loom
         // drives the backbuffer with, rendered into a panel texture instead. Resized

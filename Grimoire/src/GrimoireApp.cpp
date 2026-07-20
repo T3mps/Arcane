@@ -129,6 +129,15 @@ namespace Grimoire
             return false;
         }
 
+        // Editor undo/redo history. The resolver re-reads Runtime::Registry()
+        // EVERY call rather than capturing a Registry& up front: Runtime swaps
+        // out the registry object on Play/Stop (PlaySession -> Runtime::
+        // SnapshotRegistry/RestoreRegistry) and on plugin hot-reload, so a
+        // cached reference would dangle. `rt` is a raw Runtime* into m_runtime
+        // (stable across that swap -- only the registry INSIDE it is replaced),
+        // safe because m_undo destructs before m_runtime (declaration order).
+        m_undo.emplace([rt = &*m_runtime]() -> Astra::Registry& { return rt->Registry(); });
+
         return true;
     }
 
@@ -201,6 +210,40 @@ namespace Grimoire
                 }
                 m_runtime->SetInputSnapshot(pluginSnap);
                 m_gpu->Input().Update(frameDt, snap);
+
+                // Undo/redo keybinds: Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo.
+                // Edge-triggered off the raw hardware snapshot (InputSnapshot has
+                // no built-in press-edge tracking -- InputActions.Pressed() layers
+                // that on named/JSON-configured actions, which would need a
+                // separate "undo"/"redo" chord binding; hand-rolled here instead
+                // to avoid a same-frame double-fire: an InputActions chord match
+                // is a pure AND of its keys, so a bare "ctrl+z" binding would also
+                // match while Shift is held, firing Undo alongside Redo).
+                // snap.wantCaptureKeyboard is already baked from
+                // m_gpu->Imgui().WantCaptureKeyboard() above, so this naturally
+                // suppresses the keybind while typing in an ImGui text field --
+                // the same suppression point InputActions::ResolveControl uses.
+                // Edit-mode only: Play routes all input to the plugin.
+                {
+                    constexpr uint32_t kScLCtrl  = 224;  // SDL_SCANCODE_LCTRL
+                    constexpr uint32_t kScRCtrl  = 228;  // SDL_SCANCODE_RCTRL
+                    constexpr uint32_t kScLShift = 225;  // SDL_SCANCODE_LSHIFT
+                    constexpr uint32_t kScRShift = 229;  // SDL_SCANCODE_RSHIFT
+                    constexpr uint32_t kScY      = 28;   // SDL_SCANCODE_Y
+                    constexpr uint32_t kScZ      = 29;   // SDL_SCANCODE_Z
+
+                    const bool ctrl  = snap.ScancodeDown(kScLCtrl) || snap.ScancodeDown(kScRCtrl);
+                    const bool shift = snap.ScancodeDown(kScLShift) || snap.ScancodeDown(kScRShift);
+                    const bool undoKeyDown = ctrl && !shift && snap.ScancodeDown(kScZ);
+                    const bool redoKeyDown = ctrl && ((shift && snap.ScancodeDown(kScZ)) ||
+                                                       (!shift && snap.ScancodeDown(kScY)));
+
+                    const bool active = !m_play.IsPlaying() && !snap.wantCaptureKeyboard;
+                    if (active && undoKeyDown && !m_prevUndoKeyDown) m_undo->Undo();
+                    if (active && redoKeyDown && !m_prevRedoKeyDown) m_undo->Redo();
+                    m_prevUndoKeyDown = undoKeyDown;
+                    m_prevRedoKeyDown = redoKeyDown;
+                }
             }
 
             // Sim advance through the RunLoop with the plugin callbacks interleaved.
@@ -244,7 +287,7 @@ namespace Grimoire
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Grimoire::BeginDockSpace();
-            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable());
+            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable(), *m_undo);
             Grimoire::DrawConsolePanel(m_console);
 
             Grimoire::ViewportPanelResult vp =
@@ -275,7 +318,7 @@ namespace Grimoire
             }
 
             Grimoire::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
-            Grimoire::DrawInspectorPanel(m_runtime->Registry(), m_selection);
+            Grimoire::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo);
 
             const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
             if (vtUI && vtUI->DrawUI) vtUI->DrawUI();
