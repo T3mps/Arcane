@@ -132,6 +132,7 @@ namespace
         void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
         void Circle(glm::vec2 c, float, glm::vec4) override
         { ++circleCalls; lastCircleCenter = c; }
+        void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
         void RemoveTexture(nvrhi::ITexture*) override {}
         Arcane::Batch2DStats Stats() const override { return {}; }

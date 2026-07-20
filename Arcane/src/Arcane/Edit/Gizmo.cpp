@@ -55,8 +55,8 @@ namespace Arcane
         constexpr float kShaftThicknessPx    = 2.0f;    // axis shaft line
         constexpr float kRingThicknessPx     = 2.0f;    // rotate ring polyline
         constexpr int   kRingSegments        = 48;      // ring polyline segment count
-        constexpr float kArrowHeadLenPx      = 14.0f;   // translate arrowhead stub length
-        constexpr float kArrowHeadThicknessPx = 7.0f;   // translate arrowhead stub thickness
+        constexpr float kArrowHeadLenPx      = 14.0f;   // translate arrowhead length (tip to base)
+        constexpr float kArrowHeadHalfWidthPx = 6.0f;   // translate arrowhead base half-width
         constexpr float kScaleBoxHalfPx      = 5.0f;    // scale end-handle box half-extent
         constexpr float kTau                 = 6.28318530717958647692f;
 
@@ -236,12 +236,16 @@ namespace Arcane
 
         if (mode == GizmoMode::Translate)
         {
-            // No filled-triangle primitive: approximate each arrowhead as a
-            // short, thicker Line segment straddling the axis tip.
-            batcher.Line(tipX - dirX * kArrowHeadLenPx * 0.5f, tipX + dirX * kArrowHeadLenPx * 0.5f,
-                        kArrowHeadThicknessPx, colorX);
-            batcher.Line(tipY - dirY * kArrowHeadLenPx * 0.5f, tipY + dirY * kArrowHeadLenPx * 0.5f,
-                        kArrowHeadThicknessPx, colorY);
+            // Solid triangle arrowhead: apex at the axis tip, base kArrowHeadLenPx
+            // back along the axis and kArrowHeadHalfWidthPx to each side.
+            const glm::vec2 perpX(-dirX.y, dirX.x);
+            const glm::vec2 perpY(-dirY.y, dirY.x);
+            const glm::vec2 baseX = tipX - dirX * kArrowHeadLenPx;
+            const glm::vec2 baseY = tipY - dirY * kArrowHeadLenPx;
+            batcher.Triangle(tipX, baseX + perpX * kArrowHeadHalfWidthPx,
+                             baseX - perpX * kArrowHeadHalfWidthPx, colorX);
+            batcher.Triangle(tipY, baseY + perpY * kArrowHeadHalfWidthPx,
+                             baseY - perpY * kArrowHeadHalfWidthPx, colorY);
         }
         else   // Scale
         {

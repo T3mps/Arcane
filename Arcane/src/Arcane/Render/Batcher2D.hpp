@@ -113,6 +113,13 @@ namespace Arcane
                           glm::vec4 color) = 0;
         virtual void Circle(glm::vec2 center, float radius, glm::vec4 color) = 0;
 
+        // Filled solid-color triangle (untextured). Emitted through the shared
+        // quad path with the 4th vertex collapsed onto the 3rd, so the second
+        // sub-triangle is degenerate (the rasterizer is cull-none, so winding is
+        // irrelevant). For gizmo arrowheads and any solid 2D triangle.
+        virtual void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c,
+                              glm::vec4 color) = 0;
+
         virtual void End() = 0;
 
         // Drops the cached texture->binding-set entry for `texture` (no-op

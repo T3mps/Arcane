@@ -205,6 +205,21 @@ namespace Arcane
                          glm::vec2(-1.0f), glm::vec2(1.0f), color);
             }
 
+            void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c,
+                          glm::vec4 color) override
+            {
+                // Solid tri via the shared record path: a quad with v3 == v2, so
+                // the second sub-triangle (v0,v2,v3) is degenerate and draws
+                // nothing. White texture + constant uv on the sprite pipeline --
+                // the same solid-fill path Line/Rect use.
+                const glm::vec2 uv(0.5f);
+                PushQuadVertices(BatchKind::Sprite, m_whiteTexture.Get(),
+                                 { a, uv, color },
+                                 { b, uv, color },
+                                 { c, uv, color },
+                                 { c, uv, color });
+            }
+
             void End() override
             {
                 m_stats = {};

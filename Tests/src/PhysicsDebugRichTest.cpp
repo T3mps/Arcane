@@ -55,6 +55,7 @@ namespace
         {
             circles.emplace_back(c, r);
         }
+        void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
         void RemoveTexture(nvrhi::ITexture*) override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
