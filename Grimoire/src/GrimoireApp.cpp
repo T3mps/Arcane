@@ -259,6 +259,13 @@ namespace Grimoire
                     pluginSnap.mouseButtons = 0;
                     pluginSnap.wheelY       = 0.0f;
                 }
+                // Edit mode: the editor owns the left mouse button in the viewport
+                // (click-pick + gizmo), so the hosted plugin must not also see it --
+                // otherwise its LMB interactions (e.g. Sandbox spawn/drag/throw) fire
+                // while editing. RMB + wheel stay live so plugin camera pan/zoom still
+                // navigates the scene. (LMB=bit0; InputSnapshot.hpp.)
+                if (!m_play.IsPlaying())
+                    pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x1u);
                 m_runtime->SetInputSnapshot(pluginSnap);
                 m_gpu->Input().Update(frameDt, snap);
 
@@ -524,7 +531,9 @@ namespace Grimoire
             Grimoire::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo, !m_play.IsPlaying());
 
             const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
-            if (vtUI && vtUI->DrawUI) vtUI->DrawUI();
+            // The plugin's gameplay HUD is Play-mode only: in Edit the editor panels +
+            // toolbar own the UI, and the plugin's HUD buttons would drive a paused sim.
+            if (m_play.IsPlaying() && vtUI && vtUI->DrawUI) vtUI->DrawUI();
 
             nvrhi::ITexture* backbuffer = m_gpu->Swap().BeginFrame();
             if (!backbuffer) { ImGui::EndFrame(); continue; }
