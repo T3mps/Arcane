@@ -32,6 +32,8 @@ call :compile tonemap vs_main vs_6_5 tonemap_vs || exit /b 1
 call :compile tonemap ps_main ps_6_5 tonemap_ps || exit /b 1
 call :compile entity_id vs_main vs_6_5 entity_id_vs || exit /b 1
 call :compile entity_id ps_main ps_6_5 entity_id_ps || exit /b 1
+call :compile selection_outline vs_main vs_6_5 selection_outline_vs || exit /b 1
+call :compile selection_outline ps_main ps_6_5 selection_outline_ps || exit /b 1
 echo Shaders compiled to %OUT%
 exit /b 0
 
