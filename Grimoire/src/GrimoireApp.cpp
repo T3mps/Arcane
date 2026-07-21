@@ -13,6 +13,7 @@
 // in the GrimoireApp member declaration order -- see GrimoireApp.hpp.
 
 #include "GrimoireApp.hpp"
+#include "EditorFonts.hpp"
 #include "EditorPanels.hpp"
 #include "ViewportImGuiInput.hpp"
 
@@ -99,6 +100,12 @@ namespace Grimoire
         // Console panel's ring buffer.
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         InstallConsoleSink();
+
+        // Editor fonts: Roboto base + merged lucide icons, on the editor context
+        // (current here -- the only ImGui context created so far, see GpuContext::
+        // Create's ImGuiLayer::Create above), before the first frame and before the
+        // game ImGui context is created below. Zero engine change.
+        Grimoire::InstallEditorFonts();
 
         // The TypeContext is the process-wide type-identity singleton shared across
         // Grimoire.exe, Arcane.dll, and every loaded plugin. It is intentionally
