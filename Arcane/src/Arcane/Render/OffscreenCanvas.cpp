@@ -81,6 +81,11 @@ namespace Arcane
                 return (uint64_t)(uintptr_t)m_output.Get();
             }
 
+            nvrhi::IFramebuffer* OutputFramebuffer() const override
+            {
+                return m_outputFb.Get();
+            }
+
             void Resize(uint32_t width, uint32_t height) override
             {
                 if (width == 0 || height == 0 ||

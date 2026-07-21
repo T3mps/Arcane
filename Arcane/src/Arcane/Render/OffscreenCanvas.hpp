@@ -55,6 +55,12 @@ namespace Arcane
         // for the lifetime of the current targets; changes after Resize().
         virtual uint64_t TextureId() const = 0;
 
+        // The output texture's framebuffer (post-tonemap, display-referred), for
+        // rendering an extra overlay pass (e.g. a second ImGui context) OVER the
+        // tonemapped scene. Valid until Resize(). Do not use for the scene pass --
+        // that is Draw()'s job.
+        virtual nvrhi::IFramebuffer* OutputFramebuffer() const = 0;
+
         // Tears down and rebuilds the canvas + output targets at the new size.
         // No-op on a zero dimension or an unchanged size.
         virtual void Resize(uint32_t width, uint32_t height) = 0;
