@@ -136,4 +136,14 @@ namespace Arcane
             }
         });
     }
+
+    uint32_t PickPassId(const std::vector<Astra::Entity>& ordered, Astra::Entity e)
+    {
+        if (e == Astra::Entity::Invalid())
+            return 0u;
+        for (std::size_t k = 0; k < ordered.size(); ++k)
+            if (ordered[k] == e)
+                return static_cast<uint32_t>(k + 1);
+        return 0u;
+    }
 }

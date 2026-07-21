@@ -84,6 +84,11 @@ namespace Arcane
     ARCANE_API void CollectPickables(Astra::Registry& registry, const PickView& view,
                                      std::vector<PickDrawable>& out);
 
+    // The pass id assigned to `e` under the k+1 convention CollectPickables emits
+    // (the k-th entity in `ordered` gets id k+1; 0 = background). Reverse of the
+    // read-back mapping in Pick(). 0 if `e` is absent or Astra::Entity::Invalid().
+    ARCANE_API uint32_t PickPassId(const std::vector<Astra::Entity>& ordered, Astra::Entity e);
+
     // id 0 -> background (invalid entity). id k (k>=1) -> drawables[k-1].entity.
     // Out-of-range k -> invalid entity. Astra::Entity{} is the invalid sentinel
     // (IsValid() == false).

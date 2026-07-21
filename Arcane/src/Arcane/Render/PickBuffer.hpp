@@ -70,6 +70,11 @@ namespace Arcane
         // single pixel from it internally. (Pick() is added in Task 4.)
         virtual nvrhi::ITexture* IdTarget() const = 0;
 
+        // The pass id assigned to `e` in the most recent RenderIdPass/Pick (k+1
+        // order; 0 = background/absent). Lets a consumer (e.g. the selection
+        // outline) know an entity's id without a GPU readback.
+        virtual uint32_t PassIdOf(Astra::Entity e) const = 0;
+
         // Tears down and rebuilds the id target at the new size. No-op on a zero
         // dimension or an unchanged size. The 1x1 staging texture is size-
         // independent, so it is not rebuilt.

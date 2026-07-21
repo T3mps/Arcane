@@ -194,6 +194,23 @@ namespace Arcane
 
             nvrhi::ITexture* IdTarget() const override { return m_target; }
 
+            uint32_t PassIdOf(Astra::Entity e) const override
+            {
+                // m_drawables IS the retained id<->entity table (rebuilt each
+                // RenderIdPass/Pick, not cleared afterward -- Pick()'s
+                // PickEntityForId(m_drawables, id) reads the same table in the
+                // other direction). PickPassId's contract takes a plain
+                // vector<Astra::Entity>, so this mirrors its k+1 loop directly
+                // over m_drawables rather than copying entities into a temporary
+                // vector on every call.
+                if (e == Astra::Entity::Invalid())
+                    return 0u;
+                for (size_t k = 0; k < m_drawables.size(); ++k)
+                    if (m_drawables[k].entity == e)
+                        return static_cast<uint32_t>(k + 1);
+                return 0u;
+            }
+
             void Resize(uint32_t width, uint32_t height) override
             {
                 if (width == 0 || height == 0 ||
