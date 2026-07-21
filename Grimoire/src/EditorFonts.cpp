@@ -2,6 +2,8 @@
 
 #include "IconsLucide.h"
 
+#include <Arcane/Base/Log.hpp>
+
 #include <imgui.h>
 
 #include <filesystem>
@@ -34,7 +36,9 @@ namespace Grimoire
         const std::string lucide = (dir / "data" / "font" / "lucide" / "lucide.ttf").string();
 
         // Base font first -> becomes the default (ProggyClean is never added).
-        io.Fonts->AddFontFromFileTTF(roboto.c_str(), sizePx);
+        ImFont* robotoFont = io.Fonts->AddFontFromFileTTF(roboto.c_str(), sizePx);
+        if (!robotoFont)
+            ARC_WARN("Grimoire: failed to load font '{}'", roboto);
 
         // Merge the lucide icon glyphs into the same atlas.
         static const ImWchar range[] = { ICON_LC_MIN, ICON_LC_MAX, 0 };
@@ -42,6 +46,8 @@ namespace Grimoire
         cfg.MergeMode        = true;
         cfg.GlyphMinAdvanceX = sizePx;   // monospace icon cell
         cfg.GlyphOffset.y    = 3.0f;     // baseline nudge; tune at desk (Task 4)
-        io.Fonts->AddFontFromFileTTF(lucide.c_str(), sizePx, &cfg, range);
+        ImFont* lucideFont = io.Fonts->AddFontFromFileTTF(lucide.c_str(), sizePx, &cfg, range);
+        if (!lucideFont)
+            ARC_WARN("Grimoire: failed to load font '{}'", lucide);
     }
 }
