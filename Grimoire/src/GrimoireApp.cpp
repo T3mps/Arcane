@@ -132,14 +132,33 @@ namespace Grimoire
         // a headless host -> the plugin skips its GPU-resource creation.
         m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
 
-        // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
-        // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
-        // at Init time, so the plugin's Init adopts the host's GImGui across the DLL boundary.
-        // The ImGuiLayer (in m_gpu) has already created + set the current context by here.
+        // The hosted plugin draws its debug UI into its OWN "game" ImGui context,
+        // composited INTO the viewport texture (see MainLoop), instead of the
+        // editor context where a HUD would float over the editor chrome. Created
+        // here, AFTER the editor ImGui layer is up (GpuContext::Create) and BEFORE
+        // the plugin is loaded/adopts it below. Uses the SAME GPU device +
+        // ShaderLibrary the editor ImGui layer was built from. (Create leaves the
+        // current ImGui context null; harmless -- the editor's ImGuiLayer re-pins
+        // its own context on every BeginFrame/WantCapture*.)
+        m_gameImgui = Arcane::OffscreenImGuiLayer::Create(m_gpu->Device(), m_gpu->Shaders());
+        if (!m_gameImgui)
         {
+            ARC_ERROR("Grimoire: OffscreenImGuiLayer creation failed");
+            return false;
+        }
+
+        // ABI v2: install the ImGui context + allocators on the Runtime BEFORE the
+        // plugin loads. PluginHost::RefreshContext copies these into the EngineContext
+        // at Init time, so the plugin's Init adopts THIS GImGui across the DLL boundary.
+        // The context is the GAME context (not the editor's), so the plugin's DrawUI
+        // renders into the viewport pass in MainLoop.
+        {
+            // Same process-global ImGui allocators the editor context uses (ImGui's
+            // allocator functions are global, not per-context); only the context
+            // pointer differs from the editor redirect.
             ImGuiMemAllocFunc allocFn = nullptr; ImGuiMemFreeFunc freeFn = nullptr; void* ud = nullptr;
             ImGui::GetAllocatorFunctions(&allocFn, &freeFn, &ud);
-            m_runtime->SetImGui(ImGui::GetCurrentContext(),
+            m_runtime->SetImGui(m_gameImgui->Context(),
                                 reinterpret_cast<void*>(allocFn),
                                 reinterpret_cast<void*>(freeFn),
                                 ud);
@@ -259,6 +278,19 @@ namespace Grimoire
                     pluginSnap.mouseButtons = 0;
                     pluginSnap.wheelY       = 0.0f;
                 }
+
+                // Snapshot the viewport-local cursor + RAW buttons/wheel + dt for the
+                // game ImGui pass, which composites into the viewport AFTER this input
+                // block's scope closes (see MainLoop). Only the few values the game
+                // context needs are hoisted -- the input block stays narrow. Off the
+                // viewport, hasInput is false so the game context reads the cursor as
+                // off-target (BeginFrame injects -FLT_MAX).
+                m_lastViewportMouse = glm::vec2(lx, ly);
+                m_lastInViewport    = inViewport;
+                m_lastMouseButtons  = snap.mouseButtons;
+                m_lastWheel         = snap.wheelY;
+                m_lastFrameDt       = frameDt;
+
                 // Edit mode: the editor owns the left mouse button in the viewport
                 // (click-pick + gizmo), so the hosted plugin must not also see it --
                 // otherwise its LMB interactions (e.g. Sandbox spawn/drag/throw) fire
@@ -489,6 +521,43 @@ namespace Grimoire
                 },
                 glm::vec4(0.02f, 0.02f, 0.04f, 1.0f));
 
+            // Game debug UI -> the plugin's OWN ImGui context, composited into the
+            // viewport's output texture (Play only). Runs the plugin's DrawUI in the
+            // GAME context and blends it OVER the tonemapped scene -- so the HUD lives
+            // inside the Viewport panel, never over the editor chrome. Runs AFTER
+            // m_viewport->Draw (scene -> tonemap -> output texture) and BEFORE the
+            // editor's BeginFrame below. The game context is fully bracketed by the
+            // OffscreenImGuiLayer calls (each SetCurrentContext internally), so the
+            // editor context is untouched. Edit mode: not run (clean viewport); the
+            // input is reset so a stray draw sees no cursor/buttons.
+            if (!m_play.IsPlaying())
+                m_gameImgui->SetInput({});
+            const Arcane::PluginVTable* vtGame = m_plugin->Vtable();
+            if (m_play.IsPlaying() && vtGame && vtGame->DrawUI)
+            {
+                Arcane::OffscreenImGuiLayer::Input gi;
+                gi.displaySize  = glm::vec2((float)m_viewport->Width(), (float)m_viewport->Height());
+                gi.deltaTime    = (float)m_lastFrameDt;
+                gi.hasInput     = m_lastInViewport;
+                gi.mousePos     = m_lastViewportMouse;
+                gi.mouseDown[0] = (m_lastMouseButtons & 0x1u) != 0;   // LMB
+                gi.mouseDown[1] = (m_lastMouseButtons & 0x2u) != 0;   // RMB
+                gi.mouseDown[2] = (m_lastMouseButtons & 0x4u) != 0;   // MMB
+                gi.wheel        = m_lastWheel;
+                m_gameImgui->SetInput(gi);
+                m_gameImgui->BeginFrame();
+                vtGame->DrawUI();
+                // Composite the game HUD into the viewport output texture on a one-off
+                // command list (mirrors the backbuffer pass below). The OffscreenCanvas
+                // owns a SEPARATE command list for its scene pass, so m_gpu->Cmd() is
+                // idle here; NVRHI auto-transitions the output texture (RenderTarget for
+                // this pass, back to ShaderResource for the editor's ImGui::Image).
+                m_gpu->Cmd()->open();
+                m_gameImgui->Render(m_gpu->Cmd(), m_viewport->OutputFramebuffer());
+                m_gpu->Cmd()->close();
+                m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
+            }
+
             // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
@@ -530,10 +599,8 @@ namespace Grimoire
             Grimoire::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
             Grimoire::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo, !m_play.IsPlaying());
 
-            const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
-            // The plugin's gameplay HUD is Play-mode only: in Edit the editor panels +
-            // toolbar own the UI, and the plugin's HUD buttons would drive a paused sim.
-            if (m_play.IsPlaying() && vtUI && vtUI->DrawUI) vtUI->DrawUI();
+            // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
+            // composited into the viewport texture above -- not the editor context.)
 
             nvrhi::ITexture* backbuffer = m_gpu->Swap().BeginFrame();
             if (!backbuffer) { ImGui::EndFrame(); continue; }

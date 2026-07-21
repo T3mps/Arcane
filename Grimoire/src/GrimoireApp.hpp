@@ -19,6 +19,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
@@ -116,6 +117,27 @@ namespace Grimoire
         std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
         Grimoire::ViewportRect                   m_viewportRect{};
         bool                                      m_viewportActive = false;
+
+        // The hosted plugin's OWN ImGui context, rendered INTO the viewport's
+        // output texture (Unity/Unreal "game view") so the plugin's debug HUD
+        // lives inside the Viewport panel, never over the editor chrome. Created
+        // in Init after the editor ImGui layer is up; the plugin is pointed at it
+        // via Runtime::SetImGui (in place of the editor context). Declared after
+        // m_gpu so it destructs BEFORE the device (it holds NVRHI handles built
+        // from m_gpu->Device()); its destructor restores the editor context, so
+        // ~GpuContext's ImGuiLayer teardown stays valid. See MainLoop.
+        std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
+
+        // Viewport-local input snapshot for the game ImGui pass, captured inside
+        // MainLoop's input block (whose locals are out of scope at the render
+        // site) and read where the game UI is composited into the viewport. Only
+        // the few values the game context needs are hoisted -- the input block's
+        // scope is deliberately NOT widened.
+        glm::vec2 m_lastViewportMouse{0.0f, 0.0f};   // viewport-local cursor px
+        std::uint8_t m_lastMouseButtons = 0;         // raw snap.mouseButtons (LMB=bit0)
+        float     m_lastWheel   = 0.0f;              // raw snap.wheelY
+        bool      m_lastInViewport = false;          // cursor over the viewport this frame
+        double    m_lastFrameDt = 0.0;               // per-frame dt (seconds)
 
         // GPU hit-proxy picker, a sibling of m_viewport: created and resized at the
         // same size, it renders each pickable entity's silhouette into an R32_UINT
