@@ -44,18 +44,26 @@ namespace Grimoire
                             Arcane::GizmoMode& mode, Arcane::GizmoSpace& space)
     {
         // Icon button with a hover tooltip (icons need discoverable labels).
-        auto iconBtn = [](const char* icon, const char* tip) -> bool
+        // `id` is an ImGui ID-only suffix (e.g. "##sim_playstop") appended to the
+        // glyph so that two buttons showing the SAME icon (e.g. Play and Resume
+        // both render ICON_LC_PLAY) never hash to the same widget ID -- without
+        // a unique id, ImGui::Button(icon) collides on the label hash and the
+        // button drawn first steals the shared ActiveId out from under the one
+        // drawn second, making the second button unclickable.
+        auto iconBtn = [](const char* icon, const char* id, const char* tip) -> bool
         {
-            const bool clicked = ImGui::Button(icon);
+            const std::string label = std::string(icon) + id;
+            const bool clicked = ImGui::Button(label.c_str());
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
             return clicked;
         };
         // Toggle-style icon button: tinted background when active (gizmo T/R/S).
-        auto iconToggle = [](const char* icon, bool active, const char* tip) -> bool
+        auto iconToggle = [](const char* icon, const char* id, bool active, const char* tip) -> bool
         {
             if (active) ImGui::PushStyleColor(ImGuiCol_Button,
                                               ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            const bool clicked = ImGui::Button(icon);
+            const std::string label = std::string(icon) + id;
+            const bool clicked = ImGui::Button(label.c_str());
             if (active) ImGui::PopStyleColor();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
             return clicked;
@@ -64,7 +72,8 @@ namespace Grimoire
         ImGui::Begin("Sim");
         if (play.IsPlaying())
         {
-            if (iconBtn(ICON_LC_SQUARE, "Stop")) play.Stop(runtime, plugin);
+            // Play and Stop are the same logical toolbar slot -- one stable id.
+            if (iconBtn(ICON_LC_SQUARE, "##sim_playstop", "Stop")) play.Stop(runtime, plugin);
         }
         else
         {
@@ -79,18 +88,21 @@ namespace Grimoire
             // Load(), which round-trips the EntityManager and so preserves
             // entity ids/versions -- a pre-Play undo entry still resolves (and
             // reverts correctly) against the post-Stop registry object.
-            if (iconBtn(ICON_LC_PLAY, "Play")) play.Play(runtime, plugin);
+            if (iconBtn(ICON_LC_PLAY, "##sim_playstop", "Play")) play.Play(runtime, plugin);
         }
         // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
         // replaces m_impl->loop on Stop, so a reference taken before this point
         // (e.g. at the call site) would dangle for the rest of this frame.
         Arcane::RunLoop& loop = runtime.Loop();
         ImGui::SameLine();
-        if (iconBtn(loop.IsPaused() ? ICON_LC_PLAY : ICON_LC_PAUSE,
+        // Distinct id from Play/Stop above -- Resume also renders ICON_LC_PLAY
+        // when the loop is paused, so without "##sim_pause" this button would
+        // share Play's ImGui ID and silently swallow its own clicks.
+        if (iconBtn(loop.IsPaused() ? ICON_LC_PLAY : ICON_LC_PAUSE, "##sim_pause",
                     loop.IsPaused() ? "Resume" : "Pause"))
             loop.SetPaused(!loop.IsPaused());
         ImGui::SameLine();
-        if (iconBtn(ICON_LC_STEP_FORWARD, "Step")) loop.RequestSingleStep();
+        if (iconBtn(ICON_LC_STEP_FORWARD, "##sim_step", "Step")) loop.RequestSingleStep();
         ImGui::SameLine();
         float scale = static_cast<float>(loop.TimeScale());
         if (ImGui::SliderFloat("time-scale", &scale, 0.0f, 2.0f, "%.2f"))
@@ -98,28 +110,38 @@ namespace Grimoire
 
         ImGui::SameLine();
         ImGui::BeginDisabled(!undo.CanUndo());
-        if (iconBtn(ICON_LC_UNDO, undo.CanUndo() ? undo.UndoLabel() : "Undo")) undo.Undo();
+        {
+            const std::string undoTip = undo.CanUndo()
+                ? (std::string("Undo ") + undo.UndoLabel())
+                : std::string("Undo");
+            if (iconBtn(ICON_LC_UNDO, "##sim_undo", undoTip.c_str())) undo.Undo();
+        }
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::BeginDisabled(!undo.CanRedo());
-        if (iconBtn(ICON_LC_REDO, undo.CanRedo() ? undo.RedoLabel() : "Redo")) undo.Redo();
+        {
+            const std::string redoTip = undo.CanRedo()
+                ? (std::string("Redo ") + undo.RedoLabel())
+                : std::string("Redo");
+            if (iconBtn(ICON_LC_REDO, "##sim_redo", redoTip.c_str())) undo.Redo();
+        }
         ImGui::EndDisabled();
 
         // Transform-gizmo mode (Translate/Rotate/Scale) + space (Global/Local).
         // Mirrors the W/E/R keybinds in GrimoireApp's MainLoop input block.
         ImGui::SameLine(); ImGui::TextUnformatted("|"); ImGui::SameLine();
-        if (iconToggle(ICON_LC_MOVE, mode == Arcane::GizmoMode::Translate, "Translate (W)"))
+        if (iconToggle(ICON_LC_MOVE, "##giz_t", mode == Arcane::GizmoMode::Translate, "Translate (W)"))
             mode = Arcane::GizmoMode::Translate;
         ImGui::SameLine();
-        if (iconToggle(ICON_LC_ROTATE_3D, mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
+        if (iconToggle(ICON_LC_ROTATE_3D, "##giz_r", mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
             mode = Arcane::GizmoMode::Rotate;
         ImGui::SameLine();
-        if (iconToggle(ICON_LC_SCALE_3D, mode == Arcane::GizmoMode::Scale, "Scale (R)"))
+        if (iconToggle(ICON_LC_SCALE_3D, "##giz_s", mode == Arcane::GizmoMode::Scale, "Scale (R)"))
             mode = Arcane::GizmoMode::Scale;
         ImGui::SameLine();
         {
             bool local = (space == Arcane::GizmoSpace::Local);
-            if (iconBtn(local ? ICON_LC_BOX : ICON_LC_GLOBE,
+            if (iconBtn(local ? ICON_LC_BOX : ICON_LC_GLOBE, "##giz_space",
                         local ? "Local space" : "World space"))
                 space = local ? Arcane::GizmoSpace::World : Arcane::GizmoSpace::Local;
         }
