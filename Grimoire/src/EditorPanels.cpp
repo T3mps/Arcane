@@ -1,6 +1,7 @@
 #include "EditorPanels.hpp"
 #include "ConsoleBuffer.hpp"
 #include "EntityList.hpp"
+#include "IconsLucide.h"
 #include "InspectorFields.hpp"
 #include "PlayMode.hpp"
 #include "SelectionContext.hpp"
@@ -42,10 +43,28 @@ namespace Grimoire
                             Arcane::CommandStack& undo,
                             Arcane::GizmoMode& mode, Arcane::GizmoSpace& space)
     {
+        // Icon button with a hover tooltip (icons need discoverable labels).
+        auto iconBtn = [](const char* icon, const char* tip) -> bool
+        {
+            const bool clicked = ImGui::Button(icon);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            return clicked;
+        };
+        // Toggle-style icon button: tinted background when active (gizmo T/R/S).
+        auto iconToggle = [](const char* icon, bool active, const char* tip) -> bool
+        {
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button,
+                                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            const bool clicked = ImGui::Button(icon);
+            if (active) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            return clicked;
+        };
+
         ImGui::Begin("Sim");
         if (play.IsPlaying())
         {
-            if (ImGui::Button("Stop")) play.Stop(runtime, plugin);
+            if (iconBtn(ICON_LC_SQUARE, "Stop")) play.Stop(runtime, plugin);
         }
         else
         {
@@ -60,16 +79,18 @@ namespace Grimoire
             // Load(), which round-trips the EntityManager and so preserves
             // entity ids/versions -- a pre-Play undo entry still resolves (and
             // reverts correctly) against the post-Stop registry object.
-            if (ImGui::Button("Play")) play.Play(runtime, plugin);
+            if (iconBtn(ICON_LC_PLAY, "Play")) play.Play(runtime, plugin);
         }
         // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
         // replaces m_impl->loop on Stop, so a reference taken before this point
         // (e.g. at the call site) would dangle for the rest of this frame.
         Arcane::RunLoop& loop = runtime.Loop();
         ImGui::SameLine();
-        if (ImGui::Button(loop.IsPaused() ? "Resume" : "Pause")) loop.SetPaused(!loop.IsPaused());
+        if (iconBtn(loop.IsPaused() ? ICON_LC_PLAY : ICON_LC_PAUSE,
+                    loop.IsPaused() ? "Resume" : "Pause"))
+            loop.SetPaused(!loop.IsPaused());
         ImGui::SameLine();
-        if (ImGui::Button("Step")) loop.RequestSingleStep();
+        if (iconBtn(ICON_LC_STEP_FORWARD, "Step")) loop.RequestSingleStep();
         ImGui::SameLine();
         float scale = static_cast<float>(loop.TimeScale());
         if (ImGui::SliderFloat("time-scale", &scale, 0.0f, 2.0f, "%.2f"))
@@ -77,31 +98,30 @@ namespace Grimoire
 
         ImGui::SameLine();
         ImGui::BeginDisabled(!undo.CanUndo());
-        if (ImGui::Button("Undo")) undo.Undo();
+        if (iconBtn(ICON_LC_UNDO, undo.CanUndo() ? undo.UndoLabel() : "Undo")) undo.Undo();
         ImGui::EndDisabled();
-        if (ImGui::IsItemHovered() && undo.CanUndo()) ImGui::SetTooltip("Undo %s", undo.UndoLabel());
         ImGui::SameLine();
         ImGui::BeginDisabled(!undo.CanRedo());
-        if (ImGui::Button("Redo")) undo.Redo();
+        if (iconBtn(ICON_LC_REDO, undo.CanRedo() ? undo.RedoLabel() : "Redo")) undo.Redo();
         ImGui::EndDisabled();
-        if (ImGui::IsItemHovered() && undo.CanRedo()) ImGui::SetTooltip("Redo %s", undo.RedoLabel());
 
         // Transform-gizmo mode (Translate/Rotate/Scale) + space (Global/Local).
         // Mirrors the W/E/R keybinds in GrimoireApp's MainLoop input block.
         ImGui::SameLine(); ImGui::TextUnformatted("|"); ImGui::SameLine();
-        if (ImGui::RadioButton("T", mode == Arcane::GizmoMode::Translate)) mode = Arcane::GizmoMode::Translate;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Translate (W)");
+        if (iconToggle(ICON_LC_MOVE, mode == Arcane::GizmoMode::Translate, "Translate (W)"))
+            mode = Arcane::GizmoMode::Translate;
         ImGui::SameLine();
-        if (ImGui::RadioButton("R", mode == Arcane::GizmoMode::Rotate))    mode = Arcane::GizmoMode::Rotate;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rotate (E)");
+        if (iconToggle(ICON_LC_ROTATE_3D, mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
+            mode = Arcane::GizmoMode::Rotate;
         ImGui::SameLine();
-        if (ImGui::RadioButton("S", mode == Arcane::GizmoMode::Scale))     mode = Arcane::GizmoMode::Scale;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale (R)");
+        if (iconToggle(ICON_LC_SCALE_3D, mode == Arcane::GizmoMode::Scale, "Scale (R)"))
+            mode = Arcane::GizmoMode::Scale;
         ImGui::SameLine();
         {
             bool local = (space == Arcane::GizmoSpace::Local);
-            if (ImGui::Checkbox("Local", &local))
-                space = local ? Arcane::GizmoSpace::Local : Arcane::GizmoSpace::World;
+            if (iconBtn(local ? ICON_LC_BOX : ICON_LC_GLOBE,
+                        local ? "Local space" : "World space"))
+                space = local ? Arcane::GizmoSpace::World : Arcane::GizmoSpace::Local;
         }
 
         ImGui::End();
