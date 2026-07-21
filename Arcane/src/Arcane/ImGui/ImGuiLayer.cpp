@@ -102,8 +102,15 @@ namespace Arcane
         private:
             // The native event tap: the platform backend consumes SDL events
             // for input. `event` is a const SDL_Event* (see Window.hpp).
-            static void Tap(const void* event, void* /*user*/)
+            // Pin the editor context first: it alone owns the SDL3 platform
+            // backend. A second (offscreen) context has no SDL3 backend, and a
+            // plugin's Init (which adopts its context) or the game ImGui pass can
+            // leave THAT context current when an OS event is pumped -- on which
+            // ImGui_ImplSDL3_ProcessEvent would assert (bd == nullptr).
+            static void Tap(const void* event, void* user)
             {
+                auto* self = static_cast<ImGuiLayerImpl*>(user);
+                ImGui::SetCurrentContext(self->m_context);
                 ImGui_ImplSDL3_ProcessEvent((const SDL_Event*)event);
             }
 
