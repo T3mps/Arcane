@@ -14,6 +14,7 @@
 
 #include "GrimoireApp.hpp"
 #include "EditorPanels.hpp"
+#include "ViewportImGuiInput.hpp"
 
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
@@ -235,6 +236,10 @@ namespace Grimoire
             }
 
             // Input sample (before ImGui BeginFrame so capture flags are set).
+            // Set inside the block below once inViewport + the game context's
+            // last-frame WantCaptureMouse are known; stays in scope past the block
+            // so the click-pick further down this same frame can also honor it.
+            bool gameUiClaims = false;
             {
                 // Cleared here, set below if a gizmo drag starts or ends THIS frame --
                 // the click-pick block (later, after ImGui builds the Viewport panel)
@@ -279,6 +284,19 @@ namespace Grimoire
                     pluginSnap.wheelY       = 0.0f;
                 }
 
+                // The game's viewport debug UI (its own ImGui context, composited into
+                // the viewport texture -- see the DrawUI block below) sits over the
+                // scene, so a click on one of its widgets must claim the pointer ahead
+                // of both the plugin's gameplay input and the editor gizmo/click-pick.
+                // Uses the game context's LAST-frame WantCaptureMouse: this frame's
+                // game ImGui pass runs later (after this input block closes -- see
+                // MainLoop), so its capture state is not known yet this frame. That
+                // 1-frame lag matches the one already inherent to inViewport/
+                // m_viewportActive (both computed from the previous frame's panel
+                // hover/focus).
+                gameUiClaims = Grimoire::GameUiClaimsPointer(
+                    m_play.IsPlaying(), inViewport, m_gameImgui->WantCaptureMouse());
+
                 // Snapshot the viewport-local cursor + RAW buttons/wheel + dt for the
                 // game ImGui pass, which composites into the viewport AFTER this input
                 // block's scope closes (see MainLoop). Only the few values the game
@@ -295,8 +313,11 @@ namespace Grimoire
                 // (click-pick + gizmo), so the hosted plugin must not also see it --
                 // otherwise its LMB interactions (e.g. Sandbox spawn/drag/throw) fire
                 // while editing. RMB + wheel stay live so plugin camera pan/zoom still
-                // navigates the scene. (LMB=bit0; InputSnapshot.hpp.)
-                if (!m_play.IsPlaying())
+                // navigates the scene. (LMB=bit0; InputSnapshot.hpp.) ALSO clear it
+                // when the game's viewport debug UI claims the pointer this frame
+                // (Play + cursor over a game HUD widget) -- otherwise a HUD click
+                // would fall through and spawn/drag gameplay underneath it.
+                if (!m_play.IsPlaying() || gameUiClaims)
                     pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x1u);
                 m_runtime->SetInputSnapshot(pluginSnap);
                 m_gpu->Input().Update(frameDt, snap);
@@ -371,8 +392,12 @@ namespace Grimoire
                     // drag requires the cursor in-viewport. Aborting a live drag on
                     // viewport-exit would strand the LocalTransform at a mid-drag value
                     // with no undo record (CommandStack::Cancel does not revert), so
-                    // viewport-exit is deliberately NOT an abort.
-                    const bool gizmoActive = !m_play.IsPlaying() && m_selection.HasSelection() &&
+                    // viewport-exit is deliberately NOT an abort. !gameUiClaims is
+                    // defensive: gameUiClaims is Play-only and this is already
+                    // !IsPlaying()-gated, so it is a no-op today, but it keeps this
+                    // gate correct if the gizmo is ever allowed to run in Play.
+                    const bool gizmoActive = !m_play.IsPlaying() && !gameUiClaims &&
+                                             m_selection.HasSelection() &&
                                              (m_gizmoDrag.active || inViewport);
                     Astra::Registry*        regPtr = nullptr;
                     Arcane::LocalTransform* lt     = nullptr;
@@ -583,7 +608,10 @@ namespace Grimoire
             // Suppressed when this frame's click was already consumed by the gizmo
             // (pressed/released a handle) or a drag is still in progress -- otherwise
             // clicking/using a handle would also re-pick and disturb the selection.
-            if (vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active)
+            // Also suppressed when the game's viewport debug UI claimed the pointer
+            // this frame (gameUiClaims, computed in the input block above) so a click
+            // on a game HUD widget does not also re-pick the editor selection.
+            if (vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !gameUiClaims)
             {
                 const Arcane::PickView view{ m_runtime->CameraOffset(),
                                              m_runtime->CameraZoom() };
