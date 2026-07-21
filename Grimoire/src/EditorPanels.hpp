@@ -33,8 +33,7 @@ namespace Grimoire
     // dangling reference.
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                             const Arcane::PluginVTable* plugin,
-                            Arcane::CommandStack& undo,
-                            Arcane::GizmoMode& mode, Arcane::GizmoSpace& space);
+                            Arcane::CommandStack& undo);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);
@@ -54,7 +53,9 @@ namespace Grimoire
 
     // Draw the scene texture into a dockable Viewport window; report its rect,
     // hover/focus, and the content-region size the offscreen canvas should match.
-    ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH);
+    ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
+                                          bool& gizmoEnabled, Arcane::GizmoMode& mode,
+                                          Arcane::GizmoSpace& space);
 
     // List every live entity; clicking a row selects it. Labels rows by id
     // ("Entity <id> (v<version>)") since no Name component exists yet.

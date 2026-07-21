@@ -40,8 +40,7 @@ namespace Grimoire
 
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                             const Arcane::PluginVTable* plugin,
-                            Arcane::CommandStack& undo,
-                            Arcane::GizmoMode& mode, Arcane::GizmoSpace& space)
+                            Arcane::CommandStack& undo)
     {
         // Icon button with a hover tooltip (icons need discoverable labels).
         // `id` is an ImGui ID-only suffix (e.g. "##sim_playstop") appended to the
@@ -72,29 +71,12 @@ namespace Grimoire
         ImGui::Begin("Sim");
 
         // Full toolbar content width + left edge, captured before any widget, so the
-        // Play/Pause/Step transport can be centered later. Unity's layout: transform
-        // tools on the LEFT, the transport CENTERED.
+        // Play/Pause/Step transport can be centered. Undo/Redo sit on the LEFT; the
+        // transform-gizmo tools moved to the Viewport top-right overlay (UE5-style).
         const float fullContentW = ImGui::GetContentRegionAvail().x;
         const float lineStartX   = ImGui::GetCursorPosX();
 
-        // -- LEFT: transform-gizmo mode (Translate/Rotate/Scale) + space + undo/redo. --
-        // T/R/S mirror the W/E/R keybinds in GrimoireApp's MainLoop input block.
-        if (iconToggle(ICON_LC_MOVE, "##giz_t", mode == Arcane::GizmoMode::Translate, "Translate (W)"))
-            mode = Arcane::GizmoMode::Translate;
-        ImGui::SameLine();
-        if (iconToggle(ICON_LC_ROTATE_3D, "##giz_r", mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
-            mode = Arcane::GizmoMode::Rotate;
-        ImGui::SameLine();
-        if (iconToggle(ICON_LC_SCALE_3D, "##giz_s", mode == Arcane::GizmoMode::Scale, "Scale (R)"))
-            mode = Arcane::GizmoMode::Scale;
-        ImGui::SameLine();
-        {
-            bool local = (space == Arcane::GizmoSpace::Local);
-            if (iconBtn(local ? ICON_LC_BOX : ICON_LC_GLOBE, "##giz_space",
-                        local ? "Local space" : "World space"))
-                space = local ? Arcane::GizmoSpace::World : Arcane::GizmoSpace::Local;
-        }
-        ImGui::SameLine(); ImGui::TextUnformatted("|"); ImGui::SameLine();
+        // -- LEFT: undo / redo. --
         ImGui::BeginDisabled(!undo.CanUndo());
         {
             const std::string undoTip = undo.CanUndo()
@@ -171,8 +153,27 @@ namespace Grimoire
         ImGui::End();
     }
 
-    ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH)
+    ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
+                                          bool& gizmoEnabled, Arcane::GizmoMode& mode,
+                                          Arcane::GizmoSpace& space)
     {
+        // Stateless icon-button helpers (mirrors the toolbar's).
+        auto iconBtn = [](const char* icon, const char* id, const char* tip) -> bool
+        {
+            const bool clicked = ImGui::Button((std::string(icon) + id).c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            return clicked;
+        };
+        auto iconToggle = [](const char* icon, const char* id, bool active, const char* tip) -> bool
+        {
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button,
+                                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            const bool clicked = ImGui::Button((std::string(icon) + id).c_str());
+            if (active) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            return clicked;
+        };
+
         ViewportPanelResult r;
         ImGui::Begin("Viewport");
         const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -185,10 +186,44 @@ namespace Grimoire
         r.hovered = ImGui::IsWindowHovered();
         r.focused = ImGui::IsWindowFocused();
 
-        // Capture a left-click that lands inside the image, in viewport-local px
-        // (origin = image top-left). GrimoireApp unprojects it through the plugin
-        // camera and drives the entity pick; alt cycles the stacked candidates.
-        if (r.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        // UE5-style transform-tool overlay at the top-right of the viewport image:
+        // Select (no gizmo) / Move / Rotate / Scale + Local-World. Drawn over the
+        // image; a click on it changes the tool and must NOT also pick an entity.
+        bool overlayHovered = false;
+        {
+            const ImGuiStyle& st = ImGui::GetStyle();
+            auto bw = [&](const char* ic){ return ImGui::CalcTextSize(ic).x + st.FramePadding.x * 2.0f; };
+            const float totalW = bw(ICON_LC_MOUSE_POINTER_2) + bw(ICON_LC_MOVE) + bw(ICON_LC_ROTATE_3D)
+                               + bw(ICON_LC_SCALE_3D) + bw(ICON_LC_BOX) + st.ItemSpacing.x * 4.0f;
+            const float pad = 8.0f;
+            ImGui::SetCursorScreenPos(ImVec2(origin.x + (float)texW - totalW - pad, origin.y + pad));
+            ImGui::BeginGroup();
+            if (iconToggle(ICON_LC_MOUSE_POINTER_2, "##tool_sel", !gizmoEnabled, "Select (Q)"))
+                gizmoEnabled = false;
+            ImGui::SameLine();
+            if (iconToggle(ICON_LC_MOVE, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, "Move (W)"))
+            { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
+            ImGui::SameLine();
+            if (iconToggle(ICON_LC_ROTATE_3D, "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
+            { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
+            ImGui::SameLine();
+            if (iconToggle(ICON_LC_SCALE_3D, "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale, "Scale (R)"))
+            { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
+            ImGui::SameLine();
+            {
+                const bool local = (space == Arcane::GizmoSpace::Local);
+                if (iconBtn(local ? ICON_LC_BOX : ICON_LC_GLOBE, "##tool_space",
+                            local ? "Local space" : "World space"))
+                    space = local ? Arcane::GizmoSpace::World : Arcane::GizmoSpace::Local;
+            }
+            ImGui::EndGroup();
+            overlayHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        }
+
+        // Capture a left-click inside the image, in viewport-local px (origin = image
+        // top-left), UNLESS it landed on the tool overlay above. GrimoireApp unprojects
+        // it through the plugin camera and drives the entity pick.
+        if (r.hovered && !overlayHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
             const ImVec2 m = ImGui::GetMousePos();
             const float lx = m.x - origin.x, ly = m.y - origin.y;

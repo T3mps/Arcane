@@ -101,6 +101,7 @@ namespace Grimoire
         // so ApplyDrag recomputes from origin each frame (no accumulation drift).
         Arcane::GizmoMode  m_gizmoMode    = Arcane::GizmoMode::Translate;
         Arcane::GizmoSpace m_gizmoSpace   = Arcane::GizmoSpace::World;
+        bool               m_gizmoEnabled = false;  // false = Select tool (click-to-pick, no gizmo)
         Arcane::GizmoAxis  m_gizmoHovered = Arcane::GizmoAxis::None;
         struct GizmoDrag
         {
@@ -115,6 +116,7 @@ namespace Grimoire
         bool m_prevKeyW = false;
         bool m_prevKeyE = false;
         bool m_prevKeyR = false;
+        bool m_prevKeyQ = false;
         // Left-mouse edge-tracking, shared by the gizmo press/release detection.
         bool m_prevLmbDown = false;
         // Set for the remainder of THIS frame when a gizmo drag starts or ends,

@@ -60,6 +60,7 @@ namespace Grimoire
         constexpr uint32_t kScW = 26;   // SDL_SCANCODE_W
         constexpr uint32_t kScE = 8;    // SDL_SCANCODE_E
         constexpr uint32_t kScR = 21;   // SDL_SCANCODE_R
+        constexpr uint32_t kScQ = 20;   // SDL_SCANCODE_Q
 
         // Resolve the ComponentDescriptor for LocalTransform on `e`, for bracketing
         // a gizmo drag into the undo stack via CommandStack::SnapshotComponent.
@@ -365,13 +366,17 @@ namespace Grimoire
                     const bool wDown = snap.ScancodeDown(kScW);
                     const bool eDown = snap.ScancodeDown(kScE);
                     const bool rDown = snap.ScancodeDown(kScR);
+                    const bool qDown = snap.ScancodeDown(kScQ);
                     const bool keysActive = !m_play.IsPlaying() && !snap.wantCaptureKeyboard && m_viewportActive;
-                    if (keysActive && wDown && !m_prevKeyW) m_gizmoMode = Arcane::GizmoMode::Translate;
-                    if (keysActive && eDown && !m_prevKeyE) m_gizmoMode = Arcane::GizmoMode::Rotate;
-                    if (keysActive && rDown && !m_prevKeyR) m_gizmoMode = Arcane::GizmoMode::Scale;
+                    // Q = Select (no gizmo); W/E/R activate a transform gizmo (UE5 tools).
+                    if (keysActive && qDown && !m_prevKeyQ) m_gizmoEnabled = false;
+                    if (keysActive && wDown && !m_prevKeyW) { m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Translate; }
+                    if (keysActive && eDown && !m_prevKeyE) { m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Rotate; }
+                    if (keysActive && rDown && !m_prevKeyR) { m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Scale; }
                     m_prevKeyW = wDown;
                     m_prevKeyE = eDown;
                     m_prevKeyR = rDown;
+                    m_prevKeyQ = qDown;
                 }
 
                 // Transform-gizmo interaction: hit-test + drag against the selected
@@ -404,7 +409,7 @@ namespace Grimoire
                     // !IsPlaying()-gated, so it is a no-op today, but it keeps this
                     // gate correct if the gizmo is ever allowed to run in Play.
                     const bool gizmoActive = !m_play.IsPlaying() && !gameUiClaims &&
-                                             m_selection.HasSelection() &&
+                                             m_gizmoEnabled && m_selection.HasSelection() &&
                                              (m_gizmoDrag.active || inViewport);
                     Astra::Registry*        regPtr = nullptr;
                     Arcane::LocalTransform* lt     = nullptr;
@@ -538,7 +543,7 @@ namespace Grimoire
                     // only (mirrors the interaction gate; no viewport-hover requirement
                     // here -- the gizmo should stay visible while e.g. the mouse is over
                     // the Inspector, just not be interactable there).
-                    if (!m_play.IsPlaying() && m_selection.HasSelection())
+                    if (!m_play.IsPlaying() && m_gizmoEnabled && m_selection.HasSelection())
                     {
                         Arcane::LocalTransform* lt = m_runtime->Registry().GetComponent<Arcane::LocalTransform>(
                             m_selection.selected);
@@ -594,13 +599,13 @@ namespace Grimoire
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Grimoire::BeginDockSpace();
-            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable(), *m_undo,
-                                         m_gizmoMode, m_gizmoSpace);
+            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable(), *m_undo);
             Grimoire::DrawConsolePanel(m_console);
 
             Grimoire::ViewportPanelResult vp =
                 Grimoire::DrawViewportPanel(m_viewport->TextureId(),
-                                            m_viewport->Width(), m_viewport->Height());
+                                            m_viewport->Width(), m_viewport->Height(),
+                                            m_gizmoEnabled, m_gizmoMode, m_gizmoSpace);
             m_pendingViewportW = vp.desiredW;
             m_pendingViewportH = vp.desiredH;
             m_viewportRect     = vp.imageRect;
