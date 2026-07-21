@@ -1,0 +1,8 @@
+# Only the runtime icon font and its codepoint map are needed by Grimoire.
+# The rest of the lucide web-export bundle (lucide.svg ~18MB, lucide.symbol.svg,
+# .woff/.woff2/.eot, .css/.less/.scss/.styl, *.html, info.json) has no build or
+# runtime role -- keep ~24MB of it out of git.
+*
+!.gitignore
+!lucide.ttf
+!codepoints.json
