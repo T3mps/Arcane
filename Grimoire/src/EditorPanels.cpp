@@ -140,9 +140,15 @@ namespace Grimoire
         Arcane::RunLoop& loop = runtime.Loop();
         ImGui::SameLine();
         // Pause/Resume toggle (Unity-style): ALWAYS the pause glyph, tinted while paused.
-        if (iconToggle(ICON_LC_PAUSE, "##sim_pause", loop.IsPaused(),
+        // Disabled OUTSIDE Play: the loop's pause IS the Edit-mode sim freeze
+        // (PlaySession::Stop pauses it, Play unpauses it), so toggling it in Edit would
+        // run the sim with no active Play session and no way to Stop. Pause only within
+        // Play; tint only while actually playing so it never looks "armed" in Edit.
+        ImGui::BeginDisabled(!play.IsPlaying());
+        if (iconToggle(ICON_LC_PAUSE, "##sim_pause", play.IsPlaying() && loop.IsPaused(),
                        loop.IsPaused() ? "Resume" : "Pause"))
             loop.SetPaused(!loop.IsPaused());
+        ImGui::EndDisabled();
         ImGui::SameLine();
         // Step: momentary; disabled outside Play (single-step is meaningless in Edit),
         // matching Unity's greyed-out Step.
