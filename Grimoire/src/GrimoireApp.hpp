@@ -44,6 +44,21 @@ namespace Grimoire
 
         LoomConfig                        m_config;
         std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST
+
+        // The hosted plugin's OWN ImGui context, rendered INTO the viewport's
+        // output texture (Unity/Unreal "game view") so the plugin's debug HUD
+        // lives inside the Viewport panel, never over the editor chrome. Created
+        // in Init after the editor ImGui layer is up; the plugin is pointed at it
+        // via Runtime::SetImGui (in place of the editor context). Declared after
+        // m_gpu (destructs BEFORE the device -- it holds NVRHI handles built from
+        // m_gpu->Device()) and before m_runtime/m_plugin (destructs AFTER the
+        // plugin -- the plugin holds this ctx via SetImGui and may touch ImGui
+        // during Unload/Shutdown, so this must outlive it). Its destructor
+        // restores the editor context, so ~GpuContext's ImGuiLayer teardown stays
+        // valid. See MainLoop.
+        // before m_plugin: the plugin holds this ctx; must outlive it. after m_gpu: holds its device's handles.
+        std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
+
         Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
         std::optional<Arcane::Runtime>    m_runtime;                // destructs before m_gpu
         std::optional<Arcane::PluginHost> m_plugin;                 // destructs before m_runtime
@@ -117,16 +132,6 @@ namespace Grimoire
         std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
         Grimoire::ViewportRect                   m_viewportRect{};
         bool                                      m_viewportActive = false;
-
-        // The hosted plugin's OWN ImGui context, rendered INTO the viewport's
-        // output texture (Unity/Unreal "game view") so the plugin's debug HUD
-        // lives inside the Viewport panel, never over the editor chrome. Created
-        // in Init after the editor ImGui layer is up; the plugin is pointed at it
-        // via Runtime::SetImGui (in place of the editor context). Declared after
-        // m_gpu so it destructs BEFORE the device (it holds NVRHI handles built
-        // from m_gpu->Device()); its destructor restores the editor context, so
-        // ~GpuContext's ImGuiLayer teardown stays valid. See MainLoop.
-        std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
 
         // Viewport-local input snapshot for the game ImGui pass, captured inside
         // MainLoop's input block (whose locals are out of scope at the render
