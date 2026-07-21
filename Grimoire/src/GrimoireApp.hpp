@@ -23,6 +23,7 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
+#include <Arcane/Render/SelectionOutline.hpp>
 
 #include <spdlog/sinks/callback_sink.h>
 
@@ -151,6 +152,13 @@ namespace Grimoire
         // entity there (sprites + physics colliders; front-most wins). Replaces the
         // CPU sprite-OBB PickEntitiesAt. See PickBuffer.hpp.
         std::unique_ptr<Arcane::PickBuffer>       m_pick;
+
+        // Per-frame selection + hover outline (Edit-mode only), a sibling of m_pick:
+        // edge-detects m_pick's id buffer into the viewport's post-tonemap output
+        // texture (amber selected, cyan hovered). See MainLoop, right after
+        // m_viewport->Draw -- the same slot the Play-only game-imgui overlay pass
+        // uses (the two are mutually exclusive by mode).
+        std::unique_ptr<Arcane::SelectionOutline> m_outline;
 
         // Deferred resize: the Viewport panel's content-region size measured LAST
         // frame, applied at the START of THIS frame (before m_viewport->Draw). This

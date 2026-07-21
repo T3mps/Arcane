@@ -24,6 +24,7 @@
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
+#include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Scene/Components.hpp>   // Arcane::LocalTransform (gizmo drag target)
 
 #include <Astra/Core/TypeContext.hpp>
@@ -200,6 +201,16 @@ namespace Grimoire
         if (!m_pick)
         {
             ARC_ERROR("Grimoire: PickBuffer create failed");
+            return false;
+        }
+
+        // Selection + hover outline (Edit-mode viewport pass). Size-independent
+        // (screen-space edge-detect over whatever id buffer/target it is given),
+        // so unlike m_viewport/m_pick it is never resized.
+        m_outline = Arcane::SelectionOutline::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders());
+        if (!m_outline)
+        {
+            ARC_ERROR("Grimoire: SelectionOutline creation failed");
             return false;
         }
 
@@ -591,6 +602,30 @@ namespace Grimoire
                 // this pass, back to ShaderResource for the editor's ImGui::Image).
                 m_gpu->Cmd()->open();
                 m_gameImgui->Render(m_gpu->Cmd(), m_viewport->OutputFramebuffer());
+                m_gpu->Cmd()->close();
+                m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
+            }
+
+            // Selection + hover outline -> the viewport's own layer (Edit only). Refreshes
+            // the hit-proxy id buffer, then edge-detects it into the post-tonemap output
+            // texture (amber selected, cyan hovered). Skipped entirely when there is nothing
+            // to outline. Play mode: not run (the game-imgui overlay owns this slot instead,
+            // see above -- the two are mutually exclusive by mode).
+            if (!m_play.IsPlaying() && (m_selection.HasSelection() || m_lastInViewport))
+            {
+                const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
+                m_pick->RenderIdPass(m_runtime->Registry(), view);
+
+                Arcane::SelectionOutline::Params op;
+                op.selectedId = m_selection.HasSelection()
+                              ? m_pick->PassIdOf(m_selection.selected) : 0u;
+                op.cursorPx   = m_lastInViewport
+                              ? glm::ivec2((int)m_lastViewportMouse.x, (int)m_lastViewportMouse.y)
+                              : glm::ivec2(-1, -1);
+
+                m_gpu->Cmd()->open();
+                m_outline->Render(m_gpu->Cmd(), m_pick->IdTarget(),
+                                  m_viewport->OutputFramebuffer(), op);
                 m_gpu->Cmd()->close();
                 m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
             }
