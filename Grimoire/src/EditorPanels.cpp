@@ -70,45 +70,31 @@ namespace Grimoire
         };
 
         ImGui::Begin("Sim");
-        if (play.IsPlaying())
-        {
-            // Play and Stop are the same logical toolbar slot -- one stable id.
-            if (iconBtn(ICON_LC_SQUARE, "##sim_playstop", "Stop")) play.Stop(runtime, plugin);
-        }
-        else
-        {
-            // Edit-mode undo/redo history now SURVIVES a Play/Stop cycle -- it is
-            // no longer cleared on Play. Play-time mutation is discarded on Stop
-            // (PlaySession restores the pre-Play snapshot), so it never lingers
-            // as an undoable step; edits made WHILE Playing are never captured
-            // in the first place (the Inspector visitor's stack is null and the
-            // gizmo is !IsPlaying()-gated), so `undo` only ever holds Edit-mode
-            // edits. Those edits' entities survive the Stop-time registry swap
-            // because Runtime::RestoreRegistry rides Astra::Registry::Save()/
-            // Load(), which round-trips the EntityManager and so preserves
-            // entity ids/versions -- a pre-Play undo entry still resolves (and
-            // reverts correctly) against the post-Stop registry object.
-            if (iconBtn(ICON_LC_PLAY, "##sim_playstop", "Play")) play.Play(runtime, plugin);
-        }
-        // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
-        // replaces m_impl->loop on Stop, so a reference taken before this point
-        // (e.g. at the call site) would dangle for the rest of this frame.
-        Arcane::RunLoop& loop = runtime.Loop();
-        ImGui::SameLine();
-        // Distinct id from Play/Stop above -- Resume also renders ICON_LC_PLAY
-        // when the loop is paused, so without "##sim_pause" this button would
-        // share Play's ImGui ID and silently swallow its own clicks.
-        if (iconBtn(loop.IsPaused() ? ICON_LC_PLAY : ICON_LC_PAUSE, "##sim_pause",
-                    loop.IsPaused() ? "Resume" : "Pause"))
-            loop.SetPaused(!loop.IsPaused());
-        ImGui::SameLine();
-        if (iconBtn(ICON_LC_STEP_FORWARD, "##sim_step", "Step")) loop.RequestSingleStep();
-        ImGui::SameLine();
-        float scale = static_cast<float>(loop.TimeScale());
-        if (ImGui::SliderFloat("time-scale", &scale, 0.0f, 2.0f, "%.2f"))
-            loop.SetTimeScale(scale);
 
+        // Full toolbar content width + left edge, captured before any widget, so the
+        // Play/Pause/Step transport can be centered later. Unity's layout: transform
+        // tools on the LEFT, the transport CENTERED.
+        const float fullContentW = ImGui::GetContentRegionAvail().x;
+        const float lineStartX   = ImGui::GetCursorPosX();
+
+        // -- LEFT: transform-gizmo mode (Translate/Rotate/Scale) + space + undo/redo. --
+        // T/R/S mirror the W/E/R keybinds in GrimoireApp's MainLoop input block.
+        if (iconToggle(ICON_LC_MOVE, "##giz_t", mode == Arcane::GizmoMode::Translate, "Translate (W)"))
+            mode = Arcane::GizmoMode::Translate;
         ImGui::SameLine();
+        if (iconToggle(ICON_LC_ROTATE_3D, "##giz_r", mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
+            mode = Arcane::GizmoMode::Rotate;
+        ImGui::SameLine();
+        if (iconToggle(ICON_LC_SCALE_3D, "##giz_s", mode == Arcane::GizmoMode::Scale, "Scale (R)"))
+            mode = Arcane::GizmoMode::Scale;
+        ImGui::SameLine();
+        {
+            bool local = (space == Arcane::GizmoSpace::Local);
+            if (iconBtn(local ? ICON_LC_BOX : ICON_LC_GLOBE, "##giz_space",
+                        local ? "Local space" : "World space"))
+                space = local ? Arcane::GizmoSpace::World : Arcane::GizmoSpace::Local;
+        }
+        ImGui::SameLine(); ImGui::TextUnformatted("|"); ImGui::SameLine();
         ImGui::BeginDisabled(!undo.CanUndo());
         {
             const std::string undoTip = undo.CanUndo()
@@ -127,24 +113,42 @@ namespace Grimoire
         }
         ImGui::EndDisabled();
 
-        // Transform-gizmo mode (Translate/Rotate/Scale) + space (Global/Local).
-        // Mirrors the W/E/R keybinds in GrimoireApp's MainLoop input block.
-        ImGui::SameLine(); ImGui::TextUnformatted("|"); ImGui::SameLine();
-        if (iconToggle(ICON_LC_MOVE, "##giz_t", mode == Arcane::GizmoMode::Translate, "Translate (W)"))
-            mode = Arcane::GizmoMode::Translate;
+        // -- CENTER: transport (Play / Pause / Step), Unity-style toggles. --
+        // Center the trio within the full toolbar width; if the left tools already
+        // reach past the centered start, the transport just follows them via SameLine.
+        const ImGuiStyle& st = ImGui::GetStyle();
+        auto btnW = [&](const char* icon)
+        { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
+        const float transportW = btnW(ICON_LC_PLAY) + btnW(ICON_LC_PAUSE)
+                               + btnW(ICON_LC_STEP_FORWARD) + st.ItemSpacing.x * 2.0f;
+        const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
         ImGui::SameLine();
-        if (iconToggle(ICON_LC_ROTATE_3D, "##giz_r", mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
-            mode = Arcane::GizmoMode::Rotate;
-        ImGui::SameLine();
-        if (iconToggle(ICON_LC_SCALE_3D, "##giz_s", mode == Arcane::GizmoMode::Scale, "Scale (R)"))
-            mode = Arcane::GizmoMode::Scale;
-        ImGui::SameLine();
+        if (centerStart > ImGui::GetCursorPosX())
+            ImGui::SetCursorPosX(centerStart);
+
+        // Play/Stop toggle (Unity-style): ALWAYS the play glyph, tinted while playing;
+        // clicking the lit (playing) button stops. No icon swap.
+        const bool playing = play.IsPlaying();
+        if (iconToggle(ICON_LC_PLAY, "##sim_play", playing, playing ? "Stop" : "Play"))
         {
-            bool local = (space == Arcane::GizmoSpace::Local);
-            if (iconBtn(local ? ICON_LC_BOX : ICON_LC_GLOBE, "##giz_space",
-                        local ? "Local space" : "World space"))
-                space = local ? Arcane::GizmoSpace::World : Arcane::GizmoSpace::Local;
+            if (playing) play.Stop(runtime, plugin);
+            else         play.Play(runtime, plugin);
         }
+        // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
+        // replaces m_impl->loop on Stop, so a reference taken before this dangles.
+        // (Undo/redo/gizmo above never touch `loop`, so fetching here is safe.)
+        Arcane::RunLoop& loop = runtime.Loop();
+        ImGui::SameLine();
+        // Pause/Resume toggle (Unity-style): ALWAYS the pause glyph, tinted while paused.
+        if (iconToggle(ICON_LC_PAUSE, "##sim_pause", loop.IsPaused(),
+                       loop.IsPaused() ? "Resume" : "Pause"))
+            loop.SetPaused(!loop.IsPaused());
+        ImGui::SameLine();
+        // Step: momentary; disabled outside Play (single-step is meaningless in Edit),
+        // matching Unity's greyed-out Step.
+        ImGui::BeginDisabled(!play.IsPlaying());
+        if (iconBtn(ICON_LC_STEP_FORWARD, "##sim_step", "Step")) loop.RequestSingleStep();
+        ImGui::EndDisabled();
 
         ImGui::End();
     }
