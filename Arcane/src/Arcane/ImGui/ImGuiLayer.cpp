@@ -24,6 +24,8 @@ namespace Arcane
             {
                 if (!m_context)
                     return;
+                // self-pin: teardown runs on the current context (two-context safety).
+                ImGui::SetCurrentContext(m_context);
                 // Order mirrors Create in reverse: uninstall the tap first so
                 // no stray event reaches a half-torn-down context.
                 m_window->SetNativeEventTap(nullptr, nullptr);

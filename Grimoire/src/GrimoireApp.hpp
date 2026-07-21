@@ -56,7 +56,6 @@ namespace Grimoire
         // during Unload/Shutdown, so this must outlive it). Its destructor
         // restores the editor context, so ~GpuContext's ImGuiLayer teardown stays
         // valid. See MainLoop.
-        // before m_plugin: the plugin holds this ctx; must outlive it. after m_gpu: holds its device's handles.
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
 
         Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)

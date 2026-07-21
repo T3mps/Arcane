@@ -31,7 +31,7 @@ namespace Arcane
             bool Init(RenderDevice& device, ShaderLibrary& shaders)
             {
                 IMGUI_CHECKVERSION();
-                m_context = ImGui::CreateContext();   // own atlas; sets itself current
+                m_context = ImGui::CreateContext();   // own atlas; prior context stays current, so we pin m_context explicitly below
                 if (!m_context)
                 {
                     ARC_ERROR("OffscreenImGuiLayer: ImGui::CreateContext failed");
