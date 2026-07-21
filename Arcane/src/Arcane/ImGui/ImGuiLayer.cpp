@@ -66,6 +66,9 @@ namespace Arcane
 
             void BeginFrame() override
             {
+                // Once a second (offscreen) context exists, BeginFrame must not
+                // run on whatever context another layer last left current.
+                ImGui::SetCurrentContext(m_context);
                 ImGui_ImplSDL3_NewFrame();
                 ImGui::NewFrame();
             }
@@ -73,6 +76,7 @@ namespace Arcane
             void Render(nvrhi::ICommandList* commandList,
                         nvrhi::IFramebuffer* target) override
             {
+                ImGui::SetCurrentContext(m_context);
                 ImGui::Render();
                 m_renderer.RenderDrawData(ImGui::GetDrawData(), commandList,
                                           target);
@@ -80,11 +84,16 @@ namespace Arcane
 
             bool WantCaptureKeyboard() const override
             {
+                // Queries GImGui's current-context IO; with a second (offscreen)
+                // context possibly left current by another layer's BeginFrame/
+                // Render, this must pin the editor context before reading.
+                ImGui::SetCurrentContext(m_context);
                 return ImGui::GetIO().WantCaptureKeyboard;
             }
 
             bool WantCaptureMouse() const override
             {
+                ImGui::SetCurrentContext(m_context);
                 return ImGui::GetIO().WantCaptureMouse;
             }
 
