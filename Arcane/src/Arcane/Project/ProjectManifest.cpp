@@ -10,6 +10,7 @@
 namespace Arcane
 {
     std::optional<ProjectManifest> ProjectManifest::FromJson(const nlohmann::json& doc)
+    try
     {
         if (!doc.is_object())
             return std::nullopt;
@@ -34,7 +35,10 @@ namespace Arcane
             return std::nullopt;
         m.engineAbi = doc["engine"]["abi"].get<int>();
 
-        // Optional.
+        // Optional. doc.value(key, default) throws nlohmann::json::type_error if the key
+        // exists with the wrong type -- caught by the function-try-block below so a
+        // type-mismatched optional field yields nullopt rather than propagating an
+        // exception (same contract as the required-field guards above).
         m.description = doc.value("description", std::string{});
         m.gameModule  = doc.value("gameModule", std::string{});
         m.bootScene   = doc.value("bootScene", std::string{});
@@ -53,6 +57,10 @@ namespace Arcane
         }
 
         return m;
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        return std::nullopt;
     }
 
     std::optional<ProjectManifest> ProjectManifest::LoadFile(const std::filesystem::path& file)

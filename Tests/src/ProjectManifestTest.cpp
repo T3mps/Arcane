@@ -56,3 +56,22 @@ TEST_CASE("ProjectManifest rejects missing required fields", "[project]")
     CHECK_FALSE(Arcane::ProjectManifest::FromJson(
         nlohmann::json::parse(R"({ "formatVersion": 0, "name": "X", "engine": { "abi": 4 } })")).has_value());
 }
+
+TEST_CASE("ProjectManifest returns nullopt (never throws) on type-mismatched optional fields", "[project]")
+{
+    // "description" exists but is the wrong type (number, not string). nlohmann's
+    // doc.value(key, default) throws json::type_error in this case -- FromJson must
+    // catch that and report nullopt rather than letting the exception escape.
+    CHECK_FALSE(Arcane::ProjectManifest::FromJson(
+        nlohmann::json::parse(R"({
+            "formatVersion": 1, "name": "X", "engine": { "abi": 4 },
+            "description": 42
+        })")).has_value());
+
+    // A plugin entry with a non-bool "enabled" must likewise yield nullopt, not throw.
+    CHECK_FALSE(Arcane::ProjectManifest::FromJson(
+        nlohmann::json::parse(R"({
+            "formatVersion": 1, "name": "X", "engine": { "abi": 4 },
+            "plugins": [ { "name": "Sandbox", "enabled": "yes" } ]
+        })")).has_value());
+}
