@@ -197,17 +197,21 @@ namespace Grimoire
         }
 
         // GPU hit-proxy picker, sized to match the viewport (resized together).
-        m_pick = Arcane::PickBuffer::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
+        // Supersampled 2x: the id target feeds the JFA outline below, which needs
+        // sub-pixel silhouette coverage to seed a smooth distance field.
+        m_pick = Arcane::PickBuffer::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
+                                            1280, 720, /*supersample*/ 2);
         if (!m_pick)
         {
             ARC_ERROR("Grimoire: PickBuffer create failed");
             return false;
         }
 
-        // Selection + hover outline (Edit-mode viewport pass). Size-independent
-        // (screen-space edge-detect over whatever id buffer/target it is given),
-        // so unlike m_viewport/m_pick it is never resized.
-        m_outline = Arcane::SelectionOutline::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders());
+        // Selection + hover outline (Edit-mode viewport pass), a sibling of
+        // m_pick: created and resized at the same viewport size (its own targets
+        // are 1x -- it derives the id buffer's supersample factor internally).
+        m_outline = Arcane::SelectionOutline::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(),
+                                                     1280, 720);
         if (!m_outline)
         {
             ARC_ERROR("Grimoire: SelectionOutline creation failed");
@@ -533,6 +537,7 @@ namespace Grimoire
             {
                 m_viewport->Resize(m_pendingViewportW, m_pendingViewportH);
                 m_pick->Resize(m_pendingViewportW, m_pendingViewportH);
+                m_outline->Resize(m_pendingViewportW, m_pendingViewportH);
             }
 
             // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path Loom

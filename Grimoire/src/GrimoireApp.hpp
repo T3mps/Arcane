@@ -133,7 +133,7 @@ namespace Grimoire
         // ViewportInput.hpp + MainLoop's input block).
         std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
         Grimoire::ViewportRect                   m_viewportRect{};
-        bool                                      m_viewportActive = false;
+        bool                                     m_viewportActive = false;
 
         // Viewport-local input snapshot for the game ImGui pass, captured inside
         // MainLoop's input block (whose locals are out of scope at the render
@@ -154,8 +154,9 @@ namespace Grimoire
         std::unique_ptr<Arcane::PickBuffer>       m_pick;
 
         // Per-frame selection + hover outline (Edit-mode only), a sibling of m_pick:
-        // edge-detects m_pick's id buffer into the viewport's post-tonemap output
-        // texture (amber selected, cyan hovered). See MainLoop, right after
+        // created and resized at the same viewport size, it edge-detects m_pick's
+        // (supersampled) id buffer into the viewport's post-tonemap output texture
+        // (amber selected, cyan hovered). See MainLoop, right after
         // m_viewport->Draw -- the same slot the Play-only game-imgui overlay pass
         // uses (the two are mutually exclusive by mode).
         std::unique_ptr<Arcane::SelectionOutline> m_outline;
