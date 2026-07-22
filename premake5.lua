@@ -454,10 +454,13 @@ project "Grimoire"
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
-        -- Editor fonts: Roboto base + lucide icon font, merged into the ImGui atlas
-        -- by EditorFonts.cpp (exe-relative paths -- must align with these dests).
+        -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
+        -- the ImGui atlas by EditorFonts.cpp (exe-relative paths -- must align w/ dests).
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/lucide"',
-        '{COPYFILE} "%{wks.location}/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/Roboto-Regular.ttf"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/inter/static"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/roboto/static"',
+        '{COPYFILE} "%{wks.location}/data/font/inter/static/Inter_18pt-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/inter/static/Inter_18pt-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/roboto/static/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
     }
     filter "system:windows"
