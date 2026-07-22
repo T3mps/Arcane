@@ -1,4 +1,4 @@
-// Grimoire entity enumeration + selection. CPU-only ([grimoire]).
+// Arcane Editor entity enumeration + selection. CPU-only ([editor]).
 
 #include <memory>
 #include <vector>
@@ -27,14 +27,14 @@ namespace
     }
 }
 
-TEST_CASE("CollectEntities returns every live entity", "[grimoire]")
+TEST_CASE("CollectEntities returns every live entity", "[editor]")
 {
     auto reg = MakeSceneRegistry();          // fixture: fresh registry, Scene comps registered
     const Astra::Entity a = reg->CreateEntity();
     const Astra::Entity b = reg->CreateEntity();
     const Astra::Entity c = reg->CreateEntity();
 
-    std::vector<Astra::Entity> all = Grimoire::CollectEntities(*reg);
+    std::vector<Astra::Entity> all = Arcane::Editor::CollectEntities(*reg);
     REQUIRE(all.size() == 3);
     // ids present regardless of order
     bool ha=false, hb=false, hc=false;
@@ -42,11 +42,11 @@ TEST_CASE("CollectEntities returns every live entity", "[grimoire]")
     CHECK((ha && hb && hc));
 }
 
-TEST_CASE("SelectionContext tracks and clears selection", "[grimoire]")
+TEST_CASE("SelectionContext tracks and clears selection", "[editor]")
 {
-    Grimoire::SelectionContext sel;
+    Arcane::Editor::SelectionContext sel;
     CHECK_FALSE(sel.HasSelection());
-    Grimoire::SelectionContext::EntityT e(42u, 1u);   // see note in SelectionContext.hpp
+    Arcane::Editor::SelectionContext::EntityT e(42u, 1u);   // see note in SelectionContext.hpp
     sel.Select(e);
     CHECK(sel.HasSelection());
     CHECK(sel.selected.GetID() == 42u);

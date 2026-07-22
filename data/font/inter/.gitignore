@@ -1,4 +1,4 @@
-# Only the Inter face Grimoire actually loads is needed at build/runtime.
+# Only the Inter face Arcane Editor actually loads is needed at build/runtime.
 # The rest of the package (every weight/italic x 18/24/28pt optical sizes + the
 # variable fonts) has no build or runtime role -- keep it out of git. Mirror this
 # file's allow-list if EditorFonts.cpp starts loading another cut.

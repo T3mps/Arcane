@@ -3,7 +3,7 @@
 // Arcane/Edit: undo/redo history. The undo unit is a Transaction of 1..N
 // ComponentEditCommands (Unreal FTransaction model). Begin/SnapshotComponent
 // (idempotent snapshot-on-first-touch)/Commit/Cancel groups a gesture into one
-// step. ARCANE_API; Grimoire owns one and brackets its Inspector edits.
+// step. ARCANE_API; Arcane Editor owns one and brackets its Inspector edits.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Edit/Command.hpp>

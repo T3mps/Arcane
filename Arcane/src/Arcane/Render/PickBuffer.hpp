@@ -13,7 +13,7 @@
 // the pass, id encoding, and readback are identical in 3D -- only the geometry
 // each entity emits (CollectPickables, PickEmit.hpp) changes.
 //
-// Game-agnostic (ARCANE_API): Grimoire owns one beside its OffscreenCanvas and
+// Game-agnostic (ARCANE_API): Arcane Editor owns one beside its OffscreenCanvas and
 // calls Pick() on a viewport click; the engine holds no editor state.
 
 #include <Arcane/Base/Api.hpp>

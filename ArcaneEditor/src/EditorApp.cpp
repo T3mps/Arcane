@@ -1,18 +1,18 @@
-// GrimoireApp: Init -> MainLoop -> Shutdown. Reuses Loom's host-boot helpers
+// EditorApp: Init -> MainLoop -> Shutdown. Reuses Loom's host-boot helpers
 // (GpuContext/FramePerf/LoomConfig) by source-compile and hosts Sandbox.dll via
 // the lifted Arcane::PluginHost. The frame loop advances the sim through the
 // RunLoop, renders the scene into an OffscreenCanvas (the same canvas->batcher->
 // tonemap path Loom drives, into a panel texture instead of the backbuffer), and
-// draws an editor shell -- a full-viewport dockspace (Grimoire::BeginDockSpace)
+// draws an editor shell -- a full-viewport dockspace (Arcane::Editor::BeginDockSpace)
 // hosting a Sim toolbar (play/pause/step + time-scale), a Console panel fed by a
 // callback sink on Arcane::Log::Engine(), and a dockable Viewport panel showing
 // the scene texture. Scene input (camera pan/zoom, click-pick) is gated on the
 // Viewport panel's hover/focus and the cursor is remapped into viewport-local
 // pixels before the plugin sees it (see ViewportInput.hpp). The render plumbing
 // + teardown order live in GpuContext (m_gpu). The teardown CONTRACT is encoded
-// in the GrimoireApp member declaration order -- see GrimoireApp.hpp.
+// in the EditorApp member declaration order -- see EditorApp.hpp.
 
-#include "GrimoireApp.hpp"
+#include "EditorApp.hpp"
 #include "EditorFonts.hpp"
 #include "EditorPanels.hpp"
 #include "ViewportImGuiInput.hpp"
@@ -43,7 +43,7 @@
 #include <filesystem>
 #include <thread>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     namespace
     {
@@ -78,24 +78,29 @@ namespace Grimoire
         }
     }
 
-    GrimoireApp::GrimoireApp(LoomConfig cfg)
+    EditorApp::EditorApp(LoomConfig cfg)
         : m_config(std::move(cfg)), m_perf(m_config.perf) {}
 
-    bool GrimoireApp::Init()
+    bool EditorApp::Init()
     {
         // The whole platform/render/input stack, booted in order. Owned by m_gpu and
-        // declared BEFORE m_runtime/m_plugin in GrimoireApp -- so it destructs AFTER
+        // declared BEFORE m_runtime/m_plugin in EditorApp -- so it destructs AFTER
         // them: the render resources it owns (window/device/swapchain/shaders/canvas/
         // batcher/tonemap/imgui/input + commandList/framebuffers) must outlive runtime
         // + plugin.
         m_gpu = GpuContext::Create(m_config);
         if (!m_gpu)
         {
-            ARC_ERROR("Grimoire: GPU context create failed");
+            ARC_ERROR("Arcane Editor: GPU context create failed");
             return false;
         }
 
-        ARC_INFO("{} -- Grimoire host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
+        ARC_INFO("{} -- Arcane Editor host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
+
+        // Title the window as the editor. GpuContext defaults to "Arcane Loom" (the
+        // shared host helper Loom also uses); override it here so only this host reads
+        // "Arcane Editor" -- Loom keeps its own title.
+        m_gpu->Win().SetTitle("Arcane Editor");
 
         // Editor shell: enable ImGui docking (the placeholder single window becomes
         // a dockspace + panels in MainLoop) and route the engine logger into the
@@ -107,10 +112,10 @@ namespace Grimoire
         // (current here -- the only ImGui context created so far, see GpuContext::
         // Create's ImGuiLayer::Create above), before the first frame and before the
         // game ImGui context is created below. Zero engine change.
-        Grimoire::InstallEditorFonts();
+        Arcane::Editor::InstallEditorFonts();
 
         // The TypeContext is the process-wide type-identity singleton shared across
-        // Grimoire.exe, Arcane.dll, and every loaded plugin. It is intentionally
+        // ArcaneEditor.exe, Arcane.dll, and every loaded plugin. It is intentionally
         // heap-allocated and never freed: TypeMeta entries registered by the plugin
         // (via ASTRA_REFLECT in Components.hpp) hold std::function thunks compiled
         // into the plugin DLL. After PluginHost::Unload -> DLClose, those thunks
@@ -119,26 +124,26 @@ namespace Grimoire
         // Heap-leaking is the correct production pattern for a long-running host;
         // the OS reclaims all process memory on exit anyway.
         m_typeContext = new Astra::TypeContext();
-        // Install the shared context in THIS module too (Grimoire.exe is a separate
+        // Install the shared context in THIS module too (ArcaneEditor.exe is a separate
         // binary from Arcane.dll -- Astra::GetTypeContext()/SetTypeContext() resolve
         // through a PER-MODULE static slot, by design; Runtime::Impl's ctor installs
         // the same m_typeContext for Arcane.dll's own slot, see Runtime.cpp). Required
         // BEFORE the gizmo interaction code's TypeID<Arcane::LocalTransform>::Value()
         // lookups (Registry::GetComponent<LocalTransform> in MainLoop) -- without this,
-        // Grimoire.exe's first TypeID<T>::Value() call would silently fall back to its
+        // ArcaneEditor.exe's first TypeID<T>::Value() call would silently fall back to its
         // own empty module-local DefaultTypeContext() instead of the shared one, so
         // GetComponent<LocalTransform> would resolve against the WRONG ComponentID
         // (always-miss at best, aliasing a different component's bytes at worst).
         Astra::SetTypeContext(m_typeContext);
         // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
-        // until quit). The scripted "Grimoire --frames N" GPU-verify is headless -> false
+        // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is headless -> false
         // -> miniaudio's null backend (no real device grabbed on a CI box).
         m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
 
         // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
         // Runtime so a plugin can build its own engine render objects (e.g. the
         // narrowphase inspector's OffscreenCanvas). Non-owning; the host outlives the
-        // plugin (m_gpu is declared before the runtime/plugin in GrimoireApp). Null in
+        // plugin (m_gpu is declared before the runtime/plugin in EditorApp). Null in
         // a headless host -> the plugin skips its GPU-resource creation.
         m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
 
@@ -153,7 +158,7 @@ namespace Grimoire
         m_gameImgui = Arcane::OffscreenImGuiLayer::Create(m_gpu->Device(), m_gpu->Shaders());
         if (!m_gameImgui)
         {
-            ARC_ERROR("Grimoire: OffscreenImGuiLayer creation failed");
+            ARC_ERROR("Arcane Editor: OffscreenImGuiLayer creation failed");
             return false;
         }
 
@@ -177,11 +182,11 @@ namespace Grimoire
         m_plugin.emplace(*m_runtime, std::filesystem::path(m_config.pluginPath));
         if (!m_plugin->Load())
         {
-            ARC_ERROR("Grimoire: failed to load plugin '{}'", m_config.pluginPath);
+            ARC_ERROR("Arcane Editor: failed to load plugin '{}'", m_config.pluginPath);
             return false;
         }
 
-        // Task 8: Grimoire boots in Edit mode -- the sim starts paused. Play (m_play)
+        // Task 8: Arcane Editor boots in Edit mode -- the sim starts paused. Play (m_play)
         // unpauses it; Stop restores the snapshot and re-pauses.
         m_runtime->Loop().SetPaused(true);
 
@@ -192,7 +197,7 @@ namespace Grimoire
         m_viewport = Arcane::OffscreenCanvas::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
         if (!m_viewport)
         {
-            ARC_ERROR("Grimoire: OffscreenCanvas create failed");
+            ARC_ERROR("Arcane Editor: OffscreenCanvas create failed");
             return false;
         }
 
@@ -203,7 +208,7 @@ namespace Grimoire
                                             1280, 720, /*supersample*/ 2);
         if (!m_pick)
         {
-            ARC_ERROR("Grimoire: PickBuffer create failed");
+            ARC_ERROR("Arcane Editor: PickBuffer create failed");
             return false;
         }
 
@@ -214,7 +219,7 @@ namespace Grimoire
                                                      1280, 720);
         if (!m_outline)
         {
-            ARC_ERROR("Grimoire: SelectionOutline creation failed");
+            ARC_ERROR("Arcane Editor: SelectionOutline creation failed");
             return false;
         }
 
@@ -230,7 +235,7 @@ namespace Grimoire
         return true;
     }
 
-    void GrimoireApp::InstallConsoleSink()
+    void EditorApp::InstallConsoleSink()
     {
         auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
             [this](const spdlog::details::log_msg& m)
@@ -241,7 +246,7 @@ namespace Grimoire
         Arcane::Log::Engine()->sinks().push_back(cb);
     }
 
-    void GrimoireApp::MainLoop()
+    void EditorApp::MainLoop()
     {
         auto simPrev = std::chrono::steady_clock::now();
         auto lastFrameTime = simPrev;
@@ -286,7 +291,7 @@ namespace Grimoire
                 float lx = 0, ly = 0;
                 const bool inViewport =
                     m_viewportActive &&
-                    Grimoire::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, lx, ly);
+                    Arcane::Editor::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, lx, ly);
                 if (inViewport)
                 {
                     pluginSnap.mouseX = lx;      // plugin camera works in viewport-local px
@@ -317,7 +322,7 @@ namespace Grimoire
                 // 1-frame lag matches the one already inherent to inViewport/
                 // m_viewportActive (both computed from the previous frame's panel
                 // hover/focus).
-                gameUiClaims = Grimoire::GameUiClaimsPointer(
+                gameUiClaims = Arcane::Editor::GameUiClaimsPointer(
                     m_play.IsPlaying(), inViewport, m_gameImgui->WantCaptureMouse());
 
                 // Snapshot the viewport-local cursor + RAW buttons/wheel + dt for the
@@ -478,7 +483,7 @@ namespace Grimoire
                             // the viewport. Recomputed here because the shared lx/ly are
                             // only written when m_viewportActive is set.
                             float dragLx = 0.0f, dragLy = 0.0f;
-                            Grimoire::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, dragLx, dragLy);
+                            Arcane::Editor::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, dragLx, dragLy);
                             const glm::vec2 dragMouse(dragLx, dragLy);
 
                             Arcane::GizmoSnap gsnap;
@@ -638,20 +643,20 @@ namespace Grimoire
             // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
-            Grimoire::BeginDockSpace(*m_undo);
-            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable());
-            Grimoire::EndDockSpace();
-            Grimoire::DrawAssetsPanel();
-            Grimoire::DrawConsolePanel(m_console);
+            Arcane::Editor::BeginDockSpace(*m_undo);
+            Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable());
+            Arcane::Editor::EndDockSpace();
+            Arcane::Editor::DrawAssetsPanel();
+            Arcane::Editor::DrawConsolePanel(m_console);
 
-            Grimoire::ViewportPanelResult vp =
-                Grimoire::DrawViewportPanel(m_viewport->TextureId(),
+            Arcane::Editor::ViewportPanelResult vp =
+                Arcane::Editor::DrawViewportPanel(m_viewport->TextureId(),
                                             m_viewport->Width(), m_viewport->Height(),
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace);
             m_pendingViewportW = vp.desiredW;
             m_pendingViewportH = vp.desiredH;
             m_viewportRect     = vp.imageRect;
-            m_viewportActive   = Grimoire::SceneInputActive(vp.hovered, vp.focused);
+            m_viewportActive   = Arcane::Editor::SceneInputActive(vp.hovered, vp.focused);
 
             // Viewport click-pick: GPU hit-proxy. Render every pickable entity's
             // silhouette into the id buffer and read back the pixel under the
@@ -678,8 +683,8 @@ namespace Grimoire
                     m_selection.Clear();
             }
 
-            Grimoire::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
-            Grimoire::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo, !m_play.IsPlaying());
+            Arcane::Editor::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
+            Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo, !m_play.IsPlaying());
 
             // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
             // composited into the viewport texture above -- not the editor context.)
@@ -688,7 +693,7 @@ namespace Grimoire
             if (!backbuffer) { ImGui::EndFrame(); continue; }
 
             m_gpu->Cmd()->open();
-            // Clear the backbuffer directly (Grimoire's scene will live in a panel,
+            // Clear the backbuffer directly (Arcane Editor's scene will live in a panel,
             // so there is no scene->tonemap->backbuffer pass as in Loom).
             m_gpu->Cmd()->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
                                             nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
@@ -705,11 +710,11 @@ namespace Grimoire
         }
     }
 
-    void GrimoireApp::Shutdown()
+    void EditorApp::Shutdown()
     {
         // Deregister the console sink FIRST, before anything below can log through
         // Arcane::Log::Engine(). m_console is declared before m_runtime/m_plugin/m_gpu
-        // in GrimoireApp.hpp, so it destructs BEFORE them; if the sink outlived this
+        // in EditorApp.hpp, so it destructs BEFORE them; if the sink outlived this
         // point, a log emitted during ~GpuContext's Vulkan device teardown (validation
         // messages) would invoke the callback and Push into an already-destroyed
         // m_console deque.
@@ -723,9 +728,9 @@ namespace Grimoire
         // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
         // the guard covers a future partial-init/destructor path.
         if (m_gpu) m_gpu->Device().Nvrhi()->waitForIdle();
-        ARC_INFO("Grimoire exiting after {} frames", m_frameCount);
+        ARC_INFO("Arcane Editor exiting after {} frames", m_frameCount);
 
-        // The member destructors then run (after Run returns + ~GrimoireApp), in
+        // The member destructors then run (after Run returns + ~EditorApp), in
         // reverse declaration order -- the load-bearing TEARDOWN CONTRACT:
         //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
         //                ResetRegistry) while the plugin DLL is STILL mapped.
@@ -737,7 +742,7 @@ namespace Grimoire
         // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
     }
 
-    int GrimoireApp::Run()
+    int EditorApp::Run()
     {
         if (!Init()) return 1;
         MainLoop();

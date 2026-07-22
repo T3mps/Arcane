@@ -6,7 +6,7 @@
 
 namespace Astra { class Registry; }
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     // Every live entity in the registry, in EntityManager iteration order. A pure
     // read -- the hierarchy panel's data source. (No Name component exists yet, so

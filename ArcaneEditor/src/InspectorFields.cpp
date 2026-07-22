@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     FieldKind ClassifyField(const Astra::FieldInfo& f) noexcept
     {

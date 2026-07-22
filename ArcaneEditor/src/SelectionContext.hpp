@@ -2,7 +2,7 @@
 
 #include <Astra/Entity/Entity.hpp>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     // The one selected-entity source of truth, shared by hierarchy, inspector,
     // and viewport pick. The GPU hit-proxy pick returns the single front-most

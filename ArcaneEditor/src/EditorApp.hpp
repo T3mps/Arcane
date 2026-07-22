@@ -1,5 +1,5 @@
 #pragma once
-// GrimoireApp: the editor application. Constructed in main from a LoomConfig
+// EditorApp: the editor application. Constructed in main from a LoomConfig
 // (reused as the host config); Run() drives Init -> the frame loop -> Shutdown.
 // Member declaration order m_gpu -> m_runtime -> m_plugin is the TEARDOWN
 // CONTRACT (destruct reverse: plugin Unload while the DLL is still mapped ->
@@ -29,12 +29,12 @@
 
 namespace Astra { class TypeContext; }
 
-namespace Grimoire
+namespace Arcane::Editor
 {
-    class GrimoireApp
+    class EditorApp
     {
     public:
-        explicit GrimoireApp(LoomConfig cfg);
+        explicit EditorApp(LoomConfig cfg);
         int Run();   // Init() -> MainLoop() -> Shutdown(); process exit code
 
     private:
@@ -73,13 +73,13 @@ namespace Grimoire
 
         // Play-in-editor (Task 8): Edit|Play state machine. Play() snapshots the
         // registry + unpauses the RunLoop; Stop() restores the snapshot + re-pauses.
-        // Grimoire boots in Edit (see Init: the RunLoop is paused right after the
+        // Arcane Editor boots in Edit (see Init: the RunLoop is paused right after the
         // plugin loads).
-        Grimoire::PlaySession m_play;
+        Arcane::Editor::PlaySession m_play;
 
         // The one selected-entity source of truth, shared by the Hierarchy panel
         // (and, later, the Inspector + viewport pick -- see SelectionContext.hpp).
-        Grimoire::SelectionContext m_selection;
+        Arcane::Editor::SelectionContext m_selection;
 
         // Editor undo/redo history (Edit-mode; cleared on Play). Constructed in
         // Init once the runtime's registry exists; optional so it can be built
@@ -132,7 +132,7 @@ namespace Grimoire
         // is gated on m_viewportActive and remapped through m_viewportRect (see
         // ViewportInput.hpp + MainLoop's input block).
         std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
-        Grimoire::ViewportRect                   m_viewportRect{};
+        Arcane::Editor::ViewportRect                   m_viewportRect{};
         bool                                     m_viewportActive = false;
 
         // Viewport-local input snapshot for the game ImGui pass, captured inside

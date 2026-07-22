@@ -410,13 +410,13 @@ project "Loom"
     filter {}
 
 -- ============================================================================
--- Grimoire: the editor shell (Grimoire.exe). Engine boot + RunLoop + PluginHost
+-- Arcane Editor: the editor shell (ArcaneEditor.exe). Engine boot + RunLoop + PluginHost
 -- + ImGui docking shell. Hosts Sandbox.dll by default. Reuses Loom's host-boot
 -- helpers (GpuContext/FramePerf/LoomConfig) by source-compile -- host-to-host
--- reuse, NOT an Arcane->Grimoire dependency. Consumes only ARCANE_API otherwise.
+-- reuse, NOT an Arcane->Arcane Editor dependency. Consumes only ARCANE_API otherwise.
 -- ============================================================================
-project "Grimoire"
-    location "Grimoire"
+project "ArcaneEditor"
+    location "ArcaneEditor"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
@@ -503,28 +503,28 @@ project "ArcaneTests"
         -- Module/Plugin/PluginHost moved into Arcane/Plugin (Arcane.dll, ARCANE_API);
         -- the test exe now consumes them via the "Arcane" link, not source-compiled.
         "%{wks.location}/Loom/src/LoomConfig.cpp",
-        -- Task 3: ConsoleBuffer (Grimoire's log ring buffer) source-compiles into the
-        -- test exe so the [grimoire] unit test drives it directly, mirroring the
+        -- Task 3: ConsoleBuffer (Arcane Editor's log ring buffer) source-compiles into the
+        -- test exe so the [editor] unit test drives it directly, mirroring the
         -- Sandbox helper-unit pattern above.
-        "%{wks.location}/Grimoire/src/ConsoleBuffer.cpp",
+        "%{wks.location}/ArcaneEditor/src/ConsoleBuffer.cpp",
         -- Task 4: ViewportInput (pure input-gating predicates for the scene-in-a-
-        -- panel viewport) source-compiles into the test exe so the [grimoire] unit
+        -- panel viewport) source-compiles into the test exe so the [editor] unit
         -- tests drive it directly, same pattern as ConsoleBuffer above.
-        "%{wks.location}/Grimoire/src/ViewportInput.cpp",
+        "%{wks.location}/ArcaneEditor/src/ViewportInput.cpp",
         -- Task 5: EntityList (entity enumeration for the Hierarchy panel)
-        -- source-compiles into the test exe so the [grimoire] unit tests drive it
+        -- source-compiles into the test exe so the [editor] unit tests drive it
         -- directly, same pattern as ConsoleBuffer/ViewportInput above.
-        "%{wks.location}/Grimoire/src/EntityList.cpp",
+        "%{wks.location}/ArcaneEditor/src/EntityList.cpp",
         -- Task 6: InspectorFields (reflected field classification + pure write-backs
         -- for the Inspector panel) source-compiles into the test exe so the
-        -- [grimoire] unit tests drive it directly -- no ImGui dependency, same
+        -- [editor] unit tests drive it directly -- no ImGui dependency, same
         -- pattern as ConsoleBuffer/ViewportInput/EntityList above.
-        "%{wks.location}/Grimoire/src/InspectorFields.cpp",
+        "%{wks.location}/ArcaneEditor/src/InspectorFields.cpp",
         -- Task 8: PlayMode (play-in-editor snapshot/restore state machine)
-        -- source-compiles into the test exe so the [grimoire] round-trip test
+        -- source-compiles into the test exe so the [editor] round-trip test
         -- drives it directly against a real Arcane::Runtime, same pattern as
         -- ConsoleBuffer/ViewportInput/EntityList/InspectorFields above.
-        "%{wks.location}/Grimoire/src/PlayMode.cpp",
+        "%{wks.location}/ArcaneEditor/src/PlayMode.cpp",
     }
 
     includedirs {
@@ -532,7 +532,7 @@ project "ArcaneTests"
         "%{wks.location}/Arcane/src",
         "%{wks.location}/Sandbox/src",   -- Interaction.hpp / Scenes.hpp / Camera.hpp for the [sandbox] tests
         "%{wks.location}/Loom/src",      -- LoomConfig.hpp for the [loom] test
-        "%{wks.location}/Grimoire/src",  -- ConsoleBuffer.hpp for the [grimoire] test
+        "%{wks.location}/ArcaneEditor/src",  -- ConsoleBuffer.hpp for the [editor] test
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",

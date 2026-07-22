@@ -2,7 +2,7 @@
 
 #include <Astra/Registry/Registry.hpp>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     std::vector<Astra::Entity> CollectEntities(Astra::Registry& registry)
     {

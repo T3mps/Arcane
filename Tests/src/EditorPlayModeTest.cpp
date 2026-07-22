@@ -1,4 +1,4 @@
-// Grimoire play-in-editor: snapshot on Play, restore on Stop. CPU-only ([grimoire]).
+// Arcane Editor play-in-editor: snapshot on Play, restore on Stop. CPU-only ([editor]).
 //
 // Drives a real Arcane::Runtime bound to the process-wide SharedTypeContext (see
 // Helpers/TestTypeContext.hpp) -- the same pattern as RuntimeTest.cpp -- rather than
@@ -46,12 +46,12 @@
 // compile straight into ArcaneTests (see SandboxHudTest.cpp); the plugin ENTRY
 // (Sandbox.cpp, the extern "C" GamePlugin_* thunks) is NOT. The test below drives
 // SandboxApp exactly the way Sandbox.cpp's GamePlugin_* functions do, so it can
-// reproduce the Grimoire Stop crash without loading the real Sandbox.dll.
+// reproduce the Arcane Editor Stop crash without loading the real Sandbox.dll.
 #include "../../Sandbox/src/SandboxApp.hpp"
 
 #include <PlayMode.hpp>
 
-TEST_CASE("Play snapshots and Stop restores the authored registry", "[grimoire]")
+TEST_CASE("Play snapshots and Stop restores the authored registry", "[editor]")
 {
     Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
 
@@ -65,8 +65,8 @@ TEST_CASE("Play snapshots and Stop restores the authored registry", "[grimoire]"
     Arcane::SpriteRenderer sp; sp.sortingLayer = 3;
     reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
 
-    Grimoire::PlaySession play;
-    CHECK(play.Mode() == Grimoire::EditorMode::Edit);
+    Arcane::Editor::PlaySession play;
+    CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
 
     REQUIRE(play.Play(runtime));                  // snapshot + unpause
     CHECK(play.IsPlaying());
@@ -81,7 +81,7 @@ TEST_CASE("Play snapshots and Stop restores the authored registry", "[grimoire]"
     }
 
     REQUIRE(play.Stop(runtime));                  // restore + pause
-    CHECK(play.Mode() == Grimoire::EditorMode::Edit);
+    CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
 
     // The play-time mutation is gone -- back to the authored value.
@@ -117,7 +117,7 @@ namespace
 // property Sandbox.cpp's GamePlugin_LoadState relies on to re-resolve SceneRoot
 // by saved id after a restore. If this test fails, that assumption is false and
 // clearing the undo stack on Play was NOT safe to drop.
-TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[grimoire]")
+TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
 {
     Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
     Astra::Registry& reg = runtime.Registry();
@@ -177,18 +177,18 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[grimoire]")
     CHECK(afterRedo->position.y == 0.0f);
 }
 
-TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[grimoire]")
+TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[editor]")
 {
     Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
     reg.CreateEntity();
 
-    Grimoire::PlaySession play;
+    Arcane::Editor::PlaySession play;
 
     // Stop while already in Edit mode: no-op success, no restore attempted.
     CHECK(play.Stop(runtime));
-    CHECK(play.Mode() == Grimoire::EditorMode::Edit);
+    CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
 
     REQUIRE(play.Play(runtime));
     CHECK(play.IsPlaying());
@@ -199,12 +199,12 @@ TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[grimoi
     CHECK_FALSE(runtime.Loop().IsPaused());
 
     REQUIRE(play.Stop(runtime));
-    CHECK(play.Mode() == Grimoire::EditorMode::Edit);
+    CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
 
     // A second Stop while already stopped is a no-op success.
     CHECK(play.Stop(runtime));
-    CHECK(play.Mode() == Grimoire::EditorMode::Edit);
+    CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
 }
 
@@ -233,7 +233,7 @@ namespace
     }
 }
 
-TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present", "[grimoire]")
+TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present", "[editor]")
 {
     Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
 
@@ -244,7 +244,7 @@ TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present",
     g_fakeSaveCalls = 0;
     g_fakeLoadCalls = 0;
 
-    Grimoire::PlaySession play;
+    Arcane::Editor::PlaySession play;
 
     // Play routes through the plugin's SaveState (NOT Runtime::SnapshotRegistry), so the
     // plugin captures its own scene incl. native resources; then it unpauses the loop.
@@ -255,10 +255,10 @@ TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present",
     CHECK_FALSE(runtime.Loop().IsPaused());
 
     // Stop routes through the plugin's LoadState (which re-establishes native resources
-    // after RestoreRegistry -- what Grimoire cannot do itself); then it re-pauses.
+    // after RestoreRegistry -- what Arcane Editor cannot do itself); then it re-pauses.
     REQUIRE(play.Stop(runtime, &vt));
     CHECK(g_fakeLoadCalls == 1);
-    CHECK(play.Mode() == Grimoire::EditorMode::Edit);
+    CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
 }
 
@@ -274,7 +274,7 @@ TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present",
 // Sandbox.cpp's GamePlugin_SaveState/GamePlugin_LoadState do (see Sandbox.cpp:
 // they persist the root entity id explicitly, snapshot/restore the registry,
 // then re-establish ONLY SceneRoot + PhysicsResource -- NOT a re-run of Init).
-// It then runs real post-Stop Update + render frames (mirroring GrimoireApp's
+// It then runs real post-Stop Update + render frames (mirroring EditorApp's
 // MainLoop, which renders every iteration regardless of play/pause) against a
 // mock Batcher2D, exactly where the desk crash was observed to occur.
 // ===========================================================================
@@ -388,7 +388,7 @@ namespace
     }
 }
 
-TEST_CASE("Grimoire Stop: real SandboxApp runs post-Stop Update+render frames without crashing",
+TEST_CASE("Arcane Editor Stop: real SandboxApp runs post-Stop Update+render frames without crashing",
           "[sandbox]")
 {
     Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
@@ -417,10 +417,10 @@ TEST_CASE("Grimoire Stop: real SandboxApp runs post-Stop Update+render frames wi
 
     RecordingBatcher batcher;
 
-    // One frame through the RunLoop, mirroring GrimoireApp::MainLoop exactly: the
+    // One frame through the RunLoop, mirroring EditorApp::MainLoop exactly: the
     // plugin-fixed/plugin-update hooks via Advance, the camera push GamePlugin_Update
     // does right after SandboxApp::Update, then a render submission every iteration
-    // (Grimoire's viewport renders regardless of play/pause).
+    // (Arcane Editor's viewport renders regardless of play/pause).
     auto Frame = [&](const Arcane::InputSnapshot& input)
     {
         runtime.Loop().Advance(1.0 / 60.0,
@@ -434,7 +434,7 @@ TEST_CASE("Grimoire Stop: real SandboxApp runs post-Stop Update+render frames wi
         runtime.Loop().SubmitRender();
     };
 
-    // Grimoire boots in Edit mode (paused). A couple of idle frames materialize the
+    // Arcane Editor boots in Edit mode (paused). A couple of idle frames materialize the
     // scene-0 bodies via the paused mint-only pass (SandboxApp::Update), exactly as
     // they would sit on screen before the user presses Play.
     runtime.Loop().SetPaused(true);
@@ -442,7 +442,7 @@ TEST_CASE("Grimoire Stop: real SandboxApp runs post-Stop Update+render frames wi
     Frame(idle);
     Frame(idle);
 
-    Grimoire::PlaySession play;
+    Arcane::Editor::PlaySession play;
     Arcane::PluginVTable  vt{};
     vt.SaveState = &SandboxSaveState;
     vt.LoadState = &SandboxLoadState;
@@ -483,7 +483,7 @@ TEST_CASE("Grimoire Stop: real SandboxApp runs post-Stop Update+render frames wi
     // live). Route through the plugin vtable (fix #1); LoadState re-establishes ONLY
     // SceneRoot + PhysicsResource, mirroring the real Sandbox.cpp gap under test.
     REQUIRE(play.Stop(runtime, &vt));
-    CHECK(play.Mode() == Grimoire::EditorMode::Edit);
+    CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
 
     // ---- post-Stop: run several more Update+render frames -------------------------

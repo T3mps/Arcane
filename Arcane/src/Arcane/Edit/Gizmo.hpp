@@ -3,7 +3,7 @@
 // Arcane/Edit: 2D transform gizmo core (ARCANE_API, editor-free, STATELESS).
 // Pure functions over value inputs: HitTest (which handle is under the cursor),
 // ApplyDrag (new transform from the drag start), Draw (screen-constant geometry
-// into a Batcher2D). Grimoire owns all interaction state and consumes these.
+// into a Batcher2D). Arcane Editor owns all interaction state and consumes these.
 
 #include <Arcane/Base/Api.hpp>
 
@@ -19,7 +19,7 @@ namespace Arcane
     // sole handle and is reported as Center (ApplyDrag ignores the axis there).
     enum class GizmoAxis  { None, X, Y, Center };
 
-    // Decoupled from Scene so Edit/Gizmo has no Scene dependency; Grimoire maps
+    // Decoupled from Scene so Edit/Gizmo has no Scene dependency; Arcane Editor maps
     // LocalTransform <-> this.
     struct GizmoTransform
     {

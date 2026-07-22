@@ -1,5 +1,5 @@
-// Grimoire console ring buffer: bounded FIFO of formatted log lines the Console
-// panel renders. CPU-only ([grimoire]).
+// Arcane Editor console ring buffer: bounded FIFO of formatted log lines the Console
+// panel renders. CPU-only ([editor]).
 
 #include <string>
 #include <vector>
@@ -8,9 +8,9 @@
 
 #include <ConsoleBuffer.hpp>
 
-TEST_CASE("ConsoleBuffer keeps the newest N lines and drops the oldest", "[grimoire]")
+TEST_CASE("ConsoleBuffer keeps the newest N lines and drops the oldest", "[editor]")
 {
-    Grimoire::ConsoleBuffer buf(3);
+    Arcane::Editor::ConsoleBuffer buf(3);
     buf.Push("a"); buf.Push("b"); buf.Push("c");
     CHECK(buf.Size() == 3);
     buf.Push("d");                       // evicts "a"

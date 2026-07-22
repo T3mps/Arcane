@@ -6,12 +6,12 @@
 #include <deque>
 #include <string>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     // A bounded FIFO of log lines. Push appends; when full the oldest line is
     // dropped. Not thread-safe on its own -- the spdlog sink that feeds it holds
     // spdlog's sink mutex, and the UI reads it on the same (main) thread that
-    // pumps ImGui, so pushes and reads never overlap in Grimoire's single-thread
+    // pumps ImGui, so pushes and reads never overlap in Arcane Editor's single-thread
     // frame. (If a worker ever logs, wrap Push in the sink's lock.)
     class ConsoleBuffer
     {

@@ -3,8 +3,8 @@
 // Play-in-editor state machine (Epic 04, Task 8). Play() snapshots the scene and
 // unpauses the RunLoop; Stop() restores the snapshot and re-pauses -- so play-time
 // mutation is discarded and edit-mode edits (the snapshot content) are the authored
-// state that survives a Play/Stop cycle. Grimoire boots in Edit (paused); see
-// GrimoireApp::Init.
+// state that survives a Play/Stop cycle. Arcane Editor boots in Edit (paused); see
+// EditorApp::Init.
 //
 // Snapshot path: when a plugin vtable exporting SaveState is supplied, Play/Stop route
 // through the plugin's GamePlugin_SaveState/LoadState so the plugin captures AND
@@ -19,7 +19,7 @@
 
 namespace Arcane { class Runtime; struct PluginVTable; }
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     enum class EditorMode { Edit, Play };
 

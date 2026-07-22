@@ -1,6 +1,6 @@
 #include <ConsoleBuffer.hpp>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     void ConsoleBuffer::Push(std::string line)
     {

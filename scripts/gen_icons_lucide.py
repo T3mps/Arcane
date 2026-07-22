@@ -1,10 +1,10 @@
-# Generate Arcane/Grimoire/src/IconsLucide.h from the lucide codepoints map.
+# Generate Arcane/ArcaneEditor/src/IconsLucide.h from the lucide codepoints map.
 # Run from the repo root: python Arcane/scripts/gen_icons_lucide.py
 import json, re, os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 CP   = os.path.join(ROOT, "Arcane", "data", "font", "lucide", "codepoints.json")
-OUT  = os.path.join(ROOT, "Arcane", "Grimoire", "src", "IconsLucide.h")
+OUT  = os.path.join(ROOT, "Arcane", "ArcaneEditor", "src", "IconsLucide.h")
 
 cps = json.load(open(CP, encoding="utf-8"))
 values = [int(v) for v in cps.values()]

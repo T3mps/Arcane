@@ -6,7 +6,7 @@
 
 #include <Astra/Reflection/FieldInfo.hpp>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     enum class FieldKind { Bool, Int32, Float, Vec2, Vec3, ReadOnly };
 

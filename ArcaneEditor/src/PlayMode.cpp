@@ -8,7 +8,7 @@
 
 #include <utility>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     bool PlaySession::Play(Arcane::Runtime& runtime, const Arcane::PluginVTable* plugin)
     {
@@ -46,7 +46,7 @@ namespace Grimoire
         if (m_usedPlugin && plugin && plugin->LoadState)
         {
             // Restore via the plugin's LoadState -- it re-establishes native resources
-            // (physics world, scene root) AFTER RestoreRegistry, which Grimoire cannot
+            // (physics world, scene root) AFTER RestoreRegistry, which Arcane Editor cannot
             // do itself without knowing the plugin's scene.
             Astra::BinaryReader r(m_snapshot);
             ok = plugin->LoadState(r);

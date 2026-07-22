@@ -2,7 +2,7 @@
 
 // Arcane/Edit: editor command foundation. ICommand is the undo/redo unit --
 // the forward edit already happened (live), so a command only reverses/replays.
-// ARCANE_API generic capability; Grimoire consumes it (no editor state here).
+// ARCANE_API generic capability; Arcane Editor consumes it (no editor state here).
 
 #include <Arcane/Base/Api.hpp>
 

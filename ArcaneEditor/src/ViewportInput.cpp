@@ -1,6 +1,6 @@
 #include "ViewportInput.hpp"
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     bool ToViewportLocal(ViewportRect r, float mx, float my, float& lx, float& ly) noexcept
     {

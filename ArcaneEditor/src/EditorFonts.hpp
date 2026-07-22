@@ -2,7 +2,7 @@
 
 struct ImFont;
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     // Handles to the editor fonts installed by InstallEditorFonts (valid once the ImGui
     // atlas is built). `interRegular` is Fonts[0] -- the implicit UI default; push the

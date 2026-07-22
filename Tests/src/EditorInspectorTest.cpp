@@ -1,4 +1,4 @@
-// Grimoire inspector: field classification + reflected write-back. CPU-only.
+// Arcane Editor inspector: field classification + reflected write-back. CPU-only.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -9,7 +9,7 @@
 
 #include <InspectorFields.hpp>
 
-TEST_CASE("ClassifyField maps arithmetic/bool fields, ReadOnly otherwise", "[grimoire]")
+TEST_CASE("ClassifyField maps arithmetic/bool fields, ReadOnly otherwise", "[editor]")
 {
     const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::SpriteRenderer>();
     REQUIRE(meta != nullptr);
@@ -17,10 +17,10 @@ TEST_CASE("ClassifyField maps arithmetic/bool fields, ReadOnly otherwise", "[gri
     bool sawFloatOrInt = false;
     for (const Astra::FieldInfo& f : meta->fields)
     {
-        const Grimoire::FieldKind k = Grimoire::ClassifyField(f);
+        const Arcane::Editor::FieldKind k = Arcane::Editor::ClassifyField(f);
         if (f.name == "sortingLayer" || f.name == "orderInLayer")
-            CHECK(k == Grimoire::FieldKind::Int32);
-        if (k == Grimoire::FieldKind::Float || k == Grimoire::FieldKind::Int32) sawFloatOrInt = true;
+            CHECK(k == Arcane::Editor::FieldKind::Int32);
+        if (k == Arcane::Editor::FieldKind::Float || k == Arcane::Editor::FieldKind::Int32) sawFloatOrInt = true;
     }
     CHECK(sawFloatOrInt);
 
@@ -30,10 +30,10 @@ TEST_CASE("ClassifyField maps arithmetic/bool fields, ReadOnly otherwise", "[gri
     const Astra::FieldInfo* tintField = nullptr;
     for (const Astra::FieldInfo& f : meta->fields) if (f.name == "tint") tintField = &f;
     REQUIRE(tintField != nullptr);
-    CHECK(Grimoire::ClassifyField(*tintField) == Grimoire::FieldKind::ReadOnly);
+    CHECK(Arcane::Editor::ClassifyField(*tintField) == Arcane::Editor::FieldKind::ReadOnly);
 }
 
-TEST_CASE("ApplyIntEdit writes through reflection to the live component", "[grimoire]")
+TEST_CASE("ApplyIntEdit writes through reflection to the live component", "[editor]")
 {
     Arcane::SpriteRenderer sprite;
     sprite.sortingLayer = 0;
@@ -44,6 +44,6 @@ TEST_CASE("ApplyIntEdit writes through reflection to the live component", "[grim
     for (const Astra::FieldInfo& f : meta->fields) if (f.name == "sortingLayer") layer = &f;
     REQUIRE(layer != nullptr);
 
-    Grimoire::ApplyIntEdit(*layer, &sprite, 7);
+    Arcane::Editor::ApplyIntEdit(*layer, &sprite, 7);
     CHECK(sprite.sortingLayer == 7);
 }

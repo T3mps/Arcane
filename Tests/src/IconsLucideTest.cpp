@@ -1,4 +1,4 @@
-// Guards IconsLucide.h against a bad regeneration ([grimoire], CPU-only).
+// Guards IconsLucide.h against a bad regeneration ([editor], CPU-only).
 #include <catch2/catch_test_macros.hpp>
 
 #include "IconsLucide.h"
@@ -18,7 +18,7 @@ namespace
     }
 }
 
-TEST_CASE("IconsLucide.h codepoints are stable", "[grimoire]")
+TEST_CASE("IconsLucide.h codepoints are stable", "[editor]")
 {
     CHECK(Utf8ToCp(ICON_LC_PLAY)         == 0xE13Cu);
     CHECK(Utf8ToCp(ICON_LC_PAUSE)        == 0xE12Eu);

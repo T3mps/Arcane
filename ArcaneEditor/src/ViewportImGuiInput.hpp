@@ -3,9 +3,9 @@
 // Pure predicates for arbitrating viewport pointer input between the editor
 // (gizmo/pick), the game's in-viewport debug ImGui, and the plugin's gameplay.
 // No ImGui/GPU dependency -> headlessly unit-testable (see
-// Tests/src/ViewportImGuiInputTest.cpp). Consumed by GrimoireApp.
+// Tests/src/ViewportImGuiInputTest.cpp). Consumed by EditorApp.
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     // True when the game's viewport debug UI owns the pointer this frame, so the
     // editor gizmo/pick AND the plugin's gameplay input must be suppressed for it.

@@ -19,7 +19,7 @@
 #include <cstdio>
 #include <string>
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     void BeginDockSpace(Arcane::CommandStack& undo)
     {
@@ -34,7 +34,7 @@ namespace Grimoire
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::Begin("GrimoireDockHost", nullptr, flags);
+        ImGui::Begin("EditorDockHost", nullptr, flags);
         ImGui::PopStyleVar(3);
 
         // Editor menu bar. File items + Edit's Cut/Copy/Paste are placeholders for now;
@@ -104,7 +104,7 @@ namespace Grimoire
 
     void EndDockSpace()
     {
-        const ImGuiID dockspaceId = ImGui::GetID("GrimoireDockSpace");
+        const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
 
         // First run (no saved .ini layout): arrange the default editor layout.
         if (ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
@@ -299,7 +299,7 @@ namespace Grimoire
         }
 
         // Capture a left-click inside the image, in viewport-local px (origin = image
-        // top-left), UNLESS it landed on the tool overlay above. GrimoireApp unprojects
+        // top-left), UNLESS it landed on the tool overlay above. EditorApp unprojects
         // it through the plugin camera and drives the entity pick.
         if (r.hovered && !overlayHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
@@ -319,7 +319,7 @@ namespace Grimoire
     void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel)
     {
         ImGui::Begin("Hierarchy");
-        for (Astra::Entity e : Grimoire::CollectEntities(registry))
+        for (Astra::Entity e : Arcane::Editor::CollectEntities(registry))
         {
             char label[64];
             std::snprintf(label, sizeof(label), "Entity %u (v%u)",
@@ -374,33 +374,33 @@ namespace Grimoire
             {
                 ImGui::PushID(static_cast<int>(f.nameHash));
                 const std::string label(f.name);
-                switch (Grimoire::ClassifyField(f))
+                switch (Arcane::Editor::ClassifyField(f))
                 {
-                    case Grimoire::FieldKind::Bool:
+                    case Arcane::Editor::FieldKind::Bool:
                     {
                         bool v = f.Get<bool>(instance);
                         bool changed = ImGui::Checkbox(label.c_str(), &v);
                         BeginGestureIfActivated(label);
-                        if (changed) Grimoire::ApplyBoolEdit(f, instance, v);
+                        if (changed) Arcane::Editor::ApplyBoolEdit(f, instance, v);
                         break;
                     }
-                    case Grimoire::FieldKind::Int32:
+                    case Arcane::Editor::FieldKind::Int32:
                     {
                         int v = f.Get<int32_t>(instance);
                         bool changed = ImGui::DragInt(label.c_str(), &v);
                         BeginGestureIfActivated(label);
-                        if (changed) Grimoire::ApplyIntEdit(f, instance, v);
+                        if (changed) Arcane::Editor::ApplyIntEdit(f, instance, v);
                         break;
                     }
-                    case Grimoire::FieldKind::Float:
+                    case Arcane::Editor::FieldKind::Float:
                     {
                         float v = f.Get<float>(instance);
                         bool changed = ImGui::DragFloat(label.c_str(), &v, 0.1f);
                         BeginGestureIfActivated(label);
-                        if (changed) Grimoire::ApplyFloatEdit(f, instance, v);
+                        if (changed) Arcane::Editor::ApplyFloatEdit(f, instance, v);
                         break;
                     }
-                    case Grimoire::FieldKind::Vec2:
+                    case Arcane::Editor::FieldKind::Vec2:
                     {
                         glm::vec2 v = f.Get<glm::vec2>(instance);
                         bool changed = ImGui::DragFloat2(label.c_str(), &v.x, 0.1f);
@@ -408,7 +408,7 @@ namespace Grimoire
                         if (changed) if (glm::vec2* p = f.GetPtr<glm::vec2>(instance)) *p = v;
                         break;
                     }
-                    case Grimoire::FieldKind::Vec3:
+                    case Arcane::Editor::FieldKind::Vec3:
                     {
                         glm::vec3 v = f.Get<glm::vec3>(instance);
                         bool changed = ImGui::DragFloat3(label.c_str(), &v.x, 0.1f);
@@ -416,7 +416,7 @@ namespace Grimoire
                         if (changed) if (glm::vec3* p = f.GetPtr<glm::vec3>(instance)) *p = v;
                         break;
                     }
-                    case Grimoire::FieldKind::ReadOnly:
+                    case Arcane::Editor::FieldKind::ReadOnly:
                     default:
                         ImGui::BeginDisabled();
                         ImGui::Text("%s (unsupported)", label.c_str());

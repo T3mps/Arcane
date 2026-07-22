@@ -1,7 +1,7 @@
 #pragma once
 
 // ARCANE_API: dllexport when building Arcane.dll, dllimport for consumers
-// (Loom, Grimoire, Playground, Game.dll, ArcaneTests). The only C surface
+// (Loom, Arcane Editor, Playground, Game.dll, ArcaneTests). The only C surface
 // in the architecture is the plugin entry-point set (M4); everything
 // marked ARCANE_API is direct same-toolchain C++ linkage by design.
 

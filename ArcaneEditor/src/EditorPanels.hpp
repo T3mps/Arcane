@@ -8,7 +8,7 @@
 namespace Arcane { class RunLoop; class Runtime; struct PluginVTable; }
 namespace Astra { class Registry; }
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     class ConsoleBuffer;
     class PlaySession;

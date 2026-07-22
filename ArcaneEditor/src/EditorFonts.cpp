@@ -13,7 +13,7 @@
 #include <windows.h>
 #endif
 
-namespace Grimoire
+namespace Arcane::Editor
 {
     namespace
     {
@@ -48,7 +48,7 @@ namespace Grimoire
             ImFont* face = io.Fonts->AddFontFromFileTTF(facePath.c_str(), sizePx, &baseCfg);
             if (!face)
             {
-                ARC_WARN("Grimoire: failed to load font '{}'", facePath);
+                ARC_WARN("Arcane Editor: failed to load font '{}'", facePath);
                 return nullptr;
             }
 
@@ -57,7 +57,7 @@ namespace Grimoire
             cfg.GlyphMinAdvanceX = sizePx;   // monospace icon cell
             cfg.GlyphOffset.y    = 3.0f;     // baseline nudge (matches prior tuning)
             if (!io.Fonts->AddFontFromFileTTF(lucidePath.c_str(), sizePx, &cfg, kIconRange))
-                ARC_WARN("Grimoire: failed to merge icon font '{}' into '{}'", lucidePath, facePath);
+                ARC_WARN("Arcane Editor: failed to merge icon font '{}' into '{}'", lucidePath, facePath);
 
             return face;
         }
