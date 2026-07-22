@@ -98,4 +98,8 @@ namespace Arcane
             return Astra::Entity{};
         return drawables[id - 1].entity;
     }
+
+    // The id-buffer texel to sample for a 1x viewport click at `pixel1x` when the
+    // id buffer is supersampled by `ss` (center subsample), clamped to [0, dim).
+    ARCANE_API glm::ivec2 PickSampleTexel(glm::vec2 pixel1x, uint32_t ss, uint32_t idW, uint32_t idH);
 }

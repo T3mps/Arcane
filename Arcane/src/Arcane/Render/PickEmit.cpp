@@ -146,4 +146,14 @@ namespace Arcane
                 return static_cast<uint32_t>(k + 1);
         return 0u;
     }
+
+    glm::ivec2 PickSampleTexel(glm::vec2 pixel1x, uint32_t ss, uint32_t idW, uint32_t idH)
+    {
+        const int s = (int)ss;
+        int x = (int)std::floor(pixel1x.x) * s + s / 2;
+        int y = (int)std::floor(pixel1x.y) * s + s / 2;
+        x = std::clamp(x, 0, (int)idW - 1);
+        y = std::clamp(y, 0, (int)idH - 1);
+        return glm::ivec2(x, y);
+    }
 }

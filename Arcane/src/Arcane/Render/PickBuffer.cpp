@@ -73,8 +73,8 @@ namespace Arcane
         class PickBufferImpl final : public PickBuffer
         {
         public:
-            PickBufferImpl(nvrhi::IDevice* device, ShaderLibrary& shaders)
-                : m_device(device), m_shaders(shaders) {}
+            PickBufferImpl(nvrhi::IDevice* device, ShaderLibrary& shaders, uint32_t supersample)
+                : m_device(device), m_shaders(shaders), m_ss(supersample) {}
 
             bool Init(uint32_t width, uint32_t height)
             {
@@ -129,6 +129,14 @@ namespace Arcane
                         m_commandList->writeBuffer(m_indexBuffer, m_indices.data(),
                                                    m_indices.size() * sizeof(uint32_t));
 
+                        // Logical 1x dims: PickDrawable geometry (PickEmit) lives in
+                        // canvas px derived from PickView (world*scale+offset), which
+                        // carries no target-size dependency. Feeding the LOGICAL
+                        // width/height here (not the supersampled target's physical
+                        // size) keeps the world->NDC map identical to the ss=1 case;
+                        // only the viewport below grows, so the SAME logical content
+                        // rasterizes at higher density -- supersampling with zero
+                        // vertex-shader change (see Step 0 in the task brief).
                         const IdPushConstants push{
                             glm::vec2(2.0f / (float)m_width, 2.0f / (float)m_height),
                             glm::vec2(0.0f) };
@@ -139,8 +147,10 @@ namespace Arcane
                             .addBindingSet(m_bindingSet)
                             .setIndexBuffer({ m_indexBuffer, nvrhi::Format::R32_UINT, 0 })
                             .addVertexBuffer({ m_vertexBuffer, 0, 0 });
+                        // Viewport spans the PHYSICAL (supersampled) target so the
+                        // rasterizer samples the logical content at ss x density.
                         state.viewport.addViewportAndScissorRect(
-                            nvrhi::Viewport((float)m_width, (float)m_height));
+                            nvrhi::Viewport((float)(m_width * m_ss), (float)(m_height * m_ss)));
                         m_commandList->setGraphicsState(state);
                         m_commandList->setPushConstants(&push, sizeof(push));
                         m_commandList->drawIndexed(nvrhi::DrawArguments()
@@ -161,17 +171,21 @@ namespace Arcane
                     pixel.x >= (float)m_width || pixel.y >= (float)m_height)
                     return Astra::Entity{};
 
-                const uint32_t px = (uint32_t)pixel.x;
-                const uint32_t py = (uint32_t)pixel.y;
-
                 // Render the id pass (rebuilds the id target + the id<->entity
-                // table), then copy the single pixel under the cursor out.
+                // table), then copy the single subsample texel under the cursor
+                // out -- the center subsample of the click's 1x pixel when the
+                // id target is supersampled by m_ss.
                 RenderIdPass(registry, view);
+
+                const nvrhi::TextureDesc& targetDesc = m_target->getDesc();
+                const glm::ivec2 texel = PickSampleTexel(
+                    pixel, m_ss, targetDesc.width, targetDesc.height);
 
                 m_commandList->open();
                 m_commandList->copyTexture(
                     m_staging, nvrhi::TextureSlice(),
-                    m_target, nvrhi::TextureSlice().setOrigin(px, py)
+                    m_target, nvrhi::TextureSlice()
+                                  .setOrigin((uint32_t)texel.x, (uint32_t)texel.y)
                                   .setWidth(1).setHeight(1));
                 m_commandList->close();
                 m_device->executeCommandList(m_commandList);
@@ -231,15 +245,24 @@ namespace Arcane
 
             uint32_t Width()  const override { return m_width;  }
             uint32_t Height() const override { return m_height; }
+            uint32_t Supersample() const override { return m_ss; }
 
         private:
             bool BuildTarget(uint32_t width, uint32_t height)
             {
+                // The id target is sized PHYSICAL = m_ss * logical so the id pass
+                // (below) can rasterize the same logical content at higher
+                // density; m_width/m_height (below) stay LOGICAL -- everything
+                // outside this function (Width()/Height(), the push-constant
+                // NDC map, Pick()'s bounds check) reasons in 1x.
+                const uint32_t physW = width  * m_ss;
+                const uint32_t physH = height * m_ss;
+
                 // R32_UINT render target: the id pass writes per-pixel ids here;
-                // Pick() copies 1 pixel out. KeepInitialState lets NVRHI auto-
+                // Pick() copies 1 texel out. KeepInitialState lets NVRHI auto-
                 // transition between RenderTarget and CopySource.
                 auto desc = nvrhi::TextureDesc()
-                    .setWidth(width).setHeight(height)
+                    .setWidth(physW).setHeight(physH)
                     .setFormat(kIdFormat)
                     .setIsRenderTarget(true)
                     .setInitialState(nvrhi::ResourceStates::RenderTarget)
@@ -248,8 +271,8 @@ namespace Arcane
                 m_target = m_device->createTexture(desc);
                 if (!m_target)
                 {
-                    ARC_ERROR("PickBuffer: id target creation failed ({}x{})",
-                              width, height);
+                    ARC_ERROR("PickBuffer: id target creation failed ({}x{}, ss={})",
+                              physW, physH, m_ss);
                     return false;
                 }
 
@@ -469,22 +492,24 @@ namespace Arcane
             std::vector<IdVertex>      m_vertices;
             std::vector<uint32_t>      m_indices;
 
-            uint32_t m_width  = 0;
-            uint32_t m_height = 0;
+            uint32_t m_width  = 0;   // LOGICAL 1x size
+            uint32_t m_height = 0;   // LOGICAL 1x size
+            uint32_t m_ss     = 1;   // supersample factor; id target is m_ss*width x m_ss*height
         };
     }
 
     std::unique_ptr<PickBuffer> PickBuffer::Create(
         nvrhi::IDevice* device, ShaderLibrary& shaders,
-        uint32_t width, uint32_t height)
+        uint32_t width, uint32_t height, uint32_t supersample)
     {
-        if (!device || width == 0 || height == 0)
+        if (!device || width == 0 || height == 0 || supersample == 0)
         {
-            ARC_ERROR("PickBuffer::Create: bad args ({}x{})", width, height);
+            ARC_ERROR("PickBuffer::Create: bad args ({}x{}, ss={})",
+                      width, height, supersample);
             return nullptr;
         }
 
-        auto pb = std::make_unique<PickBufferImpl>(device, shaders);
+        auto pb = std::make_unique<PickBufferImpl>(device, shaders, supersample);
         if (!pb->Init(width, height))
             return nullptr;
         return pb;

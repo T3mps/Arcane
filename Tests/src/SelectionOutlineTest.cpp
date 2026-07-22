@@ -22,6 +22,16 @@ TEST_CASE("PickPassId maps ordered entities to k+1, 0 for absent/invalid", "[pic
     CHECK(Arcane::PickPassId({}, a) == 0u);                          // empty
 }
 
+TEST_CASE("PickSampleTexel maps a 1x click to the center subsample, clamped", "[pick]")
+{
+    // ss=2, id buffer 128x128 (1x 64x64). Click at 1x pixel (10,20) -> 2x texel (21,41).
+    CHECK(Arcane::PickSampleTexel(glm::vec2(10.4f, 20.9f), 2u, 128u, 128u) == glm::ivec2(21, 41));
+    // ss=1 is identity (floored), clamped to bounds.
+    CHECK(Arcane::PickSampleTexel(glm::vec2(3.7f, 4.2f), 1u, 64u, 64u) == glm::ivec2(3, 4));
+    // out-of-range clamps into the buffer.
+    CHECK(Arcane::PickSampleTexel(glm::vec2(999.0f, -5.0f), 2u, 128u, 128u) == glm::ivec2(127, 0));
+}
+
 // ===========================================================================
 // GPU test ([gpu][selection]) -- DESK/CI-DRIVEN. Needs a real device (per-backend,
 // like TonemapTest/PickBufferTest) and hits the Parsec GPU-driver hazard headless,

@@ -40,9 +40,17 @@ namespace Arcane
         // Returns null (with ARC_ERROR) if any owned resource fails to build.
         // `shaders` must outlive the returned PickBuffer (the id pipeline keeps a
         // reference for lazy rebuilds, mirroring OffscreenCanvas / Batcher2D).
+        // `supersample` sizes the id target at supersample*width x
+        // supersample*height (default 1 == no supersampling, byte-identical to
+        // pre-supersample behavior); Width()/Height() still report the LOGICAL
+        // 1x size regardless. The world->canvas content mapping (PickView) is
+        // resolution-independent, so a larger supersample*width x
+        // supersample*height target + matching viewport simply rasterizes the
+        // SAME logical silhouettes at higher density -- no vertex-shader change.
         static std::unique_ptr<PickBuffer> Create(nvrhi::IDevice* device,
                                                   ShaderLibrary& shaders,
-                                                  uint32_t width, uint32_t height);
+                                                  uint32_t width, uint32_t height,
+                                                  uint32_t supersample = 1);
 
         virtual ~PickBuffer() = default;
 
@@ -66,8 +74,9 @@ namespace Arcane
         virtual void RenderIdPass(Astra::Registry& registry, const PickView& view) = 0;
 
         // The R32_UINT id render target (valid after Create; rebuilt on Resize).
+        // Sized supersample*Width() x supersample*Height() -- see Supersample().
         // Exposed for readback / a future id-buffer visualization; Pick() reads a
-        // single pixel from it internally. (Pick() is added in Task 4.)
+        // single (center-subsample) pixel from it internally.
         virtual nvrhi::ITexture* IdTarget() const = 0;
 
         // The pass id assigned to `e` in the most recent RenderIdPass/Pick (k+1
@@ -80,7 +89,13 @@ namespace Arcane
         // independent, so it is not rebuilt.
         virtual void Resize(uint32_t width, uint32_t height) = 0;
 
+        // LOGICAL 1x dimensions (callers reason in 1x canvas px); the id target
+        // itself is Supersample()*Width() x Supersample()*Height().
         virtual uint32_t Width()  const = 0;
         virtual uint32_t Height() const = 0;
+
+        // The supersample factor set at Create (fixed for the buffer's lifetime;
+        // Resize keeps it). 1 == no supersampling.
+        virtual uint32_t Supersample() const = 0;
     };
 }
