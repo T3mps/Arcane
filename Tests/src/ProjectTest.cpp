@@ -58,6 +58,34 @@ TEST_CASE("Project::Open fails on missing or ambiguous manifest", "[project]")
     CHECK_FALSE(Arcane::Project::Open(many).has_value());   // ambiguous
 }
 
+TEST_CASE("Project::Open accepts a direct .arcproj file path", "[project]")
+{
+    const auto dir = TempDir("open_direct_file");
+    const auto manifestFile = dir / "Direct.arcproj";
+    WriteFile(manifestFile,
+              R"({ "formatVersion": 1, "name": "Direct", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+
+    auto proj = Arcane::Project::Open(manifestFile);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Manifest().name == "Direct");
+    CHECK(proj->Root() == dir);
+    CHECK(proj->Mounts().HasMount("game"));
+
+    auto p = proj->Mounts().Resolve("game://x.png");
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "x.png");
+}
+
+TEST_CASE("Project::Open fails on a schema-invalid manifest", "[project]")
+{
+    const auto dir = TempDir("open_schema_invalid");
+    // Well-formed JSON, but missing the required "name" field.
+    WriteFile(dir / "Bad.arcproj", R"({ "formatVersion": 1, "engine": { "abi": 4 } })");
+
+    CHECK_FALSE(Arcane::Project::Open(dir).has_value());
+}
+
 TEST_CASE("Project::ResolveAsset maps an AssetId through the mounts", "[project]")
 {
     const auto dir = TempDir("resolve");
@@ -110,4 +138,13 @@ TEST_CASE("Project::Create refuses a non-empty target directory", "[project]")
     const auto dir = TempDir("create_nonempty");
     WriteFile(dir / "existing.txt", "x");
     CHECK_FALSE(Arcane::Project::Create(dir, "X").has_value());
+}
+
+TEST_CASE("Project::Create refuses a name containing a path separator", "[project]")
+{
+    const auto dir = TempDir("create_bad_name");
+    CHECK_FALSE(Arcane::Project::Create(dir, "a/b").has_value());
+
+    // The bad name must be rejected before any skeleton is created on disk.
+    CHECK(std::filesystem::is_empty(dir));
 }

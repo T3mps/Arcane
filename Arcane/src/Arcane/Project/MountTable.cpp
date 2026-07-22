@@ -27,6 +27,22 @@ namespace Arcane
         if (it == m_roots.end())
             return std::nullopt;
 
-        return it->second / std::filesystem::path(rel);
+        // std::filesystem::operator/ REPLACES the left side entirely when the right
+        // side is absolute/rooted (drive letter, embedded "scheme://", or a leading
+        // slash), so a naively-joined `rel` can escape `root`. Reject anything rooted
+        // up front, then reject any ".."-climb that escapes the mount root once
+        // joined and lexically normalized.
+        const std::filesystem::path relPath(rel);
+        if (relPath.has_root_name() || relPath.has_root_directory())
+            return std::nullopt;
+
+        const std::filesystem::path root     = it->second.lexically_normal();
+        const std::filesystem::path resolved = (it->second / relPath).lexically_normal();
+
+        const std::filesystem::path relToRoot = resolved.lexically_relative(root);
+        if (relToRoot.empty() || relToRoot.begin()->string() == "..")
+            return std::nullopt;
+
+        return resolved;
     }
 }

@@ -3,6 +3,8 @@
 #include <Arcane/Base/Log.hpp>   // ARC_WARN (confirmed path, see Task 3)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 
+#include <Json.hpp>
+
 #include <fstream>
 #include <system_error>
 
@@ -61,6 +63,15 @@ namespace Arcane
     {
         std::error_code ec;
 
+        // Reject a bad name BEFORE touching disk: empty, or containing a path
+        // separator, would otherwise let the manifest filename (dir / (name +
+        // ".arcproj")) write outside `dir`, or silently produce a nameless file.
+        if (name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos)
+        {
+            ARC_WARN("Project::Create: invalid project name '{}'", name);
+            return std::nullopt;
+        }
+
         // Refuse a non-empty existing dir (avoid clobbering); an absent dir is fine.
         if (std::filesystem::exists(dir, ec) && !std::filesystem::is_empty(dir, ec))
         {
@@ -79,17 +90,26 @@ namespace Arcane
         }
 
         // Minimal manifest. ABI comes from the engine's plugin-ABI constant so a freshly
-        // created project always targets the engine that created it.
-        const std::string manifest =
-            "{\n"
-            "  \"formatVersion\": 1,\n"
-            "  \"name\": \"" + name + "\",\n"
-            "  \"engine\": { \"abi\": " + std::to_string(Arcane::kGamePluginABIVersion) + " },\n"
-            "  \"gameModule\": \"\",\n"
-            "  \"plugins\": [],\n"
-            "  \"bootScene\": \"\"\n"
-            "}\n";
-        std::ofstream(dir / (name + ".arcproj"), std::ios::binary) << manifest;
+        // created project always targets the engine that created it. Built via nlohmann
+        // so `name` is escaped correctly (rather than hand-concatenated into JSON text).
+        nlohmann::json manifestJson;
+        manifestJson["formatVersion"] = 1;
+        manifestJson["name"]          = name;
+        manifestJson["engine"]        = { { "abi", static_cast<int>(Arcane::kGamePluginABIVersion) } };
+        manifestJson["gameModule"]    = "";
+        manifestJson["plugins"]       = nlohmann::json::array();
+        manifestJson["bootScene"]     = "";
+
+        const std::filesystem::path manifestPath = dir / (name + ".arcproj");
+        {
+            std::ofstream out(manifestPath, std::ios::binary);
+            out << manifestJson.dump(2);
+            if (!out.good())
+            {
+                ARC_WARN("Project::Create: failed writing manifest '{}'", manifestPath.generic_string());
+                return std::nullopt;
+            }
+        }
 
         static const char* kGitignore =
             "# Derived / generated -- never commit\n"
@@ -107,7 +127,17 @@ namespace Arcane
             "*.vcxproj.filters\n"
             "*.vcxproj.user\n"
             ".vs/\n";
-        std::ofstream(dir / ".gitignore", std::ios::binary) << kGitignore;
+
+        const std::filesystem::path gitignorePath = dir / ".gitignore";
+        {
+            std::ofstream out(gitignorePath, std::ios::binary);
+            out << kGitignore;
+            if (!out.good())
+            {
+                ARC_WARN("Project::Create: failed writing '{}'", gitignorePath.generic_string());
+                return std::nullopt;
+            }
+        }
 
         return Open(dir);
     }

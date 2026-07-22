@@ -84,6 +84,9 @@ namespace Arcane
             ARC_WARN("ProjectManifest: parse failed for '{}': {}", file.generic_string(), e.what());
             return std::nullopt;
         }
-        return FromJson(doc);
+        auto m = FromJson(doc);
+        if (!m)
+            ARC_WARN("ProjectManifest: schema invalid in '{}'", file.generic_string());
+        return m;
     }
 }
