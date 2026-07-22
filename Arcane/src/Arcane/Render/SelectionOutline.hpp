@@ -35,7 +35,7 @@ namespace Arcane
             glm::vec4  selectColor = { 1.0f, 0.65f, 0.10f, 1.0f };  // amber (display-referred)
             glm::vec4  hoverColor  = { 0.25f, 0.70f, 1.0f, 1.0f };  // cyan  (display-referred)
             float      selectThicknessPx = 3.0f;                    // outline half-width
-            float      hoverThicknessPx  = 2.0f;
+            float      hoverThicknessPx  = 3.0f;
             float      edgeSoftnessPx    = 1.0f;                    // AA ramp width
         };
 

@@ -185,13 +185,14 @@ namespace Arcane
                 nvrhi::ITexture* src = m_seed0;                 // first read source
                 nvrhi::IFramebuffer* dstFb = m_pingFb[0];       // first write
                 nvrhi::ITexture* dst = m_ping[0];
-                for (uint32_t i = 0; i < passes; ++i)
+                for (uint32_t i = 0; i <= passes; ++i)
                 {
                     JfaCB jc{};
-                    jc.jump = 1 << (passes - 1 - i);
-                    jc.dimX = (int32_t)m_width;
-                    jc.dimY = (int32_t)m_height;
+                    jc.jump = (i < passes) ? static_cast<int32_t>(1u << (passes - 1u - i)) : 1;
+                    jc.dimX = static_cast<int32_t>(m_width);
+                    jc.dimY = static_cast<int32_t>(m_height);
                     jc.pad  = 0;
+
                     cmd->writeBuffer(m_jfaCb, &jc, sizeof(jc));
 
                     nvrhi::BindingSetHandle jfaSet = JfaBindingSet(src);
