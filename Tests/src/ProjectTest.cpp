@@ -55,3 +55,25 @@ TEST_CASE("Project::Open fails on missing or ambiguous manifest", "[project]")
     WriteFile(many / "B.arcproj", R"({ "formatVersion": 1, "name": "B", "engine": { "abi": 4 } })");
     CHECK_FALSE(Arcane::Project::Open(many).has_value());   // ambiguous
 }
+
+TEST_CASE("Project::ResolveAsset maps an AssetId through the mounts", "[project]")
+{
+    const auto dir = TempDir("resolve");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 4 } })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    auto id = Arcane::AssetId::FromMountPath("game://characters/hero.png");
+    auto p  = proj->ResolveAsset(id);
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "characters" / "hero.png");
+
+    // Unmounted scheme -> no resolution.
+    CHECK_FALSE(proj->ResolveAsset(
+        Arcane::AssetId::FromMountPath("engine://x.png")).has_value());
+
+    // Invalid id -> no resolution.
+    CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId{}).has_value());
+}

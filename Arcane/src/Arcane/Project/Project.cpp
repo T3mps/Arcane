@@ -54,4 +54,13 @@ namespace Arcane
         proj.m_mounts.Mount("game", root / "Content");
         return proj;
     }
+
+    std::optional<std::filesystem::path> Project::ResolveAsset(const AssetId& id) const
+    {
+        if (!id.IsValid())
+            return std::nullopt;
+        // Slice 1: the AssetId key IS the logical mount path. Slice 2 replaces this body
+        // with an AssetRegistry lookup (GUID -> mount path) before the mount resolve.
+        return m_mounts.Resolve(id.Key());
+    }
 }
