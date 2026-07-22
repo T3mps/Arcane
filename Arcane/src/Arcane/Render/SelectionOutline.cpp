@@ -3,7 +3,9 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 
+#include <cstddef>   // offsetof
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 
 namespace Arcane
@@ -31,6 +33,19 @@ namespace Arcane
         struct JfaCB { int32_t jump; int32_t dimX, dimY; int32_t pad; };
         static_assert(sizeof(JfaCB) == 16, "JfaCB must match outline_jfa.hlsl JfaCB");
 
+        // BYTE-IDENTICAL to the HLSL `cbuffer CompositeCB` in outline_composite.hlsl.
+        // HLSL packing: gSelectThick(0), gHoverThick(4), gEdgeSoft(8), _pad0(12),
+        // int2 gDim(16..24), int2 _pad1(24..32), float4 gSelectColor(32..48),
+        // float4 gHoverColor(48..64) -> 64 bytes. glm::vec4 (4-byte aligned) lands
+        // at offset 32 naturally, matching the 16-aligned HLSL row.
+        struct CompositeCB {
+            float selectThick, hoverThick, edgeSoft, pad0;
+            int32_t dimX, dimY, pad1a, pad1b;
+            glm::vec4 selectColor, hoverColor;
+        };
+        static_assert(sizeof(CompositeCB) == 64, "CompositeCB must match outline_composite.hlsl");
+        static_assert(offsetof(CompositeCB, selectColor) == 32, "selectColor at offset 32");
+
         // Distance-field targets are signed-normalized RGBA16: seed .xy stores a
         // normalized [-1,1] silhouette position, .z a +-1 select/hover tag, .w a
         // 0..1 coverage. Renderable + sample-able on both backends.
@@ -54,7 +69,14 @@ namespace Arcane
                     .setVisibility(nvrhi::ShaderType::Pixel)
                     .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
                     .addItem(nvrhi::BindingLayoutItem::ConstantBuffer(0)));
-                if (!m_seedLayout || !m_jfaLayout)
+                // composite bindings: t0 = field (SRV), t1 = seed0 (SRV), b0 =
+                // CompositeCB. Pixel stage. Two SRVs in one layout/set.
+                m_compositeLayout = m_device->createBindingLayout(nvrhi::BindingLayoutDesc()
+                    .setVisibility(nvrhi::ShaderType::Pixel)
+                    .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+                    .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+                    .addItem(nvrhi::BindingLayoutItem::ConstantBuffer(0)));
+                if (!m_seedLayout || !m_jfaLayout || !m_compositeLayout)
                 {
                     ARC_ERROR("SelectionOutline: binding layout creation failed");
                     return false;
@@ -74,16 +96,24 @@ namespace Arcane
                     .setInitialState(nvrhi::ResourceStates::ConstantBuffer)
                     .setKeepInitialState(true)
                     .setDebugName("SelectionOutline.JfaCB"));
-                if (!m_seedCb || !m_jfaCb)
+                m_compositeCb = m_device->createBuffer(nvrhi::BufferDesc()
+                    .setByteSize(sizeof(CompositeCB))
+                    .setIsConstantBuffer(true)
+                    .setInitialState(nvrhi::ResourceStates::ConstantBuffer)
+                    .setKeepInitialState(true)
+                    .setDebugName("SelectionOutline.CompositeCB"));
+                if (!m_seedCb || !m_jfaCb || !m_compositeCb)
                 {
                     ARC_ERROR("SelectionOutline: constant buffer creation failed");
                     return false;
                 }
 
-                if (!m_shaders->Get("outline_seed_vs", nvrhi::ShaderType::Vertex) ||
-                    !m_shaders->Get("outline_seed_ps", nvrhi::ShaderType::Pixel)  ||
-                    !m_shaders->Get("outline_jfa_vs",  nvrhi::ShaderType::Vertex) ||
-                    !m_shaders->Get("outline_jfa_ps",  nvrhi::ShaderType::Pixel))
+                if (!m_shaders->Get("outline_seed_vs",      nvrhi::ShaderType::Vertex) ||
+                    !m_shaders->Get("outline_seed_ps",      nvrhi::ShaderType::Pixel)  ||
+                    !m_shaders->Get("outline_jfa_vs",       nvrhi::ShaderType::Vertex) ||
+                    !m_shaders->Get("outline_jfa_ps",       nvrhi::ShaderType::Pixel)  ||
+                    !m_shaders->Get("outline_composite_vs", nvrhi::ShaderType::Vertex) ||
+                    !m_shaders->Get("outline_composite_ps", nvrhi::ShaderType::Pixel))
                 {
                     ARC_ERROR("SelectionOutline: shaders unavailable");
                     return false;
@@ -93,21 +123,24 @@ namespace Arcane
             }
 
             void Render(nvrhi::ICommandList* cmd, nvrhi::ITexture* idBuffer,
-                        nvrhi::IFramebuffer* /*target*/, const Params& p) override
+                        nvrhi::IFramebuffer* target, const Params& p) override
             {
-                // Task 2: seed + JFA into the internal field. The composite into
-                // `target` is Task 3 -- `target` is intentionally unused here.
+                // seed + JFA build the internal field, then the composite pass
+                // blends the two-color outline into `target`. A null `target`
+                // still runs seed + JFA (DebugDistanceField consumers / tests).
                 if (!cmd || !idBuffer)
                     return;
                 if (!m_seed0Fb || !m_pingFb[0] || !m_pingFb[1])
                     return;
 
                 // Lazy rebuild on shader hot reload: a generation bump invalidates
-                // both pipelines (built against the fixed RGBA16_SNORM field format).
+                // every pipeline (seed/jfa are built against the fixed RGBA16_SNORM
+                // field format; composite against the external target's format).
                 if (m_pipelineGeneration != m_shaders->Generation())
                 {
                     m_seedPipeline = nullptr;
                     m_jfaPipeline  = nullptr;
+                    m_compositePipelines.clear();
                     m_pipelineGeneration = m_shaders->Generation();
                 }
 
@@ -174,6 +207,40 @@ namespace Arcane
                     dst = m_ping[nextIdx]; dstFb = m_pingFb[nextIdx];
                 }
                 m_field = src;   // the last-written target holds the distance field
+
+                // --- Composite pass: field + seed0 -> target (display-referred) ---
+                // Reads the nearest silhouette seed (m_field, t0) + this pixel's own
+                // coverage (m_seed0, t1, for the exterior test), writes the AA amber/
+                // cyan ring straight into the gamma-encoded target (no sRGB convert).
+                if (!target)
+                    return;   // seed + JFA only (DebugDistanceField path)
+
+                nvrhi::IGraphicsPipeline* compositePipe = GetCompositePipeline(target);
+                if (!compositePipe)
+                    return;
+
+                CompositeCB cc{};
+                cc.selectThick = p.selectThicknessPx;
+                cc.hoverThick  = p.hoverThicknessPx;
+                cc.edgeSoft    = p.edgeSoftnessPx;
+                cc.pad0        = 0.0f;
+                cc.dimX = (int32_t)m_width; cc.dimY = (int32_t)m_height;
+                cc.pad1a = cc.pad1b = 0;
+                cc.selectColor = p.selectColor;
+                cc.hoverColor  = p.hoverColor;
+                cmd->writeBuffer(m_compositeCb, &cc, sizeof(cc));
+
+                {
+                    nvrhi::BindingSetHandle compositeSet = CompositeBindingSet();
+                    const nvrhi::FramebufferInfoEx& fbInfo = target->getFramebufferInfo();
+                    auto state = nvrhi::GraphicsState()
+                        .setPipeline(compositePipe)
+                        .setFramebuffer(target)
+                        .addBindingSet(compositeSet);
+                    state.viewport.addViewportAndScissorRect(fbInfo.getViewport());
+                    cmd->setGraphicsState(state);
+                    cmd->draw(nvrhi::DrawArguments().setVertexCount(3));
+                }
             }
 
             void Resize(uint32_t w, uint32_t h) override
@@ -233,6 +300,7 @@ namespace Arcane
                 // references a destroyed texture; drop them so Render rebuilds.
                 m_seedBindingSets.clear();
                 m_jfaBindingSets.clear();
+                m_compositeBindingSets.clear();
                 m_field = m_seed0;   // until the first Render populates the field
                 return true;
             }
@@ -269,6 +337,48 @@ namespace Arcane
                     m_jfaPipeline = MakeFullscreenPipeline(vs, ps, m_jfaLayout, m_pingFb[0]);
                 }
                 return m_jfaPipeline;
+            }
+
+            // Composite targets an EXTERNAL framebuffer whose format we do not own,
+            // so cache one pipeline per FramebufferInfo (mirrors v1's GetPipeline).
+            nvrhi::IGraphicsPipeline* GetCompositePipeline(nvrhi::IFramebuffer* target)
+            {
+                const nvrhi::FramebufferInfoEx& fbInfo = target->getFramebufferInfo();
+                const size_t key = std::hash<nvrhi::FramebufferInfo>{}(fbInfo);
+
+                nvrhi::GraphicsPipelineHandle& pipeline = m_compositePipelines[key];
+                if (!pipeline)
+                {
+                    nvrhi::ShaderHandle vs = m_shaders->Get("outline_composite_vs", nvrhi::ShaderType::Vertex);
+                    nvrhi::ShaderHandle ps = m_shaders->Get("outline_composite_ps", nvrhi::ShaderType::Pixel);
+                    if (!vs || !ps)
+                    {
+                        ARC_ERROR("SelectionOutline: outline_composite shaders unavailable");
+                        return nullptr;
+                    }
+
+                    // Outline texels return a (possibly translucent) color; the rest
+                    // discard -- alpha blend so the AA ring composites over the
+                    // display-referred target (mirrors v1's blend state).
+                    nvrhi::BlendState::RenderTarget blend;
+                    blend.enableBlend()
+                        .setSrcBlend(nvrhi::BlendFactor::SrcAlpha)
+                        .setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
+                        .setSrcBlendAlpha(nvrhi::BlendFactor::One)
+                        .setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+
+                    auto desc = nvrhi::GraphicsPipelineDesc()
+                        .setVertexShader(vs)
+                        .setPixelShader(ps)
+                        .addBindingLayout(m_compositeLayout);
+                    desc.primType = nvrhi::PrimitiveType::TriangleList;
+                    desc.renderState.rasterState.setCullNone();
+                    desc.renderState.depthStencilState.disableDepthTest();
+                    desc.renderState.depthStencilState.disableStencil();
+                    desc.renderState.blendState.setRenderTarget(0, blend);
+                    pipeline = m_device->createGraphicsPipeline(desc, fbInfo);
+                }
+                return pipeline;
             }
 
             nvrhi::GraphicsPipelineHandle MakeFullscreenPipeline(
@@ -323,13 +433,34 @@ namespace Arcane
                 return set;
             }
 
+            nvrhi::BindingSetHandle CompositeBindingSet()
+            {
+                // t0 = m_field (last-written JFA target; deterministic per size but
+                // keyed on the pointer for safety), t1 = m_seed0 (original coverage).
+                // BuildTargets clears the cache when the owned targets rebuild.
+                nvrhi::BindingSetHandle& set = m_compositeBindingSets[m_field];
+                if (!set)
+                {
+                    set = m_device->createBindingSet(
+                        nvrhi::BindingSetDesc()
+                            .addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_field))
+                            .addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_seed0))
+                            .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_compositeCb)),
+                        m_compositeLayout);
+                }
+                return set;
+            }
+
             nvrhi::IDevice*            m_device  = nullptr;
             ShaderLibrary*             m_shaders = nullptr;
             uint32_t                   m_width = 0, m_height = 0;
 
-            nvrhi::BindingLayoutHandle m_seedLayout, m_jfaLayout;
-            nvrhi::BufferHandle        m_seedCb, m_jfaCb;
+            nvrhi::BindingLayoutHandle m_seedLayout, m_jfaLayout, m_compositeLayout;
+            nvrhi::BufferHandle        m_seedCb, m_jfaCb, m_compositeCb;
             nvrhi::GraphicsPipelineHandle m_seedPipeline, m_jfaPipeline;
+            // Composite pipelines are keyed on the external target's FramebufferInfo
+            // hash (format may vary) -- mirrors v1's per-target pipeline cache.
+            std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_compositePipelines;
             uint64_t                   m_pipelineGeneration = 0;
 
             // Owned distance-field targets: seed pass writes m_seed0, JFA ping-pongs
@@ -342,6 +473,9 @@ namespace Arcane
             // jfa: seed0/pingA/pingB). Cleared by BuildTargets on (re)size.
             std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_seedBindingSets;
             std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_jfaBindingSets;
+            // Composite binding set keyed on the m_field pointer (t1 is always
+            // m_seed0). Cleared by BuildTargets on (re)size.
+            std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_compositeBindingSets;
         };
     }
 

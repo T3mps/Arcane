@@ -177,6 +177,166 @@ namespace
         nv->runGarbageCollection();
         CHECK(Arcane::RenderErrorCount() == 0);
     }
+
+    // Two disjoint filled rects (id1 at [lo1,hi1)^2, id2 at [lo2,hi2)^2), background
+    // 0, into a SUPERSAMPLED R32_UINT id buffer.
+    nvrhi::TextureHandle MakeIdTexture2Rects(nvrhi::IDevice* nv, uint32_t size,
+                                             uint32_t id1, uint32_t lo1, uint32_t hi1,
+                                             uint32_t id2, uint32_t lo2, uint32_t hi2)
+    {
+        auto desc = nvrhi::TextureDesc()
+            .setWidth(size).setHeight(size)
+            .setFormat(nvrhi::Format::R32_UINT)
+            .setInitialState(nvrhi::ResourceStates::ShaderResource)
+            .setKeepInitialState(true)
+            .setDebugName("SelectionOutline.IdTex2");
+        nvrhi::TextureHandle tex = nv->createTexture(desc);
+        REQUIRE(tex != nullptr);
+
+        std::vector<uint32_t> ids(static_cast<size_t>(size) * size, 0u);
+        for (uint32_t y = lo1; y < hi1; ++y)
+            for (uint32_t x = lo1; x < hi1; ++x)
+                ids[static_cast<size_t>(y) * size + x] = id1;
+        for (uint32_t y = lo2; y < hi2; ++y)
+            for (uint32_t x = lo2; x < hi2; ++x)
+                ids[static_cast<size_t>(y) * size + x] = id2;
+
+        nvrhi::CommandListHandle upload = nv->createCommandList();
+        upload->open();
+        upload->writeTexture(tex, 0, 0, ids.data(), static_cast<size_t>(size) * sizeof(uint32_t));
+        upload->close();
+        nv->executeCommandList(upload);
+        return tex;
+    }
+
+    // Read a BGRA8_UNORM target into a row-major vector<uint8_t> (4/px, BGRA order),
+    // handling the staging row pitch.
+    std::vector<uint8_t> ReadBgra(nvrhi::IDevice* nv, nvrhi::ITexture* tex, uint32_t size)
+    {
+        auto stagingDesc = nvrhi::TextureDesc()
+            .setWidth(size).setHeight(size)
+            .setFormat(nvrhi::Format::BGRA8_UNORM)
+            .setDebugName("SelectionOutline.CompositeReadback");
+        nvrhi::StagingTextureHandle staging =
+            nv->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
+        REQUIRE(staging != nullptr);
+
+        nvrhi::CommandListHandle cl = nv->createCommandList();
+        cl->open();
+        cl->copyTexture(staging, nvrhi::TextureSlice(), tex, nvrhi::TextureSlice());
+        cl->close();
+        nv->executeCommandList(cl);
+        nv->waitForIdle();
+
+        size_t rowPitch = 0;
+        const auto* base = static_cast<const uint8_t*>(nv->mapStagingTexture(
+            staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
+        REQUIRE(base != nullptr);
+        std::vector<uint8_t> out(static_cast<size_t>(size) * size * 4);
+        for (uint32_t y = 0; y < size; ++y)
+            std::memcpy(&out[static_cast<size_t>(y) * size * 4], base + static_cast<size_t>(y) * rowPitch,
+                        static_cast<size_t>(size) * 4);
+        nv->unmapStagingTexture(staging);
+        return out;
+    }
+
+    // Full pipeline: seed + JFA + composite. Asserts the anti-aliased amber/cyan
+    // EXTERIOR ring lands in a display-referred BGRA8 target: full-alpha ring texels,
+    // an intermediate-alpha texel (the AA the redesign exists for), a round (not
+    // square) metric, and background untouched. RenderErrorCount()==0.
+    void CheckSelectionComposite(Arcane::GraphicsBackend backend)
+    {
+        constexpr uint32_t kSize = 64;   // 1x (composite) size
+        Arcane::RenderDeviceDesc desc;
+        desc.backend = backend;
+        auto device = Arcane::RenderDevice::Create(desc);
+        REQUIRE(device != nullptr);
+        nvrhi::IDevice* nv = device->Nvrhi();
+
+        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "shaders");
+        REQUIRE(shaders != nullptr);
+
+        auto outline = Arcane::SelectionOutline::Create(nv, *shaders, kSize, kSize);
+        REQUIRE(outline != nullptr);
+
+        // 128x128 (ss=2) id buffer: id=5 filling 2x [16,48)^2 -> 1x silhouette [8,24)^2;
+        // id=7 filling 2x [80,112)^2 -> 1x silhouette [40,56)^2.
+        nvrhi::TextureHandle idTex =
+            MakeIdTexture2Rects(nv, kSize * 2u, 5u, 16u, 48u, 7u, 80u, 112u);
+
+        // Display-referred BGRA8 target, pre-cleared to a known background (0.2 gray;
+        // byte 51). The composite blends the ring OVER this; discarded texels keep it.
+        auto targetDesc = nvrhi::TextureDesc()
+            .setWidth(kSize).setHeight(kSize)
+            .setFormat(nvrhi::Format::BGRA8_UNORM)
+            .setIsRenderTarget(true)
+            .setInitialState(nvrhi::ResourceStates::RenderTarget)
+            .setKeepInitialState(true)
+            .setDebugName("SelectionOutline.CompositeTarget");
+        nvrhi::TextureHandle target = nv->createTexture(targetDesc);
+        REQUIRE(target != nullptr);
+        nvrhi::FramebufferHandle targetFb = nv->createFramebuffer(
+            nvrhi::FramebufferDesc().addColorAttachment(target));
+        REQUIRE(targetFb != nullptr);
+
+        Arcane::SelectionOutline::Params p;
+        p.selectedId        = 5;
+        p.cursorPx          = glm::ivec2(48, 48);   // inside id=7's 1x rect -> hovered = 7
+        p.selectThicknessPx = 3.0f;
+        p.hoverThicknessPx  = 3.0f;
+        p.edgeSoftnessPx    = 2.0f;                 // ramp d in (1,3): d=1 full, d=2 alpha 0.5
+
+        nvrhi::CommandListHandle cmd = nv->createCommandList();
+        cmd->open();
+        cmd->clearTextureFloat(target, nvrhi::AllSubresources, nvrhi::Color(0.2f, 0.2f, 0.2f, 1.0f));
+        outline->Render(cmd, idTex, targetFb, p);
+        cmd->close();
+        nv->executeCommandList(cmd);
+        nv->waitForIdle();
+
+        const std::vector<uint8_t> px = ReadBgra(nv, target, kSize);
+        auto B = [&](int x, int y) { return (int)px[(static_cast<size_t>(y) * kSize + x) * 4 + 0]; };
+        auto G = [&](int x, int y) { return (int)px[(static_cast<size_t>(y) * kSize + x) * 4 + 1]; };
+        auto R = [&](int x, int y) { return (int)px[(static_cast<size_t>(y) * kSize + x) * 4 + 2]; };
+
+        // (1) AMBER ring just outside the id=5 rect (silhouette [8,24)^2). Right-edge
+        //     exterior pixel (24,15) at distance 1 -> full alpha; amber = R dominant.
+        CHECK(R(24, 15) > 240);
+        CHECK(R(24, 15) > G(24, 15));
+        CHECK(G(24, 15) > B(24, 15));
+
+        // (2) CYAN ring just outside the id=7 rect (silhouette [40,56)^2). Right-edge
+        //     exterior pixel (56,48) at distance 1 -> full alpha; cyan = B dominant.
+        CHECK(B(56, 48) > 240);
+        CHECK(B(56, 48) > R(56, 48));
+
+        // (3) ANTI-ALIASING: (25,15) at distance 2 -> alpha 0.5, an amber/background
+        //     blend strictly between background (51) and full amber (255).
+        CHECK(R(25, 15) > 90);
+        CHECK(R(25, 15) < 210);
+        CHECK(R(25, 15) > B(25, 15));   // still amber-tinted, not neutral/cyan
+
+        // (4) BACKGROUND far from both rings is untouched (still 0.2 gray, byte ~51).
+        CHECK(std::abs(R(62, 62) - 51) <= 3);
+        CHECK(std::abs(G(62, 62) - 51) <= 3);
+        CHECK(std::abs(B(62, 62) - 51) <= 3);
+
+        // (5) UNIFORM thickness on all four sides (id=5): every distance-1 exterior
+        //     edge pixel is full amber -- left (7,15), top (15,7), bottom (15,24).
+        CHECK(R(7, 15)  > 240);
+        CHECK(R(15, 7)  > 240);
+        CHECK(R(15, 24) > 240);
+
+        // (5b) ROUND (not square) metric: the diagonal pixel (25,25) is at Euclidean
+        //      distance ~2.83 from the corner -> nearly faded out, while the axis
+        //      pixel (25,15) at the same Chebyshev distance (2) is mid-ramp. A square
+        //      metric would paint both equally; a round one fades the diagonal.
+        CHECK(R(25, 25) < R(25, 15));
+        CHECK(R(25, 25) < 90);   // essentially background -> the corner is rounded
+
+        nv->runGarbageCollection();
+        CHECK(Arcane::RenderErrorCount() == 0);
+    }
 }
 
 TEST_CASE("d3d12: SelectionOutline JFA builds a nearest-seed distance field",
@@ -189,4 +349,16 @@ TEST_CASE("vulkan: SelectionOutline JFA builds a nearest-seed distance field",
           "[gpu][selection][vulkan]")
 {
     CheckSelectionField(Arcane::GraphicsBackend::Vulkan);
+}
+
+TEST_CASE("d3d12: SelectionOutline draws an anti-aliased amber/cyan exterior outline",
+          "[gpu][selection][d3d12]")
+{
+    CheckSelectionComposite(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("vulkan: SelectionOutline draws an anti-aliased amber/cyan exterior outline",
+          "[gpu][selection][vulkan]")
+{
+    CheckSelectionComposite(Arcane::GraphicsBackend::Vulkan);
 }
