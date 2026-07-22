@@ -122,9 +122,9 @@ namespace
         return out;
     }
 
-    // The seed+JFA pass builds a nearest-seed distance field from a supersampled id
-    // buffer: covered 1x pixels seed their own centroid; the flood then resolves
-    // every background pixel to the nearest silhouette position.
+    // The seed+JFA pass builds a nearest-EDGE distance field from a supersampled id
+    // buffer: only BOUNDARY 1x pixels seed their sub-pixel centroid; the flood then
+    // resolves every other pixel (interior + exterior) to the nearest silhouette edge.
     void CheckSelectionField(Arcane::GraphicsBackend backend)
     {
         constexpr uint32_t kSize = 64;   // 1x (composite) size
@@ -161,8 +161,9 @@ namespace
         auto tag  = [&](int x, int y) { return at(x, y, 2); };
         auto cov  = [&](int x, int y) { return at(x, y, 3); };
 
-        // Interior pixel (10,10): its own seed -- fully covered, tagged select (+1),
-        // silhouette position ~(10.5,10.5), inside [8,24)^2.
+        // Interior pixel (10,10): boundary-seeded now, so it is FLOODED to the nearest
+        // silhouette EDGE (a boundary pixel of the [8,24)^2 rect) -- still tagged select
+        // (+1) with cov>0, and the resolved edge position stays inside [8,24)^2.
         CHECK(cov(10, 10) > 0.5f);
         CHECK(tag(10, 10) > 0.5f);
         CHECK(posX(10, 10) >= 8.0f);   CHECK(posX(10, 10) < 24.0f);
@@ -241,9 +242,10 @@ namespace
     }
 
     // Full pipeline: seed + JFA + composite. Asserts the anti-aliased amber/cyan
-    // EXTERIOR ring lands in a display-referred BGRA8 target: full-alpha ring texels,
-    // an intermediate-alpha texel (the AA the redesign exists for), a round (not
-    // square) metric, and background untouched. RenderErrorCount()==0.
+    // outline STRADDLES the silhouette in a display-referred BGRA8 target: interior
+    // edge pixels painted (the into-the-object half), an exterior tint (the outer
+    // half), deep interior + background untouched, and a round (not square) metric.
+    // RenderErrorCount()==0.
     void CheckSelectionComposite(Arcane::GraphicsBackend backend)
     {
         constexpr uint32_t kSize = 64;   // 1x (composite) size
@@ -284,7 +286,7 @@ namespace
         p.cursorPx          = glm::ivec2(48, 48);   // inside id=7's 1x rect -> hovered = 7
         p.selectThicknessPx = 3.0f;
         p.hoverThicknessPx  = 3.0f;
-        p.edgeSoftnessPx    = 2.0f;                 // ramp d in (1,3): d=1 full, d=2 alpha 0.5
+        p.edgeSoftnessPx    = 2.0f;                 // centered band: halfW=1.5, ramp d in (-0.5,1.5)
 
         nvrhi::CommandListHandle cmd = nv->createCommandList();
         cmd->open();
@@ -299,49 +301,48 @@ namespace
         auto G = [&](int x, int y) { return (int)px[(static_cast<size_t>(y) * kSize + x) * 4 + 1]; };
         auto R = [&](int x, int y) { return (int)px[(static_cast<size_t>(y) * kSize + x) * 4 + 2]; };
 
-        // (1) AMBER ring just outside the id=5 rect (silhouette [8,24)^2). Right-edge
-        //     exterior pixel (24,15) at distance 1 -> full alpha; amber = R dominant.
-        CHECK(R(24, 15) > 240);
-        CHECK(R(24, 15) > G(24, 15));
-        CHECK(G(24, 15) > B(24, 15));
+        // (1) STRADDLE -- interior edge painted. (23,15) is the id=5 rect's rightmost
+        //     covered column; with boundary-seeding the band now paints amber ON the
+        //     object (the 1px-into-the-object the outline gained). Amber = R dominant.
+        CHECK(R(23, 15) > 150);
+        CHECK(R(23, 15) > G(23, 15));
+        CHECK(G(23, 15) > B(23, 15));
 
-        // (2) CYAN ring just outside the id=7 rect (silhouette [40,56)^2). Right-edge
-        //     exterior pixel (56,48) at distance 1 -> full alpha; cyan = B dominant.
-        CHECK(B(56, 48) > 240);
-        CHECK(B(56, 48) > R(56, 48));
+        // (2) ...and just OUTSIDE the same edge (24,15) is amber-tinted too (the outer
+        //     half of the centered band), clearly above the 0.2 gray background.
+        CHECK(R(24, 15) > 65);
+        CHECK(R(24, 15) > B(24, 15));
 
-        // (3) ANTI-ALIASING: (25,15) at distance 2 -> alpha 0.5, an amber/background
-        //     blend strictly between background (51) and full amber (255).
-        CHECK(R(25, 15) > 90);
-        CHECK(R(25, 15) < 210);
-        CHECK(R(25, 15) > B(25, 15));   // still amber-tinted, not neutral/cyan
+        // (3) CYAN straddle on the hovered id=7 rect (silhouette [40,56)^2): its
+        //     rightmost covered column (55,48) paints cyan ON the object. B dominant.
+        CHECK(B(55, 48) > 150);
+        CHECK(B(55, 48) > R(55, 48));
 
-        // (4) BACKGROUND far from both rings is untouched (still 0.2 gray, byte ~51).
+        // (4) BACKGROUND far from both outlines is untouched (still 0.2 gray, byte ~51).
         CHECK(std::abs(R(62, 62) - 51) <= 3);
         CHECK(std::abs(G(62, 62) - 51) <= 3);
         CHECK(std::abs(B(62, 62) - 51) <= 3);
 
-        // (4b) INTERIOR of the id=5 silhouette ([8,24)^2) is untouched too -- the outline
-        //      is exterior-only (outline_composite.hlsl discards texels where the id
-        //      buffer already covers the pixel), so (15,15), well inside the rect, must
-        //      still be the same unmodified background as (4). Without the exterior
-        //      discard this pixel would paint solid amber and (4) alone wouldn't catch it.
+        // (4b) DEEP INTERIOR of id=5 ([8,24)^2) is untouched -- the band straddles the
+        //      edge, it does NOT flood the whole silhouette. (15,15), 7px inside, must
+        //      stay the unmodified background. (A bug that seeded the fill instead of the
+        //      boundary would paint this solid amber; (4) alone wouldn't catch it.)
         CHECK(std::abs(R(15, 15) - 51) <= 3);
         CHECK(std::abs(G(15, 15) - 51) <= 3);
         CHECK(std::abs(B(15, 15) - 51) <= 3);
 
-        // (5) UNIFORM thickness on all four sides (id=5): every distance-1 exterior
-        //     edge pixel is full amber -- left (7,15), top (15,7), bottom (15,24).
-        CHECK(R(7, 15)  > 240);
-        CHECK(R(15, 7)  > 240);
-        CHECK(R(15, 24) > 240);
+        // (5) UNIFORM on all four sides (id=5): each rect-edge column/row paints amber
+        //     ON the object -- left (8,15), top (15,8), bottom (15,23).
+        CHECK(R(8, 15)  > 150);
+        CHECK(R(15, 8)  > 150);
+        CHECK(R(15, 23) > 150);
 
-        // (5b) ROUND (not square) metric: the diagonal pixel (25,25) is at Euclidean
-        //      distance ~2.83 from the corner -> nearly faded out, while the axis
-        //      pixel (25,15) at the same Chebyshev distance (2) is mid-ramp. A square
-        //      metric would paint both equally; a round one fades the diagonal.
-        CHECK(R(25, 25) < R(25, 15));
-        CHECK(R(25, 25) < 90);   // essentially background -> the corner is rounded
+        // (5b) ROUND (not square) metric: the exterior diagonal pixel (24,24) is ~1.41px
+        //      from the id=5 corner seed -> nearly faded, while the axis pixel (24,15)
+        //      at distance ~1 is mid-ramp. A square metric would paint both equally; a
+        //      round one fades the diagonal.
+        CHECK(R(24, 24) < R(24, 15));
+        CHECK(R(24, 24) < 90);   // essentially background -> the corner is rounded
 
         nv->runGarbageCollection();
         CHECK(Arcane::RenderErrorCount() == 0);
@@ -360,13 +361,13 @@ TEST_CASE("vulkan: SelectionOutline JFA builds a nearest-seed distance field",
     CheckSelectionField(Arcane::GraphicsBackend::Vulkan);
 }
 
-TEST_CASE("d3d12: SelectionOutline draws an anti-aliased amber/cyan exterior outline",
+TEST_CASE("d3d12: SelectionOutline draws an anti-aliased amber/cyan straddling outline",
           "[gpu][selection][d3d12]")
 {
     CheckSelectionComposite(Arcane::GraphicsBackend::D3D12);
 }
 
-TEST_CASE("vulkan: SelectionOutline draws an anti-aliased amber/cyan exterior outline",
+TEST_CASE("vulkan: SelectionOutline draws an anti-aliased amber/cyan straddling outline",
           "[gpu][selection][vulkan]")
 {
     CheckSelectionComposite(Arcane::GraphicsBackend::Vulkan);

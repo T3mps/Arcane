@@ -1,16 +1,15 @@
-// Pass 3: distance-field -> anti-aliased two-color EXTERIOR outline. Reads the final
-// JFA target (nearest silhouette seed) + the original seed0 (this pixel's own
-// coverage, for the exterior test), blends amber/cyan (display-referred) over the
-// target. No CPU readback; no sRGB conversion.
+// Pass 3: distance-field -> anti-aliased two-color outline that STRADDLES the
+// silhouette edge (inside + border + outside). Reads the boundary-seeded JFA field
+// (nearest silhouette EDGE position + tag) and blends amber/cyan (display-referred)
+// over the target. No CPU readback; no sRGB conversion.
 //
-// The cbuffer/SRVs use plain register(b0)/register(t0)/register(t1): the SPIR-V
-// build applies -fvk-b-shift 256 0 / -fvk-t-shift 0 0 (matching
-// nvrhi::VulkanBindingOffsets), so no #if SPIRV guard is needed. .Load (not
-// .Sample) -- integer texel fetch, no sampler.
+// The cbuffer/SRV use plain register(b0)/register(t0): the SPIR-V build applies
+// -fvk-b-shift 256 0 / -fvk-t-shift 0 0 (matching nvrhi::VulkanBindingOffsets), so
+// no #if SPIRV guard is needed. .Load (not .Sample) -- integer texel fetch, no sampler.
 
 cbuffer CompositeCB : register(b0)
 {
-    float  gSelectThick;   // outline half-width (px)
+    float  gSelectThick;   // FULL outline width (px), CENTERED on the silhouette edge
     float  gHoverThick;
     float  gEdgeSoft;      // AA ramp width (px)
     float  _pad0;
@@ -20,8 +19,7 @@ cbuffer CompositeCB : register(b0)
     float4 gHoverColor;    // display-referred (cyan)
 };
 
-Texture2D<float4> gField : register(t0);
-Texture2D<float4> gSeed0 : register(t1);
+Texture2D<float4> gField : register(t0);   // boundary-seeded nearest-EDGE field
 
 struct VSOutput { float4 pos : SV_Position; };
 
@@ -37,16 +35,13 @@ float4 ps_main(VSOutput i) : SV_Target0
 {
     int2 p = int2(i.pos.xy);
 
-    // Exterior test: skip pixels the silhouette already (mostly) covers.
-    if (gSeed0.Load(int3(p, 0)).w > 0.5) discard;
-
     float4 s = gField.Load(int3(p, 0));
-    if (s.w <= 0.0) discard;                       // nothing selected/hovered anywhere
+    if (s.w <= 0.0) discard;                       // no silhouette edge reached this pixel
 
     float2 sp    = (s.xy * 0.5 + 0.5) * float2(gDim);
-    float  d     = distance((float2)p + 0.5, sp);
-    float  thick = (s.z >= 0.0) ? gSelectThick : gHoverThick;
-    float  alpha = 1.0 - smoothstep(thick - gEdgeSoft, thick, d);
+    float  d     = distance((float2)p + 0.5, sp);  // distance to the nearest silhouette EDGE
+    float  halfW = 0.5 * ((s.z >= 0.0) ? gSelectThick : gHoverThick);   // half-width each side
+    float  alpha = 1.0 - smoothstep(halfW - gEdgeSoft, halfW, d);       // d unsigned => straddles
     if (alpha <= 0.0) discard;
 
     float4 col = (s.z >= 0.0) ? gSelectColor : gHoverColor;

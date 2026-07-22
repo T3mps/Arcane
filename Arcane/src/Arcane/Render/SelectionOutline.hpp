@@ -1,8 +1,9 @@
 #pragma once
 
 // A per-frame GPU Jump-Flood distance-field outline: seed (from a SUPERSAMPLED
-// R32_UINT id buffer) -> JFA -> composite two-color EXTERIOR outlines (selected +
-// hovered) into a display-referred target. Owns its render targets. Editor- and
+// R32_UINT id buffer) -> JFA -> composite two-color outlines that STRADDLE the
+// silhouette edge (selected + hovered) into a display-referred target. Owns its
+// render targets. Editor- and
 // game-agnostic. Design: docs/superpowers/specs/2026-07-21-arcane-selection-outline-jfa-design.md.
 
 #include <Arcane/Base/Api.hpp>
@@ -34,8 +35,8 @@ namespace Arcane
             glm::ivec2 cursorPx   = { -1, -1 };                     // viewport-local; <0 => no hover
             glm::vec4  selectColor = { 1.0f, 0.65f, 0.10f, 1.0f };  // amber (display-referred)
             glm::vec4  hoverColor  = { 0.25f, 0.70f, 1.0f, 1.0f };  // cyan  (display-referred)
-            float      selectThicknessPx = 3.0f;                    // outline half-width
-            float      hoverThicknessPx  = 3.0f;
+            float      selectThicknessPx = 3.0f;                    // full width (px), centered on the edge
+            float      hoverThicknessPx  = 3.0f;                    // full width (px), centered on the edge
             float      edgeSoftnessPx    = 1.0f;                    // AA ramp width
         };
 

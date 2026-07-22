@@ -71,12 +71,12 @@ namespace Arcane
                     .setVisibility(nvrhi::ShaderType::Pixel)
                     .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
                     .addItem(nvrhi::BindingLayoutItem::ConstantBuffer(0)));
-                // composite bindings: t0 = field (SRV), t1 = seed0 (SRV), b0 =
-                // CompositeCB. Pixel stage. Two SRVs in one layout/set.
+                // composite bindings: t0 = boundary-seeded field (SRV), b0 =
+                // CompositeCB. Pixel stage. The straddling band reads distance-to-edge
+                // from the field alone -- no seed0 coverage / exterior test needed.
                 m_compositeLayout = m_device->createBindingLayout(nvrhi::BindingLayoutDesc()
                     .setVisibility(nvrhi::ShaderType::Pixel)
                     .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
-                    .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
                     .addItem(nvrhi::BindingLayoutItem::ConstantBuffer(0)));
                 if (!m_seedLayout || !m_jfaLayout || !m_compositeLayout)
                 {
@@ -211,10 +211,10 @@ namespace Arcane
                 }
                 m_field = src;   // the last-written target holds the distance field
 
-                // --- Composite pass: field + seed0 -> target (display-referred) ---
-                // Reads the nearest silhouette seed (m_field, t0) + this pixel's own
-                // coverage (m_seed0, t1, for the exterior test), writes the AA amber/
-                // cyan ring straight into the gamma-encoded target (no sRGB convert).
+                // --- Composite pass: field -> target (display-referred) ---
+                // Reads the nearest silhouette EDGE (m_field, t0) and writes the AA
+                // amber/cyan outline -- straddling the edge (inside + border + outside)
+                // -- straight into the gamma-encoded target (no sRGB convert).
                 if (!target)
                     return;   // seed + JFA only (DebugDistanceField path)
 
@@ -439,15 +439,14 @@ namespace Arcane
             nvrhi::BindingSetHandle CompositeBindingSet()
             {
                 // t0 = m_field (last-written JFA target; deterministic per size but
-                // keyed on the pointer for safety), t1 = m_seed0 (original coverage).
-                // BuildTargets clears the cache when the owned targets rebuild.
+                // keyed on the pointer for safety). BuildTargets clears the cache when
+                // the owned targets rebuild.
                 nvrhi::BindingSetHandle& set = m_compositeBindingSets[m_field];
                 if (!set)
                 {
                     set = m_device->createBindingSet(
                         nvrhi::BindingSetDesc()
                             .addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_field))
-                            .addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_seed0))
                             .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_compositeCb)),
                         m_compositeLayout);
                 }
@@ -476,8 +475,8 @@ namespace Arcane
             // jfa: seed0/pingA/pingB). Cleared by BuildTargets on (re)size.
             std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_seedBindingSets;
             std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_jfaBindingSets;
-            // Composite binding set keyed on the m_field pointer (t1 is always
-            // m_seed0). Cleared by BuildTargets on (re)size.
+            // Composite binding set keyed on the m_field pointer. Cleared by
+            // BuildTargets on (re)size.
             std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> m_compositeBindingSets;
         };
     }
