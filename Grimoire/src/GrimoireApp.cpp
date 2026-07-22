@@ -638,8 +638,10 @@ namespace Grimoire
             // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
-            Grimoire::BeginDockSpace();
-            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable(), *m_undo);
+            Grimoire::BeginDockSpace(*m_undo);
+            Grimoire::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable());
+            Grimoire::EndDockSpace();
+            Grimoire::DrawAssetsPanel();
             Grimoire::DrawConsolePanel(m_console);
 
             Grimoire::ViewportPanelResult vp =

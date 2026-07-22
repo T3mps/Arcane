@@ -14,13 +14,14 @@
 
 #include <glm/glm.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>   // DockBuilder* + ImGuiDockNode::LocalFlags (docking layout)
 
 #include <cstdio>
 #include <string>
 
 namespace Grimoire
 {
-    void BeginDockSpace()
+    void BeginDockSpace(Arcane::CommandStack& undo)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -28,19 +29,107 @@ namespace Grimoire
         ImGui::SetNextWindowViewport(vp->ID);
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+            ImGuiWindowFlags_MenuBar;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::Begin("GrimoireDockHost", nullptr, flags);
         ImGui::PopStyleVar(3);
-        ImGui::DockSpace(ImGui::GetID("GrimoireDockSpace"), ImVec2(0, 0), ImGuiDockNodeFlags_None);
+
+        // Editor menu bar. File items + Edit's Cut/Copy/Paste are placeholders for now;
+        // Edit's Undo/Redo drive the CommandStack; Preferences is a leaf item that will
+        // open a settings window later.
+        if (ImGui::BeginMenuBar())
+        {
+            if (ImGui::BeginMenu("File"))
+            {
+                ImGui::MenuItem("New Scene");
+                ImGui::MenuItem("Open Scene...");
+                ImGui::Separator();
+                ImGui::MenuItem("Save Scene");
+                ImGui::MenuItem("Save Scene As...");
+                ImGui::Separator();
+                ImGui::MenuItem("Exit");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Edit"))
+            {
+                // Undo/Redo share the CommandStack with the Ctrl+Z / Ctrl+Y shortcuts
+                // (handled in the app input loop); the shortcut text here is display-only.
+                const bool canUndo = undo.CanUndo();
+                const bool canRedo = undo.CanRedo();
+                const std::string undoLabel = canUndo ? (std::string("Undo ") + undo.UndoLabel())
+                                                      : std::string("Undo");
+                const std::string redoLabel = canRedo ? (std::string("Redo ") + undo.RedoLabel())
+                                                      : std::string("Redo");
+                if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, canUndo)) undo.Undo();
+                if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, canRedo)) undo.Redo();
+                ImGui::Separator();
+                ImGui::MenuItem("Cut");
+                ImGui::MenuItem("Copy");
+                ImGui::MenuItem("Paste");
+                ImGui::EndMenu();
+            }
+            // Leaf item (no submenu): will open a preferences window later.
+            if (ImGui::MenuItem("Preferences")) { /* TODO: open preferences window */ }
+            ImGui::EndMenuBar();
+        }
+        // Host window is left OPEN: the caller draws the fixed toolbar strip
+        // (DrawSimTimeToolbar) into it, then closes it via EndDockSpace().
+    }
+
+    // Build the standard editor layout once (when there is no saved .ini node yet): the
+    // Viewport takes the central node; the tool panels are split off around it, so the
+    // Viewport's size is whatever those panels leave. Names must match each panel's
+    // ImGui::Begin() title.
+    static void BuildDefaultLayout(ImGuiID dockspaceId)
+    {
+        ImGui::DockBuilderRemoveNode(dockspaceId);
+        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+
+        ImGuiID central = dockspaceId;
+        const ImGuiID leftId   = ImGui::DockBuilderSplitNode(central, ImGuiDir_Left,  0.18f, nullptr, &central);
+        const ImGuiID rightId  = ImGui::DockBuilderSplitNode(central, ImGuiDir_Right, 0.22f, nullptr, &central);
+        const ImGuiID bottomId = ImGui::DockBuilderSplitNode(central, ImGuiDir_Down,  0.25f, nullptr, &central);
+
+        ImGui::DockBuilderDockWindow("Hierarchy", leftId);
+        ImGui::DockBuilderDockWindow("Inspector", rightId);
+        ImGui::DockBuilderDockWindow("Assets",    bottomId);   // Assets tab first...
+        ImGui::DockBuilderDockWindow("Console",   bottomId);   // ...then Console
+        ImGui::DockBuilderDockWindow("Viewport",  central);
+        ImGui::DockBuilderFinish(dockspaceId);
+    }
+
+    void EndDockSpace()
+    {
+        const ImGuiID dockspaceId = ImGui::GetID("GrimoireDockSpace");
+
+        // First run (no saved .ini layout): arrange the default editor layout.
+        if (ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
+            BuildDefaultLayout(dockspaceId);
+
+        // Emit the dockspace into the still-open host window. Anything drawn between
+        // BeginDockSpace and here is a fixed strip above it.
+        ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_None);
+
+        // Lock the central node as the Viewport EVERY frame: no tab, not closeable, and
+        // nothing else may dock into or undock it -- so the Viewport is always the centre
+        // and its size is dictated purely by the panels split off around it.
+        // (NoDockingOverMe/NoUndocking are runtime-only flags, not saved to the layout, so
+        // they are re-applied here rather than trusted to persist.)
+        if (ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockspaceId))
+            central->LocalFlags |= ImGuiDockNodeFlags_NoTabBar
+                                 | ImGuiDockNodeFlags_NoCloseButton
+                                 | ImGuiDockNodeFlags_NoDockingOverMe
+                                 | ImGuiDockNodeFlags_NoUndocking;
+
         ImGui::End();
     }
 
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin,
-                            Arcane::CommandStack& undo)
+                            const Arcane::PluginVTable* plugin)
     {
         // Icon button with a hover tooltip (icons need discoverable labels).
         // `id` is an ImGui ID-only suffix (e.g. "##sim_playstop") appended to the
@@ -68,43 +157,23 @@ namespace Grimoire
             return clicked;
         };
 
-        ImGui::Begin("Sim");
-
-        // Full toolbar content width + left edge, captured before any widget, so the
-        // Play/Pause/Step transport can be centered. Undo/Redo sit on the LEFT; the
-        // transform-gizmo tools moved to the Viewport top-right overlay (UE5-style).
-        const float fullContentW = ImGui::GetContentRegionAvail().x;
-        const float lineStartX   = ImGui::GetCursorPosX();
-
-        // -- LEFT: undo / redo. --
-        ImGui::BeginDisabled(!undo.CanUndo());
-        {
-            const std::string undoTip = undo.CanUndo()
-                ? (std::string("Undo ") + undo.UndoLabel())
-                : std::string("Undo");
-            if (iconBtn(ICON_LC_UNDO, "##sim_undo", undoTip.c_str())) undo.Undo();
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!undo.CanRedo());
-        {
-            const std::string redoTip = undo.CanRedo()
-                ? (std::string("Redo ") + undo.RedoLabel())
-                : std::string("Redo");
-            if (iconBtn(ICON_LC_REDO, "##sim_redo", redoTip.c_str())) undo.Redo();
-        }
-        ImGui::EndDisabled();
+        // Fixed transport strip drawn into the CURRENT window (the dockspace host -- call
+        // between BeginDockSpace and EndDockSpace). Not its own window: no tab, cannot be
+        // docked or moved. A little vertical padding sets it off from the menu bar above;
+        // the trailing separator divides it from the dockspace below.
+        ImGui::Dummy(ImVec2(0.0f, 3.0f));
 
         // -- CENTER: transport (Play / Pause / Step), Unity-style toggles. --
-        // Center the trio within the full toolbar width; if the left tools already
-        // reach past the centered start, the transport just follows them via SameLine.
+        // Center the trio within the full toolbar width. Undo/Redo moved to the Edit
+        // menu; the transform-gizmo tools moved to the Viewport top-right overlay.
+        const float fullContentW = ImGui::GetContentRegionAvail().x;
+        const float lineStartX   = ImGui::GetCursorPosX();
         const ImGuiStyle& st = ImGui::GetStyle();
         auto btnW = [&](const char* icon)
         { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
         const float transportW = btnW(ICON_LC_PLAY) + btnW(ICON_LC_PAUSE)
                                + btnW(ICON_LC_STEP_FORWARD) + st.ItemSpacing.x * 2.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
-        ImGui::SameLine();
         if (centerStart > ImGui::GetCursorPosX())
             ImGui::SetCursorPosX(centerStart);
 
@@ -118,7 +187,7 @@ namespace Grimoire
         }
         // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
         // replaces m_impl->loop on Stop, so a reference taken before this dangles.
-        // (Undo/redo/gizmo above never touch `loop`, so fetching here is safe.)
+        // (Nothing above touches `loop`, so fetching here is safe.)
         Arcane::RunLoop& loop = runtime.Loop();
         ImGui::SameLine();
         // Pause/Resume toggle (Unity-style): ALWAYS the pause glyph, tinted while paused.
@@ -138,6 +207,15 @@ namespace Grimoire
         if (iconBtn(ICON_LC_STEP_FORWARD, "##sim_step", "Step")) loop.RequestSingleStep();
         ImGui::EndDisabled();
 
+        ImGui::Dummy(ImVec2(0.0f, 3.0f));
+        ImGui::Separator();
+    }
+
+    void DrawAssetsPanel()
+    {
+        ImGui::Begin("Assets");
+        // Placeholder: the asset browser lands here later.
+        ImGui::TextDisabled("Assets browser -- coming soon");
         ImGui::End();
     }
 
@@ -201,7 +279,7 @@ namespace Grimoire
             if (iconToggle(ICON_LC_MOUSE_POINTER_2, "##tool_sel", !gizmoEnabled, "Select (Q)"))
                 gizmoEnabled = false;
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_MOVE, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, "Move (W)"))
+            if (iconToggle(ICON_LC_MOVE_3D, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, "Move (W)"))
             { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
             ImGui::SameLine();
             if (iconToggle(ICON_LC_ROTATE_3D, "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))

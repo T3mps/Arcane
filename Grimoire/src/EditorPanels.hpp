@@ -14,26 +14,33 @@ namespace Grimoire
     class PlaySession;
     struct SelectionContext;
 
-    // Host a full-viewport dockspace (call once per frame between ImGui BeginFrame
-    // and the panel Begin/End calls). Enables initial docking of child windows.
-    void BeginDockSpace();
+    // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
+    // OPEN (call once per frame right after ImGui BeginFrame). Draw the fixed toolbar
+    // strip (DrawSimTimeToolbar) into it, then close it with EndDockSpace(); dockable
+    // panels are drawn AFTER EndDockSpace. `undo` drives the Edit menu's Undo/Redo
+    // (same CommandStack as the Ctrl+Z / Ctrl+Y shortcuts handled in the app input loop).
+    void BeginDockSpace(Arcane::CommandStack& undo);
 
-    // Play/Stop (play-in-editor: snapshot on Play, restore on Stop) + Pause/Step
-    // buttons + a time-scale slider, driving the RunLoop, plus Undo/Redo buttons
-    // over `undo` (enabled from CanUndo/CanRedo, tooltip shows the label), plus
-    // transform-gizmo mode (T/R/S radio buttons) and space (Global/Local toggle)
-    // controls driving `mode`/`space` in place.
-    // `plugin` is the hosted plugin's vtable (may be null): Play/Stop route
-    // through its SaveState/LoadState so the plugin re-establishes its native
-    // resources on restore. Entering Play clears `undo`'s history (play-time
-    // mutation is discarded on Stop, so it must not be undoable from Edit
-    // afterwards). Does NOT take a RunLoop& parameter: play.Stop() ->
-    // Runtime::RestoreRegistry destroys and replaces the RunLoop, so the loop
-    // is fetched fresh from `runtime` AFTER the Play/Stop handling to avoid a
-    // dangling reference.
+    // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
+    // Everything drawn in between becomes a fixed (non-dockable, tab-less) strip above
+    // the dockspace.
+    void EndDockSpace();
+
+    // Centered Play/Pause/Step transport, drawn as a FIXED STRIP into the current window
+    // -- call between BeginDockSpace and EndDockSpace so it lands in the dockspace host.
+    // Not its own window: no tab, cannot be docked or moved. Unity-style toggles (Play
+    // tinted while playing, Pause tinted while paused + disabled outside Play, Step
+    // disabled outside Play). Undo/Redo moved to the Edit menu; the gizmo tools moved to
+    // the Viewport overlay. `plugin` is the hosted plugin's vtable (may be null):
+    // Play/Stop route through its SaveState/LoadState so the plugin re-establishes its
+    // native resources on restore. Does NOT take a RunLoop&: play.Stop() ->
+    // Runtime::RestoreRegistry destroys and replaces the RunLoop, so the loop is fetched
+    // fresh from `runtime` AFTER Play/Stop handling.
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin,
-                            Arcane::CommandStack& undo);
+                            const Arcane::PluginVTable* plugin);
+
+    // Placeholder asset-browser panel (dummy for now); docks as a tab before Console.
+    void DrawAssetsPanel();
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);
