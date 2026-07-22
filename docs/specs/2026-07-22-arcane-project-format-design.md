@@ -102,7 +102,7 @@ central merge-hotspot file) does not bite — this manifest is small and rarely 
   "formatVersion": 1,                 // schema version -> migratable
   "name": "Aphelyon",
   "description": "",
-  "engine": { "abi": 4 },             // engine/ABI binding; host refuses incompatible ABI
+  "engine": { "abi": 5 },             // engine/ABI binding (== Arcane::kGamePluginABIVersion); host refuses incompatible ABI
   "gameModule": "Aphelyon.dll",       // the project's primary module (game-as-DLL)
   "plugins": [                        // enabled plugins, .uproject-style
     { "name": "Sandbox", "enabled": false }
