@@ -21,6 +21,8 @@ namespace Arcane
     namespace
     {
         constexpr uint32_t kMaxThicknessPx = 32;   // sizes the JFA pass count (jumps 32..1)
+        // NOTE: the field is exact only within kMaxThicknessPx px of a silhouette; farther pixels
+        // stay empty (w==0, discarded by the composite) by design -- JFA passes scale with thickness, not viewport res.
 
         // BYTE-IDENTICAL to the HLSL `cbuffer SeedCB` in outline_seed.hlsl. HLSL
         // packing: selectedId(0), int2 cursor(4..12), superSample(12), int2 dim(16..24),

@@ -321,6 +321,15 @@ namespace
         CHECK(std::abs(G(62, 62) - 51) <= 3);
         CHECK(std::abs(B(62, 62) - 51) <= 3);
 
+        // (4b) INTERIOR of the id=5 silhouette ([8,24)^2) is untouched too -- the outline
+        //      is exterior-only (outline_composite.hlsl discards texels where the id
+        //      buffer already covers the pixel), so (15,15), well inside the rect, must
+        //      still be the same unmodified background as (4). Without the exterior
+        //      discard this pixel would paint solid amber and (4) alone wouldn't catch it.
+        CHECK(std::abs(R(15, 15) - 51) <= 3);
+        CHECK(std::abs(G(15, 15) - 51) <= 3);
+        CHECK(std::abs(B(15, 15) - 51) <= 3);
+
         // (5) UNIFORM thickness on all four sides (id=5): every distance-1 exterior
         //     edge pixel is full amber -- left (7,15), top (15,7), bottom (15,24).
         CHECK(R(7, 15)  > 240);
