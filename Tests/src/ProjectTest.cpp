@@ -4,6 +4,8 @@
 
 #include <Arcane/Project/Project.hpp>
 
+#include <Arcane/Plugin/PluginABI.hpp>
+
 #include <filesystem>
 #include <fstream>
 
@@ -76,4 +78,36 @@ TEST_CASE("Project::ResolveAsset maps an AssetId through the mounts", "[project]
 
     // Invalid id -> no resolution.
     CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId{}).has_value());
+}
+
+TEST_CASE("Project::Create scaffolds the skeleton, manifest, and .gitignore", "[project]")
+{
+    const auto dir = TempDir("create");
+
+    auto proj = Arcane::Project::Create(dir, "Aphelyon");
+    REQUIRE(proj.has_value());
+
+    // Skeleton dirs.
+    CHECK(std::filesystem::is_directory(dir / "Source"));
+    CHECK(std::filesystem::is_directory(dir / "Content"));
+    CHECK(std::filesystem::is_directory(dir / "Config"));
+    CHECK(std::filesystem::is_directory(dir / "Plugins"));
+    // Manifest + gitignore.
+    CHECK(std::filesystem::is_regular_file(dir / "Aphelyon.arcproj"));
+    CHECK(std::filesystem::is_regular_file(dir / ".gitignore"));
+
+    // The created project is valid and re-openable.
+    CHECK(proj->Manifest().name == "Aphelyon");
+    CHECK(proj->Manifest().engineAbi == static_cast<int>(Arcane::kGamePluginABIVersion));
+    CHECK(Arcane::Project::Open(dir).has_value());
+
+    auto id = Arcane::AssetId::FromMountPath("game://a.png");
+    CHECK(proj->ResolveAsset(id) == dir / "Content" / "a.png");
+}
+
+TEST_CASE("Project::Create refuses a non-empty target directory", "[project]")
+{
+    const auto dir = TempDir("create_nonempty");
+    WriteFile(dir / "existing.txt", "x");
+    CHECK_FALSE(Arcane::Project::Create(dir, "X").has_value());
 }
