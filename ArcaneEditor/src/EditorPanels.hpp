@@ -19,6 +19,8 @@ namespace Arcane::Editor
     // strip (DrawSimTimeToolbar) into it, then close it with EndDockSpace(); dockable
     // panels are drawn AFTER EndDockSpace. `undo` drives the Edit menu's Undo/Redo
     // (same CommandStack as the Ctrl+Z / Ctrl+Y shortcuts handled in the app input loop).
+    // `openProjectRequested` is set true when the File -> Open Project... menu item is
+    // clicked; the caller is responsible for launching the folder dialog and clearing it.
     void BeginDockSpace(Arcane::CommandStack& undo, bool& openProjectRequested);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.

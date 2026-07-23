@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -174,13 +175,17 @@ namespace Arcane::Editor
         std::uint32_t m_pendingViewportH = 0;
 
         // File -> Open Project (soft-restart). The menu sets m_openProjectRequested;
-        // MainLoop launches the async folder dialog; SDL invokes FolderPickedThunk (main
-        // thread) during a later PumpEvents, which stashes the chosen path in
-        // m_pendingProjectPath; the next frame's top runs SwitchProject and clears it.
+        // MainLoop launches the async folder dialog; SDL runs FolderPickedThunk on an
+        // SDL-owned BACKGROUND thread (NOT the main thread -- the Windows backend's
+        // folder-picker callback fires off a detached worker), which stashes the chosen
+        // path in m_pendingProjectPath under m_pendingProjectMutex; the next frame's
+        // top of MainLoop takes the lock, swaps the path out, and (outside the lock)
+        // runs SwitchProject at a safe point.
         bool        m_openProjectRequested = false;
         std::string m_pendingProjectPath;
+        std::mutex  m_pendingProjectMutex;   // guards m_pendingProjectPath across the SDL callback thread
 
-        static void FolderPickedThunk(const char* path, void* user);   // -> m_pendingProjectPath
+        static void FolderPickedThunk(const char* path, void* user);   // -> m_pendingProjectPath (background thread)
         void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
     };
 }

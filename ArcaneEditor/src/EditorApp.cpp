@@ -24,6 +24,7 @@
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
@@ -262,16 +263,32 @@ namespace Arcane::Editor
 
     void EditorApp::FolderPickedThunk(const char* path, void* user)
     {
+        // Runs on an SDL-owned BACKGROUND thread (the Windows folder-picker backend
+        // fires the callback from a detached worker, not PumpEvents/the main thread) --
+        // m_pendingProjectPath must be synchronized against MainLoop's top-of-frame read.
         auto* self = static_cast<EditorApp*>(user);
-        if (path) self->m_pendingProjectPath = path;
+        if (!path) return;
+        std::lock_guard<std::mutex> lk(self->m_pendingProjectMutex);
+        self->m_pendingProjectPath = path;
     }
 
     void EditorApp::SwitchProject(const std::filesystem::path& path)
     {
-        // Validate FIRST -- never tear down a live session for a bad project.
-        if (!Arcane::Project::Open(path))
+        // Validate FIRST -- never tear down a live session for a project we cannot
+        // fully open. This mirrors BOTH checks Runtime::OpenProject will do (open +
+        // ABI gate) so the post-teardown OpenProject below cannot fail for those
+        // reasons, and a bad pick leaves the current session completely untouched.
+        auto probe = Arcane::Project::Open(path);
+        if (!probe)
         {
             ARC_ERROR("Open Project: '{}' is not a valid Arcane project", path.generic_string());
+            return;
+        }
+        if (probe->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
+        {
+            ARC_ERROR("Open Project: '{}' targets engine ABI {} but this engine is ABI {}",
+                      path.generic_string(), probe->Manifest().engineAbi,
+                      static_cast<int>(Arcane::kGamePluginABIVersion));
             return;
         }
 
@@ -335,13 +352,17 @@ namespace Arcane::Editor
             }
 
             // File->Open Project: run a pending soft-restart at a safe point (top of
-            // frame, never mid-render). Set by FolderPickedThunk during PumpEvents.
-            if (!m_pendingProjectPath.empty())
+            // frame, never mid-render). Set by FolderPickedThunk, which runs on an
+            // SDL-owned background thread -- take the path out under the lock, then
+            // switch on the local copy outside the lock (SwitchProject itself never
+            // touches m_pendingProjectPath/m_pendingProjectMutex).
+            std::string pending;
             {
-                const std::string p = m_pendingProjectPath;
-                m_pendingProjectPath.clear();
-                SwitchProject(p);
+                std::lock_guard<std::mutex> lk(m_pendingProjectMutex);
+                pending.swap(m_pendingProjectPath);
             }
+            if (!pending.empty())
+                SwitchProject(pending);
 
             // Input sample (before ImGui BeginFrame so capture flags are set).
             // Set inside the block below once inViewport + the game context's
@@ -607,7 +628,7 @@ namespace Arcane::Editor
                 double simDt = std::chrono::duration<double>(now - simPrev).count();
                 simPrev = now;
                 if (simDt > 0.25) simDt = 0.25;
-                const Arcane::PluginVTable* vt = m_plugin->Vtable();
+                const Arcane::PluginVTable* vt = m_plugin ? m_plugin->Vtable() : nullptr;
                 m_runtime->Loop().Advance(simDt,
                     [&](double dt)          { if (vt) vt->FixedUpdate(dt); },
                     [&](double dt, double a){ if (vt) vt->Update(dt, a); });
@@ -670,7 +691,7 @@ namespace Arcane::Editor
             // input is reset so a stray draw sees no cursor/buttons.
             if (!m_play.IsPlaying())
                 m_gameImgui->SetInput({});
-            const Arcane::PluginVTable* vtGame = m_plugin->Vtable();
+            const Arcane::PluginVTable* vtGame = m_plugin ? m_plugin->Vtable() : nullptr;
             if (m_play.IsPlaying() && vtGame && vtGame->DrawUI)
             {
                 Arcane::OffscreenImGuiLayer::Input gi;
@@ -724,7 +745,7 @@ namespace Arcane::Editor
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Arcane::Editor::BeginDockSpace(*m_undo, m_openProjectRequested);
-            Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable());
+            Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
             Arcane::Editor::EndDockSpace();
             if (m_openProjectRequested)
             {
@@ -788,7 +809,7 @@ namespace Arcane::Editor
             m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
             m_gpu->Swap().Present();
 
-            m_plugin->Poll();
+            if (m_plugin) m_plugin->Poll();
 
             ++m_frameCount;
             if (m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames) running = false;
