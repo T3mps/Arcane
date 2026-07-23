@@ -20,13 +20,24 @@ namespace Arcane::HostBoot
     // missing/unreadable/malformed (the host logs and continues -- input stays inert).
     inline bool LoadInputConfig(Arcane::InputActions& input, const Arcane::Project* project)
     {
-        std::filesystem::path file = "data/input_actions.json";
+        std::filesystem::path file;
         if (project)
         {
+            // A project is open: its input config comes from the project's game://
+            // mount, never the legacy exe-relative data/. If it does not resolve
+            // (today unreachable -- Project::Open always registers game://; reachable
+            // once Slice 2's AssetRegistry lookup can legitimately miss), fail loudly
+            // rather than silently loading whatever data/input_actions.json sits by the
+            // exe.
             auto resolved = project->ResolveAsset(
                 Arcane::AssetId::FromMountPath("game://input_actions.json"));
-            if (resolved)
-                file = *resolved;
+            if (!resolved)
+                return false;
+            file = *resolved;
+        }
+        else
+        {
+            file = "data/input_actions.json";   // no project: legacy exe-relative fallback
         }
         if (!input.LoadFile(file))
             return false;
