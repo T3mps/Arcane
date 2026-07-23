@@ -5,7 +5,7 @@
 #include <Arcane/Edit/Gizmo.hpp>
 #include <cstdint>
 
-namespace Arcane { class RunLoop; class Runtime; struct PluginVTable; }
+namespace Arcane { class RunLoop; class Runtime; class Project; struct PluginVTable; }
 namespace Astra { class Registry; }
 
 namespace Arcane::Editor
@@ -40,7 +40,9 @@ namespace Arcane::Editor
                             const Arcane::PluginVTable* plugin);
 
     // Placeholder asset-browser panel (dummy for now); docks as a tab before Console.
-    void DrawAssetsPanel();
+    // Shows the open project's name + root when one is open (see EditorApp::Init),
+    // else "No project open" (the legacy data/-next-to-exe boot, unchanged).
+    void DrawAssetsPanel(const Arcane::Project* project);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);

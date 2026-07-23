@@ -17,11 +17,14 @@
 #include "EditorPanels.hpp"
 #include "ViewportImGuiInput.hpp"
 
+#include <ProjectBoot.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
@@ -75,6 +78,15 @@ namespace Arcane::Editor
                     return ci.descriptor;
             }
             return nullptr;
+        }
+
+        // Window title: the project name when a project is open, else the bare
+        // editor name (no --project => legacy data/-next-to-exe boot, unchanged).
+        std::string EditorTitle(const Arcane::Project* project)
+        {
+            if (project)
+                return "Arcane Editor -- " + project->Manifest().name;
+            return "Arcane Editor";
         }
     }
 
@@ -147,6 +159,17 @@ namespace Arcane::Editor
         // a headless host -> the plugin skips its GPU-resource creation.
         m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
 
+        // Open the project (if any) BEFORE loading input + the game module (mirrors Loom).
+        if (!m_config.projectPath.empty())
+        {
+            if (!m_runtime->OpenProject(m_config.projectPath))
+                ARC_WARN("Arcane Editor: --project '{}' failed to open; using data/ + --plugin fallback",
+                         m_config.projectPath);
+        }
+        if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->CurrentProject()))
+            ARC_WARN("Arcane Editor: input actions failed to load");
+        m_gpu->Win().SetTitle(EditorTitle(m_runtime->CurrentProject()));
+
         // The hosted plugin draws its debug UI into its OWN "game" ImGui context,
         // composited INTO the viewport texture (see MainLoop), instead of the
         // editor context where a HUD would float over the editor chrome. Created
@@ -179,10 +202,12 @@ namespace Arcane::Editor
                                 ud);
         }
 
-        m_plugin.emplace(*m_runtime, std::filesystem::path(m_config.pluginPath));
+        const std::string gameModule =
+            Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
+        m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
         if (!m_plugin->Load())
         {
-            ARC_ERROR("Arcane Editor: failed to load plugin '{}'", m_config.pluginPath);
+            ARC_ERROR("Arcane Editor: failed to load game module '{}'", gameModule);
             return false;
         }
 
@@ -646,7 +671,7 @@ namespace Arcane::Editor
             Arcane::Editor::BeginDockSpace(*m_undo);
             Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable());
             Arcane::Editor::EndDockSpace();
-            Arcane::Editor::DrawAssetsPanel();
+            Arcane::Editor::DrawAssetsPanel(m_runtime->CurrentProject());
             Arcane::Editor::DrawConsolePanel(m_console);
 
             Arcane::Editor::ViewportPanelResult vp =
