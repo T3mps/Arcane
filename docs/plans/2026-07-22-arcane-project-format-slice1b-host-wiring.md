@@ -508,15 +508,29 @@ namespace Arcane::HostBoot
     // project is open, else data/input_actions.json (exe-relative, the legacy path).
     // Sets the "demo" base context on success. Returns false if the file is
     // missing/unreadable/malformed (the host logs and continues -- input stays inert).
+    // The project and no-project paths are mutually exclusive: an open project's input
+    // comes ONLY from its game:// mount -- never a silent fall-through to the legacy
+    // data/ file (see the Task 3 review fix).
     inline bool LoadInputConfig(Arcane::InputActions& input, const Arcane::Project* project)
     {
-        std::filesystem::path file = "data/input_actions.json";
+        std::filesystem::path file;
         if (project)
         {
+            // A project is open: its input config comes from the project's game://
+            // mount, never the legacy exe-relative data/. If it does not resolve
+            // (today unreachable -- Project::Open always registers game://; reachable
+            // once Slice 2's AssetRegistry lookup can legitimately miss), fail loudly
+            // rather than silently loading whatever data/input_actions.json sits by the
+            // exe.
             auto resolved = project->ResolveAsset(
                 Arcane::AssetId::FromMountPath("game://input_actions.json"));
-            if (resolved)
-                file = *resolved;
+            if (!resolved)
+                return false;
+            file = *resolved;
+        }
+        else
+        {
+            file = "data/input_actions.json";   // no project: legacy exe-relative fallback
         }
         if (!input.LoadFile(file))
             return false;
@@ -1081,6 +1095,26 @@ Close the window to exit.
 git add Arcane/Arcane/src/Arcane/Platform/Window.hpp Arcane/Arcane/src/Arcane/Platform/Window.cpp Arcane/ArcaneEditor/src/EditorPanels.hpp Arcane/ArcaneEditor/src/EditorPanels.cpp Arcane/ArcaneEditor/src/EditorApp.hpp Arcane/ArcaneEditor/src/EditorApp.cpp
 git commit -m "feat(arcane): Editor File->Open Project soft-restart via SDL folder dialog (project format S1b)"
 ```
+
+> **Shipped amendments (post-review fixes, commit `67545b90`).** Task 7's code review
+> found two Critical UB defects in the design above; the shipped code differs from the
+> Step 4–6 snippets in these ways:
+> - **ABI pre-validation before teardown.** `SwitchProject` captures `Project::Open(path)`
+>   into `probe` and, *before any teardown*, also rejects `probe->Manifest().engineAbi !=
+>   kGamePluginABIVersion` (log + return). The original snippet only checked `Project::Open`
+>   success, so an ABI-mismatched pick passed validation, tore down the plugin, then failed
+>   inside `Runtime::OpenProject` — leaving `m_plugin` disengaged mid-`MainLoop` (crash).
+>   (Needs `#include <Arcane/Plugin/PluginABI.hpp>` in `EditorApp.cpp`.)
+> - **Guarded `m_plugin` dereferences.** Every `m_plugin->Vtable()` / `m_plugin->Poll()` in
+>   `MainLoop` is optional-guarded (`m_plugin ? m_plugin->Vtable() : nullptr`, `if (m_plugin)
+>   m_plugin->Poll();`) as defense-in-depth against any disengaged-plugin state.
+> - **`m_pendingProjectPath` is mutex-guarded.** The SDL folder-dialog callback runs on an
+>   SDL-owned **background thread** (verified against SDL3 3.4.0's Windows backend), *not*
+>   the main thread during `PumpEvents` as Step 4/5 assumed. `EditorApp` gains a
+>   `std::mutex m_pendingProjectMutex` (+ `#include <mutex>`); `FolderPickedThunk` writes the
+>   path under `lock_guard`; `MainLoop` swaps it out under `lock_guard` into a local, then
+>   calls `SwitchProject` on that local *outside* the lock (so the slow reload never stalls
+>   the callback thread). This replaces the unsynchronized bare write/read.
 
 ---
 
