@@ -48,6 +48,14 @@ namespace Arcane
         std::filesystem::file_time_type pendingWrite{};
         std::chrono::steady_clock::time_point pendingSince{};
 
+        // Secondary plugins (project Plugins/): loaded ONCE (no independent hot-reload),
+        // sharing the Runtime, torn down alongside the primary, and re-established across a
+        // primary hot-reload. pluginSources is the AddPlugin() order; `plugins` holds the
+        // loaded+Init'd images, kept MAPPED (so their component descriptors stay valid
+        // while the registry is reset during a primary reload/teardown).
+        std::vector<std::filesystem::path> pluginSources;
+        std::vector<PluginImage>           plugins;
+
         Impl(Runtime& rt, std::filesystem::path src)
             : runtime(rt), source(std::move(src))
         {
@@ -126,7 +134,163 @@ namespace Arcane
             if (current)
                 TeardownImage(*current, true);
         }
+
+        // --- secondary plugins ---------------------------------------------------------
+
+        // Load + Init each pending plugin (direct load, no versioned copy -- secondaries
+        // do not hot-reload). Init in AddPlugin() order. On any failure, quiesce + drop the
+        // ones already brought up and return false (the caller unwinds the whole set).
+        bool LoadInitPlugins()
+        {
+            for (const auto& src : pluginSources)
+            {
+                std::optional<Plugin> p = Plugin::Load(src);
+                RefreshContext();
+                if (!p || !p->VTable().Init(&ctx))
+                {
+                    if (p && p->VTable().Shutdown) p->VTable().Shutdown();
+                    ShutdownPluginsLive();
+                    plugins.clear();
+                    ARC_ERROR("plugin: failed to load secondary '{}'", src.generic_string());
+                    return false;
+                }
+                PluginImage img;
+                img.plugin = std::move(*p);
+                plugins.push_back(std::move(img));
+                ARC_INFO("plugin: secondary '{}' loaded", src.generic_string());
+            }
+            return true;
+        }
+
+        // Call each loaded plugin's Shutdown (reverse of load order) but KEEP the modules
+        // mapped -- so a following registry reset can safely destroy plugin-typed component
+        // instances (their descriptors still point into loaded code).
+        void ShutdownPluginsLive()
+        {
+            for (auto it = plugins.rbegin(); it != plugins.rend(); ++it)
+                if (it->plugin && it->plugin->VTable().Shutdown)
+                    it->plugin->VTable().Shutdown();
+        }
+
+        // Re-Init each loaded plugin (load order) on the SAME mapped modules -- used to
+        // re-establish secondaries after a primary hot-reload reset the shared registry.
+        void InitPluginsLive()
+        {
+            for (auto& img : plugins)
+            {
+                RefreshContext();
+                if (img.plugin) img.plugin->VTable().Init(&ctx);
+            }
+        }
+
+        // The primary module's full reload sequence (copy + ABI + SaveState/LoadState +
+        // last-good rollback). Delicate + heavily tested; kept byte-for-byte as the
+        // single-module host -- PluginHost::Reload only wraps plugin re-establishment
+        // around it, and with no plugins the wrapper is a no-op.
+        bool ReloadPrimary(bool restoreState);
     };
+
+    bool PluginHost::Impl::ReloadPrimary(bool restoreState)
+    {
+        const std::uint32_t nextGen = gen + 1;
+        PluginImage next;
+        if (!CopyVersioned(nextGen, next))
+            return false;
+
+        std::vector<std::byte> snapshot;
+        if (restoreState && current && current->plugin)
+        {
+            const PluginVTable& vt = current->plugin->VTable();
+            if (vt.SaveState)
+            {
+                Astra::BinaryWriter w(snapshot);
+                vt.SaveState(w);
+                if (w.HasError())
+                {
+                    ARC_ERROR("plugin: SaveState failed; aborting reload, keeping live plugin");
+                    DeleteFiles(next);
+                    return false;
+                }
+            }
+        }
+
+        std::optional<PluginImage> previous = std::move(current);
+        current.reset();
+        if (previous)
+            TeardownImage(*previous, true);
+
+        if (!restoreState)
+            runtime.ResetRegistry();
+
+        std::optional<Plugin> loadedNext = Plugin::Load(next.dll);
+        RefreshContext();
+        const bool initRan = loadedNext && loadedNext->VTable().Init(&ctx);
+        bool ok = initRan;
+        if (ok && restoreState)
+        {
+            Astra::BinaryReader r(snapshot);
+            ok = loadedNext->VTable().LoadState(r);
+        }
+
+        if (ok)
+        {
+            next.plugin = std::move(*loadedNext);
+            current = std::move(next);
+            gen = nextGen;
+            if (previous)
+                DeleteFiles(*previous);
+            ARC_INFO("plugin reloaded (gen {}, snapshot {} bytes)", nextGen, snapshot.size());
+            return true;
+        }
+
+        if (loadedNext)
+        {
+            next.plugin = std::move(*loadedNext);
+            TeardownImage(next, initRan);
+        }
+        DeleteFiles(next);
+        runtime.ClearSystems();
+
+        bool rolledBack = false;
+        if (previous && !previous->dll.empty())
+        {
+            std::optional<Plugin> rollback = Plugin::Load(previous->dll);
+            RefreshContext();
+            if (rollback && rollback->VTable().Init(&ctx))
+            {
+                if (restoreState && !snapshot.empty())
+                {
+                    Astra::BinaryReader r(snapshot);
+                    if (!rollback->VTable().LoadState(r))
+                        ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
+                }
+                previous->plugin = std::move(*rollback);
+                rolledBack = true;
+            }
+        }
+
+        if (rolledBack)
+        {
+            current = std::move(previous);
+            ARC_ERROR("plugin reload failed (gen {}); rolled back to last-good", nextGen);
+            return false;
+        }
+
+        // Double failure: the new image failed to load AND the last-good rollback
+        // also failed (or there was no last-good to roll back to). Do NOT install a
+        // half-assigned 'current' whose plugin optional is empty -- that reads as
+        // IsLoaded()==false / Vtable()==null while the host still believes a plugin
+        // is present, so the main loop's `if (vt)` guards silently freeze the sim
+        // (no FixedUpdate/Update/DrawUI) while still rendering, with only the generic
+        // reload-failed line logged. Surface an honest dead state instead: leave
+        // 'current' empty so IsLoaded()==false truthfully means "no plugin", clean up
+        // the abandoned last-good copies, and log the double failure explicitly.
+        if (previous)
+            DeleteFiles(*previous);
+        current.reset();
+        ARC_ERROR("plugin reload failed (gen {}); rollback to last-good ALSO failed -- no plugin loaded", nextGen);
+        return false;
+    }
 
     PluginHost::PluginHost(Runtime& runtime, std::filesystem::path src)
         : m_impl(std::make_unique<Impl>(runtime, std::move(src))) {}
@@ -134,6 +298,11 @@ namespace Arcane
     PluginHost::~PluginHost()
     {
         Unload();
+    }
+
+    void PluginHost::AddPlugin(std::filesystem::path dll)
+    {
+        m_impl->pluginSources.push_back(std::move(dll));
     }
 
     bool PluginHost::Load()
@@ -172,119 +341,54 @@ namespace Arcane
         m_impl->current = std::move(img);
         m_impl->gen = g;
         ARC_INFO("plugin loaded (gen {})", g);
+
+        // Bring up the secondary plugins after the primary (they share the Runtime). A
+        // plugin failure unwinds the whole session -- no half-loaded host.
+        if (!m_impl->LoadInitPlugins())
+        {
+            Unload();
+            return false;
+        }
         return true;
     }
 
     void PluginHost::Unload()
     {
-        if (!m_impl->current)
+        if (!m_impl->current && m_impl->plugins.empty())
             return;
 
-        m_impl->TeardownLive();
-        m_impl->DeleteFiles(*m_impl->current);
-        m_impl->current.reset();
+        // Quiesce plugins (reverse order) while everything is still mapped; the primary's
+        // TeardownImage performs the SINGLE shared-state reset (audio/systems/registry)
+        // with all module DLLs still loaded (component descriptors may point into any).
+        m_impl->ShutdownPluginsLive();
+        if (m_impl->current)
+        {
+            m_impl->TeardownImage(*m_impl->current, true);
+            m_impl->DeleteFiles(*m_impl->current);
+            m_impl->current.reset();
+        }
+        else
+        {
+            // Plugins-only (no primary loaded): do the shared reset here, once.
+            m_impl->runtime.ResetAudio();
+            m_impl->runtime.ClearSystems();
+            m_impl->runtime.ResetRegistry();
+        }
+        m_impl->plugins.clear();   // unload plugin DLLs AFTER the reset
     }
 
     bool PluginHost::Reload(bool restoreState)
     {
-        const std::uint32_t nextGen = m_impl->gen + 1;
-        PluginImage next;
-        if (!m_impl->CopyVersioned(nextGen, next))
-            return false;
-
-        std::vector<std::byte> snapshot;
-        if (restoreState && m_impl->current && m_impl->current->plugin)
-        {
-            const PluginVTable& vt = m_impl->current->plugin->VTable();
-            if (vt.SaveState)
-            {
-                Astra::BinaryWriter w(snapshot);
-                vt.SaveState(w);
-                if (w.HasError())
-                {
-                    ARC_ERROR("plugin: SaveState failed; aborting reload, keeping live plugin");
-                    m_impl->DeleteFiles(next);
-                    return false;
-                }
-            }
-        }
-
-        std::optional<PluginImage> previous = std::move(m_impl->current);
-        m_impl->current.reset();
-        if (previous)
-            m_impl->TeardownImage(*previous, true);
-
-        if (!restoreState)
-            m_impl->runtime.ResetRegistry();
-
-        std::optional<Plugin> loadedNext = Plugin::Load(next.dll);
-        m_impl->RefreshContext();
-        const bool initRan = loadedNext && loadedNext->VTable().Init(&m_impl->ctx);
-        bool ok = initRan;
-        if (ok && restoreState)
-        {
-            Astra::BinaryReader r(snapshot);
-            ok = loadedNext->VTable().LoadState(r);
-        }
-
-        if (ok)
-        {
-            next.plugin = std::move(*loadedNext);
-            m_impl->current = std::move(next);
-            m_impl->gen = nextGen;
-            if (previous)
-                m_impl->DeleteFiles(*previous);
-            ARC_INFO("plugin reloaded (gen {}, snapshot {} bytes)", nextGen, snapshot.size());
-            return true;
-        }
-
-        if (loadedNext)
-        {
-            next.plugin = std::move(*loadedNext);
-            m_impl->TeardownImage(next, initRan);
-        }
-        m_impl->DeleteFiles(next);
-        m_impl->runtime.ClearSystems();
-
-        bool rolledBack = false;
-        if (previous && !previous->dll.empty())
-        {
-            std::optional<Plugin> rollback = Plugin::Load(previous->dll);
-            m_impl->RefreshContext();
-            if (rollback && rollback->VTable().Init(&m_impl->ctx))
-            {
-                if (restoreState && !snapshot.empty())
-                {
-                    Astra::BinaryReader r(snapshot);
-                    if (!rollback->VTable().LoadState(r))
-                        ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
-                }
-                previous->plugin = std::move(*rollback);
-                rolledBack = true;
-            }
-        }
-
-        if (rolledBack)
-        {
-            m_impl->current = std::move(previous);
-            ARC_ERROR("plugin reload failed (gen {}); rolled back to last-good", nextGen);
-            return false;
-        }
-
-        // Double failure: the new image failed to load AND the last-good rollback
-        // also failed (or there was no last-good to roll back to). Do NOT install a
-        // half-assigned 'current' whose plugin optional is empty -- that reads as
-        // IsLoaded()==false / Vtable()==null while the host still believes a plugin
-        // is present, so the main loop's `if (vt)` guards silently freeze the sim
-        // (no FixedUpdate/Update/DrawUI) while still rendering, with only the generic
-        // reload-failed line logged. Surface an honest dead state instead: leave
-        // 'current' empty so IsLoaded()==false truthfully means "no plugin", clean up
-        // the abandoned last-good copies, and log the double failure explicitly.
-        if (previous)
-            m_impl->DeleteFiles(*previous);
-        m_impl->current.reset();
-        ARC_ERROR("plugin reload failed (gen {}); rollback to last-good ALSO failed -- no plugin loaded", nextGen);
-        return false;
+        // Multi-module: quiesce plugins (kept mapped) so the primary's reset doesn't touch
+        // a running secondary, run the UNCHANGED primary reload, then re-establish the
+        // plugins on the post-reload registry. With no plugins both calls are no-ops, so
+        // Reload == ReloadPrimary exactly (the single-module hot-reload contract). Note:
+        // secondaries re-Init AFTER the primary here (a documented ordering nuance vs boot)
+        // and rebuild their own state rather than snapshotting it.
+        m_impl->ShutdownPluginsLive();
+        const bool ok = m_impl->ReloadPrimary(restoreState);
+        m_impl->InitPluginsLive();
+        return ok;
     }
 
     void PluginHost::Poll()
@@ -311,6 +415,27 @@ namespace Arcane
             m_impl->pending = false;
             Reload(true);
         }
+    }
+
+    void PluginHost::FixedUpdateAll(double dt)
+    {
+        if (const PluginVTable* vt = Vtable(); vt && vt->FixedUpdate) vt->FixedUpdate(dt);
+        for (auto& img : m_impl->plugins)
+            if (img.plugin && img.plugin->VTable().FixedUpdate) img.plugin->VTable().FixedUpdate(dt);
+    }
+
+    void PluginHost::UpdateAll(double dt, double alpha)
+    {
+        if (const PluginVTable* vt = Vtable(); vt && vt->Update) vt->Update(dt, alpha);
+        for (auto& img : m_impl->plugins)
+            if (img.plugin && img.plugin->VTable().Update) img.plugin->VTable().Update(dt, alpha);
+    }
+
+    void PluginHost::DrawUIAll()
+    {
+        if (const PluginVTable* vt = Vtable(); vt && vt->DrawUI) vt->DrawUI();
+        for (auto& img : m_impl->plugins)
+            if (img.plugin && img.plugin->VTable().DrawUI) img.plugin->VTable().DrawUI();
     }
 
     bool PluginHost::IsLoaded() const noexcept

@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace Arcane::HostBoot
 {
@@ -48,5 +49,26 @@ namespace Arcane::HostBoot
             return mod;
         }
         return fallback;
+    }
+
+    // The secondary plugin modules a host should load: each enabled manifest plugin that
+    // has built a DLL at <root>/Plugins/<name>/Binaries/<name>.dll. A content-only plugin
+    // (no Source/ -> no DLL) contributes only its plugin:// content mount (added at
+    // Project::Open) and is skipped here. Feed each to PluginHost::AddPlugin before Load().
+    inline std::vector<std::filesystem::path> PluginModules(const Arcane::Project* project)
+    {
+        std::vector<std::filesystem::path> out;
+        if (!project)
+            return out;
+        std::error_code ec;
+        for (const auto& ref : project->Manifest().plugins)
+        {
+            if (!ref.enabled)
+                continue;
+            std::filesystem::path dll = project->Root() / "Plugins" / ref.name / "Binaries" / (ref.name + ".dll");
+            if (std::filesystem::exists(dll, ec))
+                out.push_back(std::move(dll));
+        }
+        return out;
     }
 }

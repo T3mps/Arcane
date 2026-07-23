@@ -102,6 +102,11 @@ bool Loom::Init()
     const std::string gameModule =
         Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), fallback);
     m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
+    // Secondary plugins: each enabled project plugin that built a Plugins/<name>/Binaries
+    // DLL loads alongside the game module through the same host (content-only plugins are
+    // already mounted at Project::Open).
+    for (const auto& dll : Arcane::HostBoot::PluginModules(m_runtime->CurrentProject()))
+        m_plugin->AddPlugin(dll);
     if (!m_plugin->Load())
     {
         ARC_ERROR("Loom: failed to load game module '{}'", gameModule);
@@ -158,11 +163,10 @@ void Loom::MainLoop()
             double simDt = std::chrono::duration<double>(now - simPrev).count();
             simPrev = now;
             if (simDt > 0.25) simDt = 0.25;
-            const Arcane::PluginVTable* vt = m_plugin->Vtable();
             const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
             m_runtime->Loop().Advance(simDt,
-                [&](double dt)          { if (vt) vt->FixedUpdate(dt); },
-                [&](double dt, double a){ if (vt) vt->Update(dt, a); });
+                [&](double dt)          { m_plugin->FixedUpdateAll(dt); },
+                [&](double dt, double a){ m_plugin->UpdateAll(dt, a); });
             // Reclaim finished fire-and-forget SFX voices each frame (and, on the
             // headless null backend, advance audio time so one-shots actually end).
             m_runtime->AudioSystem().Update(simDt);
@@ -179,10 +183,9 @@ void Loom::MainLoop()
             ImGui::End();
         }
 
-        // ABI v2: the plugin draws its own ImGui between BeginFrame and Render.
-        // Null-checked (a v2 plugin may omit DrawUI); PlaygroundGame's is a no-op.
-        const Arcane::PluginVTable* vtUI = m_plugin->Vtable();
-        if (vtUI && vtUI->DrawUI) vtUI->DrawUI();
+        // ABI v2: the game module + any secondary plugins draw their own ImGui between
+        // BeginFrame and Render. Each entry point is null-checked inside DrawUIAll.
+        m_plugin->DrawUIAll();
 
         nvrhi::ITexture* backbuffer = m_gpu->Swap().BeginFrame();
         if (!backbuffer)

@@ -215,6 +215,8 @@ namespace Arcane::Editor
         if (!gameModule.empty())
         {
             m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
+            for (const auto& dll : Arcane::HostBoot::PluginModules(m_runtime->CurrentProject()))
+                m_plugin->AddPlugin(dll);
             if (!m_plugin->Load())
             {
                 ARC_ERROR("Arcane Editor: failed to load game module '{}'", gameModule);
@@ -330,6 +332,8 @@ namespace Arcane::Editor
         const std::string gameModule =
             Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
         m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
+        for (const auto& dll : Arcane::HostBoot::PluginModules(m_runtime->CurrentProject()))
+            m_plugin->AddPlugin(dll);
         if (!m_plugin->Load())
             ARC_ERROR("Open Project: failed to load game module '{}'", gameModule);
 
@@ -642,10 +646,9 @@ namespace Arcane::Editor
                 double simDt = std::chrono::duration<double>(now - simPrev).count();
                 simPrev = now;
                 if (simDt > 0.25) simDt = 0.25;
-                const Arcane::PluginVTable* vt = m_plugin ? m_plugin->Vtable() : nullptr;
                 m_runtime->Loop().Advance(simDt,
-                    [&](double dt)          { if (vt) vt->FixedUpdate(dt); },
-                    [&](double dt, double a){ if (vt) vt->Update(dt, a); });
+                    [&](double dt)          { if (m_plugin) m_plugin->FixedUpdateAll(dt); },
+                    [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
                 m_runtime->AudioSystem().Update(simDt);
             }
 
@@ -719,7 +722,7 @@ namespace Arcane::Editor
                 gi.wheel        = m_lastWheel;
                 m_gameImgui->SetInput(gi);
                 m_gameImgui->BeginFrame();
-                vtGame->DrawUI();
+                m_plugin->DrawUIAll();   // game module + any secondary plugins, into the game context
                 // Composite the game HUD into the viewport output texture on a one-off
                 // command list (mirrors the backbuffer pass below). The OffscreenCanvas
                 // owns a SEPARATE command list for its scene pass, so m_gpu->Cmd() is

@@ -30,6 +30,13 @@ namespace
         for (int i = 0; i < k; ++i)
             rt.Loop().Advance(1.0 / 60.0, [&](double dt){ vt.FixedUpdate(dt); }, [&](double,double){});
     }
+    // Drive k fixed steps through the WHOLE host (primary + every secondary), the way a
+    // multi-module host advances the sim -- FixedUpdateAll instead of a single vtable.
+    void StepAllK(Arcane::Runtime& rt, Arcane::PluginHost& host, int k)
+    {
+        for (int i = 0; i < k; ++i)
+            rt.Loop().Advance(1.0 / 60.0, [&](double dt){ host.FixedUpdateAll(dt); }, [&](double,double){});
+    }
 }
 
 TEST_CASE("PluginHost loads a plugin and runs it across the ABI", "[hotreload]")
@@ -102,6 +109,41 @@ TEST_CASE("ABI mismatch rolls back to last-good; session survives", "[hotreload]
     // restore the fixture for re-runs
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
+}
+
+TEST_CASE("Host drives a secondary plugin alongside the primary", "[hotreload]")
+{
+    // A multi-module host: the primary game module PLUS one secondary plugin module,
+    // both sharing the Runtime. AddPlugin registers the secondary BEFORE Load(); Load
+    // brings up the primary, then the secondary. Both V1 (primary, +1) and V2 (secondary,
+    // +10) target the SAME singleton Pulse entity -- V2's Init finds the one V1 created
+    // and caches the same handle -- so ONE FixedUpdateAll step lands +1 AND +10 on it.
+    // The value 11 is unique to "both ran": primary-only would be 1, secondary-only 10.
+    std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
+                               std::filesystem::copy_options::overwrite_existing);
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Pulse>();
+
+    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    host.AddPlugin(std::filesystem::path("HotReloadPluginV2.dll"));   // secondary, +10 per step
+    REQUIRE(host.Load());
+    REQUIRE(host.IsLoaded());
+
+    StepAllK(rt, host, 1);
+    CHECK(ReadPulse(rt) == 11);                    // primary(+1) AND secondary(+10) both drove
+
+    // A primary hot-reload quiesces the secondary, reloads the primary (state preserved),
+    // then re-establishes the secondary on the post-reload registry. If the secondary
+    // were dropped, the next step would land only the primary's +1 (12); re-established,
+    // both drive again for +11 (22). This exercises ShutdownPluginsLive/InitPluginsLive.
+    REQUIRE(host.ForceReload());
+    CHECK(ReadPulse(rt) == 11);                    // primary state survived the reload
+    StepAllK(rt, host, 1);
+    CHECK(ReadPulse(rt) == 22);                    // secondary re-established AND driven
+
+    CHECK(Arcane::RenderErrorCount() == 0);
+    host.Unload();
 }
 
 TEST_CASE("Reload failure with no last-good yields an honest dead state", "[hotreload]")
