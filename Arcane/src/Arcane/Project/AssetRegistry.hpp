@@ -3,9 +3,10 @@
 // AssetRegistry: the one map that matters -- Guid -> mount path ("game://a/b.json") --
 // built by scanning a project's content tree at open. The physical file then comes from
 // the MountTable (mount path -> file), so an asset can move on disk while its Guid (the
-// stable reference) never changes. Slice 2 first cut: native JSON assets carry a
-// top-level "id"; a missing id is generated and written back (Unity-style auto-import).
-// The .meta sidecar path for imported binary originals (.png/.wav/.ttf) is a follow-up.
+// stable reference) never changes. Where the Guid lives splits by asset kind (Unity's
+// model): native JSON assets carry a top-level "id"; imported binary originals
+// (.png/.wav/.ttf/...) that cannot embed one keep it in a sibling "<file>.meta" sidecar.
+// In both cases a missing/invalid id is minted and written back (Unity-style auto-import).
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
@@ -26,10 +27,11 @@ namespace Arcane
     class ARCANE_API AssetRegistry
     {
     public:
-        // Recursively scan `contentDir` for native assets (*.json), assigning or reading
-        // a stable Guid per asset, and register Guid -> "<scheme>://<relative>". A file
-        // with no valid top-level "id" gets one generated and written back. Returns the
-        // number of assets registered. Safe to call repeatedly (rebuilds from scratch).
+        // Recursively scan `contentDir` for assets -- native JSON (embedded "id") and
+        // imported binary originals (id in a sibling "<file>.meta") -- assigning or reading
+        // a stable Guid per asset, and register Guid -> "<scheme>://<relative>". A file with
+        // no valid id gets one generated and written back. Returns the number of assets
+        // registered. Safe to call repeatedly (rebuilds from scratch).
         std::size_t ScanContent(const std::filesystem::path& contentDir, std::string_view scheme);
 
         // Guid -> mount path ("game://a/b.json"); nullopt if the id is unknown.

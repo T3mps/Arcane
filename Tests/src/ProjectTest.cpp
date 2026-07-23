@@ -6,6 +6,8 @@
 
 #include <Arcane/Plugin/PluginABI.hpp>
 
+#include <Json.hpp>
+
 #include <filesystem>
 #include <fstream>
 
@@ -109,6 +111,64 @@ TEST_CASE("Project::ResolveAsset maps a registered Guid to a file", "[project]")
     CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId::FromGuid(Arcane::Guid::Generate())).has_value());
     // Invalid id -> no resolution.
     CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId{}).has_value());
+}
+
+TEST_CASE("Project::Open mints a .meta sidecar for an imported binary original", "[project]")
+{
+    const auto dir = TempDir("meta_mint");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 4 } })");
+    // A binary original (extension routes it to the sidecar path) with NO .meta yet ->
+    // auto-import mints one on Open. Contents are never parsed for binaries.
+    std::filesystem::create_directories(dir / "Content");
+    WriteFile(dir / "Content" / "textures" / "hero.png", "not-really-a-png");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    // The sidecar was written beside the original: hero.png -> hero.png.meta (appended,
+    // not extension-replaced, so "a.png"/"a.wav" would not collide on "a.meta").
+    const auto meta = dir / "Content" / "textures" / "hero.png.meta";
+    REQUIRE(std::filesystem::is_regular_file(meta));
+
+    // The minted guid resolves back to the ORIGINAL file, not the .meta.
+    std::ifstream in(meta, std::ios::binary);
+    auto sidecar = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
+    REQUIRE(sidecar.is_object());
+    const auto g = Arcane::Guid::FromString(sidecar.value("guid", std::string{}));
+    REQUIRE(g.has_value());
+    REQUIRE(g->IsValid());
+
+    auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "textures" / "hero.png");
+
+    // Re-opening is stable: the persisted guid is reused, not regenerated.
+    auto proj2 = Arcane::Project::Open(dir);
+    REQUIRE(proj2.has_value());
+    auto p2 = proj2->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p2.has_value());
+    CHECK(*p2 == dir / "Content" / "textures" / "hero.png");
+}
+
+TEST_CASE("Project::Open reads an existing .meta sidecar's guid", "[project]")
+{
+    const auto dir = TempDir("meta_existing");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+    WriteFile(dir / "Content" / "music.wav", "RIFF-WAVE-bytes");
+    WriteFile(dir / "Content" / "music.wav.meta",
+              R"({ "guid": "b6f1d2ef-2222-4333-8444-555566667777", "version": 1 })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    const auto g = Arcane::Guid::FromString("b6f1d2ef-2222-4333-8444-555566667777");
+    REQUIRE(g.has_value());
+    auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "music.wav");
 }
 
 TEST_CASE("Project::Create scaffolds the skeleton, manifest, and .gitignore", "[project]")
