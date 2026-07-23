@@ -53,6 +53,14 @@ namespace Arcane
         // memoized before a device was available.
         virtual void SetDevice(nvrhi::IDevice* device) = 0;
 
+        // Base directory prepended to RELATIVE paths in GetTexture/GetBytes/GetJson;
+        // absolute paths pass through unchanged. The host sets this from the open
+        // project's game:// mount (project Content/) so loose-file loads resolve under
+        // the project instead of exe-relative. Empty (default) == the legacy
+        // exe-relative behavior. Slice 2 (AssetRegistry/GUID) resolves behind the
+        // AssetId seam and this becomes the fallback for legacy path loads.
+        virtual void SetContentRoot(const std::filesystem::path& root) = 0;
+
         // Color texture (sRGB). Null on failure (logged once, memoized). Also
         // null (no crash) when no render device has been set yet.
         virtual nvrhi::TextureHandle GetTexture(

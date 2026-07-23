@@ -299,6 +299,28 @@ TEST_CASE("assets: texture loads as sRGB and reads back byte-true", "[gpu][d3d12
     std::remove(png.string().c_str());
 }
 
+TEST_CASE("Assets content-root anchors relative loads", "[assets]")
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_contentroot";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    std::ofstream(root / "probe.json", std::ios::binary) << R"({"ok":true})";
+
+    auto assets = Arcane::Assets::Create(nullptr);
+    assets->SetContentRoot(root);
+
+    auto doc = assets->GetJson("probe.json");   // relative -> resolves under root
+    REQUIRE(doc != nullptr);
+    REQUIRE((*doc)["ok"].get<bool>() == true);
+
+    auto abs = assets->GetJson(root / "probe.json");   // absolute bypasses the root
+    REQUIRE(abs != nullptr);
+
+    fs::remove_all(root, ec);
+}
+
 TEST_CASE("assets: json loader -- parse, cache identity, memoized failure", "[gpu][d3d12][assets]")
 {
     // JSON test: no GPU required; uses a null device since Assets::Create

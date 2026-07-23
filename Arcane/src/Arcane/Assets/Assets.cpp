@@ -20,10 +20,9 @@ namespace Arcane
 {
     namespace
     {
-        // Resolve a path exe-relative when relative -- mirrors the pattern in
-        // ShaderLibrary.cpp for consistency. Relative paths anchor to the
-        // executable directory so tests pass regardless of CWD.
-        std::filesystem::path ResolveAssetPath(const std::filesystem::path& path)
+        // Resolve a path exe-relative when relative -- mirrors ShaderLibrary. Relative
+        // paths anchor to the executable directory so tests pass regardless of CWD.
+        std::filesystem::path ExeRelative(const std::filesystem::path& path)
         {
             if (path.is_absolute())
                 return path;
@@ -87,6 +86,11 @@ namespace Arcane
                 // was not a real load failure -- drop both so a bound device
                 // gets a clean retry. Bytes/JSON caches are device-independent.
                 m_textures.Clear();
+            }
+
+            void SetContentRoot(const std::filesystem::path& root) override
+            {
+                m_contentRoot = root;
             }
 
             nvrhi::TextureHandle GetTexture(
@@ -308,8 +312,21 @@ namespace Arcane
                 }
             }
 
+            // Content-root-aware resolve, shadowing the free ExeRelative helper for
+            // the three Get* methods: absolute paths pass through; a set content root
+            // anchors relatives under it; otherwise the legacy exe-relative anchor.
+            std::filesystem::path ResolveAssetPath(const std::filesystem::path& path) const
+            {
+                if (path.is_absolute())
+                    return path;
+                if (!m_contentRoot.empty())
+                    return m_contentRoot / path;
+                return ExeRelative(path);
+            }
+
             nvrhi::IDevice* m_device;
             uint64_t m_byteBudget;
+            std::filesystem::path m_contentRoot;   // empty => exe-relative (legacy)
 
             // ONE recency clock across the three caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU
