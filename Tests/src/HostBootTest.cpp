@@ -59,6 +59,30 @@ TEST_CASE("HostBoot::GameModule returns the manifest gameModule when set", "[loo
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("HostBoot::GameModule resolves the project's Binaries/ copy when built", "[loom]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_hostboot_gm3";
+    std::error_code ec; fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content", ec);
+    fs::create_directories(dir / "Binaries", ec);
+    std::ofstream(dir / "P.arcproj", std::ios::binary) <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":5},)"
+        R"("gameModule":"Aphelyon.dll","plugins":[],"bootScene":""})";
+    // The project has built its own module -> the host must load THIS copy, not a
+    // same-named DLL beside the exe.
+    std::ofstream(dir / "Binaries" / "Aphelyon.dll", std::ios::binary) << "MZ";  // presence is what matters
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    REQUIRE(fs::path(Arcane::HostBoot::GameModule(&*proj, "Sandbox.dll"))
+            == dir / "Binaries" / "Aphelyon.dll");
+
+    // Without the built copy, it stays a bare name (borrowing path, resolved beside exe).
+    fs::remove(dir / "Binaries" / "Aphelyon.dll", ec);
+    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Sandbox.dll") == "Aphelyon.dll");
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("HostBoot::LoadInputConfig loads the input category", "[loom]")
 {
     const fs::path dir = fs::temp_directory_path() / "arcane_hostboot_input";
