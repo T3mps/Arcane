@@ -5,6 +5,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_dialog.h>
 
+#include <stb_image.h>   // decode the icon file; implementation lives in Assets/StbImpl.cpp (same DLL)
+
 #include <memory>
 
 namespace Arcane
@@ -120,6 +122,47 @@ namespace Arcane
         if (!m_window)
             return;
         SDL_SetWindowSize(m_window, (int)width, (int)height);
+    }
+
+    bool Window::SetIcon(const std::filesystem::path& path)
+    {
+        if (!m_window)
+            return false;
+
+        // Resolve relative paths against the exe dir (not the CWD) so the icon loads
+        // regardless of where the editor is launched from -- matching Assets/ShaderLibrary
+        // and the editor's exe-relative font/data layout. SDL_GetBasePath() is SDL-owned.
+        std::filesystem::path resolved = path;
+        if (resolved.is_relative())
+            if (const char* base = SDL_GetBasePath())
+                resolved = std::filesystem::path(base) / path;
+
+        int w = 0, h = 0, comp = 0;
+        unsigned char* pixels = stbi_load(resolved.string().c_str(), &w, &h, &comp, 4);
+        if (!pixels || w <= 0 || h <= 0)
+        {
+            ARC_WARN("Window::SetIcon: failed to load '{}'", resolved.string());
+            if (pixels) stbi_image_free(pixels);
+            return false;
+        }
+
+        // SDL_PIXELFORMAT_RGBA32 is byte-order R,G,B,A -- exactly stb's 4-channel layout.
+        // SDL_SetWindowIcon copies the surface into the window, so the surface and its
+        // backing pixels are ours to free immediately after.
+        SDL_Surface* surface = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGBA32,
+                                                     pixels, w * 4);
+        bool ok = false;
+        if (surface)
+        {
+            ok = SDL_SetWindowIcon(m_window, surface);
+            SDL_DestroySurface(surface);
+        }
+        else
+        {
+            ARC_WARN("Window::SetIcon: SDL_CreateSurfaceFrom failed: {}", SDL_GetError());
+        }
+        stbi_image_free(pixels);
+        return ok;
     }
 
     void Window::SetNativeEventTap(NativeEventTap tap, void* user)

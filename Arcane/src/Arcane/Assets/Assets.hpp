@@ -76,4 +76,20 @@ namespace Arcane
 
         virtual AssetStats Stats() const = 0;
     };
+
+    // Load an image file into a DISPLAY-REFERRED (RGBA8_UNORM) texture, for ImGui/UI
+    // where the sampled texel composites DIRECTLY into the display-referred target
+    // (the ImGui backbuffer / a tonemapped viewport output). This is deliberately NOT
+    // Assets::GetTexture, which uploads sRGB (SRGBA8_UNORM) so the sampler yields linear
+    // for the all-linear scene canvas -- feeding that to ImGui double-decodes and reads
+    // too dark. Uncached: the caller owns the returned handle (editor icons/logos are
+    // few and long-lived, so the facade's LRU budget would only get in the way). Relative
+    // paths resolve exe-relative (same anchor as Assets). Null on failure (logged once).
+    //
+    // maxSize (0 = off) caps the larger dimension by repeated 2x box-averaging downscale
+    // BEFORE upload -- a CPU mip. The ImGui sampler has no mipmaps, so a large source drawn
+    // small (e.g. a 550px logo at 24px) would alias hard under single-tap bilinear; pass a
+    // maxSize a few times the display size for a clean minified result (and less VRAM).
+    ARCANE_API nvrhi::TextureHandle LoadDisplayTexture(
+        nvrhi::IDevice* device, const std::filesystem::path& path, uint32_t maxSize = 0);
 }

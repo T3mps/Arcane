@@ -1,0 +1,8 @@
+// Win32 resource script for ArcaneEditor.exe.
+// The application icon (shown in Explorer, the taskbar, and Alt-Tab) is the ICON
+// resource with the numerically lowest id -- 1 here. Path is relative to this .rc.
+// The runtime window/taskbar icon is set separately via Window::SetIcon (SDL); this
+// only affects the .exe file's icon. arcane.ico is a multi-resolution icon
+// (256/128/64/48/32/16) generated from Arcane/data/images/arcane_logo.png.
+
+1 ICON "arcane.ico"

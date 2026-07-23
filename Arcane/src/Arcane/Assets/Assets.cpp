@@ -343,4 +343,103 @@ namespace Arcane
     {
         return std::make_unique<AssetsImpl>(device, desc);
     }
+
+    namespace
+    {
+        // One 2x box-average downscale of an RGBA8 image into `dst` (dims halved, min 1).
+        // Odd sizes clamp the trailing sample to the last row/column. Simple + adequate for
+        // a CPU mip chain (see LoadDisplayTexture's maxSize loop).
+        void HalveRGBA(const unsigned char* src, int w, int h,
+                       std::vector<unsigned char>& dst, int& outW, int& outH)
+        {
+            outW = w > 1 ? w / 2 : 1;
+            outH = h > 1 ? h / 2 : 1;
+            dst.resize((size_t)outW * outH * 4);
+            for (int y = 0; y < outH; ++y)
+            {
+                const int y0 = y * 2, y1 = (y * 2 + 1 < h) ? y * 2 + 1 : y * 2;
+                for (int x = 0; x < outW; ++x)
+                {
+                    const int x0 = x * 2, x1 = (x * 2 + 1 < w) ? x * 2 + 1 : x * 2;
+                    for (int c = 0; c < 4; ++c)
+                    {
+                        const int s = src[((size_t)y0 * w + x0) * 4 + c]
+                                    + src[((size_t)y0 * w + x1) * 4 + c]
+                                    + src[((size_t)y1 * w + x0) * 4 + c]
+                                    + src[((size_t)y1 * w + x1) * 4 + c];
+                        dst[((size_t)y * outW + x) * 4 + c] = (unsigned char)(s / 4);
+                    }
+                }
+            }
+        }
+    }
+
+    nvrhi::TextureHandle LoadDisplayTexture(nvrhi::IDevice* device,
+                                            const std::filesystem::path& path,
+                                            uint32_t maxSize)
+    {
+        if (!device)
+        {
+            ARC_WARN("LoadDisplayTexture: no render device");
+            return nullptr;
+        }
+
+        const std::filesystem::path resolved = ExeRelative(path);
+
+        int w = 0, h = 0, comp = 0;
+        unsigned char* data = stbi_load(resolved.string().c_str(), &w, &h, &comp, 4);
+        if (!data || w <= 0 || h <= 0)
+        {
+            // ARC_WARN (not ARC_ERROR): a missing UI image must not trip the GPU test's
+            // RenderErrorCount()==0 assertion (that counter tracks NVRHI validation only).
+            ARC_WARN("LoadDisplayTexture: not found or decode failed: {}", resolved.string());
+            if (data) stbi_image_free(data);
+            return nullptr;
+        }
+
+        // Optional CPU mip: halve until the larger dimension fits maxSize. `src`/w/h track
+        // the current pixels -- either the stb buffer (no downscale) or the ping-pong vectors.
+        const unsigned char* src = data;
+        std::vector<unsigned char> bufA, bufB;
+        if (maxSize > 0)
+        {
+            bool useA = true;
+            while ((uint32_t)w > maxSize || (uint32_t)h > maxSize)
+            {
+                std::vector<unsigned char>& dst = useA ? bufA : bufB;
+                int nw = 0, nh = 0;
+                HalveRGBA(src, w, h, dst, nw, nh);
+                src = dst.data();
+                w = nw; h = nh;
+                useA = !useA;
+            }
+        }
+
+        // RGBA8_UNORM, NOT sRGB: the sampled texel goes straight to the display-referred
+        // target (matches the ImGui backend's own font/texture format in ImGuiNvrhi.cpp).
+        auto texDesc = nvrhi::TextureDesc()
+            .setWidth((uint32_t)w)
+            .setHeight((uint32_t)h)
+            .setFormat(nvrhi::Format::RGBA8_UNORM)
+            .setInitialState(nvrhi::ResourceStates::ShaderResource)
+            .setKeepInitialState(true)
+            .setDebugName(resolved.filename().string().c_str());
+        nvrhi::TextureHandle tex = device->createTexture(texDesc);
+        if (!tex)
+        {
+            ARC_WARN("LoadDisplayTexture: createTexture failed for: {}", resolved.string());
+            stbi_image_free(data);
+            return nullptr;
+        }
+
+        // Transient upload command list -- same pattern as Assets::GetTexture / Batcher2D.
+        nvrhi::CommandListHandle upload = device->createCommandList();
+        upload->open();
+        upload->writeTexture(tex, 0, 0, src, (size_t)w * 4);
+        upload->close();
+        device->executeCommandList(upload);
+        stbi_image_free(data);
+
+        return tex;
+    }
 }

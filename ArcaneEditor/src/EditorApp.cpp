@@ -115,6 +115,16 @@ namespace Arcane::Editor
         // "Arcane Editor" -- Loom keeps its own title.
         m_gpu->Win().SetTitle("Arcane Editor");
 
+        // Editor branding (Arcane Editor only -- Loom does neither): the Arcane logo as the
+        // OS window/taskbar icon, and the SAME art as a display-referred texture for the
+        // transport toolbar's top-left mark (Unity-style). One shared source PNG, copied
+        // next to the exe at build. A missing file degrades quietly (default icon / no mark).
+        constexpr const char* kLogoPath = "data/images/arcane_logo.png";
+        m_gpu->Win().SetIcon(kLogoPath);
+        // maxSize 128: the toolbar draws it at ~one row height (~24px); a CPU mip down to
+        // 128 keeps the minified mark clean (the ImGui sampler has no mipmaps).
+        m_toolbarLogo = Arcane::LoadDisplayTexture(m_gpu->Device().Nvrhi(), kLogoPath, 128);
+
         // Editor shell: enable ImGui docking (the placeholder single window becomes
         // a dockspace + panels in MainLoop) and route the engine logger into the
         // Console panel's ring buffer.
@@ -762,7 +772,8 @@ namespace Arcane::Editor
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
             Arcane::Editor::BeginDockSpace(*m_undo, m_openProjectRequested);
-            Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
+            Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin ? m_plugin->Vtable() : nullptr,
+                                               (uint64_t)(intptr_t)m_toolbarLogo.Get());
             Arcane::Editor::EndDockSpace();
             if (m_openProjectRequested)
             {

@@ -19,6 +19,7 @@
 #include "SelectionContext.hpp"
 #include "ViewportInput.hpp"
 
+#include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -163,6 +164,14 @@ namespace Arcane::Editor
         // m_viewport->Draw -- the same slot the Play-only game-imgui overlay pass
         // uses (the two are mutually exclusive by mode).
         std::unique_ptr<Arcane::SelectionOutline> m_outline;
+
+        // The Arcane logo, shown at the left of the transport toolbar (Unity-style). A
+        // display-referred (UNORM) texture -- NOT Assets::GetTexture's sRGB -- so it
+        // composites correctly through the ImGui backend. Loaded once in Init; passed to
+        // DrawSimTimeToolbar as an ImTextureID (the raw nvrhi::ITexture*). Null if the
+        // image is missing (the toolbar simply omits it). Holds an NVRHI handle, so like
+        // the other render resources it is declared after m_gpu (destructs before the device).
+        nvrhi::TextureHandle m_toolbarLogo;
 
         // Deferred resize: the Viewport panel's content-region size measured LAST
         // frame, applied at the START of THIS frame (before m_viewport->Draw). This

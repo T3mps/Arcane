@@ -132,7 +132,7 @@ namespace Arcane::Editor
     }
 
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin)
+                            const Arcane::PluginVTable* plugin, uint64_t logoTex)
     {
         // Icon button with a hover tooltip (icons need discoverable labels).
         // `id` is an ImGui ID-only suffix (e.g. "##sim_playstop") appended to the
@@ -166,12 +166,26 @@ namespace Arcane::Editor
         // the trailing separator divides it from the dockspace below.
         ImGui::Dummy(ImVec2(0.0f, 3.0f));
 
+        // Measure the full strip BEFORE the logo so the transport centers in the whole
+        // width, not the width left of the logo.
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const float fullContentW = ImGui::GetContentRegionAvail().x;
+        const float lineStartX   = ImGui::GetCursorPosX();
+
+        // -- LEFT: the Arcane logo mark (Unity-style), sized to the button height so it
+        // sits inline with the transport. Drawn first; the transport is then absolutely
+        // centered across the full width regardless of the logo. 0 == no logo loaded.
+        if (logoTex != 0)
+        {
+            const float h = ImGui::GetFrameHeight();
+            ImGui::Image((ImTextureID)logoTex, ImVec2(h, h));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Arcane");
+            ImGui::SameLine();
+        }
+
         // -- CENTER: transport (Play / Pause / Step), Unity-style toggles. --
         // Center the trio within the full toolbar width. Undo/Redo moved to the Edit
         // menu; the transform-gizmo tools moved to the Viewport top-right overlay.
-        const float fullContentW = ImGui::GetContentRegionAvail().x;
-        const float lineStartX   = ImGui::GetCursorPosX();
-        const ImGuiStyle& st = ImGui::GetStyle();
         auto btnW = [&](const char* icon)
         { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
         const float transportW = btnW(ICON_LC_PLAY) + btnW(ICON_LC_PAUSE)

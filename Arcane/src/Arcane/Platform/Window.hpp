@@ -6,6 +6,7 @@
 #include <Arcane/Base/Api.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 
 struct SDL_Window;
@@ -45,6 +46,13 @@ namespace Arcane
 
         void SetTitle(const std::string& title);
         void SetSize(uint32_t width, uint32_t height);
+
+        // Set the OS window icon (title bar + taskbar) from an image file. Opt-in per
+        // host: only a host that calls this gets a custom icon -- others keep the SDL
+        // default. Decodes to RGBA via stb (compiled into this DLL); SDL_SetWindowIcon
+        // takes its own copy, so the surface + pixels are freed immediately. Returns
+        // false if there is no window yet or the image fails to decode (logged).
+        bool SetIcon(const std::filesystem::path& path);
 
         // Native event tap for engine-internal modules (ImGui): invoked
         // once per SDL event during PumpEvents, BEFORE Window's own

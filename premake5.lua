@@ -463,10 +463,18 @@ project "ArcaneEditor"
         '{COPYFILE} "%{wks.location}/data/font/inter/static/Inter_18pt-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/inter/static/Inter_18pt-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/roboto/static/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
+        -- Arcane logo: window/taskbar icon (Window::SetIcon) + transport-toolbar mark
+        -- (LoadDisplayTexture). Same PNG, exe-relative at "data/images/arcane_logo.png".
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/images"',
+        '{COPYFILE} "%{wks.location}/data/images/arcane_logo.png" "%{cfg.buildtarget.directory}/data/images/arcane_logo.png"',
     }
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus" }
+        -- .exe file icon (Explorer/taskbar/Alt-Tab): a Win32 ICON resource. The .rc
+        -- references arcane.ico by name; resincludedirs points RC at its folder.
+        files { "%{prj.location}/resources/ArcaneEditor.rc" }
+        resincludedirs { "%{prj.location}/resources" }
     filter "configurations:Debug"    defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"

@@ -37,9 +37,11 @@ namespace Arcane::Editor
     // Play/Stop route through its SaveState/LoadState so the plugin re-establishes its
     // native resources on restore. Does NOT take a RunLoop&: play.Stop() ->
     // Runtime::RestoreRegistry destroys and replaces the RunLoop, so the loop is fetched
-    // fresh from `runtime` AFTER Play/Stop handling.
+    // fresh from `runtime` AFTER Play/Stop handling. `logoTex` is the Arcane logo as an
+    // ImGui texture id (the raw nvrhi::ITexture* as a uint64_t, matching DrawViewportPanel's
+    // convention); drawn as a small mark at the far LEFT of the strip (Unity-style). 0 skips it.
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin);
+                            const Arcane::PluginVTable* plugin, uint64_t logoTex = 0);
 
     // Placeholder asset-browser panel (dummy for now); docks as a tab before Console.
     // Shows the open project's name + root when one is open (see EditorApp::Init),
