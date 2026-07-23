@@ -1,6 +1,7 @@
 #include <Arcane/Base/Runtime.hpp>
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Config/Config.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
@@ -20,10 +21,33 @@
 
 #include <optional>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace Arcane
 {
     namespace
     {
+        // Directory of the running executable, so exe-relative engine assets (here the
+        // shipped EngineConfig/ defaults) resolve regardless of CWD -- mirrors the
+        // exe-relative pattern in Assets.cpp / ShaderLibrary.cpp.
+        std::filesystem::path ExeDir()
+        {
+#ifdef _WIN32
+            wchar_t buf[MAX_PATH]{};
+            if (GetModuleFileNameW(nullptr, buf, MAX_PATH) != 0)
+                return std::filesystem::path(buf).parent_path();
+#endif
+            return std::filesystem::current_path();
+        }
+
         // ASCII name for a SerializationError so a Save failure logs a readable
         // cause rather than an opaque integer (the enum has no library to_string).
         const char* SerializationErrorName(Astra::SerializationError e) noexcept
@@ -58,6 +82,8 @@ namespace Arcane
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
         InputSnapshot                               input{};   // latest host-supplied snapshot; plugins read via Input()
         std::unique_ptr<Assets>                     assets;
+        Config                                      config;          // layered engine+project config (Slice 3)
+        std::filesystem::path                       engineConfigDir; // <exe>/EngineConfig (shipped defaults)
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
         Audio::AudioDeviceDesc                      audioDesc{};
         Audio::AudioDevice                          audio;
@@ -108,6 +134,11 @@ namespace Arcane
             // for the same reason, so a real device is always opt-in.
             audioDesc.enableDevice = enableAudioDevice;
             assets = Assets::Create(nullptr);
+            // Engine-default config layer (shipped beside the exe). A host with no
+            // project still gets this base (e.g. input bindings for bare Loom);
+            // OpenProject re-layers the project + user files on top.
+            engineConfigDir = ExeDir() / "EngineConfig";
+            config.LoadEngineDefaults(engineConfigDir);
             InitAudio();
         }
 
@@ -312,11 +343,22 @@ namespace Arcane
         m_impl->project = std::move(*proj);
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
+        // Re-layer config: engine defaults (kept) + this project's Config/ + user
+        // overrides (Saved/Config/). Rebuild-from-defaults so re-opening a project never
+        // accumulates a previous project's layers.
+        m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
+        m_impl->config.LayerProject(m_impl->project->Root() / "Config",
+                                    m_impl->project->Root() / "Saved" / "Config");
         return true;
     }
 
     const Project* Runtime::CurrentProject() const noexcept
     {
         return m_impl->project ? &*m_impl->project : nullptr;
+    }
+
+    Config& Runtime::Configuration() noexcept
+    {
+        return m_impl->config;
     }
 }

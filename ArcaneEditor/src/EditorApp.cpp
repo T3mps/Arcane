@@ -167,7 +167,7 @@ namespace Arcane::Editor
                 ARC_WARN("Arcane Editor: --project '{}' failed to open; using data/ + --plugin fallback",
                          m_config.projectPath);
         }
-        if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->CurrentProject()))
+        if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
             ARC_WARN("Arcane Editor: input actions failed to load");
         m_gpu->Win().SetTitle(EditorTitle(m_runtime->CurrentProject()));
 
@@ -323,7 +323,7 @@ namespace Arcane::Editor
             ARC_ERROR("Open Project: OpenProject('{}') failed after validation", path.generic_string());
             return;   // editor left with no plugin; user can Open another project
         }
-        if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->CurrentProject()))
+        if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
             ARC_WARN("Open Project: input actions failed to load");
 
         // Load the new game module through the same ABI-versioned plugin host.

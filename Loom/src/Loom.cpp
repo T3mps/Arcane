@@ -78,7 +78,7 @@ bool Loom::Init()
             ARC_WARN("Loom: --project '{}' failed to open; using data/ + --plugin fallback",
                      m_config.projectPath);
     }
-    if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->CurrentProject()))
+    if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
         ARC_WARN("Loom: input actions failed to load");
 
     // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE

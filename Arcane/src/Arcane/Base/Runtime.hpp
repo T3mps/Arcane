@@ -32,6 +32,7 @@ namespace Arcane
     class Batcher2D;
     class ShaderLibrary;
     class Project;
+    class Config;
     namespace Audio { class AudioDevice; }
 
 #if defined(_MSC_VER)
@@ -62,6 +63,7 @@ namespace Arcane
         ITaskExecutor*          TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
         std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
         Assets&                 AssetsFacade() noexcept;
+        Config&                 Configuration() noexcept;   // layered engine+project config (Slice 3)
         Audio::AudioDevice&     AudioSystem() noexcept;
 
         // --- project (Slice 1b) ---

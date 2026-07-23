@@ -398,8 +398,7 @@ project "Loom"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
-        '{MKDIR} "%{cfg.buildtarget.directory}/data"',
-        '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
+        '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
     }
     filter "system:windows"
@@ -454,7 +453,7 @@ project "ArcaneEditor"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Sandbox/Sandbox.dll" "%{cfg.buildtarget.directory}/Sandbox.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
-        '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
+        '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
         -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
         -- the ImGui atlas by EditorFonts.cpp (exe-relative paths -- must align w/ dests).
@@ -570,7 +569,6 @@ project "ArcaneTests"
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
-        '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',

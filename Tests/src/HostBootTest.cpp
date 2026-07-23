@@ -1,6 +1,7 @@
 #include <LoomConfig.hpp>
 #include <ProjectBoot.hpp>
 
+#include <Arcane/Config/Config.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Input/InputActions.hpp>
 
@@ -58,19 +59,19 @@ TEST_CASE("HostBoot::GameModule returns the manifest gameModule when set", "[loo
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("HostBoot::LoadInputConfig loads through the project mount", "[loom]")
+TEST_CASE("HostBoot::LoadInputConfig loads the input category", "[loom]")
 {
     const fs::path dir = fs::temp_directory_path() / "arcane_hostboot_input";
-    std::error_code ec; fs::remove_all(dir, ec);
-    REQUIRE(Arcane::Project::Create(dir, "G").has_value());
-    std::ofstream(dir / "Content" / "input_actions.json", std::ios::binary) <<
+    std::error_code ec; fs::remove_all(dir, ec); fs::create_directories(dir, ec);
+    std::ofstream(dir / "input.json", std::ios::binary) <<
         R"({"actionMaps":[{"name":"demo","actions":[{"name":"quit","type":"Button",)"
         R"("bindings":[{"path":"<Keyboard>/escape"}]}]}]})";
-    auto proj = Arcane::Project::Open(dir);
-    REQUIRE(proj.has_value());
+
+    Arcane::Config config;
+    config.LoadEngineDefaults(dir);   // temp dir stands in as the engine-default config layer
 
     auto input = Arcane::InputActions::Create();
-    REQUIRE(Arcane::HostBoot::LoadInputConfig(*input, &*proj) == true);
+    REQUIRE(Arcane::HostBoot::LoadInputConfig(*input, config) == true);
     REQUIRE(input->ActiveContext() == "demo");
     fs::remove_all(dir, ec);
 }
