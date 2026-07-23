@@ -85,6 +85,10 @@ namespace Arcane
             if (!ProjectManifest::LoadFile(descriptor))
                 continue;
 
+            // Record the activated plugin (valid + enabled), whether or not it has Content --
+            // its Config/ still layers and its Source/ DLL still loads. ActivePluginRoots().
+            proj.m_activePluginRoots.push_back(pluginRoot);
+
             const std::filesystem::path content = pluginRoot / "Content";
             if (std::filesystem::is_directory(content, ec))
             {

@@ -224,14 +224,19 @@ namespace Arcane::Editor
         // demand via --plugin Sandbox.dll or --project SampleProject.
         const std::string gameModule =
             Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
-        if (!gameModule.empty())
+        const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());
+        if (!gameModule.empty() || !pluginModules.empty())
         {
-            m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
-            for (const auto& dll : Arcane::HostBoot::PluginModules(m_runtime->CurrentProject()))
+            // A game module OR just project plugin modules is enough to host: an empty
+            // gameModule makes a plugins-only host (open a plugin-only project to work on it
+            // before its game DLL exists). PluginHost handles the primary-less case.
+            m_plugin.emplace(*m_runtime,
+                gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
+            for (const auto& dll : pluginModules)
                 m_plugin->AddPlugin(dll);
             if (!m_plugin->Load())
             {
-                ARC_ERROR("Arcane Editor: failed to load game module '{}'", gameModule);
+                ARC_ERROR("Arcane Editor: failed to load the game module / project plugins");
                 return false;
             }
         }
@@ -340,14 +345,20 @@ namespace Arcane::Editor
         if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
             ARC_WARN("Open Project: input actions failed to load");
 
-        // Load the new game module through the same ABI-versioned plugin host.
+        // Load the new game module (and/or the project's plugin modules) through the same
+        // ABI-versioned plugin host. An empty gameModule with plugins = a plugins-only host.
         const std::string gameModule =
             Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
-        m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
-        for (const auto& dll : Arcane::HostBoot::PluginModules(m_runtime->CurrentProject()))
-            m_plugin->AddPlugin(dll);
-        if (!m_plugin->Load())
-            ARC_ERROR("Open Project: failed to load game module '{}'", gameModule);
+        const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());
+        if (!gameModule.empty() || !pluginModules.empty())
+        {
+            m_plugin.emplace(*m_runtime,
+                gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
+            for (const auto& dll : pluginModules)
+                m_plugin->AddPlugin(dll);
+            if (!m_plugin->Load())
+                ARC_ERROR("Open Project: failed to load the game module / project plugins");
+        }
 
         m_runtime->Loop().SetPaused(true);   // back to Edit
         m_gpu->Win().SetTitle(EditorTitle(m_runtime->CurrentProject()));

@@ -1,4 +1,6 @@
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/Config.hpp>
+#include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Assets/Assets.hpp>
 
@@ -72,6 +74,38 @@ TEST_CASE("Runtime::OpenProject sets the Assets content root", "[project]")
     REQUIRE((*doc)["ok"].get<bool>() == true);
 
     std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Runtime::OpenProject layers an enabled plugin's Config under the project", "[project]")
+{
+    const fs::path dir = MakeTempDir("plugincfg");
+    const std::string abi = std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion));
+
+    // A project enabling one plugin "fx".
+    WriteFile(dir / "Game.arcproj",
+        std::string(R"({"formatVersion":1,"name":"G","engine":{"abi":)") + abi +
+        R"(},"gameModule":"","plugins":[{"name":"fx","enabled":true}],"bootScene":""})");
+    std::error_code ec; fs::create_directories(dir / "Content", ec);
+
+    // Plugin fx: a valid descriptor + a Config/game.json contributing two keys.
+    WriteFile(dir / "Plugins" / "fx" / "fx.arcplugin",
+        std::string(R"({"formatVersion":1,"name":"fx","engine":{"abi":)") + abi +
+        R"(},"gameModule":"","plugins":[],"bootScene":""})");
+    WriteFile(dir / "Plugins" / "fx" / "Config" / "game.json",
+        R"({"fromPlugin":true,"shared":"plugin"})");
+
+    // The project's own Config/game.json overrides the shared key (project beats plugin).
+    WriteFile(dir / "Config" / "game.json", R"({"shared":"project"})");
+
+    Arcane::Runtime rt;
+    REQUIRE(rt.OpenProject(dir) == true);
+    REQUIRE(rt.CurrentProject()->ActivePluginRoots().size() == 1);
+
+    const nlohmann::json& game = rt.Configuration().Category("game");
+    CHECK(game.value("fromPlugin", false) == true);            // plugin-only key survives
+    CHECK(game.value("shared", std::string()) == "project");   // engine->plugin->project: project wins
+
+    fs::remove_all(dir, ec);
 }
 
 TEST_CASE("Runtime::OpenProject switches projects on re-open", "[project]")

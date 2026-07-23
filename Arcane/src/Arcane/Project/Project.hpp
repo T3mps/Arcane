@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Arcane
 {
@@ -35,6 +36,13 @@ namespace Arcane
         const MountTable&            Mounts()   const { return m_mounts; }
         const AssetRegistry&         Registry() const { return m_registry; }
 
+        // The roots (<root>/Plugins/<name>) of the plugins Open() actually activated: those
+        // that were manifest-enabled AND had a valid descriptor. The single source of truth
+        // for "which plugins are live" -- content mounts key off the same gate, and callers
+        // (config layering, host module loading) should iterate THIS, not the raw manifest
+        // list (which still lists enabled-but-invalid plugins). In manifest order.
+        const std::vector<std::filesystem::path>& ActivePluginRoots() const { return m_activePluginRoots; }
+
         // The asset-reference seam: AssetId -> physical file. Slice 1 resolves via the
         // MountTable (AssetId backing = a logical mount path). Slice 2 reroutes this
         // through the AssetRegistry (GUID) WITHOUT changing the signature.
@@ -50,5 +58,6 @@ namespace Arcane
         ProjectManifest       m_manifest;
         MountTable            m_mounts;
         AssetRegistry         m_registry;
+        std::vector<std::filesystem::path> m_activePluginRoots;   // valid + enabled plugins, in manifest order
     };
 }

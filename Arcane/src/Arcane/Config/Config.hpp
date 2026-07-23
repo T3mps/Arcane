@@ -34,8 +34,15 @@ namespace Arcane
         // (valid) -- this is the base a host always has, even with no project open.
         void LoadEngineDefaults(const std::filesystem::path& engineConfigDir);
 
+        // Deep-merge one directory of *.json (non-recursive, keyed by file stem) onto the
+        // current categories -- later wins. Absent/non-dir = no-op. Used to insert an extra
+        // layer between engine defaults and the project: each enabled plugin's Config/ folds
+        // in here, so precedence is engine -> plugins -> project -> user (a project overrides
+        // the plugins it enables). Call between LoadEngineDefaults and LayerProject.
+        void LayerDir(const std::filesystem::path& dir);
+
         // Deep-merge the project layer then the user layer on top of the current
-        // (engine-default) categories. Either dir may be absent (skipped). Runtime
+        // (engine-default [+ plugin]) categories. Either dir may be absent (skipped). Runtime
         // rebuilds from defaults (LoadEngineDefaults) before each call so re-opening a
         // project never accumulates a previous project's layers.
         void LayerProject(const std::filesystem::path& projectConfigDir,
@@ -50,9 +57,6 @@ namespace Arcane
         // RFC-7386-style deep merge: objects merge by key with src winning; every other
         // type (scalar/array/type-change) replaces dst wholesale.
         static void DeepMerge(nlohmann::json& dst, const nlohmann::json& src);
-        // Load every *.json in `dir` (non-recursive), deep-merging each into
-        // m_categories[stem]. No-op if `dir` is not a directory.
-        void LayerDir(const std::filesystem::path& dir);
 
         std::unordered_map<std::string, nlohmann::json> m_categories;   // stem -> merged doc
     };

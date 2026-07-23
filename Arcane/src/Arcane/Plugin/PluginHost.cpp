@@ -307,6 +307,14 @@ namespace Arcane
 
     bool PluginHost::Load()
     {
+        // Plugins-only host (no primary game module) -- the editor opening a project that has
+        // plugin modules but no gameModule. Skip the primary copy/load/ABI/rollback path and
+        // bring up just the secondaries (LoadInitPlugins unwinds itself on failure). With a
+        // primary present this branch is never taken, so the delicate path below and every
+        // [hotreload] test stay byte-identical.
+        if (m_impl->source.empty())
+            return m_impl->LoadInitPlugins();
+
         const std::uint32_t g = m_impl->gen + 1;
         PluginImage img;
         bool copied = false;
@@ -379,6 +387,11 @@ namespace Arcane
 
     bool PluginHost::Reload(bool restoreState)
     {
+        // Plugins-only host: no primary to reload, and secondaries load once and never
+        // hot-reload -- so a reload request is a no-op success (nothing to rebuild).
+        if (m_impl->source.empty())
+            return true;
+
         // Multi-module: quiesce plugins (kept mapped) so the primary's reset doesn't touch
         // a running secondary, run the UNCHANGED primary reload, then re-establish the
         // plugins on the post-reload registry. With no plugins both calls are no-ops, so
@@ -393,6 +406,9 @@ namespace Arcane
 
     void PluginHost::Poll()
     {
+        if (m_impl->source.empty())
+            return;   // no primary to watch (plugins-only host); secondaries don't hot-reload
+
         std::error_code ec;
         const auto wt = std::filesystem::last_write_time(m_impl->source, ec);
         if (ec) return;

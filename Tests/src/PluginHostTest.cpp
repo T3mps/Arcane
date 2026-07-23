@@ -146,6 +146,36 @@ TEST_CASE("Host drives a secondary plugin alongside the primary", "[hotreload]")
     host.Unload();
 }
 
+TEST_CASE("Plugins-only host (no primary module) loads and drives its secondaries", "[hotreload]")
+{
+    // The editor opening a project that ships plugin modules but no gameModule: the host is
+    // built with an EMPTY primary path and brings up only its AddPlugin() secondaries. No
+    // primary means IsLoaded()==false / Vtable()==null, but the secondaries still run through
+    // the *All drivers.
+    std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
+                               std::filesystem::copy_options::overwrite_existing);
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Pulse>();
+
+    Arcane::PluginHost host(rt, std::filesystem::path{});           // no primary game module
+    host.AddPlugin(std::filesystem::path("HotReloadPluginV1.dll")); // one secondary (+1/step)
+    REQUIRE(host.Load());
+    CHECK_FALSE(host.IsLoaded());            // no PRIMARY is loaded...
+    CHECK(host.Vtable() == nullptr);
+
+    StepAllK(rt, host, 3);
+    CHECK(ReadPulse(rt) == 3);               // ...yet the secondary runs via FixedUpdateAll
+
+    // Reload is a clean no-op success on a plugins-only host (secondaries never hot-reload),
+    // leaving the running plugin and its state untouched.
+    CHECK(host.ForceReload());
+    StepAllK(rt, host, 1);
+    CHECK(ReadPulse(rt) == 4);
+    CHECK(Arcane::RenderErrorCount() == 0);
+    host.Unload();
+}
+
 TEST_CASE("Reload failure with no last-good yields an honest dead state", "[hotreload]")
 {
     // The double-failure fix's reachable branch: a reload whose new image fails AND

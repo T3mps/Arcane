@@ -343,10 +343,13 @@ namespace Arcane
         m_impl->project = std::move(*proj);
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
-        // Re-layer config: engine defaults (kept) + this project's Config/ + user
-        // overrides (Saved/Config/). Rebuild-from-defaults so re-opening a project never
-        // accumulates a previous project's layers.
+        // Re-layer config: engine defaults (kept) + each enabled plugin's Config/ + this
+        // project's Config/ + user overrides (Saved/Config/). Precedence engine -> plugins ->
+        // project -> user (a project overrides the plugins it enables). Rebuild-from-defaults
+        // so re-opening a project never accumulates a previous project's layers.
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
+        for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
+            m_impl->config.LayerDir(pluginRoot / "Config");
         m_impl->config.LayerProject(m_impl->project->Root() / "Config",
                                     m_impl->project->Root() / "Saved" / "Config");
         return true;

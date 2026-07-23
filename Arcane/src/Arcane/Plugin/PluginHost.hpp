@@ -17,6 +17,11 @@ namespace Arcane
     class ARCANE_API PluginHost
     {
     public:
+        // sourceDllPath is the PRIMARY game module (watched + hot-reloaded). Pass an EMPTY
+        // path for a plugins-only host: Load() then brings up only the AddPlugin() secondaries
+        // (no primary, no hot-reload watch) -- used by the editor when a project has plugin
+        // modules but no gameModule. Vtable()/IsLoaded() report no primary; the *All drivers
+        // and Unload() already handle a primary-less host.
         PluginHost(Runtime& runtime, std::filesystem::path sourceDllPath);
         ~PluginHost();
 
