@@ -39,6 +39,11 @@ namespace Arcane
         std::optional<std::filesystem::path> ResolveAsset(const AssetId& id) const;
 
     private:
+        // Open()/Create() are the only construction paths (they are static members and
+        // can reach this). std::optional<Project> in Runtime move-constructs, never
+        // default-constructs, so a private default ctor is safe.
+        Project() = default;
+
         std::filesystem::path m_root;
         ProjectManifest       m_manifest;
         MountTable            m_mounts;

@@ -6,6 +6,8 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
+#include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
@@ -15,6 +17,8 @@
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Core/WorkScheduler.hpp>
 #include <Astra/Serialization/SerializationError.hpp>
+
+#include <optional>
 
 namespace Arcane
 {
@@ -54,6 +58,7 @@ namespace Arcane
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
         InputSnapshot                               input{};   // latest host-supplied snapshot; plugins read via Input()
         std::unique_ptr<Assets>                     assets;
+        std::optional<Project>                      project;   // open project (Slice 1b); empty = none
         Audio::AudioDeviceDesc                      audioDesc{};
         Audio::AudioDevice                          audio;
 
@@ -285,5 +290,33 @@ namespace Arcane
     void Runtime::ResetAudio() noexcept
     {
         m_impl->ResetAudio();
+    }
+
+    bool Runtime::OpenProject(const std::filesystem::path& pathOrFile)
+    {
+        auto proj = Project::Open(pathOrFile);
+        if (!proj)
+            return false;   // Project::Open already logged the cause
+
+        // Engine/ABI binding: refuse a project built against a different engine ABI.
+        // Belt-and-suspenders over PluginHost's own DLL-ABI gate -- this catches a
+        // stale manifest before we even try to load the game module.
+        if (proj->Manifest().engineAbi != static_cast<int>(kGamePluginABIVersion))
+        {
+            ARC_ERROR("Runtime::OpenProject: project '{}' targets engine ABI {} but this "
+                      "engine is ABI {}", proj->Manifest().name,
+                      proj->Manifest().engineAbi, static_cast<int>(kGamePluginABIVersion));
+            return false;   // leave state untouched
+        }
+
+        m_impl->project = std::move(*proj);
+        // Route loose-file content loads under the project's game:// mount (Content/).
+        m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
+        return true;
+    }
+
+    const Project* Runtime::CurrentProject() const noexcept
+    {
+        return m_impl->project ? &*m_impl->project : nullptr;
     }
 }

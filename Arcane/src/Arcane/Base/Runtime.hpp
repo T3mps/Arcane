@@ -16,6 +16,7 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <vector>
@@ -30,6 +31,7 @@ namespace Arcane
     struct ITaskExecutor;
     class Batcher2D;
     class ShaderLibrary;
+    class Project;
     namespace Audio { class AudioDevice; }
 
 #if defined(_MSC_VER)
@@ -61,6 +63,17 @@ namespace Arcane
         std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
         Assets&                 AssetsFacade() noexcept;
         Audio::AudioDevice&     AudioSystem() noexcept;
+
+        // --- project (Slice 1b) ---
+        // Open a project folder or .arcproj: validate-then-commit. On success the
+        // Project is adopted and the Assets facade's content root is set to the
+        // project's game:// mount (root/Content); returns false and leaves ALL state
+        // untouched on a missing/invalid manifest OR an engineAbi that does not match
+        // this engine (kGamePluginABIVersion). Both hosts open a project through here.
+        bool OpenProject(const std::filesystem::path& pathOrFile);
+
+        // The open project, or nullptr when none is open (no-project fallback mode).
+        const Project* CurrentProject() const noexcept;
 
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
         // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
