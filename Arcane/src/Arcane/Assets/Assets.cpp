@@ -346,29 +346,40 @@ namespace Arcane
 
     namespace
     {
-        // One 2x box-average downscale of an RGBA8 image into `dst` (dims halved, min 1).
-        // Odd sizes clamp the trailing sample to the last row/column. Simple + adequate for
-        // a CPU mip chain (see LoadDisplayTexture's maxSize loop).
-        void HalveRGBA(const unsigned char* src, int w, int h,
-                       std::vector<unsigned char>& dst, int& outW, int& outH)
+        // High-quality area-average (box) downscale of an RGBA8 image to dw x dh, in ONE
+        // pass: each destination texel averages the full block of source texels it covers.
+        // This is the correct anti-aliased downsample for an arbitrary ratio (unlike
+        // repeated 2x halving, which only hits powers of two and leaves ImGui's single-tap
+        // bilinear to finish an odd residual ratio -> aliasing). Downscale only (dw<=sw).
+        void DownsampleRGBA(const unsigned char* src, int sw, int sh,
+                            std::vector<unsigned char>& dst, int dw, int dh)
         {
-            outW = w > 1 ? w / 2 : 1;
-            outH = h > 1 ? h / 2 : 1;
-            dst.resize((size_t)outW * outH * 4);
-            for (int y = 0; y < outH; ++y)
+            dst.resize((size_t)dw * dh * 4);
+            for (int dy = 0; dy < dh; ++dy)
             {
-                const int y0 = y * 2, y1 = (y * 2 + 1 < h) ? y * 2 + 1 : y * 2;
-                for (int x = 0; x < outW; ++x)
+                int sy0 = (int)((int64_t)dy * sh / dh);
+                int sy1 = (int)((int64_t)(dy + 1) * sh / dh);
+                if (sy1 <= sy0) sy1 = sy0 + 1;
+                for (int dx = 0; dx < dw; ++dx)
                 {
-                    const int x0 = x * 2, x1 = (x * 2 + 1 < w) ? x * 2 + 1 : x * 2;
-                    for (int c = 0; c < 4; ++c)
-                    {
-                        const int s = src[((size_t)y0 * w + x0) * 4 + c]
-                                    + src[((size_t)y0 * w + x1) * 4 + c]
-                                    + src[((size_t)y1 * w + x0) * 4 + c]
-                                    + src[((size_t)y1 * w + x1) * 4 + c];
-                        dst[((size_t)y * outW + x) * 4 + c] = (unsigned char)(s / 4);
-                    }
+                    int sx0 = (int)((int64_t)dx * sw / dw);
+                    int sx1 = (int)((int64_t)(dx + 1) * sw / dw);
+                    if (sx1 <= sx0) sx1 = sx0 + 1;
+
+                    uint32_t acc[4] = {0, 0, 0, 0};
+                    uint32_t n = 0;
+                    for (int sy = sy0; sy < sy1; ++sy)
+                        for (int sx = sx0; sx < sx1; ++sx)
+                        {
+                            const unsigned char* p = src + ((size_t)sy * sw + sx) * 4;
+                            acc[0] += p[0]; acc[1] += p[1]; acc[2] += p[2]; acc[3] += p[3];
+                            ++n;
+                        }
+                    unsigned char* d = dst.data() + ((size_t)dy * dw + dx) * 4;
+                    d[0] = (unsigned char)(acc[0] / n);
+                    d[1] = (unsigned char)(acc[1] / n);
+                    d[2] = (unsigned char)(acc[2] / n);
+                    d[3] = (unsigned char)(acc[3] / n);
                 }
             }
         }
@@ -397,22 +408,22 @@ namespace Arcane
             return nullptr;
         }
 
-        // Optional CPU mip: halve until the larger dimension fits maxSize. `src`/w/h track
-        // the current pixels -- either the stb buffer (no downscale) or the ping-pong vectors.
+        // Optional area-average downscale so the larger dimension fits maxSize (aspect
+        // preserved). `src`/w/h track the pixels uploaded -- either the stb buffer (no
+        // downscale) or `scaled`. Callers size maxSize to ~2x the on-screen draw size so
+        // the UI's own bilinear minification stays clean (see LoadDisplayTexture's doc).
         const unsigned char* src = data;
-        std::vector<unsigned char> bufA, bufB;
-        if (maxSize > 0)
+        std::vector<unsigned char> scaled;
+        if (maxSize > 0 && ((uint32_t)w > maxSize || (uint32_t)h > maxSize))
         {
-            bool useA = true;
-            while ((uint32_t)w > maxSize || (uint32_t)h > maxSize)
-            {
-                std::vector<unsigned char>& dst = useA ? bufA : bufB;
-                int nw = 0, nh = 0;
-                HalveRGBA(src, w, h, dst, nw, nh);
-                src = dst.data();
-                w = nw; h = nh;
-                useA = !useA;
-            }
+            int dw, dh;
+            if (w >= h) { dw = (int)maxSize; dh = (h * (int)maxSize + w / 2) / w; }
+            else        { dh = (int)maxSize; dw = (w * (int)maxSize + h / 2) / h; }
+            if (dw < 1) dw = 1;
+            if (dh < 1) dh = 1;
+            DownsampleRGBA(src, w, h, scaled, dw, dh);
+            src = scaled.data();
+            w = dw; h = dh;
         }
 
         // RGBA8_UNORM, NOT sRGB: the sampled texel goes straight to the display-referred

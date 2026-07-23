@@ -121,9 +121,11 @@ namespace Arcane::Editor
         // next to the exe at build. A missing file degrades quietly (default icon / no mark).
         constexpr const char* kLogoPath = "data/images/arcane_logo.png";
         m_gpu->Win().SetIcon(kLogoPath);
-        // maxSize 128: the toolbar draws it at ~one row height (~24px); a CPU mip down to
-        // 128 keeps the minified mark clean (the ImGui sampler has no mipmaps).
-        m_toolbarLogo = Arcane::LoadDisplayTexture(m_gpu->Device().Nvrhi(), kLogoPath, 128);
+        // maxSize 64 ~= 2x the toolbar mark's on-screen size (~32px = 1.35x the button row):
+        // the area-average makes a clean 64px texture, then ImGui's own bilinear only minifies
+        // ~2x (a clean box). A much larger texture would leave ImGui doing a >2x single-tap
+        // minify -> the aliased outline the raw 550px source produced.
+        m_toolbarLogo = Arcane::LoadDisplayTexture(m_gpu->Device().Nvrhi(), kLogoPath, 64);
 
         // Editor shell: enable ImGui docking (the placeholder single window becomes
         // a dockspace + panels in MainLoop) and route the engine logger into the

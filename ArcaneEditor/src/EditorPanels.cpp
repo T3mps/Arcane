@@ -17,6 +17,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // DockBuilder* + ImGuiDockNode::LocalFlags (docking layout)
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -162,37 +164,39 @@ namespace Arcane::Editor
 
         // Fixed transport strip drawn into the CURRENT window (the dockspace host -- call
         // between BeginDockSpace and EndDockSpace). Not its own window: no tab, cannot be
-        // docked or moved. A little vertical padding sets it off from the menu bar above;
-        // the trailing separator divides it from the dockspace below.
-        ImGui::Dummy(ImVec2(0.0f, 3.0f));
-
-        // Measure the full strip BEFORE the logo so the transport centers in the whole
-        // width, not the width left of the logo.
+        // docked or moved. The logo mark is a touch TALLER than the transport buttons (a
+        // small brand mark reads better with a few more pixels), vertically centered on the
+        // button row -- so the top/bottom padding also absorbs its overhang above/below.
         const ImGuiStyle& st = ImGui::GetStyle();
+        const float btnH     = ImGui::GetFrameHeight();
+        const float logoH    = (logoTex != 0) ? std::floor(btnH * 1.35f) : btnH;
+        const float overhang = (logoH - btnH) * 0.5f;   // logo extends this far above/below the row
+        ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));
+
+        // Measure the full strip at the button-row start so the transport centers in the
+        // whole width (not the width left of the logo).
         const float fullContentW = ImGui::GetContentRegionAvail().x;
         const float lineStartX   = ImGui::GetCursorPosX();
+        const float rowY         = ImGui::GetCursorPosY();
 
-        // -- LEFT: the Arcane logo mark (Unity-style), sized to the button height so it
-        // sits inline with the transport. Drawn first; the transport is then absolutely
-        // centered across the full width regardless of the logo. 0 == no logo loaded.
+        // -- LEFT: the Arcane logo mark (Unity-style), centered vertically on the button
+        // row. Absolute SetCursorPos so it does not perturb the transport's own placement.
         if (logoTex != 0)
         {
-            const float h = ImGui::GetFrameHeight();
-            ImGui::Image((ImTextureID)logoTex, ImVec2(h, h));
+            ImGui::SetCursorPos(ImVec2(lineStartX, rowY - overhang));
+            ImGui::Image((ImTextureID)logoTex, ImVec2(logoH, logoH));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Arcane");
-            ImGui::SameLine();
         }
 
         // -- CENTER: transport (Play / Pause / Step), Unity-style toggles. --
-        // Center the trio within the full toolbar width. Undo/Redo moved to the Edit
-        // menu; the transform-gizmo tools moved to the Viewport top-right overlay.
+        // Center the trio within the full toolbar width, placed on the button row. Undo/Redo
+        // moved to the Edit menu; the transform-gizmo tools moved to the Viewport overlay.
         auto btnW = [&](const char* icon)
         { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
         const float transportW = btnW(ICON_LC_PLAY) + btnW(ICON_LC_PAUSE)
                                + btnW(ICON_LC_STEP_FORWARD) + st.ItemSpacing.x * 2.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
-        if (centerStart > ImGui::GetCursorPosX())
-            ImGui::SetCursorPosX(centerStart);
+        ImGui::SetCursorPos(ImVec2(std::max(centerStart, lineStartX), rowY));
 
         // Play/Stop toggle (Unity-style): ALWAYS the play glyph, tinted while playing;
         // clicking the lit (playing) button stops. No icon swap.
@@ -224,7 +228,7 @@ namespace Arcane::Editor
         if (iconBtn(ICON_LC_STEP_FORWARD, "##sim_step", "Step")) loop.RequestSingleStep();
         ImGui::EndDisabled();
 
-        ImGui::Dummy(ImVec2(0.0f, 3.0f));
+        ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));   // clear the logo's lower overhang too
         ImGui::Separator();
     }
 
