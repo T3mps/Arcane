@@ -203,13 +203,27 @@ namespace Arcane::Editor
                                 ud);
         }
 
+        // The editor loads a game module only when one is specified -- a project's
+        // gameModule, or an explicit --plugin. Bare `ArcaneEditor` (no --project, no
+        // --plugin) starts with NO game loaded (an empty editor) rather than the physics
+        // Sandbox: pluginPath defaults empty (LoomConfig), so GameModule returns empty
+        // here and the plugin host is left disengaged. Every m_plugin-> use in MainLoop
+        // is optional-guarded, so a disengaged plugin is safe. Sandbox stays available on
+        // demand via --plugin Sandbox.dll or --project SampleProject.
         const std::string gameModule =
             Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
-        m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
-        if (!m_plugin->Load())
+        if (!gameModule.empty())
         {
-            ARC_ERROR("Arcane Editor: failed to load game module '{}'", gameModule);
-            return false;
+            m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
+            if (!m_plugin->Load())
+            {
+                ARC_ERROR("Arcane Editor: failed to load game module '{}'", gameModule);
+                return false;
+            }
+        }
+        else
+        {
+            ARC_INFO("Arcane Editor: no --project/--plugin -- starting with no game loaded");
         }
 
         // Task 8: Arcane Editor boots in Edit mode -- the sim starts paused. Play (m_play)

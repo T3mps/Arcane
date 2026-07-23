@@ -94,8 +94,13 @@ bool Loom::Init()
                             ud);
     }
 
+    // Loom's default game module is the physics Sandbox showcase: with no --project
+    // and no --plugin, host Sandbox.dll. Loom IS that showcase (the Loom --frames
+    // GPU-verify + CI depend on it), so it keeps the old default -- the editor, which
+    // leaves pluginPath empty, is the host that starts with no game (see EditorApp).
+    const std::string fallback = m_config.pluginPath.empty() ? "Sandbox.dll" : m_config.pluginPath;
     const std::string gameModule =
-        Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
+        Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), fallback);
     m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
     if (!m_plugin->Load())
     {

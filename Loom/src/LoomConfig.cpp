@@ -7,7 +7,7 @@ LoomConfig::ParseOutcome LoomConfig::Parse(int argc, char** argv)
     cli.Option("frames",  "0",           "render N frames then exit").Type(Arcane::CliType::Uint);
     cli.Flag  ("no-vsync",               "present without vsync");
     cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
-    cli.Option("plugin",  "Sandbox.dll", "game DLL to host");
+    cli.Option("plugin",  "",            "game DLL to host (empty = host default: Loom Sandbox.dll, editor none)");
     cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
 
     const Arcane::Cli::Result r = cli.Parse(argc, argv);

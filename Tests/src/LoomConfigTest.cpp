@@ -18,7 +18,9 @@ TEST_CASE("LoomConfig: defaults", "[loom]") {
     REQUIRE(o.config->maxFrames == 0u);
     REQUIRE(o.config->vsync);
     REQUIRE_FALSE(o.config->perf);
-    REQUIRE(o.config->pluginPath == "Sandbox.dll");
+    // --plugin defaults to EMPTY (was "Sandbox.dll"): each host supplies its own
+    // fallback -- Loom -> Sandbox.dll, the editor -> no game loaded.
+    REQUIRE(o.config->pluginPath.empty());
 }
 TEST_CASE("LoomConfig: every flag maps", "[loom]") {
     const auto o = Run({"--backend", "vulkan", "--frames", "180", "--no-vsync", "--perf", "--plugin", "Game.dll"});

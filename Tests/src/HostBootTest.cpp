@@ -37,6 +37,10 @@ TEST_CASE("HostBoot::GameModule falls back with no/empty gameModule", "[loom]")
     REQUIRE(proj.has_value());
     REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Sandbox.dll") == "Sandbox.dll");
     REQUIRE(Arcane::HostBoot::GameModule(nullptr, "Sandbox.dll") == "Sandbox.dll");
+    // Empty fallback + no project -> empty: the editor's "start with no game" signal
+    // (bare ArcaneEditor leaves pluginPath empty, so nothing is loaded).
+    REQUIRE(Arcane::HostBoot::GameModule(nullptr, "").empty());
+    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "").empty());   // content-only project, no --plugin
     fs::remove_all(dir, ec);
 }
 

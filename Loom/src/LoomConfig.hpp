@@ -12,7 +12,9 @@ struct LoomConfig
     std::uint64_t           maxFrames = 0;             // 0 = run until quit
     bool                    vsync     = true;
     bool                    perf      = false;
-    std::string             pluginPath = "Sandbox.dll";
+    // Empty = "no explicit --plugin"; each host supplies its own fallback (Loom ->
+    // Sandbox.dll, the editor -> no game loaded). A project's gameModule overrides both.
+    std::string             pluginPath = "";
     std::string             projectPath = "";   // .arcproj or project folder; "" = data/-next-to-exe
 
     // Forward-declared here so it names LoomConfig::ParseOutcome and can be the
