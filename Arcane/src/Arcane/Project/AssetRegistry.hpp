@@ -27,12 +27,18 @@ namespace Arcane
     class ARCANE_API AssetRegistry
     {
     public:
-        // Recursively scan `contentDir` for assets -- native JSON (embedded "id") and
-        // imported binary originals (id in a sibling "<file>.meta") -- assigning or reading
-        // a stable Guid per asset, and register Guid -> "<scheme>://<relative>". A file with
-        // no valid id gets one generated and written back. Returns the number of assets
-        // registered. Safe to call repeatedly (rebuilds from scratch).
+        // Clear the registry, then scan `contentDir` for assets -- native JSON (embedded
+        // "id") and imported binary originals (id in a sibling "<file>.meta") -- assigning
+        // or reading a stable Guid per asset, and register Guid -> "<scheme>://<relative>".
+        // A file with no valid id gets one generated and written back. Returns the number
+        // of assets registered. This is Clear() + AddContent(); a full rebuild from scratch.
         std::size_t ScanContent(const std::filesystem::path& contentDir, std::string_view scheme);
+
+        // Scan another content root into the SAME registry WITHOUT clearing it first --
+        // used to fold a mounted plugin's (or engine's) content in beside game:// content,
+        // each under its own scheme ("plugin/<name>", "engine"). Returns the number of
+        // assets newly registered by THIS call (duplicates keep the first + warn).
+        std::size_t AddContent(const std::filesystem::path& contentDir, std::string_view scheme);
 
         // Guid -> mount path ("game://a/b.json"); nullopt if the id is unknown.
         std::optional<std::string> Resolve(const Guid& id) const;

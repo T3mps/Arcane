@@ -171,6 +171,65 @@ TEST_CASE("Project::Open reads an existing .meta sidecar's guid", "[project]")
     CHECK(*p == dir / "Content" / "music.wav");
 }
 
+TEST_CASE("Project::Open mounts + registers an enabled project plugin", "[project]")
+{
+    const auto dir = TempDir("plugin_enabled");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 },)"
+              R"( "plugins": [ { "name": "fx", "enabled": true } ] })");
+    // The plugin: a <name>.arcplugin descriptor (same shape as .arcproj) + a content asset.
+    WriteFile(dir / "Plugins" / "fx" / "fx.arcplugin",
+              R"({ "formatVersion": 1, "name": "fx", "engine": { "abi": 5 } })");
+    WriteFile(dir / "Plugins" / "fx" / "Content" / "spark.json",
+              R"({ "id": "c7a2e3f0-3333-4444-8555-666677778888", "type": "vfx" })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Mounts().HasMount("plugin/fx"));
+
+    // The plugin asset resolves by its Guid, exactly like a game asset -> Plugins/fx/Content.
+    const auto g = Arcane::Guid::FromString("c7a2e3f0-3333-4444-8555-666677778888");
+    REQUIRE(g.has_value());
+    auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Plugins" / "fx" / "Content" / "spark.json");
+}
+
+TEST_CASE("Project::Open skips a disabled plugin", "[project]")
+{
+    const auto dir = TempDir("plugin_disabled");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 },)"
+              R"( "plugins": [ { "name": "fx", "enabled": false } ] })");
+    WriteFile(dir / "Plugins" / "fx" / "fx.arcplugin",
+              R"({ "formatVersion": 1, "name": "fx", "engine": { "abi": 5 } })");
+    WriteFile(dir / "Plugins" / "fx" / "Content" / "spark.json",
+              R"({ "id": "c7a2e3f0-3333-4444-8555-666677778888", "type": "vfx" })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK_FALSE(proj->Mounts().HasMount("plugin/fx"));
+    const auto g = Arcane::Guid::FromString("c7a2e3f0-3333-4444-8555-666677778888");
+    REQUIRE(g.has_value());
+    CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId::FromGuid(*g)).has_value());
+}
+
+TEST_CASE("Project::Open skips an enabled plugin with no descriptor but still opens", "[project]")
+{
+    const auto dir = TempDir("plugin_no_descriptor");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 },)"
+              R"( "plugins": [ { "name": "ghost", "enabled": true } ] })");
+    // Plugins/ghost/ has content but NO ghost.arcplugin descriptor -> the plugin is
+    // disabled, but the project still opens.
+    WriteFile(dir / "Plugins" / "ghost" / "Content" / "x.json",
+              R"({ "id": "d8b3f401-4444-4555-8666-777788889999" })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK_FALSE(proj->Mounts().HasMount("plugin/ghost"));
+}
+
 TEST_CASE("Project::Create scaffolds the skeleton, manifest, and .gitignore", "[project]")
 {
     const auto dir = TempDir("create");

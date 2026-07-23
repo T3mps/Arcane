@@ -54,10 +54,46 @@ namespace Arcane
         Project proj;
         proj.m_root     = root;
         proj.m_manifest = std::move(*manifest);
-        // Default mounts. engine:// and plugin://<name>/ are registered in later slices.
+        // Default mounts + the asset identity map (Guid -> mount path). game:// is the
+        // project's own Content/; plugin content folds in below. (engine:// stays reserved
+        // until the engine ships built-in content -- spec Q2.)
         proj.m_mounts.Mount("game", root / "Content");
-        // Build the asset identity map (Guid -> mount path) by scanning game:// content.
         proj.m_registry.ScanContent(root / "Content", "game");
+
+        // Slice 4 -- project plugins. Each enabled plugin in the manifest lives at
+        // <root>/Plugins/<name>/ with a <name>.arcplugin descriptor (same shape as
+        // .arcproj). Its Content/ (if any) mounts as "plugin/<name>://" and its assets
+        // join the SAME registry, so a plugin asset is addressed by its Guid exactly like
+        // a game asset. Dependency direction stays one-way (project -> plugin -> engine).
+        // (Loading a plugin's Source/-built DLL through the host is a follow-up; the host
+        // loads one game module today. Engine-plugin discovery is reserved -- spec Q2.)
+        for (const auto& ref : proj.m_manifest.plugins)
+        {
+            if (!ref.enabled)
+                continue;
+
+            const std::filesystem::path pluginRoot = root / "Plugins" / ref.name;
+            const std::filesystem::path descriptor = pluginRoot / (ref.name + ".arcplugin");
+            if (!std::filesystem::is_regular_file(descriptor, ec))
+            {
+                ARC_WARN("Project::Open: plugin '{}' is enabled but has no descriptor at '{}'",
+                         ref.name, descriptor.generic_string());
+                continue;
+            }
+            // Validate the descriptor (well-formed .arcproj-shaped manifest). LoadFile logs
+            // on failure; a malformed descriptor disables the plugin rather than the project.
+            if (!ProjectManifest::LoadFile(descriptor))
+                continue;
+
+            const std::filesystem::path content = pluginRoot / "Content";
+            if (std::filesystem::is_directory(content, ec))
+            {
+                const std::string scheme = "plugin/" + ref.name;   // -> "plugin/<name>://<rel>"
+                proj.m_mounts.Mount(scheme, content);
+                proj.m_registry.AddContent(content, scheme);
+            }
+        }
+
         return proj;
     }
 

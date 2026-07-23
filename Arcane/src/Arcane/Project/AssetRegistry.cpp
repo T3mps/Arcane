@@ -114,6 +114,12 @@ namespace Arcane
     std::size_t AssetRegistry::ScanContent(const std::filesystem::path& contentDir, std::string_view scheme)
     {
         m_byGuid.clear();
+        return AddContent(contentDir, scheme);
+    }
+
+    std::size_t AssetRegistry::AddContent(const std::filesystem::path& contentDir, std::string_view scheme)
+    {
+        const std::size_t before = m_byGuid.size();
 
         std::error_code ec;
         if (!std::filesystem::is_directory(contentDir, ec))
@@ -154,7 +160,7 @@ namespace Arcane
                          id.ToString(), entry.path().generic_string());
         }
 
-        return m_byGuid.size();
+        return m_byGuid.size() - before;
     }
 
     std::optional<std::string> AssetRegistry::Resolve(const Guid& id) const
