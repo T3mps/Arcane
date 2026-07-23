@@ -56,6 +56,8 @@ namespace Arcane
         proj.m_manifest = std::move(*manifest);
         // Default mounts. engine:// and plugin://<name>/ are registered in later slices.
         proj.m_mounts.Mount("game", root / "Content");
+        // Build the asset identity map (Guid -> mount path) by scanning game:// content.
+        proj.m_registry.ScanContent(root / "Content", "game");
         return proj;
     }
 
@@ -146,8 +148,10 @@ namespace Arcane
     {
         if (!id.IsValid())
             return std::nullopt;
-        // Slice 1: the AssetId key IS the logical mount path. Slice 2 replaces this body
-        // with an AssetRegistry lookup (GUID -> mount path) before the mount resolve.
-        return m_mounts.Resolve(id.Key());
+        // Guid -> mount path (AssetRegistry) -> physical file (MountTable).
+        auto mountPath = m_registry.Resolve(id.Value());
+        if (!mountPath)
+            return std::nullopt;
+        return m_mounts.Resolve(*mountPath);
     }
 }

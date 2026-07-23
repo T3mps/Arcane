@@ -7,6 +7,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Project/AssetRegistry.hpp>
 #include <Arcane/Project/MountTable.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
 
@@ -32,6 +33,7 @@ namespace Arcane
         const ProjectManifest&       Manifest() const { return m_manifest; }
         const std::filesystem::path& Root()     const { return m_root; }
         const MountTable&            Mounts()   const { return m_mounts; }
+        const AssetRegistry&         Registry() const { return m_registry; }
 
         // The asset-reference seam: AssetId -> physical file. Slice 1 resolves via the
         // MountTable (AssetId backing = a logical mount path). Slice 2 reroutes this
@@ -47,5 +49,6 @@ namespace Arcane
         std::filesystem::path m_root;
         ProjectManifest       m_manifest;
         MountTable            m_mounts;
+        AssetRegistry         m_registry;
     };
 }

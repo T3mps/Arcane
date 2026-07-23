@@ -86,24 +86,27 @@ TEST_CASE("Project::Open fails on a schema-invalid manifest", "[project]")
     CHECK_FALSE(Arcane::Project::Open(dir).has_value());
 }
 
-TEST_CASE("Project::ResolveAsset maps an AssetId through the mounts", "[project]")
+TEST_CASE("Project::ResolveAsset maps a registered Guid to a file", "[project]")
 {
     const auto dir = TempDir("resolve");
     WriteFile(dir / "Game.arcproj",
               R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 4 } })");
+    // A native asset with a stable embedded id -> the registry keys it on Open.
+    std::filesystem::create_directories(dir / "Content");
+    WriteFile(dir / "Content" / "thing.json",
+              R"({ "id": "a5e0c1de-1111-4222-8333-444455556666", "type": "t" })");
 
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
 
-    auto id = Arcane::AssetId::FromMountPath("game://characters/hero.png");
-    auto p  = proj->ResolveAsset(id);
+    const auto g = Arcane::Guid::FromString("a5e0c1de-1111-4222-8333-444455556666");
+    REQUIRE(g.has_value());
+    auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
     REQUIRE(p.has_value());
-    CHECK(*p == dir / "Content" / "characters" / "hero.png");
+    CHECK(*p == dir / "Content" / "thing.json");
 
-    // Unmounted scheme -> no resolution.
-    CHECK_FALSE(proj->ResolveAsset(
-        Arcane::AssetId::FromMountPath("engine://x.png")).has_value());
-
+    // A valid-but-unregistered Guid -> no resolution.
+    CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId::FromGuid(Arcane::Guid::Generate())).has_value());
     // Invalid id -> no resolution.
     CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId{}).has_value());
 }
@@ -128,9 +131,6 @@ TEST_CASE("Project::Create scaffolds the skeleton, manifest, and .gitignore", "[
     CHECK(proj->Manifest().name == "Aphelyon");
     CHECK(proj->Manifest().engineAbi == static_cast<int>(Arcane::kGamePluginABIVersion));
     CHECK(Arcane::Project::Open(dir).has_value());
-
-    auto id = Arcane::AssetId::FromMountPath("game://a.png");
-    CHECK(proj->ResolveAsset(id) == dir / "Content" / "a.png");
 }
 
 TEST_CASE("Project::Create refuses a non-empty target directory", "[project]")

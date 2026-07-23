@@ -1,0 +1,6 @@
+{
+  "id": "a5e0c1de-1111-4222-8333-444455556666",
+  "type": "sample",
+  "name": "Sample Asset",
+  "note": "Slice 2 fixture: a native JSON asset carrying a stable embedded Guid so the AssetRegistry has real content to identify + resolve (game://sample.asset.json)."
+}
