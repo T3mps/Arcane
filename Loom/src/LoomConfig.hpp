@@ -13,6 +13,7 @@ struct LoomConfig
     bool                    vsync     = true;
     bool                    perf      = false;
     std::string             pluginPath = "Sandbox.dll";
+    std::string             projectPath = "";   // .arcproj or project folder; "" = data/-next-to-exe
 
     // Forward-declared here so it names LoomConfig::ParseOutcome and can be the
     // return type of Parse; DEFINED below (after the class closes) because its

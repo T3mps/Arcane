@@ -8,6 +8,7 @@ LoomConfig::ParseOutcome LoomConfig::Parse(int argc, char** argv)
     cli.Flag  ("no-vsync",               "present without vsync");
     cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
     cli.Option("plugin",  "Sandbox.dll", "game DLL to host");
+    cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
 
     const Arcane::Cli::Result r = cli.Parse(argc, argv);
     if (!r.ok) return { std::nullopt, r.exitCode };
@@ -18,5 +19,6 @@ LoomConfig::ParseOutcome LoomConfig::Parse(int argc, char** argv)
     cfg.vsync      = !r.Flag("no-vsync");
     cfg.perf       = r.Flag("perf");
     cfg.pluginPath = r.Get("plugin");
+    cfg.projectPath = r.Get("project");
     return { cfg, 0 };
 }
