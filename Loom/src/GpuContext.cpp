@@ -52,9 +52,9 @@ std::unique_ptr<GpuContext> GpuContext::Create(const LoomConfig& cfg)
     if (!ctx->m_inputDevices) { ARC_ERROR("GpuContext: input devices create failed"); return nullptr; }
     ctx->m_input = Arcane::InputActions::Create();
     if (!ctx->m_input) { ARC_ERROR("GpuContext: input actions create failed"); return nullptr; }
-    if (!ctx->m_input->LoadFile("data/input_actions.json"))
-    { ARC_ERROR("GpuContext: input actions load failed (data/input_actions.json)"); return nullptr; }
-    ctx->m_input->SetBaseContext("demo");
+    // The input-actions CONFIG is loaded by the host AFTER it opens a project, so the
+    // config can resolve through the project's game:// mount (or data/ when no project).
+    // GpuContext only creates the empty action system here. See HostBoot::LoadInputConfig.
 
     // One reused command list for the whole loop. Holds an NVRHI handle ->
     // declared/destroyed before the device (see header).

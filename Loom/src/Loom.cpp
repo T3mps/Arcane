@@ -6,10 +6,13 @@
 
 #include "Loom.hpp"
 
+#include <ProjectBoot.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Batcher2D.hpp>   // Arcane::Batch2DStats (loop HUD + perf tick)
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 
@@ -66,6 +69,18 @@ bool Loom::Init()
     // headless host -> the plugin skips its GPU-resource creation.
     m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
 
+    // Open the project (if any) BEFORE loading input + the game module: both come from
+    // the project when one is given. No --project => CurrentProject() stays null and the
+    // legacy data/ + --plugin path is used (non-breaking).
+    if (!m_config.projectPath.empty())
+    {
+        if (!m_runtime->OpenProject(m_config.projectPath))
+            ARC_WARN("Loom: --project '{}' failed to open; using data/ + --plugin fallback",
+                     m_config.projectPath);
+    }
+    if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->CurrentProject()))
+        ARC_WARN("Loom: input actions failed to load");
+
     // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
     // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
     // at Init time, so the plugin's Init adopts the host's GImGui across the DLL boundary.
@@ -79,10 +94,12 @@ bool Loom::Init()
                             ud);
     }
 
-    m_plugin.emplace(*m_runtime, std::filesystem::path(m_config.pluginPath));
+    const std::string gameModule =
+        Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
+    m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
     if (!m_plugin->Load())
     {
-        ARC_ERROR("Loom: failed to load plugin '{}'", m_config.pluginPath);
+        ARC_ERROR("Loom: failed to load game module '{}'", gameModule);
         return false;
     }
 
