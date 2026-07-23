@@ -260,6 +260,52 @@ namespace Arcane::Editor
         return true;
     }
 
+    void EditorApp::FolderPickedThunk(const char* path, void* user)
+    {
+        auto* self = static_cast<EditorApp*>(user);
+        if (path) self->m_pendingProjectPath = path;
+    }
+
+    void EditorApp::SwitchProject(const std::filesystem::path& path)
+    {
+        // Validate FIRST -- never tear down a live session for a bad project.
+        if (!Arcane::Project::Open(path))
+        {
+            ARC_ERROR("Open Project: '{}' is not a valid Arcane project", path.generic_string());
+            return;
+        }
+
+        // Return to Edit + clear editor state that references the outgoing scene.
+        if (m_play.IsPlaying())
+            m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
+        m_selection.Clear();
+        if (m_undo) m_undo->Clear();
+
+        // Idle the GPU before freeing plugin-owned GPU resources, then unload the plugin
+        // (dtor: Unload -> ClearSystems + ResetRegistry, DLL still mapped).
+        m_gpu->Device().Nvrhi()->waitForIdle();
+        m_plugin.reset();
+
+        // Commit the new project (sets Assets content-root) + reload input via its mount.
+        if (!m_runtime->OpenProject(path))
+        {
+            ARC_ERROR("Open Project: OpenProject('{}') failed after validation", path.generic_string());
+            return;   // editor left with no plugin; user can Open another project
+        }
+        if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->CurrentProject()))
+            ARC_WARN("Open Project: input actions failed to load");
+
+        // Load the new game module through the same ABI-versioned plugin host.
+        const std::string gameModule =
+            Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
+        m_plugin.emplace(*m_runtime, std::filesystem::path(gameModule));
+        if (!m_plugin->Load())
+            ARC_ERROR("Open Project: failed to load game module '{}'", gameModule);
+
+        m_runtime->Loop().SetPaused(true);   // back to Edit
+        m_gpu->Win().SetTitle(EditorTitle(m_runtime->CurrentProject()));
+    }
+
     void EditorApp::InstallConsoleSink()
     {
         auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
@@ -286,6 +332,15 @@ namespace Arcane::Editor
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
+            }
+
+            // File->Open Project: run a pending soft-restart at a safe point (top of
+            // frame, never mid-render). Set by FolderPickedThunk during PumpEvents.
+            if (!m_pendingProjectPath.empty())
+            {
+                const std::string p = m_pendingProjectPath;
+                m_pendingProjectPath.clear();
+                SwitchProject(p);
             }
 
             // Input sample (before ImGui BeginFrame so capture flags are set).
@@ -668,9 +723,14 @@ namespace Arcane::Editor
             // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
-            Arcane::Editor::BeginDockSpace(*m_undo);
+            Arcane::Editor::BeginDockSpace(*m_undo, m_openProjectRequested);
             Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin->Vtable());
             Arcane::Editor::EndDockSpace();
+            if (m_openProjectRequested)
+            {
+                m_openProjectRequested = false;
+                m_gpu->Win().ShowOpenFolderDialog(&EditorApp::FolderPickedThunk, this);
+            }
             Arcane::Editor::DrawAssetsPanel(m_runtime->CurrentProject());
             Arcane::Editor::DrawConsolePanel(m_console);
 

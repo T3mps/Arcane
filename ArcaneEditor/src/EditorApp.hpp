@@ -5,8 +5,10 @@
 // CONTRACT (destruct reverse: plugin Unload while the DLL is still mapped ->
 // runtime -> render stack in GpuContext -> window last). Mirrors Loom.
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include <LoomConfig.hpp>
 #include <GpuContext.hpp>
@@ -170,5 +172,15 @@ namespace Arcane::Editor
         // Render time. See MainLoop for the full sequencing rationale.
         std::uint32_t m_pendingViewportW = 0;
         std::uint32_t m_pendingViewportH = 0;
+
+        // File -> Open Project (soft-restart). The menu sets m_openProjectRequested;
+        // MainLoop launches the async folder dialog; SDL invokes FolderPickedThunk (main
+        // thread) during a later PumpEvents, which stashes the chosen path in
+        // m_pendingProjectPath; the next frame's top runs SwitchProject and clears it.
+        bool        m_openProjectRequested = false;
+        std::string m_pendingProjectPath;
+
+        static void FolderPickedThunk(const char* path, void* user);   // -> m_pendingProjectPath
+        void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
     };
 }

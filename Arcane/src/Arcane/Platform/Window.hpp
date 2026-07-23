@@ -59,6 +59,14 @@ namespace Arcane
         void* NativeHandle() const;                       // HWND on Windows
         SDL_Window* SdlWindow() const { return m_window; }
 
+        // Native folder-picker (editor "Open Project"). Async: SDL surfaces the result
+        // during a later PumpEvents by invoking `cb` on the main thread with the chosen
+        // folder path, or nullptr on cancel/error. `cb`/SDL types stay out of this
+        // header (same opaque pattern as NativeEventTap). Uses THIS window's SDL
+        // instance -- the only one that owns the video subsystem.
+        using FolderPickedCallback = void (*)(const char* path, void* user);
+        void ShowOpenFolderDialog(FolderPickedCallback cb, void* user) const;
+
     private:
         SDL_Window*    m_window  = nullptr;
         NativeEventTap m_tap     = nullptr;

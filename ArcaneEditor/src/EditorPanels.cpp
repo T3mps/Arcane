@@ -22,7 +22,7 @@
 
 namespace Arcane::Editor
 {
-    void BeginDockSpace(Arcane::CommandStack& undo)
+    void BeginDockSpace(Arcane::CommandStack& undo, bool& openProjectRequested)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -45,6 +45,8 @@ namespace Arcane::Editor
         {
             if (ImGui::BeginMenu("File"))
             {
+                if (ImGui::MenuItem("Open Project...")) openProjectRequested = true;
+                ImGui::Separator();
                 ImGui::MenuItem("New Scene");
                 ImGui::MenuItem("Open Scene...");
                 ImGui::Separator();

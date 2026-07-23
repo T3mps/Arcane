@@ -3,9 +3,27 @@
 #include <Arcane/Base/Log.hpp>
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_dialog.h>
+
+#include <memory>
 
 namespace Arcane
 {
+    namespace
+    {
+        struct FolderCbCtx { Arcane::Window::FolderPickedCallback cb; void* user; };
+
+        // SDL hands us the full result list; the editor wants only the first folder
+        // (allow_many=false), or nullptr on cancel/error. Invoked exactly once -> we
+        // own and free the heap ctx here.
+        void SDLCALL FolderDialogTrampoline(void* userdata, const char* const* filelist, int /*filter*/)
+        {
+            std::unique_ptr<FolderCbCtx> ctx(static_cast<FolderCbCtx*>(userdata));
+            const char* picked = (filelist && filelist[0]) ? filelist[0] : nullptr;
+            if (ctx->cb) ctx->cb(picked, ctx->user);
+        }
+    }
+
     bool Window::Create(const WindowDesc& desc)
     {
         if (m_window)
@@ -108,6 +126,12 @@ namespace Arcane
     {
         m_tap     = tap;
         m_tapUser = user;
+    }
+
+    void Window::ShowOpenFolderDialog(FolderPickedCallback cb, void* user) const
+    {
+        auto* ctx = new FolderCbCtx{ cb, user };   // freed by the trampoline
+        SDL_ShowOpenFolderDialog(&FolderDialogTrampoline, ctx, m_window, nullptr, false);
     }
 
     void Window::GetPixelSize(uint32_t& width, uint32_t& height) const
