@@ -1,5 +1,6 @@
 #include "EditorPanels.hpp"
 #include "ConsoleBuffer.hpp"
+#include "EditorFonts.hpp"
 #include "EntityList.hpp"
 #include "IconsLucide.h"
 #include "InspectorFields.hpp"
@@ -179,24 +180,41 @@ namespace Arcane::Editor
         const float lineStartX   = ImGui::GetCursorPosX();
         const float rowY         = ImGui::GetCursorPosY();
 
-        // -- LEFT: the Arcane logo mark (Unity-style), centered vertically on the button
-        // row. Absolute SetCursorPos so it does not perturb the transport's own placement.
+        // -- LEFT cluster (Unity-style branding): [pad] [logo] [wordmark], inset from the
+        // window edge and vertically centered on the button row. Absolute SetCursorPos so it
+        // never perturbs the transport's own placement. leftX tracks the running right edge.
+        const float leftPad = 8.0f;
+        float leftX = lineStartX + leftPad;
         if (logoTex != 0)
         {
-            ImGui::SetCursorPos(ImVec2(lineStartX, rowY - overhang));
+            ImGui::SetCursorPos(ImVec2(leftX, rowY - overhang));
             ImGui::Image((ImTextureID)logoTex, ImVec2(logoH, logoH));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Arcane");
+            leftX += logoH + 8.0f;   // gap between logo and wordmark
+        }
+        if (ImFont* brand = GetEditorFonts().brand)
+        {
+            // "Arcane" wordmark in the display face, a touch shorter than the logo, centered
+            // on the same row. PushFont(font, size) renders it at a display size (ImGui 1.92).
+            const float brandSize = std::floor(logoH * 0.80f);
+            ImGui::PushFont(brand, brandSize);
+            const ImVec2 sz = ImGui::CalcTextSize("Arcane");
+            ImGui::SetCursorPos(ImVec2(leftX, rowY + (btnH - sz.y) * 0.5f));
+            ImGui::TextUnformatted("Arcane");
+            ImGui::PopFont();
+            leftX += sz.x;
         }
 
         // -- CENTER: transport (Play / Pause / Step), Unity-style toggles. --
-        // Center the trio within the full toolbar width, placed on the button row. Undo/Redo
-        // moved to the Edit menu; the transform-gizmo tools moved to the Viewport overlay.
+        // Center the trio within the full toolbar width, placed on the button row -- but
+        // never behind the left cluster (clamp on narrow windows). Undo/Redo moved to the
+        // Edit menu; the transform-gizmo tools moved to the Viewport overlay.
         auto btnW = [&](const char* icon)
         { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
         const float transportW = btnW(ICON_LC_PLAY) + btnW(ICON_LC_PAUSE)
                                + btnW(ICON_LC_STEP_FORWARD) + st.ItemSpacing.x * 2.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
-        ImGui::SetCursorPos(ImVec2(std::max(centerStart, lineStartX), rowY));
+        ImGui::SetCursorPos(ImVec2(std::max(centerStart, leftX + 12.0f), rowY));
 
         // Play/Stop toggle (Unity-style): ALWAYS the play glyph, tinted while playing;
         // clicking the lit (playing) button stops. No icon swap.

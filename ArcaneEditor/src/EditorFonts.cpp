@@ -78,9 +78,18 @@ namespace Arcane::Editor
         const std::string roboto =
             (dir / "data" / "font" / "roboto" / "static" / "Roboto-Regular.ttf").string();
 
+        // Brand wordmark face (Aldo the Apache) -- a display face used ONLY for the "Arcane"
+        // toolbar wordmark, rendered via PushFont(brand, size) at a display size. No lucide
+        // merge (it never shows icons) and no icon-range exclude (it carries no PUA glyphs).
+        const std::string brand =
+            (dir / "data" / "font" / "aldotheapache" / "AldotheApache.ttf").string();
+
         g_fonts = EditorFontSet{};
         g_fonts.interRegular = AddFaceWithIcons(io, inter,  lucide, sizePx);
         g_fonts.roboto       = AddFaceWithIcons(io, roboto, lucide, sizePx);
+        g_fonts.brand        = io.Fonts->AddFontFromFileTTF(brand.c_str(), sizePx);
+        if (!g_fonts.brand)
+            ARC_WARN("Arcane Editor: failed to load brand font '{}'", brand);
         return g_fonts;
     }
 

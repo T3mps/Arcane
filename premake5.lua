@@ -463,6 +463,8 @@ project "ArcaneEditor"
         '{COPYFILE} "%{wks.location}/data/font/inter/static/Inter_18pt-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/inter/static/Inter_18pt-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/roboto/static/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/aldotheapache"',
+        '{COPYFILE} "%{wks.location}/data/font/aldotheapache/AldotheApache.ttf" "%{cfg.buildtarget.directory}/data/font/aldotheapache/AldotheApache.ttf"',
         -- Arcane logo: window/taskbar icon (Window::SetIcon) + transport-toolbar mark
         -- (LoadDisplayTexture). Same PNG, exe-relative at "data/images/arcane_logo.png".
         '{MKDIR} "%{cfg.buildtarget.directory}/data/images"',

@@ -12,6 +12,7 @@ namespace Arcane::Editor
     {
         ImFont* interRegular = nullptr;   // default UI face (Inter)
         ImFont* roboto       = nullptr;   // alternate face (Roboto), pushable
+        ImFont* brand        = nullptr;   // display wordmark (Aldo the Apache); push at a size
     };
 
     // Install the editor fonts on the CURRENT ImGui context: Inter (default) + Roboto,
