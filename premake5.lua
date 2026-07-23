@@ -400,6 +400,7 @@ project "Loom"
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
+        '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
     }
     filter "system:windows"
         systemversion "latest"
@@ -454,6 +455,7 @@ project "ArcaneEditor"
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYFILE} "%{wks.location}/Loom/data/input_actions.json" "%{cfg.buildtarget.directory}/data/input_actions.json"',
+        '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
         -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
         -- the ImGui atlas by EditorFonts.cpp (exe-relative paths -- must align w/ dests).
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/lucide"',

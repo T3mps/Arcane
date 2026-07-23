@@ -1,0 +1,9 @@
+{
+  "formatVersion": 1,
+  "name": "SampleProject",
+  "description": "Slice 1b demo: proves Project::Open host wiring (gameModule = Sandbox.dll).",
+  "engine": { "abi": 5 },
+  "gameModule": "Sandbox.dll",
+  "plugins": [],
+  "bootScene": ""
+}
