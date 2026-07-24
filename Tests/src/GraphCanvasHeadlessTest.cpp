@@ -74,7 +74,7 @@ TEST_CASE("Graph document survives headless ImGui frames", "[editor][graphcanvas
         // Device-less services: the ctor skips preview resources; Rebuild
         // no-ops without a compiler/sources -- the CANVAS is what we exercise.
         DocServices services{};
-        ShaderEditorDocument doc(services, std::filesystem::path("graphcanvas.armat"),
+        ShaderEditorDocument doc(services, std::filesystem::path("graphcanvas.arcmat"),
                                  std::move(data));
         REQUIRE(doc.IsGraphOwned());
 

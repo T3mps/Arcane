@@ -179,7 +179,7 @@ namespace Arcane::Editor
         // before the device) and after m_runtime (they borrow its Assets).
         std::unique_ptr<Arcane::ShaderCompiler> m_shaderCompiler;
         Arcane::ShaderSourceProvider            m_shaderSources;
-        // Scene sprite materials (Slice 8): resolves SAVED .armat assets
+        // Scene sprite materials (Slice 8): resolves SAVED .arcmat assets
         // referenced by SpriteRenderer::material into registered Batcher2D
         // materials; the drain site feeds it, the frame loop publishes its
         // table through Runtime::SetSpriteMaterials.
@@ -201,7 +201,7 @@ namespace Arcane::Editor
         static void MaterialNewPickedThunk(const char* path, void* user);
         static void MaterialOpenPickedThunk(const char* path, void* user);
         static void InstanceNewPickedThunk(const char* path, void* user);
-        // Mint a GRAPH-owned .armat (UE-model: nodes are the authoring tier)
+        // Mint a GRAPH-owned .arcmat (UE-model: nodes are the authoring tier)
         // + open its doc. Legacy text-owned files still open via OpenPath.
         void CreateMaterialAt(std::filesystem::path path);
         void CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);

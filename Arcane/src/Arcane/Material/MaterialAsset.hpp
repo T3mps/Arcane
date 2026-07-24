@@ -1,6 +1,6 @@
 #pragma once
 
-// MaterialAsset: the .armat file -- a native JSON asset with an embedded
+// MaterialAsset: the .arcmat file -- a native JSON asset with an embedded
 // top-level "id" (rides AssetRegistry::ScanContent's native path, exactly like
 // .json assets). A BASE material stores: kind (which engine template it
 // stitches into), the snippet text (the //@param decls live IN the snippet --
@@ -67,12 +67,12 @@ namespace Arcane
         bool IsGraphOwned() const { return graph.has_value(); }
     };
 
-    // Write `data` as .armat JSON (values typed per MatParamValue: float /
+    // Write `data` as .arcmat JSON (values typed per MatParamValue: float /
     // [x,y] / [x,y,z,w] / texture guid string). False on IO failure.
     ARCANE_API bool SaveMaterialAsset(const std::filesystem::path& path,
                                       const MaterialAssetData& data);
 
-    // Parse a .armat. nullopt on IO/parse/shape failure. Param VALUE types are
+    // Parse a .arcmat. nullopt on IO/parse/shape failure. Param VALUE types are
     // resolved against the snippet's own //@param decls (the decl is the truth;
     // a value that no longer matches its decl is dropped with a warning).
     ARCANE_API std::optional<MaterialAssetData> LoadMaterialAsset(
@@ -83,7 +83,7 @@ namespace Arcane
     ARCANE_API std::size_t ApplyMaterialParams(const MaterialAssetData& data,
                                                MaterialInstance& instance);
 
-    // The self-typed {"type","value"} param-value shape shared by .armat params
+    // The self-typed {"type","value"} param-value shape shared by .arcmat params
     // and graph Param-node declarations (exported for MaterialGraph's use).
     ARCANE_API nlohmann::json MatParamValueToJson(const MatParamValue& v);
     ARCANE_API std::optional<MatParamValue> MatParamValueFromJson(const nlohmann::json& entry);

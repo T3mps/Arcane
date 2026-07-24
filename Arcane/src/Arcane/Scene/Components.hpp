@@ -74,7 +74,7 @@ namespace Arcane
         int32_t     sortingLayer = 0;
         int32_t     orderInLayer = 0;
         SpriteShape shape = SpriteShape::Rect; // primitive drawn (Rect/Circle/Capsule)
-        // Optional sprite material (Slice 8): the Guid of a SAVED .armat asset.
+        // Optional sprite material (Slice 8): the Guid of a SAVED .arcmat asset.
         // Nil (the default) = the plain sprite pipeline, byte-identical to the
         // pre-material path. Resolved to a Batcher2D material id through the
         // SpriteMaterialTable resource at submission; unresolved Guids draw as

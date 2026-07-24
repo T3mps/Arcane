@@ -1,6 +1,6 @@
 #pragma once
 
-// SpriteMaterialCache (shader-editor Slice 8): resolves SAVED .armat material
+// SpriteMaterialCache (shader-editor Slice 8): resolves SAVED .arcmat material
 // assets into registered Batcher2D materials for in-scene sprites. The host
 // (Arcane Editor today; the .arcproj runtime-host later) asks Request() for
 // every material Guid its sprites reference; the cache loads the SAVED asset

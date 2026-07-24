@@ -42,7 +42,7 @@ namespace Arcane::Editor
         AssetKind kind;
     };
 
-    // Classify by extension (matches the registry's own scan rules: .armat and
+    // Classify by extension (matches the registry's own scan rules: .arcmat and
     // .json are native; the binary list mirrors AssetRegistry's IsImportedBinary).
     inline AssetKind AssetKindOf(std::string_view mountPath)
     {
@@ -53,7 +53,7 @@ namespace Arcane::Editor
         std::transform(ext.begin(), ext.end(), ext.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-        if (ext == ".armat")
+        if (ext == ".arcmat" || ext == ".armat")   // .armat = legacy spelling
             return AssetKind::Material;
         for (const char* e : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" })
             if (ext == e) return AssetKind::Texture;
@@ -69,7 +69,7 @@ namespace Arcane::Editor
     struct AssetEntry
     {
         Arcane::Guid guid;
-        std::string  mountPath;   // "game://materials/glow.armat"
+        std::string  mountPath;   // "game://materials/glow.arcmat"
         std::string  name;        // "glow" (stem)
         AssetKind    kind = AssetKind::Other;
     };

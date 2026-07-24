@@ -1,7 +1,7 @@
 #pragma once
 
 // ShaderEditorDocument: the shader editor MVP (Slice 5) -- the first real
-// EditorDocument. One window, four panels over one .armat asset:
+// EditorDocument. One window, four panels over one .arcmat asset:
 //   snippet text (InputTextMultiline + click-to-jump via the input callback)
 //   live preview (own OffscreenCanvas + FullscreenMaterialPass, animating Time)
 //   params (auto-widgets from the //@param decls; edits write the CB LIVE, no

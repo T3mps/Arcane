@@ -300,13 +300,13 @@ namespace Arcane::Editor
         m_undo.emplace([rt = &*m_runtime]() -> Astra::Registry& { return rt->Registry(); });
 
         // Shader-editor services (Slice 5): the shared compile service, the
-        // template source root, and the .armat -> ShaderEditorDocument routing.
+        // template source root, and the .arcmat -> ShaderEditorDocument routing.
         // A missing dxcompiler.dll degrades to a warn (documents show status).
         m_shaderCompiler = std::make_unique<Arcane::ShaderCompiler>();
         if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
             ARC_WARN("Arcane Editor: dxcompiler.dll unavailable -- material editing disabled");
         m_shaderSources.AddRoot("shaders");
-        m_documents.RegisterFactory(".armat",
+        const auto materialFactory =
             [this](const std::filesystem::path& p)
                 -> std::unique_ptr<Arcane::Editor::EditorDocument>
             {
@@ -315,16 +315,22 @@ namespace Arcane::Editor
                     return nullptr;
                 return std::make_unique<Arcane::Editor::ShaderEditorDocument>(
                     MakeDocServices(), p, std::move(*data));
-            },
-            // Peek: focus an already-open doc WITHOUT constructing a duplicate
-            // (whose ctor would submit compiles on the live doc's coalesce keys).
+            };
+        // Peek: focus an already-open doc WITHOUT constructing a duplicate
+        // (whose ctor would submit compiles on the live doc's coalesce keys).
+        const auto materialPeek =
             [](const std::filesystem::path& p) -> Arcane::Guid
             {
                 const auto data = Arcane::LoadMaterialAsset(p);
                 return data ? data->id : Arcane::Guid::Nil();
-            });
+            };
+        m_documents.RegisterFactory(".arcmat", materialFactory, materialPeek);
+        // Legacy extension (the pre-rename ".armat"): same routing -- existing
+        // content keeps opening; identity is the embedded GUID, so files can
+        // be renamed to .arcmat on disk at any time.
+        m_documents.RegisterFactory(".armat", materialFactory, materialPeek);
 
-        // Scene sprite materials (Slice 8): SAVED .armat assets referenced by
+        // Scene sprite materials (Slice 8): SAVED .arcmat assets referenced by
         // SpriteRenderer::material compile through the same service and
         // register with the viewport's scene batcher.
         {
@@ -396,8 +402,8 @@ namespace Arcane::Editor
     {
         if (!parent.IsValid())
             return;
-        if (path.extension() != ".armat")
-            path += ".armat";
+        if (path.extension() != ".arcmat" && path.extension() != ".armat")
+            path += ".arcmat";
 
         Arcane::MaterialAssetData data;
         data.id = Arcane::Guid::Generate();
@@ -416,11 +422,11 @@ namespace Arcane::Editor
 
     void EditorApp::CreateMaterialAt(std::filesystem::path path)
     {
-        if (path.extension() != ".armat")
-            path += ".armat";
+        if (path.extension() != ".arcmat" && path.extension() != ".armat")
+            path += ".arcmat";
 
         // UE-model: every new material is GRAPH-owned (freeform HLSL lives in
-        // Custom nodes; legacy text-owned .armat files still open fine).
+        // Custom nodes; legacy text-owned .arcmat files still open fine).
         // Starter = a Color wired to the Output -- never an empty canvas.
         Arcane::MaterialAssetData data;
         data.id = Arcane::Guid::Generate();
@@ -1066,10 +1072,13 @@ namespace Arcane::Editor
                 const char* defaultPath = contentDir.empty() ? nullptr : contentDir.c_str();
                 if (menuReq.newMaterial)
                     m_gpu->Win().ShowSaveFileDialog(&EditorApp::MaterialNewPickedThunk, this,
-                                                    "Arcane Material", "armat", defaultPath);
+                                                    "Arcane Material", "arcmat", defaultPath);
                 if (menuReq.openMaterial)
+                    // Open accepts the legacy .armat too (SDL filter patterns
+                    // are semicolon-separated); saves are always .arcmat.
                     m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
-                                                    "Arcane Material", "armat", defaultPath);
+                                                    "Arcane Material", "arcmat;armat",
+                                                    defaultPath);
             }
             const Arcane::Editor::AssetBrowserActions browserActions =
                 Arcane::Editor::DrawAssetBrowserPanel(m_assetBrowser,
@@ -1081,7 +1090,7 @@ namespace Arcane::Editor
                 const std::string contentDir =
                     proj ? (proj->Root() / "Content").string() : std::string();
                 m_gpu->Win().ShowSaveFileDialog(&EditorApp::InstanceNewPickedThunk, this,
-                                                "Arcane Material", "armat",
+                                                "Arcane Material", "arcmat",
                                                 contentDir.empty() ? nullptr : contentDir.c_str());
             }
             Arcane::Editor::DrawConsolePanel(m_console);

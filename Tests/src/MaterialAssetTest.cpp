@@ -1,6 +1,6 @@
-// .armat material assets (Slice 5): save/load round-trip (values typed by the
+// .arcmat material assets (Slice 5): save/load round-trip (values typed by the
 // snippet's own //@param decls), saved-value application onto an instance, and
-// the AssetRegistry treating .armat as a NATIVE asset (embedded "id"). CPU-only.
+// the AssetRegistry treating .arcmat as a NATIVE asset (embedded "id"). CPU-only.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -36,7 +36,7 @@ namespace
 TEST_CASE("MaterialAsset save/load round-trips snippet and typed params", "[material]")
 {
     const auto dir = TempDir("roundtrip");
-    const auto file = dir / "glow.armat";
+    const auto file = dir / "glow.arcmat";
 
     MaterialAssetData data;
     data.id = Guid::Generate();
@@ -73,7 +73,7 @@ TEST_CASE("MaterialAsset save/load round-trips snippet and typed params", "[mate
     CHECK(v.tex == noiseTex);
 }
 
-TEST_CASE(".armat pass chains: round-trip, sprite/instance refusal", "[material]")
+TEST_CASE(".arcmat pass chains: round-trip, sprite/instance refusal", "[material]")
 {
     const auto dir = TempDir("passes");
 
@@ -88,7 +88,7 @@ TEST_CASE(".armat pass chains: round-trip, sprite/instance refusal", "[material]
 
     SECTION("fullscreen base round-trips the pass list in order")
     {
-        const auto file = dir / "chain.armat";
+        const auto file = dir / "chain.arcmat";
         REQUIRE(SaveMaterialAsset(file, data));
         const auto loaded = LoadMaterialAsset(file);
         REQUIRE(loaded.has_value());
@@ -102,7 +102,7 @@ TEST_CASE(".armat pass chains: round-trip, sprite/instance refusal", "[material]
     {
         MaterialAssetData single = data;
         single.passes.clear();
-        const auto file = dir / "single.armat";
+        const auto file = dir / "single.arcmat";
         REQUIRE(SaveMaterialAsset(file, single));
         const auto loaded = LoadMaterialAsset(file);
         REQUIRE(loaded.has_value());
@@ -113,7 +113,7 @@ TEST_CASE(".armat pass chains: round-trip, sprite/instance refusal", "[material]
     {
         MaterialAssetData sprite = data;
         sprite.kind = "sprite";
-        const auto file = dir / "sprite.armat";
+        const auto file = dir / "sprite.arcmat";
         REQUIRE(SaveMaterialAsset(file, sprite));
         const auto loaded = LoadMaterialAsset(file);
         REQUIRE(loaded.has_value());
@@ -123,7 +123,7 @@ TEST_CASE(".armat pass chains: round-trip, sprite/instance refusal", "[material]
     SECTION("instances refuse passes at load")
     {
         // Hand-authored shape: an instance file carrying a passes array.
-        const auto file = dir / "inst.armat";
+        const auto file = dir / "inst.arcmat";
         {
             std::ofstream out(file, std::ios::binary);
             out << R"({"id":"aaaa1111-1111-4111-8111-111111111111",)"
@@ -139,7 +139,7 @@ TEST_CASE(".armat pass chains: round-trip, sprite/instance refusal", "[material]
 
     SECTION("malformed pass entries drop; names default")
     {
-        const auto file = dir / "malformed.armat";
+        const auto file = dir / "malformed.arcmat";
         {
             std::ofstream out(file, std::ios::binary);
             out << R"({"id":"cccc3333-3333-4333-8333-333333333333",)"
@@ -157,7 +157,7 @@ TEST_CASE(".armat pass chains: round-trip, sprite/instance refusal", "[material]
 TEST_CASE("MaterialAsset load drops stale or mismatched saved params", "[material]")
 {
     const auto dir = TempDir("stale");
-    const auto file = dir / "stale.armat";
+    const auto file = dir / "stale.arcmat";
     std::ofstream(file, std::ios::binary) << R"({
         "id": "c1e0c1de-3333-4444-8555-666677778888",
         "kind": "fullscreen",
@@ -172,7 +172,7 @@ TEST_CASE("MaterialAsset load drops stale or mismatched saved params", "[materia
     CHECK(loaded->params.empty());
 
     // Not-a-material JSON refuses to load.
-    const auto bad = dir / "not_material.armat";
+    const auto bad = dir / "not_material.arcmat";
     std::ofstream(bad, std::ios::binary) << R"({ "id": "x", "whatever": 1 })";
     CHECK_FALSE(LoadMaterialAsset(bad).has_value());
 }
@@ -188,7 +188,7 @@ TEST_CASE("Material instance assets round-trip the override chain", "[material]"
     base.snippet = kSnippet;
     base.params.emplace_back("Tint", MatParamValue::MakeColor(0.0f, 0.0f, 1.0f, 1.0f));
     base.params.emplace_back("Speed", MatParamValue::MakeFloat(2.0f));
-    REQUIRE(SaveMaterialAsset(dir / "base.armat", base));
+    REQUIRE(SaveMaterialAsset(dir / "base.arcmat", base));
 
     // Instance: parent + ONE sparse override (Speed 4). No snippet on disk.
     MaterialAssetData inst;
@@ -196,10 +196,10 @@ TEST_CASE("Material instance assets round-trip the override chain", "[material]"
     inst.parent = base.id;
     inst.name = "Fast";
     inst.params.emplace_back("Speed", MatParamValue::MakeFloat(4.0f));
-    REQUIRE(SaveMaterialAsset(dir / "fast.armat", inst));
+    REQUIRE(SaveMaterialAsset(dir / "fast.arcmat", inst));
 
-    const auto loadedBase = LoadMaterialAsset(dir / "base.armat");
-    const auto loadedInst = LoadMaterialAsset(dir / "fast.armat");
+    const auto loadedBase = LoadMaterialAsset(dir / "base.arcmat");
+    const auto loadedInst = LoadMaterialAsset(dir / "fast.arcmat");
     REQUIRE(loadedBase.has_value());
     REQUIRE(loadedInst.has_value());
     CHECK_FALSE(loadedBase->IsInstance());
@@ -232,7 +232,7 @@ TEST_CASE("Material instance assets round-trip the override chain", "[material]"
     CHECK(v.f[0] == 2.0f);
 }
 
-TEST_CASE("AssetRegistry scans .armat as a native asset", "[material][project]")
+TEST_CASE("AssetRegistry scans .arcmat as a native asset", "[material][project]")
 {
     const auto dir = TempDir("registry");
 
@@ -241,19 +241,29 @@ TEST_CASE("AssetRegistry scans .armat as a native asset", "[material][project]")
     withId.id = Guid::Generate();
     withId.name = "A";
     withId.snippet = "float4 shade(Varyings v) { return 1; }\n";
-    REQUIRE(SaveMaterialAsset(dir / "a.armat", withId));
+    REQUIRE(SaveMaterialAsset(dir / "a.arcmat", withId));
 
-    std::ofstream(dir / "b.armat", std::ios::binary)
+    std::ofstream(dir / "b.arcmat", std::ios::binary)
         << R"({ "kind": "fullscreen", "name": "B", "snippet": "x", "params": {} })";
 
+    // Legacy extension: the pre-rename ".armat" spelling still scans.
+    MaterialAssetData legacy;
+    legacy.id = Guid::Generate();
+    legacy.name = "Old";
+    legacy.snippet = "float4 shade(Varyings v) { return 1; }\n";
+    REQUIRE(SaveMaterialAsset(dir / "old.armat", legacy));
+
     AssetRegistry registry;
-    CHECK(registry.ScanContent(dir, "game") == 2);
+    CHECK(registry.ScanContent(dir, "game") == 3);
     const auto resolved = registry.Resolve(withId.id);
     REQUIRE(resolved.has_value());
-    CHECK(*resolved == "game://a.armat");
+    CHECK(*resolved == "game://a.arcmat");
+    const auto legacyResolved = registry.Resolve(legacy.id);
+    REQUIRE(legacyResolved.has_value());
+    CHECK(*legacyResolved == "game://old.armat");
 
-    // The minted id was written back into b.armat.
-    const auto b = LoadMaterialAsset(dir / "b.armat");
+    // The minted id was written back into b.arcmat.
+    const auto b = LoadMaterialAsset(dir / "b.arcmat");
     REQUIRE(b.has_value());
     CHECK(b->id.IsValid());
     CHECK(registry.Resolve(b->id).has_value());

@@ -125,9 +125,9 @@ TEST_CASE("Project::RegisterAsset registers editor-created files incrementally",
     CHECK(proj->Registry().Count() == 0);   // empty Content at open
 
     // A material created AFTER the open-time scan (the editor's New Material).
-    WriteFile(dir / "Content" / "mats" / "new.armat",
+    WriteFile(dir / "Content" / "mats" / "new.arcmat",
               R"({ "id": "e7e0c1de-4444-4555-8666-777788889999", "snippet": "x" })");
-    const auto g = proj->RegisterAsset(dir / "Content" / "mats" / "new.armat");
+    const auto g = proj->RegisterAsset(dir / "Content" / "mats" / "new.arcmat");
     REQUIRE(g.has_value());
     CHECK(g->ToString() == "e7e0c1de-4444-4555-8666-777788889999");
     CHECK(proj->Registry().Count() == 1);
@@ -135,22 +135,22 @@ TEST_CASE("Project::RegisterAsset registers editor-created files incrementally",
     // Immediately resolvable (browser + GUID loads see it now, not on reopen).
     const auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
     REQUIRE(p.has_value());
-    CHECK(*p == dir / "Content" / "mats" / "new.armat");
+    CHECK(*p == dir / "Content" / "mats" / "new.arcmat");
 
     // Idempotent re-registration (the document Save path).
-    CHECK(proj->RegisterAsset(dir / "Content" / "mats" / "new.armat").has_value());
+    CHECK(proj->RegisterAsset(dir / "Content" / "mats" / "new.arcmat").has_value());
     CHECK(proj->Registry().Count() == 1);
 
     // Missing id: minted and written back, then registered.
-    WriteFile(dir / "Content" / "noid.armat", R"({ "snippet": "y" })");
-    const auto minted = proj->RegisterAsset(dir / "Content" / "noid.armat");
+    WriteFile(dir / "Content" / "noid.arcmat", R"({ "snippet": "y" })");
+    const auto minted = proj->RegisterAsset(dir / "Content" / "noid.arcmat");
     REQUIRE(minted.has_value());
     CHECK(minted->IsValid());
     CHECK(proj->Registry().Count() == 2);
 
     // Outside every content root -> refused (warn), not registered.
-    WriteFile(dir / "outside.armat", R"({ "id": "f8e0c1de-5555-4666-8777-888899990000", "snippet": "z" })");
-    CHECK_FALSE(proj->RegisterAsset(dir / "outside.armat").has_value());
+    WriteFile(dir / "outside.arcmat", R"({ "id": "f8e0c1de-5555-4666-8777-888899990000", "snippet": "z" })");
+    CHECK_FALSE(proj->RegisterAsset(dir / "outside.arcmat").has_value());
     // Untracked extension -> refused.
     WriteFile(dir / "Content" / "notes.txt", "hello");
     CHECK_FALSE(proj->RegisterAsset(dir / "Content" / "notes.txt").has_value());

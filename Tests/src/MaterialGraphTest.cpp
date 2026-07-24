@@ -1,5 +1,5 @@
 // Material node graph (Slice 9): node table, topological codegen (SSA locals,
-// SG adaptation table, line map), structured errors, JSON round-trip, .armat
+// SG adaptation table, line map), structured errors, JSON round-trip, .arcmat
 // integration, and the graph -> snippet -> dual-target compile proof.
 // CPU + dxc only, no GPU.
 
@@ -665,7 +665,7 @@ TEST_CASE("MintId is monotonic and never reuses", "[material]")
     CHECK(g.MintId() == 7);             // ...its id stays dead
 }
 
-TEST_CASE(".armat carries the graph; graph-only files self-heal a snippet", "[material]")
+TEST_CASE(".arcmat carries the graph; graph-only files self-heal a snippet", "[material]")
 {
     namespace fs = std::filesystem;
     const fs::path dir = fs::temp_directory_path() / "arcane_material_graph_test";
@@ -691,7 +691,7 @@ TEST_CASE(".armat carries the graph; graph-only files self-heal a snippet", "[ma
     data.snippet = gen.snippet;
     data.graph = g;
 
-    const fs::path path = dir / "graphmat.armat";
+    const fs::path path = dir / "graphmat.arcmat";
     REQUIRE(SaveMaterialAsset(path, data));
 
     const auto loaded = LoadMaterialAsset(path);
@@ -704,7 +704,7 @@ TEST_CASE(".armat carries the graph; graph-only files self-heal a snippet", "[ma
 
     SECTION("hand-authored graph-only file regenerates its snippet on load")
     {
-        const fs::path bare = dir / "bare.armat";
+        const fs::path bare = dir / "bare.arcmat";
         nlohmann::json doc;
         doc["id"] = "bbbb2222-2222-4222-8222-222222222222";
         doc["name"] = "bare";
@@ -719,7 +719,7 @@ TEST_CASE(".armat carries the graph; graph-only files self-heal a snippet", "[ma
     }
     SECTION("a graph on an instance is ignored")
     {
-        const fs::path inst = dir / "inst.armat";
+        const fs::path inst = dir / "inst.arcmat";
         nlohmann::json doc;
         doc["id"] = "cccc3333-3333-4333-8333-333333333333";
         doc["parent"] = "aaaa1111-1111-4111-8111-111111111111";

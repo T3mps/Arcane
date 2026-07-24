@@ -108,19 +108,19 @@ TEST_CASE("DocumentHost routes extensions and focuses instead of reopening", "[e
     DocumentHost host;
     const Arcane::Guid stable = Arcane::Guid::Generate();
     int factoryCalls = 0;
-    host.RegisterFactory(".armat",
+    host.RegisterFactory(".arcmat",
         [&](const std::filesystem::path& p) -> std::unique_ptr<EditorDocument>
         {
             ++factoryCalls;
             return std::make_unique<FakeDoc>(p.stem().string(), stable, false);
         });
 
-    EditorDocument* first = host.OpenPath("materials/glow.armat");
+    EditorDocument* first = host.OpenPath("materials/glow.arcmat");
     REQUIRE(first != nullptr);
     CHECK(host.Count() == 1);
 
     // Same asset guid -> the open document is returned, no second window.
-    EditorDocument* again = host.OpenPath("materials/GLOW.armat");   // case-insensitive ext
+    EditorDocument* again = host.OpenPath("materials/GLOW.arcmat");   // case-insensitive ext
     CHECK(again == first);
     CHECK(host.Count() == 1);
     CHECK(factoryCalls == 2);   // factory ran (it produces the guid) but its doc was dropped
@@ -141,7 +141,7 @@ TEST_CASE("DocumentHost peek resolves focus-not-reopen without constructing", "[
     DocumentHost host;
     const Arcane::Guid stable = Arcane::Guid::Generate();
     int factoryCalls = 0;
-    host.RegisterFactory(".armat",
+    host.RegisterFactory(".arcmat",
         [&](const std::filesystem::path& p) -> std::unique_ptr<EditorDocument>
         {
             ++factoryCalls;
@@ -149,11 +149,11 @@ TEST_CASE("DocumentHost peek resolves focus-not-reopen without constructing", "[
         },
         [&](const std::filesystem::path&) { return stable; });
 
-    EditorDocument* first = host.OpenPath("materials/glow.armat");
+    EditorDocument* first = host.OpenPath("materials/glow.arcmat");
     REQUIRE(first != nullptr);
     CHECK(factoryCalls == 1);
 
-    EditorDocument* again = host.OpenPath("materials/glow.armat");
+    EditorDocument* again = host.OpenPath("materials/glow.arcmat");
     CHECK(again == first);
     CHECK(host.Count() == 1);
     CHECK(factoryCalls == 1);   // the peek short-circuited: NO throwaway construct

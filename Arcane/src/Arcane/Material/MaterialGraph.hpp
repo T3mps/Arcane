@@ -6,7 +6,7 @@
 // declarations + a `float4 shade(Varyings v)` body -- targeting the exact same
 // %{MATERIAL_BODY} seam the text editor feeds. Everything downstream
 // (ParseMaterialSource, template stitch, compile service, preview, params
-// panel, instances, sprite cache) is untouched: a graph-owned .armat still
+// panel, instances, sprite cache) is untouched: a graph-owned .arcmat still
 // SAVES the generated snippet, so every existing loader keeps working and the
 // graph is purely the authoring truth on top.
 //
@@ -16,7 +16,7 @@
 // structured per-node errors, monotonic ids). Where this header says
 // "SG rule", that document is the citation.
 //
-// Ownership rule (spec 5.8): a material is graph-owned (the .armat carries a
+// Ownership rule (spec 5.8): a material is graph-owned (the .arcmat carries a
 // "graph" object; the text panel shows generated HLSL read-only) or text-owned.
 // Convert-to-text severs the graph one way; there is no text->graph decompile.
 
@@ -146,7 +146,7 @@ namespace Arcane
         // Param / TextureSample: the //@param this node declares. All nodes with
         // the same name share ONE declaration; codegen rejects conflicting types.
         // RENAME WART (documented, SG-parity): instance overrides key on the
-        // param NAME -- renaming a param orphans existing .armat instance
+        // param NAME -- renaming a param orphans existing .arcmat instance
         // overrides exactly like Unity's reference-name rename. MVP accepts
         // this; an editor-assisted rename that rewrites instances is a
         // follow-up (we have GUID-identified assets to find them; Unity
@@ -278,7 +278,7 @@ namespace Arcane
         const MaterialGraph& graph,
         MaterialSurface surface = MaterialSurface::Fullscreen);
 
-    // The "graph" object inside .armat JSON (see MaterialAsset). Output is
+    // The "graph" object inside .arcmat JSON (see MaterialAsset). Output is
     // ordered -- nodes sorted by id, links by (to, toPin) -- purely for diff
     // stability (SG sorts on save for the same reason). FromJson returns
     // nullopt on shape violations (unknown node types, non-numeric ids,

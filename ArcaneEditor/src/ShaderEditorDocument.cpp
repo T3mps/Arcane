@@ -1289,7 +1289,7 @@ namespace Arcane::Editor
         if (!m_graphCtx)
         {
             ed::Config cfg;
-            cfg.SettingsFile = nullptr;   // layout persists in the .armat, not an ini
+            cfg.SettingsFile = nullptr;   // layout persists in the .arcmat, not an ini
             m_graphCtx = ed::CreateEditor(&cfg);
         }
         Arcane::MaterialGraph& g = *m_data.graph;

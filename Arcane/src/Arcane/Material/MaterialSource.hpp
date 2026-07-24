@@ -63,7 +63,7 @@ namespace Arcane
     enum class MaterialSurface : std::uint8_t { Fullscreen, Sprite };
 
     // The engine template file for a surface ("materials/....hlsl", resolved
-    // through ShaderSourceProvider) and the surface for a .armat "kind" string
+    // through ShaderSourceProvider) and the surface for a .arcmat "kind" string
     // (unknown kinds fall back to Fullscreen).
     ARCANE_API const char* MaterialTemplateFile(MaterialSurface surface);
     ARCANE_API MaterialSurface MaterialSurfaceForKind(std::string_view kind);

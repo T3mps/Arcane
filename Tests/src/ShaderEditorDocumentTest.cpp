@@ -55,7 +55,7 @@ TEST_CASE("ShaderEditorDocument::Save before the first bind keeps saved params",
     // Review M1 regression: with no device the document can never bind, so
     // m_instance stays null -- Save must NOT wipe the params it loaded.
     const fs::path dir = TempDir("savebeforebind");
-    const fs::path file = dir / "glow.armat";
+    const fs::path file = dir / "glow.arcmat";
 
     Arcane::MaterialAssetData data;
     data.id = Arcane::Guid::Generate();
@@ -90,13 +90,13 @@ TEST_CASE("ShaderEditorDocument resolves, and refuses, instance parent chains", 
     base.id = Arcane::Guid::Generate();
     base.name = "Base";
     base.snippet = kSnippet;
-    REQUIRE(Arcane::SaveMaterialAsset(content / "base.armat", base));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "base.arcmat", base));
 
     Arcane::MaterialAssetData inst;
     inst.id = Arcane::Guid::Generate();
     inst.parent = base.id;
     inst.name = "Inst";
-    REQUIRE(Arcane::SaveMaterialAsset(content / "inst.armat", inst));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "inst.arcmat", inst));
 
     Arcane::MaterialAssetData cycleA, cycleB;
     cycleA.id = Arcane::Guid::Generate();
@@ -105,14 +105,14 @@ TEST_CASE("ShaderEditorDocument resolves, and refuses, instance parent chains", 
     cycleB.parent = cycleA.id;
     cycleA.name = "CycleA";
     cycleB.name = "CycleB";
-    REQUIRE(Arcane::SaveMaterialAsset(content / "cycle_a.armat", cycleA));
-    REQUIRE(Arcane::SaveMaterialAsset(content / "cycle_b.armat", cycleB));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "cycle_a.arcmat", cycleA));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "cycle_b.arcmat", cycleB));
 
     Arcane::MaterialAssetData orphan;
     orphan.id = Arcane::Guid::Generate();
     orphan.parent = Arcane::Guid::Generate();   // never registered
     orphan.name = "Orphan";
-    REQUIRE(Arcane::SaveMaterialAsset(content / "orphan.armat", orphan));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "orphan.arcmat", orphan));
 
     Arcane::Runtime rt;
     REQUIRE(rt.OpenProject(dir / "Game"));
@@ -122,34 +122,34 @@ TEST_CASE("ShaderEditorDocument resolves, and refuses, instance parent chains", 
 
     SECTION("a healthy chain resolves with no errors")
     {
-        const auto data = Arcane::LoadMaterialAsset(content / "inst.armat");
+        const auto data = Arcane::LoadMaterialAsset(content / "inst.arcmat");
         REQUIRE(data.has_value());
-        ShaderEditorDocument doc(services, content / "inst.armat", *data);
+        ShaderEditorDocument doc(services, content / "inst.arcmat", *data);
         CHECK(doc.IsInstance());
         CHECK(doc.ParseErrors().empty());
     }
 
     SECTION("a parent cycle is rejected")
     {
-        const auto data = Arcane::LoadMaterialAsset(content / "cycle_a.armat");
+        const auto data = Arcane::LoadMaterialAsset(content / "cycle_a.arcmat");
         REQUIRE(data.has_value());
-        ShaderEditorDocument doc(services, content / "cycle_a.armat", *data);
+        ShaderEditorDocument doc(services, content / "cycle_a.arcmat", *data);
         CHECK(AnyErrorContains(doc.ParseErrors(), "cycle"));
     }
 
     SECTION("an unresolvable parent is reported")
     {
-        const auto data = Arcane::LoadMaterialAsset(content / "orphan.armat");
+        const auto data = Arcane::LoadMaterialAsset(content / "orphan.arcmat");
         REQUIRE(data.has_value());
-        ShaderEditorDocument doc(services, content / "orphan.armat", *data);
+        ShaderEditorDocument doc(services, content / "orphan.arcmat", *data);
         CHECK(AnyErrorContains(doc.ParseErrors(), "not in the asset registry"));
     }
 
     SECTION("instances need an open project at all")
     {
-        const auto data = Arcane::LoadMaterialAsset(content / "inst.armat");
+        const auto data = Arcane::LoadMaterialAsset(content / "inst.arcmat");
         REQUIRE(data.has_value());
-        ShaderEditorDocument doc(DocServices{}, content / "inst.armat", *data);
+        ShaderEditorDocument doc(DocServices{}, content / "inst.arcmat", *data);
         CHECK(AnyErrorContains(doc.ParseErrors(), "open project"));
     }
 }
@@ -160,7 +160,7 @@ TEST_CASE("ShaderEditorDocument::ConsumeResult routes only its own job ids", "[e
     // stages; every drained result must route back (return true), and a foreign
     // job id must be refused -- the stale-result guard the drain site relies on.
     const fs::path dir = TempDir("routing");
-    const fs::path file = dir / "routed.armat";
+    const fs::path file = dir / "routed.arcmat";
 
     Arcane::MaterialAssetData data;
     data.id = Arcane::Guid::Generate();
@@ -217,7 +217,7 @@ TEST_CASE("ShaderEditorDocument compiles a pass chain per-pass and routes result
     // per-pass coalesce keys) and each drained result routes home. Device-less:
     // binding is skipped, but the whole chain-source path runs for real.
     const fs::path dir = TempDir("chainrouting");
-    const fs::path file = dir / "chained.armat";
+    const fs::path file = dir / "chained.arcmat";
 
     Arcane::MaterialAssetData data;
     data.id = Arcane::Guid::Generate();

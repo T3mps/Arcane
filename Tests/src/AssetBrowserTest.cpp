@@ -15,7 +15,8 @@ using namespace Arcane::Editor;
 
 TEST_CASE("AssetKindOf classifies by extension, case-insensitive", "[editor]")
 {
-    CHECK(AssetKindOf("game://materials/glow.armat") == AssetKind::Material);
+    CHECK(AssetKindOf("game://materials/glow.arcmat") == AssetKind::Material);
+    CHECK(AssetKindOf("game://materials/old.armat") == AssetKind::Material);   // legacy
     CHECK(AssetKindOf("game://tex/hero.PNG") == AssetKind::Texture);
     CHECK(AssetKindOf("game://tex/sky.hdr") == AssetKind::Texture);
     CHECK(AssetKindOf("game://sfx/hit.wav") == AssetKind::Audio);
@@ -45,7 +46,7 @@ TEST_CASE("BuildAssetEntries snapshots a scanned registry, sorted by name", "[ed
 
     std::ofstream(dir / "zeta.json", std::ios::binary)
         << R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })";
-    std::ofstream(dir / "sub" / "alpha.armat", std::ios::binary)
+    std::ofstream(dir / "sub" / "alpha.arcmat", std::ios::binary)
         << R"({ "id": "bbbb2222-2222-4222-8222-222222222222", "snippet": "x" })";
     std::ofstream(dir / "hero.png", std::ios::binary) << "notapng";   // sidecar minted
 
@@ -56,7 +57,7 @@ TEST_CASE("BuildAssetEntries snapshots a scanned registry, sorted by name", "[ed
     REQUIRE(entries.size() == 3);
     CHECK(entries[0].name == "alpha");
     CHECK(entries[0].kind == AssetKind::Material);
-    CHECK(entries[0].mountPath == "game://sub/alpha.armat");
+    CHECK(entries[0].mountPath == "game://sub/alpha.arcmat");
     CHECK(entries[1].name == "hero");
     CHECK(entries[1].kind == AssetKind::Texture);
     CHECK(entries[2].name == "zeta");
@@ -71,7 +72,7 @@ TEST_CASE("MatchesFilter combines kind filter and case-insensitive search", "[ed
 {
     AssetEntry mat;
     mat.name = "GlowPulse";
-    mat.mountPath = "game://materials/glow_pulse.armat";
+    mat.mountPath = "game://materials/glow_pulse.arcmat";
     mat.kind = AssetKind::Material;
 
     // Kind filter.

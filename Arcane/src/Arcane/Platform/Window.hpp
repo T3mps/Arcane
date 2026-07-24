@@ -78,7 +78,7 @@ namespace Arcane
         // Native save/open FILE dialogs (same async trampoline contract as the
         // folder picker: `cb` fires on the SDL dialog thread with the chosen
         // path, or nullptr on cancel/error). One optional filter --
-        // `filterName` ("Arcane Material") + `filterPattern` ("armat",
+        // `filterName` ("Arcane Material") + `filterPattern` ("arcmat",
         // semicolon-separated for multiple); pass null/null for all files.
         // `defaultPath` seeds the dialog's starting location/filename (null =
         // OS default). The save dialog does NOT force the extension -- callers

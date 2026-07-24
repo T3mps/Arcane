@@ -28,7 +28,7 @@ namespace Arcane::Editor
         using PeekGuid = std::function<Arcane::Guid(const std::filesystem::path&)>;
 
         // ---- routing (Fold 3 skeleton) ----------------------------------
-        // Register a factory for an asset extension (".armat"). Lowercase match.
+        // Register a factory for an asset extension (".arcmat"). Lowercase match.
         // `peek` (optional) lets OpenPath resolve focus-not-reopen BEFORE
         // constructing a document -- constructing one just to discard it is not
         // free (a ShaderEditorDocument's ctor submits compiles on the live
