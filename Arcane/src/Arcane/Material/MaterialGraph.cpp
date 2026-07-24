@@ -31,6 +31,12 @@ namespace Arcane
         constexpr GraphPinDesc kLerpIn[]      = { { "a", 0 }, { "b", 0 }, { "t", 0 } };
         constexpr GraphPinDesc kUnaryIn[]     = { { "x", 0 } };
         constexpr GraphPinDesc kSplitOut[]    = { { "r", 1 }, { "g", 1 }, { "b", 1 }, { "a", 1 } };
+        constexpr GraphPinDesc kCombineIn[]   = { { "r", 1 }, { "g", 1 }, { "b", 1 }, { "a", 1 } };
+        constexpr GraphPinDesc kClampIn[]     = { { "x", 0 }, { "min", 0 }, { "max", 0 } };
+        constexpr GraphPinDesc kSmoothIn[]    = { { "edge0", 0 }, { "edge1", 0 }, { "x", 0 } };
+        constexpr GraphPinDesc kStepIn[]      = { { "edge", 0 }, { "x", 0 } };
+        constexpr GraphPinDesc kRemapIn[]     = { { "x", 0 }, { "inRange", 2 }, { "outRange", 2 } };
+        constexpr GraphPinDesc kTileIn[]      = { { "uv", 2 }, { "tiling", 2 }, { "offset", 2 } };
 
         template <std::size_t N>
         constexpr std::span<const GraphPinDesc> Pins(const GraphPinDesc (&a)[N]) { return { a, N }; }
@@ -60,13 +66,24 @@ namespace Arcane
             // Custom's pins are PER-NODE data -- the table spans stay empty and
             // every pin query routes through GraphNodeInput/OutputPin below.
             { GraphNodeType::Custom,        "custom",         "Custom (HLSL)",  NoPins(),        NoPins()          },
+            { GraphNodeType::Combine,       "combine",        "Combine",        Pins(kCombineIn), Pins(kOut4)      },
+            { GraphNodeType::Clamp,         "clamp",          "Clamp",          Pins(kClampIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Smoothstep,    "smoothstep",     "Smoothstep",     Pins(kSmoothIn), Pins(kOutDyn)     },
+            { GraphNodeType::Step,          "step",           "Step",           Pins(kStepIn),   Pins(kOutDyn)     },
+            { GraphNodeType::Power,         "power",          "Power",          Pins(kBinaryIn), Pins(kOutDyn)     },
+            { GraphNodeType::Remap,         "remap",          "Remap",          Pins(kRemapIn),  Pins(kOutDyn)     },
+            { GraphNodeType::TilingOffset,  "tiling_offset",  "Tiling & Offset", Pins(kTileIn),  Pins(kOut2)       },
+            { GraphNodeType::Cos,           "cos",            "Cosine",         Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Abs,           "abs",            "Absolute",       Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Min,           "min",            "Minimum",        Pins(kBinaryIn), Pins(kOutDyn)     },
+            { GraphNodeType::Max,           "max",            "Maximum",        Pins(kBinaryIn), Pins(kOutDyn)     },
         };
     }
 
     const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept
     {
         const auto i = static_cast<std::size_t>(t);
-        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Custom) + 1,
+        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Max) + 1,
                       "kNodeInfos must cover every GraphNodeType");
         return kNodeInfos[i < std::size(kNodeInfos) ? i : 0];
     }
@@ -423,15 +440,18 @@ namespace Arcane
             widthOf[n->id] = w;
 
             // Adapted expression for input `pin` at target width `t` (0 = the
-            // node's resolved dynamic width). Unconnected numeric inputs read 0.
-            auto arg = [&](std::uint32_t pin, int t) -> std::string
+            // node's resolved dynamic width). Unconnected numeric inputs read 0
+            // by default; argOr overrides for the few pins whose neutral value
+            // is not zero (clamp max, lerp-style upper edges, pow exponent...).
+            auto argOr = [&](std::uint32_t pin, int t, const char* def) -> std::string
             {
                 if (t == 0)
                     t = w;
                 if (!in[pin].connected)
-                    return Adapt("0.0", 1, t);
+                    return Adapt(def, 1, t);
                 return Adapt(in[pin].expr, in[pin].width, t);
             };
+            auto arg = [&](std::uint32_t pin, int t) { return argOr(pin, t, "0.0"); };
 
             const std::string id = std::to_string(n->id);
             auto stmt = [&](std::string s) { body.emplace_back(std::move(s), n->id); };
@@ -572,6 +592,60 @@ namespace Arcane
                     }
                     break;
                 }
+                case GraphNodeType::Combine:
+                    local(4, "float4(" + arg(0, 1) + ", " + arg(1, 1) + ", " + arg(2, 1) +
+                             ", " + argOr(3, 1, "1.0") + ")");
+                    break;
+                case GraphNodeType::Clamp:
+                    local(w, "clamp(" + arg(0, 0) + ", " + arg(1, 0) + ", " +
+                             argOr(2, 0, "1.0") + ")");
+                    break;
+                case GraphNodeType::Smoothstep:
+                    local(w, "smoothstep(" + arg(0, 0) + ", " + argOr(1, 0, "1.0") + ", " +
+                             arg(2, 0) + ")");
+                    break;
+                case GraphNodeType::Step:
+                    local(w, "step(" + arg(0, 0) + ", " + arg(1, 0) + ")");
+                    break;
+                case GraphNodeType::Power:
+                    local(w, "pow(" + arg(0, 0) + ", " + argOr(1, 0, "1.0") + ")");
+                    break;
+                case GraphNodeType::Remap:
+                {
+                    // SG Remap: out.x + (x - in.x) * (out.y - out.x) / (in.y - in.x).
+                    // Ranges are float2 pins defaulting to (0, 1) -- the zero
+                    // default would divide by zero.
+                    const std::string x = arg(0, 0);
+                    const std::string ir = in[1].connected
+                                               ? Adapt(in[1].expr, in[1].width, 2)
+                                               : std::string("float2(0.0, 1.0)");
+                    const std::string outr = in[2].connected
+                                                 ? Adapt(in[2].expr, in[2].width, 2)
+                                                 : std::string("float2(0.0, 1.0)");
+                    local(w, "(" + outr + ").x + (" + x + " - (" + ir + ").x) * ((" + outr +
+                             ").y - (" + outr + ").x) / ((" + ir + ").y - (" + ir + ").x)");
+                    break;
+                }
+                case GraphNodeType::TilingOffset:
+                {
+                    const std::string uv = in[0].connected
+                                               ? Adapt(in[0].expr, in[0].width, 2)
+                                               : std::string("v.uv");
+                    local(2, uv + " * " + argOr(1, 2, "1.0") + " + " + arg(2, 2));
+                    break;
+                }
+                case GraphNodeType::Cos:
+                    local(w, "cos(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Abs:
+                    local(w, "abs(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Min:
+                    local(w, "min(" + arg(0, 0) + ", " + arg(1, 0) + ")");
+                    break;
+                case GraphNodeType::Max:
+                    local(w, "max(" + arg(0, 0) + ", " + arg(1, 0) + ")");
+                    break;
             }
 
             st = 2;

@@ -71,7 +71,7 @@ namespace
 TEST_CASE("Graph node table covers every type with round-tripping tokens", "[material]")
 {
     const auto infos = AllGraphNodeInfos();
-    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Custom) + 1);
+    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Max) + 1);
     for (const GraphNodeTypeInfo& info : infos)
     {
         CHECK(GraphNodeInfo(info.type).token == info.token);
@@ -88,6 +88,11 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
     CHECK(std::string(GraphNodeInfo(GraphNodeType::TextureSample).outputs[1].name) == "a");
     CHECK(GraphNodeInfo(GraphNodeType::Split).outputs.size() == 4);
     CHECK(GraphNodeInfo(GraphNodeType::Output).outputs.empty());
+    CHECK(GraphNodeInfo(GraphNodeType::Combine).inputs.size() == 4);
+    CHECK(GraphNodeInfo(GraphNodeType::Remap).inputs.size() == 3);
+    CHECK(GraphNodeInfo(GraphNodeType::Remap).inputs[1].width == 2);
+    CHECK(GraphNodeInfo(GraphNodeType::TilingOffset).inputs.size() == 3);
+    CHECK(std::string(GraphNodeInfo(GraphNodeType::Smoothstep).inputs[2].name) == "x");
 }
 
 TEST_CASE("Golden codegen: const color to output", "[material]")
@@ -247,6 +252,80 @@ TEST_CASE("Codegen: Split lanes follow the SG rule", "[material]")
     CHECK(r.snippet.find("float _n3_r = (_n2).x;") != std::string::npos);
     CHECK(r.snippet.find("float _n3_b = 0.0;") != std::string::npos);
     CHECK(r.snippet.find("_n3_g") == std::string::npos);   // unconsumed pin: no local
+}
+
+TEST_CASE("Codegen: library batch 1 kernels and their neutral defaults", "[material]")
+{
+    SECTION("Time -> Cosine -> Remap (default ranges) -> Combine.r")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(4, GraphNodeType::Time));
+        g.nodes.push_back(Node(5, GraphNodeType::Cos));
+        g.nodes.push_back(Node(6, GraphNodeType::Remap));
+        g.nodes.push_back(Node(7, GraphNodeType::Combine));
+        g.links.push_back(Link(4, 0, 5, 0));
+        g.links.push_back(Link(5, 0, 6, 0));
+        g.links.push_back(Link(6, 0, 7, 0));
+        g.links.push_back(Link(7, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float _n4 = Time;\n"
+              "    float _n5 = cos(_n4);\n"
+              "    float _n6 = (float2(0.0, 1.0)).x + (_n5 - (float2(0.0, 1.0)).x) * "
+              "((float2(0.0, 1.0)).y - (float2(0.0, 1.0)).x) / "
+              "((float2(0.0, 1.0)).y - (float2(0.0, 1.0)).x);\n"
+              "    float4 _n7 = float4(_n6, 0.0, 0.0, 1.0);\n"
+              "    return _n7;\n"
+              "}\n");
+    }
+
+    SECTION("float2 chain: clamp/smoothstep/step/pow/min/max/abs/tiling at width 2")
+    {
+        // One UV-fed chain; every unconnected operand takes its NEUTRAL
+        // default (0, except clamp.max / smoothstep.edge1 / pow.b / tiling = 1).
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        g.nodes.push_back(Node(3, GraphNodeType::Clamp));
+        g.nodes.push_back(Node(4, GraphNodeType::Smoothstep));
+        g.nodes.push_back(Node(5, GraphNodeType::Step));
+        g.nodes.push_back(Node(6, GraphNodeType::Power));
+        g.nodes.push_back(Node(7, GraphNodeType::Min));
+        g.nodes.push_back(Node(8, GraphNodeType::Max));
+        g.nodes.push_back(Node(9, GraphNodeType::Abs));
+        g.nodes.push_back(Node(10, GraphNodeType::TilingOffset));
+        g.links.push_back(Link(2, 0, 3, 0));    // uv -> clamp.x
+        g.links.push_back(Link(3, 0, 4, 2));    // -> smoothstep.x
+        g.links.push_back(Link(4, 0, 5, 0));    // -> step.edge
+        g.links.push_back(Link(5, 0, 6, 0));    // -> pow.a
+        g.links.push_back(Link(6, 0, 7, 0));    // -> min.a
+        g.links.push_back(Link(7, 0, 8, 0));    // -> max.a
+        g.links.push_back(Link(8, 0, 9, 0));    // -> abs.x
+        g.links.push_back(Link(9, 0, 10, 0));   // -> tiling.uv
+        g.links.push_back(Link(10, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float2 _n2 = v.uv;\n"
+              "    float2 _n3 = clamp(_n2, (0.0).xx, (1.0).xx);\n"
+              "    float2 _n4 = smoothstep((0.0).xx, (1.0).xx, _n3);\n"
+              "    float2 _n5 = step(_n4, (0.0).xx);\n"
+              "    float2 _n6 = pow(_n5, (1.0).xx);\n"
+              "    float2 _n7 = min(_n6, (0.0).xx);\n"
+              "    float2 _n8 = max(_n7, (0.0).xx);\n"
+              "    float2 _n9 = abs(_n8);\n"
+              "    float2 _n10 = _n9 * (1.0).xx + (0.0).xx;\n"
+              "    return float4(_n10, 0.0, 1.0);\n"
+              "}\n");
+    }
 }
 
 TEST_CASE("Codegen: Custom (HLSL) node emits a function + call", "[material]")
@@ -643,6 +722,65 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
             *templateText, gen.snippet, "graph_custom", MaterialSurface::Fullscreen);
         REQUIRE(build.errors.empty());
         compileBoth(build.hlsl, "graph_custom.hlsl");
+    }
+
+    SECTION("fullscreen: every library-batch-1 kernel in one graph")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        GraphNode tiling = Node(3, GraphNodeType::ConstFloat2);
+        tiling.value[0] = 2.0f; tiling.value[1] = 2.0f;
+        g.nodes.push_back(tiling);
+        g.nodes.push_back(Node(4, GraphNodeType::TilingOffset));
+        g.nodes.push_back(Node(5, GraphNodeType::Split));
+        g.nodes.push_back(Node(6, GraphNodeType::Time));
+        g.nodes.push_back(Node(7, GraphNodeType::Cos));
+        GraphNode inRange = Node(8, GraphNodeType::ConstFloat2);
+        inRange.value[0] = -1.0f; inRange.value[1] = 1.0f;
+        g.nodes.push_back(inRange);
+        GraphNode outRange = Node(9, GraphNodeType::ConstFloat2);
+        outRange.value[0] = 0.0f; outRange.value[1] = 1.0f;
+        g.nodes.push_back(outRange);
+        g.nodes.push_back(Node(10, GraphNodeType::Remap));
+        g.nodes.push_back(Node(11, GraphNodeType::Power));
+        g.nodes.push_back(Node(12, GraphNodeType::Clamp));
+        g.nodes.push_back(Node(13, GraphNodeType::Smoothstep));
+        g.nodes.push_back(Node(14, GraphNodeType::Step));
+        g.nodes.push_back(Node(15, GraphNodeType::Min));
+        g.nodes.push_back(Node(16, GraphNodeType::Max));
+        g.nodes.push_back(Node(17, GraphNodeType::Abs));
+        g.nodes.push_back(Node(18, GraphNodeType::Combine));
+        g.links.push_back(Link(2, 0, 4, 0));     // uv -> tiling.uv
+        g.links.push_back(Link(3, 0, 4, 1));     // const2 -> tiling.tiling
+        g.links.push_back(Link(4, 0, 5, 0));     // -> split
+        g.links.push_back(Link(6, 0, 7, 0));     // time -> cos
+        g.links.push_back(Link(7, 0, 10, 0));    // cos -> remap.x
+        g.links.push_back(Link(8, 0, 10, 1));    // -> remap.inRange
+        g.links.push_back(Link(9, 0, 10, 2));    // -> remap.outRange
+        g.links.push_back(Link(10, 0, 11, 0));   // -> pow.a
+        g.links.push_back(Link(5, 0, 11, 1));    // split.r -> pow.b
+        g.links.push_back(Link(11, 0, 12, 0));   // -> clamp.x
+        g.links.push_back(Link(12, 0, 13, 2));   // -> smoothstep.x
+        g.links.push_back(Link(13, 0, 14, 0));   // -> step.edge
+        g.links.push_back(Link(5, 1, 14, 1));    // split.g -> step.x
+        g.links.push_back(Link(14, 0, 15, 0));   // -> min.a
+        g.links.push_back(Link(7, 0, 15, 1));    // cos -> min.b
+        g.links.push_back(Link(15, 0, 16, 0));   // -> max.a
+        g.links.push_back(Link(12, 0, 16, 1));   // clamp -> max.b
+        g.links.push_back(Link(16, 0, 17, 0));   // -> abs
+        g.links.push_back(Link(17, 0, 18, 0));   // -> combine.r
+        g.links.push_back(Link(10, 0, 18, 2));   // remap -> combine.b
+        g.links.push_back(Link(18, 0, 1, 0));
+
+        const GraphCodegenResult gen = GenerateGraphSnippet(g, MaterialSurface::Fullscreen);
+        REQUIRE(gen.Ok());
+        const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const MaterialBuildResult build = BuildMaterialShaderSource(
+            *templateText, gen.snippet, "graph_library1", MaterialSurface::Fullscreen);
+        REQUIRE(build.errors.empty());
+        compileBoth(build.hlsl, "graph_library1.hlsl");
     }
 
     SECTION("sprite: SpriteTexture * VertexColor * param tint")

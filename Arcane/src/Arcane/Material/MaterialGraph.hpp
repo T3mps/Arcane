@@ -69,6 +69,19 @@ namespace Arcane
                         // a body emitted as its own function above shade(). The
                         // body may read //@param names and Globals (Time...)
                         // directly -- the snippet lands AFTER those declarations.
+        // Library growth batch 1 (2026-07-24) -- APPEND-ONLY (enum value indexes
+        // kNodeInfos; tokens are the serialized identity).
+        Combine,        // float4(r, g, b, a) from scalars (a defaults opaque 1)
+        Clamp,          // clamp(x, min, max)          (dynamic width; max defaults 1)
+        Smoothstep,     // smoothstep(edge0, edge1, x) (dynamic width; edge1 defaults 1)
+        Step,           // step(edge, x)               (dynamic width)
+        Power,          // pow(a, b)                   (dynamic width; b defaults 1)
+        Remap,          // remap x: inRange -> outRange (ranges float2, default (0,1))
+        TilingOffset,   // uv * tiling + offset (float2; uv defaults v.uv, tiling 1)
+        Cos,            // cos(x)    (dynamic width)
+        Abs,            // abs(x)    (dynamic width)
+        Min,            // min(a, b) (dynamic width)
+        Max,            // max(a, b) (dynamic width)
     };
 
     // One pin on a node type. `width` = component count of the value flowing
