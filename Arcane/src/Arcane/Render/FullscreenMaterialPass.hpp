@@ -36,8 +36,15 @@ namespace Arcane
         // Bind a compiled material: the template (layout) + the vs/ps compiled
         // from its stitched source. Rebuilds the binding layout, buffers, and
         // pipeline cache. False (pass keeps its previous material) on null args.
+        // `chainInput` (pass chains): the source was stitched with
+        // GenerateMaterialBindings' chainInput mode, so the layout additionally
+        // exposes the reserved InputTexture SRV at slot TextureCount().
         virtual bool SetMaterial(std::shared_ptr<const MaterialTemplate> templ,
-                                 nvrhi::ShaderHandle vs, nvrhi::ShaderHandle ps) = 0;
+                                 nvrhi::ShaderHandle vs, nvrhi::ShaderHandle ps,
+                                 bool chainInput) = 0;
+        bool SetMaterial(std::shared_ptr<const MaterialTemplate> templ,
+                         nvrhi::ShaderHandle vs, nvrhi::ShaderHandle ps)
+        { return SetMaterial(std::move(templ), std::move(vs), std::move(ps), false); }
 
         // True once SetMaterial has accepted a material.
         virtual bool Ready() const = 0;
@@ -47,6 +54,8 @@ namespace Arcane
         // into b1, binds the instance's textures (resolved through `assets` by
         // Guid; null/missing -> the white fallback). The instance's template
         // must be the one SetMaterial bound (no-op + warn otherwise).
+        // `chainInput` supplies the previous pass's output for a chain-mode
+        // material (null -> a 1x1 black fallback; ignored otherwise).
         // CONTRACT: texture params must already be loaded (call
         // assets->GetTexture per guid BEFORE opening the list) -- a first-time
         // load here executes an upload list while the caller's list is open,
@@ -55,6 +64,13 @@ namespace Arcane
                             nvrhi::IFramebuffer* target,
                             const MaterialInstance& instance,
                             const GlobalParams& globals,
-                            Assets* assets) = 0;
+                            Assets* assets,
+                            nvrhi::ITexture* chainInput) = 0;
+        void Render(nvrhi::ICommandList* commandList,
+                    nvrhi::IFramebuffer* target,
+                    const MaterialInstance& instance,
+                    const GlobalParams& globals,
+                    Assets* assets)
+        { Render(commandList, target, instance, globals, assets, nullptr); }
     };
 }
