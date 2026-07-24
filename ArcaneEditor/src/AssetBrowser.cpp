@@ -42,15 +42,17 @@ namespace Arcane::Editor
         }
     }
 
-    void DrawAssetBrowserPanel(AssetBrowserState& state, const Arcane::Project* project,
-                               DocumentHost& docs)
+    AssetBrowserActions DrawAssetBrowserPanel(AssetBrowserState& state,
+                                              const Arcane::Project* project,
+                                              DocumentHost& docs)
     {
+        AssetBrowserActions actions;
         ImGui::Begin("Assets");
         if (!project)
         {
             ImGui::TextDisabled("No project open (data/-next-to-exe)");
             ImGui::End();
-            return;
+            return actions;
         }
 
         // Filter row: kind combo + search box.
@@ -102,6 +104,14 @@ namespace Arcane::Editor
                     ImGui::SetDragDropPayload(kAssetDragType, &payload, sizeof(payload));
                     ImGui::Text("%s %s", KindIcon(e.kind), e.name.c_str());
                     ImGui::EndDragDropSource();
+                }
+
+                // Material rows: context menu -> derive an instance (Slice 7).
+                if (e.kind == AssetKind::Material && ImGui::BeginPopupContextItem())
+                {
+                    if (ImGui::MenuItem("New Instance..."))
+                        actions.createInstanceOf = e.guid;
+                    ImGui::EndPopup();
                 }
 
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))

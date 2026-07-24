@@ -96,6 +96,61 @@ TEST_CASE("MaterialAsset load drops stale or mismatched saved params", "[materia
     CHECK_FALSE(LoadMaterialAsset(bad).has_value());
 }
 
+TEST_CASE("Material instance assets round-trip the override chain", "[material]")
+{
+    const auto dir = TempDir("instances");
+
+    // Base: snippet + saved values (Tint blue-ish, Speed 2).
+    MaterialAssetData base;
+    base.id = Guid::Generate();
+    base.name = "Base";
+    base.snippet = kSnippet;
+    base.params.emplace_back("Tint", MatParamValue::MakeColor(0.0f, 0.0f, 1.0f, 1.0f));
+    base.params.emplace_back("Speed", MatParamValue::MakeFloat(2.0f));
+    REQUIRE(SaveMaterialAsset(dir / "base.armat", base));
+
+    // Instance: parent + ONE sparse override (Speed 4). No snippet on disk.
+    MaterialAssetData inst;
+    inst.id = Guid::Generate();
+    inst.parent = base.id;
+    inst.name = "Fast";
+    inst.params.emplace_back("Speed", MatParamValue::MakeFloat(4.0f));
+    REQUIRE(SaveMaterialAsset(dir / "fast.armat", inst));
+
+    const auto loadedBase = LoadMaterialAsset(dir / "base.armat");
+    const auto loadedInst = LoadMaterialAsset(dir / "fast.armat");
+    REQUIRE(loadedBase.has_value());
+    REQUIRE(loadedInst.has_value());
+    CHECK_FALSE(loadedBase->IsInstance());
+    CHECK(loadedInst->IsInstance());
+    CHECK(loadedInst->parent == base.id);
+    CHECK(loadedInst->snippet.empty());   // instances never persist a snippet
+    REQUIRE(loadedInst->params.size() == 1);
+
+    // Layer the chain exactly like the editor does: template <- base values <-
+    // instance overrides. Resolution: my override -> parent -> //@param default.
+    MaterialSourceParse parsed = ParseMaterialSource(loadedBase->snippet);
+    auto templ = std::make_shared<MaterialTemplate>(
+        MaterialTemplate::Build("base", 1, std::move(parsed.decls)));
+    auto baseLayer = std::make_shared<MaterialInstance>(templ);
+    CHECK(ApplyMaterialParams(*loadedBase, *baseLayer) == 2);
+    MaterialInstance child(baseLayer);
+    CHECK(ApplyMaterialParams(*loadedInst, child) == 1);
+
+    MatParamValue v;
+    REQUIRE(child.GetParam("Speed", v));
+    CHECK(v.f[0] == 4.0f);            // instance override wins
+    REQUIRE(child.GetParam("Tint", v));
+    CHECK(v.f[2] == 1.0f);            // base's saved value shows through
+    REQUIRE(child.GetParam("Noise", v));
+    CHECK(v.tex == Guid::Nil());      // untouched -> declaration default
+
+    // Clearing the instance override re-exposes the base value.
+    CHECK(child.ClearOverride("Speed"));
+    REQUIRE(child.GetParam("Speed", v));
+    CHECK(v.f[0] == 2.0f);
+}
+
 TEST_CASE("AssetRegistry scans .armat as a native asset", "[material][project]")
 {
     const auto dir = TempDir("registry");

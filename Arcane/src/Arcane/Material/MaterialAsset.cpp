@@ -1,7 +1,6 @@
 #include <Arcane/Material/MaterialAsset.hpp>
 
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Material/MaterialSource.hpp>
 
 #include <Json.hpp>
 
@@ -11,23 +10,64 @@ namespace Arcane
 {
     namespace
     {
-        nlohmann::json ValueToJson(const MatParamValue& v)
+        const char* TypeName(MatParamType t)
         {
-            switch (v.type)
+            switch (t)
             {
-                case MatParamType::Float:   return v.f[0];
-                case MatParamType::Float2:  return nlohmann::json::array({ v.f[0], v.f[1] });
-                case MatParamType::Float4:
-                case MatParamType::Color:
-                    return nlohmann::json::array({ v.f[0], v.f[1], v.f[2], v.f[3] });
-                case MatParamType::Texture: return v.tex.ToString();
+                case MatParamType::Float:   return "float";
+                case MatParamType::Float2:  return "float2";
+                case MatParamType::Float4:  return "float4";
+                case MatParamType::Color:   return "color";
+                case MatParamType::Texture: return "texture";
             }
-            return nullptr;
+            return "float4";
         }
 
-        // Interpret a JSON value AGAINST a declared type (the decl is the truth).
-        std::optional<MatParamValue> ValueFromJson(const nlohmann::json& j, MatParamType type)
+        bool TypeFromName(std::string_view name, MatParamType& out)
         {
+            if (name == "float")   { out = MatParamType::Float;   return true; }
+            if (name == "float2")  { out = MatParamType::Float2;  return true; }
+            if (name == "float4")  { out = MatParamType::Float4;  return true; }
+            if (name == "color")   { out = MatParamType::Color;   return true; }
+            if (name == "texture") { out = MatParamType::Texture; return true; }
+            return false;
+        }
+
+        // Self-typed entry: {"type": "...", "value": ...}. Instances must load
+        // without their parent's declarations, so the type rides in the file.
+        nlohmann::json ValueToJson(const MatParamValue& v)
+        {
+            nlohmann::json entry;
+            entry["type"] = TypeName(v.type);
+            switch (v.type)
+            {
+                case MatParamType::Float:
+                    entry["value"] = v.f[0];
+                    break;
+                case MatParamType::Float2:
+                    entry["value"] = nlohmann::json::array({ v.f[0], v.f[1] });
+                    break;
+                case MatParamType::Float4:
+                case MatParamType::Color:
+                    entry["value"] = nlohmann::json::array({ v.f[0], v.f[1], v.f[2], v.f[3] });
+                    break;
+                case MatParamType::Texture:
+                    entry["value"] = v.tex.ToString();
+                    break;
+            }
+            return entry;
+        }
+
+        std::optional<MatParamValue> ValueFromJson(const nlohmann::json& entry)
+        {
+            if (!entry.is_object() || !entry.contains("type") || !entry.contains("value"))
+                return std::nullopt;
+            MatParamType type;
+            if (!entry["type"].is_string() ||
+                !TypeFromName(entry["type"].get<std::string>(), type))
+                return std::nullopt;
+
+            const nlohmann::json& j = entry["value"];
             auto num = [](const nlohmann::json& x, float& out)
             {
                 if (!x.is_number()) return false;
@@ -73,9 +113,18 @@ namespace Arcane
         nlohmann::json doc;
         doc["id"] = data.id.ToString();
         doc["type"] = "material";           // self-describing (browser/routing hint)
-        doc["kind"] = data.kind;
         doc["name"] = data.name;
-        doc["snippet"] = data.snippet;
+        if (data.IsInstance())
+        {
+            // Instance shape: parent + sparse overrides; snippet/kind come from
+            // the base at the end of the parent chain.
+            doc["parent"] = data.parent.ToString();
+        }
+        else
+        {
+            doc["kind"] = data.kind;
+            doc["snippet"] = data.snippet;
+        }
         nlohmann::json params = nlohmann::json::object();
         for (const auto& [name, value] : data.params)
             params[name] = ValueToJson(value);
@@ -100,7 +149,11 @@ namespace Arcane
             return std::nullopt;
         }
         auto doc = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/false);
-        if (!doc.is_object() || !doc.contains("snippet") || !doc["snippet"].is_string())
+        const bool hasSnippet = doc.is_object() && doc.contains("snippet") &&
+                                doc["snippet"].is_string();
+        const bool hasParent = doc.is_object() && doc.contains("parent") &&
+                               doc["parent"].is_string();
+        if (!hasSnippet && !hasParent)
         {
             ARC_WARN("LoadMaterialAsset: '{}' is not a material asset", path.generic_string());
             return std::nullopt;
@@ -110,31 +163,25 @@ namespace Arcane
         if (doc.contains("id") && doc["id"].is_string())
             if (auto g = Guid::FromString(doc["id"].get<std::string>()))
                 data.id = *g;
+        if (hasParent)
+            if (auto g = Guid::FromString(doc["parent"].get<std::string>()))
+                data.parent = *g;
         data.name = doc.value("name", path.stem().string());
         data.kind = doc.value("kind", std::string("fullscreen"));
-        data.snippet = doc["snippet"].get<std::string>();
+        if (hasSnippet)
+            data.snippet = doc["snippet"].get<std::string>();
 
-        // Values are typed by the snippet's OWN decls -- entries for params the
-        // snippet no longer declares (or whose type changed) drop with a warn.
-        const MaterialSourceParse parsed = ParseMaterialSource(data.snippet);
+        // Entries are self-typed; malformed ones drop here, decl mismatches drop
+        // at APPLY time (MaterialInstance::Set is the type gate).
         if (doc.contains("params") && doc["params"].is_object())
         {
             for (const auto& [name, jvalue] : doc["params"].items())
             {
-                const ParamDecl* decl = nullptr;
-                for (const ParamDecl& d : parsed.decls)
-                    if (d.name == name) { decl = &d; break; }
-                if (!decl)
-                {
-                    ARC_WARN("LoadMaterialAsset: '{}' saves unknown param '{}' -- dropped",
-                             path.generic_string(), name);
-                    continue;
-                }
-                if (auto v = ValueFromJson(jvalue, decl->type))
+                if (auto v = ValueFromJson(jvalue))
                     data.params.emplace_back(name, *v);
                 else
-                    ARC_WARN("LoadMaterialAsset: '{}' param '{}' does not match its "
-                             "declared type -- dropped", path.generic_string(), name);
+                    ARC_WARN("LoadMaterialAsset: '{}' param '{}' is malformed -- dropped",
+                             path.generic_string(), name);
             }
         }
         return data;

@@ -132,10 +132,19 @@ namespace Arcane::Editor
         int  kindFilter = -1;   // -1 = all
     };
 
+    // Row actions the APP resolves after the draw (dialog launches never happen
+    // inside the panel).
+    struct AssetBrowserActions
+    {
+        Arcane::Guid createInstanceOf;   // context menu "New Instance..." on a material
+    };
+
     // The "Assets" panel: filter row + entry table over the open project's
     // registry (rebuilt per frame -- registries are small; revisit with caching
     // when they are not). Double-click routes into `docs` (materials open the
-    // shader editor); every row is a kAssetDragType drag source.
-    void DrawAssetBrowserPanel(AssetBrowserState& state, const Arcane::Project* project,
-                               DocumentHost& docs);
+    // shader editor); every row is a kAssetDragType drag source; material rows
+    // carry a context menu.
+    AssetBrowserActions DrawAssetBrowserPanel(AssetBrowserState& state,
+                                              const Arcane::Project* project,
+                                              DocumentHost& docs);
 }

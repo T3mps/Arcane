@@ -116,7 +116,9 @@ namespace Arcane::Editor
         : m_services(services), m_path(std::move(path)), m_data(std::move(data))
     {
         m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name;
-        m_windowLabel = m_title + " (Material)###matdoc_" + m_data.id.ToString();
+        m_windowLabel = m_title + (m_data.IsInstance() ? " (Instance)###matdoc_"
+                                                       : " (Material)###matdoc_") +
+                        m_data.id.ToString();
         m_snippet = m_data.snippet;
 
         m_preview = Arcane::OffscreenCanvas::Create(m_services.device,
@@ -125,7 +127,65 @@ namespace Arcane::Editor
         if (!m_preview || !m_pass)
             ARC_WARN("ShaderEditorDocument '{}': preview resources failed", m_title);
 
-        Rebuild();   // parse + first compile; the pass binds when results drain
+        if (!IsInstance() || ResolveParentChain())
+            Rebuild();   // parse + first compile; the pass binds when results drain
+    }
+
+    bool ShaderEditorDocument::ResolveParentChain()
+    {
+        m_parentChain.clear();
+        const Arcane::Project* project =
+            m_services.runtime ? m_services.runtime->CurrentProject() : nullptr;
+        if (!project)
+        {
+            m_parseErrors = { "instance materials need an open project (parent lookup)" };
+            return false;
+        }
+
+        Arcane::Guid cursor = m_data.parent;
+        std::vector<Arcane::Guid> visited{ m_data.id };
+        while (cursor.IsValid())
+        {
+            for (const Arcane::Guid& seen : visited)
+            {
+                if (seen == cursor)
+                {
+                    m_parseErrors = { "parent chain contains a cycle" };
+                    return false;
+                }
+            }
+            visited.push_back(cursor);
+
+            const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(cursor));
+            if (!path)
+            {
+                m_parseErrors = { "parent material " + cursor.ToString() +
+                                  " is not in the asset registry" };
+                return false;
+            }
+            auto parent = Arcane::LoadMaterialAsset(*path);
+            if (!parent)
+            {
+                m_parseErrors = { "parent material failed to load: " +
+                                  path->generic_string() };
+                return false;
+            }
+            cursor = parent->parent;
+            m_parentChain.push_back(std::move(*parent));
+        }
+
+        if (m_parentChain.empty() || m_parentChain.back().IsInstance())
+        {
+            m_parseErrors = { "parent chain never reaches a base material" };
+            return false;
+        }
+        return true;
+    }
+
+    const std::string& ShaderEditorDocument::SnippetSource() const
+    {
+        return IsInstance() && !m_parentChain.empty() ? m_parentChain.back().snippet
+                                                      : m_snippet;
     }
 
     void ShaderEditorDocument::Rebuild()
@@ -141,7 +201,7 @@ namespace Arcane::Editor
         }
 
         Arcane::MaterialBuildResult build =
-            Arcane::BuildMaterialShaderSource(*templateText, m_snippet, m_title);
+            Arcane::BuildMaterialShaderSource(*templateText, SnippetSource(), m_title);
         m_parseErrors = std::move(build.errors);
         m_pendingTemplate = std::make_shared<Arcane::MaterialTemplate>(std::move(build.templ));
         m_metas = std::move(build.metas);
@@ -198,10 +258,18 @@ namespace Arcane::Editor
         if (!vs || !ps || !m_pass->SetMaterial(m_pendingTemplate, vs, ps))
             return;
 
-        // Promote pending -> bound and migrate the instance: overrides carry
-        // over by name hash (params the new snippet dropped are rejected by
-        // Set and silently retired). First bind applies the asset's saved values.
+        // Promote pending -> bound. Instance mode first layers the parent chain
+        // (base's saved values innermost) so resolution walks child override ->
+        // parents -> //@param default. Then migrate this document's own
+        // overrides by name hash (first bind applies the asset's saved values;
+        // params a snippet edit dropped are rejected by Set and retired).
         auto fresh = std::make_shared<Arcane::MaterialInstance>(m_pendingTemplate);
+        for (auto it = m_parentChain.rbegin(); it != m_parentChain.rend(); ++it)
+        {
+            Arcane::ApplyMaterialParams(*it, *fresh);
+            fresh = std::make_shared<Arcane::MaterialInstance>(
+                std::shared_ptr<const Arcane::MaterialInstance>(fresh));
+        }
         if (m_instance)
         {
             for (const auto& [hash, value] : m_instance->Overrides())
@@ -281,6 +349,17 @@ namespace Arcane::Editor
         const float leftW = ImGui::GetContentRegionAvail().x * 0.55f;
 
         ImGui::BeginChild("##left", ImVec2(leftW, contentH));
+        if (IsInstance())
+        {
+            // Instance mode: params-only -- the source belongs to the base.
+            const float errorsH = 110.0f;
+            ImGui::BeginChild("##instparams",
+                              ImVec2(0, ImGui::GetContentRegionAvail().y - errorsH));
+            DrawParamsPanel();
+            ImGui::EndChild();
+            DrawErrorsPanel();
+        }
+        else
         {
             const float errorsH = 140.0f;
             DrawSnippetEditor(ImGui::GetContentRegionAvail().y - errorsH);
@@ -290,8 +369,15 @@ namespace Arcane::Editor
         ImGui::SameLine();
         ImGui::BeginChild("##right", ImVec2(0, contentH));
         {
-            DrawPreviewPanel(ImGui::GetContentRegionAvail().y * 0.55f);
-            DrawParamsPanel();
+            if (IsInstance())
+            {
+                DrawPreviewPanel(ImGui::GetContentRegionAvail().y);
+            }
+            else
+            {
+                DrawPreviewPanel(ImGui::GetContentRegionAvail().y * 0.55f);
+                DrawParamsPanel();
+            }
         }
         ImGui::EndChild();
 
@@ -310,11 +396,21 @@ namespace Arcane::Editor
             else
                 Save();
         }
-        ImGui::SameLine();
-        ImGui::Checkbox("Live", &m_live);
-        ImGui::SameLine();
-        if (ImGui::Button("Compile"))
-            Rebuild();
+        if (!IsInstance())
+        {
+            // Structural (snippet) controls are base-material-only; an instance
+            // recompiles nothing -- it only re-values the parent's shader.
+            ImGui::SameLine();
+            ImGui::Checkbox("Live", &m_live);
+            ImGui::SameLine();
+            if (ImGui::Button("Compile"))
+                Rebuild();
+        }
+        else if (!m_parentChain.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("instance of '%s'", m_parentChain.back().name.c_str());
+        }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120.0f);
         // Preview-surface selector: fullscreen today; "Sprite" joins in Slice 8.
@@ -521,10 +617,46 @@ namespace Arcane::Editor
         static bool s_hadBefore = false;
         static Arcane::MatParamValue s_before;
 
+        if (IsInstance())
+            ImGui::Checkbox("Only overridden", &m_showOnlyOverridden);
+
         const auto& params = m_boundTemplate->Params();
         for (std::size_t i = 0; i < params.size(); ++i)
         {
             const Arcane::ParamDecl& d = params[i];
+            if (IsInstance() && m_showOnlyOverridden && !m_instance->HasOverride(d.nameHash))
+                continue;
+
+            // Instance mode: the per-param override checkbox (UE's model) --
+            // checking materializes an override at the currently-resolved value,
+            // unchecking clears it (parent/default shows through). Undoable.
+            if (IsInstance())
+            {
+                bool ov = m_instance->HasOverride(d.nameHash);
+                const std::string ovId = "##ov_" + d.name;
+                if (ImGui::Checkbox(ovId.c_str(), &ov))
+                {
+                    if (ov)
+                    {
+                        Arcane::MatParamValue resolved;
+                        if (m_instance->GetParam(d.nameHash, resolved))
+                            SetParamWithUndo(d, resolved);
+                    }
+                    else
+                    {
+                        Arcane::MatParamValue before;
+                        m_instance->GetParam(d.nameHash, before);
+                        m_instance->ClearOverride(d.nameHash);
+                        m_dirty = true;
+                        if (m_services.undo)
+                            m_services.undo->Push(std::make_unique<ParamEditCommand>(
+                                m_instance, d.nameHash, "Reset " + d.name,
+                                /*hadBefore=*/true, before, /*hasAfter=*/false,
+                                Arcane::MatParamValue{}));
+                    }
+                }
+                ImGui::SameLine();
+            }
             const Arcane::ParamMeta meta = i < m_boundMetas.size() ? m_boundMetas[i]
                                                                    : Arcane::ParamMeta{};
             Arcane::MatParamValue value;

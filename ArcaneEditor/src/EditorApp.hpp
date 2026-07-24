@@ -186,11 +186,17 @@ namespace Arcane::Editor
         // thread stash pattern as m_pendingProjectPath below).
         std::string m_pendingMaterialNewPath;
         std::string m_pendingMaterialOpenPath;
+        std::string m_pendingInstanceNewPath;
         std::mutex  m_pendingMaterialMutex;
+        // Parent for a pending "New Instance..." save dialog. Main-thread only:
+        // written on the menu click, read when the dialog result lands.
+        Arcane::Guid m_pendingInstanceParent;
 
         static void MaterialNewPickedThunk(const char* path, void* user);
         static void MaterialOpenPickedThunk(const char* path, void* user);
+        static void InstanceNewPickedThunk(const char* path, void* user);
         void CreateMaterialAt(std::filesystem::path path);   // mint .armat + open doc
+        void CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);
         Arcane::Editor::DocServices MakeDocServices();
 
         // The Arcane logo, shown at the left of the transport toolbar (Unity-style). A

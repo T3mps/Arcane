@@ -344,6 +344,33 @@ namespace Arcane::Editor
         self->m_pendingMaterialOpenPath = path;
     }
 
+    void EditorApp::InstanceNewPickedThunk(const char* path, void* user)
+    {
+        auto* self = static_cast<EditorApp*>(user);
+        if (!path) return;
+        std::lock_guard<std::mutex> lk(self->m_pendingMaterialMutex);
+        self->m_pendingInstanceNewPath = path;
+    }
+
+    void EditorApp::CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent)
+    {
+        if (!parent.IsValid())
+            return;
+        if (path.extension() != ".armat")
+            path += ".armat";
+
+        Arcane::MaterialAssetData data;
+        data.id = Arcane::Guid::Generate();
+        data.parent = parent;
+        data.name = path.stem().string();
+        if (!Arcane::SaveMaterialAsset(path, data))
+        {
+            ARC_WARN("Arcane Editor: could not create instance at '{}'", path.generic_string());
+            return;
+        }
+        m_documents.OpenPath(path);
+    }
+
     void EditorApp::CreateMaterialAt(std::filesystem::path path)
     {
         if (path.extension() != ".armat")
@@ -483,16 +510,19 @@ namespace Arcane::Editor
 
             // Material file-dialog results (same background-thread stash
             // pattern): create/open at the top of the frame, never mid-render.
-            std::string materialNew, materialOpen;
+            std::string materialNew, materialOpen, instanceNew;
             {
                 std::lock_guard<std::mutex> lk(m_pendingMaterialMutex);
                 materialNew.swap(m_pendingMaterialNewPath);
                 materialOpen.swap(m_pendingMaterialOpenPath);
+                instanceNew.swap(m_pendingInstanceNewPath);
             }
             if (!materialNew.empty())
                 CreateMaterialAt(materialNew);
             if (!materialOpen.empty())
                 m_documents.OpenPath(materialOpen);
+            if (!instanceNew.empty())
+                CreateInstanceAt(instanceNew, m_pendingInstanceParent);
 
             // Input sample (before ImGui BeginFrame so capture flags are set).
             // Set inside the block below once inViewport + the game context's
@@ -905,8 +935,15 @@ namespace Arcane::Editor
             if (menuReq.openMaterial)
                 m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
                                                 "Arcane Material", "armat");
-            Arcane::Editor::DrawAssetBrowserPanel(m_assetBrowser,
-                                                  m_runtime->CurrentProject(), m_documents);
+            const Arcane::Editor::AssetBrowserActions browserActions =
+                Arcane::Editor::DrawAssetBrowserPanel(m_assetBrowser,
+                                                      m_runtime->CurrentProject(), m_documents);
+            if (browserActions.createInstanceOf.IsValid())
+            {
+                m_pendingInstanceParent = browserActions.createInstanceOf;
+                m_gpu->Win().ShowSaveFileDialog(&EditorApp::InstanceNewPickedThunk, this,
+                                                "Arcane Material", "armat");
+            }
             Arcane::Editor::DrawConsolePanel(m_console);
             m_documents.DrawAll();
 

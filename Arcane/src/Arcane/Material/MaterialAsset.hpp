@@ -4,11 +4,13 @@
 // top-level "id" (rides AssetRegistry::ScanContent's native path, exactly like
 // .json assets). A BASE material stores: kind (which engine template it
 // stitches into), the snippet text (the //@param decls live IN the snippet --
-// stored once, never duplicated), and the saved param VALUES (the designer's
-// tweaks on top of the //@param defaults -- including texture Guids, which the
-// //@param grammar deliberately cannot express). Slice 7 adds the instance
-// shape ("parent" Guid + sparse overrides, no snippet). Snippet stays inline
-// (one file = one atomic asset; spec open-question 2 revisits at diff pain).
+// stored once, never duplicated), and saved param VALUES. An INSTANCE stores
+// a "parent" Guid + sparse override values only -- no snippet, no kind (both
+// come from the base at the end of the parent chain). Param values are
+// SELF-TYPED on disk ({"type","value"}) so an instance file loads standalone,
+// without its parent's declarations; type-vs-decl mismatches drop at APPLY
+// time (MaterialInstance::Set rejects them). Snippet stays inline (one file =
+// one atomic asset; spec open-question 2 revisits at diff pain).
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
@@ -31,12 +33,15 @@ namespace Arcane
     struct MaterialAssetData
     {
         Guid        id;                       // asset identity (embedded "id")
+        Guid        parent;                   // nil = base material; valid = instance of it
         std::string name;                     // display name (defaults to file stem)
         std::string kind = "fullscreen";      // engine template kind (Slice 8: "sprite")
-        std::string snippet;                  // //@param decls + shade() body
-        // Saved param values by name -- applied over the //@param defaults after
-        // the template is built (unknown/mismatched names warn and drop on apply).
+        std::string snippet;                  // //@param decls + shade() body (base only)
+        // Saved param values by name -- applied over the //@param defaults (base)
+        // or the parent chain (instance); unknown/mismatched names drop on apply.
         std::vector<std::pair<std::string, MatParamValue>> params;
+
+        bool IsInstance() const { return parent.IsValid(); }
     };
 
     // Write `data` as .armat JSON (values typed per MatParamValue: float /

@@ -69,11 +69,19 @@ namespace Arcane::Editor
         // True when the result belonged to this document's in-flight compiles.
         bool ConsumeResult(const Arcane::ShaderCompileResult& result);
 
+        bool IsInstance() const { return m_data.IsInstance(); }
+
     private:
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)
         void   BindIfComplete();   // both stages landed -> createShader + SetMaterial
         bool   HasErrors() const;
+        // Instance mode: walk parent -> ... -> base through the project registry
+        // (cycle-guarded). Fills m_parentChain ([immediate parent, ..., base]);
+        // false (with a parse error) when a hop cannot resolve or load.
+        bool ResolveParentChain();
+        // The snippet the compile sees: my own (base) or the chain's base's.
+        const std::string& SnippetSource() const;
 
         void DrawToolbar();
         void DrawSnippetEditor(float height);
@@ -107,6 +115,11 @@ namespace Arcane::Editor
 
         std::unique_ptr<Arcane::OffscreenCanvas>        m_preview;
         std::unique_ptr<Arcane::FullscreenMaterialPass> m_pass;
+
+        // Instance mode (Slice 7): the resolved ancestry, immediate parent first,
+        // BASE (the snippet owner) last. Empty for base materials.
+        std::vector<Arcane::MaterialAssetData> m_parentChain;
+        bool m_showOnlyOverridden = false;   // instance params filter
 
         std::uint64_t m_vsJob = 0, m_psJob = 0;      // in-flight ids (0 = none)
         std::vector<std::uint8_t> m_vsBytes, m_psBytes;
