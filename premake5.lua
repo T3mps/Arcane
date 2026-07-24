@@ -400,6 +400,10 @@ project "Loom"
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
         '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
+        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
+        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
     filter "system:windows"
         systemversion "latest"
@@ -469,6 +473,10 @@ project "ArcaneEditor"
         -- (LoadDisplayTexture). Same PNG, exe-relative at "data/images/arcane_logo.png".
         '{MKDIR} "%{cfg.buildtarget.directory}/data/images"',
         '{COPYFILE} "%{wks.location}/data/images/arcane_logo.png" "%{cfg.buildtarget.directory}/data/images/arcane_logo.png"',
+        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
+        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
     filter "system:windows"
         systemversion "latest"
@@ -589,6 +597,10 @@ project "ArcaneTests"
         -- lines above create. (The M6 physics_oracle fixtures were retired in
         -- v2 T8; physics_feel_reference/ now holds the Phase-B Lua feel traces.)
         '{COPYDIR} "%{wks.location}/Tests/data" "%{cfg.buildtarget.directory}/data"',
+        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
+        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
 
     defines {
