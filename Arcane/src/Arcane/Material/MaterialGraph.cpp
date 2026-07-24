@@ -37,6 +37,7 @@ namespace Arcane
         constexpr GraphPinDesc kStepIn[]      = { { "edge", 0 }, { "x", 0 } };
         constexpr GraphPinDesc kRemapIn[]     = { { "x", 0 }, { "inRange", 2 }, { "outRange", 2 } };
         constexpr GraphPinDesc kTileIn[]      = { { "uv", 2 }, { "tiling", 2 }, { "offset", 2 } };
+        constexpr GraphPinDesc kNoiseIn[]     = { { "uv", 2 }, { "scale", 1 } };
 
         template <std::size_t N>
         constexpr std::span<const GraphPinDesc> Pins(const GraphPinDesc (&a)[N]) { return { a, N }; }
@@ -77,13 +78,18 @@ namespace Arcane
             { GraphNodeType::Abs,           "abs",            "Absolute",       Pins(kUnaryIn),  Pins(kOutDyn)     },
             { GraphNodeType::Min,           "min",            "Minimum",        Pins(kBinaryIn), Pins(kOutDyn)     },
             { GraphNodeType::Max,           "max",            "Maximum",        Pins(kBinaryIn), Pins(kOutDyn)     },
+            // Swizzle's OUTPUT width is per-node data (the mask length) -- the
+            // dynamic 0 here resolves through widthOf, which the emission case
+            // pins to the mask (the Param pattern).
+            { GraphNodeType::Swizzle,       "swizzle",        "Swizzle",        Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::SimpleNoise,   "simple_noise",   "Simple Noise",   Pins(kNoiseIn),  Pins(kOut1)       },
         };
     }
 
     const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept
     {
         const auto i = static_cast<std::size_t>(t);
-        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Max) + 1,
+        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::SimpleNoise) + 1,
                       "kNodeInfos must cover every GraphNodeType");
         return kNodeInfos[i < std::size(kNodeInfos) ? i : 0];
     }
@@ -194,6 +200,35 @@ namespace Arcane
             if (to == 2)
                 return "(" + expr + ").xy";
             return "(" + expr + ").x";
+        }
+
+        // Shared helper functions, emitted ONCE above shade() when any node
+        // needs them (the emit-once registry). `_g_` prefix: reserved
+        // leading-underscore space, distinct from `_n` locals and `_cf`
+        // Custom-node functions.
+        constexpr const char* kSimpleNoiseHelper[] = {
+            "float _g_hash21(float2 p)",
+            "{",
+            "    p = frac(p * float2(123.34, 456.21));",
+            "    p += dot(p, p + 45.32);",
+            "    return frac(p.x * p.y);",
+            "}",
+            "float _g_simple_noise(float2 uv)",
+            "{",
+            "    float2 i = floor(uv);",
+            "    float2 f = frac(uv);",
+            "    float2 u = f * f * (3.0 - 2.0 * f);",
+            "    float a = _g_hash21(i);",
+            "    float b = _g_hash21(i + float2(1.0, 0.0));",
+            "    float c = _g_hash21(i + float2(0.0, 1.0));",
+            "    float d = _g_hash21(i + float2(1.0, 1.0));",
+            "    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);",
+            "}",
+        };
+
+        int SwizzleLane(char c)
+        {
+            return c == 'x' ? 0 : c == 'y' ? 1 : c == 'z' ? 2 : c == 'w' ? 3 : -1;
         }
 
         struct DeclInfo
@@ -362,6 +397,19 @@ namespace Arcane
             }
         }
 
+        // --- Swizzle masks: 1/2/4 lanes from xyzw (no float3 in the value set)
+        for (const GraphNode* n : ordered)
+        {
+            if (n->type != GraphNodeType::Swizzle)
+                continue;
+            const std::string& m = n->swizzleMask;
+            bool ok = m.size() == 1 || m.size() == 2 || m.size() == 4;
+            for (char c : m)
+                ok = ok && SwizzleLane(c) >= 0;
+            if (!ok)
+                fail(n->id, "Swizzle mask '" + m + "' must be 1, 2, or 4 chars from xyzw");
+        }
+
         if (!res.errors.empty())
             return res;
 
@@ -381,6 +429,17 @@ namespace Arcane
         // Custom-node functions, emitted above shade() (line-mapped to their
         // node so compile errors INSIDE a body badge the Custom node).
         std::vector<std::pair<std::string, std::uint32_t>> funcs;
+        // The emit-once registry: shared helpers land in `funcs` the first
+        // time any node needs them (line-mapped 0 = engine-owned).
+        std::unordered_set<std::string_view> emittedHelpers;
+        auto emitHelperOnce = [&](std::string_view key, std::span<const char* const> helper)
+        {
+            if (!emittedHelpers.insert(key).second)
+                return;
+            for (const char* line : helper)
+                funcs.emplace_back(line, 0);
+            funcs.emplace_back("", 0);
+        };
 
         // Expression for a node's output pin AFTER the node was visited.
         auto pinExpr = [&](const GraphNode* n, std::uint32_t pin, int& outWidth) -> std::string
@@ -646,6 +705,57 @@ namespace Arcane
                 case GraphNodeType::Max:
                     local(w, "max(" + arg(0, 0) + ", " + arg(1, 0) + ")");
                     break;
+                case GraphNodeType::Swizzle:
+                {
+                    // Source reads at its NATIVE width; absent lanes read 0
+                    // (the Split rule). All-present masks emit a real HLSL
+                    // swizzle; mixed masks build a constructor.
+                    const int sw = in[0].connected ? in[0].width : 1;
+                    const std::string src = in[0].connected ? in[0].expr : std::string("0.0");
+                    const std::string& mask = n->swizzleMask;
+                    const int mlen = static_cast<int>(mask.size());
+                    widthOf[n->id] = mlen;   // the output pin's dynamic width
+                    bool allPresent = true;
+                    for (char c : mask)
+                        allPresent = allPresent && SwizzleLane(c) < sw;
+                    std::string expr;
+                    if (allPresent)
+                        expr = "(" + src + ")." + mask;
+                    else
+                    {
+                        const char* lane[4] = { ".x", ".y", ".z", ".w" };
+                        auto laneExpr = [&](char c) -> std::string
+                        {
+                            const int idx = SwizzleLane(c);
+                            if (idx >= sw)
+                                return "0.0";
+                            return sw == 1 ? "(" + src + ")"
+                                           : "(" + src + ")" + lane[idx];
+                        };
+                        if (mlen == 1)
+                            expr = laneExpr(mask[0]);
+                        else
+                        {
+                            expr = std::string(HlslTypeForWidth(mlen)) + "(";
+                            for (int i = 0; i < mlen; ++i)
+                            {
+                                if (i)
+                                    expr += ", ";
+                                expr += laneExpr(mask[static_cast<std::size_t>(i)]);
+                            }
+                            expr += ")";
+                        }
+                    }
+                    local(mlen, expr);
+                    break;
+                }
+                case GraphNodeType::SimpleNoise:
+                    emitHelperOnce("simple_noise", kSimpleNoiseHelper);
+                    local(1, "_g_simple_noise((" +
+                             (in[0].connected ? Adapt(in[0].expr, in[0].width, 2)
+                                              : std::string("v.uv")) +
+                             ") * " + argOr(1, 1, "10.0") + ")");
+                    break;
             }
 
             st = 2;
@@ -757,6 +867,9 @@ namespace Arcane
                 case GraphNodeType::TextureSample:
                     e["param"] = nlohmann::json{ { "name", n->paramName } };
                     break;
+                case GraphNodeType::Swizzle:
+                    e["mask"] = n->swizzleMask;
+                    break;
                 case GraphNodeType::Custom:
                 {
                     nlohmann::json c;
@@ -853,6 +966,8 @@ namespace Arcane
             }
             if (n.type == GraphNodeType::TextureSample)
                 n.paramType = MatParamType::Texture;
+            if (e.contains("mask") && e["mask"].is_string())
+                n.swizzleMask = e["mask"].get<std::string>();
             if (e.contains("custom") && e["custom"].is_object())
             {
                 const nlohmann::json& c = e["custom"];

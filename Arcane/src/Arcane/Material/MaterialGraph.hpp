@@ -82,6 +82,9 @@ namespace Arcane
         Abs,            // abs(x)    (dynamic width)
         Min,            // min(a, b) (dynamic width)
         Max,            // max(a, b) (dynamic width)
+        Swizzle,        // lane mask over the input; output width = mask length
+        SimpleNoise,    // value noise(uv * scale) -> float; the first node backed
+                        // by a SHARED helper function (emit-once registry)
     };
 
     // One pin on a node type. `width` = component count of the value flowing
@@ -163,6 +166,11 @@ namespace Arcane
         std::vector<GraphCustomPin> customPins;
         std::string customBody;
         int         customOutWidth = 4;
+
+        // Swizzle only: lane mask over the input -- 1/2/4 chars from xyzw
+        // (float3 does not exist in this value set). Lanes beyond the source
+        // width read 0 (the Split rule).
+        std::string swizzleMask = "xyzw";
     };
 
     // Edge identity is (node, pin) on BOTH ends (SG rule -- multi-output nodes

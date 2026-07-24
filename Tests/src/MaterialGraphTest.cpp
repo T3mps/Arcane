@@ -71,7 +71,7 @@ namespace
 TEST_CASE("Graph node table covers every type with round-tripping tokens", "[material]")
 {
     const auto infos = AllGraphNodeInfos();
-    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Max) + 1);
+    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::SimpleNoise) + 1);
     for (const GraphNodeTypeInfo& info : infos)
     {
         CHECK(GraphNodeInfo(info.type).token == info.token);
@@ -93,6 +93,10 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
     CHECK(GraphNodeInfo(GraphNodeType::Remap).inputs[1].width == 2);
     CHECK(GraphNodeInfo(GraphNodeType::TilingOffset).inputs.size() == 3);
     CHECK(std::string(GraphNodeInfo(GraphNodeType::Smoothstep).inputs[2].name) == "x");
+    CHECK(GraphNodeInfo(GraphNodeType::Swizzle).inputs.size() == 1);
+    CHECK(GraphNodeInfo(GraphNodeType::SimpleNoise).inputs.size() == 2);
+    CHECK(GraphNodeInfo(GraphNodeType::SimpleNoise).inputs[0].width == 2);
+    CHECK(GraphNodeInfo(GraphNodeType::SimpleNoise).outputs[0].width == 1);
 }
 
 TEST_CASE("Golden codegen: const color to output", "[material]")
@@ -325,6 +329,105 @@ TEST_CASE("Codegen: library batch 1 kernels and their neutral defaults", "[mater
               "    float2 _n10 = _n9 * (1.0).xx + (0.0).xx;\n"
               "    return float4(_n10, 0.0, 1.0);\n"
               "}\n");
+    }
+}
+
+TEST_CASE("Codegen: Swizzle masks and the SimpleNoise emit-once helper", "[material]")
+{
+    SECTION("all-present mask emits a real HLSL swizzle")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        GraphNode s = Node(3, GraphNodeType::Swizzle);
+        s.swizzleMask = "yx";
+        g.nodes.push_back(s);
+        g.links.push_back(Link(2, 0, 3, 0));
+        g.links.push_back(Link(3, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float2 _n2 = v.uv;\n"
+              "    float2 _n3 = (_n2).yx;\n"
+              "    return float4(_n3, 0.0, 1.0);\n"
+              "}\n");
+    }
+
+    SECTION("absent lanes read 0 through a constructor (Split rule)")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        GraphNode s = Node(3, GraphNodeType::Swizzle);
+        s.swizzleMask = "xyzw";   // z/w over a float2 source
+        g.nodes.push_back(s);
+        g.links.push_back(Link(2, 0, 3, 0));
+        g.links.push_back(Link(3, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("float4 _n3 = float4((_n2).x, (_n2).y, 0.0, 0.0);") !=
+              std::string::npos);
+    }
+
+    SECTION("invalid masks are structured errors")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode s = Node(2, GraphNodeType::Swizzle);
+        s.swizzleMask = "xyz";   // no float3 in the value set
+        g.nodes.push_back(s);
+        g.links.push_back(Link(2, 0, 1, 0));
+        CHECK(HasErrorOn(GenerateGraphSnippet(g), 2));
+
+        g.nodes[1].swizzleMask = "rg";   // xyzw only
+        CHECK(HasErrorOn(GenerateGraphSnippet(g), 2));
+        g.nodes[1].swizzleMask = "";
+        CHECK(HasErrorOn(GenerateGraphSnippet(g), 2));
+    }
+
+    SECTION("mask survives the JSON round-trip")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode s = Node(2, GraphNodeType::Swizzle);
+        s.swizzleMask = "wzyx";
+        g.nodes.push_back(s);
+        const auto back = GraphFromJson(GraphToJson(g));
+        REQUIRE(back.has_value());
+        CHECK(back->FindNode(2)->swizzleMask == "wzyx");
+    }
+
+    SECTION("two SimpleNoise nodes share ONE emitted helper")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::SimpleNoise));
+        g.nodes.push_back(Node(3, GraphNodeType::SimpleNoise));
+        g.nodes.push_back(Node(4, GraphNodeType::Add));
+        g.links.push_back(Link(2, 0, 4, 0));
+        g.links.push_back(Link(3, 0, 4, 1));
+        g.links.push_back(Link(4, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        auto countOf = [](const std::string& hay, const std::string& needle)
+        {
+            std::size_t c = 0, pos = 0;
+            while ((pos = hay.find(needle, pos)) != std::string::npos)
+            {
+                ++c;
+                pos += needle.size();
+            }
+            return c;
+        };
+        CHECK(countOf(r.snippet, "float _g_simple_noise(float2 uv)") == 1);
+        CHECK(countOf(r.snippet, "float _g_hash21(float2 p)") == 1);
+        // Both nodes call it (uv defaults v.uv, scale defaults 10).
+        CHECK(countOf(r.snippet, "_g_simple_noise((v.uv) * 10.0)") == 2);
     }
 }
 
@@ -781,6 +884,40 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
             *templateText, gen.snippet, "graph_library1", MaterialSurface::Fullscreen);
         REQUIRE(build.errors.empty());
         compileBoth(build.hlsl, "graph_library1.hlsl");
+    }
+
+    SECTION("fullscreen: Swizzle (both forms) + SimpleNoise through the helper")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        g.nodes.push_back(Node(3, GraphNodeType::SimpleNoise));
+        GraphNode scale = Node(4, GraphNodeType::ConstFloat);
+        scale.value[0] = 20.0f;
+        g.nodes.push_back(scale);
+        GraphNode sw2 = Node(7, GraphNodeType::Swizzle);
+        sw2.swizzleMask = "xw";   // scalar source -> constructor form
+        g.nodes.push_back(sw2);
+        g.nodes.push_back(Node(5, GraphNodeType::Combine));
+        GraphNode sw4 = Node(6, GraphNodeType::Swizzle);
+        sw4.swizzleMask = "yxzw";   // float4 source -> real swizzle
+        g.nodes.push_back(sw4);
+        g.links.push_back(Link(2, 0, 3, 0));   // uv -> noise.uv
+        g.links.push_back(Link(4, 0, 3, 1));   // 20 -> noise.scale
+        g.links.push_back(Link(3, 0, 7, 0));   // noise -> swizzle "xw"
+        g.links.push_back(Link(3, 0, 5, 0));   // noise -> combine.r
+        g.links.push_back(Link(7, 0, 5, 1));   // swizzle2 -> combine.g (.x adapt)
+        g.links.push_back(Link(5, 0, 6, 0));   // combine -> swizzle "yxzw"
+        g.links.push_back(Link(6, 0, 1, 0));
+
+        const GraphCodegenResult gen = GenerateGraphSnippet(g, MaterialSurface::Fullscreen);
+        REQUIRE(gen.Ok());
+        const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const MaterialBuildResult build = BuildMaterialShaderSource(
+            *templateText, gen.snippet, "graph_library2", MaterialSurface::Fullscreen);
+        REQUIRE(build.errors.empty());
+        compileBoth(build.hlsl, "graph_library2.hlsl");
     }
 
     SECTION("sprite: SpriteTexture * VertexColor * param tint")

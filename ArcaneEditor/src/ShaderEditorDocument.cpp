@@ -1420,6 +1420,36 @@ namespace Arcane::Editor
                 }
                 break;
             }
+            case Arcane::GraphNodeType::Swizzle:
+            {
+                // Mask edit: same stable-buffer commit as param names (the
+                // buffer is shared -- only one InputText is active at a time,
+                // and node ids are unique across types).
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%s", n.swizzleMask.c_str());
+                if (m_nameEditNode == n.id)
+                    std::memcpy(buf, m_nameBuf, sizeof(buf));
+                ImGui::SetNextItemWidth(70.0f);
+                ImGui::InputText("##mask", buf, sizeof(buf));
+                if (ImGui::IsItemActive())
+                {
+                    m_nameEditNode = n.id;
+                    std::memcpy(m_nameBuf, buf, sizeof(m_nameBuf));
+                }
+                else if (m_nameEditNode == n.id)
+                {
+                    const bool commit = ImGui::IsItemDeactivatedAfterEdit();
+                    m_nameEditNode = 0;
+                    if (commit && n.swizzleMask != m_nameBuf)
+                    {
+                        std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                        n.swizzleMask = m_nameBuf;
+                        valueEdited();
+                        PushGraphUndo("Edit Swizzle", std::move(before));
+                    }
+                }
+                break;
+            }
             case Arcane::GraphNodeType::Custom:
             {
                 // Add-pin + output width; the pin rows above carry the per-pin
