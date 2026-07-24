@@ -80,6 +80,11 @@ namespace Arcane
         std::string debugName;
         bool fromCache = false;
         bool crashed = false;            // SEH caught inside dxcompiler
+        // Transient toolchain failure (Compile hr-fail like E_OUTOFMEMORY, or
+        // DxcCreateInstance failure) -- says nothing about the CONTENT, so it is
+        // never stored in the content-hash cache (a cached phantom error would
+        // haunt that source for the whole session).
+        bool environmental = false;
         ShaderTargetResult dxil;
         ShaderTargetResult spirv;
 

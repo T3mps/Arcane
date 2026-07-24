@@ -308,6 +308,13 @@ namespace Arcane::Editor
                     return nullptr;
                 return std::make_unique<Arcane::Editor::ShaderEditorDocument>(
                     MakeDocServices(), p, std::move(*data));
+            },
+            // Peek: focus an already-open doc WITHOUT constructing a duplicate
+            // (whose ctor would submit compiles on the live doc's coalesce keys).
+            [](const std::filesystem::path& p) -> Arcane::Guid
+            {
+                const auto data = Arcane::LoadMaterialAsset(p);
+                return data ? data->id : Arcane::Guid::Nil();
             });
 
         return true;
@@ -433,6 +440,17 @@ namespace Arcane::Editor
                       static_cast<int>(Arcane::kGamePluginABIVersion));
             return;
         }
+
+        // Documents belong to the outgoing project (their texture params and
+        // parent chains resolve through ITS registry). Refuse to switch over
+        // unsaved edits -- no silent loss -- and close the rest (review m5).
+        if (m_documents.AnyDirty())
+        {
+            ARC_ERROR("Open Project: unsaved material documents -- save or close them "
+                      "before switching projects");
+            return;
+        }
+        m_documents.CloseAll();
 
         // Return to Edit + clear editor state that references the outgoing scene.
         if (m_play.IsPlaying())

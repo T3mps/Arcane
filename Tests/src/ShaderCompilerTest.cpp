@@ -255,6 +255,41 @@ TEST_CASE("ShaderCompiler async submit -> poll -> drain round-trip", "[shadercom
     sc.Shutdown();
 }
 
+TEST_CASE("ShaderCompiler last-good stays bound while a newer compile fails", "[shadercompile]")
+{
+    // The arc's headline failure-UX contract: a broken edit must never regress
+    // the consumer below the last success for that key.
+    ShaderCompiler sc;
+    REQUIRE(sc.Initialize(0.0));
+
+    sc.Submit(MakeRequest(kGoodPs, /*key=*/11), 0.0);
+    sc.Poll(0.0);
+    const auto good = DrainBlocking(sc);
+    REQUIRE(good.size() == 1);
+    REQUIRE(good[0].AllSucceeded());
+    const std::uint64_t goodHash = good[0].contentHash;
+
+    sc.Submit(MakeRequest(kBadPs, /*key=*/11), 0.0);
+    sc.Poll(0.0);
+    const auto bad = DrainBlocking(sc);
+    REQUIRE(bad.size() == 1);
+    CHECK_FALSE(bad[0].AllSucceeded());
+
+    // The failed compile landed (diags for the panel) but LastGood still serves
+    // the previous success.
+    const ShaderCompileResult* lastGood = sc.LastGood(11);
+    REQUIRE(lastGood != nullptr);
+    CHECK(lastGood->contentHash == goodHash);
+    CHECK(lastGood->AllSucceeded());
+
+    // A synchronous cache hit on the good content refreshes LastGood too.
+    const ShaderCompileResult cached = sc.CompileNow(MakeRequest(kGoodPs, /*key=*/11));
+    CHECK(cached.fromCache);
+    CHECK(sc.LastGood(11) != nullptr);
+
+    sc.Shutdown();
+}
+
 TEST_CASE("ShaderCompiler debounce coalesces rapid submits to the newest", "[shadercompile]")
 {
     ShaderCompiler sc;
@@ -308,6 +343,11 @@ TEST_CASE("ShaderCompiler drops results superseded after dispatch", "[shadercomp
     // The first (stale) result was dropped at the drain; only the newest lands.
     REQUIRE(all.size() == 1);
     CHECK(all[0].jobId == newest);
+
+    // The superseded result's bytecode still entered the content cache --
+    // undoing back to that exact source must be a cache hit, not a recompile.
+    const ShaderCompileResult undone = sc.CompileNow(MakeRequest(kGoodPs));
+    CHECK(undone.fromCache);
 
     sc.Shutdown();
 }

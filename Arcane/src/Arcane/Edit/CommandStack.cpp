@@ -126,6 +126,7 @@ namespace Arcane
         m_redo.clear();
         m_open = false;
         m_pending.clear();
+        m_pendingGeneric.clear();
     }
 
     // ---- ScopedTransaction --------------------------------------------------

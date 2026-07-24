@@ -238,6 +238,95 @@ TEST_CASE("CommandStack: survives a registry object swap (resolver, no dangling 
     CHECK(reg->GetComponent<Arcane::LocalTransform>(e2)->position.x == 0.0f);
 }
 
+namespace
+{
+    // Generic ICommand fake: counts Undo/Redo calls (the material-param /
+    // future-graph edit path through CommandStack::Push).
+    struct CountingCommand final : Arcane::ICommand
+    {
+        int* undos;
+        int* redos;
+        std::string label;
+
+        CountingCommand(int* u, int* r, std::string l)
+            : undos(u), redos(r), label(std::move(l)) {}
+        void Undo() override { ++*undos; }
+        void Redo() override { ++*redos; }
+        const char* Label() const override { return label.c_str(); }
+    };
+}
+
+TEST_CASE("CommandStack::Push: standalone step, transaction join, redo-clear", "[edit]")
+{
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::LocalTransform>(e, Arcane::LocalTransform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::LocalTransform");
+
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int undos = 0, redos = 0;
+
+    SECTION("outside a gesture, Push is its own labeled undo step")
+    {
+        stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "Edit Speed"));
+        REQUIRE(stack.CanUndo());
+        CHECK(std::string(stack.UndoLabel()) == "Edit Speed");
+        stack.Undo();
+        CHECK(undos == 1);
+        stack.Redo();
+        CHECK(redos == 1);
+    }
+
+    SECTION("inside a gesture, Push joins the transaction (one undo step)")
+    {
+        stack.Begin("combo");
+        stack.SnapshotComponent(e, desc);
+        reg->GetComponent<Arcane::LocalTransform>(e)->position.x = 4.0f;
+        stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "generic"));
+        stack.Commit();
+
+        stack.Undo();   // ONE undo reverts the component edit AND the generic
+        CHECK(undos == 1);
+        CHECK(reg->GetComponent<Arcane::LocalTransform>(e)->position.x == 0.0f);
+        CHECK_FALSE(stack.CanUndo());
+    }
+
+    SECTION("a cancelled gesture discards joined generics")
+    {
+        stack.Begin("cancelled");
+        stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "generic"));
+        stack.Cancel();
+        CHECK_FALSE(stack.CanUndo());
+    }
+}
+
+TEST_CASE("CommandStack::Clear discards generics pushed into an open gesture", "[edit]")
+{
+    // Review M9 regression: Begin -> Push -> Clear used to leave the pushed
+    // command queued in m_pendingGeneric; the NEXT unrelated commit silently
+    // spliced it in and undoing that transaction replayed a pre-Clear edit.
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::LocalTransform>(e, Arcane::LocalTransform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::LocalTransform");
+
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int undos = 0, redos = 0;
+
+    stack.Begin("doomed");
+    stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "leaky"));
+    stack.Clear();   // e.g. project switch mid-gesture
+
+    stack.Begin("fresh");
+    stack.SnapshotComponent(e, desc);
+    reg->GetComponent<Arcane::LocalTransform>(e)->position.x = 2.0f;
+    stack.Commit();
+
+    stack.Undo();
+    CHECK(undos == 0);   // the cleared generic must NOT replay
+    CHECK(reg->GetComponent<Arcane::LocalTransform>(e)->position.x == 0.0f);
+}
+
 TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
 {
     auto reg = MakeReg();

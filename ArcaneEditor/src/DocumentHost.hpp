@@ -24,10 +24,17 @@ namespace Arcane::Editor
     public:
         using OpenFactory =
             std::function<std::unique_ptr<EditorDocument>(const std::filesystem::path&)>;
+        // Cheap asset-identity probe (no document construction). Nil = unknown.
+        using PeekGuid = std::function<Arcane::Guid(const std::filesystem::path&)>;
 
         // ---- routing (Fold 3 skeleton) ----------------------------------
         // Register a factory for an asset extension (".armat"). Lowercase match.
-        void RegisterFactory(std::string extension, OpenFactory factory);
+        // `peek` (optional) lets OpenPath resolve focus-not-reopen BEFORE
+        // constructing a document -- constructing one just to discard it is not
+        // free (a ShaderEditorDocument's ctor submits compiles on the live
+        // document's coalesce keys, cancelling its in-flight work; review m4).
+        void RegisterFactory(std::string extension, OpenFactory factory,
+                             PeekGuid peek = nullptr);
         // Open a path through its extension's factory. Focus-not-reopen: when a
         // document with the same asset Guid is already open, returns it instead.
         // Null when no factory matches or the factory fails.
@@ -51,6 +58,9 @@ namespace Arcane::Editor
         void ConfirmSaveAndClose();
         void ConfirmDiscard();   // close without saving
         void CancelClose();      // keep the document open
+        // Close EVERYTHING unconditionally (destroys dirty documents too --
+        // callers gate on AnyDirty() first). Project-switch teardown.
+        void CloseAll();
 
         // ---- per-frame -----------------------------------------------------
         void TickAll(double dt);
@@ -68,8 +78,15 @@ namespace Arcane::Editor
     private:
         void Close(EditorDocument* doc);   // erase from the list (destroys it)
 
+        struct Route
+        {
+            std::string ext;
+            OpenFactory factory;
+            PeekGuid    peek;   // may be null
+        };
+
         std::vector<std::unique_ptr<EditorDocument>> m_docs;
-        std::vector<std::pair<std::string, OpenFactory>> m_factories;
+        std::vector<Route> m_factories;
         EditorDocument* m_pendingClose = nullptr;
     };
 }

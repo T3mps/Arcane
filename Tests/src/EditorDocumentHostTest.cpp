@@ -133,6 +133,47 @@ TEST_CASE("DocumentHost routes extensions and focuses instead of reopening", "[e
     CHECK(host.FindByGuid(Arcane::Guid::Generate()) == nullptr);
 }
 
+TEST_CASE("DocumentHost peek resolves focus-not-reopen without constructing", "[editor]")
+{
+    // Review m4: constructing a duplicate document just to discard it is not
+    // free (its ctor submits compiles on the live doc's coalesce keys). A
+    // registered peek must dedupe BEFORE the factory runs.
+    DocumentHost host;
+    const Arcane::Guid stable = Arcane::Guid::Generate();
+    int factoryCalls = 0;
+    host.RegisterFactory(".armat",
+        [&](const std::filesystem::path& p) -> std::unique_ptr<EditorDocument>
+        {
+            ++factoryCalls;
+            return std::make_unique<FakeDoc>(p.stem().string(), stable, false);
+        },
+        [&](const std::filesystem::path&) { return stable; });
+
+    EditorDocument* first = host.OpenPath("materials/glow.armat");
+    REQUIRE(first != nullptr);
+    CHECK(factoryCalls == 1);
+
+    EditorDocument* again = host.OpenPath("materials/glow.armat");
+    CHECK(again == first);
+    CHECK(host.Count() == 1);
+    CHECK(factoryCalls == 1);   // the peek short-circuited: NO throwaway construct
+}
+
+TEST_CASE("DocumentHost::CloseAll drops every document and any pending confirm", "[editor]")
+{
+    DocumentHost host;
+    host.Add(std::make_unique<FakeDoc>("clean", Arcane::Guid::Generate(), false));
+    auto* dirty = static_cast<FakeDoc*>(host.Add(
+        std::make_unique<FakeDoc>("dirty", Arcane::Guid::Generate(), true)));
+    host.RequestClose(dirty);
+    REQUIRE(host.HasPendingConfirm());
+
+    host.CloseAll();
+    CHECK(host.Count() == 0);
+    CHECK_FALSE(host.HasPendingConfirm());
+    CHECK_FALSE(host.AnyDirty());
+}
+
 TEST_CASE("Param decls map to their editor widgets", "[editor][material]")
 {
     using Arcane::Editor::ParamWidget;

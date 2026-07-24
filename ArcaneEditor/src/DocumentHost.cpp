@@ -20,22 +20,31 @@ namespace Arcane::Editor
         }
     }
 
-    void DocumentHost::RegisterFactory(std::string extension, OpenFactory factory)
+    void DocumentHost::RegisterFactory(std::string extension, OpenFactory factory,
+                                       PeekGuid peek)
     {
-        m_factories.emplace_back(std::move(extension), std::move(factory));
+        m_factories.push_back(Route{ std::move(extension), std::move(factory),
+                                     std::move(peek) });
     }
 
     EditorDocument* DocumentHost::OpenPath(const std::filesystem::path& path)
     {
         const std::string ext = LowerExt(path);
-        for (const auto& [registered, factory] : m_factories)
+        for (const Route& route : m_factories)
         {
-            if (registered != ext)
+            if (route.ext != ext)
                 continue;
-            std::unique_ptr<EditorDocument> doc = factory(path);
+            // Focus-not-reopen, cheap form first (review m4): resolve the asset
+            // identity WITHOUT constructing a document -- a discarded construct
+            // is not free (compile submits on the live doc's coalesce keys).
+            if (route.peek)
+                if (const Arcane::Guid peeked = route.peek(path); peeked.IsValid())
+                    if (EditorDocument* open = FindByGuid(peeked))
+                        return open;
+            std::unique_ptr<EditorDocument> doc = route.factory(path);
             if (!doc)
                 return nullptr;   // factory already logged the cause
-            // Focus-not-reopen: an already-open document for the same asset wins.
+            // Fallback dedup for peek-less routes.
             if (doc->AssetGuid().IsValid())
                 if (EditorDocument* open = FindByGuid(doc->AssetGuid()))
                     return open;
@@ -102,6 +111,12 @@ namespace Arcane::Editor
     void DocumentHost::CancelClose()
     {
         m_pendingClose = nullptr;
+    }
+
+    void DocumentHost::CloseAll()
+    {
+        m_pendingClose = nullptr;
+        m_docs.clear();
     }
 
     void DocumentHost::Close(EditorDocument* doc)

@@ -564,6 +564,12 @@ project "ArcaneTests"
         -- into the test exe so the [editor] units drive the PURE close flow
         -- with fake documents -- DrawAll (the only ImGui method) is not called.
         "%{wks.location}/ArcaneEditor/src/DocumentHost.cpp",
+        -- Shader-editor review fixes: ShaderEditorDocument source-compiles into
+        -- the test exe so the [editor] units drive its HEADLESS halves directly
+        -- (save-before-bind, parent-chain resolution, compile-result routing).
+        -- Draw (the ImGui half) is never called; device-less services skip the
+        -- preview resources in the ctor.
+        "%{wks.location}/ArcaneEditor/src/ShaderEditorDocument.cpp",
     }
 
     includedirs {

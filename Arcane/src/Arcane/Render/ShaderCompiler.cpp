@@ -298,7 +298,7 @@ namespace Arcane
 
         ShaderTargetResult CompileTarget(IDxcCompiler3* compiler,
                                          const ShaderCompileRequest& req, bool spirv,
-                                         bool& crashed)
+                                         bool& crashed, bool& environmental)
         {
             ShaderTargetResult out;
             const std::vector<std::string> args = BuildArgs(req, spirv);
@@ -336,6 +336,7 @@ namespace Arcane
 
             if (FAILED(hr) || !result)
             {
+                environmental = true;   // toolchain hiccup, not a content verdict
                 ShaderDiag d;
                 d.file = req.debugName;
                 d.severity = ShaderDiagSeverity::Error;
@@ -443,8 +444,19 @@ namespace Arcane
             r.coalesceKey = job.req.coalesceKey;
             r.contentHash = job.contentHash;
             r.debugName = job.req.debugName;
-            r.dxil = CompileTarget(compiler, job.req, /*spirv=*/false, r.crashed);
-            r.spirv = CompileTarget(compiler, job.req, /*spirv=*/true, r.crashed);
+            r.dxil = CompileTarget(compiler, job.req, /*spirv=*/false, r.crashed, r.environmental);
+            if (r.crashed)
+            {
+                // The instance may be corrupt after the SEH crash -- never run
+                // the second target through it (the caller drops the instance).
+                ShaderDiag d;
+                d.file = job.req.debugName;
+                d.severity = ShaderDiagSeverity::Error;
+                d.message = "SPIR-V compile skipped (compiler crashed on the DXIL target)";
+                r.spirv.diags.push_back(std::move(d));
+                return r;
+            }
+            r.spirv = CompileTarget(compiler, job.req, /*spirv=*/true, r.crashed, r.environmental);
             return r;
         }
 
@@ -476,12 +488,15 @@ namespace Arcane
                     r.coalesceKey = job.req.coalesceKey;
                     r.contentHash = job.contentHash;
                     r.debugName = job.req.debugName;
+                    r.environmental = true;
                     ShaderDiag d;
                     d.file = job.req.debugName;
                     d.message = "DxcCreateInstance failed on the compile worker";
                     r.dxil.diags.push_back(d);
                     r.spirv.diags.push_back(std::move(d));
                 }
+                if (r.crashed)
+                    compiler.Reset();   // recreate a fresh instance for the next job
 
                 {
                     std::lock_guard lk(mx);
@@ -510,16 +525,19 @@ namespace Arcane
             cv.notify_one();
         }
 
-        // Cache + last-good bookkeeping for a freshly-compiled (non-cache) result.
-        void Absorb(const ShaderCompileResult& r)
+        // Cache + last-good bookkeeping. Crashed/environmental results are never
+        // cached (no content verdict). updateLastGood=false for superseded
+        // results: their bytecode is still cache-worthy (undo back to a
+        // just-compiled state must hit), but lastGood stays latest-only.
+        void Absorb(const ShaderCompileResult& r, bool updateLastGood)
         {
-            if (!r.fromCache && !r.crashed)
+            if (!r.fromCache && !r.crashed && !r.environmental)
             {
                 ShaderCompileResult stored = r;
                 stored.fromCache = false;
                 cache[r.contentHash] = std::move(stored);
             }
-            if (r.coalesceKey != 0 && r.AllSucceeded())
+            if (updateLastGood && r.coalesceKey != 0 && r.AllSucceeded())
                 lastGood[r.coalesceKey] = r;
         }
     };
@@ -673,14 +691,19 @@ namespace Arcane
         for (ShaderCompileResult& r : raw)
         {
             // Superseded: a newer Submit for the same key exists -- drop it (the
-            // newer job's result is the one the consumer must see).
+            // newer job's result is the one the consumer must see). Its bytecode
+            // still enters the content cache so undoing back to this state is a
+            // cache hit, but lastGood stays latest-only.
             if (r.coalesceKey != 0)
             {
                 const auto it = im.latestJobForKey.find(r.coalesceKey);
                 if (it != im.latestJobForKey.end() && it->second != r.jobId)
+                {
+                    im.Absorb(r, /*updateLastGood=*/false);
                     continue;
+                }
             }
-            im.Absorb(r);
+            im.Absorb(r, /*updateLastGood=*/true);
             out.push_back(std::move(r));
         }
         return out;
@@ -720,6 +743,7 @@ namespace Arcane
             r.jobId = jobId;
             r.coalesceKey = req.coalesceKey;
             r.fromCache = true;
+            im.Absorb(r, /*updateLastGood=*/true);   // sync cache hit still refreshes LastGood
             return r;
         }
 
@@ -728,11 +752,14 @@ namespace Arcane
         if (!im.mainCompiler)
         {
             r.debugName = req.debugName;
+            r.environmental = true;
             return r;
         }
 
         r = im.RunJob(im.mainCompiler.Get(), Impl::Job{ jobId, req, hash });
-        im.Absorb(r);
+        if (r.crashed)
+            im.mainCompiler.Reset();   // possibly-corrupt instance; recreate next call
+        im.Absorb(r, /*updateLastGood=*/true);
         return r;
     }
 

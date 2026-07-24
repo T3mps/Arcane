@@ -273,6 +273,18 @@ namespace Arcane
                 }
                 meta.sliderMin = lo;
                 meta.sliderMax = hi;
+                rest = {};   // the whole remainder WAS the range
+            }
+
+            // Anything left is a malformed decl the author meant to matter --
+            // the classic `//@param float Speed 2.0` (forgotten '=') must not
+            // silently declare Speed = 0.
+            rest = TrimView(rest);
+            if (!rest.empty())
+            {
+                fail("unexpected trailing text '" + std::string(rest) + "' after '" +
+                     d.name + "' (missing '='?)");
+                if (lastLine) break; else continue;
             }
 
             out.decls.push_back(std::move(d));

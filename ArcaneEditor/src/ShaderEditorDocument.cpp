@@ -27,16 +27,18 @@ namespace Arcane::Editor
 
         // One param edit as an undo step. The live edit already happened (the
         // ICommand contract); Undo restores the BEFORE override state (value or
-        // no-override), Redo re-applies the AFTER. Holds the instance weakly:
-        // closing the document orphans the step harmlessly (no dangling).
+        // no-override), Redo re-applies the AFTER. Doc-identity (review M3): the
+        // command holds the DOCUMENT weakly and forwards by name hash to its
+        // CURRENT instance -- a recompile swaps the instance but the step stays
+        // live; closing the document expires the anchor (the step goes inert).
         class ParamEditCommand final : public Arcane::ICommand
         {
         public:
-            ParamEditCommand(std::weak_ptr<Arcane::MaterialInstance> instance,
+            ParamEditCommand(std::weak_ptr<ShaderEditorDocument*> anchor,
                              std::uint32_t nameHash, std::string label,
                              bool hadBefore, Arcane::MatParamValue before,
                              bool hasAfter, Arcane::MatParamValue after)
-                : m_instance(std::move(instance)), m_nameHash(nameHash),
+                : m_anchor(std::move(anchor)), m_nameHash(nameHash),
                   m_label(std::move(label)), m_hadBefore(hadBefore),
                   m_before(before), m_hasAfter(hasAfter), m_after(after)
             {
@@ -49,16 +51,13 @@ namespace Arcane::Editor
         private:
             void Apply(bool hasValue, const Arcane::MatParamValue& value)
             {
-                auto inst = m_instance.lock();
-                if (!inst)
+                auto doc = m_anchor.lock();
+                if (!doc || !*doc)
                     return;   // document closed -- the step is inert
-                if (hasValue)
-                    inst->Set(m_nameHash, value);
-                else
-                    inst->ClearOverride(m_nameHash);
+                (*doc)->ApplyParamEdit(m_nameHash, hasValue, value);
             }
 
-            std::weak_ptr<Arcane::MaterialInstance> m_instance;
+            std::weak_ptr<ShaderEditorDocument*> m_anchor;
             std::uint32_t m_nameHash;
             std::string   m_label;
             bool          m_hadBefore;
@@ -67,41 +66,6 @@ namespace Arcane::Editor
             Arcane::MatParamValue m_after;
         };
 
-        // InputTextMultiline over std::string (the imgui_stdlib resize pattern)
-        // + pending cursor jump: the CallbackAlways pass moves the cursor to the
-        // requested line once the widget is active -- stb_textedit then scrolls
-        // the cursor into view, which is exactly click-to-jump.
-        struct SnippetCallbackCtx
-        {
-            std::string* text = nullptr;
-            int jumpToLine = 0;   // 1-based; consumed on first callback pass
-        };
-
-        int SnippetCallback(ImGuiInputTextCallbackData* data)
-        {
-            auto* ctx = static_cast<SnippetCallbackCtx*>(data->UserData);
-            if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
-            {
-                ctx->text->resize(static_cast<std::size_t>(data->BufTextLen));
-                data->Buf = ctx->text->data();
-            }
-            else if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways && ctx->jumpToLine > 0)
-            {
-                int line = 1;
-                int pos = 0;
-                while (line < ctx->jumpToLine && pos < data->BufTextLen)
-                {
-                    if (data->Buf[pos] == '\n')
-                        ++line;
-                    ++pos;
-                }
-                data->CursorPos = pos;
-                data->SelectionStart = data->SelectionEnd = pos;
-                ctx->jumpToLine = 0;
-            }
-            return 0;
-        }
-
         std::uint64_t StageKey(const Arcane::Guid& id, bool vertex)
         {
             // Coalesce per (document, stage): a newer submit of the SAME stage
@@ -109,6 +73,42 @@ namespace Arcane::Editor
             return (id.hi ^ (id.lo * 1099511628211ull)) ^ (vertex ? 0x1u : 0x2u);
         }
     }
+
+    // InputTextMultiline over std::string (the imgui_stdlib resize pattern) +
+    // pending cursor jump: the CallbackAlways pass moves the cursor to the
+    // requested line once the widget is active -- stb_textedit then scrolls the
+    // cursor into view, which is exactly click-to-jump. UserData is the
+    // DOCUMENT (per-doc state, review m2 -- a shared static could deliver one
+    // document's jump to another on a same-frame focus race); this forwarder is
+    // the declared friend, so it may touch the members directly.
+    struct SnippetCallbackForwarder
+    {
+        static int Callback(ImGuiInputTextCallbackData* data)
+        {
+            auto* doc = static_cast<ShaderEditorDocument*>(data->UserData);
+            if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
+            {
+                doc->m_snippet.resize(static_cast<std::size_t>(data->BufTextLen));
+                data->Buf = doc->m_snippet.data();
+            }
+            else if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways &&
+                     doc->m_callbackJumpLine > 0)
+            {
+                int line = 1;
+                int pos = 0;
+                while (line < doc->m_callbackJumpLine && pos < data->BufTextLen)
+                {
+                    if (data->Buf[pos] == '\n')
+                        ++line;
+                    ++pos;
+                }
+                data->CursorPos = pos;
+                data->SelectionStart = data->SelectionEnd = pos;
+                doc->m_callbackJumpLine = 0;
+            }
+            return 0;
+        }
+    };
 
     ShaderEditorDocument::ShaderEditorDocument(DocServices services,
                                                std::filesystem::path path,
@@ -120,12 +120,18 @@ namespace Arcane::Editor
                                                        : " (Material)###matdoc_") +
                         m_data.id.ToString();
         m_snippet = m_data.snippet;
+        m_anchor = std::make_shared<ShaderEditorDocument*>(this);
 
-        m_preview = Arcane::OffscreenCanvas::Create(m_services.device,
-                                                    *m_services.shaders, 512, 512);
-        m_pass = Arcane::FullscreenMaterialPass::Create(m_services.device);
-        if (!m_preview || !m_pass)
-            ARC_WARN("ShaderEditorDocument '{}': preview resources failed", m_title);
+        // Device-less services (headless tests) skip the preview cleanly; the
+        // document still parses, compiles, and saves.
+        if (m_services.device && m_services.shaders)
+        {
+            m_preview = Arcane::OffscreenCanvas::Create(m_services.device,
+                                                        *m_services.shaders, 512, 512);
+            m_pass = Arcane::FullscreenMaterialPass::Create(m_services.device);
+            if (!m_preview || !m_pass)
+                ARC_WARN("ShaderEditorDocument '{}': preview resources failed", m_title);
+        }
 
         if (!IsInstance() || ResolveParentChain())
             Rebuild();   // parse + first compile; the pass binds when results drain
@@ -279,7 +285,12 @@ namespace Arcane::Editor
         {
             Arcane::ApplyMaterialParams(m_data, *fresh);
         }
+        // Re-baseline the dirty verdict against the FRESH instance's serial
+        // space; unsaved param edits ride across the swap as the base flag.
+        const bool paramsWereDirty = ParamsDirty();
         m_instance = std::move(fresh);
+        m_paramsBaseDirty = paramsWereDirty;
+        m_savedParamSerial = m_instance->EffectiveSerial();
         m_boundTemplate = m_pendingTemplate;
         m_boundMetas = m_metas;
     }
@@ -313,7 +324,28 @@ namespace Arcane::Editor
         if (m_services.runtime)
             m_services.runtime->RegisterCreatedAsset(m_path);
         m_dirty = false;
+        m_paramsBaseDirty = false;
+        m_savedParamSerial = m_instance ? m_instance->EffectiveSerial() : 0;
         return true;
+    }
+
+    bool ShaderEditorDocument::ParamsDirty() const
+    {
+        return m_paramsBaseDirty ||
+               (m_instance && m_instance->EffectiveSerial() != m_savedParamSerial);
+    }
+
+    void ShaderEditorDocument::ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
+                                              const Arcane::MatParamValue& value)
+    {
+        if (!m_instance)
+            return;
+        // A param the current snippet dropped is rejected by Set -- the step
+        // no-ops rather than corrupting an unrelated instance.
+        if (hasValue)
+            m_instance->Set(nameHash, value);
+        else
+            m_instance->ClearOverride(nameHash);
     }
 
     void ShaderEditorDocument::Tick(double dt)
@@ -341,7 +373,7 @@ namespace Arcane::Editor
     {
         bool open = true;
         ImGui::SetNextWindowSize(ImVec2(980, 640), ImGuiCond_FirstUseEver);
-        ImGuiWindowFlags flags = m_dirty ? ImGuiWindowFlags_UnsavedDocument : 0;
+        ImGuiWindowFlags flags = Dirty() ? ImGuiWindowFlags_UnsavedDocument : 0;
         if (!ImGui::Begin(m_windowLabel.c_str(), &open, flags))
         {
             ImGui::End();
@@ -455,11 +487,9 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::DrawSnippetEditor(float height)
     {
-        static SnippetCallbackCtx ctx;   // per-frame rebind; ImGui is single-threaded
-        ctx.text = &m_snippet;
         if (m_jumpToLine > 0)
         {
-            ctx.jumpToLine = m_jumpToLine;
+            m_callbackJumpLine = m_jumpToLine;
             m_jumpToLine = 0;
             m_focusSnippet = true;
         }
@@ -474,7 +504,8 @@ namespace Arcane::Editor
                                           ImGuiInputTextFlags_CallbackAlways;
         // +1 capacity: ImGui writes the terminator into the buffer it is given.
         if (ImGui::InputTextMultiline("##snippet", m_snippet.data(), m_snippet.capacity() + 1,
-                                      ImVec2(-1.0f, height), flags, &SnippetCallback, &ctx))
+                                      ImVec2(-1.0f, height), flags,
+                                      &SnippetCallbackForwarder::Callback, this))
         {
             m_dirty = true;
             if (m_live)
@@ -603,10 +634,9 @@ namespace Arcane::Editor
             m_instance->GetParam(d.nameHash, before);
         if (!m_instance->Set(d.nameHash, value))
             return;
-        m_dirty = true;
         if (m_services.undo)
             m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                m_instance, d.nameHash, "Edit " + d.name,
+                m_anchor, d.nameHash, "Edit " + d.name,
                 hadBefore, before, /*hasAfter=*/true, value));
     }
 
@@ -620,12 +650,8 @@ namespace Arcane::Editor
             return;
         }
 
-        // Before-state captured on widget activation; the undo step is pushed on
-        // release-after-edit (one drag = one step). Static is safe: one widget is
-        // active at a time and ImGui is single-threaded.
-        static bool s_hadBefore = false;
-        static Arcane::MatParamValue s_before;
-
+        // Before-state captured on widget activation (m_gesture*); the undo step
+        // is pushed on release-after-edit (one drag = one step).
         if (IsInstance())
             ImGui::Checkbox("Only overridden", &m_showOnlyOverridden);
 
@@ -656,10 +682,9 @@ namespace Arcane::Editor
                         Arcane::MatParamValue before;
                         m_instance->GetParam(d.nameHash, before);
                         m_instance->ClearOverride(d.nameHash);
-                        m_dirty = true;
                         if (m_services.undo)
                             m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                                m_instance, d.nameHash, "Reset " + d.name,
+                                m_anchor, d.nameHash, "Reset " + d.name,
                                 /*hadBefore=*/true, before, /*hasAfter=*/false,
                                 Arcane::MatParamValue{}));
                     }
@@ -695,10 +720,10 @@ namespace Arcane::Editor
 
             if (ImGui::IsItemActivated())
             {
-                s_hadBefore = m_instance->HasOverride(d.nameHash);
-                s_before = Arcane::MatParamValue{};
-                if (s_hadBefore)
-                    m_instance->GetParam(d.nameHash, s_before);
+                m_gestureHadBefore = m_instance->HasOverride(d.nameHash);
+                m_gestureBefore = Arcane::MatParamValue{};
+                if (m_gestureHadBefore)
+                    m_instance->GetParam(d.nameHash, m_gestureBefore);
             }
 
             if (edited)
@@ -706,7 +731,6 @@ namespace Arcane::Editor
                 // LIVE: straight into the instance -> next Tick packs the CB.
                 // No recompile -- the whole point of the declared-param model.
                 m_instance->Set(d.nameHash, value);
-                m_dirty = true;
             }
 
             if (ImGui::IsItemDeactivatedAfterEdit() && m_services.undo)
@@ -715,8 +739,8 @@ namespace Arcane::Editor
                 if (m_instance->GetParam(d.nameHash, after))
                 {
                     m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                        m_instance, d.nameHash, "Edit " + d.name,
-                        s_hadBefore, s_before, /*hasAfter=*/true, after));
+                        m_anchor, d.nameHash, "Edit " + d.name,
+                        m_gestureHadBefore, m_gestureBefore, /*hasAfter=*/true, after));
                 }
             }
 
@@ -731,10 +755,9 @@ namespace Arcane::Editor
                     Arcane::MatParamValue before;
                     m_instance->GetParam(d.nameHash, before);
                     m_instance->ClearOverride(d.nameHash);
-                    m_dirty = true;
                     if (m_services.undo)
                         m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                            m_instance, d.nameHash, "Reset " + d.name,
+                            m_anchor, d.nameHash, "Reset " + d.name,
                             /*hadBefore=*/true, before, /*hasAfter=*/false,
                             Arcane::MatParamValue{}));
                 }

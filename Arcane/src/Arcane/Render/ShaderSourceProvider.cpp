@@ -35,7 +35,10 @@ namespace Arcane
     std::optional<std::string> ShaderSourceProvider::Get(std::string_view logicalName) const
     {
         const std::filesystem::path rel(logicalName);
-        if (rel.empty() || rel.is_absolute())
+        // has_root_name/root_directory (not just is_absolute): Windows
+        // drive-relative "C:foo" and root-relative "\foo" both resolve OUTSIDE
+        // the roots yet are not "absolute" paths.
+        if (rel.empty() || rel.has_root_name() || rel.has_root_directory())
             return std::nullopt;
         for (const auto& part : rel)
         {

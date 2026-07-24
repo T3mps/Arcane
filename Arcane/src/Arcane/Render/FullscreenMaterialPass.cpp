@@ -13,6 +13,21 @@ namespace Arcane
 {
     namespace
     {
+        // Binding sets hold strong texture refs; past this the whole cache drops
+        // rather than pinning every texture ever bound for the pass's lifetime.
+        constexpr std::size_t kMaxCachedBindingSets = 16;
+
+        struct TextureKeyHash
+        {
+            std::size_t operator()(const std::vector<nvrhi::ITexture*>& k) const noexcept
+            {
+                std::size_t h = 0;
+                for (nvrhi::ITexture* t : k)
+                    h = h * 31 + std::hash<void*>{}(t);
+                return h;
+            }
+        };
+
         class FullscreenMaterialPassImpl final : public FullscreenMaterialPass
         {
         public:
@@ -61,38 +76,38 @@ namespace Arcane
                     return false;
                 }
 
-                m_template = std::move(templ);
-                m_vs = vs;
-                m_ps = ps;
-
+                // Create every resource into locals first -- a failure anywhere
+                // must leave the previous (last-good) material fully bound, per
+                // this pass's own contract.
                 // Layout mirrors GenerateMaterialBindings exactly: CB b0 only
                 // when numeric params exist, globals CB b1 always (the template
                 // declares it), one SRV per texture param + sampler s0.
                 auto layoutDesc = nvrhi::BindingLayoutDesc()
                     .setVisibility(nvrhi::ShaderType::Pixel);
-                if (m_template->CbSize() > 0)
+                if (templ->CbSize() > 0)
                     layoutDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(kMaterialCbSlot));
                 layoutDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(kGlobalCbSlot));
-                for (std::uint32_t t = 0; t < m_template->TextureCount(); ++t)
+                for (std::uint32_t t = 0; t < templ->TextureCount(); ++t)
                     layoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(t));
-                if (m_template->TextureCount() > 0)
+                if (templ->TextureCount() > 0)
                     layoutDesc.addItem(nvrhi::BindingLayoutItem::Sampler(0));
-                m_bindingLayout = m_device->createBindingLayout(layoutDesc);
+                nvrhi::BindingLayoutHandle bindingLayout = m_device->createBindingLayout(layoutDesc);
 
-                m_materialCb = nullptr;
-                if (m_template->CbSize() > 0)
+                nvrhi::BufferHandle materialCb;
+                if (templ->CbSize() > 0)
                 {
-                    m_materialCb = m_device->createBuffer(
+                    materialCb = m_device->createBuffer(
                         nvrhi::BufferDesc()
-                            .setByteSize(m_template->CbSize())
+                            .setByteSize(templ->CbSize())
                             .setIsConstantBuffer(true)
                             .setIsVolatile(true)
                             .setMaxVersions(16)
                             .setDebugName("MaterialParamsCB"));
                 }
-                if (!m_globalsCb)
+                nvrhi::BufferHandle globalsCb = m_globalsCb;
+                if (!globalsCb)
                 {
-                    m_globalsCb = m_device->createBuffer(
+                    globalsCb = m_device->createBuffer(
                         nvrhi::BufferDesc()
                             .setByteSize(sizeof(GlobalParams))
                             .setIsConstantBuffer(true)
@@ -100,14 +115,27 @@ namespace Arcane
                             .setMaxVersions(16)
                             .setDebugName("MaterialGlobalsCB"));
                 }
+                if (!bindingLayout || !globalsCb ||
+                    (templ->CbSize() > 0 && !materialCb))
+                {
+                    ARC_WARN("FullscreenMaterialPass::SetMaterial: resource creation "
+                             "failed -- previous material kept");
+                    return false;
+                }
 
-                // New material = new shaders/layout: every cached pipeline and
-                // binding set belongs to the previous one.
+                // Commit: everything exists, swap atomically. New material = new
+                // shaders/layout: every cached pipeline and binding set belongs
+                // to the previous one.
+                m_template = std::move(templ);
+                m_vs = vs;
+                m_ps = ps;
+                m_bindingLayout = std::move(bindingLayout);
+                m_materialCb = std::move(materialCb);
+                m_globalsCb = std::move(globalsCb);
                 m_pipelines.clear();
                 m_bindingSets.clear();
                 m_packBuffer.assign(m_template->CbSize(), 0);
-                return m_bindingLayout != nullptr && m_globalsCb != nullptr &&
-                       (m_template->CbSize() == 0 || m_materialCb != nullptr);
+                return true;
             }
 
             bool Ready() const override { return m_template != nullptr; }
@@ -196,15 +224,15 @@ namespace Arcane
                     }
                 }
 
-                // Cache keyed on the resolved texture pointers (the CBs are
-                // stable handles; only texture swaps change the set).
-                std::size_t key = 0;
-                for (nvrhi::ITexture* t : textures)
-                    key = key * 31 + std::hash<void*>{}(t);
-
-                nvrhi::BindingSetHandle& set = m_bindingSets[key];
-                if (!set)
+                // Cache keyed on the FULL resolved texture-pointer table (real
+                // key equality, not hash-as-identity; the CBs are stable
+                // handles, only texture swaps change the set). Bounded: see
+                // kMaxCachedBindingSets.
+                auto it = m_bindingSets.find(textures);
+                if (it == m_bindingSets.end())
                 {
+                    if (m_bindingSets.size() >= kMaxCachedBindingSets)
+                        m_bindingSets.clear();
                     auto setDesc = nvrhi::BindingSetDesc();
                     if (m_materialCb)
                         setDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(
@@ -215,9 +243,11 @@ namespace Arcane
                         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(t, textures[t]));
                     if (m_template->TextureCount() > 0)
                         setDesc.addItem(nvrhi::BindingSetItem::Sampler(0, m_sampler));
-                    set = m_device->createBindingSet(setDesc, m_bindingLayout);
+                    nvrhi::BindingSetHandle set =
+                        m_device->createBindingSet(setDesc, m_bindingLayout);
+                    it = m_bindingSets.emplace(textures, std::move(set)).first;
                 }
-                return set;
+                return it->second;
             }
 
             nvrhi::IDevice*            m_device;
@@ -233,7 +263,8 @@ namespace Arcane
             std::vector<std::uint8_t>  m_packBuffer;
 
             std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_pipelines;
-            std::unordered_map<size_t, nvrhi::BindingSetHandle> m_bindingSets;
+            std::unordered_map<std::vector<nvrhi::ITexture*>, nvrhi::BindingSetHandle,
+                               TextureKeyHash> m_bindingSets;
         };
     }
 

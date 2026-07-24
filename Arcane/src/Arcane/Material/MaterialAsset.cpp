@@ -136,7 +136,9 @@ namespace Arcane
             ARC_WARN("SaveMaterialAsset: cannot write '{}'", path.generic_string());
             return false;
         }
-        out << doc.dump(2) << '\n';
+        // error_handler_t::replace: an invalid-UTF-8 snippet (paste path) must
+        // degrade to U+FFFD, never throw out of Save.
+        out << doc.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
         return out.good();
     }
 
@@ -166,8 +168,14 @@ namespace Arcane
         if (hasParent)
             if (auto g = Guid::FromString(doc["parent"].get<std::string>()))
                 data.parent = *g;
-        data.name = doc.value("name", path.stem().string());
-        data.kind = doc.value("kind", std::string("fullscreen"));
+        // is_string gates (not .value): a hand-edited `"name": 5` must fall back,
+        // not throw type_error out of the loader.
+        data.name = doc.contains("name") && doc["name"].is_string()
+                        ? doc["name"].get<std::string>()
+                        : path.stem().string();
+        data.kind = doc.contains("kind") && doc["kind"].is_string()
+                        ? doc["kind"].get<std::string>()
+                        : std::string("fullscreen");
         if (hasSnippet)
             data.snippet = doc["snippet"].get<std::string>();
 

@@ -61,7 +61,10 @@ namespace Arcane::Editor
 
         const std::string& Title() const override { return m_title; }
         Arcane::Guid AssetGuid() const override { return m_data.id; }
-        bool Dirty() const override { return m_dirty; }
+        // Text dirtiness is tracked directly; param dirtiness derives from the
+        // instance's EffectiveSerial vs the saved baseline, so undo/redo of a
+        // param edit flips the verdict correctly (review m1).
+        bool Dirty() const override { return m_dirty || ParamsDirty(); }
         bool Save() override;
         void Tick(double dt) override;
         void Draw(bool& requestClose) override;
@@ -71,11 +74,23 @@ namespace Arcane::Editor
 
         bool IsInstance() const { return m_data.IsInstance(); }
 
+        // Parse/chain-resolution errors (what the errors panel shows above the
+        // compile diags). Exposed for the headless tests.
+        const std::vector<std::string>& ParseErrors() const { return m_parseErrors; }
+
+        // Undo plumbing (doc-identity commands, review M3): apply a param
+        // override edit to the CURRENT instance. Undo steps hold the document
+        // through m_anchor -- recompiles swap m_instance underneath them, so
+        // forwarding by name hash here is what lets history survive rebinds.
+        void ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
+                            const Arcane::MatParamValue& value);
+
     private:
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)
         void   BindIfComplete();   // both stages landed -> createShader + SetMaterial
         bool   HasErrors() const;
+        bool   ParamsDirty() const;   // EffectiveSerial vs the saved baseline
         // Instance mode: walk parent -> ... -> base through the project registry
         // (cycle-guarded). Fills m_parentChain ([immediate parent, ..., base]);
         // false (with a parse error) when a hop cannot resolve or load.
@@ -99,9 +114,20 @@ namespace Arcane::Editor
         std::string                     m_title;     // display name
         std::string                     m_windowLabel;   // display###stable-guid-id
         std::string                     m_snippet;   // the live edit buffer
-        bool                            m_dirty = false;
+        bool                            m_dirty = false;  // TEXT dirtiness (params: ParamsDirty)
         bool                            m_live = true;    // auto-compile on edit
         bool                            m_confirmSaveWithErrors = false;
+
+        // Param-dirtiness baseline: the instance serial at the last Save (or
+        // rebind carrying no unsaved edits). m_paramsBaseDirty carries unsaved
+        // param edits ACROSS an instance swap, whose fresh serial is unrelated.
+        std::uint64_t m_savedParamSerial = 0;
+        bool          m_paramsBaseDirty = false;
+
+        // Doc-identity handle for undo steps (review M3): commands hold this
+        // weakly and forward through the pointee -- the anchor dies with the
+        // document (steps go inert), but SURVIVES m_instance swaps.
+        std::shared_ptr<ShaderEditorDocument*> m_anchor;
 
         // Authoring state: bound = what the pass renders (last-good); pending =
         // the latest Rebuild, promoted by BindIfComplete on dual-stage success.
@@ -126,6 +152,16 @@ namespace Arcane::Editor
         double m_animTime = 0.0;                     // preview Time uniform
         int    m_jumpToLine = 0;                     // 1-based; 0 = no pending jump
         bool   m_focusSnippet = false;               // focus the input so the jump lands
+        // Armed jump consumed by the input callback. Per-document (review m2): a
+        // shared static could deliver one doc's jump to another on a same-frame
+        // focus race.
+        int    m_callbackJumpLine = 0;
+
+        // Param-widget gesture capture (before-state on activation, step pushed
+        // on release). Per-document (review m3): same-frame keyboard-nav active-
+        // ID transfer between documents could cross shared statics.
+        bool                  m_gestureHadBefore = false;
+        Arcane::MatParamValue m_gestureBefore{};
 
         friend struct SnippetCallbackForwarder;
     };
