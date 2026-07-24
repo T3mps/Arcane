@@ -73,6 +73,87 @@ TEST_CASE("MaterialAsset save/load round-trips snippet and typed params", "[mate
     CHECK(v.tex == noiseTex);
 }
 
+TEST_CASE(".armat pass chains: round-trip, sprite/instance refusal", "[material]")
+{
+    const auto dir = TempDir("passes");
+
+    MaterialAssetData data;
+    data.id = Guid::Generate();
+    data.name = "Chain";
+    data.snippet = "float4 shade(Varyings v) { return float4(v.uv, 0.0, 1.0); }\n";
+    data.passes.push_back({ "blur",
+        "float4 shade(Varyings v) { return InputTexture.Sample(MaterialSampler, v.uv); }\n" });
+    data.passes.push_back({ "composite",
+        "float4 shade(Varyings v) { return InputTexture.Sample(MaterialSampler, v.uv) * 2.0; }\n" });
+
+    SECTION("fullscreen base round-trips the pass list in order")
+    {
+        const auto file = dir / "chain.armat";
+        REQUIRE(SaveMaterialAsset(file, data));
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->passes.size() == 2);
+        CHECK(loaded->passes[0].name == "blur");
+        CHECK(loaded->passes[1].name == "composite");
+        CHECK(loaded->passes[0].snippet == data.passes[0].snippet);
+    }
+
+    SECTION("absent passes key = single-pass (the pre-chain format)")
+    {
+        MaterialAssetData single = data;
+        single.passes.clear();
+        const auto file = dir / "single.armat";
+        REQUIRE(SaveMaterialAsset(file, single));
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        CHECK(loaded->passes.empty());
+    }
+
+    SECTION("the sprite kind refuses passes at load")
+    {
+        MaterialAssetData sprite = data;
+        sprite.kind = "sprite";
+        const auto file = dir / "sprite.armat";
+        REQUIRE(SaveMaterialAsset(file, sprite));
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        CHECK(loaded->passes.empty());
+    }
+
+    SECTION("instances refuse passes at load")
+    {
+        // Hand-authored shape: an instance file carrying a passes array.
+        const auto file = dir / "inst.armat";
+        {
+            std::ofstream out(file, std::ios::binary);
+            out << R"({"id":"aaaa1111-1111-4111-8111-111111111111",)"
+                << R"("parent":"bbbb2222-2222-4222-8222-222222222222",)"
+                << R"("passes":[{"name":"x","snippet":"float4 shade(Varyings v){return 0;}"}]})"
+                << '\n';
+        }
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        CHECK(loaded->IsInstance());
+        CHECK(loaded->passes.empty());
+    }
+
+    SECTION("malformed pass entries drop; names default")
+    {
+        const auto file = dir / "malformed.armat";
+        {
+            std::ofstream out(file, std::ios::binary);
+            out << R"({"id":"cccc3333-3333-4333-8333-333333333333",)"
+                << R"("snippet":"float4 shade(Varyings v){return 0;}",)"
+                << R"("passes":[{"snippet":"float4 shade(Varyings v){return 1;}"},)"
+                << R"(17, {"name":"ok"}]})" << '\n';
+        }
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->passes.size() == 1);   // the two malformed entries drop
+        CHECK(loaded->passes[0].name == "pass 1");
+    }
+}
+
 TEST_CASE("MaterialAsset load drops stale or mismatched saved params", "[material]")
 {
     const auto dir = TempDir("stale");

@@ -131,6 +131,18 @@ namespace Arcane
             // is its generated text (kept so snippet-only consumers never care).
             if (data.graph)
                 doc["graph"] = GraphToJson(*data.graph);
+            if (!data.passes.empty())
+            {
+                if (data.kind == "sprite")
+                    ARC_WARN("SaveMaterialAsset: '{}' is a sprite material with passes -- "
+                             "the sprite kind refuses chains; they will drop on load",
+                             path.generic_string());
+                nlohmann::json passes = nlohmann::json::array();
+                for (const MaterialPass& p : data.passes)
+                    passes.push_back(nlohmann::json{ { "name", p.name },
+                                                     { "snippet", p.snippet } });
+                doc["passes"] = std::move(passes);
+            }
         }
         nlohmann::json params = nlohmann::json::object();
         for (const auto& [name, value] : data.params)
@@ -213,6 +225,34 @@ namespace Arcane
             else
                 ARC_WARN("LoadMaterialAsset: '{}' has a malformed graph object -- ignored "
                          "(text snippet still loads)", path.generic_string());
+        }
+
+        // Pass chain: fullscreen base materials only. Sprite kind and instances
+        // REFUSE passes (warn + drop -- the file stays intact on next save only
+        // if the editor re-adds them, which it won't for these shapes).
+        if (doc.contains("passes") && doc["passes"].is_array())
+        {
+            if (data.kind == "sprite" || hasParent)
+                ARC_WARN("LoadMaterialAsset: '{}' carries passes on a {} -- refused",
+                         path.generic_string(), hasParent ? "instance" : "sprite material");
+            else
+            {
+                for (const nlohmann::json& e : doc["passes"])
+                {
+                    if (!e.is_object() || !e.contains("snippet") || !e["snippet"].is_string())
+                    {
+                        ARC_WARN("LoadMaterialAsset: '{}' has a malformed pass entry -- dropped",
+                                 path.generic_string());
+                        continue;
+                    }
+                    MaterialPass p;
+                    p.snippet = e["snippet"].get<std::string>();
+                    p.name = e.contains("name") && e["name"].is_string()
+                                 ? e["name"].get<std::string>()
+                                 : "pass " + std::to_string(data.passes.size() + 1);
+                    data.passes.push_back(std::move(p));
+                }
+            }
         }
 
         // Entries are self-typed; malformed ones drop here, decl mismatches drop

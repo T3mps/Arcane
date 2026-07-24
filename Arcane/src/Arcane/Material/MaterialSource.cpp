@@ -17,6 +17,7 @@ namespace Arcane
         // everywhere keeps a snippet portable across surfaces.
         constexpr std::string_view kReservedNames[] = {
             "Time", "DeltaTime", "ViewportSize", "MaterialSampler", "SpriteTexture",
+            "InputTexture",   // pass chains: the previous pass's output
         };
 
         std::string_view TrimView(std::string_view s)
@@ -314,7 +315,8 @@ namespace Arcane
     }
 
     std::string GenerateMaterialBindings(const MaterialTemplate& templ,
-                                         MaterialSurface surface)
+                                         MaterialSurface surface,
+                                         bool chainInput)
     {
         // Members emit in declaration order: HLSL's cbuffer packing applies the
         // same rules MaterialTemplate::Build used, so the shader's offsets match
@@ -346,6 +348,7 @@ namespace Arcane
         }
 
         bool anyTexture = false;
+        std::uint32_t textureCount = 0;
         for (const ParamDecl& d : templ.Params())
         {
             if (d.type != MatParamType::Texture)
@@ -353,10 +356,17 @@ namespace Arcane
             outText += "Texture2D " + d.name + " : register(t" +
                        std::to_string(d.textureIndex + texBase) + ");\n";
             anyTexture = true;
+            ++textureCount;
         }
+        // Pass chains (fullscreen only): the previous pass's output, at the
+        // slot after the material's own textures.
+        if (chainInput && !sprite)
+            outText += "Texture2D InputTexture : register(t" +
+                       std::to_string(textureCount + texBase) + ");\n";
         // The sprite template declares MaterialSampler itself (SpriteTexture
-        // always needs it); emitting it here too would redeclare s0.
-        if (anyTexture && !sprite)
+        // always needs it); emitting it here too would redeclare s0. Chains
+        // always need it (InputTexture samples through it).
+        if (!sprite && (anyTexture || chainInput))
             outText += "SamplerState MaterialSampler : register(s0);\n";
 
         return outText;
@@ -435,6 +445,71 @@ namespace Arcane
         r.hlsl = StitchShaderTemplate(templateText, slots, &unresolved);
         for (const std::string& slot : unresolved)
             r.errors.push_back("template: unresolved slot %{" + slot + "}");
+        return r;
+    }
+
+    MaterialChainBuildResult BuildMaterialChainSource(std::string_view templateText,
+                                                      std::span<const std::string_view> passSnippets,
+                                                      std::string materialName)
+    {
+        MaterialChainBuildResult r;
+        r.hlsl.resize(passSnippets.size());
+        r.passErrors.resize(passSnippets.size());
+
+        // Merge declarations across passes: same name + same type = ONE shared
+        // param (first declaration wins default/range -- the template dup rule,
+        // chain-wide); conflicting types are chain errors on the later pass.
+        std::vector<ParamDecl> decls;
+        std::vector<ParamMeta> metas;
+        std::uint64_t hash = 14695981039346656037ull;
+        hash = Fnv64Str(hash, templateText);
+        for (std::size_t p = 0; p < passSnippets.size(); ++p)
+        {
+            hash = Fnv64Str(hash, passSnippets[p]);
+            MaterialSourceParse parsed = ParseMaterialSource(passSnippets[p]);
+            r.passErrors[p] = std::move(parsed.errors);
+            for (std::size_t i = 0; i < parsed.decls.size(); ++i)
+            {
+                const ParamDecl& d = parsed.decls[i];
+                bool known = false;
+                for (const ParamDecl& existing : decls)
+                {
+                    if (existing.name != d.name)
+                        continue;
+                    if (existing.type != d.type)
+                        r.errors.push_back("pass " + std::to_string(p) + ": param '" +
+                                           d.name + "' redeclared with a different type");
+                    known = true;
+                    break;
+                }
+                if (!known)
+                {
+                    decls.push_back(d);
+                    metas.push_back(parsed.metas[i]);
+                }
+            }
+        }
+        r.metas = std::move(metas);
+        r.templ = MaterialTemplate::Build(std::move(materialName), hash, std::move(decls));
+
+        // One binding block (union cbuffer + textures + InputTexture) stitched
+        // into EVERY pass -- a shared layout means one binding-set shape and one
+        // packed CB for the whole chain; params declared by one pass are simply
+        // visible to all of them.
+        const std::string bindings =
+            GenerateMaterialBindings(r.templ, MaterialSurface::Fullscreen, /*chainInput=*/true);
+        for (std::size_t p = 0; p < passSnippets.size(); ++p)
+        {
+            const std::pair<std::string_view, std::string_view> slots[] = {
+                { "MATERIAL_CBUFFER", bindings },
+                { "MATERIAL_BODY", passSnippets[p] },
+            };
+            std::vector<std::string> unresolved;
+            r.hlsl[p] = StitchShaderTemplate(templateText, slots, &unresolved);
+            if (p == 0)   // identical template per pass -- report slots once
+                for (const std::string& slot : unresolved)
+                    r.errors.push_back("template: unresolved slot %{" + slot + "}");
+        }
         return r;
     }
 }

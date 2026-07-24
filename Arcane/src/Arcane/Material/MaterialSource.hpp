@@ -75,8 +75,13 @@ namespace Arcane
     // surface, one shared MaterialSampler (s0) when any exist. Register
     // assignments follow the surface's map. Empty when the template has no
     // params.
+    // `chainInput` (fullscreen pass chains only): additionally declare the
+    // reserved `Texture2D InputTexture` -- the previous pass's output -- at the
+    // slot after the material's own textures, and always emit MaterialSampler
+    // (InputTexture needs it even when the material declares no textures).
     ARCANE_API std::string GenerateMaterialBindings(const MaterialTemplate& templ,
-                                                    MaterialSurface surface = MaterialSurface::Fullscreen);
+                                                    MaterialSurface surface = MaterialSurface::Fullscreen,
+                                                    bool chainInput = false);
 
     // Replace every %{NAME} in `templateText` with its slot value. Slot names
     // not in `slots` are left in place and reported through `unresolved` (when
@@ -103,6 +108,34 @@ namespace Arcane
                                                              std::string_view snippet,
                                                              std::string materialName,
                                                              MaterialSurface surface = MaterialSurface::Fullscreen);
+
+    struct MaterialChainBuildResult
+    {
+        MaterialTemplate templ;               // ONE merged layout across all passes
+        std::vector<ParamMeta> metas;         // parallel to templ.Params()
+        std::vector<std::string> hlsl;        // one stitched full source per pass
+        std::vector<std::vector<std::string>> passErrors;   // per-pass parse errors
+        std::vector<std::string> errors;      // chain-level: merge conflicts, slots
+        [[nodiscard]] bool Ok() const noexcept
+        {
+            bool ok = errors.empty();
+            for (const auto& pe : passErrors)
+                ok = ok && pe.empty();
+            return ok;
+        }
+    };
+
+    // Fullscreen pass chains: stitch EACH pass snippet into its own full source,
+    // all sharing ONE merged param surface (the union of every pass's //@param
+    // decls -- same name + same type is one shared param, first declaration
+    // wins default/range; conflicting types are chain errors) and the reserved
+    // InputTexture (see GenerateMaterialBindings). One template, one instance,
+    // one packed CB bound to every pass. Single-element chains are legal and
+    // equivalent to BuildMaterialShaderSource apart from the InputTexture decl.
+    ARCANE_API MaterialChainBuildResult BuildMaterialChainSource(
+        std::string_view templateText,
+        std::span<const std::string_view> passSnippets,
+        std::string materialName);
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif

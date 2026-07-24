@@ -33,6 +33,14 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on dll-exported types: benign under /MD
 #endif
+    // One EXTRA pass of a fullscreen pass chain (the main `snippet` is always
+    // pass 0). Text-authored only for now; a per-pass graph is a follow-up.
+    struct MaterialPass
+    {
+        std::string name;      // display label ("blur", "composite", ...)
+        std::string snippet;   // same //@param + shade() shape as the main snippet
+    };
+
     struct MaterialAssetData
     {
         Guid        id;                       // asset identity (embedded "id")
@@ -40,6 +48,12 @@ namespace Arcane
         std::string name;                     // display name (defaults to file stem)
         std::string kind = "fullscreen";      // engine template kind (Slice 8: "sprite")
         std::string snippet;                  // //@param decls + shade() body (base only)
+        // Pass chain (fullscreen BASE materials only; additive schema: absent =
+        // single-pass, exactly the pre-chain format). Passes run in order after
+        // the main snippet; each reads the previous pass's output through the
+        // reserved InputTexture. The sprite kind REFUSES passes (multi-pass
+        // sprites are renderer-owned); instances never carry them.
+        std::vector<MaterialPass> passes;
         // Saved param values by name -- applied over the //@param defaults (base)
         // or the parent chain (instance); unknown/mismatched names drop on apply.
         std::vector<std::pair<std::string, MatParamValue>> params;

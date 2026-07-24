@@ -243,3 +243,122 @@ TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target shader", 
 
     sc.Shutdown();
 }
+
+TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[material]")
+{
+    const std::string_view pass0 =
+        "//@param float Speed = 2 [0..4]\n"
+        "//@param texture Noise\n"
+        "float4 shade(Varyings v) { return Noise.Sample(MaterialSampler, v.uv) * Speed; }\n";
+    const std::string_view pass1 =
+        "//@param float Speed = 9\n"   // shared decl: the FIRST default wins
+        "//@param float2 Dir = (1, 0)\n"
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv + Dir * Speed); }\n";
+    const std::string_view passes[] = { pass0, pass1 };
+
+    const MaterialChainBuildResult r = BuildMaterialChainSource(
+        "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", passes, "chain");
+    REQUIRE(r.Ok());
+    REQUIRE(r.hlsl.size() == 2);
+
+    // ONE merged surface: Speed (default 2), Noise, Dir -- declaration order.
+    REQUIRE(r.templ.Params().size() == 3);
+    CHECK(r.templ.Params()[0].name == "Speed");
+    CHECK(r.templ.Params()[0].def.f[0] == 2.0f);
+    CHECK(r.templ.TextureCount() == 1);
+
+    // EVERY pass carries the same binding block: union cbuffer + Noise t0 +
+    // InputTexture after the material's own textures + the sampler.
+    for (const std::string& h : r.hlsl)
+    {
+        CHECK(h.find("float Speed;") != std::string::npos);
+        CHECK(h.find("float2 Dir;") != std::string::npos);
+        CHECK(h.find("Texture2D Noise : register(t0);") != std::string::npos);
+        CHECK(h.find("Texture2D InputTexture : register(t1);") != std::string::npos);
+        CHECK(h.find("SamplerState MaterialSampler : register(s0);") != std::string::npos);
+    }
+
+    SECTION("conflicting types across passes are chain errors")
+    {
+        const std::string_view bad[] = {
+            "//@param float Speed = 1\nfloat4 shade(Varyings v) { return Speed; }\n",
+            "//@param color Speed = (1, 1, 1, 1)\nfloat4 shade(Varyings v) { return Speed; }\n",
+        };
+        const MaterialChainBuildResult c = BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", bad, "conflict");
+        REQUIRE_FALSE(c.Ok());
+        REQUIRE_FALSE(c.errors.empty());
+        CHECK(c.errors[0].find("Speed") != std::string::npos);
+    }
+
+    SECTION("a textureless chain still gets InputTexture t0 + the sampler")
+    {
+        const std::string_view lone[] = {
+            "float4 shade(Varyings v) { return float4(v.uv, 0.0, 1.0); }\n",
+        };
+        const MaterialChainBuildResult c = BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", lone, "lone");
+        REQUIRE(c.Ok());
+        REQUIRE(c.hlsl.size() == 1);
+        CHECK(c.hlsl[0].find("Texture2D InputTexture : register(t0);") != std::string::npos);
+        CHECK(c.hlsl[0].find("SamplerState MaterialSampler : register(s0);") != std::string::npos);
+    }
+
+    SECTION("InputTexture is a reserved name in snippets")
+    {
+        const MaterialSourceParse p =
+            ParseMaterialSource("//@param texture InputTexture\n");
+        REQUIRE(p.errors.size() == 1);
+        CHECK(p.errors[0].find("reserved") != std::string::npos);
+    }
+}
+
+TEST_CASE("Pass-chain sources compile on both targets", "[shadercompile]")
+{
+    ShaderSourceProvider provider;
+    provider.AddRoot("shaders");
+    const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+    REQUIRE(templateText.has_value());
+
+    const std::string_view pass0 =
+        "//@param float Speed = 1.0 [0..4]\n"
+        "float4 shade(Varyings v)\n"
+        "{\n"
+        "    float w = 0.5 + 0.5 * sin(v.uv.x * 10.0 + Time * Speed);\n"
+        "    return float4(w, w, w, 1.0);\n"
+        "}\n";
+    const std::string_view pass1 =
+        "//@param color Tint = (1, 0.5, 0.25, 1)\n"
+        "float4 shade(Varyings v)\n"
+        "{\n"
+        "    return InputTexture.Sample(MaterialSampler, v.uv) * Tint;\n"
+        "}\n";
+    const std::string_view passes[] = { pass0, pass1 };
+
+    const MaterialChainBuildResult r =
+        BuildMaterialChainSource(*templateText, passes, "chain_compile");
+    REQUIRE(r.Ok());
+    REQUIRE(r.hlsl.size() == 2);
+
+    ShaderCompiler sc;
+    REQUIRE(sc.Initialize(0.0));
+    for (std::size_t p = 0; p < r.hlsl.size(); ++p)
+    {
+        for (const char* entry : { kPsEntry, kVsEntry })
+        {
+            ShaderCompileRequest req;
+            req.debugName = "chain_pass" + std::to_string(p) + ".hlsl";
+            req.sourceUtf8 = r.hlsl[p];
+            req.entry = entry;
+            req.profile = entry == kPsEntry ? kPsProfile : kVsProfile;
+            const ShaderCompileResult cr = sc.CompileNow(req);
+            for (const ShaderDiag& d : cr.dxil.diags)
+                INFO("dxil p" << p << ": " << d.line << ": " << d.message);
+            for (const ShaderDiag& d : cr.spirv.diags)
+                INFO("spirv p" << p << ": " << d.line << ": " << d.message);
+            CHECK(cr.AllSucceeded());
+        }
+    }
+    sc.Shutdown();
+}
