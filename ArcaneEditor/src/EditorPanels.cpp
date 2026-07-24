@@ -481,6 +481,14 @@ namespace Arcane::Editor
             // guaranteed NUL-terminated, so it is copied into a std::string before
             // handing a `const char*` to ImGui.
             const std::string typeName = ci.meta ? std::string(ci.meta->typeName) : std::string("<unreflected>");
+            // Derived transform state is never authored: WorldTransform is
+            // recomputed by TransformPropagationSystem every frame and
+            // PreviousTransform is the physics-capture interpolation pose.
+            // Editing either would be stomped next frame -- the Inspector shows
+            // only the authored Transform (the UE/Unity convention: relative/
+            // local is the editable truth, world is display-only derived data).
+            if (typeName == "Arcane::WorldTransform" || typeName == "Arcane::PreviousTransform")
+                continue;
             if (ImGui::CollapsingHeader(typeName.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             {
                 ImGuiFieldVisitor visitor;

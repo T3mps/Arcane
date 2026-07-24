@@ -4,7 +4,7 @@
 // binary (SceneModule) runtime persistence. It round-trips an ARBITRARY reflected
 // component roster -- every reflected + serializable component on each entity is
 // emitted keyed by its reflected type name, and loaded back through an add-by-
-// descriptor factory -- instead of a hardcoded LocalTransform+SpriteRenderer pair.
+// descriptor factory -- instead of a hardcoded Transform+SpriteRenderer pair.
 // Both hierarchy (parent) and non-hierarchical links are persisted.
 //
 // Schema:

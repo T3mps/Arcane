@@ -88,7 +88,7 @@ namespace
             });
 
             root = reg.CreateEntity();
-            reg.AddComponent<Arcane::LocalTransform>(root, Arcane::LocalTransform{});
+            reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
             reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
             reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
         }

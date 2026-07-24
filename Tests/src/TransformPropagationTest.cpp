@@ -22,9 +22,9 @@ namespace
     Astra::Entity MakeNode(Astra::Registry& reg, glm::vec2 pos)
     {
         Astra::Entity e = reg.CreateEntity();
-        Arcane::LocalTransform lt;
+        Arcane::Transform lt;
         lt.position = pos;
-        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
         return e;
     }
@@ -67,13 +67,13 @@ TEST_CASE("transform propagation applies parent rotation to child offset", "[sce
     // Parent at origin rotated +90 degrees; child offset (10,0) in parent space
     // must land at world (0,10).
     Astra::Entity root = reg.CreateEntity();
-    Arcane::LocalTransform rootT; rootT.rotation = 1.57079632679f;  // pi/2
-    reg.AddComponent<Arcane::LocalTransform>(root, rootT);
+    Arcane::Transform rootT; rootT.rotation = 1.57079632679f;  // pi/2
+    reg.AddComponent<Arcane::Transform>(root, rootT);
     reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
 
     Astra::Entity child = reg.CreateEntity();
-    Arcane::LocalTransform childT; childT.position = glm::vec2(10.0f, 0.0f);
-    reg.AddComponent<Arcane::LocalTransform>(child, childT);
+    Arcane::Transform childT; childT.position = glm::vec2(10.0f, 0.0f);
+    reg.AddComponent<Arcane::Transform>(child, childT);
     reg.AddComponent<Arcane::WorldTransform>(child, Arcane::WorldTransform{});
     reg.SetParent(child, root);
     reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -112,8 +112,8 @@ TEST_CASE("binary scene save/load round-trips transforms and relations", "[scene
 
     int spatial = 0;
     glm::vec2 childLocal{0.0f};
-    auto view = reg->CreateView<Arcane::LocalTransform>();
-    view.ForEach([&](Astra::Entity, Arcane::LocalTransform& lt)
+    auto view = reg->CreateView<Arcane::Transform>();
+    view.ForEach([&](Astra::Entity, Arcane::Transform& lt)
     {
         ++spatial;
         if (std::abs(lt.position.x - 10.0f) < 1e-4f) childLocal = lt.position;

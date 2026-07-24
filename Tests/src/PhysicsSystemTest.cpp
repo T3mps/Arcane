@@ -2,16 +2,16 @@
 // updated for fixture-list Collider2D schema.
 //
 // Tests:
-//   1. Dynamic body under gravity: after N fixed steps, LocalTransform.position.y
+//   1. Dynamic body under gravity: after N fixed steps, Transform.position.y
 //      has increased (fallen), and WorldTransform.matrix[2].y agrees (propagation ran).
-//   2. Kinematic body with authored velocity: after N steps, LocalTransform.position.x
+//   2. Kinematic body with authored velocity: after N steps, Transform.position.x
 //      has increased proportionally to velocity * dt * N.
 //   3. Remove: after DestroyEntity, the body row is removed from the PhysicsResource's
 //      entityToBody map on the next PhysicsSystem invocation.
 //   4. Determinism: two identical runs of the same scene yield exactly the same
-//      final LocalTransform positions (binary ==, not Approx).
+//      final Transform positions (binary ==, not Approx).
 //   5. Two-fixture body: an entity with a 2-fixture Collider2D gets both fixtures
-//      attached in the PhysicsWorld (FixtureCount == 2), and LocalTransform still
+//      attached in the PhysicsWorld (FixtureCount == 2), and Transform still
 //      updates after stepping.
 
 #include <catch2/catch_approx.hpp>
@@ -82,17 +82,17 @@ namespace
 
         // SceneRoot (no physics, just anchors the hierarchy).
         Astra::Entity root = reg.CreateEntity();
-        Arcane::LocalTransform rootLT;
+        Arcane::Transform rootLT;
         rootLT.position = glm::vec2(0.0f, 0.0f);
-        reg.AddComponent<Arcane::LocalTransform>(root, rootLT);
+        reg.AddComponent<Arcane::Transform>(root, rootLT);
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
 
         // Dynamic body entity: free-falls under gravity (single-fixture circle).
         Astra::Entity dyn = reg.CreateEntity();
         {
-            Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
-            reg.AddComponent<Arcane::LocalTransform>(dyn, lt);
+            Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+            reg.AddComponent<Arcane::Transform>(dyn, lt);
             reg.AddComponent<Arcane::WorldTransform>(dyn, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
@@ -116,8 +116,8 @@ namespace
         // Kinematic body entity: constant velocity in +X (single-fixture circle).
         Astra::Entity kin = reg.CreateEntity();
         {
-            Arcane::LocalTransform lt; lt.position = glm::vec2(5.0f, 0.0f);
-            reg.AddComponent<Arcane::LocalTransform>(kin, lt);
+            Arcane::Transform lt; lt.position = glm::vec2(5.0f, 0.0f);
+            reg.AddComponent<Arcane::Transform>(kin, lt);
             reg.AddComponent<Arcane::WorldTransform>(kin, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
@@ -164,7 +164,7 @@ namespace
 // ---------------------------------------------------------------------------
 // TEST 1 -- Dynamic body falls under gravity
 // ---------------------------------------------------------------------------
-TEST_CASE("PhysicsSystem: dynamic body falls under gravity (LocalTransform updated)", "[physics]")
+TEST_CASE("PhysicsSystem: dynamic body falls under gravity (Transform updated)", "[physics]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
@@ -173,7 +173,7 @@ TEST_CASE("PhysicsSystem: dynamic body falls under gravity (LocalTransform updat
     constexpr int kSteps = 10;
     RunNSteps(reg, kSteps);
 
-    const auto* lt = reg.GetComponent<Arcane::LocalTransform>(h.dyn);
+    const auto* lt = reg.GetComponent<Arcane::Transform>(h.dyn);
     REQUIRE(lt != nullptr);
 
     // After 10 steps at 60 Hz with gravityY = 10 (+Y down), y must be well positive.
@@ -203,7 +203,7 @@ TEST_CASE("PhysicsSystem: kinematic body moves by authored velocity", "[physics]
 
     RunNSteps(reg, kSteps);
 
-    const auto* lt = reg.GetComponent<Arcane::LocalTransform>(h.kin);
+    const auto* lt = reg.GetComponent<Arcane::Transform>(h.kin);
     REQUIRE(lt != nullptr);
 
     // Kinematic body at (5, 0), velocity (kKinSpeed, 0):
@@ -264,7 +264,7 @@ TEST_CASE("PhysicsSystem: body row removed after entity is destroyed", "[physics
 // ---------------------------------------------------------------------------
 // TEST 4 -- Determinism: two identical runs produce exactly the same positions
 // ---------------------------------------------------------------------------
-TEST_CASE("PhysicsSystem: two identical runs yield bit-exact LocalTransform positions", "[physics]")
+TEST_CASE("PhysicsSystem: two identical runs yield bit-exact Transform positions", "[physics]")
 {
     constexpr int kSteps = 20;
 
@@ -275,8 +275,8 @@ TEST_CASE("PhysicsSystem: two identical runs yield bit-exact LocalTransform posi
         Astra::Registry regA(components);
         auto hA = BuildScene(regA);
         RunNSteps(regA, kSteps);
-        posA_dyn = regA.GetComponent<Arcane::LocalTransform>(hA.dyn)->position;
-        posA_kin = regA.GetComponent<Arcane::LocalTransform>(hA.kin)->position;
+        posA_dyn = regA.GetComponent<Arcane::Transform>(hA.dyn)->position;
+        posA_kin = regA.GetComponent<Arcane::Transform>(hA.kin)->position;
     }
 
     // ---- Run B (fresh registry, identical setup) ----
@@ -286,8 +286,8 @@ TEST_CASE("PhysicsSystem: two identical runs yield bit-exact LocalTransform posi
         Astra::Registry regB(components);
         auto hB = BuildScene(regB);
         RunNSteps(regB, kSteps);
-        posB_dyn = regB.GetComponent<Arcane::LocalTransform>(hB.dyn)->position;
-        posB_kin = regB.GetComponent<Arcane::LocalTransform>(hB.kin)->position;
+        posB_dyn = regB.GetComponent<Arcane::Transform>(hB.dyn)->position;
+        posB_kin = regB.GetComponent<Arcane::Transform>(hB.kin)->position;
     }
 
     // Exact binary equality: same code path, same inputs, same f32 ops.
@@ -323,8 +323,8 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     // Minimal SceneRoot.
     Astra::Entity root = reg.CreateEntity();
     {
-        Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
-        reg.AddComponent<Arcane::LocalTransform>(root, lt);
+        Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        reg.AddComponent<Arcane::Transform>(root, lt);
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
     }
@@ -334,8 +334,8 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     // Fixture 1: aabb(0.3,0.3) @ local(2,0), sensor.
     Astra::Entity e = reg.CreateEntity();
     {
-        Arcane::LocalTransform lt; lt.position = glm::vec2(10.0f, 5.0f);
-        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        Arcane::Transform lt; lt.position = glm::vec2(10.0f, 5.0f);
+        reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
         Arcane::RigidBody2D rb;
@@ -386,11 +386,11 @@ TEST_CASE("PhysicsSystem: two-fixture Collider2D registers both fixtures in Phys
     REQUIRE(res->world->IsValid(bh));
     CHECK(res->world->FixtureCount(bh) == 2u);
 
-    // LocalTransform still gets written back after Step.
+    // Transform still gets written back after Step.
     Arcane::TransformPropagationSystem propagate;
     propagate(reg);
 
-    const auto* lt = reg.GetComponent<Arcane::LocalTransform>(e);
+    const auto* lt = reg.GetComponent<Arcane::Transform>(e);
     REQUIRE(lt != nullptr);
     // Kinematic body with no velocity, gravity 0 -> position stays at (10, 5).
     CHECK(lt->position.x == Approx(10.0f).margin(0.01f));
@@ -430,8 +430,8 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     // Minimal SceneRoot.
     Astra::Entity root = reg.CreateEntity();
     {
-        Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
-        reg.AddComponent<Arcane::LocalTransform>(root, lt);
+        Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        reg.AddComponent<Arcane::Transform>(root, lt);
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
     }
@@ -447,8 +447,8 @@ TEST_CASE("PhysicsSystem: fixture[0] authored filter and local-xf flow through A
     // so GetFixtureWorldPos(fixture0) == bodyPos + R(0)*localPos == (0.3,0).
     Astra::Entity e = reg.CreateEntity();
     {
-        Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
-        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+        reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
         Arcane::RigidBody2D rb;

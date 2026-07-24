@@ -96,10 +96,10 @@ namespace
     {
         const Astra::Entity e = reg.CreateEntity();
 
-        Arcane::LocalTransform lt;
+        Arcane::Transform lt;
         lt.position = pos;
         lt.scale    = scale;
-        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        reg.AddComponent<Arcane::Transform>(e, lt);
 
         Arcane::RigidBody2D rb;
         rb.type = Manifold2D::Physics::BodyType::Kinematic;

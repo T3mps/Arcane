@@ -48,7 +48,7 @@ namespace Arcane
     // Given a top-left `pos` + `size`, rotated by `rotation` radians about the
     // quad's CENTER. rotation 0 returns EXACTLY the axis-aligned corners (the
     // byte-identical legacy path). The rotation matches the engine convention
-    // R(a)*v = (c*vx - s*vy, s*vx + c*vy) (LocalTransform::ToMatrix /
+    // R(a)*v = (c*vx - s*vy, s*vx + c*vy) (Transform::ToMatrix /
     // Physics::RotateVec), so a sprite turns in lockstep with its physics body.
     [[nodiscard]] inline std::array<glm::vec2, 4>
     QuadCorners(glm::vec2 pos, glm::vec2 size, float rotation) noexcept

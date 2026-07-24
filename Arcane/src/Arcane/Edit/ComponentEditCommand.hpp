@@ -4,7 +4,7 @@
 // after byte snapshot (via the Astra descriptor serialize seam). Undo/Redo
 // re-resolve the LIVE component by (Entity, descriptor->hash) so it survives
 // archetype moves and no-ops if the entity/component is gone. Restoring a
-// LocalTransform reflects to the physics body via SPEC #1's polling reconcile.
+// Transform reflects to the physics body via SPEC #1's polling reconcile.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Edit/Command.hpp>

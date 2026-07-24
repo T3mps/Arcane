@@ -75,8 +75,8 @@ TEST_CASE("PhysicsInterpBuffer captures the pre-step pose each fixed step", "[in
 
     // One dynamic circle free-falling from the origin.
     Astra::Entity e = reg.CreateEntity();
-    Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
-    reg.AddComponent<Arcane::LocalTransform>(e, lt);
+    Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
+    reg.AddComponent<Arcane::Transform>(e, lt);
     reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
     Arcane::RigidBody2D rb; rb.type = P::BodyType::Dynamic;
     reg.AddComponent<Arcane::RigidBody2D>(e, rb);
@@ -187,7 +187,7 @@ TEST_CASE("RenderSubmissionSystem interpolates a sprite by PreviousTransform + a
 
     // Current world pose at x=10; previous local pose at x=0. Untextured Rect sprite.
     Astra::Entity e = reg.CreateEntity();
-    Arcane::LocalTransform lt; lt.position = glm::vec2(10.0f, 0.0f);
+    Arcane::Transform lt; lt.position = glm::vec2(10.0f, 0.0f);
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
     reg.AddComponent<Arcane::WorldTransform>(e, wt);
     Arcane::SpriteRenderer sp; sp.size = glm::vec2(4.0f, 4.0f);
@@ -217,7 +217,7 @@ TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest a
     Arcane::RegisterSceneComponents(reg);
 
     Astra::Entity e = reg.CreateEntity();
-    Arcane::LocalTransform lt; lt.position = glm::vec2(0.0f, 0.0f);
+    Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
     lt.rotation = 10.0f * kPi / 180.0f;            // current 10deg
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
     reg.AddComponent<Arcane::WorldTransform>(e, wt);

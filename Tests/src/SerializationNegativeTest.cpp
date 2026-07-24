@@ -247,8 +247,8 @@ TEST_CASE("Scene LoadJson rejects malformed/mis-versioned documents without thro
         CHECK(res);   // structurally valid -> loads; the unknown component is dropped
 
         int locals = 0;
-        reg->CreateView<Arcane::LocalTransform>().ForEach(
-            [&](Astra::Entity, Arcane::LocalTransform&) { ++locals; });
+        reg->CreateView<Arcane::Transform>().ForEach(
+            [&](Astra::Entity, Arcane::Transform&) { ++locals; });
         CHECK(locals == 0);
     }
 }
@@ -278,14 +278,14 @@ TEST_CASE("Scene LoadBinary rejects a corrupt file with an error result", "[seri
 
 TEST_CASE("ReflectionJson reader tolerates wrong-typed leaf data without throwing", "[serialization][negative][reflection]")
 {
-    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::LocalTransform>();
+    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::Transform>();
     REQUIRE(meta != nullptr);
 
     nlohmann::json j;
     j["position"] = "not-an-array";    // vec2 field fed a string
     j["rotation"] = "not-a-number";    // float field fed a string
 
-    Arcane::LocalTransform lt;
+    Arcane::Transform lt;
     lt.position = glm::vec2(9.0f, 9.0f);
     lt.rotation = 5.0f;
 

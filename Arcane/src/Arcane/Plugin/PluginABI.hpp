@@ -35,7 +35,11 @@ namespace Arcane
     //     plugins compile the header-only RenderSubmissionSystem + components).
     //     A stale plugin's SetLayer call lands on UpdateMaterial and its Quad on
     //     SetGlobals -- observed as an AV on project open; reject the pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 6;
+    // v7 (2026-07-24): LocalTransform renamed to Transform. The reflected type
+    //     name IS the cross-module component identity (TypeID name hash +
+    //     name-keyed scene JSON), so a stale plugin would register/query the
+    //     old name and silently diverge from engine systems; reject the pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 7;
 
     struct EngineContext
     {

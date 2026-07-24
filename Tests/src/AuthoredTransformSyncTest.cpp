@@ -1,4 +1,4 @@
-// Authored-transform ownership + physics sync (SPEC #1). LocalTransform is the
+// Authored-transform ownership + physics sync (SPEC #1). Transform is the
 // authored source of truth for a physics entity; this file exercises the engine
 // PhysicsSystem sync. Task 1: birth-time scale + appliedScale baseline.
 #include <catch2/catch_approx.hpp>
@@ -35,8 +35,8 @@ namespace
         reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
 
         Astra::Entity e = reg.CreateEntity();
-        LocalTransform lt; lt.position = pos; lt.scale = scale;
-        reg.AddComponent<LocalTransform>(e, lt);
+        Transform lt; lt.position = pos; lt.scale = scale;
+        reg.AddComponent<Transform>(e, lt);
         reg.AddComponent<WorldTransform>(e, WorldTransform{});
         RigidBody2D rb; rb.type = type;
         // Manifold2D invariant: a dynamic AABB body must be fixedRotation (an
@@ -112,8 +112,8 @@ TEST_CASE("create scales multi-fixture local offsets per-axis", "[transform-sync
     reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
 
     Astra::Entity e = reg.CreateEntity();
-    LocalTransform lt; lt.position = {0.0f, 0.0f}; lt.scale = {2.0f, 1.0f};
-    reg.AddComponent<LocalTransform>(e, lt);
+    Transform lt; lt.position = {0.0f, 0.0f}; lt.scale = {2.0f, 1.0f};
+    reg.AddComponent<Transform>(e, lt);
     reg.AddComponent<WorldTransform>(e, WorldTransform{});
     RigidBody2D rb; rb.type = Phys::BodyType::Kinematic;
     reg.AddComponent<RigidBody2D>(e, rb);
@@ -148,7 +148,7 @@ TEST_CASE("paused author move teleports body, zeroes velocity, is not stomped", 
     paused(reg);                                   // mint at (0,0)
 
     // Author moves the entity while paused (as a gizmo/inspector edit would).
-    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(5.0f, 5.0f);
+    reg.GetComponent<Transform>(e)->position = glm::vec2(5.0f, 5.0f);
     paused(reg);                                   // reconcile: body <- lt, then write-back
 
     auto* res = reg.GetResource<PhysicsResource>();
@@ -160,7 +160,7 @@ TEST_CASE("paused author move teleports body, zeroes velocity, is not stomped", 
     CHECK(static_cast<float>(bv.x) == Approx(0.0f).margin(1e-4f));
     CHECK(static_cast<float>(bv.y) == Approx(0.0f).margin(1e-4f));
     // Not stomped back to (0,0) by the same frame's write-back.
-    const glm::vec2 lp = reg.GetComponent<LocalTransform>(e)->position;
+    const glm::vec2 lp = reg.GetComponent<Transform>(e)->position;
     CHECK(lp.x == Approx(5.0f).margin(1e-4f));
     CHECK(lp.y == Approx(5.0f).margin(1e-4f));
 }
@@ -172,13 +172,13 @@ TEST_CASE("paused author rotate sets body angle, is not stomped", "[transform-sy
     PhysicsSystem paused(kDt, /*stepWorld=*/false);
     paused(reg);
 
-    reg.GetComponent<LocalTransform>(e)->rotation = 1.0f;   // radians
+    reg.GetComponent<Transform>(e)->rotation = 1.0f;   // radians
     paused(reg);
 
     auto* res = reg.GetResource<PhysicsResource>();
     const Phys::BodyHandle bh = res->entityToBody.at(e);
     CHECK(static_cast<float>(res->world->GetAngle(bh)) == Approx(1.0f).margin(1e-4f));
-    CHECK(reg.GetComponent<LocalTransform>(e)->rotation == Approx(1.0f).margin(1e-4f));
+    CHECK(reg.GetComponent<Transform>(e)->rotation == Approx(1.0f).margin(1e-4f));
 }
 
 TEST_CASE("author-while-paused then play resumes from authored pose", "[transform-sync]")
@@ -187,13 +187,13 @@ TEST_CASE("author-while-paused then play resumes from authored pose", "[transfor
     Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
     PhysicsSystem paused(kDt, /*stepWorld=*/false);
     paused(reg);
-    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(3.0f, 0.0f);
+    reg.GetComponent<Transform>(e)->position = glm::vec2(3.0f, 0.0f);
     paused(reg);                                   // reconcile pushes (3,0) into the body
 
     PhysicsSystem play(kDt, /*stepWorld=*/true);
     play(reg);                                     // stepping resumes from (3,0), no snap-back
 
-    const glm::vec2 lp = reg.GetComponent<LocalTransform>(e)->position;
+    const glm::vec2 lp = reg.GetComponent<Transform>(e)->position;
     CHECK(lp.x == Approx(3.0f).margin(1e-3f));     // kinematic, zero velocity -> stays at 3
     CHECK(lp.y == Approx(0.0f).margin(1e-3f));
 }
@@ -205,10 +205,10 @@ TEST_CASE("play mode ignores author lt edits (body owns pose)", "[transform-sync
     PhysicsSystem play(kDt, /*stepWorld=*/true);
     play(reg);                                     // mint + step; body at ~origin
 
-    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(9.0f, 9.0f); // bogus author edit
+    reg.GetComponent<Transform>(e)->position = glm::vec2(9.0f, 9.0f); // bogus author edit
     play(reg);                                     // Play: PASS 4 overwrites lt from the body
 
-    const glm::vec2 lp = reg.GetComponent<LocalTransform>(e)->position;
+    const glm::vec2 lp = reg.GetComponent<Transform>(e)->position;
     CHECK(lp.x == Approx(0.0f).margin(1e-3f));     // body owns; edit discarded
     CHECK(lp.y == Approx(0.0f).margin(1e-3f));
 }
@@ -220,7 +220,7 @@ TEST_CASE("untouched paused body is not spuriously teleported", "[transform-sync
     PhysicsSystem paused(kDt, /*stepWorld=*/false);
     for (int i = 0; i < 5; ++i) paused(reg);       // no author edits between ticks
 
-    const glm::vec2 lp = reg.GetComponent<LocalTransform>(e)->position;
+    const glm::vec2 lp = reg.GetComponent<Transform>(e)->position;
     CHECK(lp.x == Approx(2.0f).margin(1e-4f));
     CHECK(lp.y == Approx(3.0f).margin(1e-4f));
 }
@@ -231,7 +231,7 @@ TEST_CASE("paused author move works on a static body", "[transform-sync]")
     Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Static);
     PhysicsSystem paused(kDt, /*stepWorld=*/false);
     paused(reg);
-    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(4.0f, 0.0f);
+    reg.GetComponent<Transform>(e)->position = glm::vec2(4.0f, 0.0f);
     paused(reg);
     auto* res = reg.GetResource<PhysicsResource>();
     const Phys::Vec2 bp = res->world->Position(res->entityToBody.at(e));
@@ -251,7 +251,7 @@ TEST_CASE("paused scale-up rebuilds fixtures at effective size, pose preserved",
     PhysicsSystem paused(kDt, /*stepWorld=*/false);
     paused(reg);
 
-    reg.GetComponent<LocalTransform>(e)->scale = glm::vec2(2.0f, 2.0f);
+    reg.GetComponent<Transform>(e)->scale = glm::vec2(2.0f, 2.0f);
     paused(reg);                                   // reconcile: rebuild fixtures
 
     auto* res = reg.GetResource<PhysicsResource>();
@@ -272,7 +272,7 @@ TEST_CASE("paused non-uniform scale rebuilds per-axis", "[transform-sync]")
     Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
     PhysicsSystem paused(kDt, /*stepWorld=*/false);
     paused(reg);
-    reg.GetComponent<LocalTransform>(e)->scale = glm::vec2(3.0f, 1.0f);
+    reg.GetComponent<Transform>(e)->scale = glm::vec2(3.0f, 1.0f);
     paused(reg);
     const glm::vec2 he = Fixture0HalfExtents(reg);
     CHECK(he.x == Approx(1.5f).margin(1e-4f));      // 0.5 * 3
@@ -285,7 +285,7 @@ TEST_CASE("unchanged scale does not rebuild fixtures (no compounding)", "[transf
     Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
     PhysicsSystem paused(kDt, /*stepWorld=*/false);
     paused(reg);
-    reg.GetComponent<LocalTransform>(e)->scale = glm::vec2(2.0f, 2.0f);
+    reg.GetComponent<Transform>(e)->scale = glm::vec2(2.0f, 2.0f);
     paused(reg);                                   // rebuild once
 
     auto* res = reg.GetResource<PhysicsResource>();
@@ -325,8 +325,8 @@ TEST_CASE("body still steps after a scale rebuild", "[transform-sync]")
     Phys::WorldDef wd; wd.gravityX = 0.0f; wd.gravityY = 10.0f;
     reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
     Astra::Entity e = reg.CreateEntity();
-    LocalTransform lt; lt.position = {0,0};
-    reg.AddComponent<LocalTransform>(e, lt);
+    Transform lt; lt.position = {0,0};
+    reg.AddComponent<Transform>(e, lt);
     reg.AddComponent<WorldTransform>(e, WorldTransform{});
     RigidBody2D rb; rb.type = Phys::BodyType::Dynamic; rb.fixedRotation = true;  // dynamic AABB invariant
     reg.AddComponent<RigidBody2D>(e, rb);
@@ -337,12 +337,12 @@ TEST_CASE("body still steps after a scale rebuild", "[transform-sync]")
 
     PhysicsSystem paused(kDt, /*stepWorld=*/false);
     paused(reg);
-    reg.GetComponent<LocalTransform>(e)->scale = glm::vec2(2.0f, 2.0f);
+    reg.GetComponent<Transform>(e)->scale = glm::vec2(2.0f, 2.0f);
     paused(reg);                                   // rebuild fixtures
 
     PhysicsSystem play(kDt, /*stepWorld=*/true);
     for (int i = 0; i < 10; ++i) play(reg);        // must fall under gravity
-    CHECK(reg.GetComponent<LocalTransform>(e)->position.y > 0.1f);
+    CHECK(reg.GetComponent<Transform>(e)->position.y > 0.1f);
 }
 
 // ---- review-coverage follow-ups -------------------------------------------
@@ -361,7 +361,7 @@ TEST_CASE("paused author move zeroes a moving body's velocity", "[transform-sync
     const Phys::BodyHandle bh = res->entityToBody.at(e);
     REQUIRE(static_cast<float>(res->world->Velocity(bh).x) == Approx(3.0f).margin(1e-4f));  // present pre-move
 
-    reg.GetComponent<LocalTransform>(e)->position = glm::vec2(5.0f, 0.0f);  // author move
+    reg.GetComponent<Transform>(e)->position = glm::vec2(5.0f, 0.0f);  // author move
     paused(reg);                                   // reconcile teleports + zeroes velocity
 
     const Phys::Vec2 bv = res->world->Velocity(bh);
@@ -378,8 +378,8 @@ TEST_CASE("create scales a circle by the representative (max) axis", "[transform
     reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
 
     Astra::Entity e = reg.CreateEntity();
-    LocalTransform lt; lt.position = {0.0f, 0.0f}; lt.scale = {3.0f, 1.0f};  // non-uniform
-    reg.AddComponent<LocalTransform>(e, lt);
+    Transform lt; lt.position = {0.0f, 0.0f}; lt.scale = {3.0f, 1.0f};  // non-uniform
+    reg.AddComponent<Transform>(e, lt);
     reg.AddComponent<WorldTransform>(e, WorldTransform{});
     RigidBody2D rb; rb.type = Phys::BodyType::Kinematic;   // circle: no dynamic-AABB constraint
     reg.AddComponent<RigidBody2D>(e, rb);

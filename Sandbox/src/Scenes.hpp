@@ -46,7 +46,7 @@ namespace Arcane::Sandbox
 
     // -------------------------------------------------------------------------
     // Public spawn builders (Task 7): the SAME Astra-component body authoring the
-    // scene builders use (LocalTransform + WorldTransform + RigidBody2D +
+    // scene builders use (Transform + WorldTransform + RigidBody2D +
     // Collider2D + PhysicsBodyRef + SpriteRenderer, parented under SceneRoot), but
     // callable from outside Scenes.cpp so the interaction layer can spawn at the
     // cursor without duplicating the body-assembly. PhysicsSystem mints the live

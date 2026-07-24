@@ -17,7 +17,7 @@
 
 namespace Arcane
 {
-    struct LocalTransform
+    struct Transform
     {
         glm::vec2 position{0.0f, 0.0f};
         float     rotation = 0.0f;          // radians
@@ -42,7 +42,7 @@ namespace Arcane
     };
 
     // PreviousTransform (Epic 04.2): an entity's LOCAL pose at the previous fixed
-    // step, captured by PhysicsSystem write-back before it overwrites LocalTransform.
+    // step, captured by PhysicsSystem write-back before it overwrites Transform.
     // RenderSubmissionSystem draws at lerp(previous -> current, alpha) for smooth
     // slow-mo. Decomposed (position + angle) so rotation interpolates on the shortest
     // arc, NOT by lerping matrix components. Purely derived render state: an entity
@@ -88,11 +88,11 @@ namespace Arcane
 // load; binary trivially-copyable path still round-trips it harmlessly).
 namespace Arcane
 {
-    ASTRA_REFLECT_TYPE(LocalTransform)
-        ASTRA_REFLECT_FIELD(LocalTransform, position)
-        ASTRA_REFLECT_FIELD(LocalTransform, rotation)
+    ASTRA_REFLECT_TYPE(Transform)
+        ASTRA_REFLECT_FIELD(Transform, position)
+        ASTRA_REFLECT_FIELD(Transform, rotation)
             ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
-        ASTRA_REFLECT_FIELD(LocalTransform, scale)
+        ASTRA_REFLECT_FIELD(Transform, scale)
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(WorldTransform)

@@ -31,7 +31,7 @@
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
-#include <Arcane/Scene/Components.hpp>   // Arcane::LocalTransform (gizmo drag target)
+#include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Registry/Registry.hpp>   // Registry::InspectEntity/GetComponent (gizmo descriptor resolve)
@@ -69,15 +69,15 @@ namespace Arcane::Editor
         constexpr uint32_t kScR = 21;   // SDL_SCANCODE_R
         constexpr uint32_t kScQ = 20;   // SDL_SCANCODE_Q
 
-        // Resolve the ComponentDescriptor for LocalTransform on `e`, for bracketing
+        // Resolve the ComponentDescriptor for Transform on `e`, for bracketing
         // a gizmo drag into the undo stack via CommandStack::SnapshotComponent.
         // Mirrors EditorPanels.cpp's Inspector loop (InspectEntity + meta->typeName
         // match) -- namespace-qualified, matching how ASTRA_REFLECT_TYPE registers it.
-        const Astra::ComponentDescriptor* FindLocalTransformDescriptor(Astra::Registry& reg, Astra::Entity e)
+        const Astra::ComponentDescriptor* FindTransformDescriptor(Astra::Registry& reg, Astra::Entity e)
         {
             for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
             {
-                if (ci.meta && ci.meta->typeName == "Arcane::LocalTransform")
+                if (ci.meta && ci.meta->typeName == "Arcane::Transform")
                     return ci.descriptor;
             }
             return nullptr;
@@ -155,11 +155,11 @@ namespace Arcane::Editor
         // binary from Arcane.dll -- Astra::GetTypeContext()/SetTypeContext() resolve
         // through a PER-MODULE static slot, by design; Runtime::Impl's ctor installs
         // the same m_typeContext for Arcane.dll's own slot, see Runtime.cpp). Required
-        // BEFORE the gizmo interaction code's TypeID<Arcane::LocalTransform>::Value()
-        // lookups (Registry::GetComponent<LocalTransform> in MainLoop) -- without this,
+        // BEFORE the gizmo interaction code's TypeID<Arcane::Transform>::Value()
+        // lookups (Registry::GetComponent<Transform> in MainLoop) -- without this,
         // ArcaneEditor.exe's first TypeID<T>::Value() call would silently fall back to its
         // own empty module-local DefaultTypeContext() instead of the shared one, so
-        // GetComponent<LocalTransform> would resolve against the WRONG ComponentID
+        // GetComponent<Transform> would resolve against the WRONG ComponentID
         // (always-miss at best, aliasing a different component's bytes at worst).
         Astra::SetTypeContext(m_typeContext);
         // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
@@ -715,7 +715,7 @@ namespace Arcane::Editor
                 }
 
                 // Transform-gizmo interaction: hit-test + drag against the selected
-                // entity's LocalTransform, bracketed into the undo stack (one drag =
+                // entity's Transform, bracketed into the undo stack (one drag =
                 // one undo step -- Begin/SnapshotComponent on press, Commit on release;
                 // a no-move drag self-drops since Commit only pushes if bytes changed).
                 // mouseScreen is viewport-local px (lx/ly computed above), the same
@@ -737,7 +737,7 @@ namespace Arcane::Editor
                     // An in-progress drag must keep tracking (and commit on release)
                     // even after the cursor leaves the viewport rect -- only a FRESH
                     // drag requires the cursor in-viewport. Aborting a live drag on
-                    // viewport-exit would strand the LocalTransform at a mid-drag value
+                    // viewport-exit would strand the Transform at a mid-drag value
                     // with no undo record (CommandStack::Cancel does not revert), so
                     // viewport-exit is deliberately NOT an abort. !gameUiClaims is
                     // defensive: gameUiClaims is Play-only and this is already
@@ -747,11 +747,11 @@ namespace Arcane::Editor
                                              m_gizmoEnabled && m_selection.HasSelection() &&
                                              (m_gizmoDrag.active || inViewport);
                     Astra::Registry*        regPtr = nullptr;
-                    Arcane::LocalTransform* lt     = nullptr;
+                    Arcane::Transform* lt     = nullptr;
                     if (gizmoActive)
                     {
                         regPtr = &m_runtime->Registry();
-                        lt = regPtr->GetComponent<Arcane::LocalTransform>(m_selection.selected);
+                        lt = regPtr->GetComponent<Arcane::Transform>(m_selection.selected);
                     }
 
                     if (lt)
@@ -773,7 +773,7 @@ namespace Arcane::Editor
                                     // through to the click-pick below.
                                     m_gizmoCapturedClick = true;
                                     const Astra::ComponentDescriptor* desc =
-                                        FindLocalTransformDescriptor(*regPtr, sel);
+                                        FindTransformDescriptor(*regPtr, sel);
                                     if (desc)
                                     {
                                         m_undo->Begin("Gizmo");
@@ -883,13 +883,13 @@ namespace Arcane::Editor
                     // Transform gizmo, drawn AFTER the scene submit so it renders on
                     // top. Frame ordering guarantees the input block above already ran
                     // this frame, so m_gizmoHovered/m_gizmoDrag and the live
-                    // LocalTransform read here are current. Edit-mode + has-selection
+                    // Transform read here are current. Edit-mode + has-selection
                     // only (mirrors the interaction gate; no viewport-hover requirement
                     // here -- the gizmo should stay visible while e.g. the mouse is over
                     // the Inspector, just not be interactable there).
                     if (!m_play.IsPlaying() && m_gizmoEnabled && m_selection.HasSelection())
                     {
-                        Arcane::LocalTransform* lt = m_runtime->Registry().GetComponent<Arcane::LocalTransform>(
+                        Arcane::Transform* lt = m_runtime->Registry().GetComponent<Arcane::Transform>(
                             m_selection.selected);
                         if (lt)
                         {

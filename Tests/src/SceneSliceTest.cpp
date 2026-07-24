@@ -49,19 +49,19 @@ namespace
         schedulers.render.AddSystem<Arcane::RenderSubmissionSystem>();
 
         Astra::Entity root = reg.CreateEntity();
-        reg.AddComponent<Arcane::LocalTransform>(root, Arcane::LocalTransform{});
+        reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
 
         Astra::Entity parent = reg.CreateEntity();
-        Arcane::LocalTransform pT; pT.position = glm::vec2(10, 10);
-        reg.AddComponent<Arcane::LocalTransform>(parent, pT);
+        Arcane::Transform pT; pT.position = glm::vec2(10, 10);
+        reg.AddComponent<Arcane::Transform>(parent, pT);
         reg.AddComponent<Arcane::WorldTransform>(parent, Arcane::WorldTransform{});
         reg.AddComponent<Arcane::SpriteRenderer>(parent, Arcane::SpriteRenderer{});
         reg.SetParent(parent, root);
 
         Astra::Entity child = reg.CreateEntity();
-        Arcane::LocalTransform cT; cT.position = glm::vec2(5, 5);
-        reg.AddComponent<Arcane::LocalTransform>(child, cT);
+        Arcane::Transform cT; cT.position = glm::vec2(5, 5);
+        reg.AddComponent<Arcane::Transform>(child, cT);
         reg.AddComponent<Arcane::WorldTransform>(child, Arcane::WorldTransform{});
         Arcane::SpriteRenderer csr; csr.tint = glm::vec4(0.2f, 0.8f, 0.3f, 1.0f);
         reg.AddComponent<Arcane::SpriteRenderer>(child, csr);

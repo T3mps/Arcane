@@ -20,7 +20,7 @@ namespace Arcane
     enum class GizmoAxis  { None, X, Y, Center };
 
     // Decoupled from Scene so Edit/Gizmo has no Scene dependency; Arcane Editor maps
-    // LocalTransform <-> this.
+    // Transform <-> this.
     struct GizmoTransform
     {
         glm::vec2 position{0.0f, 0.0f};

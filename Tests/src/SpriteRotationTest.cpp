@@ -105,7 +105,7 @@ namespace
         Arcane::RegisterSceneComponents(reg);
 
         Astra::Entity e = reg.CreateEntity();
-        Arcane::LocalTransform lt; lt.position = glm::vec2(200.0f, 150.0f);
+        Arcane::Transform lt; lt.position = glm::vec2(200.0f, 150.0f);
         Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
         reg.AddComponent<Arcane::WorldTransform>(e, wt);
         Arcane::SpriteRenderer sp; sp.size = size; sp.shape = shape;
@@ -151,7 +151,7 @@ TEST_CASE("RenderSubmissionSystem rotates the sprite quad by the WorldTransform"
 
     // One untextured sprite (textureId 0 -> Rect path) at a body rotated by theta.
     const float theta = 0.6f;
-    Arcane::LocalTransform lt;
+    Arcane::Transform lt;
     lt.position = glm::vec2(100.0f, 100.0f);
     lt.rotation = theta;
 

@@ -14,7 +14,7 @@
 namespace Arcane
 {
     struct TransformPropagationSystem
-        : Astra::SystemTraits<Astra::Reads<LocalTransform>, Astra::Writes<WorldTransform>>
+        : Astra::SystemTraits<Astra::Reads<Transform>, Astra::Writes<WorldTransform>>
     {
         void operator()(Astra::Registry& reg)
         {
@@ -23,14 +23,14 @@ namespace Arcane
             const Astra::Entity root = sceneRoot->entity;
 
             // Root: world = local (no parent).
-            if (auto* rootLocal = reg.GetComponent<LocalTransform>(root))
+            if (auto* rootLocal = reg.GetComponent<Transform>(root))
                 if (auto* rootWorld = reg.GetComponent<WorldTransform>(root))
                     rootWorld->matrix = rootLocal->ToMatrix();
 
             reg.GetRelations(root).ForEachDescendant(
                 [&](Astra::Entity e, size_t /*depth*/)
                 {
-                    auto* local = reg.GetComponent<LocalTransform>(e);
+                    auto* local = reg.GetComponent<Transform>(e);
                     auto* world = reg.GetComponent<WorldTransform>(e);
                     if (!local || !world) return;   // skip non-spatial nodes
 

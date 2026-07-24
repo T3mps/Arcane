@@ -36,20 +36,20 @@ namespace
     void BuildScene(Astra::Registry& reg)
     {
         Astra::Entity root = reg.CreateEntity();
-        reg.AddComponent<Arcane::LocalTransform>(root, Arcane::LocalTransform{});
+        reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
 
         Astra::Entity orbiter = reg.CreateEntity();
-        Arcane::LocalTransform ot; ot.position = glm::vec2(640.0f, 360.0f);
-        reg.AddComponent<Arcane::LocalTransform>(orbiter, ot);
+        Arcane::Transform ot; ot.position = glm::vec2(640.0f, 360.0f);
+        reg.AddComponent<Arcane::Transform>(orbiter, ot);
         reg.AddComponent<Arcane::WorldTransform>(orbiter, Arcane::WorldTransform{});
         Arcane::SpriteRenderer os; os.size = glm::vec2(48.0f); os.tint = glm::vec4(0.9f, 0.7f, 0.2f, 1.0f);
         reg.AddComponent<Arcane::SpriteRenderer>(orbiter, os);
         reg.SetParent(orbiter, root);
 
         Astra::Entity moon = reg.CreateEntity();
-        Arcane::LocalTransform mt; mt.position = glm::vec2(80.0f, 0.0f);
-        reg.AddComponent<Arcane::LocalTransform>(moon, mt);
+        Arcane::Transform mt; mt.position = glm::vec2(80.0f, 0.0f);
+        reg.AddComponent<Arcane::Transform>(moon, mt);
         reg.AddComponent<Arcane::WorldTransform>(moon, Arcane::WorldTransform{});
         Arcane::SpriteRenderer ms; ms.size = glm::vec2(20.0f); ms.tint = glm::vec4(0.4f, 0.8f, 1.0f, 1.0f);
         reg.AddComponent<Arcane::SpriteRenderer>(moon, ms);
@@ -103,7 +103,7 @@ extern "C"
         }
 
         auto creg = ctx->engine->Components();
-        creg->ReRegisterComponent<Arcane::LocalTransform>();   // 2. descriptors -> this module
+        creg->ReRegisterComponent<Arcane::Transform>();   // 2. descriptors -> this module
         creg->ReRegisterComponent<Arcane::WorldTransform>();
         creg->ReRegisterComponent<Arcane::SpriteRenderer>();
 
@@ -123,7 +123,7 @@ extern "C"
     GAME_API void GamePlugin_FixedUpdate(double dt)
     {
         g_time += dt;
-        if (auto* lt = g_ctx->engine->Registry().GetComponent<Arcane::LocalTransform>(g_orbiter))
+        if (auto* lt = g_ctx->engine->Registry().GetComponent<Arcane::Transform>(g_orbiter))
             lt->rotation = static_cast<float>(g_time);   // orbit; propagation runs after, in the engine phase
     }
 

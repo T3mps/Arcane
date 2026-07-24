@@ -97,7 +97,7 @@ namespace
 {
     // The component descriptor for `typeName` on `entity`, via the same
     // InspectEntity path the Inspector/CommandStackTest use. TypeMeta::typeName
-    // is namespace-qualified (e.g. "Arcane::LocalTransform").
+    // is namespace-qualified (e.g. "Arcane::Transform").
     const Astra::ComponentDescriptor* DescriptorFor(Astra::Registry& reg,
                                                     Astra::Entity e, const char* typeName)
     {
@@ -124,11 +124,11 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
     Arcane::RegisterSceneComponents(reg);
 
     const Astra::Entity e = reg.CreateEntity();
-    Arcane::LocalTransform lt;
+    Arcane::Transform lt;
     lt.position = glm::vec2(1.0f, 0.0f);
-    reg.AddComponent<Arcane::LocalTransform>(e, lt);
+    reg.AddComponent<Arcane::Transform>(e, lt);
 
-    const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::LocalTransform");
+    const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::Transform");
     REQUIRE(desc != nullptr);
 
     // Resolver-based CommandStack (survives a registry-object swap; see
@@ -138,7 +138,7 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
     // Edit-mode edit, committed BEFORE Play: before={1,0}, after={5,0}.
     stack.Begin("edit");
     stack.SnapshotComponent(e, desc);
-    reg.GetComponent<Arcane::LocalTransform>(e)->position = glm::vec2(5.0f, 0.0f);
+    reg.GetComponent<Arcane::Transform>(e)->position = glm::vec2(5.0f, 0.0f);
     stack.Commit();
     REQUIRE(stack.CanUndo());
 
@@ -148,13 +148,13 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
 
     // Play-time mutation: never captured by the stack (the Inspector/gizmo
     // gate capture to Edit mode) -- Stop must discard this, not undo it.
-    runtime.Registry().GetComponent<Arcane::LocalTransform>(e)->position = glm::vec2(99.0f, 99.0f);
+    runtime.Registry().GetComponent<Arcane::Transform>(e)->position = glm::vec2(99.0f, 99.0f);
 
     // Stop: restore swaps in a NEW registry object built from the snapshot.
     REQUIRE(runtime.RestoreRegistry(*snap.GetValue()));
 
     // The restore preserved the entity id and its authored {5,0} value.
-    Arcane::LocalTransform* lt2 = runtime.Registry().GetComponent<Arcane::LocalTransform>(e);
+    Arcane::Transform* lt2 = runtime.Registry().GetComponent<Arcane::Transform>(e);
     REQUIRE(lt2 != nullptr);
     CHECK(lt2->position.x == 5.0f);
     CHECK(lt2->position.y == 0.0f);
@@ -163,7 +163,7 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
     // correctly across the registry swap.
     REQUIRE(stack.CanUndo());
     stack.Undo();
-    Arcane::LocalTransform* afterUndo = runtime.Registry().GetComponent<Arcane::LocalTransform>(e);
+    Arcane::Transform* afterUndo = runtime.Registry().GetComponent<Arcane::Transform>(e);
     REQUIRE(afterUndo != nullptr);
     CHECK(afterUndo->position.x == 1.0f);
     CHECK(afterUndo->position.y == 0.0f);
@@ -171,7 +171,7 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
     // Redo survives too.
     REQUIRE(stack.CanRedo());
     stack.Redo();
-    Arcane::LocalTransform* afterRedo = runtime.Registry().GetComponent<Arcane::LocalTransform>(e);
+    Arcane::Transform* afterRedo = runtime.Registry().GetComponent<Arcane::Transform>(e);
     REQUIRE(afterRedo != nullptr);
     CHECK(afterRedo->position.x == 5.0f);
     CHECK(afterRedo->position.y == 0.0f);

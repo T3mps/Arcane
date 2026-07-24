@@ -44,7 +44,7 @@ namespace Arcane
                 const glm::vec2 worldScale(glm::length(glm::vec2(m[0])),
                                            glm::length(glm::vec2(m[1])));
                 // World rotation from the first basis column (matches
-                // LocalTransform::ToMatrix: m[0] = (c*scale.x, s*scale.x)). The
+                // Transform::ToMatrix: m[0] = (c*scale.x, s*scale.x)). The
                 // camera applies a uniform zoom (no rotation), so the screen-space
                 // sprite rotates by the same angle as its physics body.
                 float worldRot = std::atan2(m[0].y, m[0].x);
