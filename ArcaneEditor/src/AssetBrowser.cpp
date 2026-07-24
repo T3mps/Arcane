@@ -134,5 +134,6 @@ namespace Arcane::Editor
             ImGui::EndTable();
         }
         ImGui::End();
+        return actions;
     }
 }

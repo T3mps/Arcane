@@ -126,6 +126,7 @@ project "Core"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
@@ -224,6 +225,7 @@ project "Arcane"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         defines { "VK_USE_PLATFORM_WIN32_KHR" }
         -- d3d12/dxgi/dxguid: D3D12 backend. SDL3-static + system libs:
         -- the platform layer (list mirrors SDL3's pkgconfig Libs line).
@@ -292,6 +294,7 @@ project "PlaygroundGame"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
     filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
@@ -353,6 +356,7 @@ project "Sandbox"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
     filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
@@ -412,6 +416,7 @@ project "Loom"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
     filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
@@ -489,6 +494,7 @@ project "ArcaneEditor"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         -- .exe file icon (Explorer/taskbar/Alt-Tab): a Win32 ICON resource. The .rc
         -- references arcane.ico by name; resincludedirs points RC at its folder.
         files { "%{prj.location}/resources/ArcaneEditor.rc" }
@@ -631,6 +637,7 @@ project "ArcaneTests"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         links { "ws2_32" }  -- Core TcpSocket
 
     filter "configurations:Debug"
@@ -679,6 +686,7 @@ local function test_plugin(name, defs)
         filter "system:windows"
             systemversion "latest"
             buildoptions { "/Zc:__cplusplus", "/bigobj" }
+            fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         filter "configurations:Debug"   defines { "ARCANE_DEBUG" }                    runtime "Debug"   symbols "on"
         filter "configurations:Release" defines { "ARCANE_RELEASE", "NDEBUG" }        runtime "Release" optimize "speed" symbols "on"
         filter "configurations:Dist"    defines { "ARCANE_DIST", "NDEBUG" }           runtime "Release" optimize "speed" symbols "off"
