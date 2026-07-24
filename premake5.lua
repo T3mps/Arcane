@@ -599,6 +599,7 @@ project "ArcaneTests"
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.imguinodeeditor}",   -- ShaderEditorDocument.cpp (graph canvas, Slice 9)
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
@@ -609,7 +610,10 @@ project "ArcaneTests"
     -- imgui is NOT linked here: it is exported from Arcane.dll (IMGUI_API =
     -- dllimport below), so the test exe shares the DLL's single GImGui rather
     -- than carrying a second null context. The import lib comes via "Arcane".
-    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D" }
+    -- imgui-node-editor IS linked (a plain static lib compiled with
+    -- IMGUI_API=dllimport, same as this exe): ShaderEditorDocument.cpp's graph
+    -- canvas calls it, and that TU source-compiles into the tests.
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D", "imgui-node-editor" }
 
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame", "Sandbox" }
 

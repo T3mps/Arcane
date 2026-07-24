@@ -376,6 +376,14 @@ namespace Arcane::Editor
         self->m_pendingMaterialNewPath = path;
     }
 
+    void EditorApp::GraphMaterialNewPickedThunk(const char* path, void* user)
+    {
+        auto* self = static_cast<EditorApp*>(user);
+        if (!path) return;
+        std::lock_guard<std::mutex> lk(self->m_pendingMaterialMutex);
+        self->m_pendingGraphMaterialNewPath = path;
+    }
+
     void EditorApp::MaterialOpenPickedThunk(const char* path, void* user)
     {
         auto* self = static_cast<EditorApp*>(user);
@@ -414,7 +422,7 @@ namespace Arcane::Editor
         m_documents.OpenPath(path);
     }
 
-    void EditorApp::CreateMaterialAt(std::filesystem::path path)
+    void EditorApp::CreateMaterialAt(std::filesystem::path path, bool graph)
     {
         if (path.extension() != ".armat")
             path += ".armat";
@@ -423,6 +431,34 @@ namespace Arcane::Editor
         data.id = Arcane::Guid::Generate();
         data.name = path.stem().string();
         data.kind = "fullscreen";
+        if (graph)
+        {
+            // Graph-owned starter: a Color wired to the Output (SG seeds its
+            // stack the same way -- never an empty canvas).
+            Arcane::MaterialGraph g;
+            Arcane::GraphNode out;
+            out.id = 1;
+            out.type = Arcane::GraphNodeType::Output;
+            out.posX = 420.0f;
+            out.posY = 200.0f;
+            Arcane::GraphNode color;
+            color.id = 2;
+            color.type = Arcane::GraphNodeType::ConstColor;
+            color.posX = 160.0f;
+            color.posY = 200.0f;
+            color.value[0] = 0.2f; color.value[1] = 0.8f;
+            color.value[2] = 1.0f; color.value[3] = 1.0f;
+            g.nodes = { out, color };
+            Arcane::GraphLink l;
+            l.fromNode = 2;
+            l.toNode = 1;
+            g.links.push_back(l);
+            g.nextId = 3;
+            auto gen = Arcane::GenerateGraphSnippet(g, Arcane::MaterialSurface::Fullscreen);
+            data.snippet = std::move(gen.snippet);
+            data.graph = std::move(g);
+        }
+        else
         data.snippet =
             "//@param color Tint  = (0.2, 0.8, 1.0, 1)\n"
             "//@param float Speed = 1.0 [0..4]\n"
@@ -589,15 +625,18 @@ namespace Arcane::Editor
 
             // Material file-dialog results (same background-thread stash
             // pattern): create/open at the top of the frame, never mid-render.
-            std::string materialNew, materialOpen, instanceNew;
+            std::string materialNew, graphMaterialNew, materialOpen, instanceNew;
             {
                 std::lock_guard<std::mutex> lk(m_pendingMaterialMutex);
                 materialNew.swap(m_pendingMaterialNewPath);
+                graphMaterialNew.swap(m_pendingGraphMaterialNewPath);
                 materialOpen.swap(m_pendingMaterialOpenPath);
                 instanceNew.swap(m_pendingInstanceNewPath);
             }
             if (!materialNew.empty())
                 CreateMaterialAt(materialNew);
+            if (!graphMaterialNew.empty())
+                CreateMaterialAt(graphMaterialNew, /*graph=*/true);
             if (!materialOpen.empty())
                 m_documents.OpenPath(materialOpen);
             if (!instanceNew.empty())
@@ -1040,7 +1079,7 @@ namespace Arcane::Editor
             Arcane::Editor::EndDockSpace();
             if (menuReq.openProject)
                 m_gpu->Win().ShowOpenFolderDialog(&EditorApp::FolderPickedThunk, this);
-            if (menuReq.newMaterial || menuReq.openMaterial)
+            if (menuReq.newMaterial || menuReq.newGraphMaterial || menuReq.openMaterial)
             {
                 // Material dialogs start in the project's Content/ (the only place
                 // a saved asset can register + resolve by GUID); no project = OS default.
@@ -1050,6 +1089,9 @@ namespace Arcane::Editor
                 const char* defaultPath = contentDir.empty() ? nullptr : contentDir.c_str();
                 if (menuReq.newMaterial)
                     m_gpu->Win().ShowSaveFileDialog(&EditorApp::MaterialNewPickedThunk, this,
+                                                    "Arcane Material", "armat", defaultPath);
+                if (menuReq.newGraphMaterial)
+                    m_gpu->Win().ShowSaveFileDialog(&EditorApp::GraphMaterialNewPickedThunk, this,
                                                     "Arcane Material", "armat", defaultPath);
                 if (menuReq.openMaterial)
                     m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,

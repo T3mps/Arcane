@@ -55,6 +55,7 @@ namespace Arcane::Editor
                 ImGui::MenuItem("Open Scene...");
                 ImGui::Separator();
                 if (ImGui::MenuItem("New Material...")) requests.newMaterial = true;
+                if (ImGui::MenuItem("New Graph Material...")) requests.newGraphMaterial = true;
                 if (ImGui::MenuItem("Open Material...")) requests.openMaterial = true;
                 ImGui::Separator();
                 ImGui::MenuItem("Save Scene");

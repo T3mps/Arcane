@@ -20,9 +20,10 @@ namespace Arcane::Editor
     // (dialog launches happen at the call site, never inside the menu draw).
     struct MenuRequests
     {
-        bool openProject = false;    // File -> Open Project...   (folder dialog)
-        bool newMaterial = false;    // File -> New Material...   (save-file dialog)
-        bool openMaterial = false;   // File -> Open Material...  (open-file dialog)
+        bool openProject = false;      // File -> Open Project...        (folder dialog)
+        bool newMaterial = false;      // File -> New Material...        (save-file dialog)
+        bool newGraphMaterial = false; // File -> New Graph Material...  (save-file dialog)
+        bool openMaterial = false;     // File -> Open Material...       (open-file dialog)
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT

@@ -191,6 +191,7 @@ namespace Arcane::Editor
         // Async file-dialog results for the material flows (same background-
         // thread stash pattern as m_pendingProjectPath below).
         std::string m_pendingMaterialNewPath;
+        std::string m_pendingGraphMaterialNewPath;   // File -> New Graph Material...
         std::string m_pendingMaterialOpenPath;
         std::string m_pendingInstanceNewPath;
         std::mutex  m_pendingMaterialMutex;
@@ -199,9 +200,12 @@ namespace Arcane::Editor
         Arcane::Guid m_pendingInstanceParent;
 
         static void MaterialNewPickedThunk(const char* path, void* user);
+        static void GraphMaterialNewPickedThunk(const char* path, void* user);
         static void MaterialOpenPickedThunk(const char* path, void* user);
         static void InstanceNewPickedThunk(const char* path, void* user);
-        void CreateMaterialAt(std::filesystem::path path);   // mint .armat + open doc
+        // Mint a .armat + open its doc; `graph` seeds a graph-owned material
+        // (Output + Color wired) instead of the starter text snippet.
+        void CreateMaterialAt(std::filesystem::path path, bool graph = false);
         void CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);
         Arcane::Editor::DocServices MakeDocServices();
 

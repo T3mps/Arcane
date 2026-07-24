@@ -38,6 +38,11 @@ namespace Arcane
     class ShaderLibrary;
 }
 
+namespace ax::NodeEditor
+{
+    struct EditorContext;   // imgui-node-editor (opaque; graph canvas, Slice 9)
+}
+
 namespace Arcane::Editor
 {
     // Everything a document borrows from the app (all outlive the host's
@@ -63,6 +68,7 @@ namespace Arcane::Editor
     public:
         ShaderEditorDocument(DocServices services, std::filesystem::path path,
                              Arcane::MaterialAssetData data);
+        ~ShaderEditorDocument() override;   // destroys the node-editor context
 
         const std::string& Title() const override { return m_title; }
         Arcane::Guid AssetGuid() const override { return m_data.id; }
@@ -78,6 +84,14 @@ namespace Arcane::Editor
         bool ConsumeResult(const Arcane::ShaderCompileResult& result);
 
         bool IsInstance() const { return m_data.IsInstance(); }
+        // Graph-owned (Slice 9): the node canvas is the editing surface and the
+        // snippet buffer holds GENERATED text (shown read-only).
+        bool IsGraphOwned() const { return m_data.graph.has_value(); }
+
+        // Undo plumbing for graph edits (same doc-identity anchor pattern as
+        // ApplyParamEdit): swap in a whole graph state -- nullopt = text-owned
+        // (convert-to-text and its redo) -- and regenerate/recompile.
+        void ApplyGraphState(std::optional<Arcane::MaterialGraph> state);
 
         // Parse/chain-resolution errors (what the errors panel shows above the
         // compile diags). Exposed for the headless tests.
@@ -106,6 +120,17 @@ namespace Arcane::Editor
         void DrawToolbar();
         void DrawSnippetEditor(float height);
         void DrawErrorsPanel();
+        // Graph mode (Slice 9, imgui-node-editor canvas).
+        void RegenerateFromGraph();          // codegen -> snippet -> Rebuild; errors keep last-good
+        void DrawGraphPanel(float height);
+        void DrawGraphNode(Arcane::GraphNode& node);
+        void HandleGraphEdits();             // link create/delete queries (inside Begin/End)
+        // One undo step per completed graph gesture: `before` was captured at
+        // the gesture start; `after` is the current graph. The live edit
+        // already happened (ICommand contract).
+        void PushGraphUndo(const char* label, std::optional<Arcane::MaterialGraph> before);
+        bool NodeBadged(std::uint32_t nodeId) const;
+        void RebuildDiagBadges();            // compile diags -> line map -> node ids
         void DrawPreviewPanel(float height);
         void DrawParamsPanel();
         // True when the ACTIVE surface has something bound to show.
@@ -180,6 +205,28 @@ namespace Arcane::Editor
         // ID transfer between documents could cross shared statics.
         bool                  m_gestureHadBefore = false;
         Arcane::MatParamValue m_gestureBefore{};
+
+        // ---- Graph mode (Slice 9) ----
+        ax::NodeEditor::EditorContext* m_graphCtx = nullptr;   // lazy; dtor destroys
+        std::vector<Arcane::GraphError> m_graphErrors;   // last codegen's errors (badges + panel)
+        std::vector<std::uint32_t> m_lineNodeIds;        // last GOOD codegen's line map
+        std::vector<std::uint32_t> m_diagBadgeNodes;     // compile-diag nodes via the line map
+        // First snippet line's 0-based offset inside the stitched HLSL -- maps
+        // compiler diag lines back into snippet space (jump + badges).
+        int  m_snippetLineOffset = 0;
+        bool m_graphPositionsApplied = false;   // canvas seeded from stored node positions
+        bool m_showGeneratedText = false;       // toolbar toggle: canvas <-> read-only HLSL
+        bool m_confirmConvertToText = false;
+        std::uint32_t m_focusNode = 0;          // errors-panel click -> select + navigate
+        float m_graphPopupX = 0.0f, m_graphPopupY = 0.0f;   // create-menu screen pos
+        // Whole-graph gesture capture for value drags (small graphs; the SG
+        // full-snapshot-undo pathology was per-edit reserialization + full
+        // preview regeneration, neither of which applies here).
+        std::optional<Arcane::MaterialGraph> m_graphGestureBefore;
+        // In-progress param-name edit (InputText needs a stable buffer while
+        // active; committed on deactivate-after-edit).
+        std::uint32_t m_nameEditNode = 0;
+        char          m_nameBuf[64] = {};
 
         friend struct SnippetCallbackForwarder;
     };
