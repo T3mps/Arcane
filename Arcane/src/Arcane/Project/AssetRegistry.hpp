@@ -17,6 +17,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace Arcane
 {
@@ -42,6 +44,10 @@ namespace Arcane
 
         // Guid -> mount path ("game://a/b.json"); nullopt if the id is unknown.
         std::optional<std::string> Resolve(const Guid& id) const;
+
+        // Snapshot of every (guid, mount path) pair -- the asset browser's feed.
+        // Unordered (map iteration order); presentation sorts as it likes.
+        std::vector<std::pair<Guid, std::string>> All() const;
 
         std::size_t Count() const { return m_byGuid.size(); }
         void        Clear()       { m_byGuid.clear(); }

@@ -171,4 +171,13 @@ namespace Arcane
             return std::nullopt;
         return it->second;
     }
+
+    std::vector<std::pair<Guid, std::string>> AssetRegistry::All() const
+    {
+        std::vector<std::pair<Guid, std::string>> out;
+        out.reserve(m_byGuid.size());
+        for (const auto& [id, mountPath] : m_byGuid)
+            out.emplace_back(id, mountPath);
+        return out;
+    }
 }

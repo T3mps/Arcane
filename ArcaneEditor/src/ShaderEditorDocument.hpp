@@ -32,8 +32,8 @@
 
 namespace Arcane
 {
-    class Assets;
     class CommandStack;
+    class Runtime;
     class ShaderLibrary;
 }
 
@@ -47,7 +47,7 @@ namespace Arcane::Editor
         Arcane::ShaderLibrary*        shaders = nullptr;    // OffscreenCanvas tonemap
         Arcane::ShaderCompiler*       compiler = nullptr;   // app-shared service
         Arcane::ShaderSourceProvider* sources = nullptr;    // template text
-        Arcane::Assets*               assets = nullptr;     // texture params by Guid
+        Arcane::Runtime*              runtime = nullptr;    // Assets facade + open project (picker)
         Arcane::CommandStack*         undo = nullptr;       // the ONE undo history
         const double*                 clock = nullptr;      // app compile clock (Poll's `now`)
         Arcane::GraphicsBackend       backend{};
@@ -80,6 +80,10 @@ namespace Arcane::Editor
         void DrawErrorsPanel();
         void DrawPreviewPanel(float height);
         void DrawParamsPanel();
+        void DrawTextureParam(const Arcane::ParamDecl& decl,
+                              const Arcane::MatParamValue& current);
+        void SetParamWithUndo(const Arcane::ParamDecl& decl,
+                              const Arcane::MatParamValue& value);
 
         DocServices                     m_services;
         std::filesystem::path           m_path;

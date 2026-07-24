@@ -320,7 +320,7 @@ namespace Arcane::Editor
         s.shaders  = &m_gpu->Shaders();
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
-        s.assets   = &m_runtime->AssetsFacade();
+        s.runtime  = &*m_runtime;
         s.undo     = m_undo ? &*m_undo : nullptr;
         s.clock    = &m_editorClock;
         s.backend  = m_gpu->Device().Backend();
@@ -905,7 +905,8 @@ namespace Arcane::Editor
             if (menuReq.openMaterial)
                 m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
                                                 "Arcane Material", "armat");
-            Arcane::Editor::DrawAssetsPanel(m_runtime->CurrentProject());
+            Arcane::Editor::DrawAssetBrowserPanel(m_assetBrowser,
+                                                  m_runtime->CurrentProject(), m_documents);
             Arcane::Editor::DrawConsolePanel(m_console);
             m_documents.DrawAll();
 

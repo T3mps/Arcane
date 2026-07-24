@@ -1,12 +1,15 @@
 #include "ShaderEditorDocument.hpp"
 
+#include "AssetBrowser.hpp"
 #include "MaterialParamWidgets.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
+#include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
 
 #include <imgui.h>
@@ -253,7 +256,9 @@ namespace Arcane::Editor
         m_preview->DrawPass(
             [&](nvrhi::ICommandList* cl, nvrhi::IFramebuffer* fb)
             {
-                m_pass->Render(cl, fb, *m_instance, globals, m_services.assets);
+                m_pass->Render(cl, fb, *m_instance, globals,
+                               m_services.runtime ? &m_services.runtime->AssetsFacade()
+                                                  : nullptr);
             },
             glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
     }
@@ -421,6 +426,85 @@ namespace Arcane::Editor
         ImGui::EndChild();
     }
 
+    // One texture param row: current binding + [pick] popup over the project's
+    // texture assets + a browser-drag drop target. All three routes land in
+    // SetParamWithUndo (single-step undo, no gesture bracketing needed).
+    void ShaderEditorDocument::DrawTextureParam(const Arcane::ParamDecl& d,
+                                                const Arcane::MatParamValue& current)
+    {
+        const Arcane::Project* project =
+            m_services.runtime ? m_services.runtime->CurrentProject() : nullptr;
+
+        std::string display = "(none)";
+        if (current.tex.IsValid())
+        {
+            display = current.tex.ToString();
+            if (project)
+                if (const auto mount = project->Registry().Resolve(current.tex))
+                    display = *mount;
+        }
+        ImGui::TextUnformatted(d.name.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", display.c_str());
+
+        // Drop target: accept a texture asset dragged from the browser.
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kAssetDragType))
+            {
+                const auto* payload = static_cast<const AssetDragPayload*>(p->Data);
+                if (payload->kind == AssetKind::Texture)
+                    SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(payload->guid));
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        ImGui::SameLine();
+        const std::string pickId = "pick##" + d.name;
+        const std::string popupId = "##texpick_" + d.name;
+        if (ImGui::SmallButton(pickId.c_str()))
+            ImGui::OpenPopup(popupId.c_str());
+        if (ImGui::BeginPopup(popupId.c_str()))
+        {
+            if (!project)
+            {
+                ImGui::TextDisabled("no project open");
+            }
+            else
+            {
+                if (ImGui::Selectable("(none)"))
+                    SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(Arcane::Guid::Nil()));
+                for (const AssetEntry& e : BuildAssetEntries(project->Registry()))
+                {
+                    if (e.kind != AssetKind::Texture)
+                        continue;
+                    const std::string label = e.name + "##" + e.mountPath;
+                    if (ImGui::Selectable(label.c_str(), e.guid == current.tex))
+                        SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(e.guid));
+                }
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    void ShaderEditorDocument::SetParamWithUndo(const Arcane::ParamDecl& d,
+                                                const Arcane::MatParamValue& value)
+    {
+        if (!m_instance)
+            return;
+        const bool hadBefore = m_instance->HasOverride(d.nameHash);
+        Arcane::MatParamValue before;
+        if (hadBefore)
+            m_instance->GetParam(d.nameHash, before);
+        if (!m_instance->Set(d.nameHash, value))
+            return;
+        m_dirty = true;
+        if (m_services.undo)
+            m_services.undo->Push(std::make_unique<ParamEditCommand>(
+                m_instance, d.nameHash, "Edit " + d.name,
+                hadBefore, before, /*hasAfter=*/true, value));
+    }
+
     void ShaderEditorDocument::DrawParamsPanel()
     {
         ImGui::BeginChild("##params", ImVec2(0, 0), ImGuiChildFlags_Borders);
@@ -464,28 +548,8 @@ namespace Arcane::Editor
                     edited = ImGui::ColorEdit4(d.name.c_str(), value.f);
                     break;
                 case ParamWidget::TexturePicker:
-                {
-                    // Guid text field for now; the asset-browser picker + drag
-                    // target arrive with Slice 6.
-                    char buf[64];
-                    const std::string s = value.tex.IsValid() ? value.tex.ToString() : "";
-                    std::snprintf(buf, sizeof(buf), "%s", s.c_str());
-                    if (ImGui::InputText(d.name.c_str(), buf, sizeof(buf),
-                                         ImGuiInputTextFlags_EnterReturnsTrue))
-                    {
-                        if (const auto g = Arcane::Guid::FromString(buf))
-                        {
-                            value = Arcane::MatParamValue::MakeTexture(*g);
-                            edited = true;
-                        }
-                        else if (buf[0] == '\0')
-                        {
-                            value = Arcane::MatParamValue::MakeTexture(Arcane::Guid::Nil());
-                            edited = true;
-                        }
-                    }
+                    DrawTextureParam(d, value);
                     break;
-                }
             }
 
             if (ImGui::IsItemActivated())

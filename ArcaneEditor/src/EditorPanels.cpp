@@ -253,24 +253,6 @@ namespace Arcane::Editor
         ImGui::Separator();
     }
 
-    void DrawAssetsPanel(const Arcane::Project* project)
-    {
-        ImGui::Begin("Assets");
-        if (project)
-        {
-            ImGui::Text("Project: %s", project->Manifest().name.c_str());
-            ImGui::TextDisabled("%s", project->Root().generic_string().c_str());
-        }
-        else
-        {
-            ImGui::TextDisabled("No project open (data/-next-to-exe)");
-        }
-        ImGui::Separator();
-        // Placeholder: the asset browser lands here later.
-        ImGui::TextDisabled("Assets browser -- coming soon");
-        ImGui::End();
-    }
-
     void DrawConsolePanel(const ConsoleBuffer& console)
     {
         ImGui::Begin("Console");

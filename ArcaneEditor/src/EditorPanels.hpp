@@ -53,10 +53,8 @@ namespace Arcane::Editor
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                             const Arcane::PluginVTable* plugin, uint64_t logoTex = 0);
 
-    // Placeholder asset-browser panel (dummy for now); docks as a tab before Console.
-    // Shows the open project's name + root when one is open (see EditorApp::Init),
-    // else "No project open" (the legacy data/-next-to-exe boot, unchanged).
-    void DrawAssetsPanel(const Arcane::Project* project);
+    // (The Assets panel is the REAL browser now -- AssetBrowser.hpp's
+    // DrawAssetBrowserPanel; the placeholder stub retired in Slice 6.)
 
 
     // Scrolling read-only console of captured log lines (autoscroll).

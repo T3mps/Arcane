@@ -14,6 +14,7 @@
 #include <LoomConfig.hpp>
 #include <GpuContext.hpp>
 #include <FramePerf.hpp>
+#include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
 #include "DocumentHost.hpp"
 #include "PlayMode.hpp"
@@ -178,6 +179,7 @@ namespace Arcane::Editor
         std::unique_ptr<Arcane::ShaderCompiler> m_shaderCompiler;
         Arcane::ShaderSourceProvider            m_shaderSources;
         Arcane::Editor::DocumentHost            m_documents;
+        Arcane::Editor::AssetBrowserState       m_assetBrowser;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
 
         // Async file-dialog results for the material flows (same background-
