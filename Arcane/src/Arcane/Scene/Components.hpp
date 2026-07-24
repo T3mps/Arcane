@@ -6,6 +6,8 @@
 // reflect blocks at namespace scope register once per module (MetaRegistry is
 // idempotent), and the simulation Registry is owned by the host module.
 
+#include <Arcane/Guid.hpp>
+
 #include <Astra/Reflection/Reflection.hpp>
 
 #include <glm/glm.hpp>
@@ -72,6 +74,12 @@ namespace Arcane
         int32_t     sortingLayer = 0;
         int32_t     orderInLayer = 0;
         SpriteShape shape = SpriteShape::Rect; // primitive drawn (Rect/Circle/Capsule)
+        // Optional sprite material (Slice 8): the Guid of a SAVED .armat asset.
+        // Nil (the default) = the plain sprite pipeline, byte-identical to the
+        // pre-material path. Resolved to a Batcher2D material id through the
+        // SpriteMaterialTable resource at submission; unresolved Guids draw as
+        // plain sprites until their compile lands. Rect shape only.
+        Guid        material{};
     };
 }
 
@@ -106,6 +114,14 @@ namespace Arcane
         ASTRA_REFLECT_ENUM_VALUE(SpriteShape, Capsule)
     ASTRA_END_REFLECT_ENUM()
 
+    // Guid reflects as a nested struct (hi/lo scalars) so the reflection->JSON
+    // path round-trips component asset references (SpriteRenderer::material).
+    // Registered here, NOT in Core -- Core stays Astra-free.
+    ASTRA_REFLECT_TYPE(Guid)
+        ASTRA_REFLECT_FIELD(Guid, hi)
+        ASTRA_REFLECT_FIELD(Guid, lo)
+    ASTRA_END_REFLECT_TYPE()
+
     ASTRA_REFLECT_TYPE(SpriteRenderer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, textureId)
         ASTRA_REFLECT_FIELD(SpriteRenderer, size)
@@ -113,5 +129,6 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(SpriteRenderer, sortingLayer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, orderInLayer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, shape)
+        ASTRA_REFLECT_FIELD(SpriteRenderer, material)
     ASTRA_END_REFLECT_TYPE()
 }

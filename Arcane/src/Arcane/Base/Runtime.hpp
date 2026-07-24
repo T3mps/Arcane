@@ -17,10 +17,12 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace nvrhi { class IDevice; }
@@ -88,6 +90,13 @@ namespace Arcane
         // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
         // so the PLUGIN owns the camera (via SetCamera) and the host stays camera-agnostic.
         void SetRenderContext(Batcher2D* batcher);
+
+        // Publish the sprite-material resolution map (Guid -> Batcher2D material
+        // id, owned by the host's SpriteMaterialCache) into the registry's
+        // SpriteMaterialTable resource. Runs IN this module so the scene TypeID
+        // resolves against the shared context (SetRenderContext's rule). Null
+        // clears the table (sprites fall back to the plain pipeline).
+        void SetSpriteMaterials(const std::unordered_map<Guid, std::uint16_t>* materials);
 
         // --- render-resources bridge: device + shader library the host owns ---------
         // The plugin reaches the engine ONLY through this Runtime, but the nvrhi device

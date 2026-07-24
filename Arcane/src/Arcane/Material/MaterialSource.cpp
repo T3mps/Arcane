@@ -1,5 +1,7 @@
 #include <Arcane/Material/MaterialSource.hpp>
 
+#include <Arcane/Material/GlobalParams.hpp>
+
 #include <charconv>
 #include <cstdint>
 
@@ -9,10 +11,12 @@ namespace Arcane
     {
         constexpr std::string_view kParamPrefix = "//@param";
 
-        // Names the fullscreen template already owns at global scope -- a param
+        // Names the engine templates already own at global scope -- a param
         // with one of these would shadow or collide in the stitched source.
+        // SpriteTexture belongs to the sprite template only, but reserving it
+        // everywhere keeps a snippet portable across surfaces.
         constexpr std::string_view kReservedNames[] = {
-            "Time", "DeltaTime", "ViewportSize", "MaterialSampler",
+            "Time", "DeltaTime", "ViewportSize", "MaterialSampler", "SpriteTexture",
         };
 
         std::string_view TrimView(std::string_view s)
@@ -296,11 +300,29 @@ namespace Arcane
         return out;
     }
 
-    std::string GenerateMaterialBindings(const MaterialTemplate& templ)
+    const char* MaterialTemplateFile(MaterialSurface surface)
+    {
+        return surface == MaterialSurface::Sprite
+                   ? "materials/sprite_material.hlsl"
+                   : "materials/fullscreen_material.hlsl";
+    }
+
+    MaterialSurface MaterialSurfaceForKind(std::string_view kind)
+    {
+        return kind == "sprite" ? MaterialSurface::Sprite
+                                : MaterialSurface::Fullscreen;
+    }
+
+    std::string GenerateMaterialBindings(const MaterialTemplate& templ,
+                                         MaterialSurface surface)
     {
         // Members emit in declaration order: HLSL's cbuffer packing applies the
         // same rules MaterialTemplate::Build used, so the shader's offsets match
-        // the CPU layout byte for byte. Keep the two in lockstep.
+        // the CPU layout byte for byte. Keep the two in lockstep. Register
+        // assignments follow the surface map in GlobalParams.hpp.
+        const bool sprite = surface == MaterialSurface::Sprite;
+        const std::uint32_t cbSlot = sprite ? kSpriteMaterialCbSlot : kMaterialCbSlot;
+        const std::uint32_t texBase = sprite ? kSpriteMaterialTextureBase : 0;
         std::string outText;
 
         bool anyNumeric = false;
@@ -309,7 +331,7 @@ namespace Arcane
 
         if (anyNumeric)
         {
-            outText += "cbuffer Material : register(b0)\n{\n";
+            outText += "cbuffer Material : register(b" + std::to_string(cbSlot) + ")\n{\n";
             for (const ParamDecl& d : templ.Params())
             {
                 if (d.type == MatParamType::Texture)
@@ -329,10 +351,12 @@ namespace Arcane
             if (d.type != MatParamType::Texture)
                 continue;
             outText += "Texture2D " + d.name + " : register(t" +
-                       std::to_string(d.textureIndex) + ");\n";
+                       std::to_string(d.textureIndex + texBase) + ");\n";
             anyTexture = true;
         }
-        if (anyTexture)
+        // The sprite template declares MaterialSampler itself (SpriteTexture
+        // always needs it); emitting it here too would redeclare s0.
+        if (anyTexture && !sprite)
             outText += "SamplerState MaterialSampler : register(s0);\n";
 
         return outText;
@@ -388,7 +412,8 @@ namespace Arcane
 
     MaterialBuildResult BuildMaterialShaderSource(std::string_view templateText,
                                                   std::string_view snippet,
-                                                  std::string materialName)
+                                                  std::string materialName,
+                                                  MaterialSurface surface)
     {
         MaterialBuildResult r;
 
@@ -401,7 +426,7 @@ namespace Arcane
         hash = Fnv64Str(hash, snippet);
         r.templ = MaterialTemplate::Build(std::move(materialName), hash, std::move(parsed.decls));
 
-        const std::string bindings = GenerateMaterialBindings(r.templ);
+        const std::string bindings = GenerateMaterialBindings(r.templ, surface);
         const std::pair<std::string_view, std::string_view> slots[] = {
             { "MATERIAL_CBUFFER", bindings },
             { "MATERIAL_BODY", snippet },

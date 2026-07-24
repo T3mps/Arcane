@@ -26,6 +26,7 @@
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
+#include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
@@ -317,6 +318,27 @@ namespace Arcane::Editor
                 return data ? data->id : Arcane::Guid::Nil();
             });
 
+        // Scene sprite materials (Slice 8): SAVED .armat assets referenced by
+        // SpriteRenderer::material compile through the same service and
+        // register with the viewport's scene batcher.
+        {
+            Arcane::SpriteMaterialCache::Services cacheServices;
+            cacheServices.compiler = m_shaderCompiler.get();
+            cacheServices.sources = &m_shaderSources;
+            cacheServices.assets = &m_runtime->AssetsFacade();
+            cacheServices.device = m_gpu->Device().Nvrhi();
+            cacheServices.backend = m_gpu->Device().Backend();
+            cacheServices.resolveAsset = [rt = &*m_runtime](const Arcane::Guid& g)
+                -> std::optional<std::filesystem::path>
+            {
+                const Arcane::Project* project = rt->CurrentProject();
+                return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(g))
+                               : std::nullopt;
+            };
+            m_spriteMaterials =
+                std::make_unique<Arcane::SpriteMaterialCache>(std::move(cacheServices));
+        }
+
         return true;
     }
 
@@ -331,6 +353,11 @@ namespace Arcane::Editor
         s.undo     = m_undo ? &*m_undo : nullptr;
         s.clock    = &m_editorClock;
         s.backend  = m_gpu->Device().Backend();
+        s.onAssetSaved = [this](const Arcane::Guid& id)
+        {
+            if (m_spriteMaterials)
+                m_spriteMaterials->Invalidate(id);
+        };
         return s;
     }
 
@@ -451,6 +478,9 @@ namespace Arcane::Editor
             return;
         }
         m_documents.CloseAll();
+        // Sprite materials resolved against the outgoing project's registry.
+        if (m_spriteMaterials)
+            m_spriteMaterials->Clear();
 
         // Return to Edit + clear editor state that references the outgoing scene.
         if (m_play.IsPlaying())
@@ -838,6 +868,15 @@ namespace Arcane::Editor
             m_viewport->Draw(
                 [&](Arcane::Batcher2D& b)
                 {
+                    // Globals for registered sprite materials (Time/Delta/
+                    // Viewport); built-in pipelines ignore them.
+                    Arcane::GlobalParams sceneGlobals;
+                    sceneGlobals.time = (float)m_editorClock;
+                    sceneGlobals.deltaTime = (float)m_lastFrameDt;
+                    sceneGlobals.viewportWidth = (float)m_viewport->Width();
+                    sceneGlobals.viewportHeight = (float)m_viewport->Height();
+                    b.SetGlobals(sceneGlobals);
+
                     m_runtime->SetRenderContext(&b);
                     m_runtime->Loop().SubmitRender();
 
@@ -925,22 +964,45 @@ namespace Arcane::Editor
             }
 
             // Shader-editor pump (Slice 5): advance the compile clock, dispatch
-            // due jobs, and route drained results to their documents -- the ONE
-            // drain site where compile results become NVRHI shaders. Then tick
-            // every document (preview render on its own OffscreenCanvas).
+            // due jobs, and route drained results to their documents AND the
+            // sprite-material cache -- the ONE drain site where compile results
+            // become NVRHI shaders. Then tick every document (preview render on
+            // its own OffscreenCanvas).
             m_editorClock += m_lastFrameDt;
             if (m_shaderCompiler && m_shaderCompiler->IsAvailable())
             {
+                // Sweep the scene for referenced sprite materials (Slice 8):
+                // Request no-ops once a material is known, so this is a cheap
+                // per-frame guarantee that whatever the scene references is
+                // compiling or bound.
+                if (m_spriteMaterials)
+                {
+                    auto sprites = m_runtime->Registry().CreateView<Arcane::SpriteRenderer>();
+                    sprites.ForEach([&](Astra::Entity, Arcane::SpriteRenderer& s)
+                    {
+                        if (s.material.IsValid())
+                            m_spriteMaterials->Request(s.material, m_editorClock);
+                    });
+                }
+
                 m_shaderCompiler->Poll(m_editorClock);
                 for (const Arcane::ShaderCompileResult& r : m_shaderCompiler->Drain())
                 {
+                    bool consumed = false;
                     m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
                     {
                         if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d))
-                            doc->ConsumeResult(r);
+                            consumed = doc->ConsumeResult(r) || consumed;
                     });
+                    if (!consumed && m_spriteMaterials)
+                        m_spriteMaterials->ConsumeResult(r, m_viewport->Batch());
                 }
             }
+            // Publish the resolution table every frame (the map's address is
+            // stable; re-setting keeps the resource honest across project
+            // switches and registry swaps).
+            if (m_spriteMaterials)
+                m_runtime->SetSpriteMaterials(&m_spriteMaterials->Table());
             m_documents.TickAll(m_lastFrameDt);
 
             // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel

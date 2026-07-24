@@ -26,6 +26,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -51,6 +52,10 @@ namespace Arcane::Editor
         Arcane::CommandStack*         undo = nullptr;       // the ONE undo history
         const double*                 clock = nullptr;      // app compile clock (Poll's `now`)
         Arcane::GraphicsBackend       backend{};
+        // Fired after a successful Save with the asset's Guid -- the app
+        // invalidates the sprite-material cache so scene sprites pick up the
+        // SAVED asset (Slice 8; scene sprites never render the working copy).
+        std::function<void(const Arcane::Guid&)> onAssetSaved;
     };
 
     class ShaderEditorDocument final : public EditorDocument
@@ -103,6 +108,11 @@ namespace Arcane::Editor
         void DrawErrorsPanel();
         void DrawPreviewPanel(float height);
         void DrawParamsPanel();
+        // True when the ACTIVE surface has something bound to show.
+        bool PreviewReady() const;
+        // Sprite surface: re-register the preview material's binding data
+        // (texture params resolved fresh) without a recompile.
+        void RefreshSpritePreviewBinding();
         void DrawTextureParam(const Arcane::ParamDecl& decl,
                               const Arcane::MatParamValue& current);
         void SetParamWithUndo(const Arcane::ParamDecl& decl,
@@ -146,6 +156,14 @@ namespace Arcane::Editor
         // BASE (the snippet owner) last. Empty for base materials.
         std::vector<Arcane::MaterialAssetData> m_parentChain;
         bool m_showOnlyOverridden = false;   // instance params filter
+
+        // Preview surface (Slice 8): 0 = fullscreen (FullscreenMaterialPass),
+        // 1 = sprite (a QuadMaterial on a checkerboard through the preview
+        // canvas's own Batcher2D). Initialized from the material's kind;
+        // switching it on a base material re-kinds the asset (structural edit).
+        int m_surface = 0;
+        std::uint16_t       m_previewSpriteMaterial = 0xFFFF;   // Batcher2D id
+        nvrhi::ShaderHandle m_previewVs, m_previewPs;           // for binding refresh
 
         std::uint64_t m_vsJob = 0, m_psJob = 0;      // in-flight ids (0 = none)
         std::vector<std::uint8_t> m_vsBytes, m_psBytes;

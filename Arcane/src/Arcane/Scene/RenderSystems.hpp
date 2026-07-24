@@ -34,6 +34,7 @@ namespace Arcane
             RenderContext2D* ctx = reg.GetResource<RenderContext2D>();
             if (!ctx || !ctx->batcher) return;
             const TextureTable* textures = reg.GetResource<TextureTable>();
+            const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
 
             auto view = reg.CreateView<WorldTransform, SpriteRenderer>();
             view.ForEach([&](Astra::Entity e, WorldTransform& world, SpriteRenderer& sprite)
@@ -109,7 +110,18 @@ namespace Arcane
                 default:
                 {
                     nvrhi::ITexture* tex = textures ? textures->Resolve(sprite.textureId) : nullptr;
-                    if (tex)
+                    // Sprite material (Slice 8): a valid Guid resolves to a
+                    // registered Batcher2D material id; 0 (unresolved / nil) is
+                    // the plain sprite path -- byte-identical when no sprite in
+                    // the scene carries a material.
+                    const uint16_t materialId =
+                        materials && sprite.material.IsValid()
+                            ? materials->Resolve(sprite.material) : 0;
+                    if (materialId != 0)
+                        ctx->batcher->QuadMaterial(materialId, dstPos, dstSize, tex,
+                                                   glm::vec2(0, 0), glm::vec2(1, 1),
+                                                   sprite.tint, worldRot);
+                    else if (tex)
                         ctx->batcher->Quad(dstPos, dstSize, tex,
                                            glm::vec2(0, 0), glm::vec2(1, 1),
                                            sprite.tint, worldRot);

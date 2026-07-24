@@ -9,7 +9,9 @@
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
+#include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
 
 #include <imgui.h>
@@ -23,7 +25,11 @@ namespace Arcane::Editor
 {
     namespace
     {
-        constexpr const char* kTemplateFile = "materials/fullscreen_material.hlsl";
+        Arcane::MaterialSurface SurfaceOf(int surface)
+        {
+            return surface == 1 ? Arcane::MaterialSurface::Sprite
+                                : Arcane::MaterialSurface::Fullscreen;
+        }
 
         // One param edit as an undo step. The live edit already happened (the
         // ICommand contract); Undo restores the BEFORE override state (value or
@@ -134,7 +140,16 @@ namespace Arcane::Editor
         }
 
         if (!IsInstance() || ResolveParentChain())
+        {
+            // Preview surface follows the asset's kind (instances inherit the
+            // chain BASE's kind -- the base owns the snippet and the surface).
+            const std::string& kind =
+                IsInstance() && !m_parentChain.empty() ? m_parentChain.back().kind
+                                                       : m_data.kind;
+            m_surface = Arcane::MaterialSurfaceForKind(kind) ==
+                                Arcane::MaterialSurface::Sprite ? 1 : 0;
             Rebuild();   // parse + first compile; the pass binds when results drain
+        }
     }
 
     bool ShaderEditorDocument::ResolveParentChain()
@@ -199,15 +214,17 @@ namespace Arcane::Editor
         if (!m_services.compiler || !m_services.sources)
             return;
 
-        const auto templateText = m_services.sources->Get(kTemplateFile);
+        const char* templateFile = Arcane::MaterialTemplateFile(SurfaceOf(m_surface));
+        const auto templateText = m_services.sources->Get(templateFile);
         if (!templateText)
         {
-            m_parseErrors = { std::string("template not found: ") + kTemplateFile };
+            m_parseErrors = { std::string("template not found: ") + templateFile };
             return;
         }
 
         Arcane::MaterialBuildResult build =
-            Arcane::BuildMaterialShaderSource(*templateText, SnippetSource(), m_title);
+            Arcane::BuildMaterialShaderSource(*templateText, SnippetSource(), m_title,
+                                              SurfaceOf(m_surface));
         m_parseErrors = std::move(build.errors);
         m_pendingTemplate = std::make_shared<Arcane::MaterialTemplate>(std::move(build.templ));
         m_metas = std::move(build.metas);
@@ -248,7 +265,9 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::BindIfComplete()
     {
-        if (m_vsBytes.empty() || m_psBytes.empty() || !m_pass || !m_pendingTemplate)
+        const bool sprite = m_surface == 1;
+        if (m_vsBytes.empty() || m_psBytes.empty() || !m_pendingTemplate ||
+            (sprite ? !m_preview : !m_pass))
             return;
 
         nvrhi::ShaderHandle vs = m_services.device->createShader(
@@ -261,7 +280,12 @@ namespace Arcane::Editor
             m_psBytes.data(), m_psBytes.size());
         m_vsBytes.clear();
         m_psBytes.clear();
-        if (!vs || !ps || !m_pass->SetMaterial(m_pendingTemplate, vs, ps))
+        if (!vs || !ps)
+            return;
+        // Fullscreen surface binds the pass here (a failure keeps last-good
+        // AND the previous instance). Sprite surface registers with the
+        // preview canvas's batcher AFTER the fresh instance exists below.
+        if (!sprite && !m_pass->SetMaterial(m_pendingTemplate, vs, ps))
             return;
 
         // Promote pending -> bound. Instance mode first layers the parent chain
@@ -293,6 +317,44 @@ namespace Arcane::Editor
         m_savedParamSerial = m_instance->EffectiveSerial();
         m_boundTemplate = m_pendingTemplate;
         m_boundMetas = m_metas;
+
+        if (sprite)
+        {
+            m_previewVs = vs;
+            m_previewPs = ps;
+            RefreshSpritePreviewBinding();
+        }
+    }
+
+    void ShaderEditorDocument::RefreshSpritePreviewBinding()
+    {
+        // (Re)register the preview material on the canvas's OWN batcher: the
+        // shared instance pointer keeps live param edits flowing (PackCB reads
+        // it at End()); texture params resolve fresh HERE, so a pick lands by
+        // calling this again -- no recompile.
+        if (!m_preview || !m_previewVs || !m_previewPs || !m_instance || !m_boundTemplate)
+            return;
+        Arcane::Material2DDesc desc;
+        desc.vs = m_previewVs;
+        desc.ps = m_previewPs;
+        desc.templ = m_boundTemplate;
+        desc.instance = m_instance;
+        const std::vector<Arcane::Guid> texGuids = m_instance->ResolveTextures();
+        desc.paramTextures.resize(texGuids.size());
+        if (m_services.runtime)
+            for (std::size_t i = 0; i < texGuids.size(); ++i)
+                if (texGuids[i].IsValid())
+                    desc.paramTextures[i] = m_services.runtime->AssetsFacade().GetTexture(
+                        Arcane::AssetId::FromGuid(texGuids[i]));
+
+        Arcane::Batcher2D& batcher = m_preview->Batch();
+        if (m_previewSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId)
+        {
+            if (!batcher.UpdateMaterial(m_previewSpriteMaterial, std::move(desc)))
+                ARC_WARN("ShaderEditorDocument '{}': sprite preview update failed", m_title);
+            return;
+        }
+        m_previewSpriteMaterial = batcher.RegisterMaterial(std::move(desc));
     }
 
     bool ShaderEditorDocument::HasErrors() const
@@ -326,6 +388,8 @@ namespace Arcane::Editor
         m_dirty = false;
         m_paramsBaseDirty = false;
         m_savedParamSerial = m_instance ? m_instance->EffectiveSerial() : 0;
+        if (m_services.onAssetSaved)
+            m_services.onAssetSaved(m_data.id);
         return true;
     }
 
@@ -346,12 +410,24 @@ namespace Arcane::Editor
             m_instance->Set(nameHash, value);
         else
             m_instance->ClearOverride(nameHash);
+        // Undo/redo of a TEXTURE param must re-bind the sprite preview too.
+        if (m_surface == 1 && m_boundTemplate)
+            if (const Arcane::ParamDecl* d = m_boundTemplate->Find(nameHash);
+                d && d->type == Arcane::MatParamType::Texture)
+                RefreshSpritePreviewBinding();
+    }
+
+    bool ShaderEditorDocument::PreviewReady() const
+    {
+        return m_surface == 1
+                   ? m_previewSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId
+                   : m_pass && m_pass->Ready();
     }
 
     void ShaderEditorDocument::Tick(double dt)
     {
         m_animTime += dt;
-        if (!m_pass || !m_pass->Ready() || !m_instance || !m_preview)
+        if (!PreviewReady() || !m_instance || !m_preview)
             return;
 
         Arcane::GlobalParams globals;
@@ -359,6 +435,36 @@ namespace Arcane::Editor
         globals.deltaTime = static_cast<float>(dt);
         globals.viewportWidth = static_cast<float>(m_preview->Width());
         globals.viewportHeight = static_cast<float>(m_preview->Height());
+
+        if (m_surface == 1)
+        {
+            // Sprite surface: the material on a centered quad over a
+            // checkerboard, through the canvas's own Batcher2D -- the SAME
+            // pipeline family scene sprites use.
+            m_preview->Draw(
+                [&](Arcane::Batcher2D& b)
+                {
+                    b.SetGlobals(globals);
+                    const float w = (float)m_preview->Width();
+                    const float h = (float)m_preview->Height();
+                    const float cell = 32.0f;
+                    const glm::vec4 light(0.16f, 0.16f, 0.19f, 1.0f);
+                    for (int y = 0; y * cell < h; ++y)
+                        for (int x = 0; x * cell < w; ++x)
+                            if ((x + y) & 1)
+                                b.Rect(glm::vec2(x * cell, y * cell),
+                                       glm::vec2(cell, cell), light);
+                    const float s = 0.8f * (std::min)(w, h);
+                    b.QuadMaterial(m_previewSpriteMaterial,
+                                   glm::vec2((w - s) * 0.5f, (h - s) * 0.5f),
+                                   glm::vec2(s, s), nullptr,
+                                   glm::vec2(0.0f), glm::vec2(1.0f),
+                                   glm::vec4(1.0f));
+                },
+                glm::vec4(0.09f, 0.09f, 0.11f, 1.0f));
+            return;
+        }
+
         m_preview->DrawPass(
             [&](nvrhi::ICommandList* cl, nvrhi::IFramebuffer* fb)
             {
@@ -451,13 +557,29 @@ namespace Arcane::Editor
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120.0f);
-        // Preview-surface selector: fullscreen today; "Sprite" joins in Slice 8.
-        int surface = 0;
-        ImGui::Combo("##surface", &surface, "Fullscreen\0");
+        // Preview-surface selector (Slice 8). On a base material this is a
+        // STRUCTURAL edit: it re-kinds the asset (the surface is what the
+        // material is FOR) and recompiles under the other template. Instances
+        // preview under the switched surface without touching the base.
+        int surface = m_surface;
+        if (ImGui::Combo("##surface", &surface, "Fullscreen\0Sprite\0") &&
+            surface != m_surface)
+        {
+            m_surface = surface;
+            m_previewSpriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;
+            m_previewVs = nullptr;
+            m_previewPs = nullptr;
+            if (!IsInstance())
+            {
+                m_data.kind = m_surface == 1 ? "sprite" : "fullscreen";
+                m_dirty = true;
+            }
+            Rebuild();
+        }
         ImGui::SameLine();
         if (HasErrors())
             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "errors");
-        else if (m_pass && m_pass->Ready())
+        else if (PreviewReady())
             ImGui::TextDisabled("ok");
         else
             ImGui::TextDisabled("compiling...");
@@ -544,7 +666,7 @@ namespace Arcane::Editor
     void ShaderEditorDocument::DrawPreviewPanel(float height)
     {
         ImGui::BeginChild("##preview", ImVec2(0, height), ImGuiChildFlags_Borders);
-        if (m_preview && m_pass && m_pass->Ready())
+        if (m_preview && PreviewReady())
         {
             const ImVec2 avail = ImGui::GetContentRegionAvail();
             const float texW = static_cast<float>(m_preview->Width());
@@ -638,6 +760,10 @@ namespace Arcane::Editor
             m_services.undo->Push(std::make_unique<ParamEditCommand>(
                 m_anchor, d.nameHash, "Edit " + d.name,
                 hadBefore, before, /*hasAfter=*/true, value));
+        // Sprite surface binds texture params at registration -- a pick needs
+        // a binding refresh (numeric params flow live through the CB).
+        if (m_surface == 1 && d.type == Arcane::MatParamType::Texture)
+            RefreshSpritePreviewBinding();
     }
 
     void ShaderEditorDocument::DrawParamsPanel()

@@ -47,6 +47,8 @@ namespace Arcane
                 return BuildTargets(width, height);
             }
 
+            Batcher2D& Batch() override { return *m_batcher; }
+
             void Draw(FunctionRef<void(Batcher2D&)> fn,
                       glm::vec4 clear) override
             {

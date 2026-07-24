@@ -28,6 +28,7 @@
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Material/MaterialTypes.hpp>
 
+#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
@@ -54,12 +55,28 @@ namespace Arcane
     // (Time, DeltaTime, ViewportSize, MaterialSampler) are errors.
     ARCANE_API MaterialSourceParse ParseMaterialSource(std::string_view snippet);
 
+    // Which engine template a material source stitches into. Each surface owns
+    // a register map (GlobalParams.hpp): Fullscreen = material CB b0, textures
+    // t0.., sampler emitted here; Sprite = the batcher's push constants own b0
+    // and the sprite texture owns t0, so the material CB sits at b1 and
+    // declared textures at t1.. (the template declares MaterialSampler itself).
+    enum class MaterialSurface : std::uint8_t { Fullscreen, Sprite };
+
+    // The engine template file for a surface ("materials/....hlsl", resolved
+    // through ShaderSourceProvider) and the surface for a .armat "kind" string
+    // (unknown kinds fall back to Fullscreen).
+    ARCANE_API const char* MaterialTemplateFile(MaterialSurface surface);
+    ARCANE_API MaterialSurface MaterialSurfaceForKind(std::string_view kind);
+
     // The %{MATERIAL_CBUFFER} payload for a built template: the Material cbuffer
-    // (b0, members in declaration order -- HLSL's packing mirrors
+    // (members in declaration order -- HLSL's packing mirrors
     // MaterialTemplate::Build's, keeping shader offsets in lockstep with the
-    // CPU layout), one Texture2D per texture param (t0..) and one shared
-    // MaterialSampler (s0) when any exist. Empty when the template has no params.
-    ARCANE_API std::string GenerateMaterialBindings(const MaterialTemplate& templ);
+    // CPU layout), one Texture2D per texture param and, on the Fullscreen
+    // surface, one shared MaterialSampler (s0) when any exist. Register
+    // assignments follow the surface's map. Empty when the template has no
+    // params.
+    ARCANE_API std::string GenerateMaterialBindings(const MaterialTemplate& templ,
+                                                    MaterialSurface surface = MaterialSurface::Fullscreen);
 
     // Replace every %{NAME} in `templateText` with its slot value. Slot names
     // not in `slots` are left in place and reported through `unresolved` (when
@@ -80,11 +97,12 @@ namespace Arcane
 
     // The one-stop authoring call: parse the snippet, build the layout (source
     // hash covers template + snippet text -- the compile cache key input), emit
-    // bindings, stitch. `hlsl` is always produced (the editor compiles what it
-    // can and shows `errors` beside it).
+    // bindings for `surface`, stitch. `hlsl` is always produced (the editor
+    // compiles what it can and shows `errors` beside it).
     ARCANE_API MaterialBuildResult BuildMaterialShaderSource(std::string_view templateText,
                                                              std::string_view snippet,
-                                                             std::string materialName);
+                                                             std::string materialName,
+                                                             MaterialSurface surface = MaterialSurface::Fullscreen);
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif

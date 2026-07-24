@@ -245,6 +245,13 @@ namespace Arcane
                             static_cast<float>(Loop().Alpha())});
     }
 
+    void Runtime::SetSpriteMaterials(const std::unordered_map<Guid, std::uint16_t>* materials)
+    {
+        // Same rule as SetRenderContext: SetResource<SpriteMaterialTable> runs
+        // IN Arcane.dll so the scene TypeID resolves against the shared context.
+        m_impl->registry->SetResource<SpriteMaterialTable>(SpriteMaterialTable{materials});
+    }
+
     Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const
     {
         // A real Save failure must be named at its source: an empty-but-"ok"

@@ -4,6 +4,8 @@
 // TextureTable are set by the host each frame; SceneRoot marks the subtree that
 // IS the scene.
 
+#include <Arcane/Guid.hpp>
+
 #include <Astra/Entity/Entity.hpp>
 
 #include <nvrhi/nvrhi.h>
@@ -85,6 +87,24 @@ namespace Arcane
             if (id == 0) return nullptr;
             auto it = textures.find(id);
             return it != textures.end() ? it->second : nullptr;
+        }
+    };
+
+    // Sprite-material resolution (Slice 8): material asset Guid -> the id a
+    // compiled material was registered under in the frame's Batcher2D. The map
+    // is OWNED by the host's SpriteMaterialCache (transient pointer resource,
+    // like RenderContext2D::batcher -- set each frame, never serialized).
+    // Unresolved (absent / still compiling / failed) -> 0, the plain sprite
+    // built-in, so a sprite always draws.
+    struct SpriteMaterialTable
+    {
+        const std::unordered_map<Guid, uint16_t>* materials = nullptr;
+
+        uint16_t Resolve(const Guid& g) const
+        {
+            if (!materials || !g.IsValid()) return 0;
+            auto it = materials->find(g);
+            return it != materials->end() ? it->second : 0;
         }
     };
 }

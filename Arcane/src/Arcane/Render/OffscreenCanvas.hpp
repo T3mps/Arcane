@@ -59,6 +59,13 @@ namespace Arcane
                                                nvrhi::IFramebuffer*)> fn,
                               glm::vec4 clear) = 0;
 
+        // The owned Batcher2D, for out-of-frame device-object work against the
+        // SAME instance Draw() records with -- material registration
+        // (Batcher2D::RegisterMaterial at the compile drain site) and texture
+        // eviction (RemoveTexture). Never record draws through it outside
+        // Draw()'s lambda.
+        virtual Batcher2D& Batch() = 0;
+
         // The output texture as an ImTextureID (ImU64), ready for
         // ImGui::Image(). The ImGui-NVRHI backend binds an arbitrary texture
         // by its raw pointer, so this is just (intptr_t)outputTexture. Stable

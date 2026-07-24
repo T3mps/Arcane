@@ -114,6 +114,85 @@ TEST_CASE("StitchShaderTemplate substitutes slots and reports unresolved ones", 
     CHECK(unresolved[0] == "MISSING");
 }
 
+TEST_CASE("GenerateMaterialBindings follows the sprite surface register map", "[material]")
+{
+    // Sprite surface (Slice 8): the batcher's push constants own b0 and the
+    // sprite's own texture owns t0, so the material CB lands at b1, declared
+    // textures at t1.., and the SAMPLER is the template's (not emitted here).
+    MaterialSourceParse parsed = ParseMaterialSource(
+        "//@param float Speed = 1.0\n"
+        "//@param texture Noise\n");
+    REQUIRE(parsed.errors.empty());
+    const MaterialTemplate templ =
+        MaterialTemplate::Build("sprite_binds", 1, std::move(parsed.decls));
+
+    const std::string fullscreen = GenerateMaterialBindings(templ);
+    CHECK(fullscreen.find("register(b0)") != std::string::npos);
+    CHECK(fullscreen.find("register(t0)") != std::string::npos);
+    CHECK(fullscreen.find("SamplerState MaterialSampler") != std::string::npos);
+
+    const std::string sprite =
+        GenerateMaterialBindings(templ, MaterialSurface::Sprite);
+    CHECK(sprite.find("register(b1)") != std::string::npos);
+    CHECK(sprite.find("register(t1)") != std::string::npos);
+    CHECK(sprite.find("register(b0)") == std::string::npos);
+    CHECK(sprite.find("register(t0)") == std::string::npos);
+    CHECK(sprite.find("SamplerState") == std::string::npos);   // template owns s0
+
+    CHECK(std::string(MaterialTemplateFile(MaterialSurface::Sprite)) ==
+          "materials/sprite_material.hlsl");
+    CHECK(MaterialSurfaceForKind("sprite") == MaterialSurface::Sprite);
+    CHECK(MaterialSurfaceForKind("fullscreen") == MaterialSurface::Fullscreen);
+    CHECK(MaterialSurfaceForKind("banana") == MaterialSurface::Fullscreen);
+}
+
+TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target SPRITE shader", "[shadercompile]")
+{
+    // The REAL sprite template through the provider seam: proves the register
+    // maps (push constants b0 / material b1 / globals b2 / SpriteTexture t0 /
+    // params t1..) coexist on BOTH targets, and that a snippet can use the
+    // sprite texture + vertex color + params + Time together.
+    ShaderSourceProvider provider;
+    provider.AddRoot("shaders");
+    const auto templateText = provider.Get("materials/sprite_material.hlsl");
+    REQUIRE(templateText.has_value());
+
+    const char* snippet =
+        "//@param color Tint  = (1, 1, 1, 1)\n"
+        "//@param float Speed = 1.0 [0..4]\n"
+        "//@param texture Noise\n"
+        "\n"
+        "float4 shade(Varyings v)\n"
+        "{\n"
+        "    float w = 0.5 + 0.5 * sin(v.uv.x * 10.0 + Time * Speed);\n"
+        "    float4 base = SpriteTexture.Sample(MaterialSampler, v.uv) * v.color;\n"
+        "    return base * Tint * Noise.Sample(MaterialSampler, v.uv) * w;\n"
+        "}\n";
+
+    const MaterialBuildResult build = BuildMaterialShaderSource(
+        *templateText, snippet, "sprite_example", MaterialSurface::Sprite);
+    REQUIRE(build.errors.empty());
+    CHECK(build.hlsl.find("%{") == std::string::npos);
+
+    ShaderCompiler sc;
+    REQUIRE(sc.Initialize(0.0));
+    for (const char* entry : { kPsEntry, kVsEntry })
+    {
+        ShaderCompileRequest req;
+        req.debugName = "sprite_example.hlsl";
+        req.sourceUtf8 = build.hlsl;
+        req.entry = entry;
+        req.profile = entry == kPsEntry ? kPsProfile : kVsProfile;
+        const ShaderCompileResult r = sc.CompileNow(req);
+        for (const ShaderDiag& d : r.dxil.diags)
+            INFO("dxil " << entry << ": " << d.line << ": " << d.message);
+        for (const ShaderDiag& d : r.spirv.diags)
+            INFO("spirv " << entry << ": " << d.line << ": " << d.message);
+        CHECK(r.AllSucceeded());
+    }
+    sc.Shutdown();
+}
+
 TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target shader", "[shadercompile]")
 {
     // The REAL template file (copied beside the test exe by the postbuild),

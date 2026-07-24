@@ -33,6 +33,7 @@
 #include <Arcane/Render/SelectionOutline.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
+#include <Arcane/Render/SpriteMaterialCache.hpp>
 
 #include <spdlog/sinks/callback_sink.h>
 
@@ -178,6 +179,11 @@ namespace Arcane::Editor
         // before the device) and after m_runtime (they borrow its Assets).
         std::unique_ptr<Arcane::ShaderCompiler> m_shaderCompiler;
         Arcane::ShaderSourceProvider            m_shaderSources;
+        // Scene sprite materials (Slice 8): resolves SAVED .armat assets
+        // referenced by SpriteRenderer::material into registered Batcher2D
+        // materials; the drain site feeds it, the frame loop publishes its
+        // table through Runtime::SetSpriteMaterials.
+        std::unique_ptr<Arcane::SpriteMaterialCache> m_spriteMaterials;
         Arcane::Editor::DocumentHost            m_documents;
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
