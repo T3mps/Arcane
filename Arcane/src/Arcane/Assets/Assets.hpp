@@ -7,13 +7,16 @@
 // later milestones (north star).
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Project/AssetId.hpp>
 
 #include <nvrhi/nvrhi.h>
 #include <Json.hpp>
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace Arcane
@@ -57,22 +60,35 @@ namespace Arcane
         // absolute paths pass through unchanged. The host sets this from the open
         // project's game:// mount (project Content/) so loose-file loads resolve under
         // the project instead of exe-relative. Empty (default) == the legacy
-        // exe-relative behavior. Slice 2 (AssetRegistry/GUID) resolves behind the
-        // AssetId seam and this becomes the fallback for legacy path loads.
+        // exe-relative behavior. GUID loads resolve behind the AssetId seam below;
+        // this stays as the fallback for legacy path loads.
         virtual void SetContentRoot(const std::filesystem::path& root) = 0;
+
+        // The GUID resolution seam: AssetId -> physical file. The host installs the
+        // open project's resolver (Project::ResolveAsset wraps AssetRegistry + the
+        // MountTable); the AssetId overloads below route through it into the SAME
+        // cached loaders as the path overloads. Installing a resolver (or a new one)
+        // clears the unresolved-id memos so a rescan gets a clean retry. No resolver
+        // (default) fails every AssetId load with one warning.
+        using AssetResolver =
+            std::function<std::optional<std::filesystem::path>(const AssetId&)>;
+        virtual void SetAssetResolver(AssetResolver resolver) = 0;
 
         // Color texture (sRGB). Null on failure (logged once, memoized). Also
         // null (no crash) when no render device has been set yet.
         virtual nvrhi::TextureHandle GetTexture(
             const std::filesystem::path& path) = 0;
+        virtual nvrhi::TextureHandle GetTexture(const AssetId& id) = 0;
 
         // Raw file bytes (fonts, blobs). Null on failure (memoized).
         virtual std::shared_ptr<const std::vector<uint8_t>> GetBytes(
             const std::filesystem::path& path) = 0;
+        virtual std::shared_ptr<const std::vector<uint8_t>> GetBytes(const AssetId& id) = 0;
 
         // Parsed JSON document (UI/data files). Null on failure (memoized).
         virtual std::shared_ptr<const nlohmann::json> GetJson(
             const std::filesystem::path& path) = 0;
+        virtual std::shared_ptr<const nlohmann::json> GetJson(const AssetId& id) = 0;
 
         virtual AssetStats Stats() const = 0;
     };

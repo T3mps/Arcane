@@ -343,6 +343,11 @@ namespace Arcane
         m_impl->project = std::move(*proj);
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
+        // GUID loads resolve through THIS project's registry (Assets AssetId seam).
+        // The raw pointer is safe: the optional's storage is stable, Runtime owns
+        // both objects, and every OpenProject reinstalls the resolver.
+        m_impl->assets->SetAssetResolver(
+            [proj = &*m_impl->project](const AssetId& id) { return proj->ResolveAsset(id); });
         // Re-layer config: engine defaults (kept) + each enabled plugin's Config/ + this
         // project's Config/ + user overrides (Saved/Config/). Precedence engine -> plugins ->
         // project -> user (a project overrides the plugins it enables). Rebuild-from-defaults
