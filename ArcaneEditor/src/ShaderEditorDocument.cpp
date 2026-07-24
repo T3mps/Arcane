@@ -1318,16 +1318,19 @@ namespace Arcane::Editor
                     PushGraphUndo("Connect", std::move(before));
                 }
             }
-            ed::EndCreate();
         }
+        // UNCONDITIONAL: CreateItemAction::Begin() arms m_InActive even when it
+        // returns false (idle frame); a skipped EndCreate() asserts on the NEXT
+        // frame's BeginCreate() (the desk crash -- frame 1 fine, frame 2 abort).
+        ed::EndCreate();
 
         // Deletion (multi-select = one undo step). Link ids are this frame's
         // indices -- collect first, erase in descending order after the
         // queries. The Output node refuses deletion (SG: blocks are fixed).
+        std::vector<std::size_t> linkIdxs;
+        std::vector<std::uint32_t> nodeIds;
         if (ed::BeginDelete())
         {
-            std::vector<std::size_t> linkIdxs;
-            std::vector<std::uint32_t> nodeIds;
             ed::LinkId lid;
             while (ed::QueryDeletedLink(&lid))
             {
@@ -1350,26 +1353,27 @@ namespace Arcane::Editor
                 if (ed::AcceptDeletedItem())
                     nodeIds.push_back(id);
             }
-            ed::EndDelete();
+        }
+        // UNCONDITIONAL for the same reason as EndCreate() above.
+        ed::EndDelete();
 
-            if (!linkIdxs.empty() || !nodeIds.empty())
+        if (!linkIdxs.empty() || !nodeIds.empty())
+        {
+            std::optional<Arcane::MaterialGraph> before = m_data.graph;
+            std::sort(linkIdxs.rbegin(), linkIdxs.rend());
+            for (std::size_t idx : linkIdxs)
+                g.links.erase(g.links.begin() + static_cast<std::ptrdiff_t>(idx));
+            for (std::uint32_t id : nodeIds)
             {
-                std::optional<Arcane::MaterialGraph> before = m_data.graph;
-                std::sort(linkIdxs.rbegin(), linkIdxs.rend());
-                for (std::size_t idx : linkIdxs)
-                    g.links.erase(g.links.begin() + static_cast<std::ptrdiff_t>(idx));
-                for (std::uint32_t id : nodeIds)
-                {
-                    std::erase_if(g.nodes, [&](const Arcane::GraphNode& n)
-                                  { return n.id == id; });
-                    std::erase_if(g.links, [&](const Arcane::GraphLink& l)
-                                  { return l.fromNode == id || l.toNode == id; });
-                }
-                m_dirty = true;
-                if (m_live)
-                    RegenerateFromGraph();
-                PushGraphUndo("Delete", std::move(before));
+                std::erase_if(g.nodes, [&](const Arcane::GraphNode& n)
+                              { return n.id == id; });
+                std::erase_if(g.links, [&](const Arcane::GraphLink& l)
+                              { return l.fromNode == id || l.toNode == id; });
             }
+            m_dirty = true;
+            if (m_live)
+                RegenerateFromGraph();
+            PushGraphUndo("Delete", std::move(before));
         }
     }
 
