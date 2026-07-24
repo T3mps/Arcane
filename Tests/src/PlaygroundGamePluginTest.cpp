@@ -52,7 +52,7 @@ TEST_CASE("PlaygroundGame runs and survives a reload", "[hotreload]")
     REQUIRE(vt != nullptr);
     REQUIRE(vt->ABIVersion != nullptr);
     CHECK(vt->ABIVersion() == Arcane::kGamePluginABIVersion);
-    CHECK(Arcane::kGamePluginABIVersion == 5u);
+    CHECK(Arcane::kGamePluginABIVersion == 6u);   // v6: slice-8 Batcher2D vtable + SpriteRenderer layout
     CHECK(vt->DrawUI != nullptr);
 
     const glm::vec2 before = MoonWorldPos(rt);

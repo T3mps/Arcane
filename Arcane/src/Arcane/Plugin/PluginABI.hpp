@@ -29,7 +29,13 @@ namespace Arcane
     //     Mosaic, so workScheduler is now Mosaic::IWorkScheduler (per-lane worker id
     //     + FunctionRef callback) -- a DIFFERENT vtable than the prior Astra-native
     //     IWorkScheduler. A stale plugin would vtable-mismatch; reject the pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 5;
+    // v6 (2026-07-24): shader-editor Slice 8 changed the cross-DLL surface twice:
+    //     Batcher2D gained RegisterMaterial/UpdateMaterial/SetGlobals/QuadMaterial
+    //     mid-vtable, and SpriteRenderer grew a Guid `material` field (+16 bytes;
+    //     plugins compile the header-only RenderSubmissionSystem + components).
+    //     A stale plugin's SetLayer call lands on UpdateMaterial and its Quad on
+    //     SetGlobals -- observed as an AV on project open; reject the pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 6;
 
     struct EngineContext
     {

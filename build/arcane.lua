@@ -18,10 +18,11 @@
 --   include(os.getenv("ARCANE_SDK") .. "/build/arcane.lua")
 --   arcane_game_module("MyGame")   -- declares the SharedLib game module (-> Binaries/MyGame.dll)
 --
--- The module implements the extern-C plugin ABI (Arcane/Plugin/PluginABI.hpp,
--- currently v5); the host's ABI gate refuses a cross-build mismatch. The include
--- + link + define set below MIRRORS the in-tree PlaygroundGame module (the proven
--- minimal game-module recipe) so an external build matches an in-tree one.
+-- The module implements the extern-C plugin ABI (Arcane/Plugin/PluginABI.hpp --
+-- see kGamePluginABIVersion there); the host's ABI gate refuses a cross-build
+-- mismatch. The include + link + define set below MIRRORS the in-tree
+-- PlaygroundGame module (the proven minimal game-module recipe) so an external
+-- build matches an in-tree one.
 -- ============================================================================
 
 ARCANE_SDK = os.getenv("ARCANE_SDK")
@@ -61,6 +62,11 @@ function arcane_game_module(name)
         includedirs {
             "%{wks.location}/Source",
             ARCANE_SDK .. "/Arcane/src",
+            -- Core's namespaced include root (<Arcane/Guid.hpp> etc.) -- engine
+            -- headers a game module includes transitively reach into it
+            -- (Runtime.hpp includes Guid.hpp since the asset-registration work);
+            -- include-only, no Core link (Core links into ONE module per process).
+            ARCANE_SDK .. "/Core/src",
             ARCANE_TP .. "/glm",
             ARCANE_TP .. "/nvrhi/include",
             ARCANE_TP .. "/Astra/include",
