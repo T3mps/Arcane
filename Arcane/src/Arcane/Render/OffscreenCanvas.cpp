@@ -74,6 +74,30 @@ namespace Arcane
                 m_device->executeCommandList(m_commandList);
             }
 
+            void DrawPass(FunctionRef<void(nvrhi::ICommandList*,
+                                           nvrhi::IFramebuffer*)> fn,
+                          glm::vec4 clear) override
+            {
+                if (!m_canvas || !m_output)
+                    return;
+
+                // Same open -> clear -> record -> tonemap -> execute shape as
+                // Draw(), with the caller recording a raw pass against the
+                // linear canvas framebuffer instead of driving the Batcher2D.
+                m_commandList->open();
+                m_commandList->clearTextureFloat(
+                    m_canvas->Texture(), nvrhi::AllSubresources,
+                    nvrhi::Color(clear.r, clear.g, clear.b, clear.a));
+
+                if (fn)
+                    fn(m_commandList.Get(), m_canvas->Framebuffer());
+
+                m_tonemap->Run(m_commandList, m_canvas->Texture(), m_outputFb);
+
+                m_commandList->close();
+                m_device->executeCommandList(m_commandList);
+            }
+
             uint64_t TextureId() const override
             {
                 // The ImGui-NVRHI backend casts ImTextureID straight back to

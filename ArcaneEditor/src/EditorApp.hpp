@@ -24,10 +24,15 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
+#include <Arcane/Material/MaterialInstance.hpp>
+#include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Render/FullscreenMaterialPass.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
 #include <Arcane/Render/SelectionOutline.hpp>
+#include <Arcane/Render/ShaderCompiler.hpp>
+#include <Arcane/Render/ShaderSourceProvider.hpp>
 
 #include <spdlog/sinks/callback_sink.h>
 
@@ -164,6 +169,28 @@ namespace Arcane::Editor
         // m_viewport->Draw -- the same slot the Play-only game-imgui overlay pass
         // uses (the two are mutually exclusive by mode).
         std::unique_ptr<Arcane::SelectionOutline> m_outline;
+
+        // Material preview (shader-editor Slice 4): a bare panel proving the
+        // material pipeline end-to-end inside the editor -- engine template +
+        // default snippet -> async runtime compile (Submit/Poll/Drain; shaders
+        // created at the drain site) -> FullscreenMaterialPass into its own
+        // OffscreenCanvas, animating on live Time. The full 4-panel shader-editor
+        // document replaces this in Slice 5. All hold NVRHI handles -> declared
+        // after m_gpu (destruct before the device).
+        std::unique_ptr<Arcane::ShaderCompiler>         m_shaderCompiler;
+        Arcane::ShaderSourceProvider                    m_shaderSources;
+        std::unique_ptr<Arcane::OffscreenCanvas>        m_materialPreview;
+        std::unique_ptr<Arcane::FullscreenMaterialPass> m_materialPass;
+        std::shared_ptr<Arcane::MaterialTemplate>       m_materialTemplate;
+        std::unique_ptr<Arcane::MaterialInstance>       m_materialInstance;
+        std::vector<std::string>  m_materialStatus;      // build/compile problems for the panel
+        std::vector<std::uint8_t> m_materialVsBytes;     // staged per-backend bytecode until
+        std::vector<std::uint8_t> m_materialPsBytes;     // ...both stages have landed
+        std::uint64_t m_materialVsJob = 0;
+        std::uint64_t m_materialPsJob = 0;
+        double        m_materialTime = 0.0;              // preview clock (drives Poll + Time)
+
+        void TickMaterialPreview();   // Poll/Drain + bind-on-arrival + render (MainLoop)
 
         // The Arcane logo, shown at the left of the transport toolbar (Unity-style). A
         // display-referred (UNORM) texture -- NOT Assets::GetTexture's sRGB -- so it

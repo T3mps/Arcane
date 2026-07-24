@@ -4,6 +4,8 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace Arcane { class RunLoop; class Runtime; class Project; struct PluginVTable; }
 namespace Astra { class Registry; }
@@ -47,6 +49,14 @@ namespace Arcane::Editor
     // Shows the open project's name + root when one is open (see EditorApp::Init),
     // else "No project open" (the legacy data/-next-to-exe boot, unchanged).
     void DrawAssetsPanel(const Arcane::Project* project);
+
+    // Bare material preview (shader-editor Slice 4): the animating default
+    // material rendered by EditorApp::TickMaterialPreview, scaled to fit, plus
+    // any build/compile status lines. `ready` = a compiled material is bound
+    // (until then a "compiling" hint shows). The full 4-panel shader-editor
+    // document supersedes this in Slice 5.
+    void DrawMaterialPreviewPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
+                                  bool ready, const std::vector<std::string>& status);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);

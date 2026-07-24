@@ -49,6 +49,16 @@ namespace Arcane
         virtual void Draw(FunctionRef<void(Batcher2D&)> fn,
                           glm::vec4 clear) = 0;
 
+        // Same canvas -> tonemap -> output path, but `fn` records a RAW pass
+        // into the open command list against the LINEAR canvas framebuffer
+        // (no Batcher2D) -- for fullscreen passes like FullscreenMaterialPass.
+        // Named (not a Draw overload): both signatures accept a lambda through
+        // FunctionRef's converting constructor, which would make an overload
+        // set ambiguous at every call site.
+        virtual void DrawPass(FunctionRef<void(nvrhi::ICommandList*,
+                                               nvrhi::IFramebuffer*)> fn,
+                              glm::vec4 clear) = 0;
+
         // The output texture as an ImTextureID (ImU64), ready for
         // ImGui::Image(). The ImGui-NVRHI backend binds an arbitrary texture
         // by its raw pointer, so this is just (intptr_t)outputTexture. Stable

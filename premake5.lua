@@ -398,6 +398,10 @@ project "Loom"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        -- Material TEMPLATE SOURCES (not compiled artifacts): the material
+        -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
+        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
         '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
@@ -456,6 +460,10 @@ project "ArcaneEditor"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Sandbox/Sandbox.dll" "%{cfg.buildtarget.directory}/Sandbox.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        -- Material TEMPLATE SOURCES (not compiled artifacts): the material
+        -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
+        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
@@ -585,6 +593,10 @@ project "ArcaneTests"
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        -- Material TEMPLATE SOURCES (not compiled artifacts): the material
+        -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
+        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
