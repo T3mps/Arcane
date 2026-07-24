@@ -25,6 +25,16 @@ TEST_CASE("AssetKindOf classifies by extension, case-insensitive", "[editor]")
     CHECK(AssetKindOf("noextension") == AssetKind::Other);
 }
 
+TEST_CASE("AssetKindFilterForFieldName infers the kind from the field name", "[editor]")
+{
+    CHECK(AssetKindFilterForFieldName("material") == static_cast<int>(AssetKind::Material));
+    CHECK(AssetKindFilterForFieldName("baseMaterial") == static_cast<int>(AssetKind::Material));
+    CHECK(AssetKindFilterForFieldName("texture") == static_cast<int>(AssetKind::Texture));
+    CHECK(AssetKindFilterForFieldName("normalTexture") == static_cast<int>(AssetKind::Texture));
+    CHECK(AssetKindFilterForFieldName("target") == -1);
+    CHECK(AssetKindFilterForFieldName("") == -1);
+}
+
 TEST_CASE("BuildAssetEntries snapshots a scanned registry, sorted by name", "[editor]")
 {
     namespace fs = std::filesystem;

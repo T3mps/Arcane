@@ -99,6 +99,23 @@ namespace Arcane::Editor
         return entries;
     }
 
+    // Inspector asset-ref (Guid) fields: infer the expected asset kind from the
+    // FIELD NAME -- reflection carries no per-field attributes yet, so this
+    // heuristic is the seam until it does. Case-insensitive substring match:
+    // "material" -> Material, "texture" -> Texture; anything else -> -1 (all
+    // kinds, same convention as MatchesFilter's kindFilter).
+    inline int AssetKindFilterForFieldName(std::string_view fieldName)
+    {
+        std::string lower(fieldName);
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower.find("material") != std::string::npos)
+            return static_cast<int>(AssetKind::Material);
+        if (lower.find("texture") != std::string::npos)
+            return static_cast<int>(AssetKind::Texture);
+        return -1;
+    }
+
     // kindFilter: -1 = all kinds. `search`: case-insensitive substring over
     // name AND mount path; empty matches everything.
     inline bool MatchesFilter(const AssetEntry& entry, int kindFilter, std::string_view search)

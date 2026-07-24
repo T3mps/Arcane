@@ -1,4 +1,5 @@
 #include "EditorPanels.hpp"
+#include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
 #include "EditorFonts.hpp"
 #include "EntityList.hpp"
@@ -385,6 +386,7 @@ namespace Arcane::Editor
             Astra::Entity                     entity{};
             const Astra::ComponentDescriptor* descriptor = nullptr;
             std::string                       typeName;
+            const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
 
             bool IsWriting() const noexcept override { return true; }
 
@@ -402,6 +404,22 @@ namespace Arcane::Editor
                 if (!stack) return;
                 if (ImGui::IsItemDeactivatedAfterEdit()) stack->Commit();
                 else if (ImGui::IsItemDeactivated())     stack->Cancel();
+            }
+
+            // Single-shot edit (asset drop / popup pick / clear): no widget gesture
+            // to bracket, so the whole transaction happens in one call. Commit()
+            // closes the stack before the shared EndGesture epilogue runs -- its
+            // Commit/Cancel on a closed stack are no-ops.
+            void ApplyGuidImmediate(const std::string& field, const Astra::FieldInfo& f,
+                                    void* instance, const Arcane::Guid& v)
+            {
+                if (stack)
+                {
+                    stack->Begin("Edit " + typeName + "." + field);
+                    stack->SnapshotComponent(entity, descriptor);
+                }
+                Arcane::Editor::ApplyGuidEdit(f, instance, v);
+                if (stack) stack->Commit();
             }
 
             void Visit(const Astra::FieldInfo& f, void* instance) override
@@ -450,6 +468,68 @@ namespace Arcane::Editor
                         if (changed) if (glm::vec3* p = f.GetPtr<glm::vec3>(instance)) *p = v;
                         break;
                     }
+                    case Arcane::Editor::FieldKind::AssetRef:
+                    {
+                        // Asset-reference (Guid) field: button shows the resolved
+                        // mount path (or raw guid), opens a pick popup, and accepts
+                        // browser drags; "x" clears. Kind filter is inferred from
+                        // the field name (AssetKindFilterForFieldName).
+                        const Arcane::Guid v = f.Get<Arcane::Guid>(instance);
+                        const int kindFilter = Arcane::Editor::AssetKindFilterForFieldName(label);
+
+                        std::string display = "(none)";
+                        if (v.IsValid())
+                        {
+                            display = v.ToString();
+                            if (project)
+                                if (const auto mount = project->Registry().Resolve(v))
+                                    display = *mount;
+                        }
+
+                        if (ImGui::Button((display + "##assetref").c_str()))
+                            ImGui::OpenPopup("##assetpick");
+                        if (ImGui::BeginDragDropTarget())
+                        {
+                            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(Arcane::Editor::kAssetDragType))
+                            {
+                                const auto* payload = static_cast<const Arcane::Editor::AssetDragPayload*>(p->Data);
+                                if (kindFilter < 0 || static_cast<int>(payload->kind) == kindFilter)
+                                    ApplyGuidImmediate(label, f, instance, payload->guid);
+                            }
+                            ImGui::EndDragDropTarget();
+                        }
+                        if (v.IsValid())
+                        {
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("x##assetclear"))
+                                ApplyGuidImmediate(label, f, instance, Arcane::Guid::Nil());
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(label.c_str());
+
+                        if (ImGui::BeginPopup("##assetpick"))
+                        {
+                            if (!project)
+                            {
+                                ImGui::TextDisabled("no project open");
+                            }
+                            else
+                            {
+                                if (ImGui::Selectable("(none)"))
+                                    ApplyGuidImmediate(label, f, instance, Arcane::Guid::Nil());
+                                for (const Arcane::Editor::AssetEntry& e :
+                                     Arcane::Editor::BuildAssetEntries(project->Registry()))
+                                {
+                                    if (kindFilter >= 0 && static_cast<int>(e.kind) != kindFilter)
+                                        continue;
+                                    if (ImGui::Selectable((e.name + "##" + e.mountPath).c_str(), e.guid == v))
+                                        ApplyGuidImmediate(label, f, instance, e.guid);
+                                }
+                            }
+                            ImGui::EndPopup();
+                        }
+                        break;
+                    }
                     case Arcane::Editor::FieldKind::ReadOnly:
                     default:
                         ImGui::BeginDisabled();
@@ -464,7 +544,8 @@ namespace Arcane::Editor
     }
 
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo, bool editMode)
+                            Arcane::CommandStack& undo, bool editMode,
+                            const Arcane::Project* project)
     {
         ImGui::Begin("Inspector");
         if (!sel.HasSelection())
@@ -499,6 +580,7 @@ namespace Arcane::Editor
                 visitor.entity     = sel.selected;
                 visitor.descriptor = ci.descriptor;
                 visitor.typeName   = typeName;
+                visitor.project    = project;
                 ci.descriptor->visitFields(ci.data, visitor);
             }
         }

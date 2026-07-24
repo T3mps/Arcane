@@ -47,3 +47,24 @@ TEST_CASE("ApplyIntEdit writes through reflection to the live component", "[edit
     Arcane::Editor::ApplyIntEdit(*layer, &sprite, 7);
     CHECK(sprite.sortingLayer == 7);
 }
+
+TEST_CASE("Guid fields classify AssetRef and round-trip through ApplyGuidEdit", "[editor]")
+{
+    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::SpriteRenderer>();
+    REQUIRE(meta != nullptr);
+
+    const Astra::FieldInfo* material = nullptr;
+    for (const Astra::FieldInfo& f : meta->fields) if (f.name == "material") material = &f;
+    REQUIRE(material != nullptr);
+    CHECK(Arcane::Editor::ClassifyField(*material) == Arcane::Editor::FieldKind::AssetRef);
+
+    Arcane::SpriteRenderer sprite;
+    REQUIRE_FALSE(sprite.material.IsValid());
+
+    const Arcane::Guid g = Arcane::Guid::FromString("aaaa1111-1111-4111-8111-111111111111").value();
+    Arcane::Editor::ApplyGuidEdit(*material, &sprite, g);
+    CHECK(sprite.material == g);
+
+    Arcane::Editor::ApplyGuidEdit(*material, &sprite, Arcane::Guid::Nil());
+    CHECK_FALSE(sprite.material.IsValid());
+}

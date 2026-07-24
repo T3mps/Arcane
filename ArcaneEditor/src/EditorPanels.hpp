@@ -94,6 +94,9 @@ namespace Arcane::Editor
     // registry through the Edit-mode undo stack (Stop's Runtime::RestoreRegistry
     // swaps the registry back but does not touch the stack, so a stale entry here
     // would let a later Ctrl+Z overwrite the restored value with play-time bytes).
+    // `project` (may be null) resolves Guid asset-ref fields to display names and
+    // feeds the pick popup; null renders asset refs read-only-with-guid.
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo, bool editMode);
+                            Arcane::CommandStack& undo, bool editMode,
+                            const Arcane::Project* project);
 }

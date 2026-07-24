@@ -178,8 +178,14 @@ namespace Arcane::Editor
         if (!m_config.projectPath.empty())
         {
             if (!m_runtime->OpenProject(m_config.projectPath))
+            {
                 ARC_WARN("Arcane Editor: --project '{}' failed to open; using data/ + --plugin fallback",
                          m_config.projectPath);
+                // Surface at first frame -- the console line alone was missed twice.
+                m_projectOpenError = "--project '" + m_config.projectPath +
+                                     "' failed to open.\nRunning with the data/ + --plugin "
+                                     "fallback instead (see Console).";
+            }
         }
         if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
             ARC_WARN("Arcane Editor: input actions failed to load");
@@ -458,6 +464,8 @@ namespace Arcane::Editor
         if (!probe)
         {
             ARC_ERROR("Open Project: '{}' is not a valid Arcane project", path.generic_string());
+            m_projectOpenError = "'" + path.generic_string() +
+                                 "' is not a valid Arcane project (no readable .arcproj).";
             return;
         }
         if (probe->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
@@ -465,6 +473,12 @@ namespace Arcane::Editor
             ARC_ERROR("Open Project: '{}' targets engine ABI {} but this engine is ABI {}",
                       path.generic_string(), probe->Manifest().engineAbi,
                       static_cast<int>(Arcane::kGamePluginABIVersion));
+            m_projectOpenError = "'" + path.generic_string() + "' targets engine ABI " +
+                                 std::to_string(probe->Manifest().engineAbi) +
+                                 " but this editor is ABI " +
+                                 std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) +
+                                 ".\nRebuild the project's game DLL against this engine "
+                                 "and update its manifest.";
             return;
         }
 
@@ -475,6 +489,8 @@ namespace Arcane::Editor
         {
             ARC_ERROR("Open Project: unsaved material documents -- save or close them "
                       "before switching projects");
+            m_projectOpenError = "There are unsaved material documents.\n"
+                                 "Save or close them before switching projects.";
             return;
         }
         m_documents.CloseAll();
@@ -497,6 +513,9 @@ namespace Arcane::Editor
         if (!m_runtime->OpenProject(path))
         {
             ARC_ERROR("Open Project: OpenProject('{}') failed after validation", path.generic_string());
+            m_projectOpenError = "Opening '" + path.generic_string() +
+                                 "' failed after validation.\nThe previous session was torn "
+                                 "down -- open another project to continue (see Console).";
             return;   // editor left with no plugin; user can Open another project
         }
         if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
@@ -514,7 +533,13 @@ namespace Arcane::Editor
             for (const auto& dll : pluginModules)
                 m_plugin->AddPlugin(dll);
             if (!m_plugin->Load())
+            {
                 ARC_ERROR("Open Project: failed to load the game module / project plugins");
+                m_projectOpenError = "The project opened, but its game module / plugins "
+                                     "failed to load (see Console).\nCheck the DLL paths in "
+                                     "the manifest and that they are built against ABI " +
+                                     std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".";
+            }
         }
 
         m_runtime->Loop().SetPaused(true);   // back to Edit
@@ -1046,6 +1071,28 @@ namespace Arcane::Editor
             Arcane::Editor::DrawConsolePanel(m_console);
             m_documents.DrawAll();
 
+            // Project-open failure modal: any refusal in SwitchProject/Init lands
+            // here (drawn at the dockspace level, outside any panel window). The
+            // string stays set until the user dismisses it, so OpenPopup re-arms
+            // across frames even if another popup momentarily owned the stack.
+            if (!m_projectOpenError.empty() && !ImGui::IsPopupOpen("Open Project Failed"))
+                ImGui::OpenPopup("Open Project Failed");
+            if (ImGui::BeginPopupModal("Open Project Failed", nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+                ImGui::TextUnformatted(m_projectOpenError.c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::Separator();
+                if (ImGui::Button("OK", ImVec2(120, 0)) ||
+                    ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
+                {
+                    m_projectOpenError.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
             Arcane::Editor::ViewportPanelResult vp =
                 Arcane::Editor::DrawViewportPanel(m_viewport->TextureId(),
                                             m_viewport->Width(), m_viewport->Height(),
@@ -1081,7 +1128,8 @@ namespace Arcane::Editor
             }
 
             Arcane::Editor::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
-            Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo, !m_play.IsPlaying());
+            Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
+                                               !m_play.IsPlaying(), m_runtime->CurrentProject());
 
             // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
             // composited into the viewport texture above -- not the editor context.)

@@ -235,5 +235,11 @@ namespace Arcane::Editor
 
         static void FolderPickedThunk(const char* path, void* user);   // -> m_pendingProjectPath (background thread)
         void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
+
+        // Open-failure surfacing: SwitchProject's refusals used to be console-only
+        // and were repeatedly missed at the desk. Any refusal/failure sets this;
+        // MainLoop shows it as a blocking modal (main thread only -- set inside
+        // SwitchProject/Init, read in the ImGui frame; no lock needed).
+        std::string m_projectOpenError;
     };
 }

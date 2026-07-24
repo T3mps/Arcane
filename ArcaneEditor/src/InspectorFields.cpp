@@ -30,12 +30,14 @@ namespace Arcane::Editor
         static const uint64_t kI32  = Astra::TypeID<int32_t>::Hash();
         static const uint64_t kVec2 = Astra::TypeID<glm::vec2>::Hash();
         static const uint64_t kVec3 = Astra::TypeID<glm::vec3>::Hash();
+        static const uint64_t kGuid = Astra::TypeID<Arcane::Guid>::Hash();
 
         if (f.typeHash == kBool) return FieldKind::Bool;
         if (f.typeHash == kF32)  return FieldKind::Float;
         if (f.typeHash == kI32)  return FieldKind::Int32;
         if (f.typeHash == kVec2) return FieldKind::Vec2;
         if (f.typeHash == kVec3) return FieldKind::Vec3;
+        if (f.typeHash == kGuid) return FieldKind::AssetRef;
 
         return FieldKind::ReadOnly;
     }
@@ -48,4 +50,7 @@ namespace Arcane::Editor
 
     void ApplyFloatEdit(const Astra::FieldInfo& f, void* instance, float v) noexcept
     { if (float* p = f.GetPtr<float>(instance)) *p = v; }
+
+    void ApplyGuidEdit(const Astra::FieldInfo& f, void* instance, const Arcane::Guid& v) noexcept
+    { if (Arcane::Guid* p = f.GetPtr<Arcane::Guid>(instance)) *p = v; }
 }
