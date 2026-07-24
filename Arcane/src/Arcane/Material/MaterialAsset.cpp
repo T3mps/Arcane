@@ -33,79 +33,82 @@ namespace Arcane
             return false;
         }
 
-        // Self-typed entry: {"type": "...", "value": ...}. Instances must load
-        // without their parent's declarations, so the type rides in the file.
-        nlohmann::json ValueToJson(const MatParamValue& v)
+    }
+
+    // Self-typed entry: {"type": "...", "value": ...}. Instances must load
+    // without their parent's declarations, so the type rides in the file.
+    // Exported (not file-local): graph Param nodes serialize their decl
+    // defaults through the same shape.
+    nlohmann::json MatParamValueToJson(const MatParamValue& v)
+    {
+        nlohmann::json entry;
+        entry["type"] = TypeName(v.type);
+        switch (v.type)
         {
-            nlohmann::json entry;
-            entry["type"] = TypeName(v.type);
-            switch (v.type)
-            {
-                case MatParamType::Float:
-                    entry["value"] = v.f[0];
-                    break;
-                case MatParamType::Float2:
-                    entry["value"] = nlohmann::json::array({ v.f[0], v.f[1] });
-                    break;
-                case MatParamType::Float4:
-                case MatParamType::Color:
-                    entry["value"] = nlohmann::json::array({ v.f[0], v.f[1], v.f[2], v.f[3] });
-                    break;
-                case MatParamType::Texture:
-                    entry["value"] = v.tex.ToString();
-                    break;
-            }
-            return entry;
+            case MatParamType::Float:
+                entry["value"] = v.f[0];
+                break;
+            case MatParamType::Float2:
+                entry["value"] = nlohmann::json::array({ v.f[0], v.f[1] });
+                break;
+            case MatParamType::Float4:
+            case MatParamType::Color:
+                entry["value"] = nlohmann::json::array({ v.f[0], v.f[1], v.f[2], v.f[3] });
+                break;
+            case MatParamType::Texture:
+                entry["value"] = v.tex.ToString();
+                break;
         }
+        return entry;
+    }
 
-        std::optional<MatParamValue> ValueFromJson(const nlohmann::json& entry)
-        {
-            if (!entry.is_object() || !entry.contains("type") || !entry.contains("value"))
-                return std::nullopt;
-            MatParamType type;
-            if (!entry["type"].is_string() ||
-                !TypeFromName(entry["type"].get<std::string>(), type))
-                return std::nullopt;
-
-            const nlohmann::json& j = entry["value"];
-            auto num = [](const nlohmann::json& x, float& out)
-            {
-                if (!x.is_number()) return false;
-                out = x.get<float>();
-                return true;
-            };
-
-            float f[4] = {0, 0, 0, 0};
-            switch (type)
-            {
-                case MatParamType::Float:
-                    if (!num(j, f[0])) return std::nullopt;
-                    return MatParamValue::MakeFloat(f[0]);
-                case MatParamType::Float2:
-                    if (!j.is_array() || j.size() != 2 ||
-                        !num(j[0], f[0]) || !num(j[1], f[1])) return std::nullopt;
-                    return MatParamValue::MakeFloat2(f[0], f[1]);
-                case MatParamType::Float4:
-                case MatParamType::Color:
-                {
-                    if (!j.is_array() || j.size() < 3 || j.size() > 4) return std::nullopt;
-                    f[3] = 1.0f;
-                    for (std::size_t i = 0; i < j.size(); ++i)
-                        if (!num(j[i], f[i])) return std::nullopt;
-                    MatParamValue v = MatParamValue::MakeFloat4(f[0], f[1], f[2], f[3]);
-                    v.type = type;
-                    return v;
-                }
-                case MatParamType::Texture:
-                {
-                    if (!j.is_string()) return std::nullopt;
-                    const auto g = Guid::FromString(j.get<std::string>());
-                    if (!g) return std::nullopt;
-                    return MatParamValue::MakeTexture(*g);
-                }
-            }
+    std::optional<MatParamValue> MatParamValueFromJson(const nlohmann::json& entry)
+    {
+        if (!entry.is_object() || !entry.contains("type") || !entry.contains("value"))
             return std::nullopt;
+        MatParamType type;
+        if (!entry["type"].is_string() ||
+            !TypeFromName(entry["type"].get<std::string>(), type))
+            return std::nullopt;
+
+        const nlohmann::json& j = entry["value"];
+        auto num = [](const nlohmann::json& x, float& out)
+        {
+            if (!x.is_number()) return false;
+            out = x.get<float>();
+            return true;
+        };
+
+        float f[4] = {0, 0, 0, 0};
+        switch (type)
+        {
+            case MatParamType::Float:
+                if (!num(j, f[0])) return std::nullopt;
+                return MatParamValue::MakeFloat(f[0]);
+            case MatParamType::Float2:
+                if (!j.is_array() || j.size() != 2 ||
+                    !num(j[0], f[0]) || !num(j[1], f[1])) return std::nullopt;
+                return MatParamValue::MakeFloat2(f[0], f[1]);
+            case MatParamType::Float4:
+            case MatParamType::Color:
+            {
+                if (!j.is_array() || j.size() < 3 || j.size() > 4) return std::nullopt;
+                f[3] = 1.0f;
+                for (std::size_t i = 0; i < j.size(); ++i)
+                    if (!num(j[i], f[i])) return std::nullopt;
+                MatParamValue v = MatParamValue::MakeFloat4(f[0], f[1], f[2], f[3]);
+                v.type = type;
+                return v;
+            }
+            case MatParamType::Texture:
+            {
+                if (!j.is_string()) return std::nullopt;
+                const auto g = Guid::FromString(j.get<std::string>());
+                if (!g) return std::nullopt;
+                return MatParamValue::MakeTexture(*g);
+            }
         }
+        return std::nullopt;
     }
 
     bool SaveMaterialAsset(const std::filesystem::path& path, const MaterialAssetData& data)
@@ -124,10 +127,14 @@ namespace Arcane
         {
             doc["kind"] = data.kind;
             doc["snippet"] = data.snippet;
+            // Graph-owned: the graph is the authoring truth; the snippet above
+            // is its generated text (kept so snippet-only consumers never care).
+            if (data.graph)
+                doc["graph"] = GraphToJson(*data.graph);
         }
         nlohmann::json params = nlohmann::json::object();
         for (const auto& [name, value] : data.params)
-            params[name] = ValueToJson(value);
+            params[name] = MatParamValueToJson(value);
         doc["params"] = std::move(params);
 
         std::ofstream out(path, std::ios::binary);
@@ -155,7 +162,9 @@ namespace Arcane
                                 doc["snippet"].is_string();
         const bool hasParent = doc.is_object() && doc.contains("parent") &&
                                doc["parent"].is_string();
-        if (!hasSnippet && !hasParent)
+        const bool hasGraph = doc.is_object() && doc.contains("graph") &&
+                              doc["graph"].is_object();
+        if (!hasSnippet && !hasParent && !hasGraph)
         {
             ARC_WARN("LoadMaterialAsset: '{}' is not a material asset", path.generic_string());
             return std::nullopt;
@@ -179,13 +188,40 @@ namespace Arcane
         if (hasSnippet)
             data.snippet = doc["snippet"].get<std::string>();
 
+        if (hasGraph)
+        {
+            if (hasParent)
+                ARC_WARN("LoadMaterialAsset: '{}' is an instance with a graph -- graphs live "
+                         "on base materials only; ignored", path.generic_string());
+            else if (auto g = GraphFromJson(doc["graph"]))
+            {
+                data.graph = std::move(*g);
+                // Self-healing: a hand-authored graph-only file still yields a
+                // working snippet (save always writes it, so this is rare).
+                if (data.snippet.empty())
+                {
+                    auto gen = GenerateGraphSnippet(*data.graph,
+                                                    MaterialSurfaceForKind(data.kind));
+                    if (gen.Ok())
+                        data.snippet = std::move(gen.snippet);
+                    else
+                        ARC_WARN("LoadMaterialAsset: '{}' graph does not generate "
+                                 "({} error(s)); snippet left empty",
+                                 path.generic_string(), gen.errors.size());
+                }
+            }
+            else
+                ARC_WARN("LoadMaterialAsset: '{}' has a malformed graph object -- ignored "
+                         "(text snippet still loads)", path.generic_string());
+        }
+
         // Entries are self-typed; malformed ones drop here, decl mismatches drop
         // at APPLY time (MaterialInstance::Set is the type gate).
         if (doc.contains("params") && doc["params"].is_object())
         {
             for (const auto& [name, jvalue] : doc["params"].items())
             {
-                if (auto v = ValueFromJson(jvalue))
+                if (auto v = MatParamValueFromJson(jvalue))
                     data.params.emplace_back(name, *v);
                 else
                     ARC_WARN("LoadMaterialAsset: '{}' param '{}' is malformed -- dropped",

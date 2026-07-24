@@ -46,6 +46,9 @@ workspace "Arcane"
     -- and consumers (ArcaneTests/Loom) import. Without this each module
     -- keeps its own null GImGui and ShowDemoWindow() from the test exe asserts.
     THIRDPARTY_IMGUI_API        = "__declspec(dllexport)"
+    -- imgui-node-editor links into ArcaneEditor.exe, which IMPORTS imgui from
+    -- Arcane.dll -- its ImGui calls must be dllimport (see the wrapper).
+    THIRDPARTY_NODE_EDITOR_IMGUI_API = "__declspec(dllimport)"
 
     IncludeDir = {}
     IncludeDir["Core"]             = "%{wks.location}/Core/src"
@@ -68,6 +71,7 @@ workspace "Arcane"
     IncludeDir["DirectXHeaders"]   = "%{wks.location}/../ThirdParty/DirectX-Headers/include"
     IncludeDir["SDL3"]             = VCPKG_INSTALLED_MD .. "/include"
     IncludeDir["imgui"]            = "%{wks.location}/../ThirdParty/imgui"
+    IncludeDir["imguinodeeditor"]  = "%{wks.location}/../ThirdParty/imgui-node-editor"
     IncludeDir["Manifold2D"]       = "%{wks.location}/../ThirdParty/Manifold2D/include"
     IncludeDir["Mosaic"]           = "%{wks.location}/../ThirdParty/Mosaic/include"
 
@@ -80,6 +84,7 @@ group "Dependencies"
     include "../ThirdParty/msdfgen"
     include "../ThirdParty/nvrhi"
     include "../ThirdParty/imgui"
+    include "../ThirdParty/imgui-node-editor"
     include "../ThirdParty/Manifold2D"
 group ""
 
@@ -454,12 +459,13 @@ project "ArcaneEditor"
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.glm}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.imguinodeeditor}",
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
-    links { "Core", "Arcane" }
+    links { "Core", "Arcane", "imgui-node-editor" }
     dependson { "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {

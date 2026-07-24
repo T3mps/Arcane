@@ -14,9 +14,12 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Material/MaterialGraph.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Material/MaterialTypes.hpp>
+
+#include <Json.hpp>
 
 #include <filesystem>
 #include <optional>
@@ -40,8 +43,14 @@ namespace Arcane
         // Saved param values by name -- applied over the //@param defaults (base)
         // or the parent chain (instance); unknown/mismatched names drop on apply.
         std::vector<std::pair<std::string, MatParamValue>> params;
+        // Graph-owned authoring (Slice 9, base materials only): present = the
+        // graph is the editing truth and `snippet` is its GENERATED text --
+        // saved anyway so every snippet-only consumer (sprite cache, parent
+        // chains, older loads) works untouched. Convert-to-text = reset() this.
+        std::optional<MaterialGraph> graph;
 
         bool IsInstance() const { return parent.IsValid(); }
+        bool IsGraphOwned() const { return graph.has_value(); }
     };
 
     // Write `data` as .armat JSON (values typed per MatParamValue: float /
@@ -59,6 +68,11 @@ namespace Arcane
     // (unknown names / type mismatches warn + skip). Returns applied count.
     ARCANE_API std::size_t ApplyMaterialParams(const MaterialAssetData& data,
                                                MaterialInstance& instance);
+
+    // The self-typed {"type","value"} param-value shape shared by .armat params
+    // and graph Param-node declarations (exported for MaterialGraph's use).
+    ARCANE_API nlohmann::json MatParamValueToJson(const MatParamValue& v);
+    ARCANE_API std::optional<MatParamValue> MatParamValueFromJson(const nlohmann::json& entry);
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
