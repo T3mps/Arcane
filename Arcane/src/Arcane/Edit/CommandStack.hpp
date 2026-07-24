@@ -49,6 +49,14 @@ namespace Arcane
         void Commit();   // capture afters; push if any changed; clear redo; close
         void Cancel();   // discard the open transaction (no push, no revert)
 
+        // Push an ALREADY-APPLIED generic command (the ICommand contract: the
+        // live edit happened, the command only reverses/replays). Joins the open
+        // transaction when one is open (committed/cancelled with it), otherwise
+        // becomes its own one-command undo step labeled by cmd->Label(). This is
+        // the non-component edit path -- material param edits, and later graph
+        // edits, share the ONE undo history through it.
+        void Push(std::unique_ptr<ICommand> command);
+
         void Undo();
         void Redo();
         [[nodiscard]] bool CanUndo() const noexcept { return !m_undo.empty(); }
@@ -79,6 +87,7 @@ namespace Arcane
         bool                 m_open = false;
         std::string          m_openLabel;
         std::vector<Pending> m_pending;
+        std::vector<std::unique_ptr<ICommand>> m_pendingGeneric;   // Push while open
     };
 #if defined(_MSC_VER)
 #pragma warning(pop)

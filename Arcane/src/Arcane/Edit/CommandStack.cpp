@@ -50,8 +50,11 @@ namespace Arcane
                 m_resolve, p.entity, p.descriptor,
                 std::move(p.before), std::move(after), m_openLabel));
         }
+        for (auto& c : m_pendingGeneric)
+            txn.commands.push_back(std::move(c));
         m_open = false;
         m_pending.clear();
+        m_pendingGeneric.clear();
         if (txn.commands.empty())
             return;   // nothing changed -> no history entry
 
@@ -65,6 +68,25 @@ namespace Arcane
     {
         m_open = false;
         m_pending.clear();
+        m_pendingGeneric.clear();
+    }
+
+    void CommandStack::Push(std::unique_ptr<ICommand> command)
+    {
+        if (!command)
+            return;
+        if (m_open)
+        {
+            m_pendingGeneric.push_back(std::move(command));
+            return;
+        }
+        Transaction txn;
+        txn.label = command->Label();
+        txn.commands.push_back(std::move(command));
+        m_undo.push_back(std::move(txn));
+        m_redo.clear();
+        while (m_undo.size() > m_maxDepth)
+            m_undo.pop_front();
     }
 
     void CommandStack::Undo()

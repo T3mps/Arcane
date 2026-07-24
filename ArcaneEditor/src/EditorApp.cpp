@@ -24,10 +24,9 @@
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
-#include <Arcane/Material/MaterialSource.hpp>   // BuildMaterialShaderSource (preview bootstrap)
+#include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
 #include <Arcane/Project/Project.hpp>
-#include <Arcane/Render/ShaderConventions.hpp>  // kVsEntry/kPsProfile (preview compile requests)
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
@@ -293,118 +292,82 @@ namespace Arcane::Editor
         // safe because m_undo destructs before m_runtime (declaration order).
         m_undo.emplace([rt = &*m_runtime]() -> Astra::Registry& { return rt->Registry(); });
 
-        // Material preview bootstrap (shader-editor Slice 4): author the default
-        // material through the REAL seams -- provider -> stitcher -> async compile
-        // service -- and let TickMaterialPreview bind it when the results drain.
-        // Failures degrade to a status line in the panel, never a failed boot.
+        // Shader-editor services (Slice 5): the shared compile service, the
+        // template source root, and the .armat -> ShaderEditorDocument routing.
+        // A missing dxcompiler.dll degrades to a warn (documents show status).
         m_shaderCompiler = std::make_unique<Arcane::ShaderCompiler>();
-        if (m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
-        {
-            m_shaderSources.AddRoot("shaders");
-            m_materialPreview = Arcane::OffscreenCanvas::Create(
-                m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 512, 512);
-            m_materialPass = Arcane::FullscreenMaterialPass::Create(m_gpu->Device().Nvrhi());
-
-            const auto templateText = m_shaderSources.Get("materials/fullscreen_material.hlsl");
-            if (templateText && m_materialPreview && m_materialPass)
+        if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
+            ARC_WARN("Arcane Editor: dxcompiler.dll unavailable -- material editing disabled");
+        m_shaderSources.AddRoot("shaders");
+        m_documents.RegisterFactory(".armat",
+            [this](const std::filesystem::path& p)
+                -> std::unique_ptr<Arcane::Editor::EditorDocument>
             {
-                const char* kDefaultSnippet =
-                    "//@param color Tint  = (0.2, 0.8, 1.0, 1)\n"
-                    "//@param float Speed = 1.0 [0..4]\n"
-                    "\n"
-                    "float4 shade(Varyings v)\n"
-                    "{\n"
-                    "    float w = 0.5 + 0.5 * sin(v.uv.x * 12.566 + Time * Speed);\n"
-                    "    return Tint * w;\n"
-                    "}\n";
-                Arcane::MaterialBuildResult build = Arcane::BuildMaterialShaderSource(
-                    *templateText, kDefaultSnippet, "preview_default");
-                m_materialStatus = build.errors;
-                m_materialTemplate = std::make_shared<Arcane::MaterialTemplate>(
-                    std::move(build.templ));
-
-                Arcane::ShaderCompileRequest req;
-                req.debugName = "preview_default.hlsl";
-                req.sourceUtf8 = build.hlsl;
-                req.entry = Arcane::kPsEntry;
-                req.profile = Arcane::kPsProfile;
-                req.coalesceKey = 2;
-                m_materialPsJob = m_shaderCompiler->Submit(req, /*now=*/0.0);
-                req.entry = Arcane::kVsEntry;
-                req.profile = Arcane::kVsProfile;
-                req.coalesceKey = 1;
-                m_materialVsJob = m_shaderCompiler->Submit(std::move(req), /*now=*/0.0);
-            }
-            else
-            {
-                m_materialStatus.push_back("material template not found (shaders/materials/)");
-            }
-        }
-        else
-        {
-            m_materialStatus.push_back("dxcompiler.dll unavailable -- runtime compiles off");
-        }
+                auto data = Arcane::LoadMaterialAsset(p);
+                if (!data)
+                    return nullptr;
+                return std::make_unique<Arcane::Editor::ShaderEditorDocument>(
+                    MakeDocServices(), p, std::move(*data));
+            });
 
         return true;
     }
 
-    void EditorApp::TickMaterialPreview()
+    Arcane::Editor::DocServices EditorApp::MakeDocServices()
     {
-        if (!m_shaderCompiler || !m_shaderCompiler->IsAvailable())
+        Arcane::Editor::DocServices s;
+        s.device   = m_gpu->Device().Nvrhi();
+        s.shaders  = &m_gpu->Shaders();
+        s.compiler = m_shaderCompiler.get();
+        s.sources  = &m_shaderSources;
+        s.assets   = &m_runtime->AssetsFacade();
+        s.undo     = m_undo ? &*m_undo : nullptr;
+        s.clock    = &m_editorClock;
+        s.backend  = m_gpu->Device().Backend();
+        return s;
+    }
+
+    void EditorApp::MaterialNewPickedThunk(const char* path, void* user)
+    {
+        // SDL dialog callback thread (see FolderPickedThunk).
+        auto* self = static_cast<EditorApp*>(user);
+        if (!path) return;
+        std::lock_guard<std::mutex> lk(self->m_pendingMaterialMutex);
+        self->m_pendingMaterialNewPath = path;
+    }
+
+    void EditorApp::MaterialOpenPickedThunk(const char* path, void* user)
+    {
+        auto* self = static_cast<EditorApp*>(user);
+        if (!path) return;
+        std::lock_guard<std::mutex> lk(self->m_pendingMaterialMutex);
+        self->m_pendingMaterialOpenPath = path;
+    }
+
+    void EditorApp::CreateMaterialAt(std::filesystem::path path)
+    {
+        if (path.extension() != ".armat")
+            path += ".armat";
+
+        Arcane::MaterialAssetData data;
+        data.id = Arcane::Guid::Generate();
+        data.name = path.stem().string();
+        data.kind = "fullscreen";
+        data.snippet =
+            "//@param color Tint  = (0.2, 0.8, 1.0, 1)\n"
+            "//@param float Speed = 1.0 [0..4]\n"
+            "\n"
+            "float4 shade(Varyings v)\n"
+            "{\n"
+            "    float w = 0.5 + 0.5 * sin(v.uv.x * 12.566 + Time * Speed);\n"
+            "    return Tint * w;\n"
+            "}\n";
+        if (!Arcane::SaveMaterialAsset(path, data))
+        {
+            ARC_WARN("Arcane Editor: could not create material at '{}'", path.generic_string());
             return;
-
-        m_materialTime += m_lastFrameDt;
-        m_shaderCompiler->Poll(m_materialTime);
-
-        // Drain site: the ONE place compile results become NVRHI shaders.
-        for (const Arcane::ShaderCompileResult& r : m_shaderCompiler->Drain())
-        {
-            const auto& target = m_gpu->Device().Backend() == Arcane::GraphicsBackend::Vulkan
-                                     ? r.spirv : r.dxil;
-            for (const Arcane::ShaderDiag& d : target.diags)
-            {
-                m_materialStatus.push_back(
-                    d.file + ":" + std::to_string(d.line) + ": " + d.message);
-            }
-            if (!target.succeeded)
-                continue;   // last-good stays bound; errors above tell the story
-            if (r.jobId == m_materialVsJob)
-                m_materialVsBytes = target.bytecode;
-            else if (r.jobId == m_materialPsJob)
-                m_materialPsBytes = target.bytecode;
         }
-
-        if (!m_materialPass->Ready() &&
-            !m_materialVsBytes.empty() && !m_materialPsBytes.empty())
-        {
-            nvrhi::IDevice* nv = m_gpu->Device().Nvrhi();
-            nvrhi::ShaderHandle vs = nv->createShader(
-                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
-                    .setEntryName(Arcane::kVsEntry).setDebugName("preview_default_vs"),
-                m_materialVsBytes.data(), m_materialVsBytes.size());
-            nvrhi::ShaderHandle ps = nv->createShader(
-                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
-                    .setEntryName(Arcane::kPsEntry).setDebugName("preview_default_ps"),
-                m_materialPsBytes.data(), m_materialPsBytes.size());
-            if (vs && ps && m_materialPass->SetMaterial(m_materialTemplate, vs, ps))
-                m_materialInstance = std::make_unique<Arcane::MaterialInstance>(m_materialTemplate);
-        }
-
-        if (m_materialPass->Ready() && m_materialInstance && m_materialPreview)
-        {
-            Arcane::GlobalParams globals;
-            globals.time = (float)m_materialTime;
-            globals.deltaTime = (float)m_lastFrameDt;
-            globals.viewportWidth = (float)m_materialPreview->Width();
-            globals.viewportHeight = (float)m_materialPreview->Height();
-            m_materialPreview->DrawPass(
-                [&](nvrhi::ICommandList* cl, nvrhi::IFramebuffer* fb)
-                {
-                    m_materialPass->Render(cl, fb, *m_materialInstance, globals,
-                                           &m_runtime->AssetsFacade());
-                },
-                glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-        }
+        m_documents.OpenPath(path);
     }
 
     void EditorApp::FolderPickedThunk(const char* path, void* user)
@@ -517,6 +480,19 @@ namespace Arcane::Editor
             }
             if (!pending.empty())
                 SwitchProject(pending);
+
+            // Material file-dialog results (same background-thread stash
+            // pattern): create/open at the top of the frame, never mid-render.
+            std::string materialNew, materialOpen;
+            {
+                std::lock_guard<std::mutex> lk(m_pendingMaterialMutex);
+                materialNew.swap(m_pendingMaterialNewPath);
+                materialOpen.swap(m_pendingMaterialOpenPath);
+            }
+            if (!materialNew.empty())
+                CreateMaterialAt(materialNew);
+            if (!materialOpen.empty())
+                m_documents.OpenPath(materialOpen);
 
             // Input sample (before ImGui BeginFrame so capture flags are set).
             // Set inside the block below once inViewport + the game context's
@@ -894,30 +870,44 @@ namespace Arcane::Editor
                 m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
             }
 
-            // Material preview (Slice 4): pump the compile service (drain-site
-            // shader creation) and re-render the animating preview canvas.
-            TickMaterialPreview();
+            // Shader-editor pump (Slice 5): advance the compile clock, dispatch
+            // due jobs, and route drained results to their documents -- the ONE
+            // drain site where compile results become NVRHI shaders. Then tick
+            // every document (preview render on its own OffscreenCanvas).
+            m_editorClock += m_lastFrameDt;
+            if (m_shaderCompiler && m_shaderCompiler->IsAvailable())
+            {
+                m_shaderCompiler->Poll(m_editorClock);
+                for (const Arcane::ShaderCompileResult& r : m_shaderCompiler->Drain())
+                {
+                    m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+                    {
+                        if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d))
+                            doc->ConsumeResult(r);
+                    });
+                }
+            }
+            m_documents.TickAll(m_lastFrameDt);
 
             // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
             // + the Viewport panel showing the scene texture just rendered above.
             m_gpu->Imgui().BeginFrame();
-            Arcane::Editor::BeginDockSpace(*m_undo, m_openProjectRequested);
+            Arcane::Editor::MenuRequests menuReq;
+            Arcane::Editor::BeginDockSpace(*m_undo, menuReq);
             Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin ? m_plugin->Vtable() : nullptr,
                                                (uint64_t)(intptr_t)m_toolbarLogo.Get());
             Arcane::Editor::EndDockSpace();
-            if (m_openProjectRequested)
-            {
-                m_openProjectRequested = false;
+            if (menuReq.openProject)
                 m_gpu->Win().ShowOpenFolderDialog(&EditorApp::FolderPickedThunk, this);
-            }
+            if (menuReq.newMaterial)
+                m_gpu->Win().ShowSaveFileDialog(&EditorApp::MaterialNewPickedThunk, this,
+                                                "Arcane Material", "armat");
+            if (menuReq.openMaterial)
+                m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
+                                                "Arcane Material", "armat");
             Arcane::Editor::DrawAssetsPanel(m_runtime->CurrentProject());
             Arcane::Editor::DrawConsolePanel(m_console);
-            Arcane::Editor::DrawMaterialPreviewPanel(
-                m_materialPreview ? m_materialPreview->TextureId() : 0,
-                m_materialPreview ? m_materialPreview->Width() : 0,
-                m_materialPreview ? m_materialPreview->Height() : 0,
-                m_materialPass && m_materialPass->Ready(),
-                m_materialStatus);
+            m_documents.DrawAll();
 
             Arcane::Editor::ViewportPanelResult vp =
                 Arcane::Editor::DrawViewportPanel(m_viewport->TextureId(),

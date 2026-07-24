@@ -136,10 +136,11 @@ namespace Arcane
             if (ext == ".meta")
                 continue;
 
-            // Route by asset kind: native JSON embeds its id; imported binaries use a
-            // sidecar; anything else is not an asset we track.
+            // Route by asset kind: native JSON embeds its id (.json data assets and
+            // .armat materials share the JSON-with-embedded-"id" shape); imported
+            // binaries use a sidecar; anything else is not an asset we track.
             Guid id;
-            if (ext == ".json")
+            if (ext == ".json" || ext == ".armat")
                 id = ResolveNativeId(entry.path());
             else if (IsImportedBinary(ext))
                 id = ResolveSidecarId(entry.path());

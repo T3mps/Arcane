@@ -16,14 +16,22 @@ namespace Arcane::Editor
     class PlaySession;
     struct SelectionContext;
 
+    // Menu-bar requests the app resolves AFTER the frame's dockspace is drawn
+    // (dialog launches happen at the call site, never inside the menu draw).
+    struct MenuRequests
+    {
+        bool openProject = false;    // File -> Open Project...   (folder dialog)
+        bool newMaterial = false;    // File -> New Material...   (save-file dialog)
+        bool openMaterial = false;   // File -> Open Material...  (open-file dialog)
+    };
+
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
     // OPEN (call once per frame right after ImGui BeginFrame). Draw the fixed toolbar
     // strip (DrawSimTimeToolbar) into it, then close it with EndDockSpace(); dockable
     // panels are drawn AFTER EndDockSpace. `undo` drives the Edit menu's Undo/Redo
     // (same CommandStack as the Ctrl+Z / Ctrl+Y shortcuts handled in the app input loop).
-    // `openProjectRequested` is set true when the File -> Open Project... menu item is
-    // clicked; the caller is responsible for launching the folder dialog and clearing it.
-    void BeginDockSpace(Arcane::CommandStack& undo, bool& openProjectRequested);
+    // Menu clicks land in `requests`; the caller launches the dialogs.
+    void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
     // Everything drawn in between becomes a fixed (non-dockable, tab-less) strip above
@@ -50,13 +58,6 @@ namespace Arcane::Editor
     // else "No project open" (the legacy data/-next-to-exe boot, unchanged).
     void DrawAssetsPanel(const Arcane::Project* project);
 
-    // Bare material preview (shader-editor Slice 4): the animating default
-    // material rendered by EditorApp::TickMaterialPreview, scaled to fit, plus
-    // any build/compile status lines. `ready` = a compiled material is bound
-    // (until then a "compiling" hint shows). The full 4-panel shader-editor
-    // document supersedes this in Slice 5.
-    void DrawMaterialPreviewPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                  bool ready, const std::vector<std::string>& status);
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);

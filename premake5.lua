@@ -552,6 +552,11 @@ project "ArcaneTests"
         -- drives it directly against a real Arcane::Runtime, same pattern as
         -- ConsoleBuffer/ViewportInput/EntityList/InspectorFields above.
         "%{wks.location}/ArcaneEditor/src/PlayMode.cpp",
+        -- Shader-editor Slice 5: DocumentHost (open-document list + unsaved-
+        -- close confirm state machine + asset->editor routing) source-compiles
+        -- into the test exe so the [editor] units drive the PURE close flow
+        -- with fake documents -- DrawAll (the only ImGui method) is not called.
+        "%{wks.location}/ArcaneEditor/src/DocumentHost.cpp",
     }
 
     includedirs {

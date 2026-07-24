@@ -75,6 +75,22 @@ namespace Arcane
         using FolderPickedCallback = void (*)(const char* path, void* user);
         void ShowOpenFolderDialog(FolderPickedCallback cb, void* user) const;
 
+        // Native save/open FILE dialogs (same async trampoline contract as the
+        // folder picker: `cb` fires on the SDL dialog thread with the chosen
+        // path, or nullptr on cancel/error). One optional filter --
+        // `filterName` ("Arcane Material") + `filterPattern` ("armat",
+        // semicolon-separated for multiple); pass null/null for all files.
+        // `defaultPath` seeds the dialog's starting location/filename (null =
+        // OS default). The save dialog does NOT force the extension -- callers
+        // append it when missing.
+        using FilePickedCallback = void (*)(const char* path, void* user);
+        void ShowSaveFileDialog(FilePickedCallback cb, void* user,
+                                const char* filterName, const char* filterPattern,
+                                const char* defaultPath = nullptr) const;
+        void ShowOpenFileDialog(FilePickedCallback cb, void* user,
+                                const char* filterName, const char* filterPattern,
+                                const char* defaultPath = nullptr) const;
+
     private:
         SDL_Window*    m_window  = nullptr;
         NativeEventTap m_tap     = nullptr;

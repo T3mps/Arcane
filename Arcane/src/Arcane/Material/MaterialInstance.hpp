@@ -59,6 +59,14 @@ namespace Arcane
 
         std::size_t OverrideCount() const { return m_overrides.size(); }
 
+        // The sparse override list itself (nameHash -> value). Read-only: the
+        // editor enumerates it to persist saved values and to migrate overrides
+        // onto a rebuilt template after a structural (snippet) edit.
+        const std::vector<std::pair<std::uint32_t, MatParamValue>>& Overrides() const
+        {
+            return m_overrides;
+        }
+
         // Resolve: my override -> parent chain -> template default. False for a name
         // the template does not declare.
         bool GetParam(std::uint32_t nameHash, MatParamValue& out) const;

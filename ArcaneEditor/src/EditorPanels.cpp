@@ -25,7 +25,7 @@
 
 namespace Arcane::Editor
 {
-    void BeginDockSpace(Arcane::CommandStack& undo, bool& openProjectRequested)
+    void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -48,10 +48,13 @@ namespace Arcane::Editor
         {
             if (ImGui::BeginMenu("File"))
             {
-                if (ImGui::MenuItem("Open Project...")) openProjectRequested = true;
+                if (ImGui::MenuItem("Open Project...")) requests.openProject = true;
                 ImGui::Separator();
                 ImGui::MenuItem("New Scene");
                 ImGui::MenuItem("Open Scene...");
+                ImGui::Separator();
+                if (ImGui::MenuItem("New Material...")) requests.newMaterial = true;
+                if (ImGui::MenuItem("Open Material...")) requests.openMaterial = true;
                 ImGui::Separator();
                 ImGui::MenuItem("Save Scene");
                 ImGui::MenuItem("Save Scene As...");
@@ -104,7 +107,6 @@ namespace Arcane::Editor
         ImGui::DockBuilderDockWindow("Inspector", rightId);
         ImGui::DockBuilderDockWindow("Assets",    bottomId);   // Assets tab first...
         ImGui::DockBuilderDockWindow("Console",   bottomId);   // ...then Console
-        ImGui::DockBuilderDockWindow("Material Preview", central);   // tab behind Viewport
         ImGui::DockBuilderDockWindow("Viewport",  central);
         ImGui::DockBuilderFinish(dockspaceId);
     }
@@ -266,33 +268,6 @@ namespace Arcane::Editor
         ImGui::Separator();
         // Placeholder: the asset browser lands here later.
         ImGui::TextDisabled("Assets browser -- coming soon");
-        ImGui::End();
-    }
-
-    void DrawMaterialPreviewPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                  bool ready, const std::vector<std::string>& status)
-    {
-        ImGui::Begin("Material Preview");
-        if (!ready || textureId == 0 || texW == 0 || texH == 0)
-        {
-            ImGui::TextDisabled(status.empty()
-                                    ? "Compiling default material..."
-                                    : "Material unavailable:");
-        }
-        else
-        {
-            // Scale to fit the content region, aspect preserved (the canvas is a
-            // fixed-size texture; the panel just letterboxes it).
-            const ImVec2 avail = ImGui::GetContentRegionAvail();
-            const float availH = avail.y > 64.0f ? avail.y : 64.0f;
-            const float scale = (std::min)(avail.x > 0 ? avail.x / (float)texW : 1.0f,
-                                           availH / (float)texH);
-            const float s = scale > 0.0f ? scale : 1.0f;
-            ImGui::Image((ImTextureID)textureId,
-                         ImVec2((float)texW * s, (float)texH * s));
-        }
-        for (const std::string& line : status)
-            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", line.c_str());
         ImGui::End();
     }
 

@@ -15,8 +15,10 @@
 #include <GpuContext.hpp>
 #include <FramePerf.hpp>
 #include "ConsoleBuffer.hpp"
+#include "DocumentHost.hpp"
 #include "PlayMode.hpp"
 #include "SelectionContext.hpp"
+#include "ShaderEditorDocument.hpp"
 #include "ViewportInput.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
@@ -24,10 +26,7 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
-#include <Arcane/Material/MaterialInstance.hpp>
-#include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
-#include <Arcane/Render/FullscreenMaterialPass.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
 #include <Arcane/Render/SelectionOutline.hpp>
@@ -170,27 +169,27 @@ namespace Arcane::Editor
         // uses (the two are mutually exclusive by mode).
         std::unique_ptr<Arcane::SelectionOutline> m_outline;
 
-        // Material preview (shader-editor Slice 4): a bare panel proving the
-        // material pipeline end-to-end inside the editor -- engine template +
-        // default snippet -> async runtime compile (Submit/Poll/Drain; shaders
-        // created at the drain site) -> FullscreenMaterialPass into its own
-        // OffscreenCanvas, animating on live Time. The full 4-panel shader-editor
-        // document replaces this in Slice 5. All hold NVRHI handles -> declared
-        // after m_gpu (destruct before the device).
-        std::unique_ptr<Arcane::ShaderCompiler>         m_shaderCompiler;
-        Arcane::ShaderSourceProvider                    m_shaderSources;
-        std::unique_ptr<Arcane::OffscreenCanvas>        m_materialPreview;
-        std::unique_ptr<Arcane::FullscreenMaterialPass> m_materialPass;
-        std::shared_ptr<Arcane::MaterialTemplate>       m_materialTemplate;
-        std::unique_ptr<Arcane::MaterialInstance>       m_materialInstance;
-        std::vector<std::string>  m_materialStatus;      // build/compile problems for the panel
-        std::vector<std::uint8_t> m_materialVsBytes;     // staged per-backend bytecode until
-        std::vector<std::uint8_t> m_materialPsBytes;     // ...both stages have landed
-        std::uint64_t m_materialVsJob = 0;
-        std::uint64_t m_materialPsJob = 0;
-        double        m_materialTime = 0.0;              // preview clock (drives Poll + Time)
+        // Shader-editor services + open documents (Slice 5). The compiler is the
+        // app-shared compile service (documents Submit through it; MainLoop
+        // Polls/Drains it once per frame and routes results to documents -- the
+        // drain site is the ONE place compile results become NVRHI shaders).
+        // Documents hold NVRHI resources -> declared after m_gpu (destruct
+        // before the device) and after m_runtime (they borrow its Assets).
+        std::unique_ptr<Arcane::ShaderCompiler> m_shaderCompiler;
+        Arcane::ShaderSourceProvider            m_shaderSources;
+        Arcane::Editor::DocumentHost            m_documents;
+        double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
 
-        void TickMaterialPreview();   // Poll/Drain + bind-on-arrival + render (MainLoop)
+        // Async file-dialog results for the material flows (same background-
+        // thread stash pattern as m_pendingProjectPath below).
+        std::string m_pendingMaterialNewPath;
+        std::string m_pendingMaterialOpenPath;
+        std::mutex  m_pendingMaterialMutex;
+
+        static void MaterialNewPickedThunk(const char* path, void* user);
+        static void MaterialOpenPickedThunk(const char* path, void* user);
+        void CreateMaterialAt(std::filesystem::path path);   // mint .armat + open doc
+        Arcane::Editor::DocServices MakeDocServices();
 
         // The Arcane logo, shown at the left of the transport toolbar (Unity-style). A
         // display-referred (UNORM) texture -- NOT Assets::GetTexture's sRGB -- so it
@@ -217,7 +216,6 @@ namespace Arcane::Editor
         // path in m_pendingProjectPath under m_pendingProjectMutex; the next frame's
         // top of MainLoop takes the lock, swaps the path out, and (outside the lock)
         // runs SwitchProject at a safe point.
-        bool        m_openProjectRequested = false;
         std::string m_pendingProjectPath;
         std::mutex  m_pendingProjectMutex;   // guards m_pendingProjectPath across the SDL callback thread
 

@@ -8,6 +8,7 @@
 #include <stb_image.h>   // decode the icon file; implementation lives in Assets/StbImpl.cpp (same DLL)
 
 #include <memory>
+#include <string>
 
 namespace Arcane
 {
@@ -175,6 +176,60 @@ namespace Arcane
     {
         auto* ctx = new FolderCbCtx{ cb, user };   // freed by the trampoline
         SDL_ShowOpenFolderDialog(&FolderDialogTrampoline, ctx, m_window, nullptr, false);
+    }
+
+    namespace
+    {
+        // File-dialog context: owns the filter STRINGS too -- SDL requires the
+        // filter array to stay valid until the callback fires, so everything
+        // lives on the heap with the ctx and is freed by the trampoline.
+        struct FileCbCtx
+        {
+            Window::FilePickedCallback cb;
+            void* user;
+            std::string filterName, filterPattern;
+            SDL_DialogFileFilter filter{};
+        };
+
+        void SDLCALL FileDialogTrampoline(void* userdata, const char* const* filelist, int /*filter*/)
+        {
+            std::unique_ptr<FileCbCtx> ctx(static_cast<FileCbCtx*>(userdata));
+            const char* picked = (filelist && filelist[0]) ? filelist[0] : nullptr;
+            if (ctx->cb) ctx->cb(picked, ctx->user);
+        }
+
+        FileCbCtx* MakeFileCtx(Window::FilePickedCallback cb, void* user,
+                               const char* filterName, const char* filterPattern)
+        {
+            auto* ctx = new FileCbCtx{ cb, user,
+                                       filterName ? filterName : "",
+                                       filterPattern ? filterPattern : "" };
+            ctx->filter.name = ctx->filterName.c_str();
+            ctx->filter.pattern = ctx->filterPattern.c_str();
+            return ctx;
+        }
+    }
+
+    void Window::ShowSaveFileDialog(FilePickedCallback cb, void* user,
+                                    const char* filterName, const char* filterPattern,
+                                    const char* defaultPath) const
+    {
+        FileCbCtx* ctx = MakeFileCtx(cb, user, filterName, filterPattern);   // freed by the trampoline
+        const bool hasFilter = filterName && filterPattern;
+        SDL_ShowSaveFileDialog(&FileDialogTrampoline, ctx, m_window,
+                               hasFilter ? &ctx->filter : nullptr, hasFilter ? 1 : 0,
+                               defaultPath);
+    }
+
+    void Window::ShowOpenFileDialog(FilePickedCallback cb, void* user,
+                                    const char* filterName, const char* filterPattern,
+                                    const char* defaultPath) const
+    {
+        FileCbCtx* ctx = MakeFileCtx(cb, user, filterName, filterPattern);   // freed by the trampoline
+        const bool hasFilter = filterName && filterPattern;
+        SDL_ShowOpenFileDialog(&FileDialogTrampoline, ctx, m_window,
+                               hasFilter ? &ctx->filter : nullptr, hasFilter ? 1 : 0,
+                               defaultPath, /*allow_many=*/false);
     }
 
     void Window::GetPixelSize(uint32_t& width, uint32_t& height) const
