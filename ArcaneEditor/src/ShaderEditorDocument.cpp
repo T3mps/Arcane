@@ -19,6 +19,7 @@
 #include <imgui_node_editor.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <unordered_set>
@@ -110,6 +111,25 @@ namespace Arcane::Editor
                                                          : rem - kPinOutBase);
             d.valid = d.node != 0;
             return d;
+        }
+
+        // Case-insensitive substring match for the create-menu search field.
+        bool ContainsInsensitive(const char* hay, const char* needle)
+        {
+            const std::size_t n = std::strlen(needle);
+            if (n == 0)
+                return true;
+            for (const char* p = hay; *p; ++p)
+            {
+                std::size_t i = 0;
+                while (i < n && p[i] &&
+                       std::tolower(static_cast<unsigned char>(p[i])) ==
+                           std::tolower(static_cast<unsigned char>(needle[i])))
+                    ++i;
+                if (i == n)
+                    return true;
+            }
+            return false;
         }
 
         // Would adding data-flow edge from->to close a cycle? Yes iff `from` is
@@ -983,6 +1003,16 @@ namespace Arcane::Editor
         ed::Suspend();
         if (ed::ShowBackgroundContextMenu())
         {
+            m_wireActive = false;   // plain create -- no wire to connect
+            const ImVec2 p = ImGui::GetMousePos();
+            m_graphPopupX = p.x;
+            m_graphPopupY = p.y;
+            ImGui::OpenPopup("##graphcreate");
+        }
+        if (m_wireCreateRequest)
+        {
+            m_wireCreateRequest = false;
+            m_wireActive = true;
             const ImVec2 p = ImGui::GetMousePos();
             m_graphPopupX = p.x;
             m_graphPopupY = p.y;
@@ -1035,6 +1065,19 @@ namespace Arcane::Editor
         }
         if (ImGui::BeginPopup("##graphcreate"))
         {
+            // The searcher: type-to-filter, Enter creates the first match.
+            if (ImGui::IsWindowAppearing())
+            {
+                m_createSearch[0] = '\0';
+                ImGui::SetKeyboardFocusHere();
+            }
+            const bool enter = ImGui::InputTextWithHint(
+                "##nodesearch", "Search...", m_createSearch, sizeof(m_createSearch),
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::Separator();
+
+            const Arcane::GraphNodeTypeInfo* chosen = nullptr;
+            const Arcane::GraphNodeTypeInfo* first = nullptr;
             for (const Arcane::GraphNodeTypeInfo& info : Arcane::AllGraphNodeInfos())
             {
                 if (info.type == Arcane::GraphNodeType::Output)
@@ -1043,9 +1086,32 @@ namespace Arcane::Editor
                                         info.type == Arcane::GraphNodeType::SpriteTexture;
                 if (spriteOnly && m_surface != 1)
                     continue;
-                if (!ImGui::MenuItem(info.display))
+                // Wire-invoked: only types with a pin on the wire's far side.
+                // Every pin is numeric (adaptation absorbs widths), so
+                // compatibility is purely structural. A fresh Custom node has
+                // no inputs, so it only appears for input-side drags.
+                if (m_wireActive)
+                {
+                    const bool hasFarPin = m_wireIsInput ? !info.outputs.empty()
+                                                         : !info.inputs.empty();
+                    if (!hasFarPin)
+                        continue;
+                }
+                if (!ContainsInsensitive(info.display, m_createSearch))
                     continue;
-
+                if (!first)
+                    first = &info;
+                if (ImGui::MenuItem(info.display))
+                    chosen = &info;
+            }
+            if (enter && first)
+            {
+                chosen = first;
+                ImGui::CloseCurrentPopup();
+            }
+            if (chosen)
+            {
+                const Arcane::GraphNodeTypeInfo& info = *chosen;
                 std::optional<Arcane::MaterialGraph> before = m_data.graph;
                 Arcane::GraphNode n;
                 n.id = g.MintId();
@@ -1090,7 +1156,33 @@ namespace Arcane::Editor
                 n.posX = canvasPos.x;
                 n.posY = canvasPos.y;
                 ed::SetNodePosition(n.id, canvasPos);
+                const std::uint32_t newId = n.id;
                 g.nodes.push_back(std::move(n));
+                // Wire-invoked: auto-connect the first far-side pin. Input
+                // drags replace silently, exactly like a hand-drawn wire; a
+                // fresh node's single edge can never cycle.
+                if (m_wireActive && g.FindNode(m_wireNode))
+                {
+                    Arcane::GraphLink l;
+                    if (m_wireIsInput)
+                    {
+                        std::erase_if(g.links, [&](const Arcane::GraphLink& x)
+                                      { return x.toNode == m_wireNode &&
+                                               x.toPin == m_wirePin; });
+                        l.fromNode = newId;
+                        l.fromPin = 0;
+                        l.toNode = m_wireNode;
+                        l.toPin = m_wirePin;
+                    }
+                    else
+                    {
+                        l.fromNode = m_wireNode;
+                        l.fromPin = m_wirePin;
+                        l.toNode = newId;
+                        l.toPin = 0;
+                    }
+                    g.links.push_back(l);
+                }
                 m_dirty = true;
                 if (m_live)
                     RegenerateFromGraph();
@@ -1098,6 +1190,8 @@ namespace Arcane::Editor
             }
             ImGui::EndPopup();
         }
+        else
+            m_wireActive = false;   // popup closed without a pick
         ed::Resume();
 
         // Position readback (skipped the seeding frame -- the canvas would
@@ -1442,6 +1536,22 @@ namespace Arcane::Editor
                     if (m_live)
                         RegenerateFromGraph();
                     PushGraphUndo("Connect", std::move(before));
+                }
+            }
+            else if (ed::QueryNewNode(&aId))
+            {
+                // Wire released over empty canvas -> the create searcher.
+                // Popups cannot open here (canvas space); stash the dragged
+                // pin and let DrawGraphPanel's Suspend block open it.
+                const DecodedPin from = DecodePin(aId);
+                if (!from.valid || !g.FindNode(from.node))
+                    ed::RejectNewItem();
+                else if (ed::AcceptNewItem())
+                {
+                    m_wireNode = from.node;
+                    m_wirePin = from.pin;
+                    m_wireIsInput = from.isInput;
+                    m_wireCreateRequest = true;
                 }
             }
         }

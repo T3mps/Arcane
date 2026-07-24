@@ -218,6 +218,16 @@ namespace Arcane::Editor
         bool m_showGeneratedText = false;       // toolbar toggle: canvas <-> read-only HLSL
         std::uint32_t m_focusNode = 0;          // errors-panel click -> select + navigate
         float m_graphPopupX = 0.0f, m_graphPopupY = 0.0f;   // create-menu screen pos
+        // Drag-wire searcher (SG's signature interaction): releasing a new wire
+        // over empty canvas opens the create menu filtered to types with a pin
+        // on the wire's far side, and the created node auto-connects. The
+        // request flag carries the accept from HandleGraphEdits (canvas space)
+        // into the Suspend'ed popup block; m_wireActive spans the popup.
+        bool          m_wireCreateRequest = false;
+        bool          m_wireActive = false;
+        bool          m_wireIsInput = false;    // dragged pin is an input pin
+        std::uint32_t m_wireNode = 0, m_wirePin = 0;
+        char          m_createSearch[64] = {};  // create-menu search filter
         // Whole-graph gesture capture for value drags (small graphs; the SG
         // full-snapshot-undo pathology was per-edit reserialization + full
         // preview regeneration, neither of which applies here).
