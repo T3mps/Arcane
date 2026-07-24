@@ -209,3 +209,62 @@ TEST_CASE("ShaderEditorDocument::ConsumeResult routes only its own job ids", "[e
 
     compiler.Shutdown();
 }
+
+TEST_CASE("ShaderEditorDocument compiles a pass chain per-pass and routes results",
+          "[editor][material][shadercompile]")
+{
+    // A 3-pass chain submits BOTH stages for EVERY pass (6 jobs, distinct
+    // per-pass coalesce keys) and each drained result routes home. Device-less:
+    // binding is skipped, but the whole chain-source path runs for real.
+    const fs::path dir = TempDir("chainrouting");
+    const fs::path file = dir / "chained.armat";
+
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.name = "Chained";
+    data.snippet = kSnippet;
+    data.passes.push_back({ "swap",
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv).grba; }\n" });
+    data.passes.push_back({ "gain",
+        "//@param float Gain = 1\n"
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv) * Gain; }\n" });
+    REQUIRE(Arcane::SaveMaterialAsset(file, data));
+
+    Arcane::ShaderCompiler compiler;
+    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    Arcane::ShaderSourceProvider sources;
+    sources.AddRoot("shaders");
+
+    DocServices services;
+    services.compiler = &compiler;
+    services.sources = &sources;
+
+    const auto loaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->passes.size() == 2);
+    ShaderEditorDocument doc(services, file, *loaded);
+    REQUIRE(doc.ParseErrors().empty());
+
+    std::vector<Arcane::ShaderCompileResult> results;
+    for (int i = 0; i < 2000 && results.size() < 6; ++i)
+    {
+        compiler.Poll(/*now=*/0.0);
+        auto batch = compiler.Drain();
+        results.insert(results.end(), std::make_move_iterator(batch.begin()),
+                       std::make_move_iterator(batch.end()));
+        if (results.size() < 6)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(results.size() == 6);
+
+    for (Arcane::ShaderCompileResult& r : results)
+    {
+        INFO("chain stage result " << r.debugName);
+        CHECK(r.AllSucceeded());
+        CHECK(doc.ConsumeResult(r));
+    }
+
+    compiler.Shutdown();
+}

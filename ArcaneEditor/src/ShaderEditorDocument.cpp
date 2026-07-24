@@ -77,11 +77,15 @@ namespace Arcane::Editor
             Arcane::MatParamValue m_after;
         };
 
-        std::uint64_t StageKey(const Arcane::Guid& id, bool vertex)
+        std::uint64_t StageKey(const Arcane::Guid& id, bool vertex,
+                               std::size_t pass = 0)
         {
-            // Coalesce per (document, stage): a newer submit of the SAME stage
-            // supersedes; the two stages never cancel each other.
-            return (id.hi ^ (id.lo * 1099511628211ull)) ^ (vertex ? 0x1u : 0x2u);
+            // Coalesce per (document, stage, pass): a newer submit of the SAME
+            // stage supersedes; stages never cancel each other. The pass bits
+            // sit at << 8, clear of the stage bits and the sprite cache's
+            // guid^0x4/0x8 keys.
+            return (id.hi ^ (id.lo * 1099511628211ull)) ^ (vertex ? 0x1u : 0x2u) ^
+                   (static_cast<std::uint64_t>(pass) << 8);
         }
 
         // ---- Graph canvas plumbing (Slice 9) ----
@@ -206,8 +210,11 @@ namespace Arcane::Editor
             auto* doc = static_cast<ShaderEditorDocument*>(data->UserData);
             if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
             {
-                doc->m_snippet.resize(static_cast<std::size_t>(data->BufTextLen));
-                data->Buf = doc->m_snippet.data();
+                // ActiveSnippet: pass chains route the editor at the selected
+                // pass's buffer (pass 0 = m_snippet, unchanged single-pass).
+                std::string& buf = doc->ActiveSnippet();
+                buf.resize(static_cast<std::size_t>(data->BufTextLen));
+                data->Buf = buf.data();
             }
             else if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways &&
                      doc->m_callbackJumpLine > 0)
@@ -348,6 +355,58 @@ namespace Arcane::Editor
             return;
         }
 
+        // Invalidate every in-flight job (both paths): a result for a source
+        // this Rebuild replaced must not bind.
+        m_vsJob = m_psJob = 0;
+        m_vsBytes.clear();
+        m_psBytes.clear();
+        m_passJobs.clear();
+
+        if (ChainMode())
+        {
+            std::vector<std::string_view> snippets;
+            snippets.reserve(1 + m_data.passes.size());
+            snippets.push_back(m_snippet);
+            for (const Arcane::MaterialPass& p : m_data.passes)
+                snippets.push_back(p.snippet);
+
+            Arcane::MaterialChainBuildResult build =
+                Arcane::BuildMaterialChainSource(*templateText, snippets, m_title);
+            m_parseErrors = std::move(build.errors);
+            for (std::size_t p = 0; p < build.passErrors.size(); ++p)
+                for (const std::string& e : build.passErrors[p])
+                    m_parseErrors.push_back(PassLabel(p) + ": " + e);
+
+            m_passLineOffsets.assign(build.hlsl.size(), 0);
+            for (std::size_t p = 0; p < build.hlsl.size(); ++p)
+                if (const std::size_t at = build.hlsl[p].find(snippets[p]);
+                    at != std::string::npos)
+                    m_passLineOffsets[p] = static_cast<int>(std::count(
+                        build.hlsl[p].begin(),
+                        build.hlsl[p].begin() + static_cast<std::ptrdiff_t>(at), '\n'));
+            m_snippetLineOffset = m_passLineOffsets.empty() ? 0 : m_passLineOffsets[0];
+            m_pendingTemplate =
+                std::make_shared<Arcane::MaterialTemplate>(std::move(build.templ));
+            m_metas = std::move(build.metas);
+
+            m_passJobs.resize(build.hlsl.size());
+            for (std::size_t p = 0; p < build.hlsl.size(); ++p)
+            {
+                Arcane::ShaderCompileRequest req;
+                req.debugName = m_title + "_p" + std::to_string(p) + ".hlsl";
+                req.sourceUtf8 = build.hlsl[p];
+                req.entry = Arcane::kPsEntry;
+                req.profile = Arcane::kPsProfile;
+                req.coalesceKey = StageKey(m_data.id, /*vertex=*/false, p);
+                m_passJobs[p].psJob = m_services.compiler->Submit(req, Now());
+                req.entry = Arcane::kVsEntry;
+                req.profile = Arcane::kVsProfile;
+                req.coalesceKey = StageKey(m_data.id, /*vertex=*/true, p);
+                m_passJobs[p].vsJob = m_services.compiler->Submit(std::move(req), Now());
+            }
+            return;
+        }
+
         Arcane::MaterialBuildResult build =
             Arcane::BuildMaterialShaderSource(*templateText, SnippetSource(), m_title,
                                               SurfaceOf(m_surface));
@@ -380,6 +439,35 @@ namespace Arcane::Editor
 
     bool ShaderEditorDocument::ConsumeResult(const Arcane::ShaderCompileResult& result)
     {
+        // Chain-mode jobs first (mutually exclusive with the single-path ids --
+        // Rebuild clears whichever set is not in play).
+        for (std::size_t p = 0; p < m_passJobs.size(); ++p)
+        {
+            PassJobs& pj = m_passJobs[p];
+            const bool chainVs = result.jobId == pj.vsJob && pj.vsJob != 0;
+            const bool chainPs = result.jobId == pj.psJob && pj.psJob != 0;
+            if (!chainVs && !chainPs)
+                continue;
+            const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
+                                     ? result.spirv : result.dxil;
+            if (chainPs)
+            {
+                pj.diags = target.diags;
+                if (p == 0)
+                {
+                    // Pass 0 is the graph-owned surface: badges read m_diags.
+                    m_diags = target.diags;
+                    RebuildDiagBadges();
+                }
+            }
+            if (target.succeeded)
+            {
+                (chainVs ? pj.vsBytes : pj.psBytes) = target.bytecode;
+                BindIfComplete();
+            }
+            return true;
+        }
+
         const bool isVs = result.jobId == m_vsJob && m_vsJob != 0;
         const bool isPs = result.jobId == m_psJob && m_psJob != 0;
         if (!isVs && !isPs)
@@ -402,6 +490,11 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::BindIfComplete()
     {
+        if (ChainMode())
+        {
+            BindChainIfComplete();
+            return;
+        }
         const bool sprite = m_surface == 1;
         if (m_vsBytes.empty() || m_psBytes.empty() || !m_pendingTemplate ||
             (sprite ? !m_preview : !m_pass))
@@ -425,6 +518,18 @@ namespace Arcane::Editor
         if (!sprite && !m_pass->SetMaterial(m_pendingTemplate, vs, ps))
             return;
 
+        PromotePendingInstance();
+
+        if (sprite)
+        {
+            m_previewVs = vs;
+            m_previewPs = ps;
+            RefreshSpritePreviewBinding();
+        }
+    }
+
+    void ShaderEditorDocument::PromotePendingInstance()
+    {
         // Promote pending -> bound. Instance mode first layers the parent chain
         // (base's saved values innermost) so resolution walks child override ->
         // parents -> //@param default. Then migrate this document's own
@@ -454,13 +559,48 @@ namespace Arcane::Editor
         m_savedParamSerial = m_instance->EffectiveSerial();
         m_boundTemplate = m_pendingTemplate;
         m_boundMetas = m_metas;
+    }
 
-        if (sprite)
+    void ShaderEditorDocument::BindChainIfComplete()
+    {
+        if (!m_pendingTemplate || m_passJobs.empty() || !m_services.device)
+            return;
+        for (const PassJobs& pj : m_passJobs)
+            if (pj.vsBytes.empty() || pj.psBytes.empty())
+                return;   // a stage is still in flight (or failed -- last-good stays)
+
+        if (!m_chain)
+            m_chain = Arcane::FullscreenMaterialChain::Create(m_services.device);
+        if (!m_chain)
+            return;
+
+        std::vector<Arcane::FullscreenMaterialChain::PassShaders> shaders;
+        shaders.reserve(m_passJobs.size());
+        for (std::size_t p = 0; p < m_passJobs.size(); ++p)
         {
-            m_previewVs = vs;
-            m_previewPs = ps;
-            RefreshSpritePreviewBinding();
+            PassJobs& pj = m_passJobs[p];
+            const std::string stem = m_title + "_p" + std::to_string(p);
+            Arcane::FullscreenMaterialChain::PassShaders ps;
+            ps.vs = m_services.device->createShader(
+                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
+                    .setEntryName(Arcane::kVsEntry).setDebugName((stem + "_vs").c_str()),
+                pj.vsBytes.data(), pj.vsBytes.size());
+            ps.ps = m_services.device->createShader(
+                nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
+                    .setEntryName(Arcane::kPsEntry).setDebugName((stem + "_ps").c_str()),
+                pj.psBytes.data(), pj.psBytes.size());
+            pj.vsBytes.clear();
+            pj.psBytes.clear();
+            if (!ps.vs || !ps.ps)
+                return;
+            shaders.push_back(std::move(ps));
         }
+        // Atomic: a rejected chain keeps the previous one bound AND the
+        // previous instance (same last-good shape as SetMaterial).
+        if (!m_chain->SetChain(m_pendingTemplate, shaders))
+            return;
+
+        PromotePendingInstance();
     }
 
     void ShaderEditorDocument::RefreshSpritePreviewBinding()
@@ -501,6 +641,10 @@ namespace Arcane::Editor
         for (const Arcane::ShaderDiag& d : m_diags)
             if (d.severity == Arcane::ShaderDiagSeverity::Error)
                 return true;
+        for (const PassJobs& pj : m_passJobs)
+            for (const Arcane::ShaderDiag& d : pj.diags)
+                if (d.severity == Arcane::ShaderDiagSeverity::Error)
+                    return true;
         return false;
     }
 
@@ -556,9 +700,32 @@ namespace Arcane::Editor
 
     bool ShaderEditorDocument::PreviewReady() const
     {
-        return m_surface == 1
-                   ? m_previewSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId
-                   : m_pass && m_pass->Ready();
+        if (m_surface == 1)
+            return m_previewSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId;
+        if (ChainMode())
+            return m_chain && m_chain->Ready();
+        return m_pass && m_pass->Ready();
+    }
+
+    std::string& ShaderEditorDocument::ActiveSnippet()
+    {
+        if (m_activePass > 0 &&
+            m_activePass <= static_cast<int>(m_data.passes.size()))
+            return m_data.passes[static_cast<std::size_t>(m_activePass) - 1].snippet;
+        return m_snippet;
+    }
+
+    std::string ShaderEditorDocument::PassLabel(std::size_t pass) const
+    {
+        if (pass == 0)
+            return "base";
+        if (pass <= m_data.passes.size())
+        {
+            const std::string& n = m_data.passes[pass - 1].name;
+            if (!n.empty())
+                return n;
+        }
+        return "pass " + std::to_string(pass);
     }
 
     void ShaderEditorDocument::Tick(double dt)
@@ -616,9 +783,19 @@ namespace Arcane::Editor
         m_preview->DrawPass(
             [&](nvrhi::ICommandList* cl, nvrhi::IFramebuffer* fb)
             {
-                m_pass->Render(cl, fb, *m_instance, globals,
-                               m_services.runtime ? &m_services.runtime->AssetsFacade()
-                                                  : nullptr);
+                Arcane::Assets* assets =
+                    m_services.runtime ? &m_services.runtime->AssetsFacade() : nullptr;
+                if (ChainMode())
+                {
+                    // View-any-intermediate: the chain truncates at the viewed
+                    // pass, which renders into the preview canvas itself.
+                    const std::size_t view =
+                        m_viewPass < 0 ? static_cast<std::size_t>(-1)
+                                       : static_cast<std::size_t>(m_viewPass);
+                    m_chain->Render(cl, fb, *m_instance, globals, assets, view);
+                }
+                else
+                    m_pass->Render(cl, fb, *m_instance, globals, assets);
             },
             glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
     }
@@ -654,7 +831,14 @@ namespace Arcane::Editor
         else
         {
             const float errorsH = 140.0f;
-            if (IsGraphOwned() && !m_showGeneratedText)
+            // Pass-chain bar: fullscreen base materials only (sprite chains are
+            // refused; instances re-value the base's chain).
+            if (m_surface == 0)
+                DrawPassBar();
+            if (m_activePass > static_cast<int>(m_data.passes.size()))
+                m_activePass = 0;   // stale selection after an outside reload
+            // The graph canvas is PASS 0's surface; extra passes are text.
+            if (IsGraphOwned() && !m_showGeneratedText && m_activePass == 0)
                 DrawGraphPanel(ImGui::GetContentRegionAvail().y - errorsH);
             else
                 DrawSnippetEditor(ImGui::GetContentRegionAvail().y - errorsH);
@@ -725,9 +909,22 @@ namespace Arcane::Editor
         // STRUCTURAL edit: it re-kinds the asset (the surface is what the
         // material is FOR) and recompiles under the other template. Instances
         // preview under the switched surface without touching the base.
+        // Pass chains are fullscreen-only: the selector LOCKS while extra
+        // passes exist (no refusal path can lose data).
+        const bool surfaceLocked = !IsInstance() && !m_data.passes.empty();
+        if (surfaceLocked)
+            ImGui::BeginDisabled();
         int surface = m_surface;
-        if (ImGui::Combo("##surface", &surface, "Fullscreen\0Sprite\0") &&
-            surface != m_surface)
+        const bool surfacePicked =
+            ImGui::Combo("##surface", &surface, "Fullscreen\0Sprite\0");
+        if (surfaceLocked)
+        {
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("pass chains are fullscreen-only -- remove the "
+                                  "extra passes to change the surface");
+        }
+        if (surfacePicked && surface != m_surface)
         {
             m_surface = surface;
             m_previewSpriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;
@@ -794,12 +991,16 @@ namespace Arcane::Editor
         ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput |
                                     ImGuiInputTextFlags_CallbackResize |
                                     ImGuiInputTextFlags_CallbackAlways;
-        // Graph-owned: the text is GENERATED -- readable (and jumpable) but
-        // never hand-edited; Convert to Text is the one-way unlock.
-        if (IsGraphOwned())
+        // Graph-owned: PASS 0's text is GENERATED -- readable (and jumpable)
+        // but never hand-edited. Extra passes are always text-authored.
+        if (IsGraphOwned() && m_activePass == 0)
             flags |= ImGuiInputTextFlags_ReadOnly;
+        // Per-pass widget identity: switching passes swaps the buffer under
+        // the widget, which must not inherit the previous pass's edit state.
+        ImGui::PushID(m_activePass);
+        std::string& snippet = ActiveSnippet();
         // +1 capacity: ImGui writes the terminator into the buffer it is given.
-        if (ImGui::InputTextMultiline("##snippet", m_snippet.data(), m_snippet.capacity() + 1,
+        if (ImGui::InputTextMultiline("##snippet", snippet.data(), snippet.capacity() + 1,
                                       ImVec2(-1.0f, height), flags,
                                       &SnippetCallbackForwarder::Callback, this))
         {
@@ -807,6 +1008,88 @@ namespace Arcane::Editor
             if (m_live)
                 Rebuild();
         }
+        ImGui::PopID();
+    }
+
+    void ShaderEditorDocument::DrawPassBar()
+    {
+        // Pass chain bar (fullscreen base materials): select the edited pass,
+        // add/rename/remove extra passes, and pick the PREVIEWED pass
+        // (view-any-intermediate). Pass edits are structural (recompile), not
+        // undoable -- same standing as text edits.
+        ImGui::PushID("passbar");
+        const int total = 1 + static_cast<int>(m_data.passes.size());
+        for (int p = 0; p < total; ++p)
+        {
+            if (p)
+                ImGui::SameLine();
+            const std::string label =
+                PassLabel(static_cast<std::size_t>(p)) + "##pass" + std::to_string(p);
+            if (ImGui::RadioButton(label.c_str(), m_activePass == p))
+                m_activePass = p;
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("+"))
+        {
+            Arcane::MaterialPass p;
+            p.name = "pass " + std::to_string(m_data.passes.size() + 1);
+            p.snippet = "float4 shade(Varyings v)\n"
+                        "{\n"
+                        "    return InputTexture.Sample(MaterialSampler, v.uv);\n"
+                        "}\n";
+            m_data.passes.push_back(std::move(p));
+            m_activePass = static_cast<int>(m_data.passes.size());
+            m_dirty = true;
+            if (m_live)
+                Rebuild();
+        }
+
+        if (m_activePass > 0 &&
+            m_activePass <= static_cast<int>(m_data.passes.size()))
+        {
+            Arcane::MaterialPass& pass =
+                m_data.passes[static_cast<std::size_t>(m_activePass) - 1];
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(110.0f);
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%s", pass.name.c_str());
+            if (ImGui::InputText("##passname", buf, sizeof(buf)))
+            {
+                pass.name = buf;
+                m_dirty = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x"))
+            {
+                m_data.passes.erase(m_data.passes.begin() + (m_activePass - 1));
+                m_activePass = (std::min)(m_activePass,
+                                          static_cast<int>(m_data.passes.size()));
+                m_viewPass = -1;
+                m_dirty = true;
+                if (m_live)
+                    Rebuild();
+                ImGui::PopID();
+                return;   // the pass list changed under this frame's bar
+            }
+        }
+
+        if (!m_data.passes.empty())
+        {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120.0f);
+            // View selector: which pass the preview shows (the chain truncates
+            // there). Default = the last pass = the final output.
+            std::string items;
+            for (int p = 0; p < total; ++p)
+            {
+                items += "view: " + PassLabel(static_cast<std::size_t>(p));
+                items += '\0';
+            }
+            int view = m_viewPass < 0 || m_viewPass >= total ? total - 1 : m_viewPass;
+            if (ImGui::Combo("##viewpass", &view, items.c_str()))
+                m_viewPass = view == total - 1 ? -1 : view;
+        }
+        ImGui::PopID();
     }
 
     void ShaderEditorDocument::DrawErrorsPanel()
@@ -834,6 +1117,51 @@ namespace Arcane::Editor
         }
         for (const std::string& e : m_parseErrors)
             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", e.c_str());
+        // Chain mode: per-pass compile diags (labeled rows; clicking switches
+        // the editor to that pass and jumps). m_diags mirrors pass 0 for the
+        // graph badges, so the single-path loop below is skipped.
+        if (ChainMode())
+        {
+            int ci = 0;
+            for (std::size_t p = 0; p < m_passJobs.size(); ++p)
+            {
+                const int offset = p < m_passLineOffsets.size() ? m_passLineOffsets[p] : 0;
+                for (const Arcane::ShaderDiag& d : m_passJobs[p].diags)
+                {
+                    const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
+                    const ImVec4 color = isError ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
+                                                 : ImVec4(0.9f, 0.8f, 0.4f, 1.0f);
+                    const int snippetLine = d.line > offset ? d.line - offset : 1;
+                    char head[80];
+                    std::snprintf(head, sizeof(head), "%s: %s(%d): ",
+                                  PassLabel(p).c_str(),
+                                  isError ? "error" : "warning", snippetLine);
+                    const std::string label =
+                        head + d.message + "##cdiag" + std::to_string(ci++);
+                    ImGui::PushStyleColor(ImGuiCol_Text, color);
+                    if (ImGui::Selectable(label.c_str(), false))
+                    {
+                        m_activePass = static_cast<int>(p);
+                        m_jumpToLine = snippetLine;
+                        if (p == 0 && IsGraphOwned() && !m_showGeneratedText)
+                        {
+                            const std::size_t idx =
+                                static_cast<std::size_t>(snippetLine) - 1;
+                            if (idx < m_lineNodeIds.size() && m_lineNodeIds[idx] != 0)
+                                m_focusNode = m_lineNodeIds[idx];
+                        }
+                    }
+                    ImGui::PopStyleColor();
+                }
+            }
+            bool anyChainDiag = false;
+            for (const PassJobs& pj : m_passJobs)
+                anyChainDiag = anyChainDiag || !pj.diags.empty();
+            if (m_graphErrors.empty() && m_parseErrors.empty() && !anyChainDiag)
+                ImGui::TextDisabled("no diagnostics");
+            ImGui::EndChild();
+            return;
+        }
         int i = 0;
         for (const Arcane::ShaderDiag& d : m_diags)
         {

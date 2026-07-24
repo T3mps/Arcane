@@ -19,6 +19,7 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Render/Device.hpp>
+#include <Arcane/Render/FullscreenMaterialChain.hpp>
 #include <Arcane/Render/FullscreenMaterialPass.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
@@ -108,6 +109,21 @@ namespace Arcane::Editor
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)
         void   BindIfComplete();   // both stages landed -> createShader + SetMaterial
+        // Pass chains (queue item 4): a fullscreen BASE material with extra
+        // passes compiles/binds through the chain path -- one merged template,
+        // per-pass stages, atomic SetChain (chain-level last-good).
+        bool   ChainMode() const
+        { return m_surface == 0 && !IsInstance() && !m_data.passes.empty(); }
+        void   BindChainIfComplete();
+        // Promote pending template -> bound + rebuild the instance over it
+        // (parent-chain layering, override migration, dirty re-baseline).
+        void   PromotePendingInstance();
+        // The snippet buffer the text editor edits: pass 0 = m_snippet, else
+        // the extra pass's text. Reference is only stable within the frame.
+        std::string& ActiveSnippet();
+        // "base" / the extra pass's display name.
+        std::string PassLabel(std::size_t pass) const;
+        void   DrawPassBar();
         bool   HasErrors() const;
         bool   ParamsDirty() const;   // EffectiveSerial vs the saved baseline
         // Instance mode: walk parent -> ... -> base through the project registry
@@ -181,8 +197,21 @@ namespace Arcane::Editor
         std::vector<std::string>                   m_parseErrors;
         std::vector<Arcane::ShaderDiag>            m_diags;      // last compile (active backend)
 
-        std::unique_ptr<Arcane::OffscreenCanvas>        m_preview;
-        std::unique_ptr<Arcane::FullscreenMaterialPass> m_pass;
+        std::unique_ptr<Arcane::OffscreenCanvas>         m_preview;
+        std::unique_ptr<Arcane::FullscreenMaterialPass>  m_pass;
+        std::unique_ptr<Arcane::FullscreenMaterialChain> m_chain;   // chain mode (lazy)
+
+        // Chain mode in-flight compile state, parallel to [m_snippet, passes...].
+        struct PassJobs
+        {
+            std::uint64_t vsJob = 0, psJob = 0;
+            std::vector<std::uint8_t> vsBytes, psBytes;
+            std::vector<Arcane::ShaderDiag> diags;   // ps stage, per pass
+        };
+        std::vector<PassJobs> m_passJobs;
+        std::vector<int> m_passLineOffsets;   // per-pass snippet offset in its hlsl
+        int m_activePass = 0;   // which snippet the text editor shows (0 = base)
+        int m_viewPass = -1;    // preview truncation; -1 = the full chain
 
         // Instance mode (Slice 7): the resolved ancestry, immediate parent first,
         // BASE (the snippet owner) last. Empty for base materials.
