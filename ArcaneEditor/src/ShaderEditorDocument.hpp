@@ -226,7 +226,12 @@ namespace Arcane::Editor
         // active; committed on deactivate-after-edit).
         std::uint32_t m_nameEditNode = 0;
         char          m_nameBuf[64] = {};
-        // Same pattern for the Custom node's HLSL body.
+        // Custom-node HLSL body editing: the node shows a plain-text preview
+        // (child-window widgets drift inside the canvas); the body edits in a
+        // Suspend'ed MODAL. Request set by the node's button, consumed in
+        // DrawGraphPanel's popup block; the buffer holds the working copy
+        // until Apply commits it as one undo step.
+        std::uint32_t m_bodyEditRequest = 0;
         std::uint32_t m_bodyEditNode = 0;
         char          m_bodyBuf[4096] = {};
 

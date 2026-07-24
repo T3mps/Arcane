@@ -988,6 +988,51 @@ namespace Arcane::Editor
             m_graphPopupY = p.y;
             ImGui::OpenPopup("##graphcreate");
         }
+
+        // Custom-node body editor: a MODAL in suspended (screen) space -- the
+        // in-node widget can only be a preview (child windows drift under the
+        // canvas transform). Apply commits ONE undo step.
+        if (m_bodyEditRequest != 0)
+        {
+            if (const Arcane::GraphNode* n = g.FindNode(m_bodyEditRequest))
+            {
+                m_bodyEditNode = m_bodyEditRequest;
+                std::snprintf(m_bodyBuf, sizeof(m_bodyBuf), "%s", n->customBody.c_str());
+                ImGui::OpenPopup("Edit HLSL##graphbody");
+            }
+            m_bodyEditRequest = 0;
+        }
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 380.0f), ImGuiCond_Appearing);
+        if (ImGui::BeginPopupModal("Edit HLSL##graphbody", nullptr))
+        {
+            ImGui::TextDisabled("Function body. Inputs arrive as the node's pins; params "
+                                "and Time are directly visible. End with a return.");
+            ImGui::InputTextMultiline("##bodyedit", m_bodyBuf, sizeof(m_bodyBuf),
+                                      ImVec2(-1.0f, ImGui::GetContentRegionAvail().y - 34.0f),
+                                      ImGuiInputTextFlags_AllowTabInput);
+            if (ImGui::Button("Apply"))
+            {
+                if (Arcane::GraphNode* n = g.FindNode(m_bodyEditNode);
+                    n && n->customBody != m_bodyBuf)
+                {
+                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    n->customBody = m_bodyBuf;
+                    m_dirty = true;
+                    if (m_live)
+                        RegenerateFromGraph();
+                    PushGraphUndo("Edit HLSL Body", std::move(before));
+                }
+                m_bodyEditNode = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                m_bodyEditNode = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
         if (ImGui::BeginPopup("##graphcreate"))
         {
             for (const Arcane::GraphNodeTypeInfo& info : Arcane::AllGraphNodeInfos())
@@ -1314,33 +1359,34 @@ namespace Arcane::Editor
                     PushGraphUndo("Output Width", std::move(before));
                 }
 
-                // Body: stable buffer while active, ONE undoable commit on
-                // deactivate-after-edit (regenerating per keystroke would push
-                // an undo step per character).
-                char body[sizeof(m_bodyBuf)];
-                std::snprintf(body, sizeof(body), "%s", n.customBody.c_str());
-                if (m_bodyEditNode == n.id)
-                    std::memcpy(body, m_bodyBuf, sizeof(body));
-                ImGui::InputTextMultiline("##body", body, sizeof(body),
-                                          ImVec2(340.0f, 130.0f),
-                                          ImGuiInputTextFlags_AllowTabInput);
-                if (ImGui::IsItemActive())
+                // Body PREVIEW only, as plain draw-list text (an in-node
+                // InputTextMultiline is a CHILD WINDOW -- it doesn't ride the
+                // canvas transform, so its text drifts while the node drags and
+                // ignores zoom). Editing happens in a Suspend'ed popup (normal
+                // ImGui space), opened by the button below.
                 {
-                    m_bodyEditNode = n.id;
-                    std::memcpy(m_bodyBuf, body, sizeof(m_bodyBuf));
-                }
-                else if (m_bodyEditNode == n.id)
-                {
-                    const bool commit = ImGui::IsItemDeactivatedAfterEdit();
-                    m_bodyEditNode = 0;
-                    if (commit && n.customBody != m_bodyBuf)
+                    std::string_view bodyText = n.customBody;
+                    int shown = 0;
+                    while (!bodyText.empty() && shown < 8)
                     {
-                        std::optional<Arcane::MaterialGraph> before = m_data.graph;
-                        n.customBody = m_bodyBuf;
-                        valueEdited();
-                        PushGraphUndo("Edit HLSL Body", std::move(before));
+                        const std::size_t nl = bodyText.find('\n');
+                        std::string_view lineText = bodyText.substr(0, nl);
+                        if (!lineText.empty() && lineText.back() == '\r')
+                            lineText.remove_suffix(1);
+                        std::string display(lineText.substr(0, 48));
+                        if (lineText.size() > 48)
+                            display += "...";
+                        ImGui::TextDisabled("%s", display.c_str());
+                        ++shown;
+                        if (nl == std::string_view::npos)
+                            break;
+                        bodyText.remove_prefix(nl + 1);
                     }
+                    if (!bodyText.empty() && shown == 8)
+                        ImGui::TextDisabled("...");
                 }
+                if (ImGui::SmallButton("Edit HLSL..."))
+                    m_bodyEditRequest = n.id;
                 break;
             }
             default:
