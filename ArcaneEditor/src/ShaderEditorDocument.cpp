@@ -22,6 +22,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -1641,6 +1642,143 @@ namespace Arcane::Editor
                 RegenerateFromGraph();
             PushGraphUndo("Delete", std::move(before));
         }
+
+        // Copy/paste/cut/duplicate: ed's shortcut actions (canvas focus only).
+        // WantTextInput keeps in-canvas text edits (param names, masks) from
+        // being hijacked. Cut deletes through ed::DeleteNode so the delete
+        // pass above owns the model erase + its undo step (next frame).
+        if (ed::BeginShortcut())
+        {
+            if (!ImGui::GetIO().WantTextInput)
+            {
+                if (ed::AcceptCopy())
+                {
+                    const std::string clip = BuildGraphClipJson();
+                    if (!clip.empty())
+                        ImGui::SetClipboardText(clip.c_str());
+                }
+                else if (ed::AcceptCut())
+                {
+                    const std::string clip = BuildGraphClipJson();
+                    if (!clip.empty())
+                    {
+                        ImGui::SetClipboardText(clip.c_str());
+                        std::vector<ed::NodeId> sel(
+                            static_cast<std::size_t>(std::max(0, ed::GetSelectedObjectCount())));
+                        const int count = sel.empty() ? 0
+                            : ed::GetSelectedNodes(sel.data(), static_cast<int>(sel.size()));
+                        for (int i = 0; i < count; ++i)
+                            ed::DeleteNode(sel[static_cast<std::size_t>(i)]);
+                    }
+                }
+                else if (ed::AcceptPaste())
+                    PasteGraphClipText(ImGui::GetClipboardText());
+                else if (ed::AcceptDuplicate())
+                {
+                    const std::string clip = BuildGraphClipJson();
+                    if (!clip.empty())
+                        PasteGraphClipText(clip.c_str());
+                }
+            }
+            ed::EndShortcut();
+        }
+    }
+
+    std::string ShaderEditorDocument::BuildGraphClipJson() const
+    {
+        const Arcane::MaterialGraph& g = *m_data.graph;
+        std::vector<ed::NodeId> sel(
+            static_cast<std::size_t>(std::max(0, ed::GetSelectedObjectCount())));
+        if (sel.empty())
+            return {};
+        const int count = ed::GetSelectedNodes(sel.data(), static_cast<int>(sel.size()));
+
+        Arcane::MaterialGraph sub;
+        std::unordered_set<std::uint32_t> picked;
+        for (int i = 0; i < count; ++i)
+        {
+            const std::uint32_t id =
+                static_cast<std::uint32_t>(sel[static_cast<std::size_t>(i)].Get());
+            const Arcane::GraphNode* node = g.FindNode(id);
+            if (!node || node->type == Arcane::GraphNodeType::Output)
+                continue;   // the one fixed node never travels
+            if (picked.insert(id).second)
+                sub.nodes.push_back(*node);
+        }
+        if (sub.nodes.empty())
+            return {};
+        // Internal links only -- both endpoints in the selection.
+        for (const Arcane::GraphLink& l : g.links)
+            if (picked.count(l.fromNode) && picked.count(l.toNode))
+                sub.links.push_back(l);
+
+        nlohmann::json j = Arcane::GraphToJson(sub);
+        j["kind"] = "arcane-graph-clip";
+        return j.dump();
+    }
+
+    void ShaderEditorDocument::PasteGraphClipText(const char* text)
+    {
+        if (!text || !*text)
+            return;
+        const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+        if (j.is_discarded() || !j.is_object() ||
+            j.value("kind", std::string()) != "arcane-graph-clip")
+            return;   // foreign clipboard content -- not ours, ignore silently
+        const std::optional<Arcane::MaterialGraph> sub = Arcane::GraphFromJson(j);
+        if (!sub)
+            return;
+
+        // Recenter the subgraph on the mouse (canvas space).
+        float cx = 0.0f, cy = 0.0f;
+        int count = 0;
+        for (const Arcane::GraphNode& n : sub->nodes)
+            if (n.type != Arcane::GraphNodeType::Output)
+            {
+                cx += n.posX;
+                cy += n.posY;
+                ++count;
+            }
+        if (count == 0)
+            return;
+        cx /= static_cast<float>(count);
+        cy /= static_cast<float>(count);
+        const ImVec2 at = ed::ScreenToCanvas(ImGui::GetMousePos());
+
+        Arcane::MaterialGraph& g = *m_data.graph;
+        std::optional<Arcane::MaterialGraph> before = m_data.graph;
+        std::unordered_map<std::uint32_t, std::uint32_t> remap;
+        ed::ClearSelection();
+        for (const Arcane::GraphNode& src : sub->nodes)
+        {
+            if (src.type == Arcane::GraphNodeType::Output)
+                continue;
+            Arcane::GraphNode n = src;
+            n.id = g.MintId();   // FRESH ids -- clip ids may collide or be stale
+            remap[src.id] = n.id;
+            n.posX += at.x - cx;
+            n.posY += at.y - cy;
+            ed::SetNodePosition(n.id, ImVec2(n.posX, n.posY));
+            ed::SelectNode(n.id, true);   // the paste becomes the selection
+            g.nodes.push_back(std::move(n));
+        }
+        for (const Arcane::GraphLink& l : sub->links)
+        {
+            const auto f = remap.find(l.fromNode);
+            const auto t = remap.find(l.toNode);
+            if (f == remap.end() || t == remap.end())
+                continue;   // endpoint did not paste
+            Arcane::GraphLink nl;
+            nl.fromNode = f->second;
+            nl.fromPin = l.fromPin;
+            nl.toNode = t->second;
+            nl.toPin = l.toPin;
+            g.links.push_back(nl);
+        }
+        m_dirty = true;
+        if (m_live)
+            RegenerateFromGraph();
+        PushGraphUndo("Paste", std::move(before));
     }
 
     // One texture param row: current binding + [pick] popup over the project's

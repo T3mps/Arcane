@@ -125,6 +125,13 @@ namespace Arcane::Editor
         void DrawGraphPanel(float height);
         void DrawGraphNode(Arcane::GraphNode& node);
         void HandleGraphEdits();             // link create/delete queries (inside Begin/End)
+        // Copy/paste: the clip is GraphToJson of the selected subgraph on the
+        // SYSTEM clipboard -- cross-document paste falls out for free, and
+        // pasted Param nodes merge into same-name decls by construction.
+        // Both run inside the canvas Begin/End (they use ed:: selection and
+        // canvas-space coordinates).
+        [[nodiscard]] std::string BuildGraphClipJson() const;   // "" = nothing copyable
+        void PasteGraphClipText(const char* text);              // ignores foreign clips
         // One undo step per completed graph gesture: `before` was captured at
         // the gesture start; `after` is the current graph. The live edit
         // already happened (ICommand contract).
