@@ -365,6 +365,17 @@ namespace Arcane
         return m_impl->project ? &*m_impl->project : nullptr;
     }
 
+    std::optional<Guid> Runtime::RegisterCreatedAsset(const std::filesystem::path& file)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::RegisterCreatedAsset: no project open -- '{}' not registered",
+                     file.generic_string());
+            return std::nullopt;
+        }
+        return m_impl->project->RegisterAsset(file);
+    }
+
     Config& Runtime::Configuration() noexcept
     {
         return m_impl->config;

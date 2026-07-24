@@ -125,43 +125,66 @@ namespace Arcane
         if (!std::filesystem::is_directory(contentDir, ec))
             return 0;
 
+        // Per-file rules (kind routing, id resolution, mount-path shape) live in
+        // AddFile so the open-time scan and the editor's incremental registration
+        // can never drift apart.
         for (const auto& entry : std::filesystem::recursive_directory_iterator(contentDir, ec))
         {
             if (!entry.is_regular_file())
                 continue;
-
-            const std::string ext = LowerExt(entry.path());
-
-            // A .meta is a sidecar carrying another file's identity, not an asset itself.
-            if (ext == ".meta")
-                continue;
-
-            // Route by asset kind: native JSON embeds its id (.json data assets and
-            // .armat materials share the JSON-with-embedded-"id" shape); imported
-            // binaries use a sidecar; anything else is not an asset we track.
-            Guid id;
-            if (ext == ".json" || ext == ".armat")
-                id = ResolveNativeId(entry.path());
-            else if (IsImportedBinary(ext))
-                id = ResolveSidecarId(entry.path());
-            else
-                continue;
-
-            if (!id.IsValid())
-                continue;   // read/parse failure -- already warned
-
-            // Mount path: "<scheme>://<relative-to-contentDir, forward slashes>". The
-            // ORIGINAL file is registered (the .meta only stores the id), so a resolved
-            // Guid still points at the real asset the loader reads.
-            const auto rel = std::filesystem::relative(entry.path(), contentDir, ec);
-            std::string mountPath = std::string(scheme) + "://" + rel.generic_string();
-
-            if (auto [_, inserted] = m_byGuid.try_emplace(id, std::move(mountPath)); !inserted)
-                ARC_WARN("AssetRegistry: duplicate id {} (also '{}') -- keeping first",
-                         id.ToString(), entry.path().generic_string());
+            AddFile(entry.path(), contentDir, scheme);
         }
 
         return m_byGuid.size() - before;
+    }
+
+    std::optional<Guid> AssetRegistry::AddFile(const std::filesystem::path& file,
+                                               const std::filesystem::path& contentDir,
+                                               std::string_view scheme)
+    {
+        const std::string ext = LowerExt(file);
+
+        // A .meta is a sidecar carrying another file's identity, not an asset itself.
+        if (ext == ".meta")
+            return std::nullopt;
+
+        // Route by asset kind: native JSON embeds its id (.json data assets and
+        // .armat materials share the JSON-with-embedded-"id" shape); imported
+        // binaries use a sidecar; anything else is not an asset we track.
+        Guid id;
+        if (ext == ".json" || ext == ".armat")
+            id = ResolveNativeId(file);
+        else if (IsImportedBinary(ext))
+            id = ResolveSidecarId(file);
+        else
+            return std::nullopt;
+
+        if (!id.IsValid())
+            return std::nullopt;   // read/parse failure -- already warned
+
+        // Mount path: "<scheme>://<relative-to-contentDir, forward slashes>". The
+        // ORIGINAL file is registered (the .meta only stores the id), so a resolved
+        // Guid still points at the real asset the loader reads. A file outside
+        // contentDir has no expressible mount path -- refuse it.
+        std::error_code ec;
+        const auto rel = std::filesystem::relative(file, contentDir, ec);
+        if (ec || rel.empty() || rel.is_absolute() || *rel.begin() == "..")
+        {
+            ARC_WARN("AssetRegistry: '{}' is not under content root '{}' -- not registered",
+                     file.generic_string(), contentDir.generic_string());
+            return std::nullopt;
+        }
+        const std::string mountPath = std::string(scheme) + "://" + rel.generic_string();
+
+        if (auto [it, inserted] = m_byGuid.try_emplace(id, mountPath);
+            !inserted && it->second != mountPath)
+        {
+            // Same id from a DIFFERENT file: scan rule -- keep the first, warn.
+            // (Same id + same mapping = idempotent re-registration, silent.)
+            ARC_WARN("AssetRegistry: duplicate id {} (also '{}') -- keeping first",
+                     id.ToString(), file.generic_string());
+        }
+        return id;
     }
 
     std::optional<std::string> AssetRegistry::Resolve(const Guid& id) const

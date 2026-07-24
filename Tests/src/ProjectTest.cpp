@@ -113,6 +113,50 @@ TEST_CASE("Project::ResolveAsset maps a registered Guid to a file", "[project]")
     CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId{}).has_value());
 }
 
+TEST_CASE("Project::RegisterAsset registers editor-created files incrementally", "[project]")
+{
+    const auto dir = TempDir("register_asset");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 } })");
+    std::filesystem::create_directories(dir / "Content");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Registry().Count() == 0);   // empty Content at open
+
+    // A material created AFTER the open-time scan (the editor's New Material).
+    WriteFile(dir / "Content" / "mats" / "new.armat",
+              R"({ "id": "e7e0c1de-4444-4555-8666-777788889999", "snippet": "x" })");
+    const auto g = proj->RegisterAsset(dir / "Content" / "mats" / "new.armat");
+    REQUIRE(g.has_value());
+    CHECK(g->ToString() == "e7e0c1de-4444-4555-8666-777788889999");
+    CHECK(proj->Registry().Count() == 1);
+
+    // Immediately resolvable (browser + GUID loads see it now, not on reopen).
+    const auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "mats" / "new.armat");
+
+    // Idempotent re-registration (the document Save path).
+    CHECK(proj->RegisterAsset(dir / "Content" / "mats" / "new.armat").has_value());
+    CHECK(proj->Registry().Count() == 1);
+
+    // Missing id: minted and written back, then registered.
+    WriteFile(dir / "Content" / "noid.armat", R"({ "snippet": "y" })");
+    const auto minted = proj->RegisterAsset(dir / "Content" / "noid.armat");
+    REQUIRE(minted.has_value());
+    CHECK(minted->IsValid());
+    CHECK(proj->Registry().Count() == 2);
+
+    // Outside every content root -> refused (warn), not registered.
+    WriteFile(dir / "outside.armat", R"({ "id": "f8e0c1de-5555-4666-8777-888899990000", "snippet": "z" })");
+    CHECK_FALSE(proj->RegisterAsset(dir / "outside.armat").has_value());
+    // Untracked extension -> refused.
+    WriteFile(dir / "Content" / "notes.txt", "hello");
+    CHECK_FALSE(proj->RegisterAsset(dir / "Content" / "notes.txt").has_value());
+    CHECK(proj->Registry().Count() == 2);
+}
+
 TEST_CASE("Project::Open mints a .meta sidecar for an imported binary original", "[project]")
 {
     const auto dir = TempDir("meta_mint");

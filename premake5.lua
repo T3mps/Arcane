@@ -278,6 +278,7 @@ project "PlaygroundGame"
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
         "%{wks.location}/Arcane/src",
+        "%{IncludeDir.Core}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
         "%{IncludeDir.glm}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.Astra}",
@@ -675,6 +676,7 @@ local function test_plugin(name, defs)
         files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/PluginExport.hpp", "%{prj.location}/HotReloadShared.hpp" }
         includedirs {
             "%{wks.location}/Arcane/src",
+            "%{IncludeDir.Core}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
             "%{IncludeDir.glm}",
             "%{IncludeDir.nvrhi}",
             "%{IncludeDir.Astra}",

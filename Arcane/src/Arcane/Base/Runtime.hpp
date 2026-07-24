@@ -6,6 +6,7 @@
 // the RunLoop, and the JobSystem. ARCANE_API: the plugin and the host both call it.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
@@ -18,6 +19,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -76,6 +78,11 @@ namespace Arcane
 
         // The open project, or nullptr when none is open (no-project fallback mode).
         const Project* CurrentProject() const noexcept;
+
+        // Register an editor-created asset file with the open project's registry
+        // (Project::RegisterAsset). Idempotent. nullopt when no project is open or
+        // the file lies outside every content root.
+        std::optional<Guid> RegisterCreatedAsset(const std::filesystem::path& file);
 
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
         // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),

@@ -297,15 +297,21 @@ namespace Arcane::Editor
     bool ShaderEditorDocument::Save()
     {
         m_data.snippet = m_snippet;
-        m_data.params.clear();
+        // Review M1: before the first successful bind there is no instance to
+        // harvest values from -- keep the loaded params instead of wiping them.
         if (m_instance && m_boundTemplate)
         {
+            m_data.params.clear();
             for (const auto& [hash, value] : m_instance->Overrides())
                 if (const Arcane::ParamDecl* d = m_boundTemplate->Find(hash))
                     m_data.params.emplace_back(d->name, value);
         }
         if (!Arcane::SaveMaterialAsset(m_path, m_data))
             return false;
+        // Idempotent: heals assets opened from paths the registry has never seen
+        // (created outside the editor flows, or before this session).
+        if (m_services.runtime)
+            m_services.runtime->RegisterCreatedAsset(m_path);
         m_dirty = false;
         return true;
     }
@@ -487,12 +493,15 @@ namespace Arcane::Editor
             const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
             const ImVec4 color = isError ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
                                          : ImVec4(0.9f, 0.8f, 0.4f, 1.0f);
-            char label[64];
-            std::snprintf(label, sizeof(label), "%s(%d): ##diag%d",
-                          isError ? "error" : "warning", d.line, i++);
+            // Review M2: the message must sit BEFORE the "##" -- ImGui renders
+            // nothing past it (everything after is only the widget ID).
+            char head[48];
+            std::snprintf(head, sizeof(head), "%s(%d): ",
+                          isError ? "error" : "warning", d.line);
+            const std::string label = head + d.message + "##diag" + std::to_string(i++);
             // Selectable row -> jump the text cursor to the diagnostic's line.
             ImGui::PushStyleColor(ImGuiCol_Text, color);
-            if (ImGui::Selectable((std::string(label) + d.message).c_str(), false))
+            if (ImGui::Selectable(label.c_str(), false))
                 m_jumpToLine = d.line > 0 ? d.line : 1;
             ImGui::PopStyleColor();
         }

@@ -48,6 +48,13 @@ namespace Arcane
         // through the AssetRegistry (GUID) WITHOUT changing the signature.
         std::optional<std::filesystem::path> ResolveAsset(const AssetId& id) const;
 
+        // Register a file CREATED after the open-time scan (editor New Material /
+        // New Instance / save) into the registry: finds which content root contains
+        // it (game://, then each active plugin's Content) and registers it under
+        // that scheme. Idempotent. nullopt (warn) when the file lies outside every
+        // content root -- such a file cannot resolve by GUID by design.
+        std::optional<Guid> RegisterAsset(const std::filesystem::path& file);
+
     private:
         // Open()/Create() are the only construction paths (they are static members and
         // can reach this). std::optional<Project> in Runtime move-constructs, never

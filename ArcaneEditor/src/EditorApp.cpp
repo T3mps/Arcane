@@ -368,6 +368,9 @@ namespace Arcane::Editor
             ARC_WARN("Arcane Editor: could not create instance at '{}'", path.generic_string());
             return;
         }
+        // Register immediately -- ResolveParentChain on the new document needs the
+        // registry to know BOTH this instance and its parent right now.
+        m_runtime->RegisterCreatedAsset(path);
         m_documents.OpenPath(path);
     }
 
@@ -394,6 +397,9 @@ namespace Arcane::Editor
             ARC_WARN("Arcane Editor: could not create material at '{}'", path.generic_string());
             return;
         }
+        // Register with the open project's registry so the new asset appears in
+        // the browser and resolves by GUID IMMEDIATELY (not on next project open).
+        m_runtime->RegisterCreatedAsset(path);
         m_documents.OpenPath(path);
     }
 
@@ -929,20 +935,33 @@ namespace Arcane::Editor
             Arcane::Editor::EndDockSpace();
             if (menuReq.openProject)
                 m_gpu->Win().ShowOpenFolderDialog(&EditorApp::FolderPickedThunk, this);
-            if (menuReq.newMaterial)
-                m_gpu->Win().ShowSaveFileDialog(&EditorApp::MaterialNewPickedThunk, this,
-                                                "Arcane Material", "armat");
-            if (menuReq.openMaterial)
-                m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
-                                                "Arcane Material", "armat");
+            if (menuReq.newMaterial || menuReq.openMaterial)
+            {
+                // Material dialogs start in the project's Content/ (the only place
+                // a saved asset can register + resolve by GUID); no project = OS default.
+                const Arcane::Project* proj = m_runtime->CurrentProject();
+                const std::string contentDir =
+                    proj ? (proj->Root() / "Content").string() : std::string();
+                const char* defaultPath = contentDir.empty() ? nullptr : contentDir.c_str();
+                if (menuReq.newMaterial)
+                    m_gpu->Win().ShowSaveFileDialog(&EditorApp::MaterialNewPickedThunk, this,
+                                                    "Arcane Material", "armat", defaultPath);
+                if (menuReq.openMaterial)
+                    m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
+                                                    "Arcane Material", "armat", defaultPath);
+            }
             const Arcane::Editor::AssetBrowserActions browserActions =
                 Arcane::Editor::DrawAssetBrowserPanel(m_assetBrowser,
                                                       m_runtime->CurrentProject(), m_documents);
             if (browserActions.createInstanceOf.IsValid())
             {
                 m_pendingInstanceParent = browserActions.createInstanceOf;
+                const Arcane::Project* proj = m_runtime->CurrentProject();
+                const std::string contentDir =
+                    proj ? (proj->Root() / "Content").string() : std::string();
                 m_gpu->Win().ShowSaveFileDialog(&EditorApp::InstanceNewPickedThunk, this,
-                                                "Arcane Material", "armat");
+                                                "Arcane Material", "armat",
+                                                contentDir.empty() ? nullptr : contentDir.c_str());
             }
             Arcane::Editor::DrawConsolePanel(m_console);
             m_documents.DrawAll();
