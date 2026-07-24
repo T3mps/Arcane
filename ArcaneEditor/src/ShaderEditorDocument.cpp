@@ -430,6 +430,17 @@ namespace Arcane::Editor
         if (!PreviewReady() || !m_instance || !m_preview)
             return;
 
+        // Texture params must be GPU-resident BEFORE the canvas list records:
+        // the Assets facade uploads through its own transient command list, and
+        // an executeCommandList issued while ANOTHER list is open loses the
+        // upload -- the texture stays empty (the [gpu] texparam test pins this
+        // contract). Memoized, so steady-state cost is a hash lookup per param.
+        if (m_services.runtime)
+            for (const Arcane::Guid& g : m_instance->ResolveTextures())
+                if (g.IsValid())
+                    (void)m_services.runtime->AssetsFacade().GetTexture(
+                        Arcane::AssetId::FromGuid(g));
+
         Arcane::GlobalParams globals;
         globals.time = static_cast<float>(m_animTime);
         globals.deltaTime = static_cast<float>(dt);

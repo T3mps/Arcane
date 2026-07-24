@@ -47,6 +47,10 @@ namespace Arcane
         // into b1, binds the instance's textures (resolved through `assets` by
         // Guid; null/missing -> the white fallback). The instance's template
         // must be the one SetMaterial bound (no-op + warn otherwise).
+        // CONTRACT: texture params must already be loaded (call
+        // assets->GetTexture per guid BEFORE opening the list) -- a first-time
+        // load here executes an upload list while the caller's list is open,
+        // which loses the upload and samples an empty texture.
         virtual void Render(nvrhi::ICommandList* commandList,
                             nvrhi::IFramebuffer* target,
                             const MaterialInstance& instance,
