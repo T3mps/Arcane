@@ -71,7 +71,7 @@ namespace
 TEST_CASE("Graph node table covers every type with round-tripping tokens", "[material]")
 {
     const auto infos = AllGraphNodeInfos();
-    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Split) + 1);
+    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Custom) + 1);
     for (const GraphNodeTypeInfo& info : infos)
     {
         CHECK(GraphNodeInfo(info.type).token == info.token);
@@ -247,6 +247,68 @@ TEST_CASE("Codegen: Split lanes follow the SG rule", "[material]")
     CHECK(r.snippet.find("float _n3_r = (_n2).x;") != std::string::npos);
     CHECK(r.snippet.find("float _n3_b = 0.0;") != std::string::npos);
     CHECK(r.snippet.find("_n3_g") == std::string::npos);   // unconsumed pin: no local
+}
+
+TEST_CASE("Codegen: Custom (HLSL) node emits a function + call", "[material]")
+{
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    g.nodes.push_back(Node(2, GraphNodeType::UV));
+    g.nodes.push_back(Node(3, GraphNodeType::Time));
+    GraphNode custom = Node(4, GraphNodeType::Custom);
+    custom.customPins = { { "uv", 2 }, { "t", 1 } };
+    custom.customOutWidth = 4;
+    custom.customBody = "float2 p = uv * 2.0;\nreturn float4(p, sin(t), 1.0);";
+    g.nodes.push_back(custom);
+    g.links.push_back(Link(2, 0, 4, 0));
+    g.links.push_back(Link(3, 0, 4, 1));
+    g.links.push_back(Link(4, 0, 1, 0));
+    g.nextId = 5;   // load self-heals nextId past max id; match for the byte compare
+
+    const GraphCodegenResult r = GenerateGraphSnippet(g);
+    REQUIRE(r.Ok());
+    CHECK(r.snippet.find("float4 _cf4(float2 uv, float t)") != std::string::npos);
+    CHECK(r.snippet.find("    float2 p = uv * 2.0;") != std::string::npos);
+    CHECK(r.snippet.find("float4 _n4 = _cf4(_n2, _n3);") != std::string::npos);
+    // The function precedes shade().
+    CHECK(r.snippet.find("float4 _cf4") < r.snippet.find("float4 shade(Varyings v)"));
+    // Line map: body lines badge the Custom node (compile errors inside the
+    // designer's HLSL land on the right node).
+    std::size_t line = 0;
+    const std::size_t at = r.snippet.find("float2 p = uv");
+    for (std::size_t i = 0; i < at; ++i)
+        if (r.snippet[i] == '\n')
+            ++line;
+    REQUIRE(line < r.lineNodeIds.size());
+    CHECK(r.lineNodeIds[line] == 4);
+
+    SECTION("validation: empty body, bad/duplicate pin names")
+    {
+        GraphNode* c = g.FindNode(4);
+        c->customBody.clear();
+        CHECK(HasErrorOn(GenerateGraphSnippet(g), 4));
+        c->customBody = "return 0.0;";
+        c->customPins[0].name = "9bad";
+        CHECK(HasErrorOn(GenerateGraphSnippet(g), 4));
+        c->customPins[0].name = "t";   // duplicates pin 1
+        CHECK(HasErrorOn(GenerateGraphSnippet(g), 4));
+    }
+    SECTION("JSON round-trips pins, body, and out width")
+    {
+        const auto back = GraphFromJson(GraphToJson(g));
+        REQUIRE(back.has_value());
+        const GraphNode* c = back->FindNode(4);
+        REQUIRE(c != nullptr);
+        CHECK(c->type == GraphNodeType::Custom);
+        REQUIRE(c->customPins.size() == 2);
+        CHECK(c->customPins[0].name == "uv");
+        CHECK(c->customPins[0].width == 2);
+        CHECK(c->customPins[1].name == "t");
+        CHECK(c->customOutWidth == 4);
+        CHECK(c->customBody == custom.customBody);
+        REQUIRE(back->links.size() == 3);
+        CHECK(GraphToJson(*back).dump() == GraphToJson(g).dump());
+    }
 }
 
 TEST_CASE("Codegen: structured errors", "[material]")
@@ -551,6 +613,36 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
             *templateText, gen.snippet, "graph_fullscreen", MaterialSurface::Fullscreen);
         REQUIRE(build.errors.empty());
         compileBoth(build.hlsl, "graph_fullscreen.hlsl");
+    }
+
+    SECTION("fullscreen: Custom node body reads a param + Time directly")
+    {
+        // The perk of our template layout: the emitted _cf function sits AFTER
+        // the cbuffer/Globals declarations, so custom HLSL can use param names
+        // and Time without piping them through pins (SG's CFN cannot).
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(ParamNode(2, "Tint", MatParamType::Color,
+                                    MatParamValue::MakeColor(1, 1, 1, 1)));
+        g.nodes.push_back(Node(3, GraphNodeType::UV));
+        GraphNode custom = Node(4, GraphNodeType::Custom);
+        custom.customPins = { { "uv", 2 } };
+        custom.customOutWidth = 4;
+        custom.customBody =
+            "float w = 0.5 + 0.5 * sin(uv.x * 12.566 + Time);\n"
+            "return Tint * w;";
+        g.nodes.push_back(custom);
+        g.links.push_back(Link(3, 0, 4, 0));
+        g.links.push_back(Link(4, 0, 1, 0));
+
+        const GraphCodegenResult gen = GenerateGraphSnippet(g, MaterialSurface::Fullscreen);
+        REQUIRE(gen.Ok());
+        const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const MaterialBuildResult build = BuildMaterialShaderSource(
+            *templateText, gen.snippet, "graph_custom", MaterialSurface::Fullscreen);
+        REQUIRE(build.errors.empty());
+        compileBoth(build.hlsl, "graph_custom.hlsl");
     }
 
     SECTION("sprite: SpriteTexture * VertexColor * param tint")

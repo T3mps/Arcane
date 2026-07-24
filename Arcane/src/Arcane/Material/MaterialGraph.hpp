@@ -64,6 +64,11 @@ namespace Arcane
         Saturate,       // saturate(x) (dynamic width)
         OneMinus,       // 1 - x   (dynamic width)
         Split,          // x -> r/g/b/a scalars (missing lanes read 0; SG Split rule)
+        Custom,         // designer HLSL island (the UE Custom node / SG string-mode
+                        // Custom Function): user-defined input pins + one output +
+                        // a body emitted as its own function above shade(). The
+                        // body may read //@param names and Globals (Time...)
+                        // directly -- the snippet lands AFTER those declarations.
     };
 
     // One pin on a node type. `width` = component count of the value flowing
@@ -106,6 +111,14 @@ namespace Arcane
     [[nodiscard]] ARCANE_API bool GraphNodeTypeFromToken(std::string_view token,
                                                          GraphNodeType& out) noexcept;
 
+    // A Custom node's user-authored input pin (name doubles as the function
+    // parameter name inside the body).
+    struct GraphCustomPin
+    {
+        std::string name;
+        int         width = 1;   // 1/2/4
+    };
+
     struct GraphNode
     {
         std::uint32_t id = 0;                        // unique within the graph, > 0, NEVER reused
@@ -127,6 +140,16 @@ namespace Arcane
         MatParamValue paramDefault;                      // Param only: the decl default
         bool          hasRange = false;                  // Param only: [min..max] slider hint
         float         rangeMin = 0.0f, rangeMax = 1.0f;
+
+        // Custom only: input pins are PER-NODE DATA (the one type whose pins
+        // are not table-static), the body is the function's HLSL (must
+        // `return` a value of customOutWidth), and the single output pin's
+        // width is customOutWidth. The editor re-indexes links when a pin is
+        // removed; codegen/serialization query pins through the per-node
+        // helpers below.
+        std::vector<GraphCustomPin> customPins;
+        std::string customBody;
+        int         customOutWidth = 4;
     };
 
     // Edge identity is (node, pin) on BOTH ends (SG rule -- multi-output nodes
@@ -179,6 +202,17 @@ namespace Arcane
             return nextId++;
         }
     };
+
+    // Per-NODE pin queries -- the only correct way to count/inspect pins
+    // (Custom nodes carry their own pin list; every other type reads the
+    // static table). Returned GraphPinDesc.name points into the node for
+    // Custom pins -- transient use only.
+    [[nodiscard]] ARCANE_API std::uint32_t GraphNodeInputCount(const GraphNode& n) noexcept;
+    [[nodiscard]] ARCANE_API std::uint32_t GraphNodeOutputCount(const GraphNode& n) noexcept;
+    [[nodiscard]] ARCANE_API GraphPinDesc GraphNodeInputPin(const GraphNode& n,
+                                                            std::uint32_t pin) noexcept;
+    [[nodiscard]] ARCANE_API GraphPinDesc GraphNodeOutputPin(const GraphNode& n,
+                                                             std::uint32_t pin) noexcept;
 
     // Structured codegen diagnostics: the canvas badges the offending node (SG:
     // one badge per node, message on hover). nodeId 0 = graph-level message.

@@ -216,7 +216,6 @@ namespace Arcane::Editor
         int  m_snippetLineOffset = 0;
         bool m_graphPositionsApplied = false;   // canvas seeded from stored node positions
         bool m_showGeneratedText = false;       // toolbar toggle: canvas <-> read-only HLSL
-        bool m_confirmConvertToText = false;
         std::uint32_t m_focusNode = 0;          // errors-panel click -> select + navigate
         float m_graphPopupX = 0.0f, m_graphPopupY = 0.0f;   // create-menu screen pos
         // Whole-graph gesture capture for value drags (small graphs; the SG
@@ -227,6 +226,9 @@ namespace Arcane::Editor
         // active; committed on deactivate-after-edit).
         std::uint32_t m_nameEditNode = 0;
         char          m_nameBuf[64] = {};
+        // Same pattern for the Custom node's HLSL body.
+        std::uint32_t m_bodyEditNode = 0;
+        char          m_bodyBuf[4096] = {};
 
         friend struct SnippetCallbackForwarder;
     };

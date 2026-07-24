@@ -57,15 +57,52 @@ namespace Arcane
             { GraphNodeType::Saturate,      "saturate",       "Saturate",       Pins(kUnaryIn),  Pins(kOutDyn)     },
             { GraphNodeType::OneMinus,      "one_minus",      "One Minus",      Pins(kUnaryIn),  Pins(kOutDyn)     },
             { GraphNodeType::Split,         "split",          "Split",          Pins(kUnaryIn),  Pins(kSplitOut)   },
+            // Custom's pins are PER-NODE data -- the table spans stay empty and
+            // every pin query routes through GraphNodeInput/OutputPin below.
+            { GraphNodeType::Custom,        "custom",         "Custom (HLSL)",  NoPins(),        NoPins()          },
         };
     }
 
     const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept
     {
         const auto i = static_cast<std::size_t>(t);
-        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Split) + 1,
+        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Custom) + 1,
                       "kNodeInfos must cover every GraphNodeType");
         return kNodeInfos[i < std::size(kNodeInfos) ? i : 0];
+    }
+
+    std::uint32_t GraphNodeInputCount(const GraphNode& n) noexcept
+    {
+        if (n.type == GraphNodeType::Custom)
+            return static_cast<std::uint32_t>(n.customPins.size());
+        return static_cast<std::uint32_t>(GraphNodeInfo(n.type).inputs.size());
+    }
+
+    std::uint32_t GraphNodeOutputCount(const GraphNode& n) noexcept
+    {
+        if (n.type == GraphNodeType::Custom)
+            return 1;
+        return static_cast<std::uint32_t>(GraphNodeInfo(n.type).outputs.size());
+    }
+
+    GraphPinDesc GraphNodeInputPin(const GraphNode& n, std::uint32_t pin) noexcept
+    {
+        if (n.type == GraphNodeType::Custom)
+        {
+            if (pin < n.customPins.size())
+                return { n.customPins[pin].name.c_str(), n.customPins[pin].width };
+            return { "", 1 };
+        }
+        const auto& pins = GraphNodeInfo(n.type).inputs;
+        return pin < pins.size() ? pins[pin] : GraphPinDesc{ "", 0 };
+    }
+
+    GraphPinDesc GraphNodeOutputPin(const GraphNode& n, std::uint32_t pin) noexcept
+    {
+        if (n.type == GraphNodeType::Custom)
+            return { "out", n.customOutWidth };
+        const auto& pins = GraphNodeInfo(n.type).outputs;
+        return pin < pins.size() ? pins[pin] : GraphPinDesc{ "", 0 };
     }
 
     std::span<const GraphNodeTypeInfo> AllGraphNodeInfos() noexcept
@@ -194,12 +231,12 @@ namespace Arcane
                         " -> " + std::to_string(l.toNode) + ")");
                 continue;
             }
-            if (l.fromPin >= GraphNodeInfo(fromIt->second->type).outputs.size())
+            if (l.fromPin >= GraphNodeOutputCount(*fromIt->second))
             {
                 fail(l.fromNode, "link uses an unknown output pin");
                 continue;
             }
-            if (l.toPin >= GraphNodeInfo(toIt->second->type).inputs.size())
+            if (l.toPin >= GraphNodeInputCount(*toIt->second))
             {
                 fail(l.toNode, "link uses an unknown input pin");
                 continue;
@@ -284,6 +321,30 @@ namespace Arcane
                     fail(n->id, std::string(GraphNodeInfo(n->type).display) +
                                 " requires the sprite surface");
 
+        // --- Custom nodes: pins name real function parameters; the body is a
+        // real function body. Validate the parts the compiler would report as
+        // gibberish otherwise.
+        for (const GraphNode* n : ordered)
+        {
+            if (n->type != GraphNodeType::Custom)
+                continue;
+            if (n->customBody.empty())
+                fail(n->id, "Custom node has no HLSL body");
+            if (n->customOutWidth != 1 && n->customOutWidth != 2 && n->customOutWidth != 4)
+                fail(n->id, "Custom node output width must be 1, 2, or 4");
+            for (std::size_t i = 0; i < n->customPins.size(); ++i)
+            {
+                const GraphCustomPin& p = n->customPins[i];
+                if (!ValidParamName(p.name))
+                    fail(n->id, "Custom pin '" + p.name + "' is not a valid identifier");
+                if (p.width != 1 && p.width != 2 && p.width != 4)
+                    fail(n->id, "Custom pin '" + p.name + "' width must be 1, 2, or 4");
+                for (std::size_t j = i + 1; j < n->customPins.size(); ++j)
+                    if (n->customPins[j].name == p.name)
+                        fail(n->id, "Custom pin name '" + p.name + "' is duplicated");
+            }
+        }
+
         if (!res.errors.empty())
             return res;
 
@@ -300,16 +361,18 @@ namespace Arcane
         std::unordered_map<std::uint32_t, int> state;    // 0 fresh / 1 on-stack / 2 done
         std::unordered_map<std::uint32_t, int> widthOf;  // resolved primary width
         std::vector<std::pair<std::string, std::uint32_t>> body;   // statement, nodeId
+        // Custom-node functions, emitted above shade() (line-mapped to their
+        // node so compile errors INSIDE a body badge the Custom node).
+        std::vector<std::pair<std::string, std::uint32_t>> funcs;
 
         // Expression for a node's output pin AFTER the node was visited.
         auto pinExpr = [&](const GraphNode* n, std::uint32_t pin, int& outWidth) -> std::string
         {
-            const auto& outs = GraphNodeInfo(n->type).outputs;
-            const int declared = outs[pin].width;
-            outWidth = declared == 0 ? widthOf[n->id] : declared;
-            if (outs.size() == 1)
+            const GraphPinDesc desc = GraphNodeOutputPin(*n, pin);
+            outWidth = desc.width == 0 ? widthOf[n->id] : desc.width;
+            if (GraphNodeOutputCount(*n) == 1)
                 return "_n" + std::to_string(n->id);
-            return "_n" + std::to_string(n->id) + "_" + outs[pin].name;
+            return "_n" + std::to_string(n->id) + "_" + desc.name;
         };
 
         std::function<bool(const GraphNode*)> visit = [&](const GraphNode* n) -> bool
@@ -324,13 +387,13 @@ namespace Arcane
             }
             st = 1;
 
-            const GraphNodeTypeInfo& info = GraphNodeInfo(n->type);
+            const std::uint32_t inputCount = GraphNodeInputCount(*n);
 
             // Visit children; collect per-input (expression, width) with
             // unconnected defaults.
             struct In { std::string expr; int width = 1; bool connected = false; };
-            std::vector<In> in(info.inputs.size());
-            for (std::uint32_t pin = 0; pin < info.inputs.size(); ++pin)
+            std::vector<In> in(inputCount);
+            for (std::uint32_t pin = 0; pin < inputCount; ++pin)
             {
                 const auto it = inputLink.find({ n->id, pin });
                 if (it == inputLink.end())
@@ -345,13 +408,14 @@ namespace Arcane
             // Resolved width: SG rule -- minimum connected non-scalar dynamic
             // input, else 1 (scalars splat, never pinning the width).
             bool dynamic = false;
-            for (const GraphPinDesc& p : info.inputs)
-                dynamic = dynamic || p.width == 0;
+            for (std::uint32_t pin = 0; pin < inputCount; ++pin)
+                dynamic = dynamic || GraphNodeInputPin(*n, pin).width == 0;
             int w = 0;
             if (dynamic)
             {
-                for (std::uint32_t pin = 0; pin < info.inputs.size(); ++pin)
-                    if (info.inputs[pin].width == 0 && in[pin].connected && in[pin].width > 1)
+                for (std::uint32_t pin = 0; pin < inputCount; ++pin)
+                    if (GraphNodeInputPin(*n, pin).width == 0 && in[pin].connected &&
+                        in[pin].width > 1)
                         w = w == 0 ? in[pin].width : std::min(w, in[pin].width);
                 if (w == 0)
                     w = 1;
@@ -444,6 +508,48 @@ namespace Arcane
                 case GraphNodeType::OneMinus:
                     local(w, "1.0 - " + arg(0, 0));
                     break;
+                case GraphNodeType::Custom:
+                {
+                    // One function per node instance above shade() + one call
+                    // here. Args adapt to the declared pin widths; unconnected
+                    // pins read zero.
+                    std::string sig = std::string(HlslTypeForWidth(n->customOutWidth)) +
+                                      " _cf" + id + "(";
+                    std::string call = "_cf" + id + "(";
+                    for (std::size_t p = 0; p < n->customPins.size(); ++p)
+                    {
+                        if (p != 0)
+                        {
+                            sig += ", ";
+                            call += ", ";
+                        }
+                        sig += std::string(HlslTypeForWidth(n->customPins[p].width)) + " " +
+                               n->customPins[p].name;
+                        call += arg(static_cast<std::uint32_t>(p), n->customPins[p].width);
+                    }
+                    sig += ")";
+                    call += ")";
+
+                    funcs.emplace_back(sig, n->id);
+                    funcs.emplace_back("{", n->id);
+                    std::string_view bodyText = n->customBody;
+                    while (!bodyText.empty())
+                    {
+                        const std::size_t nl = bodyText.find('\n');
+                        std::string_view lineText = bodyText.substr(0, nl);
+                        if (!lineText.empty() && lineText.back() == '\r')
+                            lineText.remove_suffix(1);
+                        funcs.emplace_back("    " + std::string(lineText), n->id);
+                        if (nl == std::string_view::npos)
+                            break;
+                        bodyText.remove_prefix(nl + 1);
+                    }
+                    funcs.emplace_back("}", n->id);
+                    funcs.emplace_back("", 0);
+
+                    local(n->customOutWidth, call);
+                    break;
+                }
                 case GraphNodeType::Split:
                 {
                     // SG Split rule: lanes beyond the source width read 0. The
@@ -510,6 +616,8 @@ namespace Arcane
         }
         if (!lines.empty())
             lines.emplace_back("", 0);
+        for (auto& fl : funcs)
+            lines.push_back(std::move(fl));
         lines.emplace_back("float4 shade(Varyings v)", 0);
         lines.emplace_back("{", 0);
         for (auto& [text, nodeId] : body)
@@ -575,6 +683,19 @@ namespace Arcane
                 case GraphNodeType::TextureSample:
                     e["param"] = nlohmann::json{ { "name", n->paramName } };
                     break;
+                case GraphNodeType::Custom:
+                {
+                    nlohmann::json c;
+                    c["out"] = n->customOutWidth;
+                    c["body"] = n->customBody;
+                    nlohmann::json pins = nlohmann::json::array();
+                    for (const GraphCustomPin& p : n->customPins)
+                        pins.push_back(nlohmann::json{ { "name", p.name },
+                                                       { "width", p.width } });
+                    c["pins"] = std::move(pins);
+                    e["custom"] = std::move(c);
+                    break;
+                }
                 default:
                     break;
             }
@@ -658,6 +779,35 @@ namespace Arcane
             }
             if (n.type == GraphNodeType::TextureSample)
                 n.paramType = MatParamType::Texture;
+            if (e.contains("custom") && e["custom"].is_object())
+            {
+                const nlohmann::json& c = e["custom"];
+                if (c.contains("out") && c["out"].is_number_integer())
+                {
+                    const int w = c["out"].get<int>();
+                    if (w == 1 || w == 2 || w == 4)
+                        n.customOutWidth = w;
+                }
+                if (c.contains("body") && c["body"].is_string())
+                    n.customBody = c["body"].get<std::string>();
+                if (c.contains("pins") && c["pins"].is_array())
+                {
+                    for (const nlohmann::json& jp : c["pins"])
+                    {
+                        if (!jp.is_object() || !jp.contains("name") || !jp["name"].is_string())
+                            continue;
+                        GraphCustomPin p;
+                        p.name = jp["name"].get<std::string>();
+                        if (jp.contains("width") && jp["width"].is_number_integer())
+                        {
+                            const int w = jp["width"].get<int>();
+                            if (w == 1 || w == 2 || w == 4)
+                                p.width = w;
+                        }
+                        n.customPins.push_back(std::move(p));
+                    }
+                }
+            }
             g.nodes.push_back(std::move(n));
         }
 
@@ -685,8 +835,8 @@ namespace Arcane
                     continue;
                 const GraphNode* from = g.FindNode(l.fromNode);
                 const GraphNode* to = g.FindNode(l.toNode);
-                if (l.fromPin >= GraphNodeInfo(from->type).outputs.size() ||
-                    l.toPin >= GraphNodeInfo(to->type).inputs.size())
+                if (l.fromPin >= GraphNodeOutputCount(*from) ||
+                    l.toPin >= GraphNodeInputCount(*to))
                     continue;
                 g.links.push_back(l);
             }

@@ -686,11 +686,11 @@ namespace Arcane::Editor
             }
             if (IsGraphOwned())
             {
+                // Read-only generated-code view (UE's HLSL window / SG's View
+                // Generated Shader). No convert-out: graphs are THE authoring
+                // tier; freeform HLSL lives in Custom nodes.
                 ImGui::SameLine();
                 ImGui::Checkbox("HLSL", &m_showGeneratedText);
-                ImGui::SameLine();
-                if (ImGui::Button("Convert to Text..."))
-                    m_confirmConvertToText = true;
             }
         }
         else if (!m_parentChain.empty())
@@ -754,30 +754,6 @@ namespace Arcane::Editor
             ImGui::EndPopup();
         }
 
-        if (m_confirmConvertToText)
-        {
-            ImGui::OpenPopup("Convert to Text?##matdoc");
-            m_confirmConvertToText = false;
-        }
-        if (ImGui::BeginPopupModal("Convert to Text?##matdoc", nullptr,
-                                   ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::TextUnformatted("Convert this graph material to a hand-edited text\n"
-                                   "material? The node graph is removed and the generated\n"
-                                   "HLSL becomes editable. One-way (undoable this session).");
-            ImGui::Separator();
-            if (ImGui::Button("Convert"))
-            {
-                std::optional<Arcane::MaterialGraph> before = m_data.graph;
-                ApplyGraphState(std::nullopt);
-                PushGraphUndo("Convert to Text", std::move(before));
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel"))
-                ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-        }
     }
 
     void ShaderEditorDocument::DrawSnippetEditor(float height)
@@ -1056,6 +1032,14 @@ namespace Arcane::Editor
                                       ? Arcane::MatParamType::Float
                                       : Arcane::MatParamType::Texture;
                 }
+                if (info.type == Arcane::GraphNodeType::Custom)
+                {
+                    // Magenta until written -- the classic "custom shader
+                    // pending" placeholder. Bodies can read params/Time
+                    // directly (they land after the cbuffer declarations).
+                    n.customBody = "return float4(1.0, 0.0, 1.0, 1.0);";
+                    n.customOutWidth = 4;
+                }
                 const ImVec2 canvasPos =
                     ed::ScreenToCanvas(ImVec2(m_graphPopupX, m_graphPopupY));
                 n.posX = canvasPos.x;
@@ -1102,17 +1086,10 @@ namespace Arcane::Editor
         else
             ImGui::TextUnformatted(info.display);
 
-        for (std::uint32_t pin = 0; pin < info.inputs.size(); ++pin)
-        {
-            ed::BeginPin(InPin(n.id, pin), ed::PinKind::Input);
-            ImGui::Text("-> %s", info.inputs[pin].name);
-            ed::EndPin();
-        }
-
-        // Payload widgets. Value drags bracket a whole-graph gesture (before on
-        // activation, one undo step on release); popup-widgets (combos, color
-        // pickers) cannot live inside the canvas, so Param types use a cycle
-        // button and colors edit as four drags + a preview swatch.
+        // Gesture helpers (used by pin rows AND payload widgets below). Value
+        // drags bracket a whole-graph gesture (before on activation, one undo
+        // step on release); popup-widgets (combos, color pickers) cannot live
+        // inside the canvas, so types use cycle buttons.
         auto gestureBegin = [&]
         {
             if (ImGui::IsItemActivated())
@@ -1131,6 +1108,47 @@ namespace Arcane::Editor
             if (m_live)
                 RegenerateFromGraph();
         };
+
+        for (std::uint32_t pin = 0; pin < Arcane::GraphNodeInputCount(n); ++pin)
+        {
+            ed::BeginPin(InPin(n.id, pin), ed::PinKind::Input);
+            ImGui::Text("-> %s", Arcane::GraphNodeInputPin(n, pin).name);
+            ed::EndPin();
+            // Custom pins are user-authored: width cycle + remove beside each.
+            if (n.type == Arcane::GraphNodeType::Custom)
+            {
+                ImGui::SameLine();
+                ImGui::PushID(static_cast<int>(pin));
+                Arcane::GraphCustomPin& cp = n.customPins[pin];
+                const char* wname = cp.width == 1 ? "f1" : cp.width == 2 ? "f2" : "f4";
+                if (ImGui::SmallButton(wname))
+                {
+                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    cp.width = cp.width == 1 ? 2 : cp.width == 2 ? 4 : 1;
+                    valueEdited();
+                    PushGraphUndo("Pin Width", std::move(before));
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x"))
+                {
+                    // Remove the pin: drop its links, re-index links to later
+                    // pins (toPin is a bare index into this node's pin list).
+                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    Arcane::MaterialGraph& gg = *m_data.graph;
+                    std::erase_if(gg.links, [&](const Arcane::GraphLink& l)
+                                  { return l.toNode == n.id && l.toPin == pin; });
+                    for (Arcane::GraphLink& l : gg.links)
+                        if (l.toNode == n.id && l.toPin > pin)
+                            --l.toPin;
+                    n.customPins.erase(n.customPins.begin() + pin);
+                    valueEdited();
+                    PushGraphUndo("Remove Pin", std::move(before));
+                    ImGui::PopID();
+                    break;   // pin list changed under this loop -- redraw next frame
+                }
+                ImGui::PopID();
+            }
+        }
 
         switch (n.type)
         {
@@ -1263,14 +1281,76 @@ namespace Arcane::Editor
                 }
                 break;
             }
+            case Arcane::GraphNodeType::Custom:
+            {
+                // Add-pin + output width; the pin rows above carry the per-pin
+                // width/remove controls.
+                if (ImGui::SmallButton("+ pin"))
+                {
+                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    Arcane::GraphCustomPin p;
+                    for (std::uint32_t k = 1;; ++k)
+                    {
+                        p.name = "p" + std::to_string(k);
+                        bool taken = false;
+                        for (const Arcane::GraphCustomPin& other : n.customPins)
+                            taken = taken || other.name == p.name;
+                        if (!taken)
+                            break;
+                    }
+                    n.customPins.push_back(std::move(p));
+                    valueEdited();
+                    PushGraphUndo("Add Pin", std::move(before));
+                }
+                ImGui::SameLine();
+                const char* ow = n.customOutWidth == 1 ? "out: f1"
+                                : n.customOutWidth == 2 ? "out: f2" : "out: f4";
+                if (ImGui::SmallButton(ow))
+                {
+                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    n.customOutWidth = n.customOutWidth == 1 ? 2
+                                       : n.customOutWidth == 2 ? 4 : 1;
+                    valueEdited();
+                    PushGraphUndo("Output Width", std::move(before));
+                }
+
+                // Body: stable buffer while active, ONE undoable commit on
+                // deactivate-after-edit (regenerating per keystroke would push
+                // an undo step per character).
+                char body[sizeof(m_bodyBuf)];
+                std::snprintf(body, sizeof(body), "%s", n.customBody.c_str());
+                if (m_bodyEditNode == n.id)
+                    std::memcpy(body, m_bodyBuf, sizeof(body));
+                ImGui::InputTextMultiline("##body", body, sizeof(body),
+                                          ImVec2(340.0f, 130.0f),
+                                          ImGuiInputTextFlags_AllowTabInput);
+                if (ImGui::IsItemActive())
+                {
+                    m_bodyEditNode = n.id;
+                    std::memcpy(m_bodyBuf, body, sizeof(m_bodyBuf));
+                }
+                else if (m_bodyEditNode == n.id)
+                {
+                    const bool commit = ImGui::IsItemDeactivatedAfterEdit();
+                    m_bodyEditNode = 0;
+                    if (commit && n.customBody != m_bodyBuf)
+                    {
+                        std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                        n.customBody = m_bodyBuf;
+                        valueEdited();
+                        PushGraphUndo("Edit HLSL Body", std::move(before));
+                    }
+                }
+                break;
+            }
             default:
                 break;
         }
 
-        for (std::uint32_t pin = 0; pin < info.outputs.size(); ++pin)
+        for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(n); ++pin)
         {
             ed::BeginPin(OutPin(n.id, pin), ed::PinKind::Output);
-            ImGui::Text("        %s ->", info.outputs[pin].name);
+            ImGui::Text("        %s ->", Arcane::GraphNodeOutputPin(n, pin).name);
             ed::EndPin();
         }
 

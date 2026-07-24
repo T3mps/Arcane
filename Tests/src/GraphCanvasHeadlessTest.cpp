@@ -35,12 +35,19 @@ TEST_CASE("Graph document survives headless ImGui frames", "[editor][graphcanvas
     color.posX = 160.0f;
     color.posY = 200.0f;
     color.value[0] = 0.2f; color.value[1] = 0.8f; color.value[2] = 1.0f; color.value[3] = 1.0f;
-    g.nodes = { out, color };
+    GraphNode custom;
+    custom.id = 3;
+    custom.type = GraphNodeType::Custom;
+    custom.posX = 160.0f;
+    custom.posY = 360.0f;
+    custom.customPins = { { "x", 1 } };
+    custom.customBody = "return float4(x, x, x, 1.0);";
+    g.nodes = { out, color, custom };
     GraphLink l;
     l.fromNode = 2;
     l.toNode = 1;
     g.links.push_back(l);
-    g.nextId = 3;
+    g.nextId = 4;
 
     MaterialAssetData data;
     data.id = Guid::FromString("dddd4444-4444-4444-8444-444444444444").value();
