@@ -145,6 +145,9 @@ namespace Arcane
                         { "inputs", p.inputs },
                         { "pos", nlohmann::json::array({ p.posX, p.posY }) } });
                 doc["passes"] = std::move(passes);
+                doc["chainPos"] = nlohmann::json{
+                    { "base", nlohmann::json::array({ data.chainBaseX, data.chainBaseY }) },
+                    { "out", nlohmann::json::array({ data.chainOutX, data.chainOutY }) } };
             }
         }
         nlohmann::json params = nlohmann::json::object();
@@ -274,6 +277,22 @@ namespace Arcane
                     data.passes.push_back(std::move(p));
                 }
             }
+        }
+
+        if (doc.contains("chainPos") && doc["chainPos"].is_object())
+        {
+            const auto readPos = [&](const char* key, float& x, float& y)
+            {
+                const nlohmann::json& cp = doc["chainPos"];
+                if (cp.contains(key) && cp[key].is_array() && cp[key].size() == 2 &&
+                    cp[key][0].is_number() && cp[key][1].is_number())
+                {
+                    x = cp[key][0].get<float>();
+                    y = cp[key][1].get<float>();
+                }
+            };
+            readPos("base", data.chainBaseX, data.chainBaseY);
+            readPos("out", data.chainOutX, data.chainOutY);
         }
 
         // Entries are self-typed; malformed ones drop here, decl mismatches drop

@@ -123,7 +123,16 @@ namespace Arcane::Editor
         std::string& ActiveSnippet();
         // "base" / the extra pass's display name.
         std::string PassLabel(std::size_t pass) const;
-        void   DrawPassBar();
+        // The pass CANVAS (replaces the old pass bar): every pass is a node
+        // with a live thumbnail; wires are the DAG (a wire into slot pin k IS
+        // inputs[k]). Click = edit that pass, double-click = view it, context
+        // menu adds/removes, drag wires to rewire. Structural edits recompile.
+        void   DrawPassCanvas(float height);
+        // Keep execution order == array order after a rewire: stable topo sort
+        // (positions/active/view indices ride along). False on a cycle.
+        bool   TopoSortPasses();
+        // Would wiring `source` into `consumer` (chain indices) close a cycle?
+        bool   PassWireWouldCycle(std::uint32_t source, std::uint32_t consumer) const;
         bool   HasErrors() const;
         bool   ParamsDirty() const;   // EffectiveSerial vs the saved baseline
         // Instance mode: walk parent -> ... -> base through the project registry
@@ -214,6 +223,13 @@ namespace Arcane::Editor
         // captured at Rebuild so async binds never race pass-list edits).
         std::vector<std::vector<std::uint32_t>> m_passInputs;
         std::uint32_t m_chainInputSlots = 1;
+        // Pass-canvas state (a SECOND node-editor context; node ids are chain
+        // index + 1, the Output node is kPassOutputNodeId).
+        ax::NodeEditor::EditorContext* m_passCanvasCtx = nullptr;
+        bool  m_passCanvasSeeded = false;   // re-seed positions after list edits
+        int   m_passNameEditIdx = -1;       // in-node rename (chain index)
+        std::uint32_t m_passCtxNode = 0;    // node the context menu opened on
+        float m_passPopupX = 0.0f, m_passPopupY = 0.0f;
         int m_activePass = 0;   // which snippet the text editor shows (0 = base)
         int m_viewPass = -1;    // preview truncation; -1 = the full chain
 

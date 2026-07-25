@@ -73,6 +73,10 @@ namespace Arcane
         // saved anyway so every snippet-only consumer (sprite cache, parent
         // chains, older loads) works untouched. Convert-to-text = reset() this.
         std::optional<MaterialGraph> graph;
+        // Pass-canvas layout for the two fixed nodes (per-pass positions live
+        // on each MaterialPass). All-zero = never laid out -> auto-layout.
+        float chainBaseX = 0.0f, chainBaseY = 0.0f;
+        float chainOutX = 0.0f, chainOutY = 0.0f;
 
         bool IsInstance() const { return parent.IsValid(); }
         bool IsGraphOwned() const { return graph.has_value(); }

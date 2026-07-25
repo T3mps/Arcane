@@ -91,6 +91,11 @@ namespace Arcane::Editor
         // ---- Graph canvas plumbing (Slice 9) ----
         namespace ed = ax::NodeEditor;
 
+        // Pass-canvas fixed ids (chain index c = node id c+1; these sit far
+        // above any realistic pass count).
+        constexpr std::uint32_t kPassOutputNodeId = 900000;
+        constexpr std::uint32_t kPassOutputLinkId = 800000;
+
         // Pin id encoding: node id * 1000 + slot band. Inputs at +1.., outputs
         // at +501.. (a node type never has anywhere near 500 pins).
         constexpr std::uint64_t kPinInBase = 1, kPinOutBase = 501;
@@ -282,6 +287,11 @@ namespace Arcane::Editor
         {
             ed::DestroyEditor(m_graphCtx);
             m_graphCtx = nullptr;
+        }
+        if (m_passCanvasCtx)
+        {
+            ed::DestroyEditor(m_passCanvasCtx);
+            m_passCanvasCtx = nullptr;
         }
     }
 
@@ -835,10 +845,12 @@ namespace Arcane::Editor
         else
         {
             const float errorsH = 140.0f;
-            // Pass-chain bar: fullscreen base materials only (sprite chains are
-            // refused; instances re-value the base's chain).
+            // Pass canvas: fullscreen base materials only (sprite chains are
+            // refused; instances re-value the base's chain). Even a single-pass
+            // material shows base -> Output -- the pipeline affordance and the
+            // right-click Add Pass entry point.
             if (m_surface == 0)
-                DrawPassBar();
+                DrawPassCanvas(170.0f);
             if (m_activePass > static_cast<int>(m_data.passes.size()))
                 m_activePass = 0;   // stale selection after an outside reload
             // The graph canvas is PASS 0's surface; extra passes are text.
@@ -980,6 +992,11 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::DrawSnippetEditor(float height)
     {
+        // Chain mode: say which pass the buffer belongs to (the pass canvas
+        // above is the selector).
+        if (ChainMode())
+            ImGui::TextDisabled("editing: %s",
+                                PassLabel(static_cast<std::size_t>(m_activePass)).c_str());
         if (m_jumpToLine > 0)
         {
             m_callbackJumpLine = m_jumpToLine;
@@ -1015,85 +1032,510 @@ namespace Arcane::Editor
         ImGui::PopID();
     }
 
-    void ShaderEditorDocument::DrawPassBar()
+    bool ShaderEditorDocument::PassWireWouldCycle(std::uint32_t source,
+                                                  std::uint32_t consumer) const
     {
-        // Pass chain bar (fullscreen base materials): select the edited pass,
-        // add/rename/remove extra passes, and pick the PREVIEWED pass
-        // (view-any-intermediate). Pass edits are structural (recompile), not
-        // undoable -- same standing as text edits.
-        ImGui::PushID("passbar");
-        const int total = 1 + static_cast<int>(m_data.passes.size());
-        for (int p = 0; p < total; ++p)
+        // Adding consumer.inputs += source cycles iff `consumer` is already
+        // upstream of `source` (walk source's input ancestry).
+        if (source == consumer)
+            return true;
+        std::vector<std::uint32_t> stack{ source };
+        std::unordered_set<std::uint32_t> seen;
+        while (!stack.empty())
         {
-            if (p)
-                ImGui::SameLine();
-            const std::string label =
-                PassLabel(static_cast<std::size_t>(p)) + "##pass" + std::to_string(p);
-            if (ImGui::RadioButton(label.c_str(), m_activePass == p))
-                m_activePass = p;
+            const std::uint32_t c = stack.back();
+            stack.pop_back();
+            if (c == consumer)
+                return true;
+            if (!seen.insert(c).second || c == 0)
+                continue;
+            if (c - 1 < m_data.passes.size())
+                for (std::uint32_t in : m_data.passes[c - 1].inputs)
+                    stack.push_back(in);
         }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("+"))
+        return false;
+    }
+
+    bool ShaderEditorDocument::TopoSortPasses()
+    {
+        // Stable Kahn over chain indices (base = 0 is always first). Positions
+        // ride each MaterialPass; active/view indices remap.
+        const std::size_t n = m_data.passes.size();
+        if (n == 0)
+            return true;
+        std::vector<std::uint32_t> order;   // new sequence of OLD chain indices
+        std::vector<bool> placed(n + 1, false);
+        placed[0] = true;
+        bool progress = true;
+        while (order.size() < n && progress)
         {
-            Arcane::MaterialPass p;
-            p.name = "pass " + std::to_string(m_data.passes.size() + 1);
-            p.snippet = "float4 shade(Varyings v)\n"
-                        "{\n"
-                        "    return InputTexture.Sample(MaterialSampler, v.uv);\n"
-                        "}\n";
-            m_data.passes.push_back(std::move(p));
-            m_activePass = static_cast<int>(m_data.passes.size());
+            progress = false;
+            for (std::uint32_t c = 1; c <= n; ++c)
+            {
+                if (placed[c])
+                    continue;
+                bool ready = true;
+                for (std::uint32_t in : m_data.passes[c - 1].inputs)
+                    ready = ready && in <= n && placed[in];
+                if (!ready)
+                    continue;
+                placed[c] = true;
+                order.push_back(c);
+                progress = true;
+            }
+        }
+        if (order.size() < n)
+            return false;   // cycle -- the canvas refuses these at wire time
+
+        std::vector<std::uint32_t> remap(n + 1, 0);
+        for (std::size_t i = 0; i < order.size(); ++i)
+            remap[order[i]] = static_cast<std::uint32_t>(i) + 1;
+        std::vector<Arcane::MaterialPass> sorted;
+        sorted.reserve(n);
+        for (std::uint32_t old : order)
+            sorted.push_back(std::move(m_data.passes[old - 1]));
+        for (Arcane::MaterialPass& p : sorted)
+            for (std::uint32_t& in : p.inputs)
+                in = remap[in];
+        m_data.passes = std::move(sorted);
+        if (m_activePass > 0 && m_activePass <= static_cast<int>(n))
+            m_activePass = static_cast<int>(remap[static_cast<std::uint32_t>(m_activePass)]);
+        if (m_viewPass > 0 && m_viewPass <= static_cast<int>(n))
+            m_viewPass = static_cast<int>(remap[static_cast<std::uint32_t>(m_viewPass)]);
+        return true;
+    }
+
+    void ShaderEditorDocument::DrawPassCanvas(float height)
+    {
+        // The pass DAG as a canvas (replaces the pass bar): chain index c is
+        // node id c+1, the Output node is kPassOutputNodeId, and the WIRES ARE
+        // THE DATA -- a link into input pin s of a pass IS inputs[s]. Edits are
+        // structural (recompile), not undoable -- same standing as text edits.
+        if (!m_passCanvasCtx)
+        {
+            ed::Config cfg;
+            cfg.SettingsFile = nullptr;
+            m_passCanvasCtx = ed::CreateEditor(&cfg);
+            m_passCanvasSeeded = false;
+        }
+        const std::size_t total = 1 + m_data.passes.size();
+        auto nodeOf = [](std::size_t chain) { return static_cast<std::uint32_t>(chain) + 1; };
+
+        ed::SetCurrentEditor(m_passCanvasCtx);
+        ed::Begin("##passcanvas", ImVec2(0.0f, height));
+
+        const bool seededThisFrame = !m_passCanvasSeeded;
+        if (seededThisFrame)
+        {
+            // Never-laid-out data (all zeros, incl. pre-canvas files): a simple
+            // left-to-right row.
+            bool anyPos = m_data.chainBaseX != 0.0f || m_data.chainBaseY != 0.0f ||
+                          m_data.chainOutX != 0.0f || m_data.chainOutY != 0.0f;
+            for (const Arcane::MaterialPass& p : m_data.passes)
+                anyPos = anyPos || p.posX != 0.0f || p.posY != 0.0f;
+            if (!anyPos)
+            {
+                m_data.chainBaseX = 40.0f;
+                m_data.chainBaseY = 40.0f;
+                for (std::size_t k = 0; k < m_data.passes.size(); ++k)
+                {
+                    m_data.passes[k].posX = 40.0f + 190.0f * static_cast<float>(k + 1);
+                    m_data.passes[k].posY = 40.0f;
+                }
+                m_data.chainOutX = 40.0f + 190.0f * static_cast<float>(total);
+                m_data.chainOutY = 40.0f;
+            }
+            ed::SetNodePosition(nodeOf(0), ImVec2(m_data.chainBaseX, m_data.chainBaseY));
+            for (std::size_t k = 0; k < m_data.passes.size(); ++k)
+                ed::SetNodePosition(nodeOf(k + 1),
+                                    ImVec2(m_data.passes[k].posX, m_data.passes[k].posY));
+            ed::SetNodePosition(kPassOutputNodeId,
+                                ImVec2(m_data.chainOutX, m_data.chainOutY));
+            m_passCanvasSeeded = true;
+        }
+
+        // ---- nodes
+        Arcane::FullscreenMaterialChain* chain = ChainMode() ? m_chain.get() : nullptr;
+        for (std::size_t c = 0; c < total; ++c)
+        {
+            const std::uint32_t nodeId = nodeOf(c);
+            ed::BeginNode(ed::NodeId(nodeId));
+            ImGui::PushID(static_cast<int>(nodeId));
+
+            bool passError = false;
+            if (c < m_passJobs.size())
+                for (const Arcane::ShaderDiag& d : m_passJobs[c].diags)
+                    passError = passError ||
+                                d.severity == Arcane::ShaderDiagSeverity::Error;
+            const std::string title =
+                (m_activePass == static_cast<int>(c) ? "> " : "") + PassLabel(c);
+            if (passError)
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "(!) %s", title.c_str());
+            else
+                ImGui::TextUnformatted(title.c_str());
+
+            // Extra passes rename in-node (stable-buffer commit, no undo --
+            // structural-edit standing).
+            if (c >= 1)
+            {
+                Arcane::MaterialPass& pass = m_data.passes[c - 1];
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%s", pass.name.c_str());
+                if (m_passNameEditIdx == static_cast<int>(c))
+                    std::memcpy(buf, m_nameBuf, sizeof(buf));
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputText("##passname", buf, sizeof(buf));
+                if (ImGui::IsItemActive())
+                {
+                    m_passNameEditIdx = static_cast<int>(c);
+                    std::memcpy(m_nameBuf, buf, sizeof(m_nameBuf));
+                }
+                else if (m_passNameEditIdx == static_cast<int>(c))
+                {
+                    const bool commit = ImGui::IsItemDeactivatedAfterEdit();
+                    m_passNameEditIdx = -1;
+                    if (commit && pass.name != m_nameBuf)
+                    {
+                        pass.name = m_nameBuf;
+                        m_dirty = true;
+                    }
+                }
+            }
+
+            // Input pins: one per wired slot + a spare that accepts a new wire.
+            const std::size_t inputCount =
+                c >= 1 ? m_data.passes[c - 1].inputs.size() : 0;
+            if (c >= 1)
+            {
+                for (std::size_t s = 0; s < inputCount; ++s)
+                {
+                    ed::BeginPin(InPin(nodeId, static_cast<std::uint32_t>(s)),
+                                 ed::PinKind::Input);
+                    ImGui::Text("-> in%zu", s);
+                    ed::EndPin();
+                }
+                if (inputCount < Arcane::kMaxPassInputs)
+                {
+                    ed::BeginPin(InPin(nodeId, static_cast<std::uint32_t>(inputCount)),
+                                 ed::PinKind::Input);
+                    ImGui::TextDisabled("-> +");
+                    ed::EndPin();
+                }
+            }
+
+            // Live thumbnail: the pass's own intermediate (chain mode; LINEAR,
+            // so HDR clamps -- fine for a thumbnail). Single-pass materials
+            // show the tonemapped preview on the base node instead.
+            nvrhi::ITexture* thumb = chain ? chain->PassOutput(c) : nullptr;
+            ImTextureID thumbId = 0;
+            if (thumb)
+                thumbId = static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(thumb));
+            else if (c == 0 && m_preview && PreviewReady())
+                thumbId = static_cast<ImTextureID>(m_preview->TextureId());
+            if (thumbId)
+                ImGui::Image(thumbId, ImVec2(72.0f, 72.0f));
+
+            ed::BeginPin(OutPin(nodeId, 0), ed::PinKind::Output);
+            ImGui::TextUnformatted("out ->");
+            ed::EndPin();
+
+            ImGui::PopID();
+            ed::EndNode();
+        }
+
+        // The Output node: shows the final image; its wire marks the LAST pass
+        // (execution order's tail = what single-material consumers see).
+        ed::BeginNode(ed::NodeId(kPassOutputNodeId));
+        ImGui::TextUnformatted("Output");
+        ed::BeginPin(InPin(kPassOutputNodeId, 0), ed::PinKind::Input);
+        ImGui::TextUnformatted("-> final");
+        ed::EndPin();
+        if (nvrhi::ITexture* finalTex = chain ? chain->PassOutput(total - 1) : nullptr)
+            ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(finalTex)),
+                         ImVec2(72.0f, 72.0f));
+        ed::EndNode();
+
+        // ---- links (derived from the data each frame; ids = list index + 1)
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> linkSlots;   // consumer, slot
+        for (std::size_t c = 1; c < total; ++c)
+            for (std::size_t s = 0; s < m_data.passes[c - 1].inputs.size(); ++s)
+            {
+                const std::uint32_t src = m_data.passes[c - 1].inputs[s];
+                linkSlots.emplace_back(static_cast<std::uint32_t>(c),
+                                       static_cast<std::uint32_t>(s));
+                ed::Link(ed::LinkId(linkSlots.size()),
+                         OutPin(nodeOf(src), 0),
+                         InPin(nodeOf(c), static_cast<std::uint32_t>(s)));
+            }
+        ed::Link(ed::LinkId(kPassOutputLinkId), OutPin(nodeOf(total - 1), 0),
+                 InPin(kPassOutputNodeId, 0));
+
+        // ---- wire edits
+        bool structural = false;
+        if (ed::BeginCreate())
+        {
+            ed::PinId aId, bId;
+            if (ed::QueryNewLink(&aId, &bId))
+            {
+                const DecodedPin a = DecodePin(aId);
+                const DecodedPin b = DecodePin(bId);
+                const DecodedPin& out = a.isInput ? b : a;
+                const DecodedPin& in = a.isInput ? a : b;
+                bool valid = a.valid && b.valid && a.isInput != b.isInput &&
+                             out.node != kPassOutputNodeId &&
+                             out.node >= 1 && out.node <= total;
+                const std::uint32_t source = out.node - 1;
+                if (valid && in.node == kPassOutputNodeId)
+                {
+                    // Make `source` the final pass: legal only when nothing
+                    // reads it (a consumer must execute after it).
+                    bool hasDependent = false;
+                    for (const Arcane::MaterialPass& p : m_data.passes)
+                        for (std::uint32_t pin : p.inputs)
+                            hasDependent = hasDependent || pin == source;
+                    if (source == 0 || source == total - 1 || hasDependent)
+                        ed::RejectNewItem();
+                    else if (ed::AcceptNewItem())
+                    {
+                        Arcane::MaterialPass moved =
+                            std::move(m_data.passes[source - 1]);
+                        m_data.passes.erase(m_data.passes.begin() +
+                                            static_cast<std::ptrdiff_t>(source - 1));
+                        m_data.passes.push_back(std::move(moved));
+                        for (Arcane::MaterialPass& p : m_data.passes)
+                            for (std::uint32_t& pin : p.inputs)
+                                pin = pin == source
+                                          ? static_cast<std::uint32_t>(total - 1)
+                                          : pin > source ? pin - 1 : pin;
+                        if (m_activePass == static_cast<int>(source))
+                            m_activePass = static_cast<int>(total - 1);
+                        else if (m_activePass > static_cast<int>(source))
+                            --m_activePass;
+                        m_viewPass = -1;
+                        structural = true;
+                    }
+                }
+                else
+                {
+                    const std::uint32_t consumer = in.node - 1;
+                    valid = valid && in.node >= 2 && in.node <= total &&
+                            in.pin <= m_data.passes[consumer - 1].inputs.size() &&
+                            in.pin < Arcane::kMaxPassInputs &&
+                            !PassWireWouldCycle(source, consumer);
+                    if (!valid)
+                        ed::RejectNewItem();
+                    else if (ed::AcceptNewItem())
+                    {
+                        std::vector<std::uint32_t>& ins =
+                            m_data.passes[consumer - 1].inputs;
+                        if (in.pin < ins.size())
+                            ins[in.pin] = source;   // silent replace
+                        else
+                            ins.push_back(source);  // the spare pin
+                        TopoSortPasses();
+                        structural = true;
+                    }
+                }
+            }
+        }
+        ed::EndCreate();   // UNCONDITIONAL (the material-canvas lesson)
+
+        // ---- deletions: links = unwire a slot; nodes = remove the pass
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> unwire;
+        std::vector<std::uint32_t> removePasses;   // chain indices
+        if (ed::BeginDelete())
+        {
+            ed::LinkId lid;
+            while (ed::QueryDeletedLink(&lid))
+            {
+                const std::size_t idx = static_cast<std::size_t>(lid.Get()) - 1;
+                if (lid.Get() == kPassOutputLinkId || idx >= linkSlots.size())
+                    ed::RejectDeletedItem();   // the final wire is structural
+                else if (ed::AcceptDeletedItem())
+                    unwire.push_back(linkSlots[idx]);
+            }
+            ed::NodeId nid;
+            while (ed::QueryDeletedNode(&nid))
+            {
+                const std::uint32_t id = static_cast<std::uint32_t>(nid.Get());
+                if (id < 2 || id > total)   // base + Output are fixed
+                {
+                    ed::RejectDeletedItem();
+                    continue;
+                }
+                if (ed::AcceptDeletedItem())
+                    removePasses.push_back(id - 1);
+            }
+        }
+        ed::EndDelete();   // UNCONDITIONAL
+
+        if (!unwire.empty() || !removePasses.empty())
+        {
+            // Unwire first (descending slot so indices stay valid), then remove
+            // passes (descending chain index), fixing every reference.
+            std::sort(unwire.rbegin(), unwire.rend());
+            for (const auto& [consumer, slot] : unwire)
+            {
+                std::vector<std::uint32_t>& ins = m_data.passes[consumer - 1].inputs;
+                if (slot < ins.size())
+                    ins.erase(ins.begin() + slot);
+            }
+            std::sort(removePasses.rbegin(), removePasses.rend());
+            for (std::uint32_t r : removePasses)
+            {
+                m_data.passes.erase(m_data.passes.begin() +
+                                    static_cast<std::ptrdiff_t>(r - 1));
+                for (Arcane::MaterialPass& p : m_data.passes)
+                {
+                    std::erase(p.inputs, r);
+                    for (std::uint32_t& in : p.inputs)
+                        if (in > r)
+                            --in;
+                }
+                if (m_activePass >= static_cast<int>(r))
+                    --m_activePass;
+            }
+            m_activePass = std::clamp(m_activePass, 0,
+                                      static_cast<int>(m_data.passes.size()));
+            m_viewPass = -1;
+            structural = true;
+        }
+
+        // ---- selection -> edited pass; double-click -> viewed pass. Only on
+        // selection CHANGES -- re-asserting every frame would stomp the
+        // errors-panel's own pass switching.
+        {
+            if (ed::HasSelectionChanged())
+            {
+                std::vector<ed::NodeId> sel(
+                    static_cast<std::size_t>(std::max(0, ed::GetSelectedObjectCount())));
+                if (!sel.empty())
+                {
+                    const int count = ed::GetSelectedNodes(sel.data(),
+                                                           static_cast<int>(sel.size()));
+                    if (count == 1)
+                    {
+                        const std::uint32_t id =
+                            static_cast<std::uint32_t>(sel[0].Get());
+                        if (id >= 1 && id <= total)
+                            m_activePass = static_cast<int>(id - 1);
+                    }
+                }
+            }
+            const std::uint32_t dbl =
+                static_cast<std::uint32_t>(ed::GetDoubleClickedNode().Get());
+            if (dbl == kPassOutputNodeId)
+                m_viewPass = -1;
+            else if (dbl >= 1 && dbl <= total)
+                m_viewPass = dbl == total ? -1 : static_cast<int>(dbl - 1);
+        }
+
+        // ---- context menus (Suspend: popups live in screen space)
+        ed::Suspend();
+        {
+            ed::NodeId ctxNode;
+            if (ed::ShowNodeContextMenu(&ctxNode))
+            {
+                m_passCtxNode = static_cast<std::uint32_t>(ctxNode.Get());
+                ImGui::OpenPopup("##passnodemenu");
+            }
+            else if (ed::ShowBackgroundContextMenu())
+            {
+                const ImVec2 p = ImGui::GetMousePos();
+                m_passPopupX = p.x;
+                m_passPopupY = p.y;
+                ImGui::OpenPopup("##passbgmenu");
+            }
+            if (ImGui::BeginPopup("##passnodemenu"))
+            {
+                const std::uint32_t id = m_passCtxNode;
+                if (id == kPassOutputNodeId)
+                {
+                    if (ImGui::MenuItem("View Final"))
+                        m_viewPass = -1;
+                }
+                else if (id >= 1 && id <= total)
+                {
+                    if (ImGui::MenuItem("View This Pass"))
+                        m_viewPass = id == total ? -1 : static_cast<int>(id - 1);
+                    if (id >= 2 && ImGui::MenuItem("Remove Pass"))
+                    {
+                        const std::uint32_t r = id - 1;
+                        m_data.passes.erase(m_data.passes.begin() +
+                                            static_cast<std::ptrdiff_t>(r - 1));
+                        for (Arcane::MaterialPass& p : m_data.passes)
+                        {
+                            std::erase(p.inputs, r);
+                            for (std::uint32_t& in : p.inputs)
+                                if (in > r)
+                                    --in;
+                        }
+                        if (m_activePass >= static_cast<int>(r))
+                            --m_activePass;
+                        m_activePass = std::clamp(
+                            m_activePass, 0, static_cast<int>(m_data.passes.size()));
+                        m_viewPass = -1;
+                        structural = true;
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            if (ImGui::BeginPopup("##passbgmenu"))
+            {
+                if (ImGui::MenuItem("Add Pass"))
+                {
+                    Arcane::MaterialPass p;
+                    p.name = "pass " + std::to_string(m_data.passes.size() + 1);
+                    p.snippet = "float4 shade(Varyings v)\n"
+                                "{\n"
+                                "    return InputTexture.Sample(MaterialSampler, v.uv);\n"
+                                "}\n";
+                    // Default wiring: read the current final (linear extend).
+                    p.inputs = { static_cast<std::uint32_t>(total - 1) };
+                    const ImVec2 canvasPos =
+                        ed::ScreenToCanvas(ImVec2(m_passPopupX, m_passPopupY));
+                    p.posX = canvasPos.x;
+                    p.posY = canvasPos.y;
+                    m_data.passes.push_back(std::move(p));
+                    m_activePass = static_cast<int>(m_data.passes.size());
+                    structural = true;
+                }
+                ImGui::EndPopup();
+            }
+        }
+        ed::Resume();
+
+        // ---- position readback (skip the seed frame)
+        if (!seededThisFrame && !structural)
+        {
+            auto readback = [&](std::uint32_t nodeId, float& x, float& y)
+            {
+                const ImVec2 p = ed::GetNodePosition(ed::NodeId(nodeId));
+                if (p.x != x || p.y != y)
+                {
+                    x = p.x;
+                    y = p.y;
+                    m_dirty = true;
+                }
+            };
+            readback(nodeOf(0), m_data.chainBaseX, m_data.chainBaseY);
+            for (std::size_t k = 0; k < m_data.passes.size(); ++k)
+                readback(nodeOf(k + 1), m_data.passes[k].posX, m_data.passes[k].posY);
+            readback(kPassOutputNodeId, m_data.chainOutX, m_data.chainOutY);
+        }
+
+        ed::End();
+        ed::SetCurrentEditor(nullptr);
+
+        if (structural)
+        {
+            // Indices moved under the canvas: re-seed node ids from the data
+            // next frame, then recompile the chain.
+            m_passCanvasSeeded = false;
             m_dirty = true;
             if (m_live)
                 Rebuild();
         }
-
-        if (m_activePass > 0 &&
-            m_activePass <= static_cast<int>(m_data.passes.size()))
-        {
-            Arcane::MaterialPass& pass =
-                m_data.passes[static_cast<std::size_t>(m_activePass) - 1];
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(110.0f);
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%s", pass.name.c_str());
-            if (ImGui::InputText("##passname", buf, sizeof(buf)))
-            {
-                pass.name = buf;
-                m_dirty = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("x"))
-            {
-                m_data.passes.erase(m_data.passes.begin() + (m_activePass - 1));
-                m_activePass = (std::min)(m_activePass,
-                                          static_cast<int>(m_data.passes.size()));
-                m_viewPass = -1;
-                m_dirty = true;
-                if (m_live)
-                    Rebuild();
-                ImGui::PopID();
-                return;   // the pass list changed under this frame's bar
-            }
-        }
-
-        if (!m_data.passes.empty())
-        {
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(120.0f);
-            // View selector: which pass the preview shows (the chain truncates
-            // there). Default = the last pass = the final output.
-            std::string items;
-            for (int p = 0; p < total; ++p)
-            {
-                items += "view: " + PassLabel(static_cast<std::size_t>(p));
-                items += '\0';
-            }
-            int view = m_viewPass < 0 || m_viewPass >= total ? total - 1 : m_viewPass;
-            if (ImGui::Combo("##viewpass", &view, items.c_str()))
-                m_viewPass = view == total - 1 ? -1 : view;
-        }
-        ImGui::PopID();
     }
 
     void ShaderEditorDocument::DrawErrorsPanel()
