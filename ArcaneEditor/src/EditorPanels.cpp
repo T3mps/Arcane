@@ -360,6 +360,10 @@ namespace Arcane::Editor
 
     namespace
     {
+        // Payload type tag for outliner entity drag/reparent; shared by the
+        // source/target sites below so the string only ever appears once.
+        constexpr const char* kOutlinerDragType = "ARC_OUTLINER_ENTITY";
+
         bool ApplyStructural(Arcane::CommandStack& undo, const OutlinerBinding& b,
                              std::string label, Arcane::FunctionRef<bool()> mutate)
         {
@@ -595,7 +599,7 @@ namespace Arcane::Editor
 
                     if (binding.editMode && ImGui::BeginDragDropSource())
                     {
-                        ImGui::SetDragDropPayload("ARC_OUTLINER_ENTITY",
+                        ImGui::SetDragDropPayload(kOutlinerDragType,
                                                   &row.entity, sizeof(Astra::Entity));
                         ImGui::TextUnformatted(row.label.c_str());
                         ImGui::EndDragDropSource();
@@ -603,7 +607,7 @@ namespace Arcane::Editor
                     if (binding.editMode && ImGui::BeginDragDropTarget())
                     {
                         if (const ImGuiPayload* p =
-                                ImGui::AcceptDragDropPayload("ARC_OUTLINER_ENTITY"))
+                                ImGui::AcceptDragDropPayload(kOutlinerDragType))
                         {
                             Astra::Entity dragged;
                             std::memcpy(&dragged, p->Data, sizeof(dragged));
@@ -633,15 +637,20 @@ namespace Arcane::Editor
             ImGui::EndTable();
         }
 
-        // Drop below the table = unparent to root. Only visible mid-drag.
-        if (binding.editMode && ImGui::GetDragDropPayload() != nullptr)
+        // Drop below the table = unparent to root. Only visible mid-drag, and
+        // only for our own entity payload -- GetDragDropPayload() returns
+        // non-null for ANY active drag (e.g. an asset-browser drag), which
+        // used to show this strip for foreign payloads too.
+        const ImGuiPayload* activeDrag = ImGui::GetDragDropPayload();
+        if (binding.editMode && activeDrag != nullptr
+            && activeDrag->IsDataType(kOutlinerDragType))
         {
             ImGui::Selectable("(drop here to unparent)", false,
                               ImGuiSelectableFlags_Disabled);
             if (ImGui::BeginDragDropTarget())
             {
                 if (const ImGuiPayload* p =
-                        ImGui::AcceptDragDropPayload("ARC_OUTLINER_ENTITY"))
+                        ImGui::AcceptDragDropPayload(kOutlinerDragType))
                 {
                     Astra::Entity dragged;
                     std::memcpy(&dragged, p->Data, sizeof(dragged));
@@ -656,8 +665,17 @@ namespace Arcane::Editor
             }
         }
 
-        if (binding.editMode && ImGui::BeginPopupContextWindow("##outliner_ctx",
-                ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+        // BeginPopupContextWindow cannot serve this: the ScrollY rows table
+        // opens a child window that covers the panel, and the window-hover
+        // test behind that helper demands an EXACT window match against the
+        // outer window. Detect the hover across the child hierarchy and open
+        // the popup by hand.
+        if (binding.editMode
+            && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
+            && !ImGui::IsAnyItemHovered()
+            && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+            ImGui::OpenPopup("##outliner_ctx");
+        if (ImGui::BeginPopup("##outliner_ctx"))
         {
             if (ImGui::MenuItem("New Entity"))
             {
