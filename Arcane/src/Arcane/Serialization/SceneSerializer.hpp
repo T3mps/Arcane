@@ -89,7 +89,19 @@ namespace Arcane::Scene
                     continue;   // non-reflected component -> outside the JSON contract
                 void* instance = const_cast<void*>(reg.GetComponentByHash(e, desc->hash));
                 if (!instance)
+                {
+                    // Zero-size ("empty"/tag) components -- e.g. Hidden -- have NO
+                    // storage array (Astra's is_empty optimization: desc->size == 0),
+                    // so GetComponentByHash always returns nullptr for them even though
+                    // the entity carries the component (present in the archetype mask).
+                    // That is "nothing to read", not "absent" -- write the same null
+                    // wire shape SaveJson already uses for an all-Serializable(false)
+                    // component, so LoadJson's existing null-body handling (roster
+                    // faithfulness: key present => component present) reconstructs it.
+                    if (desc->is_empty)
+                        components[std::string(desc->meta->typeName)] = nullptr;
                     continue;
+                }
                 nlohmann::json cj;
                 ReflectionJsonWriter writer(cj);
                 desc->visitFields(instance, writer);   // writer READS; const_cast is safe
