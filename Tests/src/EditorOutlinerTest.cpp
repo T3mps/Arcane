@@ -168,6 +168,23 @@ TEST_CASE("Sort reorders sibling groups without breaking the tree", "[editor][ou
     CHECK(rows[0].entity == zeta);
 }
 
+TEST_CASE("A matching root needs no ancestors and is not dimmed", "[editor][outliner]")
+{
+    // The ancestor-chain walk has an empty chain at depth 0; a root that
+    // matches must survive on its own and stay undimmed. Descendants of a
+    // match are NOT auto-kept -- only matches and their ancestors.
+    World w;
+    Astra::Entity root = w.Make("Beacon");
+    w.Make("Child", root);
+    w.Make("Other");
+
+    auto rows = BuildOutlinerRows(w.reg, "beacon", kNoSort, kNoneCollapsed);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].entity == root);
+    CHECK(rows[0].depth == 0);
+    CHECK_FALSE(rows[0].dimmed);
+}
+
 TEST_CASE("RowRange spans visible rows inclusively, either direction", "[editor][outliner]")
 {
     World w;

@@ -398,18 +398,30 @@ namespace Arcane::Editor
     {
         ImGui::Begin("Outliner");
 
-        // A structural undo/redo can destroy the rename target out from
-        // under the InputText; drop the stale target or `renaming` wedges
-        // shut (and F2/Delete with it).
-        if (state.renameTarget.IsValid() && !registry.IsValid(state.renameTarget))
-            state.renameTarget = Astra::Entity::Invalid();
-
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputTextWithHint("##outliner_search", ICON_LC_SEARCH " Filter",
                                  state.search, sizeof(state.search));
 
         const std::vector<OutlinerRow> rows =
             BuildOutlinerRows(registry, state.search, state.sort, state.collapsed);
+
+        // The rename target can stop being drawable two ways: a structural
+        // undo/redo destroys it, or it simply leaves the visible set (its
+        // parent collapsed, or the filter excludes it). Either way no row
+        // draws the InputText, so IsItemDeactivated never fires -- drop the
+        // target or `renaming` wedges shut, taking F2 and Delete with it.
+        if (state.renameTarget.IsValid())
+        {
+            bool hasRow = false;
+            for (const OutlinerRow& r : rows)
+                if (r.entity == state.renameTarget)
+                {
+                    hasRow = true;
+                    break;
+                }
+            if (!hasRow)
+                state.renameTarget = Astra::Entity::Invalid();
+        }
 
         const bool renaming = state.renameTarget.IsValid();
         const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
@@ -545,7 +557,18 @@ namespace Arcane::Editor
                         if (ctrl)
                             sel.Toggle(row.entity);
                         else if (shift && sel.HasSelection())
-                            sel.AddRange(RowRange(rows, sel.Primary(), row.entity), row.entity);
+                        {
+                            // An anchor with no visible row (filtered out, or
+                            // under a collapsed parent) yields an empty range;
+                            // degrade to a plain select rather than moving the
+                            // primary outside the selection.
+                            const std::vector<Astra::Entity> range =
+                                RowRange(rows, sel.Primary(), row.entity);
+                            if (range.empty())
+                                sel.Select(row.entity);
+                            else
+                                sel.AddRange(range, row.entity);
+                        }
                         else
                         {
                             // Slow second click on the sole-selected row = rename.

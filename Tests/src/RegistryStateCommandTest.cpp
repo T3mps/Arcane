@@ -242,4 +242,9 @@ TEST_CASE("failed redo-capture latches: redo stays a warned no-op", "[outliner]"
     CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);
     w.stack.Redo();                                       // still a no-op
     CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);
+
+    // The latch is the point: after the failed capture, no later Undo may
+    // re-invoke the snapshot fn (a retry would capture the already-restored
+    // BEFORE state and make Redo silently "succeed" into a no-change state).
+    CHECK(calls == 2);
 }
