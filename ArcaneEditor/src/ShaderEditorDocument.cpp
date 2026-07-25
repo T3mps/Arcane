@@ -20,6 +20,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -1569,6 +1571,16 @@ namespace Arcane::Editor
             structural = true;
         }
 
+        // F = frame, exactly like the graph canvas.
+        if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput &&
+            ImGui::IsKeyPressed(ImGuiKey_F, false))
+        {
+            if (ed::GetSelectedObjectCount() > 0)
+                ed::NavigateToSelection(true);
+            else
+                ed::NavigateToContent();
+        }
+
         // ---- selection -> edited pass; double-click -> viewed pass. Only on
         // selection CHANGES -- re-asserting every frame would stomp the
         // errors-panel's own pass switching.
@@ -2281,16 +2293,22 @@ namespace Arcane::Editor
     {
         if (!ActiveGraphOwned())
             return;
+        // One context per SHOWN graph: node ids are only unique per graph and
+        // the context keeps per-id state (a Comment's group record re-types
+        // the id), so a pass switch rebuilds the context wholesale -- which
+        // also drops the selection and stale view for free.
+        const bool switchedPass = m_graphShownPass != m_activePass;
+        if (switchedPass && m_graphCtx)
+        {
+            ed::DestroyEditor(m_graphCtx);
+            m_graphCtx = nullptr;
+        }
         if (!m_graphCtx)
         {
             ed::Config cfg;
             cfg.SettingsFile = nullptr;   // layout persists in the .arcmat, not an ini
             m_graphCtx = ed::CreateEditor(&cfg);
         }
-        // ONE context serves every pass's graph: on a pass switch, re-seed
-        // positions from the data (they persist per graph) and drop the
-        // selection + stale badges -- node ids are only unique per graph.
-        const bool switchedPass = m_graphShownPass != m_activePass;
         if (switchedPass)
         {
             m_graphShownPass = m_activePass;
@@ -2309,7 +2327,12 @@ namespace Arcane::Editor
         if (seededThisFrame)
         {
             for (const Arcane::GraphNode& n : g.nodes)
+            {
                 ed::SetNodePosition(n.id, ImVec2(n.posX, n.posY));
+                if (n.type == Arcane::GraphNodeType::Comment)
+                    ed::SetGroupSize(n.id, ImVec2((std::max)(80.0f, n.value[0]),
+                                                  (std::max)(60.0f, n.value[1])));
+            }
             m_graphPositionsApplied = true;
         }
 
@@ -2334,6 +2357,87 @@ namespace Arcane::Editor
             ed::NavigateToSelection(true);
             m_focusNode = 0;
         }
+
+        // F = frame (the UE/SG muscle memory): zoom to the selection, or to
+        // everything when nothing is selected.
+        if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput &&
+            ImGui::IsKeyPressed(ImGuiKey_F, false))
+        {
+            if (ed::GetSelectedObjectCount() > 0)
+                ed::NavigateToSelection(true);
+            else
+                ed::NavigateToContent();
+        }
+
+        // Node context menu -> alignment over the current selection.
+        ed::Suspend();
+        {
+            ed::NodeId ctxNode;
+            if (ed::ShowNodeContextMenu(&ctxNode))
+                ImGui::OpenPopup("##graphnodemenu");
+            if (ImGui::BeginPopup("##graphnodemenu"))
+            {
+                std::vector<ed::NodeId> sel(
+                    static_cast<std::size_t>(std::max(0, ed::GetSelectedObjectCount())));
+                const int count = sel.empty() ? 0
+                    : ed::GetSelectedNodes(sel.data(), static_cast<int>(sel.size()));
+                std::vector<Arcane::GraphNode*> picked;
+                for (int i = 0; i < count; ++i)
+                    if (Arcane::GraphNode* node = g.FindNode(static_cast<std::uint32_t>(
+                            sel[static_cast<std::size_t>(i)].Get())))
+                        picked.push_back(node);
+                const bool can = picked.size() >= 2;
+
+                // One undo step per alignment; positions write BOTH the canvas
+                // and the data, so the later readback sees no delta.
+                auto align = [&](const char* label, auto&& place)
+                {
+                    if (!ImGui::MenuItem(label, nullptr, false, can))
+                        return;
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                    for (Arcane::GraphNode* node : picked)
+                    {
+                        const ImVec2 size = ed::GetNodeSize(ed::NodeId(node->id));
+                        ImVec2 p(node->posX, node->posY);
+                        place(p, size);
+                        node->posX = p.x;
+                        node->posY = p.y;
+                        ed::SetNodePosition(ed::NodeId(node->id), p);
+                    }
+                    m_dirty = true;
+                    PushGraphUndo(label, std::move(before));
+                };
+
+                float minX = FLT_MAX, minY = FLT_MAX, maxR = -FLT_MAX, maxB = -FLT_MAX;
+                float sumCX = 0.0f, sumCY = 0.0f;
+                for (const Arcane::GraphNode* node : picked)
+                {
+                    const ImVec2 size = ed::GetNodeSize(ed::NodeId(node->id));
+                    minX = (std::min)(minX, node->posX);
+                    minY = (std::min)(minY, node->posY);
+                    maxR = (std::max)(maxR, node->posX + size.x);
+                    maxB = (std::max)(maxB, node->posY + size.y);
+                    sumCX += node->posX + size.x * 0.5f;
+                    sumCY += node->posY + size.y * 0.5f;
+                }
+                const float n = picked.empty() ? 1.0f : static_cast<float>(picked.size());
+                const float avgCX = sumCX / n, avgCY = sumCY / n;
+
+                align("Align Left",   [&](ImVec2& p, const ImVec2&)  { p.x = minX; });
+                align("Align Right",  [&](ImVec2& p, const ImVec2& s){ p.x = maxR - s.x; });
+                align("Align Top",    [&](ImVec2& p, const ImVec2&)  { p.y = minY; });
+                align("Align Bottom", [&](ImVec2& p, const ImVec2& s){ p.y = maxB - s.y; });
+                align("Center Column",[&](ImVec2& p, const ImVec2& s){ p.x = avgCX - s.x * 0.5f; });
+                align("Center Row",   [&](ImVec2& p, const ImVec2& s){ p.y = avgCY - s.y * 0.5f; });
+                if (!can)
+                {
+                    ImGui::Separator();
+                    ImGui::TextDisabled("select 2+ nodes to align");
+                }
+                ImGui::EndPopup();
+            }
+        }
+        ed::Resume();
 
         // Background context menu -> create node (Suspend: popups live in
         // normal ImGui space, not canvas space).
@@ -2501,6 +2605,13 @@ namespace Arcane::Editor
                     n.customBody = "return float4(1.0, 0.0, 1.0, 1.0);";
                     n.customOutWidth = 4;
                 }
+                if (info.type == Arcane::GraphNodeType::Comment)
+                {
+                    n.paramName = "Comment";
+                    n.value[0] = 280.0f;   // starter box size
+                    n.value[1] = 160.0f;
+                    ed::SetGroupSize(n.id, ImVec2(n.value[0], n.value[1]));
+                }
                 const ImVec2 canvasPos =
                     ed::ScreenToCanvas(ImVec2(m_graphPopupX, m_graphPopupY));
                 n.posX = canvasPos.x;
@@ -2566,6 +2677,52 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::DrawGraphNode(Arcane::GraphNode& n)
     {
+        if (n.type == Arcane::GraphNodeType::Comment)
+        {
+            // Comment/group box (UE comment, SG group): the editor's NATIVE
+            // group node, so dragging the box carries contained nodes. The
+            // size persists exactly: ed::Group records its bounds from the
+            // Dummy it draws, so GetItemRectSize right after IS the live
+            // (possibly user-resized) box.
+            ed::BeginNode(ed::NodeId(n.id));
+            ImGui::PushID(static_cast<int>(n.id));
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%s", n.paramName.c_str());
+            if (m_nameEditNode == n.id)
+                std::memcpy(buf, m_nameBuf, sizeof(buf));
+            ImGui::SetNextItemWidth((std::max)(120.0f, n.value[0] - 16.0f));
+            ImGui::InputText("##ctitle", buf, sizeof(buf));
+            if (ImGui::IsItemActive())
+            {
+                m_nameEditNode = n.id;
+                std::memcpy(m_nameBuf, buf, sizeof(m_nameBuf));
+            }
+            else if (m_nameEditNode == n.id)
+            {
+                const bool commit = ImGui::IsItemDeactivatedAfterEdit();
+                m_nameEditNode = 0;
+                if (commit && n.paramName != m_nameBuf)
+                {
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                    n.paramName = m_nameBuf;
+                    m_dirty = true;   // annotation only -- no recompile
+                    PushGraphUndo("Edit Comment", std::move(before));
+                }
+            }
+            ed::Group(ImVec2((std::max)(80.0f, n.value[0]),
+                             (std::max)(60.0f, n.value[1])));
+            const ImVec2 gs = ImGui::GetItemRectSize();
+            if (std::abs(gs.x - n.value[0]) > 0.5f || std::abs(gs.y - n.value[1]) > 0.5f)
+            {
+                n.value[0] = gs.x;
+                n.value[1] = gs.y;
+                m_dirty = true;   // resize has move standing (dirty, no undo step)
+            }
+            ImGui::PopID();
+            ed::EndNode();
+            return;
+        }
+
         const Arcane::GraphNodeTypeInfo& info = Arcane::GraphNodeInfo(n.type);
         ed::BeginNode(ed::NodeId(n.id));
         ImGui::PushID(static_cast<int>(n.id));

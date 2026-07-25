@@ -96,6 +96,10 @@ namespace Arcane
                         // only). Absent/unconnected = passthrough. Nodes that
                         // sample textures (or need pixel-snippet helpers) are
                         // barred from this walk.
+        Comment,        // annotation group box (UE comment / SG group): no
+                        // pins, emits nothing -- pure canvas furniture that
+                        // drags contained nodes. paramName holds the title,
+                        // value[0]/value[1] the box size.
     };
 
     // One pin on a node type. `width` = component count of the value flowing
@@ -156,6 +160,7 @@ namespace Arcane
 
         // Param / TextureSample: the //@param this node declares. All nodes with
         // the same name share ONE declaration; codegen rejects conflicting types.
+        // (Comment reuses this field as the box TITLE.)
         // RENAME WART (documented, SG-parity): instance overrides key on the
         // param NAME -- renaming a param orphans existing .arcmat instance
         // overrides exactly like Unity's reference-name rename. MVP accepts

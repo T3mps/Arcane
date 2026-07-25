@@ -87,13 +87,14 @@ namespace Arcane
             { GraphNodeType::SimpleNoise,   "simple_noise",   "Simple Noise",   Pins(kNoiseIn),  Pins(kOut1)       },
             { GraphNodeType::PassInput,     "pass_input",     "Pass Input",     Pins(kUvIn),     Pins(kSampleOut)  },
             { GraphNodeType::VertexOutput,  "vertex_output",  "Vertex Output",  Pins(kVertexOutIn), NoPins()        },
+            { GraphNodeType::Comment,       "comment",        "Comment",        NoPins(),        NoPins()          },
         };
     }
 
     const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept
     {
         const auto i = static_cast<std::size_t>(t);
-        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::VertexOutput) + 1,
+        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Comment) + 1,
                       "kNodeInfos must cover every GraphNodeType");
         return kNodeInfos[i < std::size(kNodeInfos) ? i : 0];
     }
@@ -1049,6 +1050,12 @@ namespace Arcane
                 case GraphNodeType::PassInput:
                     e["slot"] = n->passInputSlot;
                     break;
+                case GraphNodeType::Comment:
+                    e["comment"] = nlohmann::json{
+                        { "text", n->paramName },
+                        { "size", nlohmann::json::array({ n->value[0], n->value[1] }) },
+                    };
+                    break;
                 case GraphNodeType::Custom:
                 {
                     nlohmann::json c;
@@ -1149,6 +1156,18 @@ namespace Arcane
                 n.swizzleMask = e["mask"].get<std::string>();
             if (e.contains("slot") && e["slot"].is_number_unsigned())
                 n.passInputSlot = e["slot"].get<std::uint32_t>();
+            if (e.contains("comment") && e["comment"].is_object())
+            {
+                const nlohmann::json& c = e["comment"];
+                if (c.contains("text") && c["text"].is_string())
+                    n.paramName = c["text"].get<std::string>();
+                if (c.contains("size") && c["size"].is_array() && c["size"].size() == 2 &&
+                    c["size"][0].is_number() && c["size"][1].is_number())
+                {
+                    n.value[0] = c["size"][0].get<float>();
+                    n.value[1] = c["size"][1].get<float>();
+                }
+            }
             if (e.contains("custom") && e["custom"].is_object())
             {
                 const nlohmann::json& c = e["custom"];

@@ -71,7 +71,7 @@ namespace
 TEST_CASE("Graph node table covers every type with round-tripping tokens", "[material]")
 {
     const auto infos = AllGraphNodeInfos();
-    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::VertexOutput) + 1);
+    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Comment) + 1);
     for (const GraphNodeTypeInfo& info : infos)
     {
         CHECK(GraphNodeInfo(info.type).token == info.token);
@@ -99,6 +99,45 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
     CHECK(GraphNodeInfo(GraphNodeType::SimpleNoise).outputs[0].width == 1);
     CHECK(GraphNodeInfo(GraphNodeType::PassInput).inputs.size() == 1);     // uv
     CHECK(GraphNodeInfo(GraphNodeType::PassInput).outputs.size() == 2);    // rgba + a
+    CHECK(GraphNodeInfo(GraphNodeType::Comment).inputs.empty());           // furniture
+    CHECK(GraphNodeInfo(GraphNodeType::Comment).outputs.empty());
+}
+
+TEST_CASE("Comment nodes are canvas furniture: ignored by codegen, round-trip",
+          "[material]")
+{
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    GraphNode c2 = Node(2, GraphNodeType::ConstFloat);
+    c2.value[0] = 0.5f;
+    g.nodes.push_back(c2);
+    g.links.push_back(Link(2, 0, 1, 0));
+    GraphNode note = Node(3, GraphNodeType::Comment);
+    note.paramName = "the base color block";
+    note.value[0] = 280.0f;
+    note.value[1] = 160.0f;
+    g.nodes.push_back(note);
+
+    // Codegen: identical output with or without the comment.
+    const GraphCodegenResult with = GenerateGraphSnippet(g);
+    REQUIRE(with.Ok());
+    CHECK(with.snippet.find("comment") == std::string::npos);
+    CHECK(with.snippet.find("_n3") == std::string::npos);
+    MaterialGraph bare = g;
+    std::erase_if(bare.nodes, [](const GraphNode& n)
+                  { return n.type == GraphNodeType::Comment; });
+    CHECK(GenerateGraphSnippet(bare).snippet == with.snippet);
+
+    // Round-trip keeps title + size; node previews skip it.
+    const auto back = GraphFromJson(GraphToJson(g));
+    REQUIRE(back.has_value());
+    const GraphNode* rt = back->FindNode(3);
+    REQUIRE(rt != nullptr);
+    CHECK(rt->type == GraphNodeType::Comment);
+    CHECK(rt->paramName == "the base color block");
+    CHECK(rt->value[0] == 280.0f);
+    CHECK(rt->value[1] == 160.0f);
+    CHECK_FALSE(GenerateNodePreviewSnippet(g, 3).Ok());
 }
 
 TEST_CASE("Codegen: the Vertex Output context emits displace()", "[material]")
