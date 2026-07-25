@@ -12,6 +12,11 @@
 // registry object -- the CommandStack's resolve-every-call design already
 // survives that, see CommandStack's ctor contract); tests bind
 // Registry::Save / Registry::Load over a local slot.
+// OPEN (slice 2 decides): with a game plugin hosting native state (physics
+// worlds, cached handles), raw registry restore leaves that state
+// unreconciled -- the editor binding must either route through the plugin
+// SaveState/LoadState seam (as PlaySession does) or add a post-restore
+// reconcile hook.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Edit/Command.hpp>
@@ -34,7 +39,10 @@ namespace Arcane
     class ARCANE_API RegistryStateCommand final : public ICommand
     {
     public:
-        using SnapshotFn = std::function<std::vector<std::byte>()>;       // empty = failed
+        // empty = failed; unambiguous, since a successful Registry::Save
+        // always writes a header, so a real snapshot is never zero bytes
+        // (even for an empty registry).
+        using SnapshotFn = std::function<std::vector<std::byte>()>;
         using RestoreFn  = std::function<bool(std::span<const std::byte>)>;
 
         // `before` is the registry state BEFORE the (already applied) edit.
@@ -62,6 +70,8 @@ namespace Arcane
     // The one structural-edit entry point: snapshot -> mutate() -> push.
     // Refuses (false, nothing runs) when the before-snapshot fails -- a
     // structural edit without undo coverage must not happen silently.
+    // Also refuses (false, mutate() never runs) when `stack` has an open
+    // transaction -- see CommandStack::InTransaction.
     // Skips the push (edit stands, no undo step) when mutate() reports no
     // change, so no-op edits never pollute the history. Returns mutate()'s
     // result.

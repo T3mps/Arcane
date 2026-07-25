@@ -49,6 +49,10 @@ namespace
     };
 }
 
+// Regression guard for the SceneSerializer zero-field-component save fix
+// (commit d0142324): EntityInfo/Hidden are the zero/near-zero-field
+// components that exposed the bug. If this test is ever rewritten, that
+// coverage must move with it, not vanish.
 TEST_CASE("EntityInfo + Hidden round-trip scene JSON", "[outliner][json]")
 {
     const Arcane::Guid stableId = Arcane::Guid::Generate();

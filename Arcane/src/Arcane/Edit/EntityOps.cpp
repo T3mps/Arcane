@@ -4,7 +4,6 @@
 
 #include <Astra/Registry/Registry.hpp>
 
-#include <algorithm>
 #include <new>
 #include <unordered_set>
 #include <vector>
@@ -75,6 +74,8 @@ namespace Arcane::Edit
         // survivors is preserved regardless of set nesting.
         for (Astra::Entity e : doomed)
         {
+            if (!reg.IsValid(e))
+                continue;   // stale selection entry: nothing to splice
             Astra::Entity heir = reg.GetParent(e);
             while (heir.IsValid() && doomed.contains(heir))
                 heir = reg.GetParent(heir);
@@ -89,9 +90,14 @@ namespace Arcane::Edit
             }
         }
 
+        // Dead entities in `set` no-op here rather than count: an honest
+        // count keeps ApplyRegistryMutation's count>0 push idiom from
+        // pushing a no-op memento (an undo step that reverts nothing).
         std::size_t destroyed = 0;
         for (Astra::Entity e : doomed)
         {
+            if (!reg.IsValid(e))
+                continue;
             reg.DestroyEntity(e);
             ++destroyed;
         }
@@ -110,6 +116,8 @@ namespace Arcane::Edit
         std::size_t moved = 0;
         for (Astra::Entity e : set)
         {
+            if (!reg.IsValid(e))
+                continue;   // stale selection entry: not moved, not counted
             if (reg.GetParent(e) == parent || e == parent)
                 continue;
             if (parent.IsValid())
@@ -124,6 +132,9 @@ namespace Arcane::Edit
     std::size_t SetHiddenRecursive(Astra::Registry& reg, Astra::Entity e,
                                    bool hidden)
     {
+        if (!reg.IsValid(e))
+            return 0;   // dead root: descendants come from the live graph,
+                        // so a dead root has none to walk
         std::vector<Astra::Entity> subtree;
         CollectSubtree(reg, e, subtree);
         std::size_t changed = 0;
@@ -173,10 +184,10 @@ namespace Arcane::Edit
                 continue;
             void* buf = ::operator new(bytes, align);
             desc.DefaultConstruct(buf);
-            reg.AddComponentByID(e, desc.id, buf, desc.size);
+            if (reg.AddComponentByID(e, desc.id, buf, desc.size))
+                ++touched;
             desc.Destruct(buf);
             ::operator delete(buf, align);
-            ++touched;
         }
         return touched;
     }

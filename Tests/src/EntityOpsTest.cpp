@@ -163,3 +163,62 @@ TEST_CASE("Add/RemoveComponent by descriptor over a set", "[outliner]")
     CHECK(Edit::RemoveComponent(w.reg, set, *desc) == 2);
     CHECK(w.reg.GetComponent<SpriteRenderer>(a) == nullptr);
 }
+
+TEST_CASE("Dead entities in a set no-op and don't inflate the returned count",
+          "[outliner]")
+{
+    // A stale selection (the Outliner's future use case) can carry an
+    // entity that died between selection and the op running. Every op
+    // must treat it as absent, not count it as touched.
+    World w;
+
+    // (a) DeleteEntities: an already-destroyed entity in the set is not
+    // recounted as destroyed.
+    {
+        Astra::Entity live = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        Astra::Entity dead = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        w.reg.DestroyEntity(dead);
+        const std::array<Astra::Entity, 2> set{ live, dead };
+        CHECK(Edit::DeleteEntities(w.reg, set) == 1);
+        CHECK(!w.reg.IsValid(live));
+    }
+
+    // (b) DeleteEntities: a duplicate LIVE entity counts once -- the
+    // header's documented "duplicates tolerated" contract.
+    {
+        Astra::Entity live = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        const std::array<Astra::Entity, 2> set{ live, live };
+        CHECK(Edit::DeleteEntities(w.reg, set) == 1);
+    }
+
+    // (c) Reparent and AddComponent: a dead entity in the set is excluded
+    // from both the moved/touched count and the effect.
+    {
+        Astra::Entity parent = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        Astra::Entity live   = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        Astra::Entity dead   = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        w.reg.DestroyEntity(dead);
+        const std::array<Astra::Entity, 2> set{ live, dead };
+
+        CHECK(Edit::Reparent(w.reg, set, parent) == 1);
+        CHECK(w.reg.GetParent(live) == parent);
+
+        Astra::Entity spriteHost = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        w.reg.AddComponent<SpriteRenderer>(spriteHost, SpriteRenderer{});
+        const Astra::ComponentDescriptor* desc = nullptr;
+        for (const Astra::Registry::ComponentInfo& ci : w.reg.InspectEntity(spriteHost))
+            if (ci.meta && ci.meta->typeName == "Arcane::SpriteRenderer")
+                desc = ci.descriptor;
+        REQUIRE(desc != nullptr);
+
+        CHECK(Edit::AddComponent(w.reg, set, *desc) == 1);   // only `live` touched
+        CHECK(w.reg.GetComponent<SpriteRenderer>(live) != nullptr);
+    }
+
+    // (d) SetHiddenRecursive on a destroyed root returns 0.
+    {
+        Astra::Entity dead = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        w.reg.DestroyEntity(dead);
+        CHECK(Edit::SetHiddenRecursive(w.reg, dead, true) == 0);
+    }
+}

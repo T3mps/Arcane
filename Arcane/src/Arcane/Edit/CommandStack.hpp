@@ -61,6 +61,10 @@ namespace Arcane
         void Redo();
         [[nodiscard]] bool CanUndo() const noexcept { return !m_undo.empty(); }
         [[nodiscard]] bool CanRedo() const noexcept { return !m_redo.empty(); }
+        // Structural mementos refuse to run inside an open gesture (Cancel
+        // would discard their undo coverage without reverting the edit --
+        // see ApplyRegistryMutation).
+        [[nodiscard]] bool InTransaction() const noexcept { return m_open; }
         [[nodiscard]] const char* UndoLabel() const noexcept;
         [[nodiscard]] const char* RedoLabel() const noexcept;
         void Clear() noexcept;

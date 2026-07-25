@@ -50,6 +50,16 @@ namespace Arcane
                                const RegistryStateCommand::RestoreFn& restore,
                                FunctionRef<bool()> mutate)
     {
+        // A structural memento pushed while a gesture is open would ride
+        // Cancel()'s discard-without-revert path, stranding the (already
+        // applied) edit with no undo coverage. Refuse before mutate() runs.
+        if (stack.InTransaction())
+        {
+            ARC_WARN("'{}': structural edit inside an open undo gesture "
+                     "refused -- Cancel would strand it without undo "
+                     "coverage", label);
+            return false;
+        }
         std::vector<std::byte> before = snapshot();
         if (before.empty())
         {

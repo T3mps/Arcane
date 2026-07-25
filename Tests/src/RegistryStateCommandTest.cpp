@@ -149,6 +149,26 @@ TEST_CASE("failed before-snapshot refuses the whole edit", "[outliner]")
     CHECK_FALSE(w.stack.CanUndo());
 }
 
+TEST_CASE("ApplyRegistryMutation refuses inside an open transaction", "[outliner]")
+{
+    // CommandStack::Push joins an open transaction, and Cancel() discards
+    // pending commands WITHOUT reverting them -- so a structural memento
+    // pushed mid-gesture would leave an already-applied edit stranded with
+    // no undo coverage if the gesture is later cancelled. Refuse up front.
+    World w;
+    Astra::Entity a = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
+
+    w.stack.Begin("gesture");
+    REQUIRE(w.stack.InTransaction());
+
+    CHECK_FALSE(ApplyRegistryMutation(w.stack, "Hide", w.Snapshot(), w.Restore(),
+        [&] { return Edit::SetHiddenRecursive(*w.reg, a, true) > 0; }));
+    CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);   // mutate() never ran
+
+    w.stack.Cancel();
+    CHECK_FALSE(w.stack.CanUndo());
+}
+
 TEST_CASE("every structural op round-trips through the memento", "[outliner]")
 {
     // Hide, rename, and add-component all ride the SAME memento path --
