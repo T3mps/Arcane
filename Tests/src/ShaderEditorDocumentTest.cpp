@@ -387,6 +387,58 @@ TEST_CASE("PatchParamRename re-keys saved params with the merge rule",
     }
 }
 
+TEST_CASE("A base-only scene-reading material compiles through the chain path",
+          "[editor][material][shadercompile]")
+{
+    // The common POST material: no extra passes, the base reads the Scene.
+    // ChainMode must cover it (post-mode chain build, InputTexture bound),
+    // and both stage jobs must route home.
+    const fs::path dir = TempDir("postbase");
+    const fs::path file = dir / "grade.arcmat";
+
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.name = "Grade";
+    data.snippet = "float4 shade(Varyings v)\n"
+                   "{ return 1.0 - InputTexture.Sample(MaterialSampler, v.uv); }\n";
+    data.baseInputs = { Arcane::kSceneInput };
+    REQUIRE(Arcane::SaveMaterialAsset(file, data));
+
+    Arcane::ShaderCompiler compiler;
+    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    Arcane::ShaderSourceProvider sources;
+    sources.AddRoot("shaders");
+
+    DocServices services;
+    services.compiler = &compiler;
+    services.sources = &sources;
+
+    const auto loaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->baseInputs.size() == 1);
+    ShaderEditorDocument doc(services, file, *loaded);
+    REQUIRE(doc.ParseErrors().empty());   // post-mode build accepted the scene read
+
+    std::vector<Arcane::ShaderCompileResult> results;
+    for (int i = 0; i < 2000 && results.size() < 2; ++i)
+    {
+        compiler.Poll(/*now=*/0.0);
+        auto batch = compiler.Drain();
+        results.insert(results.end(), std::make_move_iterator(batch.begin()),
+                       std::make_move_iterator(batch.end()));
+        if (results.size() < 2)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(results.size() == 2);
+    for (Arcane::ShaderCompileResult& r : results)
+    {
+        INFO("post stage result " << r.debugName);
+        CHECK(r.AllSucceeded());
+        CHECK(doc.ConsumeResult(r));
+    }
+    compiler.Shutdown();
+}
+
 TEST_CASE("ApplyPassListState swaps the pass list, clamps selection, dirties",
           "[editor][material]")
 {

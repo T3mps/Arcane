@@ -108,6 +108,7 @@ namespace Arcane::Editor
         // Pass-canvas fixed ids (chain index c = node id c+1; these sit far
         // above any realistic pass count).
         constexpr std::uint32_t kPassOutputNodeId = 900000;
+        constexpr std::uint32_t kPassSceneNodeId  = 900001;   // the Scene source
         constexpr std::uint32_t kPassOutputLinkId = 800000;
 
         // Pin id encoding: node id * 1000 + slot band. Inputs at +1.., outputs
@@ -444,12 +445,16 @@ namespace Arcane::Editor
         {
             std::vector<Arcane::MaterialChainPassDesc> descs;
             descs.reserve(1 + m_data.passes.size());
-            descs.push_back({ m_snippet, {} });
+            descs.push_back({ m_snippet, m_data.baseInputs });
             for (const Arcane::MaterialPass& p : m_data.passes)
                 descs.push_back({ p.snippet, p.inputs });
 
+            // The editor ALWAYS builds in post mode: scene reads must author
+            // and preview here (the stand-in feeds them); only a non-post
+            // RUNTIME consumer refuses them.
             Arcane::MaterialChainBuildResult build = Arcane::BuildMaterialChainSource(
-                *templateText, descs, m_title, m_data.vertexSnippet);
+                *templateText, descs, m_title, m_data.vertexSnippet,
+                /*externalInput=*/true);
             m_passInputs = std::move(build.passInputs);
             m_chainInputSlots = build.chainInputSlots;
             m_vsLineOffset = 0;
@@ -984,7 +989,8 @@ namespace Arcane::Editor
                     const std::size_t view =
                         m_viewPass < 0 ? static_cast<std::size_t>(-1)
                                        : static_cast<std::size_t>(m_viewPass);
-                    m_chain->Render(cl, fb, *m_instance, globals, assets, view);
+                    m_chain->Render(cl, fb, *m_instance, globals, assets, view,
+                                    SceneStandIn());
                 }
                 else
                     m_pass->Render(cl, fb, *m_instance, globals, assets);
@@ -1115,7 +1121,9 @@ namespace Arcane::Editor
         // preview under the switched surface without touching the base.
         // Pass chains are fullscreen-only: the selector LOCKS while extra
         // passes exist (no refusal path can lose data).
-        const bool surfaceLocked = !IsInstance() && !m_data.passes.empty();
+        const bool surfaceLocked =
+            !IsInstance() &&
+            (!m_data.passes.empty() || !m_data.baseInputs.empty());
         if (surfaceLocked)
             ImGui::BeginDisabled();
         int surface = m_surface;
@@ -1287,7 +1295,8 @@ namespace Arcane::Editor
                     continue;
                 bool ready = true;
                 for (std::uint32_t in : m_data.passes[c - 1].inputs)
-                    ready = ready && in <= n && placed[in];
+                    ready = ready &&
+                            (in == Arcane::kSceneInput || (in <= n && placed[in]));
                 if (!ready)
                     continue;
                 placed[c] = true;
@@ -1307,7 +1316,8 @@ namespace Arcane::Editor
             sorted.push_back(std::move(m_data.passes[old - 1]));
         for (Arcane::MaterialPass& p : sorted)
             for (std::uint32_t& in : p.inputs)
-                in = remap[in];
+                if (in != Arcane::kSceneInput)   // the scene is not a pass
+                    in = remap[in];
         m_data.passes = std::move(sorted);
         if (m_activePass > 0 && m_activePass <= static_cast<int>(n))
             m_activePass = static_cast<int>(remap[static_cast<std::uint32_t>(m_activePass)]);
@@ -1357,12 +1367,21 @@ namespace Arcane::Editor
                 m_data.chainOutX = 40.0f + 190.0f * static_cast<float>(total);
                 m_data.chainOutY = 40.0f;
             }
+            // The Scene source sits left of the base by default (also heals
+            // pre-scene files whose chainPos lacks it).
+            if (m_data.chainSceneX == 0.0f && m_data.chainSceneY == 0.0f)
+            {
+                m_data.chainSceneX = m_data.chainBaseX - 170.0f;
+                m_data.chainSceneY = m_data.chainBaseY + 90.0f;
+            }
             ed::SetNodePosition(nodeOf(0), ImVec2(m_data.chainBaseX, m_data.chainBaseY));
             for (std::size_t k = 0; k < m_data.passes.size(); ++k)
                 ed::SetNodePosition(nodeOf(k + 1),
                                     ImVec2(m_data.passes[k].posX, m_data.passes[k].posY));
             ed::SetNodePosition(kPassOutputNodeId,
                                 ImVec2(m_data.chainOutX, m_data.chainOutY));
+            ed::SetNodePosition(kPassSceneNodeId,
+                                ImVec2(m_data.chainSceneX, m_data.chainSceneY));
             m_passCanvasSeeded = true;
         }
 
@@ -1417,25 +1436,25 @@ namespace Arcane::Editor
                 }
             }
 
-            // Input pins: one per wired slot + a spare that accepts a new wire.
-            const std::size_t inputCount =
-                c >= 1 ? m_data.passes[c - 1].inputs.size() : 0;
-            if (c >= 1)
+            // Input pins: one per wired slot + a spare that accepts a new
+            // wire. The BASE has pins too -- its slots are its scene inputs
+            // (the base may read ONLY the Scene source; enforced at connect).
+            const std::vector<std::uint32_t>& nodeInputs =
+                c >= 1 ? m_data.passes[c - 1].inputs : m_data.baseInputs;
+            for (std::size_t s = 0; s < nodeInputs.size(); ++s)
             {
-                for (std::size_t s = 0; s < inputCount; ++s)
-                {
-                    ed::BeginPin(InPin(nodeId, static_cast<std::uint32_t>(s)),
-                                 ed::PinKind::Input);
-                    ImGui::Text("-> in%zu", s);
-                    ed::EndPin();
-                }
-                if (inputCount < Arcane::kMaxPassInputs)
-                {
-                    ed::BeginPin(InPin(nodeId, static_cast<std::uint32_t>(inputCount)),
-                                 ed::PinKind::Input);
-                    ImGui::TextDisabled("-> +");
-                    ed::EndPin();
-                }
+                ed::BeginPin(InPin(nodeId, static_cast<std::uint32_t>(s)),
+                             ed::PinKind::Input);
+                ImGui::Text("-> in%zu", s);
+                ed::EndPin();
+            }
+            if (nodeInputs.size() < Arcane::kMaxPassInputs)
+            {
+                ed::BeginPin(InPin(nodeId,
+                                   static_cast<std::uint32_t>(nodeInputs.size())),
+                             ed::PinKind::Input);
+                ImGui::TextDisabled("-> +");
+                ed::EndPin();
             }
 
             // Live thumbnail: the pass's own intermediate (chain mode; LINEAR,
@@ -1458,6 +1477,19 @@ namespace Arcane::Editor
             ed::EndNode();
         }
 
+        // The Scene source: the EXTERNAL scene color (bound by the runtime
+        // post hook; the checkerboard stand-in in the preview). Output pin
+        // only; wiring it writes the kSceneInput sentinel.
+        ed::BeginNode(ed::NodeId(kPassSceneNodeId));
+        ImGui::TextUnformatted("Scene");
+        if (nvrhi::ITexture* standIn = SceneStandIn())
+            ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(standIn)),
+                         ImVec2(72.0f, 72.0f));
+        ed::BeginPin(OutPin(kPassSceneNodeId, 0), ed::PinKind::Output);
+        ImGui::TextUnformatted("scene ->");
+        ed::EndPin();
+        ed::EndNode();
+
         // The Output node: shows the final image; its wire marks the LAST pass
         // (execution order's tail = what single-material consumers see).
         ed::BeginNode(ed::NodeId(kPassOutputNodeId));
@@ -1470,18 +1502,25 @@ namespace Arcane::Editor
                          ImVec2(72.0f, 72.0f));
         ed::EndNode();
 
-        // ---- links (derived from the data each frame; ids = list index + 1)
+        // ---- links (derived from the data each frame; ids = list index + 1).
+        // Sentinel entries draw from the Scene source; the base (c == 0) only
+        // ever has those.
         std::vector<std::pair<std::uint32_t, std::uint32_t>> linkSlots;   // consumer, slot
-        for (std::size_t c = 1; c < total; ++c)
-            for (std::size_t s = 0; s < m_data.passes[c - 1].inputs.size(); ++s)
+        for (std::size_t c = 0; c < total; ++c)
+        {
+            const std::vector<std::uint32_t>& ins =
+                c >= 1 ? m_data.passes[c - 1].inputs : m_data.baseInputs;
+            for (std::size_t s = 0; s < ins.size(); ++s)
             {
-                const std::uint32_t src = m_data.passes[c - 1].inputs[s];
+                const std::uint32_t src = ins[s];
                 linkSlots.emplace_back(static_cast<std::uint32_t>(c),
                                        static_cast<std::uint32_t>(s));
                 ed::Link(ed::LinkId(linkSlots.size()),
-                         OutPin(nodeOf(src), 0),
+                         src == Arcane::kSceneInput ? OutPin(kPassSceneNodeId, 0)
+                                                    : OutPin(nodeOf(src), 0),
                          InPin(nodeOf(c), static_cast<std::uint32_t>(s)));
             }
+        }
         ed::Link(ed::LinkId(kPassOutputLinkId), OutPin(nodeOf(total - 1), 0),
                  InPin(kPassOutputNodeId, 0));
 
@@ -1507,19 +1546,24 @@ namespace Arcane::Editor
                 const DecodedPin b = DecodePin(bId);
                 const DecodedPin& out = a.isInput ? b : a;
                 const DecodedPin& in = a.isInput ? a : b;
+                const bool sceneSource = out.node == kPassSceneNodeId;
                 bool valid = a.valid && b.valid && a.isInput != b.isInput &&
                              out.node != kPassOutputNodeId &&
-                             out.node >= 1 && out.node <= total;
-                const std::uint32_t source = out.node - 1;
+                             (sceneSource ||
+                              (out.node >= 1 && out.node <= total));
+                const std::uint32_t source =
+                    sceneSource ? Arcane::kSceneInput : out.node - 1;
                 if (valid && in.node == kPassOutputNodeId)
                 {
                     // Make `source` the final pass: legal only when nothing
-                    // reads it (a consumer must execute after it).
+                    // reads it (a consumer must execute after it). The Scene
+                    // is a source, never the final image.
                     bool hasDependent = false;
                     for (const Arcane::MaterialPass& p : m_data.passes)
                         for (std::uint32_t pin : p.inputs)
                             hasDependent = hasDependent || pin == source;
-                    if (source == 0 || source == total - 1 || hasDependent)
+                    if (sceneSource || source == 0 || source == total - 1 ||
+                        hasDependent)
                         ed::RejectNewItem();
                     else if (ed::AcceptNewItem())
                     {
@@ -1531,9 +1575,13 @@ namespace Arcane::Editor
                         m_data.passes.push_back(std::move(moved));
                         for (Arcane::MaterialPass& p : m_data.passes)
                             for (std::uint32_t& pin : p.inputs)
+                            {
+                                if (pin == Arcane::kSceneInput)
+                                    continue;   // the scene is not a pass
                                 pin = pin == source
                                           ? static_cast<std::uint32_t>(total - 1)
                                           : pin > source ? pin - 1 : pin;
+                            }
                         if (m_activePass == static_cast<int>(source))
                             m_activePass = static_cast<int>(total - 1);
                         else if (m_activePass > static_cast<int>(source))
@@ -1544,18 +1592,30 @@ namespace Arcane::Editor
                 }
                 else
                 {
+                    // The BASE (in.node == 1) accepts ONLY the Scene source;
+                    // scene wires skip the cycle check (the scene is external,
+                    // it cannot depend on any pass).
                     const std::uint32_t consumer = in.node - 1;
-                    valid = valid && in.node >= 2 && in.node <= total &&
-                            in.pin <= m_data.passes[consumer - 1].inputs.size() &&
-                            in.pin < Arcane::kMaxPassInputs &&
-                            !PassWireWouldCycle(source, consumer);
+                    valid = valid && in.node >= 1 && in.node <= total &&
+                            (consumer > 0 || sceneSource);
+                    if (valid)
+                    {
+                        const std::vector<std::uint32_t>& ins =
+                            consumer == 0 ? m_data.baseInputs
+                                          : m_data.passes[consumer - 1].inputs;
+                        valid = in.pin <= ins.size() &&
+                                in.pin < Arcane::kMaxPassInputs &&
+                                (sceneSource ||
+                                 !PassWireWouldCycle(source, consumer));
+                    }
                     if (!valid)
                         ed::RejectNewItem();
                     else if (ed::AcceptNewItem())
                     {
                         capturePassBefore("Wire Pass");
                         std::vector<std::uint32_t>& ins =
-                            m_data.passes[consumer - 1].inputs;
+                            consumer == 0 ? m_data.baseInputs
+                                          : m_data.passes[consumer - 1].inputs;
                         if (in.pin < ins.size())
                             ins[in.pin] = source;   // silent replace
                         else
@@ -1605,7 +1665,9 @@ namespace Arcane::Editor
             std::sort(unwire.rbegin(), unwire.rend());
             for (const auto& [consumer, slot] : unwire)
             {
-                std::vector<std::uint32_t>& ins = m_data.passes[consumer - 1].inputs;
+                std::vector<std::uint32_t>& ins =
+                    consumer == 0 ? m_data.baseInputs
+                                  : m_data.passes[consumer - 1].inputs;
                 if (slot < ins.size())
                     ins.erase(ins.begin() + slot);
             }
@@ -1618,7 +1680,7 @@ namespace Arcane::Editor
                 {
                     std::erase(p.inputs, r);
                     for (std::uint32_t& in : p.inputs)
-                        if (in > r)
+                        if (in != Arcane::kSceneInput && in > r)
                             --in;
                 }
                 if (m_activePass >= static_cast<int>(r))
@@ -1693,6 +1755,11 @@ namespace Arcane::Editor
                     if (ImGui::MenuItem("View Final"))
                         m_viewPass = -1;
                 }
+                else if (id == kPassSceneNodeId)
+                {
+                    ImGui::TextDisabled("the scene color (bound by the runtime "
+                                        "post hook; checkerboard here)");
+                }
                 else if (id >= 1 && id <= total)
                 {
                     if (ImGui::MenuItem("View This Pass"))
@@ -1707,7 +1774,7 @@ namespace Arcane::Editor
                         {
                             std::erase(p.inputs, r);
                             for (std::uint32_t& in : p.inputs)
-                                if (in > r)
+                                if (in != Arcane::kSceneInput && in > r)
                                     --in;
                         }
                         if (m_activePass >= static_cast<int>(r))
@@ -1780,6 +1847,7 @@ namespace Arcane::Editor
             for (std::size_t k = 0; k < m_data.passes.size(); ++k)
                 readback(nodeOf(k + 1), m_data.passes[k].posX, m_data.passes[k].posY);
             readback(kPassOutputNodeId, m_data.chainOutX, m_data.chainOutY);
+            readback(kPassSceneNodeId, m_data.chainSceneX, m_data.chainSceneY);
         }
 
         ed::End();
@@ -2012,13 +2080,14 @@ namespace Arcane::Editor
             std::optional<Arcane::MaterialGraph>& g = GraphOptAt(c);
             if (!g)
                 continue;
-            // The pass context: PassInput nodes may only read slots the pass
-            // canvas actually wired (the base has none).
-            const std::uint32_t avail =
-                c == 0 ? 0u
-                       : static_cast<std::uint32_t>(m_data.passes[c - 1].inputs.size());
-            Arcane::GraphCodegenResult r =
-                Arcane::GenerateGraphSnippet(*g, SurfaceOf(m_surface), avail);
+            // The wired-slot context: PassInput nodes may only read slots the
+            // pass canvas actually wired (the base's slots are its scene
+            // inputs).
+            const std::uint32_t avail = static_cast<std::uint32_t>(
+                c == 0 ? m_data.baseInputs.size()
+                       : m_data.passes[c - 1].inputs.size());
+            Arcane::GraphCodegenResult r = Arcane::GenerateGraphSnippet(
+                *g, SurfaceOf(m_surface), avail, /*passGraph=*/c > 0);
             if (!r.Ok())
             {
                 m_passGraphErrors[c] = std::move(r.errors);
@@ -2240,7 +2309,7 @@ namespace Arcane::Editor
 
     ShaderEditorDocument::PassListState ShaderEditorDocument::CapturePassListState() const
     {
-        return { m_data.passes, m_activePass, m_viewPass };
+        return { m_data.passes, m_data.baseInputs, m_activePass, m_viewPass };
     }
 
     void ShaderEditorDocument::ApplyPassListState(PassListState state)
@@ -2248,6 +2317,7 @@ namespace Arcane::Editor
         if (IsInstance())
             return;   // instances never carry passes
         m_data.passes = std::move(state.passes);
+        m_data.baseInputs = std::move(state.baseInputs);
         const int count = static_cast<int>(m_data.passes.size());
         m_activePass = std::clamp(state.activePass, 0, count);
         m_viewPass = std::clamp(state.viewPass, -1, count);
@@ -2363,7 +2433,7 @@ namespace Arcane::Editor
 
         const Arcane::MaterialGraph& g = *ActiveGraphOpt();
         const std::vector<std::uint32_t> wired =
-            pass == 0 ? std::vector<std::uint32_t>{} : m_data.passes[pass - 1].inputs;
+            pass == 0 ? m_data.baseInputs : m_data.passes[pass - 1].inputs;
         const std::uint32_t avail = static_cast<std::uint32_t>(wired.size());
 
         std::unordered_set<std::uint32_t> live;
@@ -2511,11 +2581,46 @@ namespace Arcane::Editor
             std::vector<nvrhi::ITexture*> ins;
             ins.reserve(np.boundSources.size());
             for (std::uint32_t src : np.boundSources)
-                ins.push_back(m_chain ? m_chain->PassOutput(src) : nullptr);
+                ins.push_back(src == Arcane::kSceneInput
+                                  ? SceneStandIn()
+                                  : m_chain ? m_chain->PassOutput(src) : nullptr);
             np.pass->Render(m_nodePreviewCl, np.fb, *np.inst, globals, assets, ins);
         }
         m_nodePreviewCl->close();
         m_services.device->executeCommandList(m_nodePreviewCl);
+    }
+
+    nvrhi::ITexture* ShaderEditorDocument::SceneStandIn()
+    {
+        if (m_sceneStandIn || !m_services.device)
+            return m_sceneStandIn.Get();
+        constexpr std::uint32_t kSize = 64;
+        auto desc = nvrhi::TextureDesc()
+            .setWidth(kSize).setHeight(kSize)
+            .setFormat(nvrhi::Format::RGBA8_UNORM)
+            .setInitialState(nvrhi::ResourceStates::ShaderResource)
+            .setKeepInitialState(true)
+            .setDebugName("SceneStandIn");
+        m_sceneStandIn = m_services.device->createTexture(desc);
+        if (!m_sceneStandIn)
+            return nullptr;
+        std::vector<std::uint32_t> px(kSize * kSize);
+        for (std::uint32_t y = 0; y < kSize; ++y)
+            for (std::uint32_t x = 0; x < kSize; ++x)
+                px[y * kSize + x] =
+                    (((x >> 3) + (y >> 3)) & 1) ? 0xFF4A4A52u : 0xFF26262Cu;
+        nvrhi::CommandListHandle cl = m_services.device->createCommandList();
+        if (!cl)
+        {
+            m_sceneStandIn = nullptr;
+            return nullptr;
+        }
+        cl->open();
+        cl->writeTexture(m_sceneStandIn, 0, 0, px.data(),
+                         kSize * sizeof(std::uint32_t));
+        cl->close();
+        m_services.device->executeCommandList(cl);
+        return m_sceneStandIn.Get();
     }
 
     void ShaderEditorDocument::DrawNodePreviewImage(const Arcane::GraphNode& n)
@@ -2833,8 +2938,10 @@ namespace Arcane::Editor
                                         info.type == Arcane::GraphNodeType::SpriteTexture;
                 if (spriteOnly && m_surface != 1)
                     continue;
-                // Pass Input samples upstream pass outputs -- pass graphs only.
-                if (info.type == Arcane::GraphNodeType::PassInput && m_activePass == 0)
+                // Pass Input samples wired input slots -- available wherever
+                // the active pass has any (the base's are its scene wires).
+                if (info.type == Arcane::GraphNodeType::PassInput &&
+                    m_activePass == 0 && m_data.baseInputs.empty())
                     continue;
                 // The vertex context lives on the BASE graph, at most once.
                 if (info.type == Arcane::GraphNodeType::VertexOutput &&

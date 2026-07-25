@@ -110,6 +110,7 @@ namespace Arcane::Editor
         struct PassListState
         {
             std::vector<Arcane::MaterialPass> passes;
+            std::vector<std::uint32_t> baseInputs;   // scene wires on the base
             int activePass = 0;
             int viewPass = -1;
         };
@@ -151,8 +152,14 @@ namespace Arcane::Editor
         // Pass chains (queue item 4): a fullscreen BASE material with extra
         // passes compiles/binds through the chain path -- one merged template,
         // per-pass stages, atomic SetChain (chain-level last-good).
+        // Chain mode also covers the base-only POST material (scene inputs,
+        // no extra passes) -- one uniform build/run path for anything that
+        // reads InputTexture slots.
         bool   ChainMode() const
-        { return m_surface == 0 && !IsInstance() && !m_data.passes.empty(); }
+        {
+            return m_surface == 0 && !IsInstance() &&
+                   (!m_data.passes.empty() || !m_data.baseInputs.empty());
+        }
         void   BindChainIfComplete();
         // Promote pending template -> bound + rebuild the instance over it
         // (parent-chain layering, override migration, dirty re-baseline).
@@ -418,6 +425,11 @@ namespace Arcane::Editor
         std::uint64_t       m_nodePreviewVsJob = 0;
         nvrhi::ShaderHandle m_nodePreviewVs;    // shared passthrough VS
         nvrhi::CommandListHandle m_nodePreviewCl;
+        // The Scene stand-in (post materials): a checkerboard bound wherever
+        // kSceneInput slots appear in the PREVIEW -- the real scene color
+        // only exists at runtime. Lazy; null device-less.
+        nvrhi::TextureHandle m_sceneStandIn;
+        nvrhi::ITexture* SceneStandIn();
         // Displaced thumbnail textures parked one frame: an ImGui::Image
         // submitted earlier in the SAME frame still holds the raw pointer
         // until the backend records it, so release happens next Tick.
