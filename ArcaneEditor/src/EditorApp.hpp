@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 #include <LoomConfig.hpp>
 #include <GpuContext.hpp>
@@ -187,6 +188,15 @@ namespace Arcane::Editor
         Arcane::Editor::DocumentHost            m_documents;
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
+
+        // Material file watcher: a ~1 Hz mtime sweep over the registry's
+        // .arcmat files (ShaderLibrary's hot-reload pattern). An EXTERNAL
+        // change (git pull, sibling repo, hand edit) invalidates the sprite
+        // cache and reloads/refreshes open documents; our own saves
+        // re-baseline through onAssetSaved so they never bounce back.
+        void PollMaterialWatch();
+        std::unordered_map<std::string, std::filesystem::file_time_type> m_materialMtimes;
+        double m_materialWatchNext = 0.0;
 
         // Async file-dialog results for the material flows (same background-
         // thread stash pattern as m_pendingProjectPath below).

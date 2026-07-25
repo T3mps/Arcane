@@ -269,6 +269,71 @@ TEST_CASE("ShaderEditorDocument compiles a pass chain per-pass and routes result
     compiler.Shutdown();
 }
 
+TEST_CASE("ReloadFromDisk discards the working copy; DependsOn walks the chain",
+          "[editor][material]")
+{
+    // The material file watcher's document hooks (external edits: git pull,
+    // sibling repo, hand edits).
+    const fs::path dir = TempDir("reload");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "ReloadTest").has_value());
+    const fs::path content = dir / "Game" / "Content";
+
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate();
+    base.name = "Base";
+    base.snippet = kSnippet;
+    REQUIRE(Arcane::SaveMaterialAsset(content / "base.arcmat", base));
+
+    Arcane::MaterialAssetData inst;
+    inst.id = Arcane::Guid::Generate();
+    inst.parent = base.id;
+    inst.name = "Inst";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "inst.arcmat", inst));
+
+    Arcane::Runtime rt;
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    DocServices services;
+    services.runtime = &rt;
+
+    SECTION("reload picks up an external rewrite")
+    {
+        const auto loaded = Arcane::LoadMaterialAsset(content / "base.arcmat");
+        REQUIRE(loaded.has_value());
+        ShaderEditorDocument doc(services, content / "base.arcmat", *loaded);
+
+        Arcane::MaterialAssetData edited = base;
+        edited.name = "BaseRenamed";
+        edited.snippet = "float4 shade(Varyings v) { return 0.5; }\n";
+        REQUIRE(Arcane::SaveMaterialAsset(content / "base.arcmat", edited));
+
+        doc.ReloadFromDisk();
+        CHECK_FALSE(doc.Dirty());
+        CHECK(doc.Title() == "BaseRenamed");
+        REQUIRE(doc.Save());   // saving right back writes the DISK version
+        const auto back = Arcane::LoadMaterialAsset(content / "base.arcmat");
+        REQUIRE(back.has_value());
+        CHECK(back->snippet == edited.snippet);
+    }
+    SECTION("DependsOn is the resolved parent chain, not guesswork")
+    {
+        const auto loaded = Arcane::LoadMaterialAsset(content / "inst.arcmat");
+        REQUIRE(loaded.has_value());
+        ShaderEditorDocument doc(services, content / "inst.arcmat", *loaded);
+        REQUIRE(doc.ParseErrors().empty());
+        CHECK(doc.DependsOn(base.id));
+        CHECK_FALSE(doc.DependsOn(inst.id));
+        CHECK_FALSE(doc.DependsOn(Arcane::Guid::Generate()));
+
+        // A parent edit refreshes the chain (device-less: resolve-only proof).
+        Arcane::MaterialAssetData edited = base;
+        edited.snippet = "float4 shade(Varyings v) { return 1.0; }\n";
+        REQUIRE(Arcane::SaveMaterialAsset(content / "base.arcmat", edited));
+        doc.RefreshParentChain();
+        CHECK(doc.ParseErrors().empty());
+        CHECK(doc.DependsOn(base.id));
+    }
+}
+
 TEST_CASE("PatchParamRename re-keys saved params with the merge rule",
           "[editor][material]")
 {

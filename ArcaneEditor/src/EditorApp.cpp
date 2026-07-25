@@ -365,6 +365,17 @@ namespace Arcane::Editor
         {
             if (m_spriteMaterials)
                 m_spriteMaterials->Invalidate(id);
+            // Re-baseline the file watcher: our own save is not an external
+            // edit and must not bounce back as a reload.
+            if (const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject()
+                                                     : nullptr)
+                if (const auto path = p->ResolveAsset(Arcane::AssetId::FromGuid(id)))
+                {
+                    std::error_code ec;
+                    const auto t = std::filesystem::last_write_time(*path, ec);
+                    if (!ec)
+                        m_materialMtimes[path->generic_string()] = t;
+                }
         };
         s.onParamRenamed = [this](const Arcane::Guid& id, const std::string& oldName,
                                   const std::string& newName)
@@ -376,6 +387,64 @@ namespace Arcane::Editor
                 doc->PatchParamRename(oldName, newName);
         };
         return s;
+    }
+
+    void EditorApp::PollMaterialWatch()
+    {
+        if (m_editorClock < m_materialWatchNext)
+            return;
+        m_materialWatchNext = m_editorClock + 1.0;
+        const Arcane::Project* project =
+            m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project)
+            return;
+
+        for (const Arcane::Editor::AssetEntry& e :
+             Arcane::Editor::BuildAssetEntries(project->Registry()))
+        {
+            if (e.kind != Arcane::Editor::AssetKind::Material)
+                continue;
+            const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(e.guid));
+            if (!path)
+                continue;
+            std::error_code ec;
+            const auto mtime = std::filesystem::last_write_time(*path, ec);
+            if (ec)
+                continue;   // deleted/unreadable -- documents keep last-good
+            const auto [it, inserted] =
+                m_materialMtimes.try_emplace(path->generic_string(), mtime);
+            if (inserted || it->second == mtime)
+            {
+                it->second = mtime;
+                continue;   // first sighting is the baseline, not an event
+            }
+            it->second = mtime;
+
+            // An EXTERNAL edit landed: scene sprites re-resolve, an open
+            // document for the asset reloads (clean) or keeps its edits with
+            // a warn (dirty -- never stomped), and open documents whose
+            // PARENT chain contains it re-resolve + recompile.
+            ARC_INFO("material '{}' changed on disk", e.name);
+            if (m_spriteMaterials)
+                m_spriteMaterials->Invalidate(e.guid);
+            m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+            {
+                auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
+                if (!doc)
+                    return;
+                if (doc->AssetGuid() == e.guid)
+                {
+                    if (doc->Dirty())
+                        ARC_WARN("'{}' changed on disk but has unsaved edits here -- "
+                                 "keeping yours (Save overwrites the disk version)",
+                                 e.name);
+                    else
+                        doc->ReloadFromDisk();
+                }
+                else if (doc->DependsOn(e.guid))
+                    doc->RefreshParentChain();
+            });
+        }
     }
 
     void EditorApp::MaterialNewPickedThunk(const char* path, void* user)
@@ -1055,6 +1124,7 @@ namespace Arcane::Editor
             // switches and registry swaps).
             if (m_spriteMaterials)
                 m_runtime->SetSpriteMaterials(&m_spriteMaterials->Table());
+            PollMaterialWatch();   // external .arcmat edits (~1 Hz mtime sweep)
             m_documents.TickAll(m_lastFrameDt);
 
             // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel

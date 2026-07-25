@@ -133,6 +133,17 @@ namespace Arcane::Editor
         // migrates the live override when the renamed base finally rebinds).
         void PatchParamRename(const std::string& oldName, const std::string& newName);
 
+        // External-change hooks (the app's material file watcher):
+        // Reload from disk, DISCARDING the working copy -- callers gate on
+        // Dirty(). Re-seeds every canvas, re-resolves chains, recompiles.
+        void ReloadFromDisk();
+        // True when this document's resolved parent chain contains `id`.
+        bool DependsOn(const Arcane::Guid& id) const;
+        // A parent's FILE changed: re-resolve the chain + recompile, keeping
+        // this document's own working copy and live overrides (they migrate
+        // by hash at the rebind, rename-translated).
+        void RefreshParentChain();
+
     private:
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)

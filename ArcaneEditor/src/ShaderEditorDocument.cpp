@@ -2023,6 +2023,67 @@ namespace Arcane::Editor
                 std::move(before), ActiveGraphOpt()));
     }
 
+    // --------------------------------------------- external file changes
+    void ShaderEditorDocument::ReloadFromDisk()
+    {
+        auto data = Arcane::LoadMaterialAsset(m_path);
+        if (!data)
+        {
+            ARC_WARN("'{}': reload from disk failed -- keeping the in-memory copy",
+                     m_title);
+            return;
+        }
+        m_data = std::move(*data);
+        m_snippet = m_data.snippet;
+        m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name;
+        m_windowLabel = m_title + (m_data.IsInstance() ? " (Instance)###matdoc_"
+                                                       : " (Material)###matdoc_") +
+                        m_data.id.ToString();
+        m_dirty = false;
+        m_paramsBaseDirty = false;
+        m_savedParamSerial = 0;
+        m_instance.reset();      // the file's values are truth again (rebind reapplies)
+        m_paramRenames.clear();
+        m_parentChain.clear();
+        m_parseErrors.clear();
+        m_activePass = 0;
+        m_viewPass = -1;
+        m_passCanvasSeeded = false;
+        m_graphPositionsApplied = false;
+        m_graphShownPass = -1;
+        if (!IsInstance() || ResolveParentChain())
+        {
+            const std::string& kind =
+                IsInstance() && !m_parentChain.empty() ? m_parentChain.back().kind
+                                                       : m_data.kind;
+            m_surface = Arcane::MaterialSurfaceForKind(kind) ==
+                                Arcane::MaterialSurface::Sprite ? 1 : 0;
+            // Sprite preview re-registers fresh at the next bind (the surface-
+            // switch pattern).
+            m_previewSpriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;
+            m_previewVs = nullptr;
+            m_previewPs = nullptr;
+            RegenerateFromGraph();
+        }
+    }
+
+    bool ShaderEditorDocument::DependsOn(const Arcane::Guid& id) const
+    {
+        for (const Arcane::MaterialAssetData& p : m_parentChain)
+            if (p.id == id)
+                return true;
+        return false;
+    }
+
+    void ShaderEditorDocument::RefreshParentChain()
+    {
+        if (!IsInstance())
+            return;
+        m_parseErrors.clear();
+        if (ResolveParentChain())
+            Rebuild();   // failure keeps last-good bound + the errors visible
+    }
+
     // --------------------------------------------- assisted param rename
     void ShaderEditorDocument::BeginParamRename(const std::string& oldName,
                                                 const std::string& newName)
