@@ -269,6 +269,59 @@ TEST_CASE("ShaderEditorDocument compiles a pass chain per-pass and routes result
     compiler.Shutdown();
 }
 
+TEST_CASE("PatchParamRename re-keys saved params with the merge rule",
+          "[editor][material]")
+{
+    // The open-document half of assisted rename: the base's propagation
+    // rewrote this instance's FILE; the patch keeps memory in step and Save
+    // must never write the orphan back.
+    const fs::path dir = TempDir("patchrename");
+    const fs::path file = dir / "inst.arcmat";
+
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.parent = Arcane::Guid::Generate();   // unresolvable is fine device-less
+    data.name = "Inst";
+    data.params.emplace_back("Speed", Arcane::MatParamValue::MakeFloat(3.5f));
+    data.params.emplace_back("Tint", Arcane::MatParamValue::MakeColor(1, 0, 0, 1));
+    REQUIRE(Arcane::SaveMaterialAsset(file, data));
+
+    const auto loaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+    ShaderEditorDocument doc(DocServices{}, file, *loaded);
+
+    SECTION("plain re-key")
+    {
+        doc.PatchParamRename("Speed", "Rate");
+        REQUIRE(doc.Save());
+        const auto back = Arcane::LoadMaterialAsset(file);
+        REQUIRE(back.has_value());
+        REQUIRE(back->params.size() == 2);
+        CHECK(back->params[0].first == "Rate");
+        CHECK(back->params[0].second.f[0] == 3.5f);
+        CHECK(back->params[1].first == "Tint");
+    }
+    SECTION("merge rule: an existing new-name value wins, the orphan drops")
+    {
+        doc.PatchParamRename("Speed", "Tint");
+        REQUIRE(doc.Save());
+        const auto back = Arcane::LoadMaterialAsset(file);
+        REQUIRE(back.has_value());
+        REQUIRE(back->params.size() == 1);
+        CHECK(back->params[0].first == "Tint");
+        CHECK(back->params[0].second.f[0] == 1.0f);   // the Tint color's red
+    }
+    SECTION("absent old name is a no-op")
+    {
+        doc.PatchParamRename("NotThere", "Rate");
+        REQUIRE(doc.Save());
+        const auto back = Arcane::LoadMaterialAsset(file);
+        REQUIRE(back.has_value());
+        CHECK(back->params.size() == 2);
+        CHECK(back->params[0].first == "Speed");
+    }
+}
+
 TEST_CASE("ApplyPassListState swaps the pass list, clamps selection, dirties",
           "[editor][material]")
 {

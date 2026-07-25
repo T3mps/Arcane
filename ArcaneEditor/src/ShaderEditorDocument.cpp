@@ -137,6 +137,28 @@ namespace Arcane::Editor
             return d;
         }
 
+        // Re-key a saved-params entry old -> new. Merge rule (assisted rename):
+        // when BOTH names exist the new-name value wins and the orphan drops.
+        void RekeySavedParam(
+            std::vector<std::pair<std::string, Arcane::MatParamValue>>& params,
+            const std::string& oldName, const std::string& newName)
+        {
+            const auto oldIt = std::find_if(params.begin(), params.end(),
+                [&](const auto& p) { return p.first == oldName; });
+            if (oldIt == params.end())
+                return;
+            const bool hasNew = std::any_of(params.begin(), params.end(),
+                [&](const auto& p) { return p.first == newName; });
+            if (hasNew)
+            {
+                ARC_WARN("param rename: a '{}' value already exists -- dropping "
+                         "the orphaned '{}' entry", newName, oldName);
+                params.erase(oldIt);
+            }
+            else
+                oldIt->first = newName;
+        }
+
         // Case-insensitive substring match for the create-menu search field.
         bool ContainsInsensitive(const char* hay, const char* needle)
         {
@@ -679,8 +701,11 @@ namespace Arcane::Editor
         }
         if (m_instance)
         {
+            // Overrides forward by hash -- through the pending-rename
+            // translation, so an assisted rename carries the value onto the
+            // renamed decl instead of retiring it.
             for (const auto& [hash, value] : m_instance->Overrides())
-                fresh->Set(hash, value);
+                fresh->Set(TranslateOverrideHash(hash, *m_pendingTemplate), value);
         }
         else
         {
@@ -808,7 +833,18 @@ namespace Arcane::Editor
             m_data.params.clear();
             for (const auto& [hash, value] : m_instance->Overrides())
                 if (const Arcane::ParamDecl* d = m_boundTemplate->Find(hash))
-                    m_data.params.emplace_back(d->name, value);
+                {
+                    // An INSTANCE still bound to the pre-rename base harvests
+                    // the OLD decl name -- translate so Save never writes an
+                    // orphan back over the propagated file. (A base's own
+                    // template already carries the new name.)
+                    std::string pname = d->name;
+                    if (IsInstance())
+                        for (const auto& [oldName, newName] : m_paramRenames)
+                            if (pname == oldName)
+                                pname = newName;
+                    m_data.params.emplace_back(std::move(pname), value);
+                }
         }
         if (!Arcane::SaveMaterialAsset(m_path, m_data))
             return false;
@@ -1987,6 +2023,123 @@ namespace Arcane::Editor
                 std::move(before), ActiveGraphOpt()));
     }
 
+    // --------------------------------------------- assisted param rename
+    void ShaderEditorDocument::BeginParamRename(const std::string& oldName,
+                                                const std::string& newName)
+    {
+        if (IsInstance() || oldName.empty() || newName.empty() || oldName == newName)
+            return;
+        // Sole-declarer guard: if ANOTHER node (any pass's graph) still
+        // declares the old name, this edit was a decl SPLIT, not a rename --
+        // the shared declaration lives on, nothing orphans.
+        for (std::size_t c = 0; c <= m_data.passes.size(); ++c)
+        {
+            const std::optional<Arcane::MaterialGraph>& opt = GraphOptAt(c);
+            if (!opt)
+                continue;
+            for (const Arcane::GraphNode& gn : opt->nodes)
+                if ((gn.type == Arcane::GraphNodeType::Param ||
+                     gn.type == Arcane::GraphNodeType::TextureSample) &&
+                    gn.paramName == oldName)
+                    return;
+        }
+
+        // Local fix (unconditional): this document's own saved value follows
+        // the rename; the live override migrates at the next rebind through
+        // the pending-rename translation.
+        RekeySavedParam(m_data.params, oldName, newName);
+        m_paramRenames.emplace_back(oldName, newName);
+
+        // Discovery: every registered instance whose parent chain reaches
+        // THIS base (any depth, cycle-guarded) and whose saved params carry
+        // the old name. GUID identity is what makes this possible at all --
+        // Unity structurally cannot find these files.
+        m_renameTargets.clear();
+        const Arcane::Project* project =
+            m_services.runtime ? m_services.runtime->CurrentProject() : nullptr;
+        if (!project)
+            return;
+        for (const AssetEntry& e : BuildAssetEntries(project->Registry()))
+        {
+            if (e.kind != AssetKind::Material || e.guid == m_data.id)
+                continue;
+            const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(e.guid));
+            if (!path)
+                continue;
+            const auto data = Arcane::LoadMaterialAsset(*path);
+            if (!data || !data->IsInstance())
+                continue;
+
+            bool reaches = false;
+            Arcane::Guid cursor = data->parent;
+            std::vector<Arcane::Guid> visited{ data->id };
+            while (cursor.IsValid())
+            {
+                if (cursor == m_data.id)
+                {
+                    reaches = true;
+                    break;
+                }
+                bool seen = false;
+                for (const Arcane::Guid& v : visited)
+                    seen = seen || v == cursor;
+                if (seen)
+                    break;   // cycle -- refuse quietly
+                visited.push_back(cursor);
+                const auto hopPath = project->ResolveAsset(Arcane::AssetId::FromGuid(cursor));
+                if (!hopPath)
+                    break;
+                const auto hop = Arcane::LoadMaterialAsset(*hopPath);
+                if (!hop)
+                    break;
+                cursor = hop->parent;
+            }
+            if (!reaches)
+                continue;
+            bool carries = false;
+            for (const auto& [pname, pvalue] : data->params)
+                carries = carries || pname == oldName;
+            if (!carries)
+                continue;
+            m_renameTargets.push_back(
+                { e.guid, *path, data->name.empty() ? e.name : data->name });
+        }
+        if (m_renameTargets.empty())
+            return;   // nothing to propagate -- no modal
+        m_renameOld = oldName;
+        m_renameNew = newName;
+        m_renameRequest = true;
+    }
+
+    void ShaderEditorDocument::PatchParamRename(const std::string& oldName,
+                                                const std::string& newName)
+    {
+        // The base's propagation rewrote this instance's FILE; re-key the open
+        // document's memory to match (unsaved edits stay untouched) and queue
+        // the override migration for whenever the renamed base rebinds here.
+        RekeySavedParam(m_data.params, oldName, newName);
+        m_paramRenames.emplace_back(oldName, newName);
+    }
+
+    std::uint32_t ShaderEditorDocument::TranslateOverrideHash(
+        std::uint32_t hash, const Arcane::MaterialTemplate& templ) const
+    {
+        // A pending rename migrates an override across the template boundary
+        // the moment it MATERIALIZES (the target declares new, not old) -- and
+        // in reverse when an undo rolled the template back. Inert otherwise,
+        // so a stale pair can never mistranslate.
+        for (const auto& [oldName, newName] : m_paramRenames)
+        {
+            const std::uint32_t oh = Arcane::HashParamName(oldName);
+            const std::uint32_t nh = Arcane::HashParamName(newName);
+            if (hash == oh && templ.Find(nh) && !templ.Find(oh))
+                hash = nh;
+            else if (hash == nh && templ.Find(oh) && !templ.Find(nh))
+                hash = oh;
+        }
+        return hash;
+    }
+
     ShaderEditorDocument::PassListState ShaderEditorDocument::CapturePassListState() const
     {
         return { m_data.passes, m_activePass, m_viewPass };
@@ -2504,6 +2657,61 @@ namespace Arcane::Editor
             }
             ImGui::EndPopup();
         }
+        // Assisted param rename: the consent modal (cross-FILE writes are not
+        // undoable -- this gate is their structural-edit standing).
+        if (m_renameRequest)
+        {
+            m_renameRequest = false;
+            ImGui::OpenPopup("Rename Param Everywhere?##prename");
+        }
+        if (ImGui::BeginPopupModal("Rename Param Everywhere?##prename", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Renamed '%s' -> '%s'.", m_renameOld.c_str(), m_renameNew.c_str());
+            ImGui::Text("%zu instance file(s) carry a saved value under the old name:",
+                        m_renameTargets.size());
+            for (std::size_t i = 0; i < m_renameTargets.size() && i < 8; ++i)
+                ImGui::BulletText("%s", m_renameTargets[i].name.c_str());
+            if (m_renameTargets.size() > 8)
+                ImGui::TextDisabled("...and %zu more", m_renameTargets.size() - 8);
+            ImGui::TextDisabled("Files that already have a '%s' value keep it; the "
+                                "old entry drops.", m_renameNew.c_str());
+            ImGui::Separator();
+            if (ImGui::Button("Rename everywhere"))
+            {
+                for (const RenameTarget& t : m_renameTargets)
+                {
+                    auto data = Arcane::LoadMaterialAsset(t.path);
+                    if (!data)
+                    {
+                        ARC_ERROR("param rename: '{}' failed to load -- skipped",
+                                  t.path.generic_string());
+                        continue;
+                    }
+                    RekeySavedParam(data->params, m_renameOld, m_renameNew);
+                    if (!Arcane::SaveMaterialAsset(t.path, *data))
+                    {
+                        ARC_ERROR("param rename: '{}' failed to save -- skipped",
+                                  t.path.generic_string());
+                        continue;
+                    }
+                    if (m_services.onAssetSaved)
+                        m_services.onAssetSaved(t.id);   // sprite-cache invalidate
+                    if (m_services.onParamRenamed)
+                        m_services.onParamRenamed(t.id, m_renameOld, m_renameNew);
+                }
+                m_renameTargets.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Just here"))
+            {
+                m_renameTargets.clear();   // today's behavior: the wart, chosen
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
         if (ImGui::BeginPopup("##graphcreate"))
         {
             // The searcher: type-to-filter, Enter creates the first match.
@@ -2858,9 +3066,13 @@ namespace Arcane::Editor
                     if (commit && n.paramName != m_nameBuf)
                     {
                         std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                        const std::string oldName = n.paramName;
                         n.paramName = m_nameBuf;
                         valueEdited();
                         PushGraphUndo("Rename Param", std::move(before));
+                        // Assisted rename: local override fix + the dependent-
+                        // instance walk (arms the propagation modal on hits).
+                        BeginParamRename(oldName, m_nameBuf);
                     }
                 }
 

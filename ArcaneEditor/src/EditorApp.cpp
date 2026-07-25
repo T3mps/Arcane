@@ -366,6 +366,15 @@ namespace Arcane::Editor
             if (m_spriteMaterials)
                 m_spriteMaterials->Invalidate(id);
         };
+        s.onParamRenamed = [this](const Arcane::Guid& id, const std::string& oldName,
+                                  const std::string& newName)
+        {
+            // Assisted rename rewrote this instance's file; an OPEN document
+            // for it gets patched in memory (never stomped -- re-key only).
+            if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(
+                    m_documents.FindByGuid(id)))
+                doc->PatchParamRename(oldName, newName);
+        };
         return s;
     }
 

@@ -63,6 +63,11 @@ namespace Arcane::Editor
         // invalidates the sprite-material cache so scene sprites pick up the
         // SAVED asset (Slice 8; scene sprites never render the working copy).
         std::function<void(const Arcane::Guid&)> onAssetSaved;
+        // Fired by assisted param rename for each rewritten INSTANCE file: the
+        // app patches any OPEN document for that asset in memory (re-key only;
+        // unsaved edits stay). (guid, oldName, newName).
+        std::function<void(const Arcane::Guid&, const std::string&, const std::string&)>
+            onParamRenamed;
     };
 
     class ShaderEditorDocument final : public EditorDocument
@@ -121,6 +126,12 @@ namespace Arcane::Editor
         // forwarding by name hash here is what lets history survive rebinds.
         void ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
                             const Arcane::MatParamValue& value);
+
+        // Assisted param rename (design 2026-07-24): the BASE document's
+        // propagation rewrote this INSTANCE's file on disk -- keep this open
+        // document in step (saved-params re-key + a pending rename that
+        // migrates the live override when the renamed base finally rebinds).
+        void PatchParamRename(const std::string& oldName, const std::string& newName);
 
     private:
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
@@ -345,6 +356,28 @@ namespace Arcane::Editor
         std::uint32_t m_bodyEditRequest = 0;
         std::uint32_t m_bodyEditNode = 0;
         char          m_bodyBuf[4096] = {};
+
+        // ---- Assisted param rename (graph tier only; text //@param edits are
+        // not reliably detectable as renames) ----
+        struct RenameTarget
+        {
+            Arcane::Guid id;
+            std::filesystem::path path;
+            std::string name;
+        };
+        // Rename-commit hook: sole-declarer guard, local fix, registry walk
+        // for dependent instance files; a nonempty hit list arms the modal.
+        void BeginParamRename(const std::string& oldName, const std::string& newName);
+        // Pending renames awaiting MATERIALIZATION: override-hash migration at
+        // PromotePendingInstance (conditional on the target template, so an
+        // undo rolling the template back translates in reverse) and saved-name
+        // translation at instance Save.
+        [[nodiscard]] std::uint32_t TranslateOverrideHash(
+            std::uint32_t hash, const Arcane::MaterialTemplate& templ) const;
+        std::vector<std::pair<std::string, std::string>> m_paramRenames;
+        std::vector<RenameTarget> m_renameTargets;   // the modal's hit list
+        std::string m_renameOld, m_renameNew;
+        bool m_renameRequest = false;   // open the modal (Suspend space)
 
         // ---- Node preview thumbnails ----
         struct NodePreview
