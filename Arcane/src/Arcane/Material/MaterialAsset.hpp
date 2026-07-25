@@ -50,6 +50,11 @@ namespace Arcane
         std::string snippet;   // same //@param + shade() shape as the main snippet
         std::vector<std::uint32_t> inputs;   // chain indices feeding InputTextureN
         float posX = 0.0f, posY = 0.0f;      // pass-canvas layout (persisted)
+        // Graph-owned pass (same contract as the base's graph): present = the
+        // graph is this pass's editing truth and `snippet` is its GENERATED
+        // text, saved so snippet-only consumers keep working. PassInput nodes
+        // sample the slots `inputs` wires.
+        std::optional<MaterialGraph> graph;
     };
 
     struct MaterialAssetData

@@ -108,6 +108,41 @@ TEST_CASE(".arcmat pass chains: round-trip, sprite/instance refusal", "[material
         CHECK(loaded->passes[0].posY == 40.0f);
     }
 
+    SECTION("a graph-owned pass round-trips its graph and self-heals a snippet")
+    {
+        // Pass graph: PassInput(slot 0) -> Output.
+        MaterialGraph pg;
+        GraphNode out = { };
+        out.id = 1;
+        out.type = GraphNodeType::Output;
+        GraphNode in = { };
+        in.id = 2;
+        in.type = GraphNodeType::PassInput;
+        pg.nodes = { out, in };
+        GraphLink l;
+        l.fromNode = 2;
+        l.toNode = 1;
+        pg.links.push_back(l);
+        pg.nextId = 3;
+
+        MaterialAssetData chained = data;
+        chained.passes[0].inputs = { 0 };
+        chained.passes[0].graph = pg;
+        chained.passes[0].snippet.clear();   // graph-only on disk
+
+        const auto file = dir / "passgraph.arcmat";
+        REQUIRE(SaveMaterialAsset(file, chained));
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->passes.size() == 2);
+        REQUIRE(loaded->passes[0].graph.has_value());
+        CHECK(loaded->passes[0].graph->nodes.size() == 2);
+        // Self-heal: the graph-only pass regenerated a working snippet with
+        // the pass's OWN input count as context.
+        CHECK(loaded->passes[0].snippet.find(
+                  "InputTexture.Sample(MaterialSampler, v.uv)") != std::string::npos);
+    }
+
     SECTION("a pre-DAG file (no inputs key) defaults to the linear chain")
     {
         const auto file = dir / "predag.arcmat";

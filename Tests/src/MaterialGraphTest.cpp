@@ -71,7 +71,7 @@ namespace
 TEST_CASE("Graph node table covers every type with round-tripping tokens", "[material]")
 {
     const auto infos = AllGraphNodeInfos();
-    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::SimpleNoise) + 1);
+    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::PassInput) + 1);
     for (const GraphNodeTypeInfo& info : infos)
     {
         CHECK(GraphNodeInfo(info.type).token == info.token);
@@ -97,6 +97,61 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
     CHECK(GraphNodeInfo(GraphNodeType::SimpleNoise).inputs.size() == 2);
     CHECK(GraphNodeInfo(GraphNodeType::SimpleNoise).inputs[0].width == 2);
     CHECK(GraphNodeInfo(GraphNodeType::SimpleNoise).outputs[0].width == 1);
+    CHECK(GraphNodeInfo(GraphNodeType::PassInput).inputs.size() == 1);     // uv
+    CHECK(GraphNodeInfo(GraphNodeType::PassInput).outputs.size() == 2);    // rgba + a
+}
+
+TEST_CASE("Codegen: PassInput samples wired upstream slots only", "[material]")
+{
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    GraphNode in0 = Node(2, GraphNodeType::PassInput);      // slot 0 default
+    GraphNode in1 = Node(3, GraphNodeType::PassInput);
+    in1.passInputSlot = 1;
+    g.nodes.push_back(in0);
+    g.nodes.push_back(in1);
+    g.nodes.push_back(Node(4, GraphNodeType::Add));
+    g.links.push_back(Link(2, 0, 4, 0));
+    g.links.push_back(Link(3, 0, 4, 1));
+    g.links.push_back(Link(4, 0, 1, 0));
+
+    SECTION("wired slots emit InputTexture / InputTexture1 samples")
+    {
+        const GraphCodegenResult r =
+            GenerateGraphSnippet(g, MaterialSurface::Fullscreen, /*availableInputs=*/2);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find(
+                  "float4 _n2_rgba = InputTexture.Sample(MaterialSampler, v.uv);") !=
+              std::string::npos);
+        CHECK(r.snippet.find(
+                  "float4 _n3_rgba = InputTexture1.Sample(MaterialSampler, v.uv);") !=
+              std::string::npos);
+    }
+
+    SECTION("an unwired slot is a structured error on the node")
+    {
+        const GraphCodegenResult r =
+            GenerateGraphSnippet(g, MaterialSurface::Fullscreen, /*availableInputs=*/1);
+        REQUIRE_FALSE(r.Ok());
+        CHECK_FALSE(HasErrorOn(r, 2));   // slot 0 is wired
+        CHECK(HasErrorOn(r, 3));         // slot 1 is not
+    }
+
+    SECTION("base graphs (no pass context) refuse PassInput entirely")
+    {
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE_FALSE(r.Ok());
+        CHECK(HasErrorOn(r, 2));
+        CHECK(HasErrorOn(r, 3));
+    }
+
+    SECTION("the slot survives the JSON round-trip")
+    {
+        const auto back = GraphFromJson(GraphToJson(g));
+        REQUIRE(back.has_value());
+        CHECK(back->FindNode(3)->passInputSlot == 1);
+        CHECK(back->FindNode(2)->passInputSlot == 0);
+    }
 }
 
 TEST_CASE("Golden codegen: const color to output", "[material]")

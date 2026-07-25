@@ -83,13 +83,14 @@ namespace Arcane
             // pins to the mask (the Param pattern).
             { GraphNodeType::Swizzle,       "swizzle",        "Swizzle",        Pins(kUnaryIn),  Pins(kOutDyn)     },
             { GraphNodeType::SimpleNoise,   "simple_noise",   "Simple Noise",   Pins(kNoiseIn),  Pins(kOut1)       },
+            { GraphNodeType::PassInput,     "pass_input",     "Pass Input",     Pins(kUvIn),     Pins(kSampleOut)  },
         };
     }
 
     const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept
     {
         const auto i = static_cast<std::size_t>(t);
-        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::SimpleNoise) + 1,
+        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::PassInput) + 1,
                       "kNodeInfos must cover every GraphNodeType");
         return kNodeInfos[i < std::size(kNodeInfos) ? i : 0];
     }
@@ -243,7 +244,8 @@ namespace Arcane
         };
     }
 
-    GraphCodegenResult GenerateGraphSnippet(const MaterialGraph& graph, MaterialSurface surface)
+    GraphCodegenResult GenerateGraphSnippet(const MaterialGraph& graph, MaterialSurface surface,
+                                            std::uint32_t availableInputs)
     {
         GraphCodegenResult res;
         auto fail = [&](std::uint32_t node, std::string msg)
@@ -374,6 +376,17 @@ namespace Arcane
                 if (n->type == GraphNodeType::VertexColor || n->type == GraphNodeType::SpriteTexture)
                     fail(n->id, std::string(GraphNodeInfo(n->type).display) +
                                 " requires the sprite surface");
+
+        // --- pass-context gating: a PassInput samples a slot the owning pass
+        // wired on the pass canvas; anything else is authoring error.
+        for (const GraphNode* n : ordered)
+            if (n->type == GraphNodeType::PassInput && n->passInputSlot >= availableInputs)
+                fail(n->id, availableInputs == 0
+                                ? std::string("Pass Input needs a pass with wired inputs "
+                                              "(base graphs have none)")
+                                : "Pass Input slot " + std::to_string(n->passInputSlot) +
+                                      " is not wired (the pass has " +
+                                      std::to_string(availableInputs) + " input(s))");
 
         // --- Custom nodes: pins name real function parameters; the body is a
         // real function body. Validate the parts the compiler would report as
@@ -758,6 +771,22 @@ namespace Arcane
                                               : std::string("v.uv")) +
                              ") * " + argOr(1, 1, "10.0") + ")");
                     break;
+                case GraphNodeType::PassInput:
+                {
+                    // Mirrors TextureSample: rgba primary + consumed-only alpha.
+                    const std::string tex =
+                        n->passInputSlot == 0
+                            ? std::string("InputTexture")
+                            : "InputTexture" + std::to_string(n->passInputSlot);
+                    const std::string uv = in[0].connected
+                                               ? Adapt(in[0].expr, in[0].width, 2)
+                                               : std::string("v.uv");
+                    stmt("float4 _n" + id + "_rgba = " + tex +
+                         ".Sample(MaterialSampler, " + uv + ");");
+                    if (pinConsumed(n->id, 1))
+                        stmt("float _n" + id + "_a = _n" + id + "_rgba.a;");
+                    break;
+                }
             }
 
             st = 2;
@@ -872,6 +901,9 @@ namespace Arcane
                 case GraphNodeType::Swizzle:
                     e["mask"] = n->swizzleMask;
                     break;
+                case GraphNodeType::PassInput:
+                    e["slot"] = n->passInputSlot;
+                    break;
                 case GraphNodeType::Custom:
                 {
                     nlohmann::json c;
@@ -970,6 +1002,8 @@ namespace Arcane
                 n.paramType = MatParamType::Texture;
             if (e.contains("mask") && e["mask"].is_string())
                 n.swizzleMask = e["mask"].get<std::string>();
+            if (e.contains("slot") && e["slot"].is_number_unsigned())
+                n.passInputSlot = e["slot"].get<std::uint32_t>();
             if (e.contains("custom") && e["custom"].is_object())
             {
                 const nlohmann::json& c = e["custom"];

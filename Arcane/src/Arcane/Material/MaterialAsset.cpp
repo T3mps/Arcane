@@ -139,11 +139,16 @@ namespace Arcane
                              path.generic_string());
                 nlohmann::json passes = nlohmann::json::array();
                 for (const MaterialPass& p : data.passes)
-                    passes.push_back(nlohmann::json{
+                {
+                    nlohmann::json e{
                         { "name", p.name },
                         { "snippet", p.snippet },
                         { "inputs", p.inputs },
-                        { "pos", nlohmann::json::array({ p.posX, p.posY }) } });
+                        { "pos", nlohmann::json::array({ p.posX, p.posY }) } };
+                    if (p.graph)
+                        e["graph"] = GraphToJson(*p.graph);
+                    passes.push_back(std::move(e));
+                }
                 doc["passes"] = std::move(passes);
                 doc["chainPos"] = nlohmann::json{
                     { "base", nlohmann::json::array({ data.chainBaseX, data.chainBaseY }) },
@@ -273,6 +278,31 @@ namespace Arcane
                     {
                         p.posX = e["pos"][0].get<float>();
                         p.posY = e["pos"][1].get<float>();
+                    }
+                    if (e.contains("graph") && e["graph"].is_object())
+                    {
+                        if (auto g = GraphFromJson(e["graph"]))
+                        {
+                            p.graph = std::move(*g);
+                            // Same self-heal as the base: a graph-only pass
+                            // still yields a working snippet.
+                            if (p.snippet.empty())
+                            {
+                                auto gen = GenerateGraphSnippet(
+                                    *p.graph, MaterialSurface::Fullscreen,
+                                    static_cast<std::uint32_t>(p.inputs.size()));
+                                if (gen.Ok())
+                                    p.snippet = std::move(gen.snippet);
+                                else
+                                    ARC_WARN("LoadMaterialAsset: '{}' pass '{}' graph "
+                                             "does not generate; snippet left empty",
+                                             path.generic_string(), p.name);
+                            }
+                        }
+                        else
+                            ARC_WARN("LoadMaterialAsset: '{}' pass '{}' has a malformed "
+                                     "graph -- ignored (text snippet still loads)",
+                                     path.generic_string(), p.name);
                     }
                     data.passes.push_back(std::move(p));
                 }

@@ -86,13 +86,14 @@ namespace Arcane::Editor
 
         bool IsInstance() const { return m_data.IsInstance(); }
         // Graph-owned (Slice 9): the node canvas is the editing surface and the
-        // snippet buffer holds GENERATED text (shown read-only).
+        // snippet buffer holds GENERATED text (shown read-only). Doc-level =
+        // the BASE; every pass carries its own optional graph (per-pass graphs).
         bool IsGraphOwned() const { return m_data.graph.has_value(); }
 
         // Undo plumbing for graph edits (same doc-identity anchor pattern as
-        // ApplyParamEdit): swap in a whole graph state -- nullopt = text-owned
-        // (convert-to-text and its redo) -- and regenerate/recompile.
-        void ApplyGraphState(std::optional<Arcane::MaterialGraph> state);
+        // ApplyParamEdit): swap in a whole graph state for ONE pass (0 = base)
+        // and regenerate/recompile.
+        void ApplyGraphState(std::size_t pass, std::optional<Arcane::MaterialGraph> state);
 
         // Parse/chain-resolution errors (what the errors panel shows above the
         // compile diags). Exposed for the headless tests.
@@ -145,8 +146,15 @@ namespace Arcane::Editor
         void DrawToolbar();
         void DrawSnippetEditor(float height);
         void DrawErrorsPanel();
-        // Graph mode (Slice 9, imgui-node-editor canvas).
-        void RegenerateFromGraph();          // codegen -> snippet -> Rebuild; errors keep last-good
+        // Graph mode (Slice 9, imgui-node-editor canvas). The canvas edits the
+        // ACTIVE pass's graph; these resolve which optional that is.
+        std::optional<Arcane::MaterialGraph>& GraphOptAt(std::size_t pass);
+        std::optional<Arcane::MaterialGraph>& ActiveGraphOpt();
+        bool ActiveGraphOwned() { return ActiveGraphOpt().has_value(); }
+        // Regenerate EVERY graph-owned pass's snippet, then Rebuild. Safe to
+        // call on text-only docs (the loop no-ops); any codegen error keeps
+        // last-good bound and fills that pass's badge list instead.
+        void RegenerateFromGraph();
         void DrawGraphPanel(float height);
         void DrawGraphNode(Arcane::GraphNode& node);
         void HandleGraphEdits();             // link create/delete queries (inside Begin/End)
@@ -155,7 +163,7 @@ namespace Arcane::Editor
         // pasted Param nodes merge into same-name decls by construction.
         // Both run inside the canvas Begin/End (they use ed:: selection and
         // canvas-space coordinates).
-        [[nodiscard]] std::string BuildGraphClipJson() const;   // "" = nothing copyable
+        [[nodiscard]] std::string BuildGraphClipJson();   // "" = nothing copyable
         void PasteGraphClipText(const char* text);              // ignores foreign clips
         // One undo step per completed graph gesture: `before` was captured at
         // the gesture start; `after` is the current graph. The live edit
@@ -262,11 +270,14 @@ namespace Arcane::Editor
         bool                  m_gestureHadBefore = false;
         Arcane::MatParamValue m_gestureBefore{};
 
-        // ---- Graph mode (Slice 9) ----
+        // ---- Graph mode (Slice 9; per-pass graphs) ----
         ax::NodeEditor::EditorContext* m_graphCtx = nullptr;   // lazy; dtor destroys
-        std::vector<Arcane::GraphError> m_graphErrors;   // last codegen's errors (badges + panel)
-        std::vector<std::uint32_t> m_lineNodeIds;        // last GOOD codegen's line map
-        std::vector<std::uint32_t> m_diagBadgeNodes;     // compile-diag nodes via the line map
+        // Per-pass codegen state, indexed by CHAIN index (0 = base). Sized by
+        // RegenerateFromGraph; empty entries = text-owned or clean.
+        std::vector<std::vector<Arcane::GraphError>> m_passGraphErrors;
+        std::vector<std::vector<std::uint32_t>> m_passLineNodeIds;   // GOOD line maps
+        std::vector<std::uint32_t> m_diagBadgeNodes;     // ACTIVE pass's diag nodes
+        int m_graphShownPass = -1;   // canvas re-seeds + reselects on pass switch
         // First snippet line's 0-based offset inside the stitched HLSL -- maps
         // compiler diag lines back into snippet space (jump + badges).
         int  m_snippetLineOffset = 0;

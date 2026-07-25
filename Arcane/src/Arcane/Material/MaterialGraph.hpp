@@ -85,6 +85,10 @@ namespace Arcane
         Swizzle,        // lane mask over the input; output width = mask length
         SimpleNoise,    // value noise(uv * scale) -> float; the first node backed
                         // by a SHARED helper function (emit-once registry)
+        PassInput,      // samples an upstream pass output (InputTexture(N)) --
+                        // PASS GRAPHS only: valid iff the node's slot is wired
+                        // on the pass canvas (see GenerateGraphSnippet's
+                        // availableInputs)
     };
 
     // One pin on a node type. `width` = component count of the value flowing
@@ -171,6 +175,10 @@ namespace Arcane
         // (float3 does not exist in this value set). Lanes beyond the source
         // width read 0 (the Split rule).
         std::string swizzleMask = "xyzw";
+
+        // PassInput only: which of the pass's wired input slots to sample
+        // (0 = InputTexture, k = InputTexture<k>).
+        std::uint32_t passInputSlot = 0;
     };
 
     // Edge identity is (node, pin) on BOTH ends (SG rule -- multi-output nodes
@@ -274,9 +282,16 @@ namespace Arcane
     //
     // On any error `snippet` is empty -- callers keep the last good snippet
     // bound, exactly like a failed text compile.
+    //
+    // `availableInputs` is the PASS context: how many upstream slots the pass
+    // owning this graph has wired on the pass canvas. PassInput nodes with
+    // slot >= availableInputs are structured errors (0 -- the default -- makes
+    // them invalid everywhere outside a wired pass: base graphs, sprite
+    // surfaces, standalone use).
     [[nodiscard]] ARCANE_API GraphCodegenResult GenerateGraphSnippet(
         const MaterialGraph& graph,
-        MaterialSurface surface = MaterialSurface::Fullscreen);
+        MaterialSurface surface = MaterialSurface::Fullscreen,
+        std::uint32_t availableInputs = 0);
 
     // The "graph" object inside .arcmat JSON (see MaterialAsset). Output is
     // ordered -- nodes sorted by id, links by (to, toPin) -- purely for diff

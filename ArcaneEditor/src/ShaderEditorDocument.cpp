@@ -175,9 +175,10 @@ namespace Arcane::Editor
         {
         public:
             GraphEditCommand(std::weak_ptr<ShaderEditorDocument*> anchor, std::string label,
+                             std::size_t pass,
                              std::optional<Arcane::MaterialGraph> before,
                              std::optional<Arcane::MaterialGraph> after)
-                : m_anchor(std::move(anchor)), m_label(std::move(label)),
+                : m_anchor(std::move(anchor)), m_label(std::move(label)), m_pass(pass),
                   m_before(std::move(before)), m_after(std::move(after))
             {
             }
@@ -192,11 +193,12 @@ namespace Arcane::Editor
                 auto doc = m_anchor.lock();
                 if (!doc || !*doc)
                     return;   // document closed -- the step is inert
-                (*doc)->ApplyGraphState(state);
+                (*doc)->ApplyGraphState(m_pass, state);
             }
 
             std::weak_ptr<ShaderEditorDocument*> m_anchor;
             std::string m_label;
+            std::size_t m_pass;   // which pass's graph the step edits (0 = base)
             std::optional<Arcane::MaterialGraph> m_before, m_after;
         };
     }
@@ -272,12 +274,10 @@ namespace Arcane::Editor
                                                        : m_data.kind;
             m_surface = Arcane::MaterialSurfaceForKind(kind) ==
                                 Arcane::MaterialSurface::Sprite ? 1 : 0;
-            // Graph-owned: regenerate from the graph (deterministic codegen ==
-            // the saved snippet, so this leaves the doc clean) then compile.
-            if (IsGraphOwned())
-                RegenerateFromGraph();
-            else
-                Rebuild();   // parse + first compile; the pass binds when results drain
+            // Regenerate every graph-owned pass (deterministic codegen == the
+            // saved snippets, so this leaves the doc clean) then compile; for
+            // text-only docs the regen loop no-ops into a plain Rebuild.
+            RegenerateFromGraph();
         }
     }
 
@@ -466,11 +466,10 @@ namespace Arcane::Editor
             {
                 pj.diags = target.diags;
                 if (p == 0)
-                {
-                    // Pass 0 is the graph-owned surface: badges read m_diags.
-                    m_diags = target.diags;
-                    RebuildDiagBadges();
-                }
+                    m_diags = target.diags;   // single-path mirror
+                // Badges belong to the ACTIVE pass's canvas (any pass may be
+                // graph-owned now).
+                RebuildDiagBadges();
             }
             if (target.succeeded)
             {
@@ -853,8 +852,9 @@ namespace Arcane::Editor
                 DrawPassCanvas(170.0f);
             if (m_activePass > static_cast<int>(m_data.passes.size()))
                 m_activePass = 0;   // stale selection after an outside reload
-            // The graph canvas is PASS 0's surface; extra passes are text.
-            if (IsGraphOwned() && !m_showGeneratedText && m_activePass == 0)
+            // The canvas serves whichever pass is active and graph-owned;
+            // text-owned passes get the text editor.
+            if (ActiveGraphOwned() && !m_showGeneratedText)
                 DrawGraphPanel(ImGui::GetContentRegionAvail().y - errorsH);
             else
                 DrawSnippetEditor(ImGui::GetContentRegionAvail().y - errorsH);
@@ -899,13 +899,8 @@ namespace Arcane::Editor
             ImGui::Checkbox("Live", &m_live);
             ImGui::SameLine();
             if (ImGui::Button("Compile"))
-            {
-                if (IsGraphOwned())
-                    RegenerateFromGraph();
-                else
-                    Rebuild();
-            }
-            if (IsGraphOwned())
+                RegenerateFromGraph();   // regenerates graph passes, then Rebuild
+            if (ActiveGraphOwned())
             {
                 // Read-only generated-code view (UE's HLSL window / SG's View
                 // Generated Shader). No convert-out: graphs are THE authoring
@@ -953,10 +948,7 @@ namespace Arcane::Editor
             }
             // Graph docs must re-CODEGEN, not just restitch -- the surface
             // gates node validity (VertexColor/SpriteTexture are sprite-only).
-            if (IsGraphOwned())
-                RegenerateFromGraph();
-            else
-                Rebuild();
+            RegenerateFromGraph();
         }
         ImGui::SameLine();
         if (HasErrors())
@@ -1012,9 +1004,9 @@ namespace Arcane::Editor
         ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput |
                                     ImGuiInputTextFlags_CallbackResize |
                                     ImGuiInputTextFlags_CallbackAlways;
-        // Graph-owned: PASS 0's text is GENERATED -- readable (and jumpable)
-        // but never hand-edited. Extra passes are always text-authored.
-        if (IsGraphOwned() && m_activePass == 0)
+        // Graph-owned passes: the text is GENERATED -- readable (and jumpable)
+        // but never hand-edited.
+        if (ActiveGraphOwned())
             flags |= ImGuiInputTextFlags_ReadOnly;
         // Per-pass widget identity: switching passes swaps the buffer under
         // the widget, which must not inherit the previous pass's edit state.
@@ -1486,10 +1478,27 @@ namespace Arcane::Editor
                 {
                     Arcane::MaterialPass p;
                     p.name = "pass " + std::to_string(m_data.passes.size() + 1);
-                    p.snippet = "float4 shade(Varyings v)\n"
-                                "{\n"
-                                "    return InputTexture.Sample(MaterialSampler, v.uv);\n"
-                                "}\n";
+                    // UE model: new passes are GRAPH-owned. Starter = Pass
+                    // Input (slot 0) wired to Output -- a visible passthrough,
+                    // never an empty canvas. The snippet regenerates from it.
+                    Arcane::MaterialGraph pg;
+                    Arcane::GraphNode out;
+                    out.id = 1;
+                    out.type = Arcane::GraphNodeType::Output;
+                    out.posX = 360.0f;
+                    out.posY = 120.0f;
+                    Arcane::GraphNode in;
+                    in.id = 2;
+                    in.type = Arcane::GraphNodeType::PassInput;
+                    in.posX = 100.0f;
+                    in.posY = 120.0f;
+                    pg.nodes = { out, in };
+                    Arcane::GraphLink link;
+                    link.fromNode = 2;
+                    link.toNode = 1;
+                    pg.links.push_back(link);
+                    pg.nextId = 3;
+                    p.graph = std::move(pg);
                     // Default wiring: read the current final (linear extend).
                     p.inputs = { static_cast<std::uint32_t>(total - 1) };
                     const ImVec2 canvasPos =
@@ -1530,36 +1539,50 @@ namespace Arcane::Editor
         if (structural)
         {
             // Indices moved under the canvas: re-seed node ids from the data
-            // next frame, then recompile the chain.
+            // next frame, then re-CODEGEN (rewires change which PassInput
+            // slots are valid) and recompile the chain.
             m_passCanvasSeeded = false;
             m_dirty = true;
             if (m_live)
-                Rebuild();
+                RegenerateFromGraph();
         }
     }
 
     void ShaderEditorDocument::DrawErrorsPanel()
     {
         ImGui::BeginChild("##errors", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        // Graph-level codegen errors first (badged on the canvas too); clicking
-        // a row selects + navigates to the offending node.
+        // Graph-level codegen errors first (badged on the canvas too), for
+        // EVERY pass's graph; clicking a row switches to that pass and selects
+        // + navigates to the offending node.
         int gi = 0;
-        for (const Arcane::GraphError& e : m_graphErrors)
+        bool anyGraphError = false;
+        for (std::size_t c = 0; c < m_passGraphErrors.size(); ++c)
         {
-            std::string head = "graph: ";
-            if (e.nodeId != 0)
+            for (const Arcane::GraphError& e : m_passGraphErrors[c])
             {
-                const Arcane::GraphNode* n =
-                    m_data.graph ? m_data.graph->FindNode(e.nodeId) : nullptr;
-                head += (n ? std::string(Arcane::GraphNodeInfo(n->type).display)
-                           : std::string("node")) +
-                        " #" + std::to_string(e.nodeId) + ": ";
+                anyGraphError = true;
+                std::string head =
+                    m_data.passes.empty() ? std::string("graph: ")
+                                          : PassLabel(c) + " graph: ";
+                if (e.nodeId != 0)
+                {
+                    std::optional<Arcane::MaterialGraph>& g = GraphOptAt(c);
+                    const Arcane::GraphNode* n = g ? g->FindNode(e.nodeId) : nullptr;
+                    head += (n ? std::string(Arcane::GraphNodeInfo(n->type).display)
+                               : std::string("node")) +
+                            " #" + std::to_string(e.nodeId) + ": ";
+                }
+                const std::string label =
+                    head + e.message + "##gdiag" + std::to_string(gi++);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.35f, 1.0f));
+                if (ImGui::Selectable(label.c_str(), false))
+                {
+                    m_activePass = static_cast<int>(c);
+                    if (e.nodeId != 0)
+                        m_focusNode = e.nodeId;
+                }
+                ImGui::PopStyleColor();
             }
-            const std::string label = head + e.message + "##gdiag" + std::to_string(gi++);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.35f, 1.0f));
-            if (ImGui::Selectable(label.c_str(), false) && e.nodeId != 0)
-                m_focusNode = e.nodeId;
-            ImGui::PopStyleColor();
         }
         for (const std::string& e : m_parseErrors)
             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", e.c_str());
@@ -1589,12 +1612,13 @@ namespace Arcane::Editor
                     {
                         m_activePass = static_cast<int>(p);
                         m_jumpToLine = snippetLine;
-                        if (p == 0 && IsGraphOwned() && !m_showGeneratedText)
+                        if (p < m_passLineNodeIds.size() && !m_showGeneratedText)
                         {
                             const std::size_t idx =
                                 static_cast<std::size_t>(snippetLine) - 1;
-                            if (idx < m_lineNodeIds.size() && m_lineNodeIds[idx] != 0)
-                                m_focusNode = m_lineNodeIds[idx];
+                            const auto& lineMap = m_passLineNodeIds[p];
+                            if (idx < lineMap.size() && lineMap[idx] != 0)
+                                m_focusNode = lineMap[idx];
                         }
                     }
                     ImGui::PopStyleColor();
@@ -1603,7 +1627,7 @@ namespace Arcane::Editor
             bool anyChainDiag = false;
             for (const PassJobs& pj : m_passJobs)
                 anyChainDiag = anyChainDiag || !pj.diags.empty();
-            if (m_graphErrors.empty() && m_parseErrors.empty() && !anyChainDiag)
+            if (!anyGraphError && m_parseErrors.empty() && !anyChainDiag)
                 ImGui::TextDisabled("no diagnostics");
             ImGui::EndChild();
             return;
@@ -1630,16 +1654,18 @@ namespace Arcane::Editor
             if (ImGui::Selectable(label.c_str(), false))
             {
                 m_jumpToLine = snippetLine;
-                if (IsGraphOwned() && !m_showGeneratedText)
+                if (IsGraphOwned() && !m_showGeneratedText &&
+                    !m_passLineNodeIds.empty())
                 {
                     const std::size_t idx = static_cast<std::size_t>(snippetLine) - 1;
-                    if (idx < m_lineNodeIds.size() && m_lineNodeIds[idx] != 0)
-                        m_focusNode = m_lineNodeIds[idx];
+                    const auto& lineMap = m_passLineNodeIds[0];
+                    if (idx < lineMap.size() && lineMap[idx] != 0)
+                        m_focusNode = lineMap[idx];
                 }
             }
             ImGui::PopStyleColor();
         }
-        if (m_graphErrors.empty() && m_parseErrors.empty() && m_diags.empty())
+        if (!anyGraphError && m_parseErrors.empty() && m_diags.empty())
             ImGui::TextDisabled("no diagnostics");
         ImGui::EndChild();
     }
@@ -1666,30 +1692,59 @@ namespace Arcane::Editor
     }
 
     // ------------------------------------------------------------ graph mode
-    void ShaderEditorDocument::RegenerateFromGraph()
+    std::optional<Arcane::MaterialGraph>& ShaderEditorDocument::GraphOptAt(std::size_t pass)
     {
-        if (!m_data.graph)
-            return;
-        Arcane::GraphCodegenResult r =
-            Arcane::GenerateGraphSnippet(*m_data.graph, SurfaceOf(m_surface));
-        m_graphErrors = std::move(r.errors);
-        if (!m_graphErrors.empty())
-            return;   // last-good snippet/pipeline stay bound; badges show why
-        m_lineNodeIds = std::move(r.lineNodeIds);
-        m_snippet = std::move(r.snippet);
-        Rebuild();
+        if (pass > 0 && pass <= m_data.passes.size())
+            return m_data.passes[pass - 1].graph;
+        return m_data.graph;
     }
 
-    void ShaderEditorDocument::ApplyGraphState(std::optional<Arcane::MaterialGraph> state)
+    std::optional<Arcane::MaterialGraph>& ShaderEditorDocument::ActiveGraphOpt()
     {
-        m_data.graph = std::move(state);
-        m_graphPositionsApplied = false;   // re-seed the canvas from the data
-        m_graphErrors.clear();
+        return GraphOptAt(static_cast<std::size_t>(std::max(0, m_activePass)));
+    }
+
+    void ShaderEditorDocument::RegenerateFromGraph()
+    {
+        const std::size_t total = 1 + m_data.passes.size();
+        m_passGraphErrors.assign(total, std::vector<Arcane::GraphError>{});
+        m_passLineNodeIds.assign(total, std::vector<std::uint32_t>{});
+        bool anyError = false;
+        for (std::size_t c = 0; c < total; ++c)
+        {
+            std::optional<Arcane::MaterialGraph>& g = GraphOptAt(c);
+            if (!g)
+                continue;
+            // The pass context: PassInput nodes may only read slots the pass
+            // canvas actually wired (the base has none).
+            const std::uint32_t avail =
+                c == 0 ? 0u
+                       : static_cast<std::uint32_t>(m_data.passes[c - 1].inputs.size());
+            Arcane::GraphCodegenResult r =
+                Arcane::GenerateGraphSnippet(*g, SurfaceOf(m_surface), avail);
+            if (!r.Ok())
+            {
+                m_passGraphErrors[c] = std::move(r.errors);
+                anyError = true;
+                continue;
+            }
+            m_passLineNodeIds[c] = std::move(r.lineNodeIds);
+            (c == 0 ? m_snippet : m_data.passes[c - 1].snippet) = std::move(r.snippet);
+        }
+        if (!anyError)
+            Rebuild();   // any codegen error keeps last-good bound; badges show why
+    }
+
+    void ShaderEditorDocument::ApplyGraphState(std::size_t pass,
+                                               std::optional<Arcane::MaterialGraph> state)
+    {
+        if (pass > m_data.passes.size())
+            return;   // the pass was removed since the step was pushed
+        GraphOptAt(pass) = std::move(state);
+        if (static_cast<int>(pass) == m_activePass)
+            m_graphPositionsApplied = false;   // re-seed the canvas from the data
         m_dirty = true;
-        if (m_data.graph)
-            RegenerateFromGraph();
-        // nullopt = text-owned now (convert-to-text / its redo): the snippet
-        // keeps the last generated text and the text editor unlocks.
+        RegenerateFromGraph();
     }
 
     void ShaderEditorDocument::PushGraphUndo(const char* label,
@@ -1697,14 +1752,17 @@ namespace Arcane::Editor
     {
         if (m_services.undo)
             m_services.undo->Push(std::make_unique<GraphEditCommand>(
-                m_anchor, label, std::move(before), m_data.graph));
+                m_anchor, label, static_cast<std::size_t>(std::max(0, m_activePass)),
+                std::move(before), ActiveGraphOpt()));
     }
 
     bool ShaderEditorDocument::NodeBadged(std::uint32_t nodeId) const
     {
-        for (const Arcane::GraphError& e : m_graphErrors)
-            if (e.nodeId == nodeId)
-                return true;
+        const std::size_t c = static_cast<std::size_t>(std::max(0, m_activePass));
+        if (c < m_passGraphErrors.size())
+            for (const Arcane::GraphError& e : m_passGraphErrors[c])
+                if (e.nodeId == nodeId)
+                    return true;
         for (std::uint32_t id : m_diagBadgeNodes)
             if (id == nodeId)
                 return true;
@@ -1713,24 +1771,36 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::RebuildDiagBadges()
     {
+        // Compile-diag badges for the ACTIVE pass's canvas: that pass's diags,
+        // line offset, and line map (single-path docs are pass 0 throughout).
         m_diagBadgeNodes.clear();
-        if (!IsGraphOwned())
+        const std::size_t c = static_cast<std::size_t>(std::max(0, m_activePass));
+        if (c >= m_passLineNodeIds.size() || m_passLineNodeIds[c].empty())
             return;
-        for (const Arcane::ShaderDiag& d : m_diags)
+        const std::vector<Arcane::ShaderDiag>* diags = &m_diags;
+        int offset = m_snippetLineOffset;
+        if (ChainMode() && c < m_passJobs.size())
+        {
+            diags = &m_passJobs[c].diags;
+            if (c < m_passLineOffsets.size())
+                offset = m_passLineOffsets[c];
+        }
+        const std::vector<std::uint32_t>& lineMap = m_passLineNodeIds[c];
+        for (const Arcane::ShaderDiag& d : *diags)
         {
             if (d.severity != Arcane::ShaderDiagSeverity::Error)
                 continue;
             // stitched line -> snippet line -> statement's node (the line map).
-            const int snippetLine = d.line - m_snippetLineOffset;
+            const int snippetLine = d.line - offset;
             const std::size_t idx = static_cast<std::size_t>(snippetLine) - 1;
-            if (snippetLine >= 1 && idx < m_lineNodeIds.size() && m_lineNodeIds[idx] != 0)
-                m_diagBadgeNodes.push_back(m_lineNodeIds[idx]);
+            if (snippetLine >= 1 && idx < lineMap.size() && lineMap[idx] != 0)
+                m_diagBadgeNodes.push_back(lineMap[idx]);
         }
     }
 
     void ShaderEditorDocument::DrawGraphPanel(float height)
     {
-        if (!m_data.graph)
+        if (!ActiveGraphOwned())
             return;
         if (!m_graphCtx)
         {
@@ -1738,10 +1808,22 @@ namespace Arcane::Editor
             cfg.SettingsFile = nullptr;   // layout persists in the .arcmat, not an ini
             m_graphCtx = ed::CreateEditor(&cfg);
         }
-        Arcane::MaterialGraph& g = *m_data.graph;
+        // ONE context serves every pass's graph: on a pass switch, re-seed
+        // positions from the data (they persist per graph) and drop the
+        // selection + stale badges -- node ids are only unique per graph.
+        const bool switchedPass = m_graphShownPass != m_activePass;
+        if (switchedPass)
+        {
+            m_graphShownPass = m_activePass;
+            m_graphPositionsApplied = false;
+            RebuildDiagBadges();
+        }
+        Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
         ed::SetCurrentEditor(m_graphCtx);
         ed::Begin("##graphcanvas", ImVec2(0.0f, height));
+        if (switchedPass)
+            ed::ClearSelection();
 
         const bool seededThisFrame = !m_graphPositionsApplied;
         if (seededThisFrame)
@@ -1820,7 +1902,7 @@ namespace Arcane::Editor
                 if (Arcane::GraphNode* n = g.FindNode(m_bodyEditNode);
                     n && n->customBody != m_bodyBuf)
                 {
-                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                     n->customBody = m_bodyBuf;
                     m_dirty = true;
                     if (m_live)
@@ -1861,6 +1943,9 @@ namespace Arcane::Editor
                                         info.type == Arcane::GraphNodeType::SpriteTexture;
                 if (spriteOnly && m_surface != 1)
                     continue;
+                // Pass Input samples upstream pass outputs -- pass graphs only.
+                if (info.type == Arcane::GraphNodeType::PassInput && m_activePass == 0)
+                    continue;
                 // Wire-invoked: only types with a pin on the wire's far side.
                 // Every pin is numeric (adaptation absorbs widths), so
                 // compatibility is purely structural. A fresh Custom node has
@@ -1887,7 +1972,7 @@ namespace Arcane::Editor
             if (chosen)
             {
                 const Arcane::GraphNodeTypeInfo& info = *chosen;
-                std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                 Arcane::GraphNode n;
                 n.id = g.MintId();
                 n.type = info.type;
@@ -2007,7 +2092,7 @@ namespace Arcane::Editor
         auto gestureBegin = [&]
         {
             if (ImGui::IsItemActivated())
-                m_graphGestureBefore = m_data.graph;
+                m_graphGestureBefore = ActiveGraphOpt();
         };
         auto gestureEnd = [&](const char* label)
         {
@@ -2037,7 +2122,7 @@ namespace Arcane::Editor
                 const char* wname = cp.width == 1 ? "f1" : cp.width == 2 ? "f2" : "f4";
                 if (ImGui::SmallButton(wname))
                 {
-                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                     cp.width = cp.width == 1 ? 2 : cp.width == 2 ? 4 : 1;
                     valueEdited();
                     PushGraphUndo("Pin Width", std::move(before));
@@ -2047,8 +2132,8 @@ namespace Arcane::Editor
                 {
                     // Remove the pin: drop its links, re-index links to later
                     // pins (toPin is a bare index into this node's pin list).
-                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
-                    Arcane::MaterialGraph& gg = *m_data.graph;
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                    Arcane::MaterialGraph& gg = *ActiveGraphOpt();
                     std::erase_if(gg.links, [&](const Arcane::GraphLink& l)
                                   { return l.toNode == n.id && l.toPin == pin; });
                     for (Arcane::GraphLink& l : gg.links)
@@ -2125,7 +2210,7 @@ namespace Arcane::Editor
                     m_nameEditNode = 0;
                     if (commit && n.paramName != m_nameBuf)
                     {
-                        std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                        std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                         n.paramName = m_nameBuf;
                         valueEdited();
                         PushGraphUndo("Rename Param", std::move(before));
@@ -2147,7 +2232,7 @@ namespace Arcane::Editor
                             typeIdx = t;
                     if (ImGui::SmallButton(kTypeNames[typeIdx]))
                     {
-                        std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                        std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                         n.paramType = kTypes[(typeIdx + 1) % 4];
                         n.paramDefault.type = n.paramType;
                         valueEdited();
@@ -2172,7 +2257,7 @@ namespace Arcane::Editor
                     bool ranged = n.hasRange;
                     if (ImGui::Checkbox("range", &ranged))
                     {
-                        std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                        std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                         n.hasRange = ranged;
                         valueEdited();
                         PushGraphUndo("Param Range", std::move(before));
@@ -2192,6 +2277,22 @@ namespace Arcane::Editor
                         }
                         gestureEnd("Param Range");
                     }
+                }
+                break;
+            }
+            case Arcane::GraphNodeType::PassInput:
+            {
+                // Which wired slot to sample: cycle button (validity against
+                // the pass's actual wiring is codegen's job -- the badge says
+                // when a slot is not wired).
+                const char* slotName[4] = { "in0", "in1", "in2", "in3" };
+                if (ImGui::SmallButton(slotName[n.passInputSlot %
+                                                Arcane::kMaxPassInputs]))
+                {
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                    n.passInputSlot = (n.passInputSlot + 1) % Arcane::kMaxPassInputs;
+                    valueEdited();
+                    PushGraphUndo("Input Slot", std::move(before));
                 }
                 break;
             }
@@ -2217,7 +2318,7 @@ namespace Arcane::Editor
                     m_nameEditNode = 0;
                     if (commit && n.swizzleMask != m_nameBuf)
                     {
-                        std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                        std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                         n.swizzleMask = m_nameBuf;
                         valueEdited();
                         PushGraphUndo("Edit Swizzle", std::move(before));
@@ -2231,7 +2332,7 @@ namespace Arcane::Editor
                 // width/remove controls.
                 if (ImGui::SmallButton("+ pin"))
                 {
-                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                     Arcane::GraphCustomPin p;
                     for (std::uint32_t k = 1;; ++k)
                     {
@@ -2251,7 +2352,7 @@ namespace Arcane::Editor
                                 : n.customOutWidth == 2 ? "out: f2" : "out: f4";
                 if (ImGui::SmallButton(ow))
                 {
-                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                     n.customOutWidth = n.customOutWidth == 1 ? 2
                                        : n.customOutWidth == 2 ? 4 : 1;
                     valueEdited();
@@ -2305,7 +2406,7 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::HandleGraphEdits()
     {
-        Arcane::MaterialGraph& g = *m_data.graph;
+        Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
         // Wire creation: one edge per input (silent replace), outputs fan out,
         // cycles refused silently at connect time (all SG rules). Every numeric
@@ -2328,7 +2429,7 @@ namespace Arcane::Editor
                     ed::RejectNewItem();
                 else if (ed::AcceptNewItem())
                 {
-                    std::optional<Arcane::MaterialGraph> before = m_data.graph;
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
                     std::erase_if(g.links, [&](const Arcane::GraphLink& l)
                                   { return l.toNode == in.node && l.toPin == in.pin; });
                     Arcane::GraphLink l;
@@ -2400,7 +2501,7 @@ namespace Arcane::Editor
 
         if (!linkIdxs.empty() || !nodeIds.empty())
         {
-            std::optional<Arcane::MaterialGraph> before = m_data.graph;
+            std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
             std::sort(linkIdxs.rbegin(), linkIdxs.rend());
             for (std::size_t idx : linkIdxs)
                 g.links.erase(g.links.begin() + static_cast<std::ptrdiff_t>(idx));
@@ -2458,9 +2559,9 @@ namespace Arcane::Editor
         }
     }
 
-    std::string ShaderEditorDocument::BuildGraphClipJson() const
+    std::string ShaderEditorDocument::BuildGraphClipJson()
     {
-        const Arcane::MaterialGraph& g = *m_data.graph;
+        const Arcane::MaterialGraph& g = *ActiveGraphOpt();
         std::vector<ed::NodeId> sel(
             static_cast<std::size_t>(std::max(0, ed::GetSelectedObjectCount())));
         if (sel.empty())
@@ -2519,8 +2620,8 @@ namespace Arcane::Editor
         cy /= static_cast<float>(count);
         const ImVec2 at = ed::ScreenToCanvas(ImGui::GetMousePos());
 
-        Arcane::MaterialGraph& g = *m_data.graph;
-        std::optional<Arcane::MaterialGraph> before = m_data.graph;
+        Arcane::MaterialGraph& g = *ActiveGraphOpt();
+        std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
         std::unordered_map<std::uint32_t, std::uint32_t> remap;
         ed::ClearSelection();
         for (const Arcane::GraphNode& src : sub->nodes)
