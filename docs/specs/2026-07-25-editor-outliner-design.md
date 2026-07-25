@@ -1,0 +1,152 @@
+# Editor Outliner: UE-shape hierarchy + EntityInfo/Hidden + multi-edit + Add Component
+
+**Status: design.** The Hierarchy panel is a flat `Entity 42 (v1)` list; entities
+have no names, no visibility toggle, no way to be created, deleted, reparented,
+or given/denied components from the editor. This arc rebuilds it into an
+Unreal-Outliner-shaped panel and adds the two small engine components it needs
+(a UE5 Outliner screenshot is the visual reference).
+
+Decided in brainstorm (do not re-litigate): all four interactive features are
+in scope (eye, create/delete, drag-reparent, multi-select); hiding is a
+`Hidden{}` marker component (not a SpriteRenderer field, not an editor-side
+set); the identity component is named **EntityInfo** (not Tag — "tag
+component" stays free for empty markers); multi-select is **full multi-edit**
+(gizmo group transforms + Inspector fan-out + multi-outline), not list-only.
+
+## 1. Components (engine)
+
+```cpp
+struct EntityInfo            // editor-facing identity
+{
+    Guid        id{};        // stable identity; generated when the component is added
+    std::string name;        // display name; empty falls back to "Entity <id>"
+    template<typename Ar> void Serialize(Ar& ar) { ar(id); ar(name); }
+};
+struct Hidden {};            // marker: render submission skips the entity
+```
+
+- Both reflected + registered in `RegisterSceneComponents` and the in-tree
+  plugin rosters (Sandbox, PlaygroundGame); Aphelyon adds them at its next
+  desk rebuild. Scene JSON is free (string fields + nested Guid both already
+  supported); the binary path (Play snapshots, SaveBinary) uses EntityInfo's
+  `Serialize` member — Astra's `HasSerializeMethod` seam exists for exactly
+  this. `Hidden` serializes as presence-only (verify the zero-field JSON path
+  in tests).
+- `RenderSubmissionSystem` skips entities carrying `Hidden` (view exclusion
+  filter if Astra has one, else a per-entity has-check — planning verifies).
+  The system is plugin-compiled: in-tree plugins ride the workspace build.
+- **Policy:** the EDITOR adds EntityInfo (create + first rename); runtime
+  spawns are never forced to carry strings. Auto-names: `Entity`,
+  `Entity_2`, ... (uniqueness scan over existing EntityInfo names at create).
+- **ABI:** two appended name-keyed component types + a behavior change in a
+  plugin-compiled system. Same argument as PostProcess — no layout change, no
+  vtable change, expected NO bump; record in the PluginABI.hpp ledger and
+  verify with the tripwires. A stale plugin simply doesn't honor `Hidden`.
+
+## 2. Structural undo commands (engine, `Arcane/Edit/`)
+
+The primitives every later slice uses, on the existing CommandStack +
+registry-resolver seam, all headless-testable:
+
+- **CreateEntity** (optional parent; adds EntityInfo w/ auto-name). Undo
+  destroys; redo must resurrect the SAME entity id (later stack entries
+  reference it).
+- **DeleteEntities** (the selection set): captures every component per
+  descriptor (binary serialize), parent links, and child lists. Children of a
+  deleted entity splice up to its parent. Undo restores ids, components,
+  links. Multi-delete handles nested selections (deepest-first).
+- **Reparent** (set → new parent; null = root). Refuses cycles.
+- **Add/RemoveComponent** (entity set + descriptor; remove captures bytes).
+- **SetHidden** (entity + descendants, add/remove `Hidden`; one step).
+- **RenameEntity** (add-EntityInfo-if-missing + set name; one step).
+
+**Named risk:** id resurrection. Scene binary LOAD already restores exact
+entity ids, so a seam exists — planning locates it (EntityManager
+create-with-id or the serializer's restore path) before committing to the
+command shape. If it's truly absent, commands remap ids on restore and patch
+the stack — but exhaust the existing seam first.
+
+## 3. The Outliner panel (editor)
+
+Pure-core + ImGui-shell, like AssetBrowser:
+
+- **`BuildOutlinerRows(registry, filter, sort)`** (EntityList.hpp, headless-
+  tested): flat, depth-annotated rows in tree order from the relationship
+  graph, plus roots-without-parents; case-insensitive substring filter over
+  display names — matches AND their ancestors stay visible (non-matching
+  ancestors render dimmed); per-row: entity, depth, label, type string,
+  hidden flag, child count. Label = EntityInfo.name, else `Entity <id>`.
+  Type column by component priority: PostProcess → "Post Process",
+  RigidBody2D → "Rigid Body", SpriteRenderer → "Sprite", else "Entity"
+  (extensible table).
+- **`DrawOutlinerPanel`**: `ImGui::BeginTable` (RowBg striping, sortable
+  Label/Type header, frozen header row). Column 0 = eye icon
+  (ICON_LC_EYE / _OFF, dimmed when off); column 1 = TreeNodeEx arrow + label;
+  column 2 = type. Footer: `N entities (M selected)`. Search box above the
+  table. Renaming = F2 or slow-double-click → inline InputText in the row.
+- **Interactions:** click selects (plain = replace, Ctrl = toggle, Shift =
+  range over visible row order); right-click row → New Child Entity / Rename /
+  Delete / Add Component...; right-click empty → New Entity; drag rows onto a
+  row = reparent set, onto empty = unparent (cycle-refused); eye click =
+  SetHidden on entity + descendants; Delete key deletes the selection.
+  Everything routes through §2 commands.
+
+## 4. Full multi-edit
+
+- **SelectionContext** → ordered set + primary (last-clicked). Every current
+  `.selected` consumer updates (EditorApp pick/gizmo/outline/Inspector).
+  Viewport: Ctrl+click toggles the picked entity; plain click replaces;
+  Alt-cycle keeps operating on the primary.
+- **Gizmo:** anchors at the primary's pivot. Deltas apply to **selection
+  roots only** (selected entities with no selected ancestor — prevents
+  double-transform through propagation). Translate = shared delta; rotate/
+  scale = true group transform about the primary's pivot (positions orbit /
+  scale, rotations += / scales *=; 2D mat3). One drag = one undo step
+  snapshotting every touched Transform.
+- **Inspector:** shows the component-type intersection across the set
+  (header: `<primary name> (+N)`); widgets display the PRIMARY's values; a
+  field edit fans that field out to every selected entity's component —
+  gesture = Begin → snapshot each → apply → Commit. Mixed-value dashes are a
+  follow-up, not this arc.
+- **Outline:** the seed pass gets a CB array of up to **64** selected ids
+  (membership loop in-shader); hovered stays single. Beyond 64: first 64 +
+  one-time log. SelectionOutline's signature changes — editor/tests are its
+  only consumers (verified: Sandbox doesn't touch it).
+
+## 5. Add/Remove Component UI (Inspector)
+
+- `+ Add Component` button (bottom of the Inspector) → searchable popup over
+  the ComponentRegistry's descriptors minus a curated **system-managed
+  hide-list** (`WorldTransform`, `PreviousTransform`, `PhysicsBodyRef` —
+  derived state, never hand-added). Adds default-constructed component to
+  every selected entity lacking it (one undo step).
+- Per-component header context menu → Remove Component (same hide-list
+  protects system-managed ones from removal; everything else, Transform
+  included, is removable — the user asked for it by name).
+
+## 6. Slices
+
+1. **Components + commands** — §1 + §2 + tests (EntityInfo JSON/binary
+   round-trip incl. Play-snapshot path, Hidden presence round-trip +
+   submission skip, every command round-trips through undo/redo, auto-name
+   collisions). Pure engine; ships alone.
+2. **Outliner panel** — §3 on top of S1. SelectionContext becomes set+primary
+   HERE (list ops need it); every existing consumer switches to a Primary()
+   accessor mechanically, keeping single-entity behavior until S3 makes it
+   multi. Headless row-builder tests; panel behavior desk-verified.
+3. **Full multi-edit** — §4 (gizmo group math headless-tested; outline CB
+   change rides the existing [gpu] outline suites + RenderErrorCount).
+4. **Add/Remove Component** — §5 + headless tests over the descriptor
+   filtering + command reuse.
+
+Estimated 3–4 sessions. Each slice lands green independently.
+
+## Non-goals (this arc)
+
+- Outliner folders (the parent hierarchy IS the tree; UE folders are an
+  organizational overlay we don't need yet).
+- Mixed-value display in multi-edit widgets; multi-rename with numbering.
+- Editor-only-vs-game visibility split (`Hidden` is one serialized bit;
+  UE's bHiddenEd/bHidden distinction can layer on later if wanted).
+- Unreal's pin/star columns, per-type row icons beyond the type string.
+- Outlining more than 64 selected entities.
