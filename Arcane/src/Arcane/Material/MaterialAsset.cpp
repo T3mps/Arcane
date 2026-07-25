@@ -152,10 +152,17 @@ namespace Arcane
                     passes.push_back(std::move(e));
                 }
                 doc["passes"] = std::move(passes);
+            }
+            // The BASE pass's input slots (post materials: kSceneInput
+            // entries reading the external scene) -- independent of extra
+            // passes, since the common post material is base-only.
+            if (!data.baseInputs.empty())
+                doc["baseInputs"] = data.baseInputs;
+            if (!data.passes.empty() || !data.baseInputs.empty())
                 doc["chainPos"] = nlohmann::json{
                     { "base", nlohmann::json::array({ data.chainBaseX, data.chainBaseY }) },
-                    { "out", nlohmann::json::array({ data.chainOutX, data.chainOutY }) } };
-            }
+                    { "out", nlohmann::json::array({ data.chainOutX, data.chainOutY }) },
+                    { "scene", nlohmann::json::array({ data.chainSceneX, data.chainSceneY }) } };
         }
         nlohmann::json params = nlohmann::json::object();
         for (const auto& [name, value] : data.params)
@@ -268,7 +275,15 @@ namespace Arcane
                     if (e.contains("inputs") && e["inputs"].is_array())
                         for (const nlohmann::json& in : e["inputs"])
                             if (in.is_number_unsigned())
-                                p.inputs.push_back(in.get<std::uint32_t>());
+                            {
+                                // Anything in the sentinel half-space reads as
+                                // the scene input (exact round-trip + garbage
+                                // clamp in one rule).
+                                const std::uint64_t v = in.get<std::uint64_t>();
+                                p.inputs.push_back(v >= 0x80000000ull
+                                                       ? kSceneInput
+                                                       : static_cast<std::uint32_t>(v));
+                            }
                     if (e.contains("pos") && e["pos"].is_array() && e["pos"].size() == 2 &&
                         e["pos"][0].is_number() && e["pos"][1].is_number())
                     {
@@ -286,7 +301,8 @@ namespace Arcane
                             {
                                 auto gen = GenerateGraphSnippet(
                                     *p.graph, MaterialSurface::Fullscreen,
-                                    static_cast<std::uint32_t>(p.inputs.size()));
+                                    static_cast<std::uint32_t>(p.inputs.size()),
+                                    /*passGraph=*/true);
                                 if (gen.Ok())
                                     p.snippet = std::move(gen.snippet);
                                 else
@@ -319,7 +335,21 @@ namespace Arcane
             };
             readPos("base", data.chainBaseX, data.chainBaseY);
             readPos("out", data.chainOutX, data.chainOutY);
+            readPos("scene", data.chainSceneX, data.chainSceneY);
         }
+
+        // The base pass's own input slots (sprite materials refuse them along
+        // with passes; same sentinel clamp as the per-pass lists).
+        if (!data.IsInstance() && data.kind != "sprite" &&
+            doc.contains("baseInputs") && doc["baseInputs"].is_array())
+            for (const nlohmann::json& in : doc["baseInputs"])
+                if (in.is_number_unsigned())
+                {
+                    const std::uint64_t v = in.get<std::uint64_t>();
+                    data.baseInputs.push_back(v >= 0x80000000ull
+                                                  ? kSceneInput
+                                                  : static_cast<std::uint32_t>(v));
+                }
 
         // Entries are self-typed; malformed ones drop here, decl mismatches drop
         // at APPLY time (MaterialInstance::Set is the type gate).

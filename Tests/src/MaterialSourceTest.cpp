@@ -386,6 +386,56 @@ TEST_CASE("BuildMaterialShaderSource declares chainInputs without a chain build"
     CHECK(r.templ.SourceHash() != r0.templ.SourceHash());
 }
 
+TEST_CASE("BuildMaterialChainSource post mode: the scene input sentinel", "[material]")
+{
+    const std::string_view reader =
+        "float4 shade(Varyings v)\n"
+        "{ return 1.0 - InputTexture.Sample(MaterialSampler, v.uv); }\n";
+    const std::uint32_t scene[] = { kSceneInput };
+    const MaterialChainPassDesc passes[] = { { reader, scene } };
+
+    SECTION("post mode: pass 0 may read the scene, and only the scene")
+    {
+        const MaterialChainBuildResult r = BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", passes, "post", {},
+            /*externalInput=*/true);
+        REQUIRE(r.Ok());
+        CHECK(r.chainInputSlots == 1);   // the sentinel occupies a real slot
+        CHECK(r.passInputs[0] == std::vector<std::uint32_t>{ kSceneInput });
+        CHECK(r.hlsl[0].find("Texture2D InputTexture : register(t0);") !=
+              std::string::npos);
+
+        const std::uint32_t real[] = { 0 };
+        const MaterialChainPassDesc bad[] = { { reader, real } };
+        CHECK_FALSE(BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", bad, "post", {}, true).Ok());
+    }
+    SECTION("outside post mode a scene read is a chain error")
+    {
+        const MaterialChainBuildResult r = BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", passes, "notpost");
+        REQUIRE_FALSE(r.Ok());
+        REQUIRE_FALSE(r.errors.empty());
+        CHECK(r.errors[0].find("scene post chain") != std::string::npos);
+    }
+    SECTION("later passes may mix scene + earlier-pass inputs")
+    {
+        const std::uint32_t p1in[] = { kSceneInput, 0 };
+        const MaterialChainPassDesc mix[] = {
+            { "float4 shade(Varyings v) { return 0.25; }\n", {} },
+            { "float4 shade(Varyings v)\n"
+              "{ return InputTexture.Sample(MaterialSampler, v.uv) +\n"
+              "         InputTexture1.Sample(MaterialSampler, v.uv); }\n", p1in },
+        };
+        const MaterialChainBuildResult r = BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", mix, "mix", {}, true);
+        REQUIRE(r.Ok());
+        CHECK(r.chainInputSlots == 2);
+        CHECK(r.passInputs[1] ==
+              (std::vector<std::uint32_t>{ kSceneInput, 0 }));
+    }
+}
+
 TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[material]")
 {
     const std::string_view pass0 =

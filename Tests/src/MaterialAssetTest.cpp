@@ -325,3 +325,36 @@ TEST_CASE("AssetRegistry scans .arcmat as a native asset", "[material][project]"
     CHECK(b->id.IsValid());
     CHECK(registry.Resolve(b->id).has_value());
 }
+
+TEST_CASE(".arcmat round-trips base scene inputs (the post-material shape)", "[material]")
+{
+    const auto dir = TempDir("baseinputs");
+    const auto file = dir / "post.arcmat";
+
+    MaterialAssetData data;
+    data.id = Guid::Generate();
+    data.name = "Post";
+    data.snippet = "float4 shade(Varyings v)\n"
+                   "{ return 1.0 - InputTexture.Sample(MaterialSampler, v.uv); }\n";
+    data.baseInputs = { kSceneInput };
+    data.chainSceneX = -180.0f;
+    data.chainSceneY = 40.0f;
+    REQUIRE(SaveMaterialAsset(file, data));
+
+    const auto back = LoadMaterialAsset(file);
+    REQUIRE(back.has_value());
+    REQUIRE(back->baseInputs.size() == 1);
+    CHECK(back->baseInputs[0] == kSceneInput);       // sentinel survives exactly
+    CHECK(back->chainSceneX == -180.0f);
+    CHECK(back->chainSceneY == 40.0f);
+    CHECK(back->passes.empty());                     // base-only post material
+
+    // Garbage in the sentinel half-space clamps to the sentinel.
+    MaterialAssetData weird = data;
+    weird.baseInputs = { 0x80000001u };
+    REQUIRE(SaveMaterialAsset(file, weird));
+    const auto clamped = LoadMaterialAsset(file);
+    REQUIRE(clamped.has_value());
+    REQUIRE(clamped->baseInputs.size() == 1);
+    CHECK(clamped->baseInputs[0] == kSceneInput);
+}

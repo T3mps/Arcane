@@ -74,6 +74,11 @@ namespace Arcane
         // reserved InputTexture. The sprite kind REFUSES passes (multi-pass
         // sprites are renderer-owned); instances never carry them.
         std::vector<MaterialPass> passes;
+        // The BASE pass's input slots (post materials: kSceneInput entries
+        // reading the external scene color -- build-time enforced to be the
+        // ONLY thing pass 0 may read). The common post material is base-only,
+        // so this lives beside `snippet` rather than in a MaterialPass.
+        std::vector<std::uint32_t> baseInputs;
         // Saved param values by name -- applied over the //@param defaults (base)
         // or the parent chain (instance); unknown/mismatched names drop on apply.
         std::vector<std::pair<std::string, MatParamValue>> params;
@@ -82,10 +87,11 @@ namespace Arcane
         // saved anyway so every snippet-only consumer (sprite cache, parent
         // chains, older loads) works untouched. Convert-to-text = reset() this.
         std::optional<MaterialGraph> graph;
-        // Pass-canvas layout for the two fixed nodes (per-pass positions live
+        // Pass-canvas layout for the fixed nodes (per-pass positions live
         // on each MaterialPass). All-zero = never laid out -> auto-layout.
         float chainBaseX = 0.0f, chainBaseY = 0.0f;
         float chainOutX = 0.0f, chainOutY = 0.0f;
+        float chainSceneX = 0.0f, chainSceneY = 0.0f;   // the Scene source node
 
         bool IsInstance() const { return parent.IsValid(); }
         bool IsGraphOwned() const { return graph.has_value(); }

@@ -301,15 +301,18 @@ namespace Arcane
     // On any error `snippet` is empty -- callers keep the last good snippet
     // bound, exactly like a failed text compile.
     //
-    // `availableInputs` is the PASS context: how many upstream slots the pass
-    // owning this graph has wired on the pass canvas. PassInput nodes with
-    // slot >= availableInputs are structured errors (0 -- the default -- makes
-    // them invalid everywhere outside a wired pass: base graphs, sprite
-    // surfaces, standalone use).
+    // `availableInputs` is the wired-slot context: how many input slots the
+    // owning pass has wired on the pass canvas (a BASE graph gains slots too
+    // once it reads the scene -- post materials). PassInput nodes with
+    // slot >= availableInputs are structured errors (0 -- the default --
+    // makes them invalid anywhere without wired inputs). `passGraph` marks an
+    // EXTRA pass's graph: Vertex Output is barred there (the vertex stage
+    // belongs to the base).
     [[nodiscard]] ARCANE_API GraphCodegenResult GenerateGraphSnippet(
         const MaterialGraph& graph,
         MaterialSurface surface = MaterialSurface::Fullscreen,
-        std::uint32_t availableInputs = 0);
+        std::uint32_t availableInputs = 0,
+        bool passGraph = false);
 
     // Per-node preview codegen (the editor's SG-style thumbnails): the snippet
     // whose final color VISUALIZES `nodeId`'s first output pin -- scalars splat

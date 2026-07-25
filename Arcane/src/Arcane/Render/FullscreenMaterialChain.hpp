@@ -68,11 +68,15 @@ namespace Arcane
         // (thumbnails stay live); the `viewIndex` pass (clamped; SIZE_MAX = the
         // last) also renders into the target. Texture params follow the same
         // pre-load contract as FullscreenMaterialPass::Render.
+        // `externalInput`: the texture kSceneInput slots bind (the scene color
+        // in the post arc; a stand-in in the editor preview). Null -> the 1x1
+        // black fallback, same as any missing input.
         virtual void Render(nvrhi::ICommandList* commandList,
                             nvrhi::IFramebuffer* target,
                             const MaterialInstance& instance,
                             const GlobalParams& globals,
                             Assets* assets,
-                            std::size_t viewIndex = static_cast<std::size_t>(-1)) = 0;
+                            std::size_t viewIndex = static_cast<std::size_t>(-1),
+                            nvrhi::ITexture* externalInput = nullptr) = 0;
     };
 }

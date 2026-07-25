@@ -79,6 +79,12 @@ namespace Arcane
     // InputTexture1..3 -- the reserved-name list is sized to match).
     inline constexpr std::uint32_t kMaxPassInputs = 4;
 
+    // Sentinel `inputs` entry: "the EXTERNAL scene color", not a chain index
+    // (the post-processing arc). Only valid when the chain builds in post
+    // mode; occupies an InputTexture slot like any other input, and the
+    // runner binds the caller's external texture there.
+    inline constexpr std::uint32_t kSceneInput = 0xFFFFFFFFu;
+
     // `chainInputs` (fullscreen pass chains only): additionally declare that
     // many reserved upstream textures -- `InputTexture`, `InputTexture1`, ... --
     // at the slots after the material's own textures, and always emit
@@ -171,11 +177,17 @@ namespace Arcane
     // kMaxPassInputs per pass.
     // `vertexSnippet`: the material's ONE vertex stage, stitched into every
     // pass's source (chains share the fullscreen vertex path).
+    // `externalInput` (post mode): kSceneInput entries become VALID -- any
+    // pass may read the scene, and pass 0's no-inputs rule relaxes to
+    // "scene only". Outside post mode a kSceneInput entry is a chain error
+    // (the material belongs on the scene post slot, not wherever it was
+    // stitched from).
     ARCANE_API MaterialChainBuildResult BuildMaterialChainSource(
         std::string_view templateText,
         std::span<const MaterialChainPassDesc> passes,
         std::string materialName,
-        std::string_view vertexSnippet = {});
+        std::string_view vertexSnippet = {},
+        bool externalInput = false);
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif

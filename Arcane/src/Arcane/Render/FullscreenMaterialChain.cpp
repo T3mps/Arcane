@@ -1,6 +1,7 @@
 #include <Arcane/Render/FullscreenMaterialChain.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Material/MaterialSource.hpp>   // kSceneInput
 #include <Arcane/Render/FullscreenMaterialPass.hpp>
 
 #include <algorithm>
@@ -73,7 +74,8 @@ namespace Arcane
                         const MaterialInstance& instance,
                         const GlobalParams& globals,
                         Assets* assets,
-                        std::size_t viewIndex) override
+                        std::size_t viewIndex,
+                        nvrhi::ITexture* externalInput) override
             {
                 if (!Ready() || !commandList || !target)
                     return;
@@ -86,9 +88,11 @@ namespace Arcane
                 {
                     // Bind this pass's upstream outputs (validated earlier-only,
                     // so every source intermediate is already rendered).
+                    // kSceneInput slots read the caller's external texture.
                     sources.clear();
                     for (std::uint32_t in : m_inputs[i])
-                        sources.push_back(in < i ? m_tex[in].Get() : nullptr);
+                        sources.push_back(in == kSceneInput ? externalInput
+                                          : in < i ? m_tex[in].Get() : nullptr);
                     m_passes[i]->Render(commandList, m_fb[i], instance, globals,
                                         assets, sources);
                     if (i == view)

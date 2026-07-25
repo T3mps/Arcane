@@ -250,7 +250,7 @@ namespace Arcane
     }
 
     GraphCodegenResult GenerateGraphSnippet(const MaterialGraph& graph, MaterialSurface surface,
-                                            std::uint32_t availableInputs)
+                                            std::uint32_t availableInputs, bool passGraph)
     {
         GraphCodegenResult res;
         auto fail = [&](std::uint32_t node, std::string msg)
@@ -328,7 +328,10 @@ namespace Arcane
                 else
                     vertexOut = n;
             }
-        if (vertexOut && availableInputs > 0)
+        // Explicitly a PASS-graph gate, not availableInputs > 0: a BASE graph
+        // gains wired inputs the moment it reads the scene (post materials),
+        // and it still owns the vertex stage.
+        if (vertexOut && passGraph)
             fail(vertexOut->id, "the vertex stage belongs to the BASE material's "
                                 "graph, not a pass graph");
         if (vertexOut && surface != MaterialSurface::Sprite &&

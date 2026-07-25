@@ -191,8 +191,11 @@ TEST_CASE("Codegen: the Vertex Output context emits displace()", "[material]")
         CHECK_FALSE(GenerateGraphSnippet(g).Ok());
         g.nodes.pop_back();
 
-        // Vertex Output inside a pass graph.
-        CHECK(HasErrorOn(GenerateGraphSnippet(g, MaterialSurface::Fullscreen, 1), 6));
+        // Vertex Output inside a pass graph (the EXPLICIT pass flag -- a base
+        // graph with wired scene inputs keeps its vertex stage).
+        CHECK(HasErrorOn(
+            GenerateGraphSnippet(g, MaterialSurface::Fullscreen, 1, true), 6));
+        CHECK(GenerateGraphSnippet(g, MaterialSurface::Fullscreen, 1, false).Ok());
 
         // The color pin on the fullscreen surface.
         g.nodes.push_back(Node(8, GraphNodeType::ConstColor));

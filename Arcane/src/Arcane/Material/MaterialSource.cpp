@@ -468,7 +468,8 @@ namespace Arcane
     MaterialChainBuildResult BuildMaterialChainSource(std::string_view templateText,
                                                       std::span<const MaterialChainPassDesc> passes,
                                                       std::string materialName,
-                                                      std::string_view vertexSnippet)
+                                                      std::string_view vertexSnippet,
+                                                      bool externalInput)
     {
         MaterialChainBuildResult r;
         r.hlsl.resize(passes.size());
@@ -476,21 +477,32 @@ namespace Arcane
         r.passInputs.resize(passes.size());
 
         // DAG rules (what keeps the chain executable in span order): pass 0 is
-        // the base and reads nothing; every input references an EARLIER pass;
-        // at most kMaxPassInputs per pass. Violations are chain errors.
+        // the base and reads nothing but the scene; every real input
+        // references an EARLIER pass; at most kMaxPassInputs per pass.
+        // kSceneInput entries are post-mode-only. Violations are chain errors.
         for (std::size_t p = 0; p < passes.size(); ++p)
         {
             r.passInputs[p].assign(passes[p].inputs.begin(), passes[p].inputs.end());
-            if (p == 0 && !r.passInputs[p].empty())
-                r.errors.push_back("pass 0 (the base) cannot read pass outputs");
             if (r.passInputs[p].size() > kMaxPassInputs)
                 r.errors.push_back("pass " + std::to_string(p) + ": at most " +
                                    std::to_string(kMaxPassInputs) + " inputs");
             for (std::uint32_t in : r.passInputs[p])
-                if (in >= p)
+            {
+                if (in == kSceneInput)
+                {
+                    if (!externalInput)
+                        r.errors.push_back(
+                            "pass " + std::to_string(p) + ": reads the scene -- "
+                            "assign this material as the scene post chain");
+                    continue;
+                }
+                if (p == 0)
+                    r.errors.push_back("pass 0 (the base) can read only the scene");
+                else if (in >= p)
                     r.errors.push_back("pass " + std::to_string(p) + ": input " +
                                        std::to_string(in) +
                                        " must reference an earlier pass");
+            }
         }
 
         // Merge declarations across passes: same name + same type = ONE shared
