@@ -168,6 +168,8 @@ namespace Arcane::Edit
             return false;
         if (EntityInfo* info = reg.GetComponent<EntityInfo>(e))
         {
+            if (info->name == name)
+                return false;   // no-op rename: no change, no memento
             info->name = std::move(name);
             return true;
         }

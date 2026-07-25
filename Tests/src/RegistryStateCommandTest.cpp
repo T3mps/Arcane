@@ -208,3 +208,38 @@ TEST_CASE("every structural op round-trips through the memento", "[outliner]")
     CHECK(w.reg->GetComponent<EntityInfo>(a)->name == "Renamed");
     CHECK(w.reg->GetComponent<SpriteRenderer>(a) != nullptr);
 }
+
+TEST_CASE("failed redo-capture latches: redo stays a warned no-op", "[outliner]")
+{
+    // Slice-1 final review Minor #3: without a latch, a second Undo after a
+    // failed after-capture re-attempts the capture and silently snapshots
+    // the already-restored BEFORE state as the redo target. The latch keeps
+    // redo an honest no-op forever. Observable pin: state stays correct
+    // through undo/redo/undo/redo with a snapshot fn that fails after the
+    // initial (ApplyRegistryMutation-time) call.
+    World w;
+    Astra::Entity a = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
+
+    int calls = 0;
+    auto flakySnapshot = [&]() -> std::vector<std::byte>
+    {
+        ++calls;
+        if (calls > 1)
+            return {};                    // every capture after the first fails
+        auto r = w.reg->Save();
+        return r.IsOk() ? std::move(*r) : std::vector<std::byte>{};
+    };
+
+    REQUIRE(ApplyRegistryMutation(w.stack, "Hide", flakySnapshot, w.Restore(),
+        [&] { return Edit::SetHiddenRecursive(*w.reg, a, true) > 0; }));
+    CHECK(w.reg->GetComponent<Hidden>(a) != nullptr);
+
+    w.stack.Undo();                                       // capture fails, restore works
+    CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);
+    w.stack.Redo();                                       // warned no-op
+    CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);
+    w.stack.Undo();                                       // must NOT re-capture
+    CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);
+    w.stack.Redo();                                       // still a no-op
+    CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);
+}

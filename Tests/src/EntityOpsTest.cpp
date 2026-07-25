@@ -252,3 +252,29 @@ TEST_CASE("Dead entities in a set no-op and don't inflate the returned count",
         CHECK(Edit::SetHiddenRecursive(w.reg, dead, true) == 0);
     }
 }
+
+TEST_CASE("Same-name rename is a no-op and reports false", "[outliner]")
+{
+    // Inline rename commits on defocus even when the user changed nothing;
+    // reporting false lets ApplyRegistryMutation skip the memento push so
+    // the undo history never records a step that reverts nothing.
+    World w;
+    Astra::Entity e = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    REQUIRE(Edit::RenameEntity(w.reg, e, "Hero"));
+    CHECK_FALSE(Edit::RenameEntity(w.reg, e, "Hero"));   // unchanged -> false
+    CHECK(Edit::RenameEntity(w.reg, e, "Hero2"));        // real change -> true
+    CHECK(w.reg.GetComponent<EntityInfo>(e)->name == "Hero2");
+}
+
+TEST_CASE("CreateEntity under a dead parent creates at root", "[outliner]")
+{
+    // Documented fallback (slice-1 final review, Minor #2): a stale parent
+    // handle silently no-ops in Registry::SetParent, so the entity lands
+    // unparented. Pin the behavior the header now documents.
+    World w;
+    Astra::Entity parent = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    w.reg.DestroyEntity(parent);
+    Astra::Entity e = Edit::CreateEntity(w.reg, parent);
+    CHECK(w.reg.IsValid(e));
+    CHECK_FALSE(w.reg.GetParent(e).IsValid());
+}

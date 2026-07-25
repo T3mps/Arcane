@@ -12,11 +12,12 @@
 // registry object -- the CommandStack's resolve-every-call design already
 // survives that, see CommandStack's ctor contract); tests bind
 // Registry::Save / Registry::Load over a local slot.
-// OPEN (slice 2 decides): with a game plugin hosting native state (physics
-// worlds, cached handles), raw registry restore leaves that state
-// unreconciled -- the editor binding must either route through the plugin
-// SaveState/LoadState seam (as PlaySession does) or add a post-restore
-// reconcile hook.
+// DECIDED (slice 2): the editor's structural-edit binding is EDIT-MODE-ONLY
+// (the Outliner disables structural ops while Play is running), so a raw
+// registry restore never has plugin-hosted native state (physics worlds,
+// cached handles) to reconcile -- PlaySession rebuilds that state at Play
+// start from the current registry. If a future plugin ever holds edit-time
+// native state, add a post-restore reconcile hook then.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Edit/Command.hpp>
@@ -62,6 +63,7 @@ namespace Arcane
         RestoreFn              m_restore;
         std::vector<std::byte> m_before;
         std::vector<std::byte> m_after;   // captured on first Undo
+        bool m_redoLost = false;   // first failed after-capture latches: redo stays a warned no-op
     };
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -75,6 +77,9 @@ namespace Arcane
     // Skips the push (edit stands, no undo step) when mutate() reports no
     // change, so no-op edits never pollute the history. Returns mutate()'s
     // result.
+    // mutate() must be all-or-nothing: it must NOT partially mutate the
+    // registry and then return false -- a false return means "nothing
+    // changed" and skips the undo push entirely.
     ARCANE_API bool ApplyRegistryMutation(CommandStack& stack, std::string label,
                                           const RegistryStateCommand::SnapshotFn& snapshot,
                                           const RegistryStateCommand::RestoreFn& restore,

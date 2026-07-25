@@ -21,12 +21,18 @@ namespace Arcane
 
     void RegistryStateCommand::Undo()
     {
-        if (m_after.empty())
+        if (m_after.empty() && !m_redoLost)
         {
             m_after = m_snapshot();
             if (m_after.empty())
+            {
+                // Latch: retrying on a later Undo would capture the restored
+                // BEFORE state and make redo "succeed" silently while
+                // restoring the state the registry is already in.
+                m_redoLost = true;
                 ARC_WARN("'{}': redo-state capture failed -- undo proceeds, "
                          "redo will be unavailable", m_label);
+            }
         }
         if (!m_restore(m_before))
             ARC_WARN("'{}': registry restore failed on undo", m_label);
@@ -34,7 +40,7 @@ namespace Arcane
 
     void RegistryStateCommand::Redo()
     {
-        if (m_after.empty())
+        if (m_redoLost || m_after.empty())
         {
             ARC_WARN("'{}': no redo state captured -- redo skipped", m_label);
             return;

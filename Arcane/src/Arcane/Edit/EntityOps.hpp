@@ -28,6 +28,9 @@ namespace Arcane::Edit
 
     // New entity carrying Transform{} + EntityInfo{Generate(), AutoEntityName},
     // parented under `parent` when valid. Returns the new entity.
+    // A dead (stale) parent handle silently falls back to root creation --
+    // Registry::SetParent no-ops on dead parents and a create is still a
+    // real edit worth keeping.
     ARCANE_API Astra::Entity CreateEntity(Astra::Registry& reg,
                                           Astra::Entity parent);
 
@@ -52,7 +55,8 @@ namespace Arcane::Edit
                                               Astra::Entity e, bool hidden);
 
     // Set the display name; adds EntityInfo{Generate(), name} when absent.
-    // False only for a dead entity.
+    // Returns false for a dead entity OR when the name is already exactly
+    // `name` (no-op).
     ARCANE_API bool RenameEntity(Astra::Registry& reg, Astra::Entity e,
                                  std::string name);
 
