@@ -304,6 +304,26 @@ namespace Arcane
         MaterialSurface surface = MaterialSurface::Fullscreen,
         std::uint32_t availableInputs = 0);
 
+    // Per-node preview codegen (the editor's SG-style thumbnails): the snippet
+    // whose final color VISUALIZES `nodeId`'s first output pin -- scalars splat
+    // to grayscale, float2 shows as R/G, and alpha is forced opaque (a preview
+    // must never vanish into the canvas). Built entirely from the existing
+    // vocabulary: a clone of the graph with the Output re-wired through a
+    // synthetic Custom node (`float4(value.rgb, 1)` behind a width-4 pin), so
+    // the adaptation table does the width work at the call site and codegen
+    // stays untouched. Vertex Output nodes are stripped from
+    // the clone (previews are pixel values; no displacement, and pass-context
+    // clones stay legal). Always generated against the FULLSCREEN surface --
+    // that is the surface thumbnails render on -- so subgraphs using
+    // sprite-only nodes refuse with errors (callers show no preview).
+    // `availableInputs` follows GenerateGraphSnippet's pass-context contract.
+    // Errors: nodeId missing / previewless (no output pins) / whatever the
+    // underlying codegen refuses.
+    [[nodiscard]] ARCANE_API GraphCodegenResult GenerateNodePreviewSnippet(
+        const MaterialGraph& graph,
+        std::uint32_t nodeId,
+        std::uint32_t availableInputs = 0);
+
     // The "graph" object inside .arcmat JSON (see MaterialAsset). Output is
     // ordered -- nodes sorted by id, links by (to, toPin) -- purely for diff
     // stability (SG sorts on save for the same reason). FromJson returns

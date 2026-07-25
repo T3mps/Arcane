@@ -88,6 +88,18 @@ namespace Arcane::Editor
                    (static_cast<std::uint64_t>(pass) << 8);
         }
 
+        // Node-preview compiles coalesce per (document, pass, node), in a key
+        // band the StageKey space never reaches (salt in the top bits).
+        std::uint64_t NodePreviewKey(const Arcane::Guid& id, std::size_t pass,
+                                     std::uint32_t node)
+        {
+            std::uint64_t h = (id.hi ^ (id.lo * 1099511628211ull)) ^
+                              0x9E3779B97F4A7C15ull;
+            h = (h ^ (static_cast<std::uint64_t>(pass) << 32) ^ node) *
+                1099511628211ull;
+            return h;
+        }
+
         // ---- Graph canvas plumbing (Slice 9) ----
         namespace ed = ax::NodeEditor;
 
@@ -469,6 +481,62 @@ namespace Arcane::Editor
 
     bool ShaderEditorDocument::ConsumeResult(const Arcane::ShaderCompileResult& result)
     {
+        // Node-preview jobs: diag-less (the MAIN compile owns every badge --
+        // a preview clone can only fail where the real snippet also fails);
+        // a failure simply leaves that node's last-good thumbnail showing.
+        if (result.jobId == m_nodePreviewVsJob && m_nodePreviewVsJob != 0)
+        {
+            m_nodePreviewVsJob = 0;
+            const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
+                                     ? result.spirv : result.dxil;
+            if (target.succeeded && m_services.device)
+            {
+                m_nodePreviewVs = m_services.device->createShader(
+                    nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Vertex)
+                        .setEntryName(Arcane::kVsEntry)
+                        .setDebugName((m_title + "_thumbvs").c_str()),
+                    target.bytecode.data(), target.bytecode.size());
+                // Bind every thumbnail that landed before the shared VS did.
+                if (m_nodePreviewVs)
+                    for (auto& [id, np] : m_nodePreviews)
+                        if (!np.psBytes.empty())
+                        {
+                            nvrhi::ShaderHandle ps = m_services.device->createShader(
+                                nvrhi::ShaderDesc()
+                                    .setShaderType(nvrhi::ShaderType::Pixel)
+                                    .setEntryName(Arcane::kPsEntry)
+                                    .setDebugName("NodePreview_ps"),
+                                np.psBytes.data(), np.psBytes.size());
+                            np.psBytes.clear();
+                            BindNodePreview(np, ps);
+                        }
+            }
+            return true;
+        }
+        for (auto& [id, np] : m_nodePreviews)
+        {
+            if (result.jobId != np.psJob || np.psJob == 0)
+                continue;
+            np.psJob = 0;
+            const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
+                                     ? result.spirv : result.dxil;
+            if (target.succeeded && m_services.device)
+            {
+                if (!m_nodePreviewVs)
+                    np.psBytes = target.bytecode;   // bind when the VS lands
+                else
+                {
+                    nvrhi::ShaderHandle ps = m_services.device->createShader(
+                        nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
+                            .setEntryName(Arcane::kPsEntry)
+                            .setDebugName("NodePreview_ps"),
+                        target.bytecode.data(), target.bytecode.size());
+                    BindNodePreview(np, ps);
+                }
+            }
+            return true;
+        }
+
         // Chain-mode jobs first (mutually exclusive with the single-path ids --
         // Rebuild clears whichever set is not in play).
         for (std::size_t p = 0; p < m_passJobs.size(); ++p)
@@ -781,6 +849,10 @@ namespace Arcane::Editor
     void ShaderEditorDocument::Tick(double dt)
     {
         m_animTime += dt;
+        // Thumbnails displaced LAST frame are safe to release now (their
+        // ImGui draws have been recorded); this frame's displacements queue up.
+        m_nodePreviewRetired.clear();
+        RenderNodePreviews(dt);
         if (!PreviewReady() || !m_instance || !m_preview)
             return;
 
@@ -944,6 +1016,9 @@ namespace Arcane::Editor
                 // tier; freeform HLSL lives in Custom nodes.
                 ImGui::SameLine();
                 ImGui::Checkbox("HLSL", &m_showGeneratedText);
+                ImGui::SameLine();
+                if (ImGui::Checkbox("Thumbs", &m_showNodePreviews))
+                    RefreshNodePreviews();   // off clears; on resubmits
             }
             // The vertex stage (%{VERTEX_BODY}): one text body per material,
             // shared by every pass. Toggling swaps the text panel to it.
@@ -1820,6 +1895,9 @@ namespace Arcane::Editor
         }
         if (!anyError)
             Rebuild();   // any codegen error keeps last-good bound; badges show why
+        // Per-node thumbnails ride every regeneration; the hash gate keeps
+        // untouched subgraphs from recompiling.
+        RefreshNodePreviews();
     }
 
     void ShaderEditorDocument::ApplyGraphState(std::size_t pass,
@@ -1885,6 +1963,236 @@ namespace Arcane::Editor
         }
     }
 
+    // ------------------------------------------------- node preview thumbnails
+    void ShaderEditorDocument::RefreshNodePreviews()
+    {
+        const bool eligible = m_services.device && m_services.compiler &&
+                              m_services.sources && !IsInstance() &&
+                              m_showNodePreviews && ActiveGraphOwned();
+        if (!eligible)
+        {
+            for (auto& [id, np] : m_nodePreviews)
+                if (np.tex)
+                    m_nodePreviewRetired.push_back(np.tex);
+            m_nodePreviews.clear();
+            m_nodePreviewsPass = -1;
+            return;
+        }
+        std::size_t pass = static_cast<std::size_t>(std::max(0, m_activePass));
+        if (pass > m_data.passes.size())
+            pass = 0;   // stale selection after an outside reload
+        if (m_nodePreviewsPass != static_cast<int>(pass))
+        {
+            for (auto& [id, np] : m_nodePreviews)
+                if (np.tex)
+                    m_nodePreviewRetired.push_back(np.tex);
+            m_nodePreviews.clear();
+            m_nodePreviewsPass = static_cast<int>(pass);
+        }
+
+        // Thumbnails always render the FULLSCREEN surface (see
+        // GenerateNodePreviewSnippet) -- sprite-gated subgraphs simply refuse.
+        const auto templateText = m_services.sources->Get(
+            Arcane::MaterialTemplateFile(Arcane::MaterialSurface::Fullscreen));
+        if (!templateText)
+            return;
+
+        // The ONE passthrough VS every thumbnail shares (register assignments
+        // are explicit in the generated source, so a VS compiled without a
+        // preview's texture declarations still matches its layout).
+        if (!m_nodePreviewVs && m_nodePreviewVsJob == 0)
+        {
+            Arcane::MaterialBuildResult vsBuild = Arcane::BuildMaterialShaderSource(
+                *templateText, "float4 shade(Varyings v) { return float4(0,0,0,1); }\n",
+                m_title + "_thumbvs");
+            Arcane::ShaderCompileRequest req;
+            req.debugName = m_title + "_thumbvs.hlsl";
+            req.sourceUtf8 = std::move(vsBuild.hlsl);
+            req.entry = Arcane::kVsEntry;
+            req.profile = Arcane::kVsProfile;
+            req.coalesceKey = NodePreviewKey(m_data.id, 0xFFFF, 0);
+            m_nodePreviewVsJob = m_services.compiler->Submit(std::move(req), Now());
+        }
+
+        const Arcane::MaterialGraph& g = *ActiveGraphOpt();
+        const std::vector<std::uint32_t> wired =
+            pass == 0 ? std::vector<std::uint32_t>{} : m_data.passes[pass - 1].inputs;
+        const std::uint32_t avail = static_cast<std::uint32_t>(wired.size());
+
+        std::unordered_set<std::uint32_t> live;
+        for (const Arcane::GraphNode& n : g.nodes)
+        {
+            if (Arcane::GraphNodeOutputCount(n) == 0)
+                continue;   // Output / Vertex Output show no thumbnail
+            live.insert(n.id);
+            NodePreview& np = m_nodePreviews[n.id];
+
+            Arcane::GraphCodegenResult r =
+                Arcane::GenerateNodePreviewSnippet(g, n.id, avail);
+            const std::uint64_t hash =
+                r.Ok() ? std::hash<std::string>{}(r.snippet) | 1ull : 0ull;
+            if (hash == np.snippetHash)
+                continue;   // upstream unchanged -- keep whatever is bound
+            np.snippetHash = hash;
+            np.psJob = 0;   // orphan any in-flight compile of the older source
+            np.psBytes.clear();
+            np.pendingTempl.reset();
+            if (!r.Ok())
+                continue;   // no preview for this node (last-good keeps showing)
+
+            Arcane::MaterialBuildResult build = Arcane::BuildMaterialShaderSource(
+                *templateText, r.snippet, m_title + "_n" + std::to_string(n.id),
+                Arcane::MaterialSurface::Fullscreen, {}, avail);
+            if (!build.errors.empty())
+                continue;
+            np.pendingTempl =
+                std::make_shared<Arcane::MaterialTemplate>(std::move(build.templ));
+            np.pendingInputs = avail;
+            np.pendingSources = wired;
+
+            Arcane::ShaderCompileRequest req;
+            req.debugName = m_title + "_n" + std::to_string(n.id) + ".hlsl";
+            req.sourceUtf8 = std::move(build.hlsl);
+            req.entry = Arcane::kPsEntry;
+            req.profile = Arcane::kPsProfile;
+            req.coalesceKey = NodePreviewKey(m_data.id, pass, n.id);
+            np.psJob = m_services.compiler->Submit(std::move(req), Now());
+        }
+
+        // Nodes deleted since the last refresh.
+        for (auto it = m_nodePreviews.begin(); it != m_nodePreviews.end();)
+        {
+            if (!live.contains(it->first))
+            {
+                if (it->second.tex)
+                    m_nodePreviewRetired.push_back(it->second.tex);
+                it = m_nodePreviews.erase(it);
+            }
+            else
+                ++it;
+        }
+    }
+
+    void ShaderEditorDocument::BindNodePreview(NodePreview& np, nvrhi::ShaderHandle ps)
+    {
+        if (!np.pendingTempl || !m_nodePreviewVs || !ps)
+            return;
+        if (!np.pass)
+            np.pass = Arcane::FullscreenMaterialPass::Create(m_services.device);
+        if (!np.pass)
+            return;
+        if (!np.pass->SetMaterial(np.pendingTempl, m_nodePreviewVs, ps,
+                                  np.pendingInputs))
+            return;
+        np.inst = std::make_shared<Arcane::MaterialInstance>(
+            std::shared_ptr<const Arcane::MaterialTemplate>(np.pendingTempl));
+        np.boundInputs = np.pendingInputs;
+        np.boundSources = np.pendingSources;
+        if (!np.tex)
+        {
+            constexpr std::uint32_t kThumbSize = 128;
+            auto desc = nvrhi::TextureDesc()
+                .setWidth(kThumbSize).setHeight(kThumbSize)
+                .setFormat(nvrhi::Format::RGBA16_FLOAT)
+                .setIsRenderTarget(true)
+                .setInitialState(nvrhi::ResourceStates::ShaderResource)
+                .setKeepInitialState(true)
+                .setDebugName("NodePreview");
+            np.tex = m_services.device->createTexture(desc);
+            np.fb = np.tex ? m_services.device->createFramebuffer(
+                                 nvrhi::FramebufferDesc().addColorAttachment(np.tex))
+                           : nullptr;
+        }
+        np.ready = np.tex && np.fb;
+    }
+
+    void ShaderEditorDocument::RenderNodePreviews(double dt)
+    {
+        // Thumbnails record only while the canvas is the visible editing
+        // surface; params sync from the doc instance first (redundant Sets
+        // don't bump serials, so the steady state is hash lookups).
+        if (!m_showNodePreviews || !m_services.device || IsInstance() ||
+            !ActiveGraphOwned() || m_showGeneratedText || m_editVertex)
+            return;
+        bool any = false;
+        for (auto& [id, np] : m_nodePreviews)
+            any = any || np.ready;
+        if (!any)
+            return;
+
+        for (auto& [id, np] : m_nodePreviews)
+        {
+            if (!np.ready || !np.inst)
+                continue;
+            if (m_instance)
+                for (const Arcane::ParamDecl& d : np.inst->Template().Params())
+                {
+                    Arcane::MatParamValue v;
+                    if (m_instance->GetParam(d.nameHash, v))
+                        np.inst->Set(d.nameHash, v);
+                }
+            // Texture params must be resident BEFORE the list opens (the same
+            // upload-loss contract as the main preview).
+            if (m_services.runtime)
+                for (const Arcane::Guid& tg : np.inst->ResolveTextures())
+                    if (tg.IsValid())
+                        (void)m_services.runtime->AssetsFacade().GetTexture(
+                            Arcane::AssetId::FromGuid(tg));
+        }
+
+        if (!m_nodePreviewCl)
+            m_nodePreviewCl = m_services.device->createCommandList();
+        if (!m_nodePreviewCl)
+            return;
+
+        Arcane::GlobalParams globals;
+        globals.time = static_cast<float>(m_animTime);
+        globals.deltaTime = static_cast<float>(dt);
+        globals.viewportWidth = 128.0f;
+        globals.viewportHeight = 128.0f;
+        Arcane::Assets* assets =
+            m_services.runtime ? &m_services.runtime->AssetsFacade() : nullptr;
+
+        m_nodePreviewCl->open();
+        for (auto& [id, np] : m_nodePreviews)
+        {
+            if (!np.ready || !np.inst)
+                continue;
+            // Pass-graph thumbnails read the chain's LIVE intermediates (one
+            // frame stale -- invisible at thumbnail scale); missing entries
+            // fall back to the pass's 1x1 black.
+            std::vector<nvrhi::ITexture*> ins;
+            ins.reserve(np.boundSources.size());
+            for (std::uint32_t src : np.boundSources)
+                ins.push_back(m_chain ? m_chain->PassOutput(src) : nullptr);
+            np.pass->Render(m_nodePreviewCl, np.fb, *np.inst, globals, assets, ins);
+        }
+        m_nodePreviewCl->close();
+        m_services.device->executeCommandList(m_nodePreviewCl);
+    }
+
+    void ShaderEditorDocument::DrawNodePreviewImage(const Arcane::GraphNode& n)
+    {
+        if (!m_showNodePreviews)
+            return;
+        constexpr float kThumbDraw = 96.0f;
+        if (n.type == Arcane::GraphNodeType::Output)
+        {
+            // The Output node shows the material's own preview (the pass
+            // canvas's base-node convention).
+            if (m_preview && PreviewReady())
+                ImGui::Image(static_cast<ImTextureID>(m_preview->TextureId()),
+                             ImVec2(kThumbDraw, kThumbDraw));
+            return;
+        }
+        const auto it = m_nodePreviews.find(n.id);
+        if (it == m_nodePreviews.end() || !it->second.ready || !it->second.tex)
+            return;
+        ImGui::Image(static_cast<ImTextureID>(
+                         reinterpret_cast<uintptr_t>(it->second.tex.Get())),
+                     ImVec2(kThumbDraw, kThumbDraw));
+    }
+
     void ShaderEditorDocument::DrawGraphPanel(float height)
     {
         if (!ActiveGraphOwned())
@@ -1904,6 +2212,7 @@ namespace Arcane::Editor
             m_graphShownPass = m_activePass;
             m_graphPositionsApplied = false;
             RebuildDiagBadges();
+            RefreshNodePreviews();   // thumbnails belong to the shown graph
         }
         Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
@@ -2496,6 +2805,8 @@ namespace Arcane::Editor
             ImGui::Text("        %s ->", Arcane::GraphNodeOutputPin(n, pin).name);
             ed::EndPin();
         }
+
+        DrawNodePreviewImage(n);
 
         ImGui::PopID();
         ed::EndNode();

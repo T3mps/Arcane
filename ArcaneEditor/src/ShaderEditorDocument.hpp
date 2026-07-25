@@ -30,6 +30,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Arcane
@@ -172,6 +173,17 @@ namespace Arcane::Editor
         bool NodeBadged(std::uint32_t nodeId) const;
         void RebuildDiagBadges();            // compile diags -> line map -> node ids
         void DrawPreviewPanel(float height);
+        // ---- Per-node preview thumbnails (SG parity) ----
+        // Each previewable node of the ACTIVE graph compiles a truncated clone
+        // (GenerateNodePreviewSnippet) through the NORMAL build path into its
+        // own tiny RGBA16F target, hash-gated so only nodes whose upstream
+        // actually changed recompile. One passthrough VS (fullscreen template,
+        // empty snippet) serves every thumbnail; params sync from the doc's
+        // instance every frame (redundant Sets don't bump serials); pass-graph
+        // thumbnails bind the chain's live intermediates as InputTexture(N).
+        void RefreshNodePreviews();          // (re)submit stale per-node compiles
+        void RenderNodePreviews(double dt);  // record all ready thumbnails (own CL)
+        void DrawNodePreviewImage(const Arcane::GraphNode& node);
         void DrawParamsPanel();
         // True when the ACTIVE surface has something bound to show.
         bool PreviewReady() const;
@@ -316,6 +328,36 @@ namespace Arcane::Editor
         std::uint32_t m_bodyEditRequest = 0;
         std::uint32_t m_bodyEditNode = 0;
         char          m_bodyBuf[4096] = {};
+
+        // ---- Node preview thumbnails ----
+        struct NodePreview
+        {
+            std::uint64_t psJob = 0;         // in-flight compile (0 = none)
+            std::uint64_t snippetHash = 0;   // last generated preview source
+            std::vector<std::uint8_t> psBytes;   // landed before the shared VS
+            std::shared_ptr<Arcane::MaterialTemplate> pendingTempl;
+            std::uint32_t pendingInputs = 0; // slot count the source stitched
+            std::vector<std::uint32_t> pendingSources;   // wired chain indices
+            // Bound state (last-good: a failed recompile leaves these showing).
+            std::unique_ptr<Arcane::FullscreenMaterialPass> pass;
+            std::shared_ptr<Arcane::MaterialInstance> inst;
+            std::uint32_t boundInputs = 0;
+            std::vector<std::uint32_t> boundSources;
+            nvrhi::TextureHandle tex;
+            nvrhi::FramebufferHandle fb;
+            bool ready = false;
+        };
+        std::unordered_map<std::uint32_t, NodePreview> m_nodePreviews;   // ACTIVE graph
+        int  m_nodePreviewsPass = -1;   // which pass the map belongs to
+        bool m_showNodePreviews = true; // toolbar toggle
+        std::uint64_t       m_nodePreviewVsJob = 0;
+        nvrhi::ShaderHandle m_nodePreviewVs;    // shared passthrough VS
+        nvrhi::CommandListHandle m_nodePreviewCl;
+        // Displaced thumbnail textures parked one frame: an ImGui::Image
+        // submitted earlier in the SAME frame still holds the raw pointer
+        // until the backend records it, so release happens next Tick.
+        std::vector<nvrhi::TextureHandle> m_nodePreviewRetired;
+        void BindNodePreview(NodePreview& np, nvrhi::ShaderHandle ps);
 
         friend struct SnippetCallbackForwarder;
     };

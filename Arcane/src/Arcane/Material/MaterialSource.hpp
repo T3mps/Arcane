@@ -115,11 +115,17 @@ namespace Arcane
     // empty = identity passthrough. It runs at the END of vs_main (pos is
     // clip space) and sees params + Globals; //@param declarations belong in
     // the PIXEL snippet only.
+    //
+    // `chainInputs`: declare that many reserved InputTexture(N) slots (see
+    // GenerateMaterialBindings) WITHOUT the full chain build -- a single
+    // source that samples upstream textures the caller binds directly. The
+    // editor's per-node thumbnails of pass graphs stitch through this.
     ARCANE_API MaterialBuildResult BuildMaterialShaderSource(std::string_view templateText,
                                                              std::string_view snippet,
                                                              std::string materialName,
                                                              MaterialSurface surface = MaterialSurface::Fullscreen,
-                                                             std::string_view vertexSnippet = {});
+                                                             std::string_view vertexSnippet = {},
+                                                             std::uint32_t chainInputs = 0);
 
     // One pass's authored surface, as the chain builder consumes it. `inputs`
     // are CHAIN indices (0 = the base snippet) feeding InputTexture(N); they

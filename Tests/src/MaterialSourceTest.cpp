@@ -359,6 +359,33 @@ TEST_CASE("Vertex-stage sources compile on both targets and surfaces", "[shaderc
     sc.Shutdown();
 }
 
+TEST_CASE("BuildMaterialShaderSource declares chainInputs without a chain build",
+          "[material]")
+{
+    // The node-thumbnail path: a SINGLE source that samples upstream textures
+    // the caller binds directly (no BuildMaterialChainSource ceremony).
+    const std::string_view snippet =
+        "//@param texture Noise\n"
+        "float4 shade(Varyings v)\n"
+        "{ return Noise.Sample(MaterialSampler, v.uv) +\n"
+        "         InputTexture1.Sample(MaterialSampler, v.uv); }\n";
+    const MaterialBuildResult r = BuildMaterialShaderSource(
+        "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n%{VERTEX_BODY}\n", snippet,
+        "thumb", MaterialSurface::Fullscreen, {}, 2);
+    REQUIRE(r.errors.empty());
+    CHECK(r.hlsl.find("Texture2D Noise : register(t0);") != std::string::npos);
+    CHECK(r.hlsl.find("Texture2D InputTexture : register(t1);") != std::string::npos);
+    CHECK(r.hlsl.find("Texture2D InputTexture1 : register(t2);") != std::string::npos);
+    CHECK(r.hlsl.find("SamplerState MaterialSampler : register(s0);") != std::string::npos);
+
+    // The slot count is SOURCE: it must reach the template hash (distinct
+    // pipelines for distinct layouts).
+    const MaterialBuildResult r0 = BuildMaterialShaderSource(
+        "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n%{VERTEX_BODY}\n", snippet,
+        "thumb", MaterialSurface::Fullscreen, {}, 0);
+    CHECK(r.templ.SourceHash() != r0.templ.SourceHash());
+}
+
 TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[material]")
 {
     const std::string_view pass0 =

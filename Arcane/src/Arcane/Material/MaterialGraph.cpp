@@ -928,6 +928,73 @@ namespace Arcane
         return res;
     }
 
+    GraphCodegenResult GenerateNodePreviewSnippet(const MaterialGraph& graph,
+                                                  std::uint32_t nodeId,
+                                                  std::uint32_t availableInputs)
+    {
+        GraphCodegenResult res;
+        const GraphNode* target = graph.FindNode(nodeId);
+        if (!target)
+        {
+            res.errors.push_back({ nodeId, "preview: node does not exist" });
+            return res;
+        }
+        if (GraphNodeOutputCount(*target) == 0)
+        {
+            res.errors.push_back({ nodeId, "preview: node has no output pin" });
+            return res;
+        }
+
+        MaterialGraph pg = graph;
+
+        // Strip Vertex Output nodes (previews are pixel values) and every link
+        // touching them or feeding the Output -- the preview owns the Output.
+        std::uint32_t outId = 0;
+        for (const GraphNode& n : pg.nodes)
+            if (n.type == GraphNodeType::Output)
+                outId = n.id;
+        if (outId == 0)
+        {
+            res.errors.push_back({ 0, "preview: graph has no Output node" });
+            return res;
+        }
+        std::vector<std::uint32_t> dropped;
+        std::erase_if(pg.nodes, [&](const GraphNode& n)
+        {
+            if (n.type != GraphNodeType::VertexOutput)
+                return false;
+            dropped.push_back(n.id);
+            return true;
+        });
+        std::erase_if(pg.links, [&](const GraphLink& l)
+        {
+            if (l.toNode == outId)
+                return true;
+            for (std::uint32_t id : dropped)
+                if (l.fromNode == id || l.toNode == id)
+                    return true;
+            return false;
+        });
+
+        // target.pin0 -> Custom(float4 value){ return float4(value.rgb, 1) }
+        // -> Output. The custom CALL SITE adapts the wire to the declared
+        // width-4 pin -- scalars splat (grayscale), float2 appends 0,1 -- and
+        // the body forces alpha opaque: exactly the SG preview semantics.
+        // (Split would NOT work here: it reads its source at native width, so
+        // a scalar target would land in the red lane alone.)
+        GraphNode wrap;
+        wrap.id = pg.MintId();
+        wrap.type = GraphNodeType::Custom;
+        wrap.customPins = { { "value", 4 } };
+        wrap.customOutWidth = 4;
+        wrap.customBody = "return float4(value.rgb, 1.0);";
+        pg.links.push_back({ nodeId, 0, wrap.id, 0 });
+        pg.links.push_back({ wrap.id, 0, outId, 0 });
+        pg.nodes.push_back(std::move(wrap));
+
+        return GenerateGraphSnippet(pg, MaterialSurface::Fullscreen, availableInputs);
+    }
+
     // ------------------------------------------------------------------- json
     nlohmann::json GraphToJson(const MaterialGraph& graph)
     {

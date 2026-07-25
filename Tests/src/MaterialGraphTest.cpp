@@ -710,6 +710,79 @@ TEST_CASE("Codegen: structured errors", "[material]")
     }
 }
 
+TEST_CASE("Node preview codegen: adaptation wrap, stripping, contexts", "[material]")
+{
+    // The editor's per-node thumbnails: clone + rewire through a synthetic
+    // Custom node whose width-4 pin makes the adaptation table do the work --
+    // scalars splat to grayscale, and the body forces alpha opaque.
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    g.nodes.push_back(Node(2, GraphNodeType::Time));
+    g.nodes.push_back(Node(3, GraphNodeType::Sin));
+    g.links.push_back(Link(2, 0, 3, 0));
+    g.links.push_back(Link(3, 0, 1, 0));
+
+    SECTION("scalar target wraps to grayscale with opaque alpha")
+    {
+        const GraphCodegenResult r = GenerateNodePreviewSnippet(g, 3);
+        REQUIRE(r.Ok());
+        // Call-site adaptation splats the scalar to the width-4 pin; the wrap
+        // body forces alpha 1 (opaque).
+        CHECK(r.snippet.find(".xxxx") != std::string::npos);
+        CHECK(r.snippet.find("float4(value.rgb, 1.0);") != std::string::npos);
+        CHECK(r.snippet.find("float4 shade(Varyings v)") != std::string::npos);
+        // Deterministic: same graph, same snippet.
+        CHECK(GenerateNodePreviewSnippet(g, 3).snippet == r.snippet);
+        // The original graph was not touched.
+        CHECK(g.nodes.size() == 3);
+        CHECK(g.links.size() == 2);
+    }
+    SECTION("previews reach nodes the Output cannot see")
+    {
+        g.nodes.push_back(Node(7, GraphNodeType::UV));   // disconnected island
+        const GraphCodegenResult r = GenerateNodePreviewSnippet(g, 7);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("v.uv") != std::string::npos);
+    }
+    SECTION("Output and Vertex Output are not previewable; missing node errors")
+    {
+        CHECK_FALSE(GenerateNodePreviewSnippet(g, 1).Ok());
+        g.nodes.push_back(Node(6, GraphNodeType::VertexOutput));
+        CHECK_FALSE(GenerateNodePreviewSnippet(g, 6).Ok());
+        CHECK_FALSE(GenerateNodePreviewSnippet(g, 42).Ok());
+    }
+    SECTION("Vertex Output nodes are stripped from the clone")
+    {
+        g.nodes.push_back(Node(6, GraphNodeType::VertexOutput));
+        g.links.push_back(Link(3, 0, 6, 0));   // sine drives posOffset too
+        const GraphCodegenResult r = GenerateNodePreviewSnippet(g, 3);
+        REQUIRE(r.Ok());
+        CHECK(r.vertexSnippet.empty());   // previews are pixel values only
+    }
+    SECTION("pass context: PassInput previews under wired slots only")
+    {
+        MaterialGraph pg;
+        pg.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode in = Node(2, GraphNodeType::PassInput);
+        in.passInputSlot = 1;
+        pg.nodes.push_back(in);
+        pg.links.push_back(Link(2, 0, 1, 0));
+        CHECK_FALSE(GenerateNodePreviewSnippet(pg, 2, 0).Ok());   // unwired
+        const GraphCodegenResult r = GenerateNodePreviewSnippet(pg, 2, 2);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("InputTexture1") != std::string::npos);
+    }
+    SECTION("sprite-only nodes refuse (thumbnails render fullscreen)")
+    {
+        MaterialGraph sg;
+        sg.nodes.push_back(Node(1, GraphNodeType::Output));
+        sg.nodes.push_back(Node(2, GraphNodeType::VertexColor));
+        sg.links.push_back(Link(2, 0, 1, 0));
+        REQUIRE(GenerateGraphSnippet(sg, MaterialSurface::Sprite).Ok());
+        CHECK_FALSE(GenerateNodePreviewSnippet(sg, 2).Ok());
+    }
+}
+
 TEST_CASE("Graph JSON round-trip is stable, sorted, and self-healing", "[material]")
 {
     MaterialGraph g;

@@ -435,7 +435,8 @@ namespace Arcane
                                                   std::string_view snippet,
                                                   std::string materialName,
                                                   MaterialSurface surface,
-                                                  std::string_view vertexSnippet)
+                                                  std::string_view vertexSnippet,
+                                                  std::uint32_t chainInputs)
     {
         MaterialBuildResult r;
 
@@ -447,9 +448,11 @@ namespace Arcane
         hash = Fnv64Str(hash, templateText);
         hash = Fnv64Str(hash, snippet);
         hash = Fnv64Str(hash, vertexSnippet);
+        // The input-slot count changes the emitted bindings -- it is source.
+        hash = (hash ^ chainInputs) * 1099511628211ull;
         r.templ = MaterialTemplate::Build(std::move(materialName), hash, std::move(parsed.decls));
 
-        const std::string bindings = GenerateMaterialBindings(r.templ, surface);
+        const std::string bindings = GenerateMaterialBindings(r.templ, surface, chainInputs);
         const std::pair<std::string_view, std::string_view> slots[] = {
             { "MATERIAL_CBUFFER", bindings },
             { "MATERIAL_BODY", snippet },
