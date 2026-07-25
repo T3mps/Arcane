@@ -16,7 +16,7 @@ using namespace Arcane::Editor;
 TEST_CASE("AssetKindOf classifies by extension, case-insensitive", "[editor]")
 {
     CHECK(AssetKindOf("game://materials/glow.arcmat") == AssetKind::Material);
-    CHECK(AssetKindOf("game://materials/old.armat") == AssetKind::Material);   // legacy
+    CHECK(AssetKindOf("game://materials/old.armat") == AssetKind::Other);   // dead spelling
     CHECK(AssetKindOf("game://tex/hero.PNG") == AssetKind::Texture);
     CHECK(AssetKindOf("game://tex/sky.hdr") == AssetKind::Texture);
     CHECK(AssetKindOf("game://sfx/hit.wav") == AssetKind::Audio);

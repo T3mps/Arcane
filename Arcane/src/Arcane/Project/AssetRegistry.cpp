@@ -149,12 +149,10 @@ namespace Arcane
             return std::nullopt;
 
         // Route by asset kind: native JSON embeds its id (.json data assets and
-        // .arcmat materials share the JSON-with-embedded-"id" shape; .armat is
-        // the material extension's pre-rename spelling, still scanned so
-        // existing content keeps resolving); imported binaries use a sidecar;
-        // anything else is not an asset we track.
+        // .arcmat materials share the JSON-with-embedded-"id" shape); imported
+        // binaries use a sidecar; anything else is not an asset we track.
         Guid id;
-        if (ext == ".json" || ext == ".arcmat" || ext == ".armat")
+        if (ext == ".json" || ext == ".arcmat")
             id = ResolveNativeId(file);
         else if (IsImportedBinary(ext))
             id = ResolveSidecarId(file);

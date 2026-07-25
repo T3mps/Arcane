@@ -325,10 +325,6 @@ namespace Arcane::Editor
                 return data ? data->id : Arcane::Guid::Nil();
             };
         m_documents.RegisterFactory(".arcmat", materialFactory, materialPeek);
-        // Legacy extension (the pre-rename ".armat"): same routing -- existing
-        // content keeps opening; identity is the embedded GUID, so files can
-        // be renamed to .arcmat on disk at any time.
-        m_documents.RegisterFactory(".armat", materialFactory, materialPeek);
 
         // Scene sprite materials (Slice 8): SAVED .arcmat assets referenced by
         // SpriteRenderer::material compile through the same service and
@@ -402,7 +398,7 @@ namespace Arcane::Editor
     {
         if (!parent.IsValid())
             return;
-        if (path.extension() != ".arcmat" && path.extension() != ".armat")
+        if (path.extension() != ".arcmat")
             path += ".arcmat";
 
         Arcane::MaterialAssetData data;
@@ -422,7 +418,7 @@ namespace Arcane::Editor
 
     void EditorApp::CreateMaterialAt(std::filesystem::path path)
     {
-        if (path.extension() != ".arcmat" && path.extension() != ".armat")
+        if (path.extension() != ".arcmat")
             path += ".arcmat";
 
         // UE-model: every new material is GRAPH-owned (freeform HLSL lives in
@@ -1074,11 +1070,8 @@ namespace Arcane::Editor
                     m_gpu->Win().ShowSaveFileDialog(&EditorApp::MaterialNewPickedThunk, this,
                                                     "Arcane Material", "arcmat", defaultPath);
                 if (menuReq.openMaterial)
-                    // Open accepts the legacy .armat too (SDL filter patterns
-                    // are semicolon-separated); saves are always .arcmat.
                     m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
-                                                    "Arcane Material", "arcmat;armat",
-                                                    defaultPath);
+                                                    "Arcane Material", "arcmat", defaultPath);
             }
             const Arcane::Editor::AssetBrowserActions browserActions =
                 Arcane::Editor::DrawAssetBrowserPanel(m_assetBrowser,

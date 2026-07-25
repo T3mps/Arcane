@@ -145,21 +145,19 @@ TEST_CASE(".arcmat pass chains: round-trip, sprite/instance refusal", "[material
                   "InputTexture.Sample(MaterialSampler, v.uv)") != std::string::npos);
     }
 
-    SECTION("a pre-DAG file (no inputs key) defaults to the linear chain")
+    SECTION("an absent inputs key means NO inputs (no pre-DAG defaulting)")
     {
-        const auto file = dir / "predag.arcmat";
+        const auto file = dir / "noinputs.arcmat";
         {
             std::ofstream out(file, std::ios::binary);
             out << R"({"id":"eeee5555-5555-4555-8555-555555555555",)"
                 << R"("snippet":"float4 shade(Varyings v){return 0;}",)"
-                << R"("passes":[{"name":"a","snippet":"s"},{"name":"b","snippet":"s"}]})"
-                << '\n';
+                << R"("passes":[{"name":"a","snippet":"s"}]})" << '\n';
         }
         const auto loaded = LoadMaterialAsset(file);
         REQUIRE(loaded.has_value());
-        REQUIRE(loaded->passes.size() == 2);
-        CHECK(loaded->passes[0].inputs == std::vector<std::uint32_t>{ 0 });
-        CHECK(loaded->passes[1].inputs == std::vector<std::uint32_t>{ 1 });
+        REQUIRE(loaded->passes.size() == 1);
+        CHECK(loaded->passes[0].inputs.empty());
     }
 
     SECTION("absent passes key = single-pass (the pre-chain format)")
@@ -310,21 +308,16 @@ TEST_CASE("AssetRegistry scans .arcmat as a native asset", "[material][project]"
     std::ofstream(dir / "b.arcmat", std::ios::binary)
         << R"({ "kind": "fullscreen", "name": "B", "snippet": "x", "params": {} })";
 
-    // Legacy extension: the pre-rename ".armat" spelling still scans.
-    MaterialAssetData legacy;
-    legacy.id = Guid::Generate();
-    legacy.name = "Old";
-    legacy.snippet = "float4 shade(Varyings v) { return 1; }\n";
-    REQUIRE(SaveMaterialAsset(dir / "old.armat", legacy));
+    // The pre-rename ".armat" spelling is DEAD (no shipped content): not
+    // scanned, not an asset.
+    std::ofstream(dir / "old.armat", std::ios::binary)
+        << R"({ "id": "abab1212-1212-4212-8212-121212121212", "snippet": "x" })";
 
     AssetRegistry registry;
-    CHECK(registry.ScanContent(dir, "game") == 3);
+    CHECK(registry.ScanContent(dir, "game") == 2);
     const auto resolved = registry.Resolve(withId.id);
     REQUIRE(resolved.has_value());
     CHECK(*resolved == "game://a.arcmat");
-    const auto legacyResolved = registry.Resolve(legacy.id);
-    REQUIRE(legacyResolved.has_value());
-    CHECK(*legacyResolved == "game://old.armat");
 
     // The minted id was written back into b.arcmat.
     const auto b = LoadMaterialAsset(dir / "b.arcmat");

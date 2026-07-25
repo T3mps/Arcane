@@ -53,7 +53,7 @@ namespace Arcane::Editor
         std::transform(ext.begin(), ext.end(), ext.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-        if (ext == ".arcmat" || ext == ".armat")   // .armat = legacy spelling
+        if (ext == ".arcmat")
             return AssetKind::Material;
         for (const char* e : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" })
             if (ext == e) return AssetKind::Texture;
