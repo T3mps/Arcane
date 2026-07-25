@@ -330,21 +330,34 @@ namespace Arcane::Editor
         // SpriteRenderer::material compile through the same service and
         // register with the viewport's scene batcher.
         {
-            Arcane::SpriteMaterialCache::Services cacheServices;
-            cacheServices.compiler = m_shaderCompiler.get();
-            cacheServices.sources = &m_shaderSources;
-            cacheServices.assets = &m_runtime->AssetsFacade();
-            cacheServices.device = m_gpu->Device().Nvrhi();
-            cacheServices.backend = m_gpu->Device().Backend();
-            cacheServices.resolveAsset = [rt = &*m_runtime](const Arcane::Guid& g)
+            const auto resolveAsset = [rt = &*m_runtime](const Arcane::Guid& g)
                 -> std::optional<std::filesystem::path>
             {
                 const Arcane::Project* project = rt->CurrentProject();
                 return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(g))
                                : std::nullopt;
             };
+            Arcane::SpriteMaterialCache::Services cacheServices;
+            cacheServices.compiler = m_shaderCompiler.get();
+            cacheServices.sources = &m_shaderSources;
+            cacheServices.assets = &m_runtime->AssetsFacade();
+            cacheServices.device = m_gpu->Device().Nvrhi();
+            cacheServices.backend = m_gpu->Device().Backend();
+            cacheServices.resolveAsset = resolveAsset;
             m_spriteMaterials =
                 std::make_unique<Arcane::SpriteMaterialCache>(std::move(cacheServices));
+
+            // Post-chain twin (post arc, slice 2): same services, same drain
+            // site; slice 3's PostProcess sweep drives Request.
+            Arcane::PostChainCache::Services postServices;
+            postServices.compiler = m_shaderCompiler.get();
+            postServices.sources = &m_shaderSources;
+            postServices.assets = &m_runtime->AssetsFacade();
+            postServices.device = m_gpu->Device().Nvrhi();
+            postServices.backend = m_gpu->Device().Backend();
+            postServices.resolveAsset = resolveAsset;
+            m_postChains =
+                std::make_unique<Arcane::PostChainCache>(std::move(postServices));
         }
 
         return true;
@@ -365,6 +378,8 @@ namespace Arcane::Editor
         {
             if (m_spriteMaterials)
                 m_spriteMaterials->Invalidate(id);
+            if (m_postChains)
+                m_postChains->Invalidate(id);
             // Re-baseline the file watcher: our own save is not an external
             // edit and must not bounce back as a reload.
             if (const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject()
@@ -427,6 +442,8 @@ namespace Arcane::Editor
             ARC_INFO("material '{}' changed on disk", e.name);
             if (m_spriteMaterials)
                 m_spriteMaterials->Invalidate(e.guid);
+            if (m_postChains)
+                m_postChains->Invalidate(e.guid);
             m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
             {
                 auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
@@ -590,9 +607,11 @@ namespace Arcane::Editor
             return;
         }
         m_documents.CloseAll();
-        // Sprite materials resolved against the outgoing project's registry.
+        // Materials resolved against the outgoing project's registry.
         if (m_spriteMaterials)
             m_spriteMaterials->Clear();
+        if (m_postChains)
+            m_postChains->Clear();
 
         // Return to Edit + clear editor state that references the outgoing scene.
         if (m_play.IsPlaying())
@@ -1116,7 +1135,9 @@ namespace Arcane::Editor
                             consumed = doc->ConsumeResult(r) || consumed;
                     });
                     if (!consumed && m_spriteMaterials)
-                        m_spriteMaterials->ConsumeResult(r, m_viewport->Batch());
+                        consumed = m_spriteMaterials->ConsumeResult(r, m_viewport->Batch());
+                    if (!consumed && m_postChains)
+                        m_postChains->ConsumeResult(r);
                 }
             }
             // Publish the resolution table every frame (the map's address is

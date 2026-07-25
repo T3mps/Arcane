@@ -1,8 +1,10 @@
 #include <Arcane/Render/OffscreenCanvas.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/Canvas.hpp>
+#include <Arcane/Render/FullscreenMaterialChain.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 #include <Arcane/Render/TonemapPass.hpp>
 
@@ -70,7 +72,7 @@ namespace Arcane
                     fn(*m_batcher);
                 m_batcher->End();
 
-                m_tonemap->Run(m_commandList, m_canvas->Texture(), m_outputFb);
+                RunPostAndTonemap();
 
                 m_commandList->close();
                 m_device->executeCommandList(m_commandList);
@@ -112,6 +114,20 @@ namespace Arcane
                 return m_outputFb.Get();
             }
 
+            void SetPostChain(FullscreenMaterialChain* chain,
+                              const MaterialInstance* instance,
+                              Assets* assets) override
+            {
+                m_postChain    = chain;
+                m_postInstance = instance;
+                m_postAssets   = assets;
+            }
+
+            void SetPostGlobals(const GlobalParams& globals) override
+            {
+                m_postGlobals = globals;
+            }
+
             void Resize(uint32_t width, uint32_t height) override
             {
                 if (width == 0 || height == 0 ||
@@ -122,9 +138,10 @@ namespace Arcane
                 // may still read requires an idle (Canvas::Resize does the
                 // same).
                 m_device->waitForIdle();
-                m_outputFb = nullptr;
-                m_output   = nullptr;
-                m_canvas   = nullptr;
+                m_outputFb   = nullptr;
+                m_output     = nullptr;
+                m_canvas     = nullptr;
+                m_postCanvas = nullptr;   // lazily rebuilt at the next posted Draw
                 m_device->runGarbageCollection();
                 BuildTargets(width, height);
             }
@@ -133,6 +150,46 @@ namespace Arcane
             uint32_t Height() const override { return m_height; }
 
         private:
+            // The post hook (slice 2): with a bound chain the scene canvas
+            // feeds it as the external "Scene" input, the chain renders into
+            // the owned linear post buffer, and the tonemap samples THAT.
+            // Without one this is exactly the pre-hook line -- byte-identical.
+            void RunPostAndTonemap()
+            {
+                const bool post = m_postChain && m_postChain->Ready() &&
+                                  m_postInstance && EnsurePostTarget();
+                if (post)
+                {
+                    m_postChain->Render(m_commandList, m_postCanvas->Framebuffer(),
+                                        *m_postInstance, m_postGlobals,
+                                        m_postAssets,
+                                        static_cast<std::size_t>(-1),
+                                        m_canvas->Texture());
+                    m_tonemap->Run(m_commandList, m_postCanvas->Texture(),
+                                   m_outputFb);
+                }
+                else
+                {
+                    m_tonemap->Run(m_commandList, m_canvas->Texture(), m_outputFb);
+                }
+            }
+
+            // The post buffer is a second linear Canvas, built lazily so the
+            // many chainless OffscreenCanvases (doc previews, thumbnails)
+            // never pay for it. Sized with the scene canvas; dropped in
+            // Resize().
+            bool EnsurePostTarget()
+            {
+                if (m_postCanvas && m_postCanvas->Width() == m_width &&
+                    m_postCanvas->Height() == m_height)
+                    return true;
+                m_postCanvas = CreateCanvas(m_device, m_width, m_height);
+                if (!m_postCanvas)
+                    ARC_ERROR("OffscreenCanvas: post buffer creation failed "
+                              "({}x{}) -- post chain skipped", m_width, m_height);
+                return m_postCanvas != nullptr;
+            }
+
             bool BuildTargets(uint32_t width, uint32_t height)
             {
                 // Linear-HDR scene target: the canonical engine 2D draw target.
@@ -177,8 +234,15 @@ namespace Arcane
 
             nvrhi::IDevice*              m_device = nullptr;
             std::unique_ptr<Canvas>      m_canvas;
+            std::unique_ptr<Canvas>      m_postCanvas;   // lazy: only chains pay
             std::unique_ptr<Batcher2D>   m_batcher;
             std::unique_ptr<TonemapPass> m_tonemap;
+
+            // Post hook state -- non-owning, sticky (see the header contract).
+            FullscreenMaterialChain* m_postChain    = nullptr;
+            const MaterialInstance*  m_postInstance = nullptr;
+            Assets*                  m_postAssets   = nullptr;
+            GlobalParams             m_postGlobals{};
             nvrhi::TextureHandle         m_output;     // display-referred BGRA8 RT + SRV
             nvrhi::FramebufferHandle     m_outputFb;
             nvrhi::CommandListHandle     m_commandList;

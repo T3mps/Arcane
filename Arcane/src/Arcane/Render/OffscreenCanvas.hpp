@@ -25,8 +25,12 @@
 
 namespace Arcane
 {
+    class Assets;
     class Batcher2D;
+    class FullscreenMaterialChain;
+    class MaterialInstance;
     class ShaderLibrary;
+    struct GlobalParams;
 
     class ARCANE_API OffscreenCanvas
     {
@@ -84,5 +88,30 @@ namespace Arcane
 
         virtual uint32_t Width()  const = 0;
         virtual uint32_t Height() const = 0;
+
+        // --- scene post-processing hook (post arc, slice 2) ------------------
+        // NOTE: these are APPENDED at the END of the vtable on purpose --
+        // OffscreenCanvas is plugin-reachable (Runtime hands out the device +
+        // shader library so a plugin can create one), and appending keeps every
+        // existing slot index valid for modules built against the older header.
+        // Keep any future virtual BELOW these.
+
+        // Bind a scene post chain: in Draw(), after the batcher pass closes,
+        // the linear canvas feeds `chain` as its external "Scene" input, the
+        // chain renders into an owned linear post buffer, and the tonemap
+        // samples THAT instead of the canvas. Null chain or instance = off --
+        // the pre-hook path, byte-identical. All three pointers are non-owning
+        // and sticky; the caller keeps them alive (or clears them) across
+        // Draws. `assets` resolves the instance's texture params at render
+        // time and follows FullscreenMaterialPass::Render's pre-load contract:
+        // textures must already be loaded before Draw() opens the list.
+        virtual void SetPostChain(FullscreenMaterialChain* chain,
+                                  const MaterialInstance* instance,
+                                  Assets* assets) = 0;
+
+        // Engine-global shader constants for the post chain (Time/DeltaTime/
+        // ViewportSize). Sticky -- the host sets them once per frame before
+        // Draw(), mirroring Batcher2D::SetGlobals' contract.
+        virtual void SetPostGlobals(const GlobalParams& globals) = 0;
     };
 }

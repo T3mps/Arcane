@@ -49,6 +49,12 @@ public:
     // Lazily builds + caches the backbuffer framebuffer for `backbuffer`.
     nvrhi::FramebufferHandle& FramebufferFor(nvrhi::ITexture* backbuffer);
 
+    // The linear post buffer for the scene post chain (post arc): built lazily
+    // at the first posted frame and resized here to track the canvas, so a
+    // chainless run never allocates it. Null on creation failure (the caller
+    // falls back to tonemapping the canvas directly).
+    Arcane::Canvas* EnsurePost();
+
     // Accessors return references to the owned objects (or the bare nvrhi
     // command-list handle, which is already pointer-like).
     Arcane::Window&        Win()       { return m_window; }
@@ -78,6 +84,7 @@ private:
     std::unique_ptr<Arcane::Swapchain>     m_swapchain;
     std::unique_ptr<Arcane::ShaderLibrary> m_shaders;
     std::unique_ptr<Arcane::Canvas>        m_canvas;
+    std::unique_ptr<Arcane::Canvas>        m_post;      // lazy -- see EnsurePost
     std::unique_ptr<Arcane::Batcher2D>     m_batcher;
     std::unique_ptr<Arcane::TonemapPass>   m_tonemap;
     std::unique_ptr<Arcane::ImGuiLayer>    m_imgui;

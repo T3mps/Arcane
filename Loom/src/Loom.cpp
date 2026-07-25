@@ -15,6 +15,7 @@
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Batcher2D.hpp>   // Arcane::Batch2DStats (loop HUD + perf tick)
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
+#include <Arcane/Render/FullscreenMaterialChain.hpp>   // scene post hook
 
 #include <Astra/Core/TypeContext.hpp>
 
@@ -233,7 +234,26 @@ void Loom::MainLoop()
         nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);
         {
             const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
-            m_gpu->Tone().Run(m_gpu->Cmd(), m_gpu->Cnv().Texture(), fb);
+            // Scene post hook (post arc): with a bound chain the linear canvas
+            // feeds it as the external Scene input and the tonemap samples the
+            // chain's output -- without one this is exactly the old line
+            // (byte-identical). Slice 3's PostProcess sweep feeds the members.
+            Arcane::Canvas* post =
+                (m_postChain && m_postChain->Ready() && m_postInstance)
+                    ? m_gpu->EnsurePost() : nullptr;
+            if (post)
+            {
+                m_postChain->Render(m_gpu->Cmd(), post->Framebuffer(),
+                                    *m_postInstance, m_postGlobals,
+                                    &m_runtime->AssetsFacade(),
+                                    static_cast<std::size_t>(-1),
+                                    m_gpu->Cnv().Texture());
+                m_gpu->Tone().Run(m_gpu->Cmd(), post->Texture(), fb);
+            }
+            else
+            {
+                m_gpu->Tone().Run(m_gpu->Cmd(), m_gpu->Cnv().Texture(), fb);
+            }
             m_perf.Add(m_perf.accTone, t0, m_perf.Now());
         }
         {

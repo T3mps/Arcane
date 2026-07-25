@@ -73,6 +73,19 @@ void GpuContext::OnResize(std::uint32_t w, std::uint32_t h)
     m_canvas->Resize(m_swapchain->Width(), m_swapchain->Height());
 }
 
+Arcane::Canvas* GpuContext::EnsurePost()
+{
+    // Track the scene canvas' CURRENT extent (resizes are host-paced, so a
+    // size check per posted frame is the whole sync story).
+    if (!m_post)
+        m_post = Arcane::CreateCanvas(m_device->Nvrhi(),
+                                      m_canvas->Width(), m_canvas->Height());
+    else if (m_post->Width() != m_canvas->Width() ||
+             m_post->Height() != m_canvas->Height())
+        m_post->Resize(m_canvas->Width(), m_canvas->Height());
+    return m_post.get();
+}
+
 nvrhi::FramebufferHandle& GpuContext::FramebufferFor(nvrhi::ITexture* backbuffer)
 {
     nvrhi::FramebufferHandle& fb = m_framebuffers[backbuffer];

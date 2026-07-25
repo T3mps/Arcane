@@ -31,6 +31,7 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
+#include <Arcane/Render/PostChainCache.hpp>
 #include <Arcane/Render/SelectionOutline.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
@@ -185,6 +186,12 @@ namespace Arcane::Editor
         // materials; the drain site feeds it, the frame loop publishes its
         // table through Runtime::SetSpriteMaterials.
         std::unique_ptr<Arcane::SpriteMaterialCache> m_spriteMaterials;
+        // Scene post chain (post arc, slice 2): resolves the assigned post
+        // material into a bound FullscreenMaterialChain for the viewport's
+        // SetPostChain hook. Same drain site, same invalidation rides
+        // (onAssetSaved + the material watcher); slice 3's PostProcess sweep
+        // drives Request and hands Chain()/Instance() to the viewport.
+        std::unique_ptr<Arcane::PostChainCache> m_postChains;
         Arcane::Editor::DocumentHost            m_documents;
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
