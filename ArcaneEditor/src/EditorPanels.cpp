@@ -515,12 +515,23 @@ namespace Arcane::Editor
                             }
                             else
                             {
+                                // Type-to-filter (one popup is open at a time,
+                                // so a function-local buffer serves them all).
+                                static char s_pickSearch[64] = {};
+                                if (ImGui::IsWindowAppearing())
+                                {
+                                    s_pickSearch[0] = '\0';
+                                    ImGui::SetKeyboardFocusHere();
+                                }
+                                ImGui::InputTextWithHint("##assetsearch", "Search...",
+                                                         s_pickSearch, sizeof(s_pickSearch));
+                                ImGui::Separator();
                                 if (ImGui::Selectable("(none)"))
                                     ApplyGuidImmediate(label, f, instance, Arcane::Guid::Nil());
                                 for (const Arcane::Editor::AssetEntry& e :
                                      Arcane::Editor::BuildAssetEntries(project->Registry()))
                                 {
-                                    if (kindFilter >= 0 && static_cast<int>(e.kind) != kindFilter)
+                                    if (!Arcane::Editor::MatchesFilter(e, kindFilter, s_pickSearch))
                                         continue;
                                     if (ImGui::Selectable((e.name + "##" + e.mountPath).c_str(), e.guid == v))
                                         ApplyGuidImmediate(label, f, instance, e.guid);
