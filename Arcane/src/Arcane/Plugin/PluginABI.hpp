@@ -39,6 +39,15 @@ namespace Arcane
     //     name IS the cross-module component identity (TypeID name hash +
     //     name-keyed scene JSON), so a stale plugin would register/query the
     //     old name and silently diverge from engine systems; reject the pairing.
+    //     NOTE (2026-07-25, post arc slices 2+3, deliberately NO bump):
+    //     OffscreenCanvas gained SetPostChain/SetPostGlobals APPENDED at the
+    //     END of its vtable (every pre-existing slot index unchanged; only
+    //     hosts -- in-tree, rebuilt with the engine -- call the new slots),
+    //     and PostProcess is an ADDED component type (name-keyed identity; a
+    //     stale plugin's roster simply lacks it -- typed views come back
+    //     empty, nothing smashes). Neither changes EngineContext, the entry
+    //     points, or any existing layout, so a v7<->v7 cross-build pairing
+    //     stays memory-safe in both directions.
     inline constexpr uint32_t kGamePluginABIVersion = 7;
 
     struct EngineContext

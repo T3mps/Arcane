@@ -81,6 +81,17 @@ namespace Arcane
         // plain sprites until their compile lands. Rect shape only.
         Guid        material{};
     };
+
+    // The scene's post-processing stack (post arc): the Guid of a SAVED
+    // fullscreen .arcmat whose pass DAG runs between the linear canvas and the
+    // tonemap (the material IS the stack; kSceneInput wires read the scene
+    // color). The host sweeps for it each frame -- the FIRST entity with a
+    // valid material wins, nil or unresolved means no chain (today's path,
+    // byte-identical). One scene, one chain; per-camera stacks are a non-goal.
+    struct PostProcess
+    {
+        Guid material{};
+    };
 }
 
 // Reflection blocks at namespace scope (NOT anonymous). WorldTransform::matrix is
@@ -130,5 +141,9 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(SpriteRenderer, orderInLayer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, shape)
         ASTRA_REFLECT_FIELD(SpriteRenderer, material)
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(PostProcess)
+        ASTRA_REFLECT_FIELD(PostProcess, material)
     ASTRA_END_REFLECT_TYPE()
 }

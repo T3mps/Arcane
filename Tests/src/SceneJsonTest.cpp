@@ -43,6 +43,12 @@ TEST_CASE("scene round-trips through JSON (typed roster)", "[json][scene]")
         Arcane::SpriteRenderer sr; sr.tint = glm::vec4(0.5f, 0.6f, 0.7f, 1.0f); sr.sortingLayer = 2;
         reg.AddComponent<Arcane::SpriteRenderer>(child, sr);
 
+        // The scene's post chain assignment (post arc slice 3): a PostProcess
+        // component's material Guid must survive the JSON round-trip.
+        Arcane::PostProcess post;
+        post.material = Arcane::Guid{ 0x1122334455667788ull, 0x99AABBCCDDEEFF00ull };
+        reg.AddComponent<Arcane::PostProcess>(root, post);
+
         reg.SetParent(child, root);
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
 
@@ -68,6 +74,17 @@ TEST_CASE("scene round-trips through JSON (typed roster)", "[json][scene]")
     const Arcane::SceneRoot* root = reg.GetResource<Arcane::SceneRoot>();
     REQUIRE(root != nullptr);
     CHECK(reg.GetChildCount(root->entity) == 1);
+
+    int postCount = 0;
+    Arcane::Guid postGuid{};
+    reg.CreateView<Arcane::PostProcess>().ForEach(
+        [&](Astra::Entity, Arcane::PostProcess& pp)
+    {
+        ++postCount;
+        postGuid = pp.material;
+    });
+    CHECK(postCount == 1);
+    CHECK(postGuid == Arcane::Guid{ 0x1122334455667788ull, 0x99AABBCCDDEEFF00ull });
 
     bool foundChild = false;
     auto ltView = reg.CreateView<Arcane::Transform>();

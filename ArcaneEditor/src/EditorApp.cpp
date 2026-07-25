@@ -999,6 +999,53 @@ namespace Arcane::Editor
                 m_outline->Resize(m_pendingViewportW, m_pendingViewportH);
             }
 
+            // Scene post chain (post arc, slice 3): sweep for the assignment and
+            // feed the viewport hook from the CURRENT cache state. The FIRST
+            // entity with a valid PostProcess.material wins (>1 warns once);
+            // none/unresolved leaves the hook null -- today's path. Chain/
+            // Instance are re-fetched every frame BEFORE Draw: last frame's
+            // drain may have swapped the bound instance under a re-save.
+            {
+                Arcane::Guid postId{};
+                int postCount = 0;
+                m_runtime->Registry().CreateView<Arcane::PostProcess>().ForEach(
+                    [&](Astra::Entity, Arcane::PostProcess& pp)
+                {
+                    if (!pp.material.IsValid())
+                        return;
+                    if (postCount++ == 0)
+                        postId = pp.material;
+                });
+                if (postCount > 1)
+                {
+                    if (!m_warnedMultiPost)
+                        ARC_WARN("scene carries {} PostProcess assignments -- "
+                                 "the first found wins", postCount);
+                    m_warnedMultiPost = true;
+                }
+                else
+                {
+                    m_warnedMultiPost = false;
+                }
+
+                Arcane::FullscreenMaterialChain* postChain = nullptr;
+                const Arcane::MaterialInstance* postInst = nullptr;
+                if (postId.IsValid() && m_postChains)
+                {
+                    m_postChains->Request(postId, m_editorClock);
+                    postChain = m_postChains->Chain(postId);
+                    postInst = m_postChains->Instance(postId);
+                }
+                Arcane::GlobalParams postGlobals;
+                postGlobals.time = (float)m_editorClock;
+                postGlobals.deltaTime = (float)m_lastFrameDt;
+                postGlobals.viewportWidth = (float)m_viewport->Width();
+                postGlobals.viewportHeight = (float)m_viewport->Height();
+                m_viewport->SetPostGlobals(postGlobals);
+                m_viewport->SetPostChain(postChain, postInst,
+                                         &m_runtime->AssetsFacade());
+            }
+
             // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path Loom
             // drives, but into a panel texture). SetRenderContext writes RenderContext2D
             // in Arcane.dll and applies the plugin's stored camera; SubmitRender runs the

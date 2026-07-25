@@ -204,6 +204,9 @@ namespace Arcane::Editor
         void PollMaterialWatch();
         std::unordered_map<std::string, std::filesystem::file_time_type> m_materialMtimes;
         double m_materialWatchNext = 0.0;
+        // >1 PostProcess assignments in the scene: warned once, reset when the
+        // count drops back (the post sweep in MainLoop).
+        bool m_warnedMultiPost = false;
 
         // Async file-dialog results for the material flows (same background-
         // thread stash pattern as m_pendingProjectPath below).
