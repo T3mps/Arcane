@@ -108,6 +108,13 @@ namespace Arcane::Edit
                          std::span<const Astra::Entity> set,
                          Astra::Entity parent)
     {
+        // A stale-but-nonnull parent handle passes IsValid() (handle-level
+        // non-null) yet SetParent silently no-ops on it below -- refuse the
+        // whole operation up front so the caller doesn't count entities as
+        // moved when nothing actually changed.
+        if (parent.IsValid() && !reg.IsValid(parent))
+            return 0;
+
         if (parent.IsValid())
             for (Astra::Entity e : set)
                 if (IsAncestorOrSelf(reg, e, parent))

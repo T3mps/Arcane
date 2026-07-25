@@ -116,6 +116,36 @@ TEST_CASE("Reparent refuses cycles wholesale, skips no-ops", "[outliner]")
     CHECK(!w.reg.GetParent(b).IsValid());
 }
 
+TEST_CASE("Reparent refuses wholesale on a dead parent or a set-contained parent",
+          "[outliner]")
+{
+    World w;
+
+    // (a) A stale-but-nonnull parent handle passes IsValid() but is no
+    // longer registry-alive: the whole op refuses and the live entity's
+    // parent is unchanged.
+    {
+        Astra::Entity deadParent = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        Astra::Entity live = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        w.reg.DestroyEntity(deadParent);
+
+        const std::array<Astra::Entity, 1> set{ live };
+        CHECK(Edit::Reparent(w.reg, set, deadParent) == 0);
+        CHECK(!w.reg.GetParent(live).IsValid());
+    }
+
+    // (b) `parent` itself is inside `set`: the cycle pre-check refuses the
+    // whole operation, so nothing in the set moves -- not just `parent`.
+    {
+        Astra::Entity parent = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        Astra::Entity other = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+
+        const std::array<Astra::Entity, 2> set{ parent, other };
+        CHECK(Edit::Reparent(w.reg, set, parent) == 0);
+        CHECK(!w.reg.GetParent(other).IsValid());
+    }
+}
+
 TEST_CASE("SetHiddenRecursive covers the subtree, idempotently", "[outliner]")
 {
     World w;

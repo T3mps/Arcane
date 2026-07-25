@@ -39,8 +39,9 @@ namespace Arcane::Edit
 
     // Reparent every entity in `set` under `parent` (invalid = unparent to
     // root). REFUSES the whole operation (returns 0) when `parent` is inside
-    // any moved entity's subtree or is itself in `set` (cycle). Skips
-    // entities already under `parent`; returns how many moved.
+    // any moved entity's subtree or is itself in `set` (cycle), or when
+    // `parent` is a dead (stale) handle. Skips entities already under
+    // `parent`; returns how many moved.
     ARCANE_API std::size_t Reparent(Astra::Registry& reg,
                                     std::span<const Astra::Entity> set,
                                     Astra::Entity parent);
