@@ -891,12 +891,12 @@ namespace Arcane::Editor
                     if (gizmoActive)
                     {
                         regPtr = &m_runtime->Registry();
-                        lt = regPtr->GetComponent<Arcane::Transform>(m_selection.selected);
+                        lt = regPtr->GetComponent<Arcane::Transform>(m_selection.Primary());
                     }
 
                     if (lt)
                     {
-                        const Astra::Entity sel = m_selection.selected;
+                        const Astra::Entity sel = m_selection.Primary();
                         const Arcane::GizmoTransform gt{ lt->position, lt->rotation, lt->scale };
                         const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
 
@@ -1077,7 +1077,7 @@ namespace Arcane::Editor
                     if (!m_play.IsPlaying() && m_gizmoEnabled && m_selection.HasSelection())
                     {
                         Arcane::Transform* lt = m_runtime->Registry().GetComponent<Arcane::Transform>(
-                            m_selection.selected);
+                            m_selection.Primary());
                         if (lt)
                         {
                             const Arcane::GizmoTransform gt{ lt->position, lt->rotation, lt->scale };
@@ -1138,7 +1138,7 @@ namespace Arcane::Editor
 
                 Arcane::SelectionOutline::Params op;
                 op.selectedId = m_selection.HasSelection()
-                              ? m_pick->PassIdOf(m_selection.selected) : 0u;
+                              ? m_pick->PassIdOf(m_selection.Primary()) : 0u;
                 op.cursorPx   = m_lastInViewport
                               ? glm::ivec2((int)m_lastViewportMouse.x, (int)m_lastViewportMouse.y)
                               : glm::ivec2(-1, -1);

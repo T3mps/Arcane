@@ -363,7 +363,7 @@ namespace Arcane::Editor
             char label[64];
             std::snprintf(label, sizeof(label), "Entity %u (v%u)",
                           (unsigned)e.GetID(), (unsigned)e.GetVersion());
-            const bool isSel = sel.HasSelection() && sel.selected.GetValue() == e.GetValue();
+            const bool isSel = sel.Contains(e);
             if (ImGui::Selectable(label, isSel))
                 sel.Select(e);
         }
@@ -569,7 +569,7 @@ namespace Arcane::Editor
             ImGui::End();
             return;
         }
-        for (const Astra::Registry::ComponentInfo& ci : registry.InspectEntity(sel.selected))
+        for (const Astra::Registry::ComponentInfo& ci : registry.InspectEntity(sel.Primary()))
         {
             if (!ci.descriptor || !ci.descriptor->visitFields || !ci.data) continue;
             // TypeMeta::typeName is a std::string_view into a substring of a larger
@@ -592,7 +592,7 @@ namespace Arcane::Editor
                 // early-return on a null stack, so gesture bracketing is fully inert
                 // (no Begin, no Commit/Cancel) against the live simulating registry.
                 visitor.stack      = editMode ? &undo : nullptr;
-                visitor.entity     = sel.selected;
+                visitor.entity     = sel.Primary();
                 visitor.descriptor = ci.descriptor;
                 visitor.typeName   = typeName;
                 visitor.project    = project;

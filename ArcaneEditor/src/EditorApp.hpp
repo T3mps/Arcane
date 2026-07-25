@@ -89,8 +89,9 @@ namespace Arcane::Editor
         // plugin loads).
         Arcane::Editor::PlaySession m_play;
 
-        // The one selected-entity source of truth, shared by the Hierarchy panel
-        // (and, later, the Inspector + viewport pick -- see SelectionContext.hpp).
+        // Ordered multi-select source of truth (set + primary); slice-2 consumers
+        // operate on Primary(), shared by the Hierarchy panel (and, later, the
+        // Inspector + viewport pick -- see SelectionContext.hpp).
         Arcane::Editor::SelectionContext m_selection;
 
         // Editor undo/redo history (Edit-mode; cleared on Play). Constructed in
