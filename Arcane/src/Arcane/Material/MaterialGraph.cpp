@@ -38,6 +38,8 @@ namespace Arcane
         constexpr GraphPinDesc kRemapIn[]     = { { "x", 0 }, { "inRange", 2 }, { "outRange", 2 } };
         constexpr GraphPinDesc kTileIn[]      = { { "uv", 2 }, { "tiling", 2 }, { "offset", 2 } };
         constexpr GraphPinDesc kNoiseIn[]     = { { "uv", 2 }, { "scale", 1 } };
+        constexpr GraphPinDesc kVertexOutIn[] = { { "posOffset", 2 }, { "uvOffset", 2 },
+                                                  { "color", 4 } };
 
         template <std::size_t N>
         constexpr std::span<const GraphPinDesc> Pins(const GraphPinDesc (&a)[N]) { return { a, N }; }
@@ -84,13 +86,14 @@ namespace Arcane
             { GraphNodeType::Swizzle,       "swizzle",        "Swizzle",        Pins(kUnaryIn),  Pins(kOutDyn)     },
             { GraphNodeType::SimpleNoise,   "simple_noise",   "Simple Noise",   Pins(kNoiseIn),  Pins(kOut1)       },
             { GraphNodeType::PassInput,     "pass_input",     "Pass Input",     Pins(kUvIn),     Pins(kSampleOut)  },
+            { GraphNodeType::VertexOutput,  "vertex_output",  "Vertex Output",  Pins(kVertexOutIn), NoPins()        },
         };
     }
 
     const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept
     {
         const auto i = static_cast<std::size_t>(t);
-        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::PassInput) + 1,
+        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::VertexOutput) + 1,
                       "kNodeInfos must cover every GraphNodeType");
         return kNodeInfos[i < std::size(kNodeInfos) ? i : 0];
     }
@@ -314,6 +317,25 @@ namespace Arcane
         if (!output)
             fail(0, "graph has no Output node");
 
+        // --- at most one Vertex Output (the vertex context; base graphs only)
+        const GraphNode* vertexOut = nullptr;
+        for (const GraphNode* n : ordered)
+            if (n->type == GraphNodeType::VertexOutput)
+            {
+                if (vertexOut)
+                    fail(n->id, "graph has more than one Vertex Output node");
+                else
+                    vertexOut = n;
+            }
+        if (vertexOut && availableInputs > 0)
+            fail(vertexOut->id, "the vertex stage belongs to the BASE material's "
+                                "graph, not a pass graph");
+        if (vertexOut && surface != MaterialSurface::Sprite &&
+            inputLink.count({ vertexOut->id, 2 }))
+            fail(vertexOut->id,
+                 "the color pin requires the sprite surface (fullscreen "
+                 "Varyings carry no vertex color)");
+
         // --- param declarations over ALL nodes (reachable or not -- the params
         // panel must match the canvas). First-declaring node id wins the
         // default value (template dup rule); conflicting TYPES are an error on
@@ -467,6 +489,11 @@ namespace Arcane
             return "_n" + std::to_string(n->id) + "_" + desc.name;
         };
 
+        // The vertex walk bars every node that samples textures or leans on
+        // helpers/functions -- those emit into the PIXEL snippet, which the
+        // templates stitch AFTER %{VERTEX_BODY} (declaration order), and VS
+        // has no Sample anyway.
+        bool vertexWalk = false;
         std::function<bool(const GraphNode*)> visit = [&](const GraphNode* n) -> bool
         {
             int& st = state[n->id];
@@ -478,6 +505,18 @@ namespace Arcane
                 return false;
             }
             st = 1;
+
+            if (vertexWalk &&
+                (n->type == GraphNodeType::TextureSample ||
+                 n->type == GraphNodeType::SpriteTexture ||
+                 n->type == GraphNodeType::PassInput ||
+                 n->type == GraphNodeType::Custom ||
+                 n->type == GraphNodeType::SimpleNoise))
+            {
+                fail(n->id, std::string(GraphNodeInfo(n->type).display) +
+                            " is not available in the vertex stage");
+                return false;
+            }
 
             const std::uint32_t inputCount = GraphNodeInputCount(*n);
 
@@ -772,6 +811,16 @@ namespace Arcane
                                               : std::string("v.uv")) +
                              ") * " + argOr(1, 1, "10.0") + ")");
                     break;
+                case GraphNodeType::VertexOutput:
+                    // Only connected pins emit -- an untouched pin is a true
+                    // passthrough for that member.
+                    if (in[0].connected)
+                        stmt("v.pos.xy += " + Adapt(in[0].expr, in[0].width, 2) + ";");
+                    if (in[1].connected)
+                        stmt("v.uv += " + Adapt(in[1].expr, in[1].width, 2) + ";");
+                    if (in[2].connected)
+                        stmt("v.color *= " + Adapt(in[2].expr, in[2].width, 4) + ";");
+                    break;
                 case GraphNodeType::PassInput:
                 {
                     // Mirrors TextureSample: rgba primary + consumed-only alpha.
@@ -799,6 +848,24 @@ namespace Arcane
             res.snippet.clear();
             res.lineNodeIds.clear();
             return res;
+        }
+
+        // The vertex walk: independent DFS from Vertex Output into a fresh
+        // statement list (locals shared with the pixel walk duplicate safely
+        // -- separate function scopes).
+        std::vector<std::pair<std::string, std::uint32_t>> pixelBody = std::move(body);
+        body.clear();
+        if (vertexOut)
+        {
+            state.clear();
+            widthOf.clear();
+            vertexWalk = true;
+            if (!visit(vertexOut) || !res.errors.empty())
+            {
+                res.snippet.clear();
+                res.lineNodeIds.clear();
+                return res;
+            }
         }
 
         // --- assemble: //@param block + blank + shade() wrapper, with the
@@ -836,7 +903,7 @@ namespace Arcane
             lines.push_back(std::move(fl));
         lines.emplace_back("float4 shade(Varyings v)", 0);
         lines.emplace_back("{", 0);
-        for (auto& [text, nodeId] : body)
+        for (auto& [text, nodeId] : pixelBody)
             lines.emplace_back("    " + text, nodeId);
         lines.emplace_back("}", 0);
 
@@ -847,6 +914,16 @@ namespace Arcane
             res.snippet += text;
             res.snippet += '\n';
             res.lineNodeIds.push_back(nodeId);
+        }
+
+        // The vertex body is its OWN artifact (it feeds %{VERTEX_BODY}, not
+        // the pixel snippet). `body` holds the vertex walk's statements.
+        if (vertexOut)
+        {
+            res.vertexSnippet = "Varyings displace(Varyings v)\n{\n";
+            for (auto& [text, nodeId] : body)
+                res.vertexSnippet += "    " + text + "\n";
+            res.vertexSnippet += "    return v;\n}\n";
         }
         return res;
     }

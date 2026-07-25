@@ -89,6 +89,13 @@ namespace Arcane
                         // PASS GRAPHS only: valid iff the node's slot is wired
                         // on the pass canvas (see GenerateGraphSnippet's
                         // availableInputs)
+        VertexOutput,   // the VERTEX context (base graph only, at most one):
+                        // connected pins emit into `displace()` -- posOffset
+                        // adds to clip-space pos.xy, uvOffset adds to uv,
+                        // color multiplies the sprite tint (sprite surface
+                        // only). Absent/unconnected = passthrough. Nodes that
+                        // sample textures (or need pixel-snippet helpers) are
+                        // barred from this walk.
     };
 
     // One pin on a node type. `width` = component count of the value flowing
@@ -254,6 +261,10 @@ namespace Arcane
     struct GraphCodegenResult
     {
         std::string snippet;               // complete //@param block + shade() body; empty on error
+        // The vertex stage generated from the graph's Vertex Output node --
+        // a full `Varyings displace(Varyings v)` body for %{VERTEX_BODY}.
+        // Empty when the graph has no Vertex Output (= passthrough).
+        std::string vertexSnippet;
         std::vector<GraphError> errors;
         // Per-snippet-line node attribution: lineNodeIds[i] = the node whose
         // statement produced 0-based line i (0 = engine-owned line). This is

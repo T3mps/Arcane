@@ -71,7 +71,7 @@ namespace
 TEST_CASE("Graph node table covers every type with round-tripping tokens", "[material]")
 {
     const auto infos = AllGraphNodeInfos();
-    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::PassInput) + 1);
+    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::VertexOutput) + 1);
     for (const GraphNodeTypeInfo& info : infos)
     {
         CHECK(GraphNodeInfo(info.type).token == info.token);
@@ -99,6 +99,77 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
     CHECK(GraphNodeInfo(GraphNodeType::SimpleNoise).outputs[0].width == 1);
     CHECK(GraphNodeInfo(GraphNodeType::PassInput).inputs.size() == 1);     // uv
     CHECK(GraphNodeInfo(GraphNodeType::PassInput).outputs.size() == 2);    // rgba + a
+}
+
+TEST_CASE("Codegen: the Vertex Output context emits displace()", "[material]")
+{
+    // Speed(param) * Time -> Sine -> posOffset; the same param also feeds the
+    // pixel walk (shared decls, separate function scopes).
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    g.nodes.push_back(ParamNode(2, "Speed", MatParamType::Float,
+                                MatParamValue::MakeFloat(2.0f)));
+    g.nodes.push_back(Node(3, GraphNodeType::Time));
+    g.nodes.push_back(Node(4, GraphNodeType::Mul));
+    g.nodes.push_back(Node(5, GraphNodeType::Sin));
+    g.nodes.push_back(Node(6, GraphNodeType::VertexOutput));
+    g.links.push_back(Link(3, 0, 4, 0));
+    g.links.push_back(Link(2, 0, 4, 1));
+    g.links.push_back(Link(4, 0, 5, 0));
+    g.links.push_back(Link(5, 0, 6, 0));   // -> posOffset
+    g.links.push_back(Link(2, 0, 1, 0));   // Speed also -> Output (pixel walk)
+
+    SECTION("both bodies generate; connected pins only")
+    {
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        REQUIRE_FALSE(r.vertexSnippet.empty());
+        CHECK(r.vertexSnippet.find("Varyings displace(Varyings v)") != std::string::npos);
+        CHECK(r.vertexSnippet.find("v.pos.xy += (_n5).xx;") != std::string::npos);
+        CHECK(r.vertexSnippet.find("v.uv") == std::string::npos);      // unconnected
+        CHECK(r.vertexSnippet.find("v.color") == std::string::npos);   // unconnected
+        CHECK(r.vertexSnippet.find("return v;") != std::string::npos);
+        // The pixel snippet is untouched by the vertex walk.
+        CHECK(r.snippet.find("displace") == std::string::npos);
+        CHECK(r.snippet.find("//@param float Speed") != std::string::npos);
+    }
+
+    SECTION("no Vertex Output = empty vertexSnippet (passthrough)")
+    {
+        std::erase_if(g.nodes, [](const GraphNode& n)
+                      { return n.type == GraphNodeType::VertexOutput; });
+        std::erase_if(g.links, [](const GraphLink& l) { return l.toNode == 6; });
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.vertexSnippet.empty());
+    }
+
+    SECTION("context violations are structured errors")
+    {
+        // A second Vertex Output.
+        GraphNode dup = Node(7, GraphNodeType::VertexOutput);
+        g.nodes.push_back(dup);
+        CHECK_FALSE(GenerateGraphSnippet(g).Ok());
+        g.nodes.pop_back();
+
+        // Vertex Output inside a pass graph.
+        CHECK(HasErrorOn(GenerateGraphSnippet(g, MaterialSurface::Fullscreen, 1), 6));
+
+        // The color pin on the fullscreen surface.
+        g.nodes.push_back(Node(8, GraphNodeType::ConstColor));
+        g.links.push_back(Link(8, 0, 6, 2));
+        CHECK(HasErrorOn(GenerateGraphSnippet(g), 6));
+        // ...but fine on sprite.
+        CHECK(GenerateGraphSnippet(g, MaterialSurface::Sprite).Ok());
+
+        // Texture sampling barred from the vertex walk.
+        MaterialGraph tg;
+        tg.nodes.push_back(Node(1, GraphNodeType::Output));
+        tg.nodes.push_back(TexNode(2, "Noise"));
+        tg.nodes.push_back(Node(3, GraphNodeType::VertexOutput));
+        tg.links.push_back(Link(2, 0, 3, 0));
+        CHECK(HasErrorOn(GenerateGraphSnippet(tg), 2));
+    }
 }
 
 TEST_CASE("Codegen: PassInput samples wired upstream slots only", "[material]")
@@ -973,6 +1044,38 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
             *templateText, gen.snippet, "graph_library2", MaterialSurface::Fullscreen);
         REQUIRE(build.errors.empty());
         compileBoth(build.hlsl, "graph_library2.hlsl");
+    }
+
+    SECTION("fullscreen: a graph-generated vertex stage compiles")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(ParamNode(2, "Speed", MatParamType::Float,
+                                    MatParamValue::MakeFloat(2.0f)));
+        g.nodes.push_back(Node(3, GraphNodeType::Time));
+        g.nodes.push_back(Node(4, GraphNodeType::Mul));
+        g.nodes.push_back(Node(5, GraphNodeType::Sin));
+        g.nodes.push_back(Node(6, GraphNodeType::VertexOutput));
+        GraphNode c = Node(7, GraphNodeType::ConstColor);
+        c.value[1] = 1.0f;
+        c.value[3] = 1.0f;
+        g.nodes.push_back(c);
+        g.links.push_back(Link(3, 0, 4, 0));
+        g.links.push_back(Link(2, 0, 4, 1));
+        g.links.push_back(Link(4, 0, 5, 0));
+        g.links.push_back(Link(5, 0, 6, 0));
+        g.links.push_back(Link(7, 0, 1, 0));
+
+        const GraphCodegenResult gen = GenerateGraphSnippet(g);
+        REQUIRE(gen.Ok());
+        REQUIRE_FALSE(gen.vertexSnippet.empty());
+        const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const MaterialBuildResult build = BuildMaterialShaderSource(
+            *templateText, gen.snippet, "graph_vertex", MaterialSurface::Fullscreen,
+            gen.vertexSnippet);
+        REQUIRE(build.errors.empty());
+        compileBoth(build.hlsl, "graph_vertex.hlsl");
     }
 
     SECTION("sprite: SpriteTexture * VertexColor * param tint")
