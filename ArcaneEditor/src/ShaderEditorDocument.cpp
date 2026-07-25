@@ -213,6 +213,38 @@ namespace Arcane::Editor
             std::size_t m_pass;   // which pass's graph the step edits (0 = base)
             std::optional<Arcane::MaterialGraph> m_before, m_after;
         };
+
+        // One pass-canvas STRUCTURAL gesture as an undo step (add/remove/
+        // rewire/reorder/rename): whole pass-list before/after through the
+        // same doc-identity anchor.
+        class PassListCommand final : public Arcane::ICommand
+        {
+        public:
+            PassListCommand(std::weak_ptr<ShaderEditorDocument*> anchor, std::string label,
+                            ShaderEditorDocument::PassListState before,
+                            ShaderEditorDocument::PassListState after)
+                : m_anchor(std::move(anchor)), m_label(std::move(label)),
+                  m_before(std::move(before)), m_after(std::move(after))
+            {
+            }
+
+            void Undo() override { Apply(m_before); }
+            void Redo() override { Apply(m_after); }
+            const char* Label() const override { return m_label.c_str(); }
+
+        private:
+            void Apply(const ShaderEditorDocument::PassListState& state)
+            {
+                auto doc = m_anchor.lock();
+                if (!doc || !*doc)
+                    return;   // document closed -- the step is inert
+                (*doc)->ApplyPassListState(state);
+            }
+
+            std::weak_ptr<ShaderEditorDocument*> m_anchor;
+            std::string m_label;
+            ShaderEditorDocument::PassListState m_before, m_after;
+        };
     }
 
     // InputTextMultiline over std::string (the imgui_stdlib resize pattern) +
@@ -1227,8 +1259,9 @@ namespace Arcane::Editor
     {
         // The pass DAG as a canvas (replaces the pass bar): chain index c is
         // node id c+1, the Output node is kPassOutputNodeId, and the WIRES ARE
-        // THE DATA -- a link into input pin s of a pass IS inputs[s]. Edits are
-        // structural (recompile), not undoable -- same standing as text edits.
+        // THE DATA -- a link into input pin s of a pass IS inputs[s]. Every
+        // structural gesture (wire/unwire/add/remove/reorder/rename) is ONE
+        // undo step (whole pass-list before/after through PassListCommand).
         if (!m_passCanvasCtx)
         {
             ed::Config cfg;
@@ -1292,8 +1325,9 @@ namespace Arcane::Editor
             else
                 ImGui::TextUnformatted(title.c_str());
 
-            // Extra passes rename in-node (stable-buffer commit, no undo --
-            // structural-edit standing).
+            // Extra passes rename in-node (stable-buffer commit; one undo step
+            // on deactivate-after-edit -- renames are not structural, so the
+            // step pushes here rather than riding the structural block).
             if (c >= 1)
             {
                 Arcane::MaterialPass& pass = m_data.passes[c - 1];
@@ -1314,8 +1348,10 @@ namespace Arcane::Editor
                     m_passNameEditIdx = -1;
                     if (commit && pass.name != m_nameBuf)
                     {
+                        PassListState before = CapturePassListState();
                         pass.name = m_nameBuf;
                         m_dirty = true;
+                        PushPassUndo("Rename Pass", std::move(before));
                     }
                 }
             }
@@ -1389,7 +1425,18 @@ namespace Arcane::Editor
                  InPin(kPassOutputNodeId, 0));
 
         // ---- wire edits
+        // Structural gestures land on the undo stack as whole pass-list
+        // before/after (the before captures lazily at the FIRST mutation of
+        // the frame; the push rides the structural block at the end).
         bool structural = false;
+        std::optional<PassListState> passBefore;
+        const char* passEditLabel = "Edit Passes";
+        auto capturePassBefore = [&](const char* label)
+        {
+            if (!passBefore)
+                passBefore = CapturePassListState();
+            passEditLabel = label;
+        };
         if (ed::BeginCreate())
         {
             ed::PinId aId, bId;
@@ -1415,6 +1462,7 @@ namespace Arcane::Editor
                         ed::RejectNewItem();
                     else if (ed::AcceptNewItem())
                     {
+                        capturePassBefore("Reorder Passes");
                         Arcane::MaterialPass moved =
                             std::move(m_data.passes[source - 1]);
                         m_data.passes.erase(m_data.passes.begin() +
@@ -1444,6 +1492,7 @@ namespace Arcane::Editor
                         ed::RejectNewItem();
                     else if (ed::AcceptNewItem())
                     {
+                        capturePassBefore("Wire Pass");
                         std::vector<std::uint32_t>& ins =
                             m_data.passes[consumer - 1].inputs;
                         if (in.pin < ins.size())
@@ -1489,6 +1538,7 @@ namespace Arcane::Editor
 
         if (!unwire.empty() || !removePasses.empty())
         {
+            capturePassBefore(removePasses.empty() ? "Unwire Pass" : "Remove Pass");
             // Unwire first (descending slot so indices stay valid), then remove
             // passes (descending chain index), fixing every reference.
             std::sort(unwire.rbegin(), unwire.rend());
@@ -1578,6 +1628,7 @@ namespace Arcane::Editor
                         m_viewPass = id == total ? -1 : static_cast<int>(id - 1);
                     if (id >= 2 && ImGui::MenuItem("Remove Pass"))
                     {
+                        capturePassBefore("Remove Pass");
                         const std::uint32_t r = id - 1;
                         m_data.passes.erase(m_data.passes.begin() +
                                             static_cast<std::ptrdiff_t>(r - 1));
@@ -1602,6 +1653,7 @@ namespace Arcane::Editor
             {
                 if (ImGui::MenuItem("Add Pass"))
                 {
+                    capturePassBefore("Add Pass");
                     Arcane::MaterialPass p;
                     p.name = "pass " + std::to_string(m_data.passes.size() + 1);
                     // UE model: new passes are GRAPH-owned. Starter = Pass
@@ -1671,6 +1723,8 @@ namespace Arcane::Editor
             m_dirty = true;
             if (m_live)
                 RegenerateFromGraph();
+            if (passBefore)
+                PushPassUndo(passEditLabel, std::move(*passBefore));
         }
     }
 
@@ -1919,6 +1973,36 @@ namespace Arcane::Editor
             m_services.undo->Push(std::make_unique<GraphEditCommand>(
                 m_anchor, label, static_cast<std::size_t>(std::max(0, m_activePass)),
                 std::move(before), ActiveGraphOpt()));
+    }
+
+    ShaderEditorDocument::PassListState ShaderEditorDocument::CapturePassListState() const
+    {
+        return { m_data.passes, m_activePass, m_viewPass };
+    }
+
+    void ShaderEditorDocument::ApplyPassListState(PassListState state)
+    {
+        if (IsInstance())
+            return;   // instances never carry passes
+        m_data.passes = std::move(state.passes);
+        const int count = static_cast<int>(m_data.passes.size());
+        m_activePass = std::clamp(state.activePass, 0, count);
+        m_viewPass = std::clamp(state.viewPass, -1, count);
+        // Chain indices moved under BOTH canvases: re-seed the pass canvas,
+        // and force the graph canvas through its pass-switch path (positions,
+        // selection, badges, thumbnails).
+        m_passCanvasSeeded = false;
+        m_graphPositionsApplied = false;
+        m_graphShownPass = -1;
+        m_dirty = true;
+        RegenerateFromGraph();
+    }
+
+    void ShaderEditorDocument::PushPassUndo(const char* label, PassListState before)
+    {
+        if (m_services.undo)
+            m_services.undo->Push(std::make_unique<PassListCommand>(
+                m_anchor, label, std::move(before), CapturePassListState()));
     }
 
     bool ShaderEditorDocument::NodeBadged(std::uint32_t nodeId) const

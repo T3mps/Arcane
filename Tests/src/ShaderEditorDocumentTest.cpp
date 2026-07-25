@@ -268,3 +268,60 @@ TEST_CASE("ShaderEditorDocument compiles a pass chain per-pass and routes result
 
     compiler.Shutdown();
 }
+
+TEST_CASE("ApplyPassListState swaps the pass list, clamps selection, dirties",
+          "[editor][material]")
+{
+    // The pass-canvas undo surface (PassListCommand forwards here): a stale
+    // step must land safely even when its indices no longer fit the list.
+    const fs::path dir = TempDir("passundo");
+    const fs::path file = dir / "undoable.arcmat";
+
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.name = "Undoable";
+    data.snippet = kSnippet;
+    data.passes.push_back({ "swap",
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv).grba; }\n" });
+    data.passes.push_back({ "gain",
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv); }\n" });
+    REQUIRE(Arcane::SaveMaterialAsset(file, data));
+
+    const auto loaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+    ShaderEditorDocument doc(DocServices{}, file, *loaded);
+    CHECK_FALSE(doc.Dirty());
+
+    ShaderEditorDocument::PassListState s = doc.CapturePassListState();
+    REQUIRE(s.passes.size() == 2);
+
+    // Undo of an "Add Pass": one pass fewer, selection indices gone stale.
+    s.passes.pop_back();
+    s.activePass = 5;
+    s.viewPass = 7;
+    doc.ApplyPassListState(std::move(s));
+    CHECK(doc.Dirty());
+
+    const ShaderEditorDocument::PassListState now = doc.CapturePassListState();
+    CHECK(now.passes.size() == 1);
+    CHECK(now.passes[0].name == "swap");
+    CHECK(now.activePass == 1);   // clamped to the new count
+    CHECK(now.viewPass == 1);
+
+    // Redo lands the removed pass back, rename and all.
+    ShaderEditorDocument::PassListState redo = now;
+    Arcane::MaterialPass gain;
+    gain.name = "gain (renamed)";
+    gain.snippet = "float4 shade(Varyings v) { return 1.0; }\n";
+    redo.passes.push_back(std::move(gain));
+    redo.activePass = 2;
+    redo.viewPass = -1;
+    doc.ApplyPassListState(std::move(redo));
+    const ShaderEditorDocument::PassListState after = doc.CapturePassListState();
+    REQUIRE(after.passes.size() == 2);
+    CHECK(after.passes[1].name == "gain (renamed)");
+    CHECK(after.activePass == 2);
+    CHECK(after.viewPass == -1);
+}

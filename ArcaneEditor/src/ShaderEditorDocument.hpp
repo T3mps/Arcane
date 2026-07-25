@@ -96,6 +96,21 @@ namespace Arcane::Editor
         // and regenerate/recompile.
         void ApplyGraphState(std::size_t pass, std::optional<Arcane::MaterialGraph> state);
 
+        // Undo plumbing for pass-canvas STRUCTURAL edits (add/remove/rewire/
+        // reorder/rename): whole pass-list before/after, one step per gesture.
+        // The list is small (a handful of passes, graphs of tens of nodes), so
+        // the whole-state snapshot carries the same justification as
+        // GraphEditCommand's. active/view ride along so undo lands the user
+        // back on the pass they were editing.
+        struct PassListState
+        {
+            std::vector<Arcane::MaterialPass> passes;
+            int activePass = 0;
+            int viewPass = -1;
+        };
+        [[nodiscard]] PassListState CapturePassListState() const;
+        void ApplyPassListState(PassListState state);
+
         // Parse/chain-resolution errors (what the errors panel shows above the
         // compile diags). Exposed for the headless tests.
         const std::vector<std::string>& ParseErrors() const { return m_parseErrors; }
@@ -170,6 +185,8 @@ namespace Arcane::Editor
         // the gesture start; `after` is the current graph. The live edit
         // already happened (ICommand contract).
         void PushGraphUndo(const char* label, std::optional<Arcane::MaterialGraph> before);
+        // One undo step per completed pass-canvas gesture (after = current).
+        void PushPassUndo(const char* label, PassListState before);
         bool NodeBadged(std::uint32_t nodeId) const;
         void RebuildDiagBadges();            // compile diags -> line map -> node ids
         void DrawPreviewPanel(float height);
