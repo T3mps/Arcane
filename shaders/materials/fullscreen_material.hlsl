@@ -6,6 +6,10 @@
 //   MATERIAL_CBUFFER <- generated from the snippet's //@param decls:
 //       cbuffer Material : register(b0) + Texture2D tN + MaterialSampler s0
 //   MATERIAL_BODY    <- the designer snippet defining float4 shade(Varyings)
+//   VERTEX_BODY      <- optional designer Varyings displace(Varyings v)
+//       (passthrough when absent); runs at the END of vs_main, so pos is
+//       CLIP SPACE. Params and Time are visible; texture sampling is not
+//       (no Sample in VS).
 // and hands the result to the runtime ShaderCompiler (DXIL + SPIR-V; plain
 // register() declarations work on both targets -- the -fvk-*-shift flags in
 // ShaderConventions.hpp translate them for Vulkan).
@@ -30,13 +34,15 @@ struct Varyings
     float2 uv  : TEXCOORD0;
 };
 
+%{VERTEX_BODY}
+
 // Fullscreen triangle from SV_VertexID -- no vertex buffer (tonemap.hlsl shape).
 Varyings vs_main(uint vertexId : SV_VertexID)
 {
     Varyings o;
     o.uv = float2((vertexId << 1) & 2, vertexId & 2);
     o.pos = float4(o.uv.x * 2.0 - 1.0, 1.0 - o.uv.y * 2.0, 0.0, 1.0);
-    return o;
+    return displace(o);
 }
 
 %{MATERIAL_BODY}

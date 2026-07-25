@@ -244,6 +244,121 @@ TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target shader", 
     sc.Shutdown();
 }
 
+TEST_CASE("The vertex stage stitches %{VERTEX_BODY} (passthrough by default)", "[material]")
+{
+    const char* templ = "%{MATERIAL_CBUFFER}\n%{VERTEX_BODY}\n%{MATERIAL_BODY}\n";
+    const char* snippet = "float4 shade(Varyings v) { return 1; }\n";
+
+    const MaterialBuildResult plain =
+        BuildMaterialShaderSource(templ, snippet, "vs_default");
+    REQUIRE(plain.errors.empty());
+    CHECK(plain.hlsl.find("Varyings displace(Varyings v) { return v; }") !=
+          std::string::npos);
+
+    const char* wobble =
+        "Varyings displace(Varyings v)\n"
+        "{\n"
+        "    v.pos.x += sin(Time) * 0.01;\n"
+        "    return v;\n"
+        "}\n";
+    const MaterialBuildResult custom = BuildMaterialShaderSource(
+        templ, snippet, "vs_custom", MaterialSurface::Fullscreen, wobble);
+    REQUIRE(custom.errors.empty());
+    CHECK(custom.hlsl.find(wobble) != std::string::npos);
+    CHECK(custom.hlsl.find("Varyings displace(Varyings v) { return v; }") ==
+          std::string::npos);
+    // The vertex snippet participates in the compile-cache hash.
+    CHECK(custom.templ.SourceHash() != plain.templ.SourceHash());
+
+    // The hook's name is reserved for params.
+    const MaterialSourceParse p = ParseMaterialSource("//@param float displace = 1\n");
+    REQUIRE(p.errors.size() == 1);
+    CHECK(p.errors[0].find("reserved") != std::string::npos);
+}
+
+TEST_CASE("Vertex-stage sources compile on both targets and surfaces", "[shadercompile]")
+{
+    ShaderSourceProvider provider;
+    provider.AddRoot("shaders");
+    ShaderCompiler sc;
+    REQUIRE(sc.Initialize(0.0));
+
+    auto compileBoth = [&](const std::string& hlsl, const char* name)
+    {
+        for (const char* entry : { kPsEntry, kVsEntry })
+        {
+            ShaderCompileRequest req;
+            req.debugName = name;
+            req.sourceUtf8 = hlsl;
+            req.entry = entry;
+            req.profile = entry == kPsEntry ? kPsProfile : kVsProfile;
+            const ShaderCompileResult r = sc.CompileNow(req);
+            for (const ShaderDiag& d : r.dxil.diags)
+                INFO("dxil " << entry << ": " << d.line << ": " << d.message);
+            for (const ShaderDiag& d : r.spirv.diags)
+                INFO("spirv " << entry << ": " << d.line << ": " << d.message);
+            CHECK(r.AllSucceeded());
+        }
+    };
+
+    const char* snippet =
+        "//@param float Wobble = 0.02 [0..0.2]\n"
+        "float4 shade(Varyings v) { return float4(v.uv, 0.0, 1.0); }\n";
+    const char* displace =
+        "Varyings displace(Varyings v)\n"
+        "{\n"
+        "    v.pos.x += sin(Time * 3.0 + v.pos.y * 8.0) * Wobble;\n"
+        "    return v;\n"
+        "}\n";
+
+    SECTION("fullscreen: displace reads a param + Time")
+    {
+        const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const MaterialBuildResult build = BuildMaterialShaderSource(
+            *templateText, snippet, "vs_fullscreen", MaterialSurface::Fullscreen,
+            displace);
+        REQUIRE(build.errors.empty());
+        compileBoth(build.hlsl, "vs_fullscreen.hlsl");
+    }
+
+    SECTION("sprite: the same displace body under the sprite register map")
+    {
+        const auto templateText = provider.Get("materials/sprite_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const char* spriteSnippet =
+            "//@param float Wobble = 0.02 [0..0.2]\n"
+            "float4 shade(Varyings v)\n"
+            "{ return SpriteTexture.Sample(MaterialSampler, v.uv) * v.color; }\n";
+        const MaterialBuildResult build = BuildMaterialShaderSource(
+            *templateText, spriteSnippet, "vs_sprite", MaterialSurface::Sprite,
+            displace);
+        REQUIRE(build.errors.empty());
+        compileBoth(build.hlsl, "vs_sprite.hlsl");
+    }
+
+    SECTION("chains stitch the ONE vertex body into every pass")
+    {
+        const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const std::uint32_t p1in[] = { 0 };
+        const MaterialChainPassDesc passes[] = {
+            { snippet, {} },
+            { "float4 shade(Varyings v)\n"
+              "{ return InputTexture.Sample(MaterialSampler, v.uv); }\n", p1in },
+        };
+        const MaterialChainBuildResult r = BuildMaterialChainSource(
+            *templateText, passes, "vs_chain", displace);
+        REQUIRE(r.Ok());
+        for (const std::string& h : r.hlsl)
+            CHECK(h.find("sin(Time * 3.0") != std::string::npos);
+        for (std::size_t p = 0; p < r.hlsl.size(); ++p)
+            compileBoth(r.hlsl[p], "vs_chain.hlsl");
+    }
+
+    sc.Shutdown();
+}
+
 TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[material]")
 {
     const std::string_view pass0 =

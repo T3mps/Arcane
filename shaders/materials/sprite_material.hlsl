@@ -7,6 +7,9 @@
 //       SPRITE register map (GlobalParams.hpp): cbuffer Material : register(b1)
 //       + Texture2D t1..N. MaterialSampler (s0) is declared HERE, not there.
 //   MATERIAL_BODY    <- the designer snippet defining float4 shade(Varyings)
+//   VERTEX_BODY      <- optional designer Varyings displace(Varyings v)
+//       (passthrough when absent); runs at the END of vs_main, so pos is
+//       CLIP SPACE. Params and Time are visible; texture sampling is not.
 // and hands the result to the runtime ShaderCompiler (DXIL + SPIR-V).
 //
 // The vertex stage and push constants mirror sprite.hlsl EXACTLY -- the
@@ -59,6 +62,8 @@ struct Varyings
     float4 color : COLOR0;     // the sprite's tint (linear, may exceed 1)
 };
 
+%{VERTEX_BODY}
+
 Varyings vs_main(VSInput input)
 {
     Varyings o;
@@ -67,7 +72,7 @@ Varyings vs_main(VSInput input)
                    0.0, 1.0);
     o.uv = input.uv;
     o.color = input.color;
-    return o;
+    return displace(o);
 }
 
 %{MATERIAL_BODY}

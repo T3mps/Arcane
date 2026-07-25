@@ -380,10 +380,17 @@ namespace Arcane::Editor
             for (const Arcane::MaterialPass& p : m_data.passes)
                 descs.push_back({ p.snippet, p.inputs });
 
-            Arcane::MaterialChainBuildResult build =
-                Arcane::BuildMaterialChainSource(*templateText, descs, m_title);
+            Arcane::MaterialChainBuildResult build = Arcane::BuildMaterialChainSource(
+                *templateText, descs, m_title, m_data.vertexSnippet);
             m_passInputs = std::move(build.passInputs);
             m_chainInputSlots = build.chainInputSlots;
+            m_vsLineOffset = 0;
+            if (!m_data.vertexSnippet.empty() && !build.hlsl.empty())
+                if (const std::size_t at = build.hlsl[0].find(m_data.vertexSnippet);
+                    at != std::string::npos)
+                    m_vsLineOffset = static_cast<int>(std::count(
+                        build.hlsl[0].begin(),
+                        build.hlsl[0].begin() + static_cast<std::ptrdiff_t>(at), '\n'));
             m_parseErrors = std::move(build.errors);
             for (std::size_t p = 0; p < build.passErrors.size(); ++p)
                 for (const std::string& e : build.passErrors[p])
@@ -419,10 +426,21 @@ namespace Arcane::Editor
             return;
         }
 
+        // Instances inherit the base's vertex stage (they carry no snippets).
+        const std::string& vertexSnippet =
+            IsInstance() && !m_parentChain.empty() ? m_parentChain.back().vertexSnippet
+                                                   : m_data.vertexSnippet;
         Arcane::MaterialBuildResult build =
             Arcane::BuildMaterialShaderSource(*templateText, SnippetSource(), m_title,
-                                              SurfaceOf(m_surface));
+                                              SurfaceOf(m_surface), vertexSnippet);
         m_parseErrors = std::move(build.errors);
+        m_vsLineOffset = 0;
+        if (!vertexSnippet.empty())
+            if (const std::size_t at = build.hlsl.find(vertexSnippet);
+                at != std::string::npos)
+                m_vsLineOffset = static_cast<int>(std::count(
+                    build.hlsl.begin(),
+                    build.hlsl.begin() + static_cast<std::ptrdiff_t>(at), '\n'));
         // The snippet rides verbatim into the stitched source -- its line
         // offset maps compiler diag lines back into snippet space (error-row
         // jump; graph node badges via the codegen line map).
@@ -471,6 +489,8 @@ namespace Arcane::Editor
                 // graph-owned now).
                 RebuildDiagBadges();
             }
+            if (chainVs && p == 0)
+                m_vsDiags = target.diags;   // one vertex stage, every pass alike
             if (target.succeeded)
             {
                 (chainVs ? pj.vsBytes : pj.psBytes) = target.bytecode;
@@ -491,6 +511,8 @@ namespace Arcane::Editor
             m_diags = target.diags;   // the ps stage carries the designer-relevant diags
             RebuildDiagBadges();
         }
+        if (isVs)
+            m_vsDiags = target.diags;   // the vertex stage's own errors (displace)
         if (target.succeeded)
         {
             (isVs ? m_vsBytes : m_psBytes) = target.bytecode;
@@ -658,6 +680,19 @@ namespace Arcane::Editor
             for (const Arcane::ShaderDiag& d : pj.diags)
                 if (d.severity == Arcane::ShaderDiagSeverity::Error)
                     return true;
+        // Vertex-stage errors, filtered to the vertex body (see the panel).
+        if (!m_data.vertexSnippet.empty())
+        {
+            const int vsLines = 1 + static_cast<int>(std::count(
+                m_data.vertexSnippet.begin(), m_data.vertexSnippet.end(), '\n'));
+            for (const Arcane::ShaderDiag& d : m_vsDiags)
+            {
+                const int rel = d.line - m_vsLineOffset;
+                if (rel >= 1 && rel <= vsLines &&
+                    d.severity == Arcane::ShaderDiagSeverity::Error)
+                    return true;
+            }
+        }
         return false;
     }
 
@@ -722,6 +757,8 @@ namespace Arcane::Editor
 
     std::string& ShaderEditorDocument::ActiveSnippet()
     {
+        if (m_editVertex)
+            return m_data.vertexSnippet;   // the ONE vertex stage (doc-level)
         if (m_activePass > 0 &&
             m_activePass <= static_cast<int>(m_data.passes.size()))
             return m_data.passes[static_cast<std::size_t>(m_activePass) - 1].snippet;
@@ -853,8 +890,8 @@ namespace Arcane::Editor
             if (m_activePass > static_cast<int>(m_data.passes.size()))
                 m_activePass = 0;   // stale selection after an outside reload
             // The canvas serves whichever pass is active and graph-owned;
-            // text-owned passes get the text editor.
-            if (ActiveGraphOwned() && !m_showGeneratedText)
+            // text-owned passes -- and the vertex stage -- get the text editor.
+            if (ActiveGraphOwned() && !m_showGeneratedText && !m_editVertex)
                 DrawGraphPanel(ImGui::GetContentRegionAvail().y - errorsH);
             else
                 DrawSnippetEditor(ImGui::GetContentRegionAvail().y - errorsH);
@@ -908,6 +945,10 @@ namespace Arcane::Editor
                 ImGui::SameLine();
                 ImGui::Checkbox("HLSL", &m_showGeneratedText);
             }
+            // The vertex stage (%{VERTEX_BODY}): one text body per material,
+            // shared by every pass. Toggling swaps the text panel to it.
+            ImGui::SameLine();
+            ImGui::Checkbox("Vertex", &m_editVertex);
         }
         else if (!m_parentChain.empty())
         {
@@ -984,9 +1025,11 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::DrawSnippetEditor(float height)
     {
-        // Chain mode: say which pass the buffer belongs to (the pass canvas
-        // above is the selector).
-        if (ChainMode())
+        // Say which buffer this is (the pass canvas / Vertex toggle select it).
+        if (m_editVertex)
+            ImGui::TextDisabled("editing: vertex stage (Varyings displace(Varyings v); "
+                                "empty = passthrough)");
+        else if (ChainMode())
             ImGui::TextDisabled("editing: %s",
                                 PassLabel(static_cast<std::size_t>(m_activePass)).c_str());
         if (m_jumpToLine > 0)
@@ -1005,12 +1048,13 @@ namespace Arcane::Editor
                                     ImGuiInputTextFlags_CallbackResize |
                                     ImGuiInputTextFlags_CallbackAlways;
         // Graph-owned passes: the text is GENERATED -- readable (and jumpable)
-        // but never hand-edited.
-        if (ActiveGraphOwned())
+        // but never hand-edited. The vertex stage is always text-authored.
+        if (ActiveGraphOwned() && !m_editVertex)
             flags |= ImGuiInputTextFlags_ReadOnly;
-        // Per-pass widget identity: switching passes swaps the buffer under
-        // the widget, which must not inherit the previous pass's edit state.
-        ImGui::PushID(m_activePass);
+        // Per-buffer widget identity: switching passes (or to the vertex
+        // stage) swaps the buffer under the widget, which must not inherit
+        // the previous buffer's edit state.
+        ImGui::PushID(m_editVertex ? -2 : m_activePass);
         std::string& snippet = ActiveSnippet();
         // +1 capacity: ImGui writes the terminator into the buffer it is given.
         if (ImGui::InputTextMultiline("##snippet", snippet.data(), snippet.capacity() + 1,
@@ -1586,6 +1630,38 @@ namespace Arcane::Editor
         }
         for (const std::string& e : m_parseErrors)
             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", e.c_str());
+        // Vertex-stage rows: ONLY diags whose line falls inside the vertex
+        // body -- both stages compile the same TU, so pixel-body errors appear
+        // in the vs result too and are already shown by the loops below.
+        bool anyVertexRow = false;
+        if (!m_data.vertexSnippet.empty())
+        {
+            const int vsLines = 1 + static_cast<int>(std::count(
+                m_data.vertexSnippet.begin(), m_data.vertexSnippet.end(), '\n'));
+            int vi = 0;
+            for (const Arcane::ShaderDiag& d : m_vsDiags)
+            {
+                const int rel = d.line - m_vsLineOffset;
+                if (rel < 1 || rel > vsLines)
+                    continue;
+                anyVertexRow = true;
+                const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
+                const ImVec4 color = isError ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
+                                             : ImVec4(0.9f, 0.8f, 0.4f, 1.0f);
+                char head[48];
+                std::snprintf(head, sizeof(head), "vertex: %s(%d): ",
+                              isError ? "error" : "warning", rel);
+                const std::string label =
+                    head + d.message + "##vdiag" + std::to_string(vi++);
+                ImGui::PushStyleColor(ImGuiCol_Text, color);
+                if (ImGui::Selectable(label.c_str(), false))
+                {
+                    m_editVertex = true;   // jump lands in the vertex buffer
+                    m_jumpToLine = rel;
+                }
+                ImGui::PopStyleColor();
+            }
+        }
         // Chain mode: per-pass compile diags (labeled rows; clicking switches
         // the editor to that pass and jumps). m_diags mirrors pass 0 for the
         // graph badges, so the single-path loop below is skipped.
@@ -1627,7 +1703,7 @@ namespace Arcane::Editor
             bool anyChainDiag = false;
             for (const PassJobs& pj : m_passJobs)
                 anyChainDiag = anyChainDiag || !pj.diags.empty();
-            if (!anyGraphError && m_parseErrors.empty() && !anyChainDiag)
+            if (!anyGraphError && m_parseErrors.empty() && !anyChainDiag && !anyVertexRow)
                 ImGui::TextDisabled("no diagnostics");
             ImGui::EndChild();
             return;
@@ -1665,7 +1741,7 @@ namespace Arcane::Editor
             }
             ImGui::PopStyleColor();
         }
-        if (!anyGraphError && m_parseErrors.empty() && m_diags.empty())
+        if (!anyGraphError && m_parseErrors.empty() && m_diags.empty() && !anyVertexRow)
             ImGui::TextDisabled("no diagnostics");
         ImGui::EndChild();
     }

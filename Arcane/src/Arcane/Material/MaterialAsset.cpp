@@ -127,6 +127,8 @@ namespace Arcane
         {
             doc["kind"] = data.kind;
             doc["snippet"] = data.snippet;
+            if (!data.vertexSnippet.empty())
+                doc["vertexSnippet"] = data.vertexSnippet;
             // Graph-owned: the graph is the authoring truth; the snippet above
             // is its generated text (kept so snippet-only consumers never care).
             if (data.graph)
@@ -210,6 +212,8 @@ namespace Arcane
                         : std::string("fullscreen");
         if (hasSnippet)
             data.snippet = doc["snippet"].get<std::string>();
+        if (doc.contains("vertexSnippet") && doc["vertexSnippet"].is_string())
+            data.vertexSnippet = doc["vertexSnippet"].get<std::string>();
 
         if (hasGraph)
         {

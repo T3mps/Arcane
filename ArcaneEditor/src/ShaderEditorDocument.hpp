@@ -227,6 +227,11 @@ namespace Arcane::Editor
         };
         std::vector<PassJobs> m_passJobs;
         std::vector<int> m_passLineOffsets;   // per-pass snippet offset in its hlsl
+        // Vertex stage: the text panel edits m_data.vertexSnippet while the
+        // toggle is on; vs-stage diags render with their own line offset.
+        bool m_editVertex = false;
+        std::vector<Arcane::ShaderDiag> m_vsDiags;
+        int  m_vsLineOffset = 0;
         // Validated DAG wiring from the last chain build (what SetChain binds;
         // captured at Rebuild so async binds never race pass-list edits).
         std::vector<std::vector<std::uint32_t>> m_passInputs;

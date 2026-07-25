@@ -64,6 +64,10 @@ namespace Arcane
         std::string name;                     // display name (defaults to file stem)
         std::string kind = "fullscreen";      // engine template kind (Slice 8: "sprite")
         std::string snippet;                  // //@param decls + shade() body (base only)
+        // The vertex stage (base only, both surfaces, ONE per material --
+        // chains share it): an optional `Varyings displace(Varyings v)` body
+        // for %{VERTEX_BODY}. Empty = identity. Text-authored.
+        std::string vertexSnippet;
         // Pass chain (fullscreen BASE materials only; additive schema: absent =
         // single-pass, exactly the pre-chain format). Passes run in order after
         // the main snippet; each reads the previous pass's output through the

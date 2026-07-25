@@ -109,10 +109,17 @@ namespace Arcane
     // hash covers template + snippet text -- the compile cache key input), emit
     // bindings for `surface`, stitch. `hlsl` is always produced (the editor
     // compiles what it can and shows `errors` beside it).
+    //
+    // `vertexSnippet` (the vertex stage): an optional designer
+    // `Varyings displace(Varyings v)` body stitched into %{VERTEX_BODY};
+    // empty = identity passthrough. It runs at the END of vs_main (pos is
+    // clip space) and sees params + Globals; //@param declarations belong in
+    // the PIXEL snippet only.
     ARCANE_API MaterialBuildResult BuildMaterialShaderSource(std::string_view templateText,
                                                              std::string_view snippet,
                                                              std::string materialName,
-                                                             MaterialSurface surface = MaterialSurface::Fullscreen);
+                                                             MaterialSurface surface = MaterialSurface::Fullscreen,
+                                                             std::string_view vertexSnippet = {});
 
     // One pass's authored surface, as the chain builder consumes it. `inputs`
     // are CHAIN indices (0 = the base snippet) feeding InputTexture(N); they
@@ -154,10 +161,13 @@ namespace Arcane
     // instance, one packed CB bound to every pass. DAG rules enforced here:
     // pass 0 takes no inputs, every input references an earlier pass, at most
     // kMaxPassInputs per pass.
+    // `vertexSnippet`: the material's ONE vertex stage, stitched into every
+    // pass's source (chains share the fullscreen vertex path).
     ARCANE_API MaterialChainBuildResult BuildMaterialChainSource(
         std::string_view templateText,
         std::span<const MaterialChainPassDesc> passes,
-        std::string materialName);
+        std::string materialName,
+        std::string_view vertexSnippet = {});
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif

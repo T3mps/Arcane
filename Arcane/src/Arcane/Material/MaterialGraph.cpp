@@ -155,6 +155,7 @@ namespace Arcane
             "Time", "DeltaTime", "ViewportSize", "MaterialSampler", "SpriteTexture",
             // Pass chains: upstream pass outputs (slot k of the pass's inputs).
             "InputTexture", "InputTexture1", "InputTexture2", "InputTexture3",
+            "displace",   // the vertex-stage hook function
         };
 
         bool ValidParamName(std::string_view name)

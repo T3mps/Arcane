@@ -20,7 +20,13 @@ namespace Arcane
             "Time", "DeltaTime", "ViewportSize", "MaterialSampler", "SpriteTexture",
             // Pass chains: upstream pass outputs (slot k of the pass's inputs).
             "InputTexture", "InputTexture1", "InputTexture2", "InputTexture3",
+            "displace",   // the vertex-stage hook function
         };
+
+        // The %{VERTEX_BODY} default: identity. A material's vertexSnippet
+        // replaces this wholesale (same slot both templates).
+        constexpr std::string_view kVertexPassthrough =
+            "Varyings displace(Varyings v) { return v; }";
 
         std::string_view TrimView(std::string_view s)
         {
@@ -428,7 +434,8 @@ namespace Arcane
     MaterialBuildResult BuildMaterialShaderSource(std::string_view templateText,
                                                   std::string_view snippet,
                                                   std::string materialName,
-                                                  MaterialSurface surface)
+                                                  MaterialSurface surface,
+                                                  std::string_view vertexSnippet)
     {
         MaterialBuildResult r;
 
@@ -439,12 +446,14 @@ namespace Arcane
         std::uint64_t hash = 14695981039346656037ull;
         hash = Fnv64Str(hash, templateText);
         hash = Fnv64Str(hash, snippet);
+        hash = Fnv64Str(hash, vertexSnippet);
         r.templ = MaterialTemplate::Build(std::move(materialName), hash, std::move(parsed.decls));
 
         const std::string bindings = GenerateMaterialBindings(r.templ, surface);
         const std::pair<std::string_view, std::string_view> slots[] = {
             { "MATERIAL_CBUFFER", bindings },
             { "MATERIAL_BODY", snippet },
+            { "VERTEX_BODY", vertexSnippet.empty() ? kVertexPassthrough : vertexSnippet },
         };
         std::vector<std::string> unresolved;
         r.hlsl = StitchShaderTemplate(templateText, slots, &unresolved);
@@ -455,7 +464,8 @@ namespace Arcane
 
     MaterialChainBuildResult BuildMaterialChainSource(std::string_view templateText,
                                                       std::span<const MaterialChainPassDesc> passes,
-                                                      std::string materialName)
+                                                      std::string materialName,
+                                                      std::string_view vertexSnippet)
     {
         MaterialChainBuildResult r;
         r.hlsl.resize(passes.size());
@@ -487,6 +497,7 @@ namespace Arcane
         std::vector<ParamMeta> metas;
         std::uint64_t hash = 14695981039346656037ull;
         hash = Fnv64Str(hash, templateText);
+        hash = Fnv64Str(hash, vertexSnippet);
         for (std::size_t p = 0; p < passes.size(); ++p)
         {
             hash = Fnv64Str(hash, passes[p].snippet);
@@ -532,6 +543,8 @@ namespace Arcane
             const std::pair<std::string_view, std::string_view> slots[] = {
                 { "MATERIAL_CBUFFER", bindings },
                 { "MATERIAL_BODY", passes[p].snippet },
+                { "VERTEX_BODY",
+                  vertexSnippet.empty() ? kVertexPassthrough : vertexSnippet },
             };
             std::vector<std::string> unresolved;
             r.hlsl[p] = StitchShaderTemplate(templateText, slots, &unresolved);

@@ -89,8 +89,10 @@ namespace Arcane
                 // Layout mirrors GenerateMaterialBindings exactly: CB b0 only
                 // when numeric params exist, globals CB b1 always (the template
                 // declares it), one SRV per texture param + sampler s0.
+                // All stages: the vertex stage (%{VERTEX_BODY}) reads the same
+                // Material/Globals CBs the pixel stage does.
                 auto layoutDesc = nvrhi::BindingLayoutDesc()
-                    .setVisibility(nvrhi::ShaderType::Pixel);
+                    .setVisibility(nvrhi::ShaderType::All);
                 if (templ->CbSize() > 0)
                     layoutDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(kMaterialCbSlot));
                 layoutDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(kGlobalCbSlot));

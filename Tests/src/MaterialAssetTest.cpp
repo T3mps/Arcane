@@ -42,6 +42,7 @@ TEST_CASE("MaterialAsset save/load round-trips snippet and typed params", "[mate
     data.id = Guid::Generate();
     data.name = "Glow";
     data.snippet = kSnippet;
+    data.vertexSnippet = "Varyings displace(Varyings v) { v.pos.x += 0.1; return v; }\n";
     const Guid noiseTex = Guid::Generate();
     data.params.emplace_back("Tint", MatParamValue::MakeColor(0.25f, 0.5f, 0.75f, 1.0f));
     data.params.emplace_back("Speed", MatParamValue::MakeFloat(2.5f));
@@ -55,6 +56,7 @@ TEST_CASE("MaterialAsset save/load round-trips snippet and typed params", "[mate
     CHECK(loaded->name == "Glow");
     CHECK(loaded->kind == "fullscreen");
     CHECK(loaded->snippet == kSnippet);
+    CHECK(loaded->vertexSnippet == data.vertexSnippet);
     REQUIRE(loaded->params.size() == 3);
 
     // Apply onto an instance over the snippet's own template.
