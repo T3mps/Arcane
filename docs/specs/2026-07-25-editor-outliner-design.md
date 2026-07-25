@@ -60,11 +60,14 @@ registry-resolver seam, all headless-testable:
 - **SetHidden** (entity + descendants, add/remove `Hidden`; one step).
 - **RenameEntity** (add-EntityInfo-if-missing + set name; one step).
 
-**Named risk:** id resurrection. Scene binary LOAD already restores exact
-entity ids, so a seam exists — planning locates it (EntityManager
-create-with-id or the serializer's restore path) before committing to the
-command shape. If it's truly absent, commands remap ids on restore and patch
-the stack — but exhaust the existing seam first.
+**Risk resolved at planning:** exact-id resurrection comes free from binary
+registry restore (`Registry::Save/Load`, surfaced as
+`Runtime::SnapshotRegistry/RestoreRegistry`). The six bespoke commands
+collapsed into pure mutators (`Arcane/Edit/EntityOps`) + ONE whole-registry
+memento (`RegistryStateCommand` via `ApplyRegistryMutation`); the CommandStack
+resolver already survives the registry swap. Snapshot size per structural op
+is the whole scene (editor-scale; acceptable; revisit only if profiling says
+so).
 
 ## 3. The Outliner panel (editor)
 
