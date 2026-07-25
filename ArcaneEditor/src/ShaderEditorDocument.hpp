@@ -278,9 +278,13 @@ namespace Arcane::Editor
         };
         std::vector<PassJobs> m_passJobs;
         std::vector<int> m_passLineOffsets;   // per-pass snippet offset in its hlsl
-        // Vertex stage: the text panel edits m_data.vertexSnippet while the
-        // toggle is on; vs-stage diags render with their own line offset.
+        // Vertex stage: REPAIR MODE ONLY (graphless base) -- graph-owned
+        // materials author it with the Vertex Output node and view it inside
+        // the read-only HLSL view (UE's one-code-viewer shape).
         bool m_editVertex = false;
+        // The combined read-only HLSL view buffer (pixel body + vertex body);
+        // rebuilt each frame it is shown.
+        std::string m_generatedView;
         std::vector<Arcane::ShaderDiag> m_vsDiags;
         int  m_vsLineOffset = 0;
         // Validated DAG wiring from the last chain build (what SetChain binds;

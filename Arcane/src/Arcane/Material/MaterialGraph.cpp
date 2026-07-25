@@ -471,6 +471,9 @@ namespace Arcane
         // The emit-once registry: shared helpers land in `funcs` the first
         // time any node needs them (line-mapped 0 = engine-owned).
         std::unordered_set<std::string_view> emittedHelpers;
+        // Custom nodes reachable from BOTH walks (the visit state resets for
+        // the vertex walk) must still define their _cf function exactly once.
+        std::unordered_set<std::uint32_t> emittedCustomFuncs;
         auto emitHelperOnce = [&](std::string_view key, std::span<const char* const> helper)
         {
             if (!emittedHelpers.insert(key).second)
@@ -490,10 +493,12 @@ namespace Arcane
             return "_n" + std::to_string(n->id) + "_" + desc.name;
         };
 
-        // The vertex walk bars every node that samples textures or leans on
-        // helpers/functions -- those emit into the PIXEL snippet, which the
-        // templates stitch AFTER %{VERTEX_BODY} (declaration order), and VS
-        // has no Sample anyway.
+        // The vertex walk (UE's WPO model): helpers ARE available -- the
+        // templates stitch %{MATERIAL_BODY} BEFORE %{VERTEX_BODY}, so
+        // displace() can call the snippet's functions -- and texture reads
+        // emit SampleLevel (VS has no implicit derivatives). Only Pass Input
+        // stays barred (the vertex context lives on the base graph, which has
+        // no upstream passes).
         bool vertexWalk = false;
         std::function<bool(const GraphNode*)> visit = [&](const GraphNode* n) -> bool
         {
@@ -507,15 +512,9 @@ namespace Arcane
             }
             st = 1;
 
-            if (vertexWalk &&
-                (n->type == GraphNodeType::TextureSample ||
-                 n->type == GraphNodeType::SpriteTexture ||
-                 n->type == GraphNodeType::PassInput ||
-                 n->type == GraphNodeType::Custom ||
-                 n->type == GraphNodeType::SimpleNoise))
+            if (vertexWalk && n->type == GraphNodeType::PassInput)
             {
-                fail(n->id, std::string(GraphNodeInfo(n->type).display) +
-                            " is not available in the vertex stage");
+                fail(n->id, "Pass Input cannot drive the vertex stage");
                 return false;
             }
 
@@ -605,7 +604,12 @@ namespace Arcane
                         n->type == GraphNodeType::SpriteTexture ? "SpriteTexture" : n->paramName;
                     const std::string uv = in[0].connected ? Adapt(in[0].expr, in[0].width, 2)
                                                            : std::string("v.uv");
-                    stmt("float4 _n" + id + "_rgba = " + tex + ".Sample(MaterialSampler, " + uv + ");");
+                    // The vertex stage samples at mip 0 explicitly -- Sample's
+                    // implicit derivatives only exist in the pixel stage.
+                    const std::string call = vertexWalk
+                        ? tex + ".SampleLevel(MaterialSampler, " + uv + ", 0.0)"
+                        : tex + ".Sample(MaterialSampler, " + uv + ")";
+                    stmt("float4 _n" + id + "_rgba = " + call + ";");
                     if (pinConsumed(n->id, 1))
                         stmt("float _n" + id + "_a = _n" + id + "_rgba.a;");
                     break;
@@ -665,22 +669,25 @@ namespace Arcane
                     sig += ")";
                     call += ")";
 
-                    funcs.emplace_back(sig, n->id);
-                    funcs.emplace_back("{", n->id);
-                    std::string_view bodyText = n->customBody;
-                    while (!bodyText.empty())
+                    if (emittedCustomFuncs.insert(n->id).second)
                     {
-                        const std::size_t nl = bodyText.find('\n');
-                        std::string_view lineText = bodyText.substr(0, nl);
-                        if (!lineText.empty() && lineText.back() == '\r')
-                            lineText.remove_suffix(1);
-                        funcs.emplace_back("    " + std::string(lineText), n->id);
-                        if (nl == std::string_view::npos)
-                            break;
-                        bodyText.remove_prefix(nl + 1);
+                        funcs.emplace_back(sig, n->id);
+                        funcs.emplace_back("{", n->id);
+                        std::string_view bodyText = n->customBody;
+                        while (!bodyText.empty())
+                        {
+                            const std::size_t nl = bodyText.find('\n');
+                            std::string_view lineText = bodyText.substr(0, nl);
+                            if (!lineText.empty() && lineText.back() == '\r')
+                                lineText.remove_suffix(1);
+                            funcs.emplace_back("    " + std::string(lineText), n->id);
+                            if (nl == std::string_view::npos)
+                                break;
+                            bodyText.remove_prefix(nl + 1);
+                        }
+                        funcs.emplace_back("}", n->id);
+                        funcs.emplace_back("", 0);
                     }
-                    funcs.emplace_back("}", n->id);
-                    funcs.emplace_back("", 0);
 
                     local(n->customOutWidth, call);
                     break;

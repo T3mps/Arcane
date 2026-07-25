@@ -201,13 +201,63 @@ TEST_CASE("Codegen: the Vertex Output context emits displace()", "[material]")
         // ...but fine on sprite.
         CHECK(GenerateGraphSnippet(g, MaterialSurface::Sprite).Ok());
 
-        // Texture sampling barred from the vertex walk.
+        // Pass Input can never drive the vertex stage (the vertex context
+        // lives on the base graph, which has no upstream passes).
+        MaterialGraph pg;
+        pg.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode pin = Node(2, GraphNodeType::PassInput);
+        pg.nodes.push_back(pin);
+        pg.nodes.push_back(Node(3, GraphNodeType::VertexOutput));
+        pg.links.push_back(Link(2, 0, 3, 0));
+        CHECK(HasErrorOn(GenerateGraphSnippet(pg), 2));
+    }
+
+    SECTION("texture reads in the vertex walk emit SampleLevel")
+    {
+        // UE's WPO model: displacement may sample textures -- with an
+        // explicit mip (no implicit derivatives in VS). The pixel walk of the
+        // SAME node keeps plain Sample.
         MaterialGraph tg;
         tg.nodes.push_back(Node(1, GraphNodeType::Output));
         tg.nodes.push_back(TexNode(2, "Noise"));
         tg.nodes.push_back(Node(3, GraphNodeType::VertexOutput));
         tg.links.push_back(Link(2, 0, 3, 0));
-        CHECK(HasErrorOn(GenerateGraphSnippet(tg), 2));
+        tg.links.push_back(Link(2, 0, 1, 0));
+        const GraphCodegenResult r = GenerateGraphSnippet(tg);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("Noise.Sample(MaterialSampler, v.uv);") !=
+              std::string::npos);
+        CHECK(r.vertexSnippet.find(
+                  "Noise.SampleLevel(MaterialSampler, v.uv, 0.0);") !=
+              std::string::npos);
+        CHECK(r.vertexSnippet.find(".Sample(") == std::string::npos);
+    }
+
+    SECTION("a Custom node reachable from BOTH walks defines _cf once")
+    {
+        MaterialGraph cg;
+        cg.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode custom = Node(2, GraphNodeType::Custom);
+        custom.customPins = { { "x", 1 } };
+        custom.customOutWidth = 2;
+        custom.customBody = "return float2(x, -x);";
+        cg.nodes.push_back(custom);
+        cg.nodes.push_back(Node(3, GraphNodeType::Time));
+        cg.nodes.push_back(Node(4, GraphNodeType::VertexOutput));
+        cg.links.push_back(Link(3, 0, 2, 0));
+        cg.links.push_back(Link(2, 0, 1, 0));   // -> pixel walk
+        cg.links.push_back(Link(2, 0, 4, 0));   // -> vertex walk (posOffset)
+        const GraphCodegenResult r = GenerateGraphSnippet(cg);
+        REQUIRE(r.Ok());
+        std::size_t defs = 0;
+        for (std::size_t at = r.snippet.find("float2 _cf2(");
+             at != std::string::npos; at = r.snippet.find("float2 _cf2(", at + 1))
+            ++defs;
+        CHECK(defs == 1);
+        // ...and BOTH bodies call it (each walk resolves its own SSA local
+        // for the Time input).
+        CHECK(r.snippet.find("_cf2(_n3)") != std::string::npos);
+        CHECK(r.vertexSnippet.find("_cf2(_n3)") != std::string::npos);
     }
 }
 
@@ -1063,6 +1113,41 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
             *templateText, gen.snippet, "graph_custom", MaterialSurface::Fullscreen);
         REQUIRE(build.errors.empty());
         compileBoth(build.hlsl, "graph_custom.hlsl");
+    }
+
+    SECTION("fullscreen: texture + noise + Custom drive the VERTEX stage")
+    {
+        // The lifted bars end-to-end: displacement built from SimpleNoise (a
+        // shared helper), a texture read (SampleLevel in VS), and a Custom
+        // node used by BOTH walks -- proving %{MATERIAL_BODY}-before-
+        // %{VERTEX_BODY} declaration order and the single _cf definition
+        // survive real DXC on both targets.
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(TexNode(2, "HeightMap"));
+        g.nodes.push_back(Node(3, GraphNodeType::SimpleNoise));
+        GraphNode custom = Node(4, GraphNodeType::Custom);
+        custom.customPins = { { "a", 1 }, { "b", 1 } };
+        custom.customOutWidth = 2;
+        custom.customBody = "return float2(a, b) * (0.5 + 0.5 * sin(Time));";
+        g.nodes.push_back(custom);
+        g.nodes.push_back(Node(5, GraphNodeType::VertexOutput));
+        g.links.push_back(Link(2, 1, 4, 0));   // heightmap alpha -> custom.a
+        g.links.push_back(Link(3, 0, 4, 1));   // noise -> custom.b
+        g.links.push_back(Link(4, 0, 5, 0));   // -> posOffset (vertex walk)
+        g.links.push_back(Link(2, 0, 1, 0));   // rgba also -> pixel Output
+
+        const GraphCodegenResult gen = GenerateGraphSnippet(g, MaterialSurface::Fullscreen);
+        REQUIRE(gen.Ok());
+        REQUIRE_FALSE(gen.vertexSnippet.empty());
+        CHECK(gen.vertexSnippet.find("SampleLevel") != std::string::npos);
+        const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const MaterialBuildResult build = BuildMaterialShaderSource(
+            *templateText, gen.snippet, "graph_vtx_helpers",
+            MaterialSurface::Fullscreen, gen.vertexSnippet);
+        REQUIRE(build.errors.empty());
+        compileBoth(build.hlsl, "graph_vtx_helpers.hlsl");
     }
 
     SECTION("fullscreen: every library-batch-1 kernel in one graph")

@@ -93,9 +93,11 @@ namespace Arcane
                         // connected pins emit into `displace()` -- posOffset
                         // adds to clip-space pos.xy, uvOffset adds to uv,
                         // color multiplies the sprite tint (sprite surface
-                        // only). Absent/unconnected = passthrough. Nodes that
-                        // sample textures (or need pixel-snippet helpers) are
-                        // barred from this walk.
+                        // only). Absent/unconnected = passthrough. Snippet
+                        // helpers (Custom, SimpleNoise) ARE available -- the
+                        // templates stitch %{MATERIAL_BODY} first -- and
+                        // texture reads emit SampleLevel (no implicit
+                        // derivatives in VS); only Pass Input stays barred.
         Comment,        // annotation group box (UE comment / SG group): no
                         // pins, emits nothing -- pure canvas furniture that
                         // drags contained nodes. paramName holds the title,

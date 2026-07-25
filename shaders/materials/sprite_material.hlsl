@@ -9,7 +9,9 @@
 //   MATERIAL_BODY    <- the designer snippet defining float4 shade(Varyings)
 //   VERTEX_BODY      <- optional designer Varyings displace(Varyings v)
 //       (passthrough when absent); runs at the END of vs_main, so pos is
-//       CLIP SPACE. Params and Time are visible; texture sampling is not.
+//       CLIP SPACE. Params, Time, and the snippet's helper functions are
+//       visible (MATERIAL_BODY stitches FIRST); texture reads must use
+//       SampleLevel (no implicit derivatives in VS).
 // and hands the result to the runtime ShaderCompiler (DXIL + SPIR-V).
 //
 // The vertex stage and push constants mirror sprite.hlsl EXACTLY -- the
@@ -62,6 +64,8 @@ struct Varyings
     float4 color : COLOR0;     // the sprite's tint (linear, may exceed 1)
 };
 
+%{MATERIAL_BODY}
+
 %{VERTEX_BODY}
 
 Varyings vs_main(VSInput input)
@@ -74,8 +78,6 @@ Varyings vs_main(VSInput input)
     o.color = input.color;
     return displace(o);
 }
-
-%{MATERIAL_BODY}
 
 float4 ps_main(Varyings v) : SV_Target0
 {

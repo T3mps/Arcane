@@ -113,8 +113,10 @@ namespace Arcane
     // `vertexSnippet` (the vertex stage): an optional designer
     // `Varyings displace(Varyings v)` body stitched into %{VERTEX_BODY};
     // empty = identity passthrough. It runs at the END of vs_main (pos is
-    // clip space) and sees params + Globals; //@param declarations belong in
-    // the PIXEL snippet only.
+    // clip space) and sees params + Globals AND the pixel snippet's helper
+    // functions -- the templates stitch %{MATERIAL_BODY} first. Texture reads
+    // must use SampleLevel (no implicit derivatives in VS). //@param
+    // declarations belong in the PIXEL snippet only.
     //
     // `chainInputs`: declare that many reserved InputTexture(N) slots (see
     // GenerateMaterialBindings) WITHOUT the full chain build -- a single
