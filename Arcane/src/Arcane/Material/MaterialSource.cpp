@@ -2,6 +2,7 @@
 
 #include <Arcane/Material/GlobalParams.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <cstdint>
 
@@ -17,7 +18,8 @@ namespace Arcane
         // everywhere keeps a snippet portable across surfaces.
         constexpr std::string_view kReservedNames[] = {
             "Time", "DeltaTime", "ViewportSize", "MaterialSampler", "SpriteTexture",
-            "InputTexture",   // pass chains: the previous pass's output
+            // Pass chains: upstream pass outputs (slot k of the pass's inputs).
+            "InputTexture", "InputTexture1", "InputTexture2", "InputTexture3",
         };
 
         std::string_view TrimView(std::string_view s)
@@ -316,7 +318,7 @@ namespace Arcane
 
     std::string GenerateMaterialBindings(const MaterialTemplate& templ,
                                          MaterialSurface surface,
-                                         bool chainInput)
+                                         std::uint32_t chainInputs)
     {
         // Members emit in declaration order: HLSL's cbuffer packing applies the
         // same rules MaterialTemplate::Build used, so the shader's offsets match
@@ -358,15 +360,18 @@ namespace Arcane
             anyTexture = true;
             ++textureCount;
         }
-        // Pass chains (fullscreen only): the previous pass's output, at the
-        // slot after the material's own textures.
-        if (chainInput && !sprite)
-            outText += "Texture2D InputTexture : register(t" +
-                       std::to_string(textureCount + texBase) + ");\n";
+        // Pass chains (fullscreen only): upstream pass outputs, at the slots
+        // after the material's own textures. Slot 0 keeps the bare
+        // "InputTexture" spelling (the pre-DAG name).
+        if (!sprite)
+            for (std::uint32_t i = 0; i < chainInputs && i < kMaxPassInputs; ++i)
+                outText += "Texture2D InputTexture" + (i ? std::to_string(i) : "") +
+                           " : register(t" +
+                           std::to_string(textureCount + texBase + i) + ");\n";
         // The sprite template declares MaterialSampler itself (SpriteTexture
         // always needs it); emitting it here too would redeclare s0. Chains
-        // always need it (InputTexture samples through it).
-        if (!sprite && (anyTexture || chainInput))
+        // always need it (the input textures sample through it).
+        if (!sprite && (anyTexture || chainInputs > 0))
             outText += "SamplerState MaterialSampler : register(s0);\n";
 
         return outText;
@@ -449,12 +454,31 @@ namespace Arcane
     }
 
     MaterialChainBuildResult BuildMaterialChainSource(std::string_view templateText,
-                                                      std::span<const std::string_view> passSnippets,
+                                                      std::span<const MaterialChainPassDesc> passes,
                                                       std::string materialName)
     {
         MaterialChainBuildResult r;
-        r.hlsl.resize(passSnippets.size());
-        r.passErrors.resize(passSnippets.size());
+        r.hlsl.resize(passes.size());
+        r.passErrors.resize(passes.size());
+        r.passInputs.resize(passes.size());
+
+        // DAG rules (what keeps the chain executable in span order): pass 0 is
+        // the base and reads nothing; every input references an EARLIER pass;
+        // at most kMaxPassInputs per pass. Violations are chain errors.
+        for (std::size_t p = 0; p < passes.size(); ++p)
+        {
+            r.passInputs[p].assign(passes[p].inputs.begin(), passes[p].inputs.end());
+            if (p == 0 && !r.passInputs[p].empty())
+                r.errors.push_back("pass 0 (the base) cannot read pass outputs");
+            if (r.passInputs[p].size() > kMaxPassInputs)
+                r.errors.push_back("pass " + std::to_string(p) + ": at most " +
+                                   std::to_string(kMaxPassInputs) + " inputs");
+            for (std::uint32_t in : r.passInputs[p])
+                if (in >= p)
+                    r.errors.push_back("pass " + std::to_string(p) + ": input " +
+                                       std::to_string(in) +
+                                       " must reference an earlier pass");
+        }
 
         // Merge declarations across passes: same name + same type = ONE shared
         // param (first declaration wins default/range -- the template dup rule,
@@ -463,10 +487,10 @@ namespace Arcane
         std::vector<ParamMeta> metas;
         std::uint64_t hash = 14695981039346656037ull;
         hash = Fnv64Str(hash, templateText);
-        for (std::size_t p = 0; p < passSnippets.size(); ++p)
+        for (std::size_t p = 0; p < passes.size(); ++p)
         {
-            hash = Fnv64Str(hash, passSnippets[p]);
-            MaterialSourceParse parsed = ParseMaterialSource(passSnippets[p]);
+            hash = Fnv64Str(hash, passes[p].snippet);
+            MaterialSourceParse parsed = ParseMaterialSource(passes[p].snippet);
             r.passErrors[p] = std::move(parsed.errors);
             for (std::size_t i = 0; i < parsed.decls.size(); ++i)
             {
@@ -492,17 +516,22 @@ namespace Arcane
         r.metas = std::move(metas);
         r.templ = MaterialTemplate::Build(std::move(materialName), hash, std::move(decls));
 
-        // One binding block (union cbuffer + textures + InputTexture) stitched
-        // into EVERY pass -- a shared layout means one binding-set shape and one
-        // packed CB for the whole chain; params declared by one pass are simply
-        // visible to all of them.
-        const std::string bindings =
-            GenerateMaterialBindings(r.templ, MaterialSurface::Fullscreen, /*chainInput=*/true);
-        for (std::size_t p = 0; p < passSnippets.size(); ++p)
+        // One binding block (union cbuffer + textures + the input-texture set)
+        // stitched into EVERY pass -- a shared layout means one binding-set
+        // shape and one packed CB for the whole chain; params declared by one
+        // pass are simply visible to all of them. The decl count is uniform:
+        // the max input count anywhere, min 1 (the pre-DAG snippets that read
+        // a bare InputTexture keep compiling).
+        for (const auto& ins : r.passInputs)
+            r.chainInputSlots = (std::max)(r.chainInputSlots,
+                                           static_cast<std::uint32_t>(ins.size()));
+        const std::string bindings = GenerateMaterialBindings(
+            r.templ, MaterialSurface::Fullscreen, r.chainInputSlots);
+        for (std::size_t p = 0; p < passes.size(); ++p)
         {
             const std::pair<std::string_view, std::string_view> slots[] = {
                 { "MATERIAL_CBUFFER", bindings },
-                { "MATERIAL_BODY", passSnippets[p] },
+                { "MATERIAL_BODY", passes[p].snippet },
             };
             std::vector<std::string> unresolved;
             r.hlsl[p] = StitchShaderTemplate(templateText, slots, &unresolved);

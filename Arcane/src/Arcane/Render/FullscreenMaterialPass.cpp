@@ -75,7 +75,7 @@ namespace Arcane
 
             bool SetMaterial(std::shared_ptr<const MaterialTemplate> templ,
                              nvrhi::ShaderHandle vs, nvrhi::ShaderHandle ps,
-                             bool chainInput) override
+                             std::uint32_t chainInputs) override
             {
                 if (!templ || !vs || !ps)
                 {
@@ -96,13 +96,13 @@ namespace Arcane
                 layoutDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(kGlobalCbSlot));
                 for (std::uint32_t t = 0; t < templ->TextureCount(); ++t)
                     layoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(t));
-                // Chain mode: InputTexture after the material's own textures,
-                // and the sampler exists even when the material declares none
-                // (mirrors GenerateMaterialBindings' chainInput emission).
-                if (chainInput)
+                // Chain mode: upstream-input SRVs after the material's own
+                // textures, and the sampler exists even when the material
+                // declares none (mirrors GenerateMaterialBindings' emission).
+                for (std::uint32_t i = 0; i < chainInputs; ++i)
                     layoutDesc.addItem(
-                        nvrhi::BindingLayoutItem::Texture_SRV(templ->TextureCount()));
-                if (templ->TextureCount() > 0 || chainInput)
+                        nvrhi::BindingLayoutItem::Texture_SRV(templ->TextureCount() + i));
+                if (templ->TextureCount() > 0 || chainInputs > 0)
                     layoutDesc.addItem(nvrhi::BindingLayoutItem::Sampler(0));
                 nvrhi::BindingLayoutHandle bindingLayout = m_device->createBindingLayout(layoutDesc);
 
@@ -142,7 +142,7 @@ namespace Arcane
                 m_template = std::move(templ);
                 m_vs = vs;
                 m_ps = ps;
-                m_chainInput = chainInput;
+                m_chainInputs = chainInputs;
                 m_bindingLayout = std::move(bindingLayout);
                 m_materialCb = std::move(materialCb);
                 m_globalsCb = std::move(globalsCb);
@@ -159,7 +159,7 @@ namespace Arcane
                         const MaterialInstance& instance,
                         const GlobalParams& globals,
                         Assets* assets,
-                        nvrhi::ITexture* chainInput) override
+                        std::span<nvrhi::ITexture* const> chainInputs) override
             {
                 if (!Ready() || !commandList || !target)
                     return;
@@ -184,7 +184,7 @@ namespace Arcane
                 commandList->writeBuffer(m_globalsCb, &globals, sizeof(globals));
 
                 nvrhi::BindingSetHandle bindingSet =
-                    GetBindingSet(instance, assets, chainInput);
+                    GetBindingSet(instance, assets, chainInputs);
                 if (!bindingSet)
                     return;
 
@@ -222,7 +222,7 @@ namespace Arcane
 
             nvrhi::BindingSetHandle GetBindingSet(const MaterialInstance& instance,
                                                   Assets* assets,
-                                                  nvrhi::ITexture* chainInput)
+                                                  std::span<nvrhi::ITexture* const> chainInputs)
             {
                 // Resolve the instance's texture table (Guid -> GPU handle via
                 // the Assets GUID seam; anything unresolved renders white).
@@ -240,10 +240,16 @@ namespace Arcane
                             textures[i] = t.Get();
                     }
                 }
-                // Chain mode: InputTexture rides in the same key vector, so a
-                // ping-pong flip is just another cached set.
-                if (m_chainInput)
-                    textures.push_back(chainInput ? chainInput : m_black.Get());
+                // Chain mode: the input textures ride in the same key vector,
+                // so a rewire is just another cached set. Missing/null entries
+                // read black.
+                for (std::uint32_t i = 0; i < m_chainInputs; ++i)
+                {
+                    nvrhi::ITexture* in =
+                        i < chainInputs.size() && chainInputs[i] ? chainInputs[i]
+                                                                 : m_black.Get();
+                    textures.push_back(in);
+                }
 
                 // Cache keyed on the FULL resolved texture-pointer table (real
                 // key equality, not hash-as-identity; the CBs are stable
@@ -262,10 +268,11 @@ namespace Arcane
                         kGlobalCbSlot, m_globalsCb));
                     for (std::uint32_t t = 0; t < m_template->TextureCount(); ++t)
                         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(t, textures[t]));
-                    if (m_chainInput)
+                    for (std::uint32_t i = 0; i < m_chainInputs; ++i)
                         setDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(
-                            m_template->TextureCount(), textures.back()));
-                    if (m_template->TextureCount() > 0 || m_chainInput)
+                            m_template->TextureCount() + i,
+                            textures[m_template->TextureCount() + i]));
+                    if (m_template->TextureCount() > 0 || m_chainInputs > 0)
                         setDesc.addItem(nvrhi::BindingSetItem::Sampler(0, m_sampler));
                     nvrhi::BindingSetHandle set =
                         m_device->createBindingSet(setDesc, m_bindingLayout);
@@ -282,7 +289,7 @@ namespace Arcane
             std::shared_ptr<const MaterialTemplate> m_template;
             nvrhi::ShaderHandle        m_vs;
             nvrhi::ShaderHandle        m_ps;
-            bool                       m_chainInput = false;
+            std::uint32_t              m_chainInputs = 0;
             nvrhi::BindingLayoutHandle m_bindingLayout;
             nvrhi::BufferHandle        m_materialCb;   // b0, sized CbSize (null when 0)
             nvrhi::BufferHandle        m_globalsCb;    // b1, one register

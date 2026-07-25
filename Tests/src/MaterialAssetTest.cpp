@@ -88,6 +88,12 @@ TEST_CASE(".arcmat pass chains: round-trip, sprite/instance refusal", "[material
 
     SECTION("fullscreen base round-trips the pass list in order")
     {
+        // DAG wiring + canvas layout ride each entry.
+        data.passes[0].inputs = { 0 };
+        data.passes[0].posX = 120.0f;
+        data.passes[0].posY = 40.0f;
+        data.passes[1].inputs = { 1, 0 };   // composite reads blur AND base
+
         const auto file = dir / "chain.arcmat";
         REQUIRE(SaveMaterialAsset(file, data));
         const auto loaded = LoadMaterialAsset(file);
@@ -96,6 +102,27 @@ TEST_CASE(".arcmat pass chains: round-trip, sprite/instance refusal", "[material
         CHECK(loaded->passes[0].name == "blur");
         CHECK(loaded->passes[1].name == "composite");
         CHECK(loaded->passes[0].snippet == data.passes[0].snippet);
+        CHECK(loaded->passes[0].inputs == std::vector<std::uint32_t>{ 0 });
+        CHECK(loaded->passes[1].inputs == std::vector<std::uint32_t>({ 1, 0 }));
+        CHECK(loaded->passes[0].posX == 120.0f);
+        CHECK(loaded->passes[0].posY == 40.0f);
+    }
+
+    SECTION("a pre-DAG file (no inputs key) defaults to the linear chain")
+    {
+        const auto file = dir / "predag.arcmat";
+        {
+            std::ofstream out(file, std::ios::binary);
+            out << R"({"id":"eeee5555-5555-4555-8555-555555555555",)"
+                << R"("snippet":"float4 shade(Varyings v){return 0;}",)"
+                << R"("passes":[{"name":"a","snippet":"s"},{"name":"b","snippet":"s"}]})"
+                << '\n';
+        }
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->passes.size() == 2);
+        CHECK(loaded->passes[0].inputs == std::vector<std::uint32_t>{ 0 });
+        CHECK(loaded->passes[1].inputs == std::vector<std::uint32_t>{ 1 });
     }
 
     SECTION("absent passes key = single-pass (the pre-chain format)")

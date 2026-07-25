@@ -364,14 +364,16 @@ namespace Arcane::Editor
 
         if (ChainMode())
         {
-            std::vector<std::string_view> snippets;
-            snippets.reserve(1 + m_data.passes.size());
-            snippets.push_back(m_snippet);
+            std::vector<Arcane::MaterialChainPassDesc> descs;
+            descs.reserve(1 + m_data.passes.size());
+            descs.push_back({ m_snippet, {} });
             for (const Arcane::MaterialPass& p : m_data.passes)
-                snippets.push_back(p.snippet);
+                descs.push_back({ p.snippet, p.inputs });
 
             Arcane::MaterialChainBuildResult build =
-                Arcane::BuildMaterialChainSource(*templateText, snippets, m_title);
+                Arcane::BuildMaterialChainSource(*templateText, descs, m_title);
+            m_passInputs = std::move(build.passInputs);
+            m_chainInputSlots = build.chainInputSlots;
             m_parseErrors = std::move(build.errors);
             for (std::size_t p = 0; p < build.passErrors.size(); ++p)
                 for (const std::string& e : build.passErrors[p])
@@ -379,7 +381,7 @@ namespace Arcane::Editor
 
             m_passLineOffsets.assign(build.hlsl.size(), 0);
             for (std::size_t p = 0; p < build.hlsl.size(); ++p)
-                if (const std::size_t at = build.hlsl[p].find(snippets[p]);
+                if (const std::size_t at = build.hlsl[p].find(descs[p].snippet);
                     at != std::string::npos)
                     m_passLineOffsets[p] = static_cast<int>(std::count(
                         build.hlsl[p].begin(),
@@ -589,6 +591,8 @@ namespace Arcane::Editor
                 nvrhi::ShaderDesc().setShaderType(nvrhi::ShaderType::Pixel)
                     .setEntryName(Arcane::kPsEntry).setDebugName((stem + "_ps").c_str()),
                 pj.psBytes.data(), pj.psBytes.size());
+            if (p < m_passInputs.size())
+                ps.inputs = m_passInputs[p];
             pj.vsBytes.clear();
             pj.psBytes.clear();
             if (!ps.vs || !ps.ps)
@@ -597,7 +601,7 @@ namespace Arcane::Editor
         }
         // Atomic: a rejected chain keeps the previous one bound AND the
         // previous instance (same last-good shape as SetMaterial).
-        if (!m_chain->SetChain(m_pendingTemplate, shaders))
+        if (!m_chain->SetChain(m_pendingTemplate, shaders, m_chainInputSlots))
             return;
 
         PromotePendingInstance();

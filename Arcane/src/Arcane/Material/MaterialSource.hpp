@@ -75,13 +75,18 @@ namespace Arcane
     // surface, one shared MaterialSampler (s0) when any exist. Register
     // assignments follow the surface's map. Empty when the template has no
     // params.
-    // `chainInput` (fullscreen pass chains only): additionally declare the
-    // reserved `Texture2D InputTexture` -- the previous pass's output -- at the
-    // slot after the material's own textures, and always emit MaterialSampler
-    // (InputTexture needs it even when the material declares no textures).
+    // A pass may read up to this many upstream pass outputs (InputTexture,
+    // InputTexture1..3 -- the reserved-name list is sized to match).
+    inline constexpr std::uint32_t kMaxPassInputs = 4;
+
+    // `chainInputs` (fullscreen pass chains only): additionally declare that
+    // many reserved upstream textures -- `InputTexture`, `InputTexture1`, ... --
+    // at the slots after the material's own textures, and always emit
+    // MaterialSampler (they need it even when the material declares no
+    // textures). 0 = not a chain (the single-material path).
     ARCANE_API std::string GenerateMaterialBindings(const MaterialTemplate& templ,
                                                     MaterialSurface surface = MaterialSurface::Fullscreen,
-                                                    bool chainInput = false);
+                                                    std::uint32_t chainInputs = 0);
 
     // Replace every %{NAME} in `templateText` with its slot value. Slot names
     // not in `slots` are left in place and reported through `unresolved` (when
@@ -109,13 +114,28 @@ namespace Arcane
                                                              std::string materialName,
                                                              MaterialSurface surface = MaterialSurface::Fullscreen);
 
+    // One pass's authored surface, as the chain builder consumes it. `inputs`
+    // are CHAIN indices (0 = the base snippet) feeding InputTexture(N); they
+    // must reference EARLIER passes only (execution order = span order), which
+    // is what keeps the pass DAG acyclic by construction.
+    struct MaterialChainPassDesc
+    {
+        std::string_view snippet;
+        std::span<const std::uint32_t> inputs;
+    };
+
     struct MaterialChainBuildResult
     {
         MaterialTemplate templ;               // ONE merged layout across all passes
         std::vector<ParamMeta> metas;         // parallel to templ.Params()
         std::vector<std::string> hlsl;        // one stitched full source per pass
         std::vector<std::vector<std::string>> passErrors;   // per-pass parse errors
-        std::vector<std::string> errors;      // chain-level: merge conflicts, slots
+        std::vector<std::string> errors;      // chain-level: merge/DAG violations
+        // Validated per-pass input lists (verbatim from the descs) and the
+        // UNIFORM InputTexture decl count every pass's source carries -- what
+        // the runner sizes its binding layout with.
+        std::vector<std::vector<std::uint32_t>> passInputs;
+        std::uint32_t chainInputSlots = 1;
         [[nodiscard]] bool Ok() const noexcept
         {
             bool ok = errors.empty();
@@ -128,13 +148,15 @@ namespace Arcane
     // Fullscreen pass chains: stitch EACH pass snippet into its own full source,
     // all sharing ONE merged param surface (the union of every pass's //@param
     // decls -- same name + same type is one shared param, first declaration
-    // wins default/range; conflicting types are chain errors) and the reserved
-    // InputTexture (see GenerateMaterialBindings). One template, one instance,
-    // one packed CB bound to every pass. Single-element chains are legal and
-    // equivalent to BuildMaterialShaderSource apart from the InputTexture decl.
+    // wins default/range; conflicting types are chain errors) and one UNIFORM
+    // set of reserved upstream textures (see GenerateMaterialBindings; the decl
+    // count is the max input count over the chain, min 1). One template, one
+    // instance, one packed CB bound to every pass. DAG rules enforced here:
+    // pass 0 takes no inputs, every input references an earlier pass, at most
+    // kMaxPassInputs per pass.
     ARCANE_API MaterialChainBuildResult BuildMaterialChainSource(
         std::string_view templateText,
-        std::span<const std::string_view> passSnippets,
+        std::span<const MaterialChainPassDesc> passes,
         std::string materialName);
 #if defined(_MSC_VER)
 #pragma warning(pop)

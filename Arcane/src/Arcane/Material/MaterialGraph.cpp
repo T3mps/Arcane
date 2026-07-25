@@ -152,7 +152,8 @@ namespace Arcane
         // for node-accurate messages).
         constexpr std::string_view kGraphReservedNames[] = {
             "Time", "DeltaTime", "ViewportSize", "MaterialSampler", "SpriteTexture",
-            "InputTexture",   // pass chains: the previous pass's output
+            // Pass chains: upstream pass outputs (slot k of the pass's inputs).
+            "InputTexture", "InputTexture1", "InputTexture2", "InputTexture3",
         };
 
         bool ValidParamName(std::string_view name)

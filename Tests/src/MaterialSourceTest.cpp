@@ -255,12 +255,16 @@ TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[mat
         "//@param float2 Dir = (1, 0)\n"
         "float4 shade(Varyings v)\n"
         "{ return InputTexture.Sample(MaterialSampler, v.uv + Dir * Speed); }\n";
-    const std::string_view passes[] = { pass0, pass1 };
+    const std::uint32_t p1in[] = { 0 };
+    const MaterialChainPassDesc passes[] = { { pass0, {} }, { pass1, p1in } };
 
     const MaterialChainBuildResult r = BuildMaterialChainSource(
         "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", passes, "chain");
     REQUIRE(r.Ok());
     REQUIRE(r.hlsl.size() == 2);
+    CHECK(r.chainInputSlots == 1);
+    REQUIRE(r.passInputs.size() == 2);
+    CHECK(r.passInputs[1] == std::vector<std::uint32_t>{ 0 });
 
     // ONE merged surface: Speed (default 2), Noise, Dir -- declaration order.
     REQUIRE(r.templ.Params().size() == 3);
@@ -281,9 +285,11 @@ TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[mat
 
     SECTION("conflicting types across passes are chain errors")
     {
-        const std::string_view bad[] = {
-            "//@param float Speed = 1\nfloat4 shade(Varyings v) { return Speed; }\n",
-            "//@param color Speed = (1, 1, 1, 1)\nfloat4 shade(Varyings v) { return Speed; }\n",
+        const std::uint32_t in0[] = { 0 };
+        const MaterialChainPassDesc bad[] = {
+            { "//@param float Speed = 1\nfloat4 shade(Varyings v) { return Speed; }\n", {} },
+            { "//@param color Speed = (1, 1, 1, 1)\nfloat4 shade(Varyings v) { return Speed; }\n",
+              in0 },
         };
         const MaterialChainBuildResult c = BuildMaterialChainSource(
             "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", bad, "conflict");
@@ -294,8 +300,8 @@ TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[mat
 
     SECTION("a textureless chain still gets InputTexture t0 + the sampler")
     {
-        const std::string_view lone[] = {
-            "float4 shade(Varyings v) { return float4(v.uv, 0.0, 1.0); }\n",
+        const MaterialChainPassDesc lone[] = {
+            { "float4 shade(Varyings v) { return float4(v.uv, 0.0, 1.0); }\n", {} },
         };
         const MaterialChainBuildResult c = BuildMaterialChainSource(
             "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", lone, "lone");
@@ -305,12 +311,76 @@ TEST_CASE("BuildMaterialChainSource merges params and binds InputTexture", "[mat
         CHECK(c.hlsl[0].find("SamplerState MaterialSampler : register(s0);") != std::string::npos);
     }
 
-    SECTION("InputTexture is a reserved name in snippets")
+    SECTION("multi-input passes widen the uniform decl set (the DAG)")
     {
-        const MaterialSourceParse p =
-            ParseMaterialSource("//@param texture InputTexture\n");
-        REQUIRE(p.errors.size() == 1);
-        CHECK(p.errors[0].find("reserved") != std::string::npos);
+        // p2 reads BOTH p1 and p0 (bloom's composite shape): every pass's
+        // source carries InputTexture + InputTexture1, slots t0/t1.
+        const std::uint32_t p1in[] = { 0 };
+        const std::uint32_t p2in[] = { 1, 0 };
+        const MaterialChainPassDesc dag[] = {
+            { "float4 shade(Varyings v) { return float4(v.uv, 0.0, 1.0); }\n", {} },
+            { "float4 shade(Varyings v)\n"
+              "{ return InputTexture.Sample(MaterialSampler, v.uv); }\n", p1in },
+            { "float4 shade(Varyings v)\n"
+              "{ return InputTexture.Sample(MaterialSampler, v.uv) +\n"
+              "         InputTexture1.Sample(MaterialSampler, v.uv); }\n", p2in },
+        };
+        const MaterialChainBuildResult c = BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", dag, "dag");
+        REQUIRE(c.Ok());
+        CHECK(c.chainInputSlots == 2);
+        CHECK(c.passInputs[2] == std::vector<std::uint32_t>({ 1, 0 }));
+        for (const std::string& h : c.hlsl)
+        {
+            CHECK(h.find("Texture2D InputTexture : register(t0);") != std::string::npos);
+            CHECK(h.find("Texture2D InputTexture1 : register(t1);") != std::string::npos);
+        }
+    }
+
+    SECTION("DAG violations are chain errors")
+    {
+        const std::uint32_t self[] = { 1 };      // pass 1 reading itself
+        const MaterialChainPassDesc selfRef[] = {
+            { "float4 shade(Varyings v) { return 1; }\n", {} },
+            { "float4 shade(Varyings v) { return 1; }\n", self },
+        };
+        CHECK_FALSE(BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", selfRef, "s").Ok());
+
+        const std::uint32_t fwd[] = { 2 };       // pass 1 reading a later pass
+        const MaterialChainPassDesc forward[] = {
+            { "float4 shade(Varyings v) { return 1; }\n", {} },
+            { "float4 shade(Varyings v) { return 1; }\n", fwd },
+            { "float4 shade(Varyings v) { return 1; }\n", {} },
+        };
+        CHECK_FALSE(BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", forward, "f").Ok());
+
+        const std::uint32_t baseIn[] = { 0 };    // the base reading anything
+        const MaterialChainPassDesc basePass[] = {
+            { "float4 shade(Varyings v) { return 1; }\n", baseIn },
+        };
+        CHECK_FALSE(BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", basePass, "b").Ok());
+
+        const std::uint32_t five[] = { 0, 0, 0, 0, 0 };   // over kMaxPassInputs
+        const MaterialChainPassDesc tooMany[] = {
+            { "float4 shade(Varyings v) { return 1; }\n", {} },
+            { "float4 shade(Varyings v) { return 1; }\n", five },
+        };
+        CHECK_FALSE(BuildMaterialChainSource(
+            "%{MATERIAL_CBUFFER}\n%{MATERIAL_BODY}\n", tooMany, "m").Ok());
+    }
+
+    SECTION("the InputTexture names are reserved in snippets")
+    {
+        for (const char* line : { "//@param texture InputTexture\n",
+                                  "//@param float InputTexture1 = 0\n" })
+        {
+            const MaterialSourceParse p = ParseMaterialSource(line);
+            REQUIRE(p.errors.size() == 1);
+            CHECK(p.errors[0].find("reserved") != std::string::npos);
+        }
     }
 }
 
@@ -332,14 +402,17 @@ TEST_CASE("Pass-chain sources compile on both targets", "[shadercompile]")
         "//@param color Tint = (1, 0.5, 0.25, 1)\n"
         "float4 shade(Varyings v)\n"
         "{\n"
-        "    return InputTexture.Sample(MaterialSampler, v.uv) * Tint;\n"
+        "    return InputTexture.Sample(MaterialSampler, v.uv) * Tint +\n"
+        "           InputTexture1.Sample(MaterialSampler, v.uv) * 0.25;\n"
         "}\n";
-    const std::string_view passes[] = { pass0, pass1 };
+    const std::uint32_t p1in[] = { 0, 0 };   // both slots fed by the base
+    const MaterialChainPassDesc passes[] = { { pass0, {} }, { pass1, p1in } };
 
     const MaterialChainBuildResult r =
         BuildMaterialChainSource(*templateText, passes, "chain_compile");
     REQUIRE(r.Ok());
     REQUIRE(r.hlsl.size() == 2);
+    CHECK(r.chainInputSlots == 2);
 
     ShaderCompiler sc;
     REQUIRE(sc.Initialize(0.0));

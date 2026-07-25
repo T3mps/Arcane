@@ -58,9 +58,10 @@ namespace
         const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
         REQUIRE(templateText.has_value());
 
-        // Color-rotating chain: each pass's output is a distinct primary, so a
-        // pass that failed to read its input is unmissable.
-        //   p0: green -> p1: .grba = red -> p2: .bgra * Gain = blue.
+        // Color-rotating DAG (the bloom composite shape): each pass's output is
+        // a distinct primary, and the last pass reads TWO upstream passes.
+        //   p0: green -> p1 (reads p0): .grba = red
+        //   p2 (reads p1 AND p0): p1.bgra=blue + p0=green -> cyan, * Gain.
         const std::string_view pass0 =
             "float4 shade(Varyings v) { return float4(0.0, 1.0, 0.0, 1.0); }\n";
         const std::string_view pass1 =
@@ -69,13 +70,22 @@ namespace
         const std::string_view pass2 =
             "//@param float Gain = 1.0\n"
             "float4 shade(Varyings v)\n"
-            "{ return InputTexture.Sample(MaterialSampler, v.uv).bgra * Gain; }\n";
-        const std::string_view snippets[] = { pass0, pass1, pass2 };
+            "{\n"
+            "    float4 a = InputTexture.Sample(MaterialSampler, v.uv);\n"
+            "    float4 b = InputTexture1.Sample(MaterialSampler, v.uv);\n"
+            "    return float4(a.bgr + b.rgb, 1.0) * Gain;\n"
+            "}\n";
+        const std::uint32_t p1in[] = { 0 };
+        const std::uint32_t p2in[] = { 1, 0 };
+        const Arcane::MaterialChainPassDesc descs[] = {
+            { pass0, {} }, { pass1, p1in }, { pass2, p2in },
+        };
 
         const Arcane::MaterialChainBuildResult build =
-            Arcane::BuildMaterialChainSource(*templateText, snippets, "chain_gpu");
+            Arcane::BuildMaterialChainSource(*templateText, descs, "chain_gpu");
         REQUIRE(build.Ok());
         REQUIRE(build.hlsl.size() == 3);
+        REQUIRE(build.chainInputSlots == 2);
 
         Arcane::ShaderCompiler sc;
         REQUIRE(sc.Initialize(0.0));
@@ -96,6 +106,7 @@ namespace
                                     nvrhi::ShaderType::Vertex, Arcane::kVsEntry);
             ps.ps = MakeChainShader(device->Nvrhi(), backend, psResult,
                                     nvrhi::ShaderType::Pixel, Arcane::kPsEntry);
+            ps.inputs = build.passInputs[p];
             REQUIRE(ps.vs != nullptr);
             REQUIRE(ps.ps != nullptr);
             passShaders.push_back(ps);
@@ -104,7 +115,7 @@ namespace
         auto chain = Arcane::FullscreenMaterialChain::Create(device->Nvrhi());
         REQUIRE(chain != nullptr);
         auto templ = std::make_shared<Arcane::MaterialTemplate>(build.templ);
-        REQUIRE(chain->SetChain(templ, passShaders));
+        REQUIRE(chain->SetChain(templ, passShaders, build.chainInputSlots));
         REQUIRE(chain->Ready());
         CHECK(chain->PassCount() == 3);
 
@@ -151,13 +162,14 @@ namespace
 
         uint8_t bgra[4] = {};
 
-        // Full chain (default view = last pass): blue.
+        // Full chain (default view = last pass): cyan -- proof p2 read BOTH
+        // upstream passes (blue from p1's swizzle + green straight from p0).
         RenderAndReadCenter(static_cast<std::size_t>(-1), bgra);
         CHECK((int)bgra[0] > 200);   // B
-        CHECK((int)bgra[1] < 64);    // G
+        CHECK((int)bgra[1] > 200);   // G
         CHECK((int)bgra[2] < 64);    // R
 
-        // viewIndex truncation: pass 0 alone is green, through pass 1 is red.
+        // View any pass: pass 0 alone is green, pass 1 is red.
         RenderAndReadCenter(0, bgra);
         CHECK((int)bgra[1] > 200);   // G
         CHECK((int)bgra[0] < 64);
@@ -166,6 +178,12 @@ namespace
         CHECK((int)bgra[2] > 200);   // R
         CHECK((int)bgra[0] < 64);
         CHECK((int)bgra[1] < 64);
+
+        // Per-pass intermediates stay live for thumbnails.
+        CHECK(chain->PassOutput(0) != nullptr);
+        CHECK(chain->PassOutput(1) != nullptr);
+        CHECK(chain->PassOutput(2) != nullptr);
+        CHECK(chain->PassOutput(3) == nullptr);
 
         // One shared CB serves every pass: a live override on the merged
         // instance reaches pass 2 without a recompile.

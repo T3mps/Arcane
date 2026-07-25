@@ -35,10 +35,21 @@ namespace Arcane
 #endif
     // One EXTRA pass of a fullscreen pass chain (the main `snippet` is always
     // pass 0). Text-authored only for now; a per-pass graph is a follow-up.
+    //
+    // `inputs` makes the chain a DAG: entry k names the pass (by CHAIN index --
+    // 0 = the base snippet, 1 = passes[0], ...) whose output this pass reads
+    // through the reserved InputTexture (k = 0), InputTexture1, ... Execution
+    // order is ARRAY order, so inputs may only reference EARLIER passes --
+    // acyclic by construction; the editor topo-sorts on wire edits and
+    // BuildMaterialChainSource refuses violations. Loading a pre-DAG file
+    // (no "inputs" key) defaults to { previous pass } -- the linear chain.
+    // An explicit empty array is legal (a generator pass reads nothing).
     struct MaterialPass
     {
         std::string name;      // display label ("blur", "composite", ...)
         std::string snippet;   // same //@param + shade() shape as the main snippet
+        std::vector<std::uint32_t> inputs;   // chain indices feeding InputTextureN
+        float posX = 0.0f, posY = 0.0f;      // pass-canvas layout (persisted)
     };
 
     struct MaterialAssetData

@@ -139,8 +139,11 @@ namespace Arcane
                              path.generic_string());
                 nlohmann::json passes = nlohmann::json::array();
                 for (const MaterialPass& p : data.passes)
-                    passes.push_back(nlohmann::json{ { "name", p.name },
-                                                     { "snippet", p.snippet } });
+                    passes.push_back(nlohmann::json{
+                        { "name", p.name },
+                        { "snippet", p.snippet },
+                        { "inputs", p.inputs },
+                        { "pos", nlohmann::json::array({ p.posX, p.posY }) } });
                 doc["passes"] = std::move(passes);
             }
         }
@@ -250,6 +253,24 @@ namespace Arcane
                     p.name = e.contains("name") && e["name"].is_string()
                                  ? e["name"].get<std::string>()
                                  : "pass " + std::to_string(data.passes.size() + 1);
+                    if (e.contains("inputs") && e["inputs"].is_array())
+                    {
+                        for (const nlohmann::json& in : e["inputs"])
+                            if (in.is_number_unsigned())
+                                p.inputs.push_back(in.get<std::uint32_t>());
+                    }
+                    else
+                    {
+                        // Pre-DAG file: the linear-chain default (previous pass).
+                        p.inputs.push_back(
+                            static_cast<std::uint32_t>(data.passes.size()));
+                    }
+                    if (e.contains("pos") && e["pos"].is_array() && e["pos"].size() == 2 &&
+                        e["pos"][0].is_number() && e["pos"][1].is_number())
+                    {
+                        p.posX = e["pos"][0].get<float>();
+                        p.posY = e["pos"][1].get<float>();
+                    }
                     data.passes.push_back(std::move(p));
                 }
             }

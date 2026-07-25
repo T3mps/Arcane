@@ -210,6 +210,10 @@ namespace Arcane::Editor
         };
         std::vector<PassJobs> m_passJobs;
         std::vector<int> m_passLineOffsets;   // per-pass snippet offset in its hlsl
+        // Validated DAG wiring from the last chain build (what SetChain binds;
+        // captured at Rebuild so async binds never race pass-list edits).
+        std::vector<std::vector<std::uint32_t>> m_passInputs;
+        std::uint32_t m_chainInputSlots = 1;
         int m_activePass = 0;   // which snippet the text editor shows (0 = base)
         int m_viewPass = -1;    // preview truncation; -1 = the full chain
 
