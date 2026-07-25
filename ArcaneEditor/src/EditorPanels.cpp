@@ -24,6 +24,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace Arcane::Editor
@@ -558,6 +559,64 @@ namespace Arcane::Editor
                         state.lastClickTime = now;
                     }
 
+                    // Right-click selects (if outside the selection) then menus.
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)
+                        && !sel.Contains(row.entity))
+                        sel.Select(row.entity);
+                    if (ImGui::BeginPopupContextItem("##row_ctx"))
+                    {
+                        if (!binding.editMode)
+                            ImGui::BeginDisabled();
+                        if (ImGui::MenuItem("New Child Entity"))
+                        {
+                            Astra::Entity created = Astra::Entity::Invalid();
+                            const Astra::Entity parent = row.entity;
+                            if (ApplyStructural(undo, binding, "Create Entity",
+                                    [&] { created = Arcane::Edit::CreateEntity(registry, parent);
+                                          return created.IsValid(); }))
+                            {
+                                state.collapsed.erase(
+                                    static_cast<std::uint64_t>(parent.GetValue()));
+                                sel.Select(created);
+                            }
+                        }
+                        if (ImGui::MenuItem("Rename", "F2"))
+                            BeginRename(state, row.entity, row.label);
+                        if (ImGui::MenuItem("Delete", "Del"))
+                        {
+                            if (!sel.Contains(row.entity))
+                                sel.Select(row.entity);
+                            DeleteSelection(registry, sel, undo, binding);
+                        }
+                        if (!binding.editMode)
+                            ImGui::EndDisabled();
+                        ImGui::EndPopup();
+                    }
+
+                    if (binding.editMode && ImGui::BeginDragDropSource())
+                    {
+                        ImGui::SetDragDropPayload("ARC_OUTLINER_ENTITY",
+                                                  &row.entity, sizeof(Astra::Entity));
+                        ImGui::TextUnformatted(row.label.c_str());
+                        ImGui::EndDragDropSource();
+                    }
+                    if (binding.editMode && ImGui::BeginDragDropTarget())
+                    {
+                        if (const ImGuiPayload* p =
+                                ImGui::AcceptDragDropPayload("ARC_OUTLINER_ENTITY"))
+                        {
+                            Astra::Entity dragged;
+                            std::memcpy(&dragged, p->Data, sizeof(dragged));
+                            const std::vector<Astra::Entity> moving =
+                                sel.Contains(dragged) ? sel.Entities()
+                                                      : std::vector<Astra::Entity>{ dragged };
+                            const Astra::Entity target = row.entity;
+                            ApplyStructural(undo, binding, "Reparent",
+                                [&] { return Arcane::Edit::Reparent(registry, moving, target) > 0; });
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+
                     if (indent > 0.0f)
                         ImGui::Unindent(indent);
                 }
@@ -572,6 +631,44 @@ namespace Arcane::Editor
                 ImGui::PopID();
             }
             ImGui::EndTable();
+        }
+
+        // Drop below the table = unparent to root. Only visible mid-drag.
+        if (binding.editMode && ImGui::GetDragDropPayload() != nullptr)
+        {
+            ImGui::Selectable("(drop here to unparent)", false,
+                              ImGuiSelectableFlags_Disabled);
+            if (ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* p =
+                        ImGui::AcceptDragDropPayload("ARC_OUTLINER_ENTITY"))
+                {
+                    Astra::Entity dragged;
+                    std::memcpy(&dragged, p->Data, sizeof(dragged));
+                    const std::vector<Astra::Entity> moving =
+                        sel.Contains(dragged) ? sel.Entities()
+                                              : std::vector<Astra::Entity>{ dragged };
+                    ApplyStructural(undo, binding, "Unparent",
+                        [&] { return Arcane::Edit::Reparent(registry, moving,
+                                                            Astra::Entity::Invalid()) > 0; });
+                }
+                ImGui::EndDragDropTarget();
+            }
+        }
+
+        if (binding.editMode && ImGui::BeginPopupContextWindow("##outliner_ctx",
+                ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+        {
+            if (ImGui::MenuItem("New Entity"))
+            {
+                Astra::Entity created = Astra::Entity::Invalid();
+                if (ApplyStructural(undo, binding, "Create Entity",
+                        [&] { created = Arcane::Edit::CreateEntity(registry,
+                                            Astra::Entity::Invalid());
+                              return created.IsValid(); }))
+                    sel.Select(created);
+            }
+            ImGui::EndPopup();
         }
 
         std::size_t total = 0;
