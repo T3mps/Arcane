@@ -23,6 +23,8 @@ namespace Arcane
         creg.RegisterComponent<PreviousTransform>();
         creg.RegisterComponent<SpriteRenderer>();
         creg.RegisterComponent<PostProcess>();
+        creg.RegisterComponent<EntityInfo>();
+        creg.RegisterComponent<Hidden>();
     }
 
     inline void RegisterSceneComponents(Astra::Registry& reg)

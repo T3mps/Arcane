@@ -48,6 +48,10 @@ namespace Arcane
     //     empty, nothing smashes). Neither changes EngineContext, the entry
     //     points, or any existing layout, so a v7<->v7 cross-build pairing
     //     stays memory-safe in both directions.
+    //     Outliner slice 1 rides the same argument: EntityInfo + Hidden are
+    //     two more appended name-keyed component types, and the Not<Hidden>
+    //     filter in the plugin-compiled RenderSubmissionSystem is behavioral
+    //     (a stale plugin just doesn't honor hiding). Still NO bump.
     inline constexpr uint32_t kGamePluginABIVersion = 7;
 
     struct EngineContext

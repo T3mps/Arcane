@@ -27,7 +27,7 @@
 namespace Arcane
 {
     struct RenderSubmissionSystem
-        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, PreviousTransform>>
+        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, PreviousTransform, Hidden>>
     {
         void operator()(Astra::Registry& reg)
         {
@@ -36,7 +36,7 @@ namespace Arcane
             const TextureTable* textures = reg.GetResource<TextureTable>();
             const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
 
-            auto view = reg.CreateView<WorldTransform, SpriteRenderer>();
+            auto view = reg.CreateView<WorldTransform, SpriteRenderer, Astra::Not<Hidden>>();
             view.ForEach([&](Astra::Entity e, WorldTransform& world, SpriteRenderer& sprite)
             {
                 const glm::mat3& m = world.matrix;

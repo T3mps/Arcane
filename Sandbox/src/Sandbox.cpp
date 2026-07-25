@@ -115,6 +115,8 @@ extern "C"
         creg->ReRegisterComponent<Arcane::PreviousTransform>();
         creg->ReRegisterComponent<Arcane::SpriteRenderer>();
         creg->ReRegisterComponent<Arcane::PostProcess>();
+        creg->ReRegisterComponent<Arcane::EntityInfo>();
+        creg->ReRegisterComponent<Arcane::Hidden>();
         creg->ReRegisterComponent<Arcane::RigidBody2D>();
         creg->ReRegisterComponent<Arcane::Collider2D>();
         creg->ReRegisterComponent<Arcane::PhysicsBodyRef>();

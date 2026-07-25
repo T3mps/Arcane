@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 namespace Arcane
 {
@@ -92,6 +93,26 @@ namespace Arcane
     {
         Guid material{};
     };
+
+    // The editor-facing identity (Outliner arc): a STABLE Guid + display name.
+    // Policy: the EDITOR adds this (entity create + first rename); runtime
+    // spawns are never forced to carry strings. An entity without one displays
+    // as "Entity <id>". The Guid is generated when the component is added and
+    // is the durable cross-save identity -- entity ids are not.
+    struct EntityInfo
+    {
+        Guid        id{};
+        std::string name;
+        // Non-trivially-copyable: the binary path (Play snapshots, scene
+        // SaveBinary) serializes through this member instead of the POD
+        // memcpy overload (Astra's HasSerializeMethod seam).
+        template<typename Archive> void Serialize(Archive& ar) { ar(id); ar(name); }
+    };
+
+    // Marker ("tag component"): render submission skips entities carrying it
+    // (the Outliner eye). Serialized like any component, so hidden stays
+    // hidden in game; the eye applies it to an entity AND its descendants.
+    struct Hidden {};
 }
 
 // Reflection blocks at namespace scope (NOT anonymous). WorldTransform::matrix is
@@ -145,5 +166,13 @@ namespace Arcane
 
     ASTRA_REFLECT_TYPE(PostProcess)
         ASTRA_REFLECT_FIELD(PostProcess, material)
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(EntityInfo)
+        ASTRA_REFLECT_FIELD(EntityInfo, id)
+        ASTRA_REFLECT_FIELD(EntityInfo, name)
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(Hidden)
     ASTRA_END_REFLECT_TYPE()
 }
