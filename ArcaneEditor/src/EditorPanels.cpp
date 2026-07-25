@@ -122,18 +122,21 @@ namespace Arcane::Editor
 
         // Emit the dockspace into the still-open host window. Anything drawn between
         // BeginDockSpace and here is a fixed strip above it.
+        //
+        // The central node is NOT locked anymore: the Viewport is a normal tab
+        // (movable, dockable-over) and editor documents open as tabs beside it
+        // -- the UE/Unity shape where asset editors share the main area with
+        // the scene.
         ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_None);
 
-        // Lock the central node as the Viewport EVERY frame: no tab, not closeable, and
-        // nothing else may dock into or undock it -- so the Viewport is always the centre
-        // and its size is dictated purely by the panels split off around it.
-        // (NoDockingOverMe/NoUndocking are runtime-only flags, not saved to the layout, so
-        // they are re-applied here rather than trusted to persist.)
+        // SCRUB the old lock: NoTabBar/NoCloseButton are SAVED dock flags, so
+        // every imgui.ini written while the lock existed still carries them --
+        // simply not re-applying changes nothing on machines with a layout.
         if (ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockspaceId))
-            central->LocalFlags |= ImGuiDockNodeFlags_NoTabBar
-                                 | ImGuiDockNodeFlags_NoCloseButton
-                                 | ImGuiDockNodeFlags_NoDockingOverMe
-                                 | ImGuiDockNodeFlags_NoUndocking;
+            central->LocalFlags &= ~(ImGuiDockNodeFlags_NoTabBar
+                                   | ImGuiDockNodeFlags_NoCloseButton
+                                   | ImGuiDockNodeFlags_NoDockingOverMe
+                                   | ImGuiDockNodeFlags_NoUndocking);
 
         ImGui::End();
     }
@@ -289,6 +292,7 @@ namespace Arcane::Editor
 
         ViewportPanelResult r;
         ImGui::Begin("Viewport");
+        r.dockId = static_cast<unsigned int>(ImGui::GetWindowDockID());
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         r.desiredW = avail.x > 0 ? static_cast<uint32_t>(avail.x) : 1;
         r.desiredH = avail.y > 0 ? static_cast<uint32_t>(avail.y) : 1;

@@ -449,7 +449,7 @@ namespace Arcane::Editor
 
     void EditorApp::MaterialNewPickedThunk(const char* path, void* user)
     {
-        // SDL dialog callback thread (see FolderPickedThunk).
+        // SDL dialog callback thread (see ProjectPickedThunk).
         auto* self = static_cast<EditorApp*>(user);
         if (!path) return;
         std::lock_guard<std::mutex> lk(self->m_pendingMaterialMutex);
@@ -539,9 +539,9 @@ namespace Arcane::Editor
         m_documents.OpenPath(path);
     }
 
-    void EditorApp::FolderPickedThunk(const char* path, void* user)
+    void EditorApp::ProjectPickedThunk(const char* path, void* user)
     {
-        // Runs on an SDL-owned BACKGROUND thread (the Windows folder-picker backend
+        // Runs on an SDL-owned BACKGROUND thread (the Windows dialog backend
         // fires the callback from a detached worker, not PumpEvents/the main thread) --
         // m_pendingProjectPath must be synchronized against MainLoop's top-of-frame read.
         auto* self = static_cast<EditorApp*>(user);
@@ -671,7 +671,7 @@ namespace Arcane::Editor
             }
 
             // File->Open Project: run a pending soft-restart at a safe point (top of
-            // frame, never mid-render). Set by FolderPickedThunk, which runs on an
+            // frame, never mid-render). Set by ProjectPickedThunk, which runs on an
             // SDL-owned background thread -- take the path out under the lock, then
             // switch on the local copy outside the lock (SwitchProject itself never
             // touches m_pendingProjectPath/m_pendingProjectMutex).
@@ -1136,7 +1136,8 @@ namespace Arcane::Editor
                                                (uint64_t)(intptr_t)m_toolbarLogo.Get());
             Arcane::Editor::EndDockSpace();
             if (menuReq.openProject)
-                m_gpu->Win().ShowOpenFolderDialog(&EditorApp::FolderPickedThunk, this);
+                m_gpu->Win().ShowOpenFileDialog(&EditorApp::ProjectPickedThunk, this,
+                                                "Arcane Project", "arcproj");
             if (menuReq.newMaterial || menuReq.openMaterial)
             {
                 // Material dialogs start in the project's Content/ (the only place
@@ -1166,7 +1167,8 @@ namespace Arcane::Editor
                                                 contentDir.empty() ? nullptr : contentDir.c_str());
             }
             Arcane::Editor::DrawConsolePanel(m_console);
-            m_documents.DrawAll();
+            // New documents tab into the Viewport's node (captured last frame).
+            m_documents.DrawAll(m_viewportDockId);
 
             // Project-open failure modal: any refusal in SwitchProject/Init lands
             // here (drawn at the dockspace level, outside any panel window). The
@@ -1194,6 +1196,7 @@ namespace Arcane::Editor
                 Arcane::Editor::DrawViewportPanel(m_viewport->TextureId(),
                                             m_viewport->Width(), m_viewport->Height(),
                                             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace);
+            m_viewportDockId = vp.dockId;
             m_pendingViewportW = vp.desiredW;
             m_pendingViewportH = vp.desiredH;
             m_viewportRect     = vp.imageRect;

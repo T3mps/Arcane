@@ -236,17 +236,22 @@ namespace Arcane::Editor
         std::uint32_t m_pendingViewportH = 0;
 
         // File -> Open Project (soft-restart). The menu sets m_openProjectRequested;
-        // MainLoop launches the async folder dialog; SDL runs FolderPickedThunk on an
-        // SDL-owned BACKGROUND thread (NOT the main thread -- the Windows backend's
-        // folder-picker callback fires off a detached worker), which stashes the chosen
-        // path in m_pendingProjectPath under m_pendingProjectMutex; the next frame's
-        // top of MainLoop takes the lock, swaps the path out, and (outside the lock)
-        // runs SwitchProject at a safe point.
+        // MainLoop launches the async .arcproj FILE dialog; SDL runs
+        // ProjectPickedThunk on an SDL-owned BACKGROUND thread (NOT the main
+        // thread -- the Windows backend's dialog callback fires off a detached
+        // worker), which stashes the chosen path in m_pendingProjectPath under
+        // m_pendingProjectMutex; the next frame's top of MainLoop takes the
+        // lock, swaps the path out, and (outside the lock) runs SwitchProject
+        // at a safe point. (Project::Open accepts the .arcproj file directly.)
         std::string m_pendingProjectPath;
         std::mutex  m_pendingProjectMutex;   // guards m_pendingProjectPath across the SDL callback thread
 
-        static void FolderPickedThunk(const char* path, void* user);   // -> m_pendingProjectPath (background thread)
+        static void ProjectPickedThunk(const char* path, void* user);  // -> m_pendingProjectPath (background thread)
         void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
+
+        // The dock node the Viewport occupied LAST frame (0 = floating):
+        // where new document windows dock as sibling tabs (DrawAll).
+        unsigned int m_viewportDockId = 0;
 
         // Open-failure surfacing: SwitchProject's refusals used to be console-only
         // and were repeatedly missed at the desk. Any refusal/failure sets this;

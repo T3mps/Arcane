@@ -117,10 +117,12 @@ namespace Arcane::Editor
     {
         m_pendingClose = nullptr;
         m_docs.clear();
+        m_dockPlaced.clear();
     }
 
     void DocumentHost::Close(EditorDocument* doc)
     {
+        m_dockPlaced.erase(doc);   // a reopen docks fresh again
         m_docs.erase(std::remove_if(m_docs.begin(), m_docs.end(),
                                     [doc](const auto& d) { return d.get() == doc; }),
                      m_docs.end());
@@ -132,12 +134,20 @@ namespace Arcane::Editor
             d->Tick(dt);
     }
 
-    void DocumentHost::DrawAll()
+    void DocumentHost::DrawAll(unsigned int dockId)
     {
         // Snapshot the pointers: a close request mutates m_docs after the loop.
         std::vector<EditorDocument*> toClose;
         for (const auto& d : m_docs)
         {
+            // First draw after OPENING forces the document into the target
+            // node (Cond_Always -- the imgui.ini remembers pre-docking
+            // floating placements for reopened assets, so FirstUseEver would
+            // silently lose). One frame only: afterwards the user's drags own
+            // the window for the document's lifetime.
+            if (dockId != 0 && m_dockPlaced.insert(d.get()).second)
+                ImGui::SetNextWindowDockID(static_cast<ImGuiID>(dockId),
+                                           ImGuiCond_Always);
             bool requestClose = false;
             d->Draw(requestClose);
             if (requestClose)

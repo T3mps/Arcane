@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Arcane::Editor
@@ -65,7 +66,13 @@ namespace Arcane::Editor
         // ---- per-frame -----------------------------------------------------
         void TickAll(double dt);
         // Draw every document window + the pending-close confirm modal.
-        void DrawAll();
+        // `dockId` (an ImGuiID; 0 = none): the dock node a document window is
+        // FORCED into on its first draw after opening -- the host passes the
+        // Viewport's node, so asset editors always OPEN as tabs in the main
+        // area (UE/Unity shape), overriding any stale floating placement the
+        // imgui.ini remembers. After that first frame the user's drags win
+        // for the document's lifetime.
+        void DrawAll(unsigned int dockId = 0);
 
         // Visit every open document (compile-result routing and the like).
         template <typename F>
@@ -88,5 +95,8 @@ namespace Arcane::Editor
         std::vector<std::unique_ptr<EditorDocument>> m_docs;
         std::vector<Route> m_factories;
         EditorDocument* m_pendingClose = nullptr;
+        // Documents that already received their initial dock placement (see
+        // DrawAll). Erased on close so a reopen docks fresh again.
+        std::unordered_set<const EditorDocument*> m_dockPlaced;
     };
 }

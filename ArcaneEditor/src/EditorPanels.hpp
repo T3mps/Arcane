@@ -71,6 +71,9 @@ namespace Arcane::Editor
         bool         altHeld  = false;      // alt modifier at click time (cycle stack)
         float        clickLocalX = 0.0f;    // viewport-local px of the click
         float        clickLocalY = 0.0f;
+        // The dock node the Viewport currently lives in (0 = floating) --
+        // where new editor documents dock as sibling tabs.
+        unsigned int dockId = 0;
     };
 
     // Draw the scene texture into a dockable Viewport window; report its rect,
