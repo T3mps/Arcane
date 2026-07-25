@@ -393,6 +393,12 @@ namespace Arcane::Editor
     {
         ImGui::Begin("Outliner");
 
+        // A structural undo/redo can destroy the rename target out from
+        // under the InputText; drop the stale target or `renaming` wedges
+        // shut (and F2/Delete with it).
+        if (state.renameTarget.IsValid() && !registry.IsValid(state.renameTarget))
+            state.renameTarget = Astra::Entity::Invalid();
+
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputTextWithHint("##outliner_search", ICON_LC_SEARCH " Filter",
                                  state.search, sizeof(state.search));
@@ -402,7 +408,9 @@ namespace Arcane::Editor
 
         const bool renaming = state.renameTarget.IsValid();
         const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
-        if (binding.editMode && windowFocused && !renaming)
+        // Shortcuts must not fire while any text field owns the keyboard
+        // (e.g. the search box above) -- else Delete/F2 hijack typing.
+        if (binding.editMode && windowFocused && !renaming && !ImGui::GetIO().WantTextInput)
         {
             if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && sel.Count() == 1)
                 BeginRename(state, sel.Primary(),
