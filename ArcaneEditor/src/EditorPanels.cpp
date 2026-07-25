@@ -9,6 +9,7 @@
 #include "SelectionContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 
@@ -20,6 +21,7 @@
 #include <imgui_internal.h>   // DockBuilder* + ImGuiDockNode::LocalFlags (docking layout)
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -104,7 +106,7 @@ namespace Arcane::Editor
         const ImGuiID rightId  = ImGui::DockBuilderSplitNode(central, ImGuiDir_Right, 0.22f, nullptr, &central);
         const ImGuiID bottomId = ImGui::DockBuilderSplitNode(central, ImGuiDir_Down,  0.25f, nullptr, &central);
 
-        ImGui::DockBuilderDockWindow("Hierarchy", leftId);
+        ImGui::DockBuilderDockWindow("Outliner", leftId);
         ImGui::DockBuilderDockWindow("Inspector", rightId);
         ImGui::DockBuilderDockWindow("Assets",    bottomId);   // Assets tab first...
         ImGui::DockBuilderDockWindow("Console",   bottomId);   // ...then Console
@@ -355,18 +357,223 @@ namespace Arcane::Editor
         return r;
     }
 
-    void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel)
+    namespace
     {
-        ImGui::Begin("Hierarchy");
-        for (Astra::Entity e : Arcane::Editor::CollectEntities(registry))
+        bool ApplyStructural(Arcane::CommandStack& undo, const OutlinerBinding& b,
+                             std::string label, Arcane::FunctionRef<bool()> mutate)
         {
-            char label[64];
-            std::snprintf(label, sizeof(label), "Entity %u (v%u)",
-                          (unsigned)e.GetID(), (unsigned)e.GetVersion());
-            const bool isSel = sel.Contains(e);
-            if (ImGui::Selectable(label, isSel))
-                sel.Select(e);
+            if (!b.editMode)
+                return false;
+            return Arcane::ApplyRegistryMutation(undo, std::move(label),
+                                                 b.snapshot, b.restore, mutate);
         }
+
+        void BeginRename(OutlinerState& st, Astra::Entity e, const std::string& current)
+        {
+            st.renameTarget = e;
+            std::snprintf(st.renameBuf, sizeof(st.renameBuf), "%s", current.c_str());
+            st.renameFocusPending = true;
+        }
+
+        void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
+                             Arcane::CommandStack& undo, const OutlinerBinding& binding)
+        {
+            const std::vector<Astra::Entity> doomed = sel.Entities();   // copy: sel mutates after
+            if (doomed.empty())
+                return;
+            if (ApplyStructural(undo, binding, "Delete",
+                    [&] { return Arcane::Edit::DeleteEntities(registry, doomed) > 0; }))
+                sel.Clear();
+        }
+    }
+
+    void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
+                           Arcane::CommandStack& undo, const OutlinerBinding& binding,
+                           OutlinerState& state)
+    {
+        ImGui::Begin("Outliner");
+
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##outliner_search", ICON_LC_SEARCH " Filter",
+                                 state.search, sizeof(state.search));
+
+        const std::vector<OutlinerRow> rows =
+            BuildOutlinerRows(registry, state.search, state.sort, state.collapsed);
+
+        const bool renaming = state.renameTarget.IsValid();
+        const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+        if (binding.editMode && windowFocused && !renaming)
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && sel.Count() == 1)
+                BeginRename(state, sel.Primary(),
+                            Arcane::Edit::DisplayName(registry, sel.Primary()));
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && sel.HasSelection())
+                DeleteSelection(registry, sel, undo, binding);
+        }
+
+        const float footerH = ImGui::GetFrameHeightWithSpacing();
+        const ImGuiTableFlags tflags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
+                                     | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
+        if (ImGui::BeginTable("##outliner_rows", 3, tflags, ImVec2(0.0f, -footerH)))
+        {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn(ICON_LC_EYE,
+                ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed,
+                ImGui::GetFrameHeight());
+            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_DefaultSort);
+            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed,
+                                    ImGui::CalcTextSize("Post Process").x * 1.4f);
+            ImGui::TableHeadersRow();
+
+            // Header sort -> state.sort; rows were built with LAST frame's
+            // sort (one-frame lag, rebuilt every frame anyway).
+            if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs())
+            {
+                state.sort = OutlinerSort{};
+                if (specs->SpecsCount > 0)
+                {
+                    const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
+                    state.sort.column = (s.ColumnIndex == 2) ? OutlinerSort::Column::Type
+                                                             : OutlinerSort::Column::Label;
+                    state.sort.ascending = s.SortDirection != ImGuiSortDirection_Descending;
+                }
+            }
+
+            for (const OutlinerRow& row : rows)
+            {
+                ImGui::TableNextRow();
+                ImGui::PushID(static_cast<int>(row.entity.GetValue()));
+
+                // -- column 0: the eye --------------------------------------
+                ImGui::TableSetColumnIndex(0);
+                {
+                    const char* icon = row.hidden ? ICON_LC_EYE_OFF : ICON_LC_EYE;
+                    if (row.hidden)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    if (binding.editMode)
+                    {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                        if (ImGui::SmallButton(icon))
+                        {
+                            const Astra::Entity e = row.entity;
+                            const bool hide = !row.hidden;
+                            ApplyStructural(undo, binding, hide ? "Hide" : "Show",
+                                [&] { return Arcane::Edit::SetHiddenRecursive(registry, e, hide) > 0; });
+                        }
+                        ImGui::PopStyleColor();
+                    }
+                    else
+                        ImGui::TextUnformatted(icon);
+                    if (row.hidden)
+                        ImGui::PopStyleColor();
+                }
+
+                // -- column 1: tree arrow + label (or inline rename) --------
+                ImGui::TableSetColumnIndex(1);
+                if (state.renameTarget == row.entity)
+                {
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if (state.renameFocusPending)
+                    {
+                        ImGui::SetKeyboardFocusHere();
+                        state.renameFocusPending = false;
+                    }
+                    bool commit = ImGui::InputText("##rename", state.renameBuf,
+                        sizeof(state.renameBuf),
+                        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+                    if (ImGui::IsItemDeactivated())
+                    {
+                        commit = commit || !ImGui::IsKeyPressed(ImGuiKey_Escape);
+                        if (commit)
+                        {
+                            const Astra::Entity e = row.entity;
+                            ApplyStructural(undo, binding, "Rename",
+                                [&] { return Arcane::Edit::RenameEntity(registry, e, state.renameBuf); });
+                        }
+                        state.renameTarget = Astra::Entity::Invalid();
+                    }
+                }
+                else
+                {
+                    const float indent = row.depth * ImGui::GetStyle().IndentSpacing;
+                    if (indent > 0.0f)
+                        ImGui::Indent(indent);
+
+                    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth
+                                             | ImGuiTreeNodeFlags_OpenOnArrow
+                                             | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+                    if (!row.hasChildren)
+                        flags |= ImGuiTreeNodeFlags_Leaf;
+                    if (sel.Contains(row.entity))
+                        flags |= ImGuiTreeNodeFlags_Selected;
+
+                    const std::uint64_t value = static_cast<std::uint64_t>(row.entity.GetValue());
+                    const bool open = !state.collapsed.contains(value);
+                    ImGui::SetNextItemOpen(open, ImGuiCond_Always);
+                    if (row.dimmed)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    const bool nowOpen = ImGui::TreeNodeEx(row.label.c_str(), flags);
+                    if (row.dimmed)
+                        ImGui::PopStyleColor();
+                    if (row.hasChildren && nowOpen != open)
+                    {
+                        if (nowOpen) state.collapsed.erase(value);
+                        else         state.collapsed.insert(value);
+                    }
+
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)
+                        && !ImGui::IsItemToggledOpen())
+                    {
+                        const double now = ImGui::GetTime();
+                        const bool ctrl = ImGui::GetIO().KeyCtrl;
+                        const bool shift = ImGui::GetIO().KeyShift;
+                        if (ctrl)
+                            sel.Toggle(row.entity);
+                        else if (shift && sel.HasSelection())
+                            sel.AddRange(RowRange(rows, sel.Primary(), row.entity), row.entity);
+                        else
+                        {
+                            // Slow second click on the sole-selected row = rename.
+                            const bool slowSecond = binding.editMode
+                                && sel.Count() == 1 && sel.Primary() == row.entity
+                                && state.lastClicked == row.entity
+                                && (now - state.lastClickTime) > ImGui::GetIO().MouseDoubleClickTime
+                                && (now - state.lastClickTime) < 1.2;
+                            if (slowSecond)
+                                BeginRename(state, row.entity, row.label);
+                            else
+                                sel.Select(row.entity);
+                        }
+                        state.lastClicked = row.entity;
+                        state.lastClickTime = now;
+                    }
+
+                    if (indent > 0.0f)
+                        ImGui::Unindent(indent);
+                }
+
+                // -- column 2: type -----------------------------------------
+                ImGui::TableSetColumnIndex(2);
+                if (row.dimmed)
+                    ImGui::TextDisabled("%s", row.type.c_str());
+                else
+                    ImGui::TextUnformatted(row.type.c_str());
+
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+
+        std::size_t total = 0;
+        for (Astra::Entity e : registry.GetEntityManager())
+        {
+            (void)e;
+            ++total;
+        }
+        ImGui::Text("%zu entities (%zu selected)", total, sel.Count());
+
         ImGui::End();
     }
 

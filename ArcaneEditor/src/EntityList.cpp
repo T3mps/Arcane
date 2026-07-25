@@ -9,18 +9,6 @@
 #include <algorithm>
 #include <cctype>
 
-namespace Arcane::Editor
-{
-    std::vector<Astra::Entity> CollectEntities(Astra::Registry& registry)
-    {
-        std::vector<Astra::Entity> out;
-        out.reserve(registry.Size());
-        for (Astra::Entity e : registry.GetEntityManager())
-            out.push_back(e);
-        return out;
-    }
-}
-
 namespace
 {
     bool ContainsCI(std::string_view hay, std::string_view needle)

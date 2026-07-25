@@ -18,6 +18,7 @@
 #include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
 #include "DocumentHost.hpp"
+#include "EditorPanels.hpp"
 #include "PlayMode.hpp"
 #include "SelectionContext.hpp"
 #include "ShaderEditorDocument.hpp"
@@ -93,6 +94,10 @@ namespace Arcane::Editor
         // operate on Primary(), shared by the Hierarchy panel (and, later, the
         // Inspector + viewport pick -- see SelectionContext.hpp).
         Arcane::Editor::SelectionContext m_selection;
+
+        // Outliner panel state + structural-edit binding (slice 2)
+        Arcane::Editor::OutlinerState   m_outliner;
+        Arcane::Editor::OutlinerBinding m_outlinerBinding;
 
         // Editor undo/redo history (Edit-mode; cleared on Play). Constructed in
         // Init once the runtime's registry exists; optional so it can be built

@@ -1,10 +1,13 @@
 #pragma once
 
+#include "EntityList.hpp"
 #include "ViewportInput.hpp"
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/Edit/RegistryStateCommand.hpp>
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Arcane { class RunLoop; class Runtime; class Project; struct PluginVTable; }
@@ -82,9 +85,32 @@ namespace Arcane::Editor
                                           bool& gizmoEnabled, Arcane::GizmoMode& mode,
                                           Arcane::GizmoSpace& space);
 
-    // List every live entity; clicking a row selects it. Labels rows by id
-    // ("Entity <id> (v<version>)") since no Name component exists yet.
-    void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel);
+    // The Outliner (replaces the flat Hierarchy panel). Pure row data comes
+    // from BuildOutlinerRows (EntityList.hpp, headless-tested); this shell
+    // draws it and routes EVERY structural edit through ApplyRegistryMutation
+    // over binding.snapshot/restore (Runtime::SnapshotRegistry/RestoreRegistry).
+    // binding.editMode == false (Play running) disables structural edits --
+    // the slice-2 resolution of RegistryStateCommand.hpp's native-state note.
+    struct OutlinerBinding
+    {
+        Arcane::RegistryStateCommand::SnapshotFn snapshot;
+        Arcane::RegistryStateCommand::RestoreFn  restore;
+        bool editMode = true;    // false during Play: structural edits disabled
+    };
+    struct OutlinerState
+    {
+        char search[128] = {};
+        std::unordered_set<std::uint64_t> collapsed;
+        OutlinerSort sort;
+        Astra::Entity renameTarget = Astra::Entity::Invalid();
+        char renameBuf[256] = {};
+        bool renameFocusPending = false;
+        Astra::Entity lastClicked = Astra::Entity::Invalid();
+        double lastClickTime = 0.0;
+    };
+    void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
+                           Arcane::CommandStack& undo, const OutlinerBinding& binding,
+                           OutlinerState& state);
 
     // Show the selected entity's components (via Registry::InspectEntity) and edit
     // reflected fields in place; unsupported types render read-only. Each field

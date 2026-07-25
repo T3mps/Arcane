@@ -299,6 +299,18 @@ namespace Arcane::Editor
         // safe because m_undo destructs before m_runtime (declaration order).
         m_undo.emplace([rt = &*m_runtime]() -> Astra::Registry& { return rt->Registry(); });
 
+        // Structural-edit binding: whole-registry snapshot/restore through the
+        // SAME Runtime the resolver reads, so the memento survives registry swaps.
+        m_outlinerBinding.snapshot = [rt = &*m_runtime]() -> std::vector<std::byte>
+        {
+            auto r = rt->SnapshotRegistry();
+            return r.IsOk() ? std::move(*r) : std::vector<std::byte>{};
+        };
+        m_outlinerBinding.restore = [rt = &*m_runtime](std::span<const std::byte> bytes)
+        {
+            return rt->RestoreRegistry(bytes);
+        };
+
         // Shader-editor services (Slice 5): the shared compile service, the
         // template source root, and the .arcmat -> ShaderEditorDocument routing.
         // A missing dxcompiler.dll degrades to a warn (documents show status).
@@ -617,6 +629,7 @@ namespace Arcane::Editor
         if (m_play.IsPlaying())
             m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
         m_selection.Clear();
+        m_outliner = {};
         if (m_undo) m_undo->Clear();
 
         // Idle the GPU before freeing plugin-owned GPU resources, then unload the plugin
@@ -1295,7 +1308,11 @@ namespace Arcane::Editor
                     m_selection.Clear();
             }
 
-            Arcane::Editor::DrawHierarchyPanel(m_runtime->Registry(), m_selection);
+            m_selection.Prune([reg = &m_runtime->Registry()](Astra::Entity e)
+                              { return reg->IsValid(e); });
+            m_outlinerBinding.editMode = !m_play.IsPlaying();
+            Arcane::Editor::DrawOutlinerPanel(m_runtime->Registry(), m_selection,
+                                              *m_undo, m_outlinerBinding, m_outliner);
             Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
                                                !m_play.IsPlaying(), m_runtime->CurrentProject());
 

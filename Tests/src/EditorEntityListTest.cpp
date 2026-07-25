@@ -29,21 +29,6 @@ namespace
     }
 }
 
-TEST_CASE("CollectEntities returns every live entity", "[editor]")
-{
-    auto reg = MakeSceneRegistry();          // fixture: fresh registry, Scene comps registered
-    const Astra::Entity a = reg->CreateEntity();
-    const Astra::Entity b = reg->CreateEntity();
-    const Astra::Entity c = reg->CreateEntity();
-
-    std::vector<Astra::Entity> all = Arcane::Editor::CollectEntities(*reg);
-    REQUIRE(all.size() == 3);
-    // ids present regardless of order
-    bool ha=false, hb=false, hc=false;
-    for (Astra::Entity e : all) { ha |= (e.GetID()==a.GetID()); hb |= (e.GetID()==b.GetID()); hc |= (e.GetID()==c.GetID()); }
-    CHECK((ha && hb && hc));
-}
-
 TEST_CASE("SelectionContext: Select replaces, Toggle adds/removes, primary follows", "[editor]")
 {
     Arcane::Editor::SelectionContext sel;
