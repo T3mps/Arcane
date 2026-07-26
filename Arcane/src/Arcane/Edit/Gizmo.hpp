@@ -61,4 +61,28 @@ namespace Arcane
                                         const GizmoTransform& start, const GizmoView& view,
                                         glm::vec2 mouseStartScreen, glm::vec2 mouseCurScreen,
                                         const GizmoSnap& snap);
+
+    // A drag's effect on the PRIMARY, expressed so it can be replayed onto the
+    // rest of a multi-selection. `translate` is a shared world delta;
+    // `rotate`/`scale` act about `pivot`, so a group rotate ORBITS the other
+    // members rather than spinning each in place.
+    struct GizmoGroupDelta
+    {
+        glm::vec2 translate{0.0f, 0.0f};
+        float     rotate = 0.0f;        // radians
+        glm::vec2 scale{1.0f, 1.0f};    // ratio, component-wise
+        glm::vec2 pivot{0.0f, 0.0f};    // the primary's PRE-drag position
+    };
+
+    // Delta from the primary's pre-drag pose to its post-drag pose. A start
+    // scale component under 1e-6 yields a ratio of 1 on that axis instead of
+    // infinity.
+    ARCANE_API GizmoGroupDelta MakeGroupDelta(const GizmoTransform& start,
+                                              const GizmoTransform& end);
+
+    // Replay a group delta onto a member's PRE-drag pose. Replaying onto the
+    // primary's own start reproduces ApplyDrag's result, so callers may apply
+    // this uniformly across the whole selection without special-casing.
+    ARCANE_API GizmoTransform ApplyGroupDelta(const GizmoTransform& t,
+                                              const GizmoGroupDelta& d);
 }

@@ -278,3 +278,43 @@ TEST_CASE("CreateEntity under a dead parent creates at root", "[outliner]")
     CHECK(w.reg.IsValid(e));
     CHECK_FALSE(w.reg.GetParent(e).IsValid());
 }
+
+TEST_CASE("SelectionRoots drops entities covered by a selected ancestor", "[outliner]")
+{
+    // Transform edits must apply to roots ONLY: a selected child already
+    // rides its selected parent through WorldTransform propagation, so
+    // transforming both would double-move the child.
+    World w;
+    Astra::Entity a = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    Astra::Entity b = Edit::CreateEntity(w.reg, a);          // child of a
+    Astra::Entity c = Edit::CreateEntity(w.reg, b);          // grandchild of a
+    Astra::Entity lone = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+
+    SECTION("ancestor in the set covers descendants at any depth")
+    {
+        const std::array<Astra::Entity, 4> set{ a, b, c, lone };
+        const std::vector<Astra::Entity> roots = Edit::SelectionRoots(w.reg, set);
+        REQUIRE(roots.size() == 2);
+        CHECK(roots[0] == a);        // input order preserved
+        CHECK(roots[1] == lone);
+    }
+
+    SECTION("a child selected WITHOUT its parent is its own root")
+    {
+        const std::array<Astra::Entity, 2> set{ c, lone };
+        const std::vector<Astra::Entity> roots = Edit::SelectionRoots(w.reg, set);
+        REQUIRE(roots.size() == 2);
+        CHECK(roots[0] == c);
+    }
+
+    SECTION("dead entities are skipped and duplicates collapse")
+    {
+        Astra::Entity dead = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        w.reg.DestroyEntity(dead);
+        const std::array<Astra::Entity, 4> set{ lone, dead, lone, a };
+        const std::vector<Astra::Entity> roots = Edit::SelectionRoots(w.reg, set);
+        REQUIRE(roots.size() == 2);      // lone once, a once
+        CHECK(roots[0] == lone);
+        CHECK(roots[1] == a);
+    }
+}

@@ -69,4 +69,12 @@ namespace Arcane::Edit
     ARCANE_API std::size_t RemoveComponent(Astra::Registry& reg,
                                            std::span<const Astra::Entity> set,
                                            const Astra::ComponentDescriptor& desc);
+
+    // The entities in `set` that have NO ancestor also in `set`. Transform
+    // edits must apply to these only: moving a parent already carries its
+    // children through WorldTransform propagation, so applying to both
+    // double-moves the children. Dead entities are skipped and duplicates
+    // collapse; surviving order follows `set`.
+    ARCANE_API std::vector<Astra::Entity> SelectionRoots(Astra::Registry& reg,
+                                                         std::span<const Astra::Entity> set);
 }

@@ -211,4 +211,31 @@ namespace Arcane::Edit
                 ++touched;
         return touched;
     }
+
+    std::vector<Astra::Entity> SelectionRoots(Astra::Registry& reg,
+                                              std::span<const Astra::Entity> set)
+    {
+        const std::unordered_set<Astra::Entity> members(set.begin(), set.end());
+        std::unordered_set<Astra::Entity> emitted;
+        std::vector<Astra::Entity> roots;
+        for (Astra::Entity e : set)
+        {
+            if (!reg.IsValid(e) || emitted.contains(e))
+                continue;
+            bool covered = false;
+            for (Astra::Entity a = reg.GetParent(e); a.IsValid(); a = reg.GetParent(a))
+            {
+                if (members.contains(a))
+                {
+                    covered = true;
+                    break;
+                }
+            }
+            if (covered)
+                continue;
+            emitted.insert(e);
+            roots.push_back(e);
+        }
+        return roots;
+    }
 }

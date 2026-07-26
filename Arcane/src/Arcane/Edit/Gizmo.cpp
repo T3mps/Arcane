@@ -258,4 +258,33 @@ namespace Arcane
         const glm::vec2 centerHalf(kCenterHalfPx, kCenterHalfPx);
         batcher.Rect(pivot - centerHalf, centerHalf * 2.0f, AxisColor(GizmoAxis::Center, hovered, active));
     }
+
+    GizmoGroupDelta MakeGroupDelta(const GizmoTransform& start, const GizmoTransform& end)
+    {
+        GizmoGroupDelta d;
+        d.translate = end.position - start.position;
+        d.rotate    = end.rotation - start.rotation;
+        d.pivot     = start.position;
+        d.scale.x   = std::abs(start.scale.x) > 1e-6f ? end.scale.x / start.scale.x : 1.0f;
+        d.scale.y   = std::abs(start.scale.y) > 1e-6f ? end.scale.y / start.scale.y : 1.0f;
+        return d;
+    }
+
+    GizmoTransform ApplyGroupDelta(const GizmoTransform& t, const GizmoGroupDelta& d)
+    {
+        // Scale then rotate the member's offset from the pivot, then shift.
+        // (Equivalent to the mat3 T*R*S about the pivot, written directly:
+        // the 2x2 has no shear, so composing matrices would only obscure it.)
+        glm::vec2 rel = t.position - d.pivot;
+        rel *= d.scale;
+        const float c = std::cos(d.rotate);
+        const float s = std::sin(d.rotate);
+        rel = glm::vec2(rel.x * c - rel.y * s, rel.x * s + rel.y * c);
+
+        GizmoTransform r;
+        r.position = d.pivot + rel + d.translate;
+        r.rotation = t.rotation + d.rotate;
+        r.scale    = t.scale * d.scale;
+        return r;
+    }
 }
