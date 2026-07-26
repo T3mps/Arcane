@@ -115,6 +115,27 @@ Pure-core + ImGui-shell, like AssetBrowser:
   field edit fans that field out to every selected entity's component —
   gesture = Begin → snapshot each → apply → Commit. Mixed-value dashes are a
   follow-up, not this arc.
+
+**Follow-up BUILT 2026-07-26 (Inspector multi-select UE parity).** The two
+deferred behaviours landed; plan at
+`docs/superpowers/plans/2026-07-26-inspector-multiselect-ue-parity.md`. All
+three rules were read out of the vendored UE 5.6 source
+(`Engine/Source/Editor/DetailCustomizations/Private/ComponentTransformDetails.cpp`),
+not recalled:
+- `:505`/`:551`/`:628` — `.AllowSpin(SelectedObjects.Num() == 1)`: UE gives a
+  multi-selection **no spinner at all**. It does not buffer a drag; the widget
+  simply becomes type-and-commit. We mirror that with per-component text entry.
+- `:1248` — `if (!bCommitted && SelectedObjects.Num() > 1) return;`, commented
+  *"Ignore interactive changes when we have more than one selected object"*.
+  Both belts, so we wear both too.
+- `:1215-1225` — mixed values are **per-axis and sticky**: the first carrier
+  seeds, each later one clears any axis that differs, and the
+  `&& Cached<X>.IsSet()` term means a cleared axis never returns. `:1026`
+  states the convention: *"unset means multiple differing values"*.
+Ours lives in `Arcane::Editor::ComputeFieldMixed` (pure, headless-tested) plus
+`MultiScalarRow` in the visitor. `ImGuiItemFlags_MixedValue` is Checkbox-only in
+our vendored ImGui (`imgui_internal.h:984`), so Bool gets the native tri-state
+and numerics blank by hand. Single-selection behaviour is unchanged.
 - **Outline:** the seed pass gets a CB array of up to **64** selected ids
   (membership loop in-shader); hovered stays single. Beyond 64: first 64 +
   one-time log. SelectionOutline's signature changes — editor/tests are its
