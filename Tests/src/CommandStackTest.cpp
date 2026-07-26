@@ -97,11 +97,12 @@ TEST_CASE("CommandStack: one-gesture transaction undo/redo + redo cleared on new
 
     Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
 
-    // Gesture: Begin -> Snapshot (before) -> mutate -> Commit (after).
-    stack.Begin("move");
+    // Gesture: Begin -> Snapshot (before) -> mutate -> Commit (after). Begin
+    // returns the owner token; only its holder may close the transaction.
+    Arcane::TransactionId txn = stack.Begin("move");
     stack.SnapshotComponent(e, desc);
     reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2(5.0f, 0.0f);
-    stack.Commit();
+    stack.Commit(txn);
 
     REQUIRE(stack.CanUndo());
     REQUIRE_FALSE(stack.CanRedo());
@@ -116,9 +117,9 @@ TEST_CASE("CommandStack: one-gesture transaction undo/redo + redo cleared on new
     // A new edit after an undo clears the redo stack.
     stack.Undo();                         // back to x=0, redo available
     REQUIRE(stack.CanRedo());
-    stack.Begin("move2"); stack.SnapshotComponent(e, desc);
+    txn = stack.Begin("move2"); stack.SnapshotComponent(e, desc);
     reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2(7.0f, 0.0f);
-    stack.Commit();
+    stack.Commit(txn);
     CHECK_FALSE(stack.CanRedo());
 }
 
@@ -130,14 +131,14 @@ TEST_CASE("CommandStack: empty / no-op transaction is not pushed", "[edit]")
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
 
     Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
-    stack.Begin("noop");
+    const Arcane::TransactionId noop = stack.Begin("noop");
     stack.SnapshotComponent(e, desc);     // no mutation
-    stack.Commit();                        // before == after -> nothing pushed
+    stack.Commit(noop);                    // before == after -> nothing pushed
     CHECK_FALSE(stack.CanUndo());
 
-    stack.Begin("cancelled");
+    const Arcane::TransactionId cancelled = stack.Begin("cancelled");
     stack.SnapshotComponent(e, desc);
-    stack.Cancel();
+    stack.Cancel(cancelled);
     CHECK_FALSE(stack.CanUndo());
 }
 
@@ -151,7 +152,7 @@ TEST_CASE("CommandStack: a transaction groups two components into one undo step"
     const Astra::ComponentDescriptor* dSr = DescriptorFor(*reg, e, "Arcane::SpriteRenderer");
 
     Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
-    stack.Begin("multi");
+    const Arcane::TransactionId txn = stack.Begin("multi");
     stack.SnapshotComponent(e, dLt);      // captures before = 0
     stack.SnapshotComponent(e, dSr);
     // Discriminating idempotency check: mutate BETWEEN the two dLt touches. If
@@ -162,7 +163,7 @@ TEST_CASE("CommandStack: a transaction groups two components into one undo step"
     stack.SnapshotComponent(e, dLt);      // idempotent: MUST NOT re-capture x=3
     reg->GetComponent<Arcane::Transform>(e)->position.x = 7.0f;
     reg->GetComponent<Arcane::SpriteRenderer>(e)->sortingLayer = 4;
-    stack.Commit();
+    stack.Commit(txn);
 
     stack.Undo();                          // ONE undo reverts BOTH
     CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 0.0f);   // fails if 2nd touch re-snapshotted
@@ -205,10 +206,10 @@ TEST_CASE("CommandStack: survives a registry object swap (resolver, no dangling 
     Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
 
     // Commit one edit on the pre-swap registry.
-    stack.Begin("pre-swap edit");
+    const Arcane::TransactionId pre = stack.Begin("pre-swap edit");
     stack.SnapshotComponent(e, desc);
     reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2(1.0f, 0.0f);
-    stack.Commit();
+    stack.Commit(pre);
     REQUIRE(stack.CanUndo());
 
     // Swap: frees the OLD registry OBJECT the pre-swap command captured
@@ -229,10 +230,10 @@ TEST_CASE("CommandStack: survives a registry object swap (resolver, no dangling 
     reg->AddComponent<Arcane::Transform>(e2, Arcane::Transform{});
     const Astra::ComponentDescriptor* desc2 = DescriptorFor(*reg, e2, "Arcane::Transform");
 
-    stack.Begin("post-swap edit");
+    const Arcane::TransactionId post = stack.Begin("post-swap edit");
     stack.SnapshotComponent(e2, desc2);
     reg->GetComponent<Arcane::Transform>(e2)->position.x = 5.0f;
-    stack.Commit();
+    stack.Commit(post);
 
     stack.Undo();
     CHECK(reg->GetComponent<Arcane::Transform>(e2)->position.x == 0.0f);
@@ -279,11 +280,11 @@ TEST_CASE("CommandStack::Push: standalone step, transaction join, redo-clear", "
 
     SECTION("inside a gesture, Push joins the transaction (one undo step)")
     {
-        stack.Begin("combo");
+        const Arcane::TransactionId txn = stack.Begin("combo");
         stack.SnapshotComponent(e, desc);
         reg->GetComponent<Arcane::Transform>(e)->position.x = 4.0f;
         stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "generic"));
-        stack.Commit();
+        stack.Commit(txn);
 
         stack.Undo();   // ONE undo reverts the component edit AND the generic
         CHECK(undos == 1);
@@ -293,9 +294,9 @@ TEST_CASE("CommandStack::Push: standalone step, transaction join, redo-clear", "
 
     SECTION("a cancelled gesture discards joined generics")
     {
-        stack.Begin("cancelled");
+        const Arcane::TransactionId txn = stack.Begin("cancelled");
         stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "generic"));
-        stack.Cancel();
+        stack.Cancel(txn);
         CHECK_FALSE(stack.CanUndo());
     }
 }
@@ -313,17 +314,163 @@ TEST_CASE("CommandStack::Clear discards generics pushed into an open gesture", "
     Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
     int undos = 0, redos = 0;
 
-    stack.Begin("doomed");
+    (void)stack.Begin("doomed");
     stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "leaky"));
     stack.Clear();   // e.g. project switch mid-gesture
 
-    stack.Begin("fresh");
+    const Arcane::TransactionId fresh = stack.Begin("fresh");
     stack.SnapshotComponent(e, desc);
     reg->GetComponent<Arcane::Transform>(e)->position.x = 2.0f;
-    stack.Commit();
+    stack.Commit(fresh);
 
     stack.Undo();
     CHECK(undos == 0);   // the cleared generic must NOT replay
+    CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 0.0f);
+}
+
+TEST_CASE("CommandStack: a non-owner cannot close another consumer's transaction", "[edit]")
+{
+    // Regression for the CRITICAL in docs/superpowers/audits/
+    // 2026-07-26-outliner-s4-multiselect-hub-s1-review.md. THREE independent
+    // input consumers share one stack -- a gizmo drag (opens on mouse-press,
+    // closes on release, spans frames), an Inspector field gesture (opens on
+    // widget activation, closes on deactivation, spans frames), and the
+    // Inspector's single-shot immediate edits (open+apply+close in one call).
+    // ImGui fires two of them in ONE frame routinely: clicking a gizmo handle
+    // clears the ActiveId of a text box that still holds uncommitted text, so
+    // IsItemDeactivatedAfterEdit() fires on the SAME frame as the gizmo press.
+    //
+    // Under the old `void Begin` + unconditional `Commit()`, the immediate
+    // path's Commit closed the GIZMO's transaction; the rest of the drag then
+    // mutated Transforms against a closed stack and the mouse-up Commit
+    // no-opped, so the entire drag became silently un-undoable.
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
+    REQUIRE(desc != nullptr);
+
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    SECTION("a joiner's Commit does not close the owner's transaction")
+    {
+        const Arcane::TransactionId gizmo = stack.Begin("Gizmo");
+        REQUIRE(gizmo != Arcane::TransactionId::None);
+        stack.SnapshotComponent(e, desc);          // before = x 0
+
+        // Same frame: the Inspector's ApplyImmediate opens and closes.
+        const Arcane::TransactionId joined = stack.Begin("Edit Transform.position");
+        CHECK(joined == Arcane::TransactionId::None);   // joined, owns nothing
+        stack.Commit(joined);
+        CHECK(stack.InTransaction());                   // the gizmo still owns it
+
+        // The rest of the drag, against a stack that is still open.
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 5.0f;
+        stack.Commit(gizmo);
+
+        REQUIRE(stack.CanUndo());
+        CHECK(std::string(stack.UndoLabel()) == "Gizmo");
+        stack.Undo();
+        CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 0.0f);
+    }
+
+    SECTION("a joiner's Cancel does not discard the owner's transaction")
+    {
+        // The mirror shape: EndGroup forwards the Deactivated flag, so an
+        // Inspector field's EndGesture can fire Cancel() during a live drag.
+        const Arcane::TransactionId gizmo = stack.Begin("Gizmo");
+        stack.SnapshotComponent(e, desc);
+        stack.Cancel(Arcane::TransactionId::None);
+        CHECK(stack.InTransaction());
+
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 5.0f;
+        stack.Commit(gizmo);
+        REQUIRE(stack.CanUndo());
+        stack.Undo();
+        CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 0.0f);
+    }
+
+    SECTION("a joiner's snapshots ride along in the owner's transaction")
+    {
+        // Joining must not LOSE the joiner's edit: its snapshot lands in the
+        // open transaction and the real owner commits it. One undo step covers
+        // both consumers' mutations.
+        reg->AddComponent<Arcane::SpriteRenderer>(e, Arcane::SpriteRenderer{});
+        const Astra::ComponentDescriptor* dSr = DescriptorFor(*reg, e, "Arcane::SpriteRenderer");
+        REQUIRE(dSr != nullptr);
+
+        const Arcane::TransactionId gizmo = stack.Begin("Gizmo");
+        stack.SnapshotComponent(e, desc);
+
+        const Arcane::TransactionId joined = stack.Begin("Edit SpriteRenderer.sortingLayer");
+        stack.SnapshotComponent(e, dSr);
+        reg->GetComponent<Arcane::SpriteRenderer>(e)->sortingLayer = 4;
+        stack.Commit(joined);                      // no-op: not the owner
+
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 5.0f;
+        stack.Commit(gizmo);
+
+        stack.Undo();                              // ONE step reverts BOTH
+        CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 0.0f);
+        CHECK(reg->GetComponent<Arcane::SpriteRenderer>(e)->sortingLayer == 0);
+    }
+
+    SECTION("a stale owner token is inert after its transaction closed")
+    {
+        // The token is monotonic, not a bool: an owner that already committed
+        // cannot reach into whatever transaction is open NOW.
+        const Arcane::TransactionId first = stack.Begin("first");
+        stack.SnapshotComponent(e, desc);
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 1.0f;
+        stack.Commit(first);
+        REQUIRE(stack.CanUndo());
+
+        const Arcane::TransactionId second = stack.Begin("second");
+        // Monotonic: a fresh open is never handed a previously-issued token, which
+        // is what makes the staleness check below meaningful rather than accidental.
+        // The Inspector depends on this when it commits a still-parked gesture and
+        // immediately opens another for the field that just took focus.
+        CHECK(second != first);
+        CHECK(second != Arcane::TransactionId::None);
+        stack.SnapshotComponent(e, desc);
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 2.0f;
+        stack.Commit(first);                       // stale -> must NOT close `second`
+        CHECK(stack.InTransaction());
+        stack.Cancel(first);                       // stale -> must NOT discard it either
+        CHECK(stack.InTransaction());
+        stack.Commit(second);
+
+        stack.Undo();
+        CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 1.0f);
+    }
+}
+
+TEST_CASE("ScopedTransaction only closes a transaction it opened", "[edit]")
+{
+    // The RAII form of the same rule: nested inside a live gesture it must join
+    // (and let the outer owner commit), never commit the outer transaction from
+    // its own dtor. This is what makes the Inspector's single-shot immediate
+    // edits safe to run mid-drag.
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
+
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    const Arcane::TransactionId outer = stack.Begin("Gizmo");
+    stack.SnapshotComponent(e, desc);
+    {
+        Arcane::ScopedTransaction nested(stack, "Edit Transform.position");
+        nested.Snapshot(e, desc);
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 3.0f;
+    }   // dtor must NOT commit -- it never owned the transaction
+    CHECK(stack.InTransaction());
+    CHECK_FALSE(stack.CanUndo());
+
+    reg->GetComponent<Arcane::Transform>(e)->position.x = 5.0f;
+    stack.Commit(outer);
+    stack.Undo();
     CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 0.0f);
 }
 
@@ -337,10 +484,10 @@ TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
     Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; }, /*maxDepth*/ 2);
     for (int i = 1; i <= 3; ++i)
     {
-        stack.Begin("e");
+        const Arcane::TransactionId txn = stack.Begin("e");
         stack.SnapshotComponent(e, desc);
         reg->GetComponent<Arcane::Transform>(e)->position = glm::vec2((float)i, 0.0f);
-        stack.Commit();
+        stack.Commit(txn);
     }
     // Cap 2: only the last two edits are undoable (3->2, 2->1); the 0->1 op was dropped.
     stack.Undo(); stack.Undo();

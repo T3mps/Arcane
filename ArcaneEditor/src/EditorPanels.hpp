@@ -137,7 +137,18 @@ namespace Arcane::Editor
     // ComponentEditCommand gestures.
     // `project` (may be null) resolves Guid asset-ref fields to display names and
     // feeds the pick popup; null renders asset refs read-only-with-guid.
+    //
+    // Persistent Inspector state. A field-edit gesture opens its undo transaction
+    // on widget activation in one frame and closes it on deactivation in a LATER
+    // one, so the CommandStack ownership token (see CommandStack::Begin) has to
+    // outlive the per-frame field visitor -- parking it here is what stops an
+    // Inspector edit from committing or cancelling a concurrent gizmo drag's
+    // transaction, and vice versa.
+    struct InspectorState
+    {
+        Arcane::TransactionId gestureTxn = Arcane::TransactionId::None;
+    };
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                            const Arcane::Project* project);
+                            const Arcane::Project* project, InspectorState& state);
 }

@@ -49,10 +49,20 @@ namespace Arcane
         // externalContext == null: Runtime creates+owns a TypeContext (production: Loom).
         // externalContext != null: install+use the caller's context so multiple modules
         // (a test exe + Arcane.dll + the plugin) share one component-ID space.
+        //
+        // NO DEFAULT on externalContext, deliberately. This ctor resolves ten
+        // TypeID statics while registering the engine roster, so the FIRST Runtime
+        // in a process permanently pins Arcane.dll's component-ID numbering. A
+        // test that constructed a bare `Runtime rt;` would install an UNSHARED
+        // context and every later Edit:: op would silently report 0 changes --
+        // the failure recorded in the ArcaneTests TypeContext-theft note. Every
+        // caller already passes a context explicitly; making it required means the
+        // compiler enforces that instead of convention.
+        //
         // enableAudioDevice: opt into a real OS audio device. Defaults false (headless:
         // tests/servers/tools and the scripted "Loom --frames N" verify use the null
         // backend). An interactive host passes true; the real->null fallback still applies.
-        explicit Runtime(Astra::TypeContext* externalContext = nullptr, bool enableAudioDevice = false);
+        explicit Runtime(Astra::TypeContext* externalContext, bool enableAudioDevice = false);
         ~Runtime();
 
         Runtime(const Runtime&) = delete;

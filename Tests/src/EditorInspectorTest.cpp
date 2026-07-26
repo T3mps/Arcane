@@ -3,21 +3,55 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Astra/Registry/Registry.hpp>
+#include <Astra/Reflection/Macros.hpp>
 #include <Astra/Reflection/TypeMeta.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
 #include <InspectorFields.hpp>
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <vector>
 
 #include "Helpers/TestTypeContext.hpp"
+
+#include <algorithm>
+
+// A reflected struct that exists ONLY as a witness for ClassifyField's arms.
+// Named namespace, not anonymous: ASTRA_REFLECT_TYPE declares a static inline
+// registrar, and the engine's own reflection blocks are at namespace scope for
+// the same reason. NOT registered as an ECS component -- ClassifyField reads
+// TypeMeta, which the registrar installs on its own.
+namespace ArcaneEditorTest
+{
+    struct ClassifyProbe
+    {
+        bool         flag   = false;
+        std::int32_t count  = 0;
+        float        scalar = 0.0f;
+        glm::vec2    two{};
+        glm::vec3    three{};   // the arm nothing in the engine roster witnesses
+        glm::vec4    four{};    // no Vec4 editor -> must classify ReadOnly
+        Arcane::Guid ref{};
+    };
+
+    ASTRA_REFLECT_TYPE(ClassifyProbe)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, flag)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, count)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, scalar)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, two)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, three)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, four)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, ref)
+    ASTRA_END_REFLECT_TYPE()
+}
 
 namespace
 {
@@ -47,7 +81,14 @@ namespace
         {
             const Astra::ComponentDescriptor* d =
                 creg->GetComponentDescriptor(Astra::TypeID<Arcane::Transform>::Value());
-            return d ? d->hash : 0;
+            // REQUIRE rather than the old `d ? d->hash : 0`. A zero hash makes
+            // ComputeFieldMixed find NO carriers and return an empty mask, so five
+            // of the mixed-value tests below (every CHECK_FALSE(...Any())) would
+            // pass trivially on a broken fixture -- flagged latent by the
+            // 2026-07-26 review. Fail loudly here instead.
+            REQUIRE(d != nullptr);
+            REQUIRE(d->hash != 0);
+            return d->hash;
         }
     };
 
@@ -67,23 +108,76 @@ TEST_CASE("ClassifyField maps arithmetic/bool fields, ReadOnly otherwise", "[edi
     const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::SpriteRenderer>();
     REQUIRE(meta != nullptr);
 
-    bool sawFloatOrInt = false;
+    // Int32 arm, per named field. (The old `sawFloatOrInt` accumulator here was
+    // VACUOUS -- an int alone satisfied it, so it never witnessed the Float arm.)
+    const Astra::FieldInfo* layerField = nullptr;
+    const Astra::FieldInfo* orderField = nullptr;
+    const Astra::FieldInfo* tintField  = nullptr;
     for (const Astra::FieldInfo& f : meta->fields)
     {
-        const Arcane::Editor::FieldKind k = Arcane::Editor::ClassifyField(f);
-        if (f.name == "sortingLayer" || f.name == "orderInLayer")
-            CHECK(k == Arcane::Editor::FieldKind::Int32);
-        if (k == Arcane::Editor::FieldKind::Float || k == Arcane::Editor::FieldKind::Int32) sawFloatOrInt = true;
+        if (f.name == "sortingLayer") layerField = &f;
+        if (f.name == "orderInLayer") orderField = &f;
+        if (f.name == "tint")         tintField  = &f;
     }
-    CHECK(sawFloatOrInt);
+    REQUIRE(layerField != nullptr);
+    REQUIRE(orderField != nullptr);
+    CHECK(Arcane::Editor::ClassifyField(*layerField) == Arcane::Editor::FieldKind::Int32);
+    CHECK(Arcane::Editor::ClassifyField(*orderField) == Arcane::Editor::FieldKind::Int32);
 
     // tint is a glm::vec4 -- no Vec4 editor exists, so it must classify ReadOnly
     // rather than being silently misclassified (regression coverage for the
     // now-removed size==1-arithmetic bool fallback).
-    const Astra::FieldInfo* tintField = nullptr;
-    for (const Astra::FieldInfo& f : meta->fields) if (f.name == "tint") tintField = &f;
     REQUIRE(tintField != nullptr);
     CHECK(Arcane::Editor::ClassifyField(*tintField) == Arcane::Editor::FieldKind::ReadOnly);
+}
+
+TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
+{
+    // The 2026-07-26 review found the Bool, Float and Vec3 arms of ClassifyField
+    // could ALL be deleted with the suite still green: the only test inspected
+    // SpriteRenderer, which has no bool and no vec3, and the Float check was an
+    // accumulator an int satisfied. One assertion per arm, so deleting any arm
+    // fails a named test.
+    using K = Arcane::Editor::FieldKind;
+    const auto kindOf = [](const Astra::TypeMeta* m, const char* name) -> K
+    {
+        for (const Astra::FieldInfo& f : m->fields)
+            if (f.name == name)
+                return Arcane::Editor::ClassifyField(f);
+        return K::ReadOnly;   // not found; the REQUIREs below catch that case
+    };
+
+    // Bool + Float from a real engine component (RigidBody2D reflects both).
+    const Astra::TypeMeta* body = Astra::GetMeta<Arcane::RigidBody2D>();
+    REQUIRE(body != nullptr);
+    REQUIRE(std::any_of(body->fields.begin(), body->fields.end(),
+                        [](const Astra::FieldInfo& f) { return f.name == "fixedRotation"; }));
+    REQUIRE(std::any_of(body->fields.begin(), body->fields.end(),
+                        [](const Astra::FieldInfo& f) { return f.name == "mass"; }));
+    CHECK(kindOf(body, "fixedRotation") == K::Bool);
+    CHECK(kindOf(body, "bullet")        == K::Bool);
+    CHECK(kindOf(body, "mass")          == K::Float);
+    CHECK(kindOf(body, "linearDamping") == K::Float);
+
+    // Vec2 + Float from Transform.
+    const Astra::TypeMeta* xform = Astra::GetMeta<Arcane::Transform>();
+    REQUIRE(xform != nullptr);
+    CHECK(kindOf(xform, "position") == K::Vec2);
+    CHECK(kindOf(xform, "scale")    == K::Vec2);
+    CHECK(kindOf(xform, "rotation") == K::Float);
+
+    // Vec3 has NO witness anywhere in the engine roster -- nothing reflected
+    // declares a glm::vec3 -- which is precisely why that arm was unpinned. The
+    // local probe below is the witness.
+    const Astra::TypeMeta* probe = Astra::GetMeta<ArcaneEditorTest::ClassifyProbe>();
+    REQUIRE(probe != nullptr);
+    CHECK(kindOf(probe, "three") == K::Vec3);
+    CHECK(kindOf(probe, "two")   == K::Vec2);
+    CHECK(kindOf(probe, "flag")  == K::Bool);
+    CHECK(kindOf(probe, "count") == K::Int32);
+    CHECK(kindOf(probe, "scalar")== K::Float);
+    CHECK(kindOf(probe, "ref")   == K::AssetRef);
+    CHECK(kindOf(probe, "four")  == K::ReadOnly);   // no Vec4 editor
 }
 
 TEST_CASE("ApplyIntEdit writes through reflection to the live component", "[editor]")
@@ -191,18 +285,40 @@ TEST_CASE("ComputeFieldMixed is STICKY: a later match does not clear a marked ax
 {
     // THE case a naive "compare against the previous entity" implementation gets
     // wrong. UE's `&& Cached.IsSet()` term is what makes it sticky.
-    MixedWorld w;
-    const Astra::Entity a = w.Make(glm::vec2(1.0f, 0.0f), 0.0f);
-    const Astra::Entity b = w.Make(glm::vec2(2.0f, 0.0f), 0.0f);   // x diverges here
-    const Astra::Entity c = w.Make(glm::vec2(1.0f, 0.0f), 0.0f);   // and matches the SEED again
     const Astra::FieldInfo* pos = TransformField("position");
     REQUIRE(pos != nullptr);
 
-    const std::array<Astra::Entity, 3> sel{ a, b, c };
-    const Arcane::Editor::FieldMixedMask m =
-        Arcane::Editor::ComputeFieldMixed(w.reg, sel, w.TransformHash(), *pos);
-    CHECK(m.Test(0));         // still mixed despite c agreeing with a
-    CHECK_FALSE(m.Test(1));
+    SECTION("x returns to the SEED value (1, 2, 1)")
+    {
+        MixedWorld w;
+        const Astra::Entity a = w.Make(glm::vec2(1.0f, 0.0f), 0.0f);
+        const Astra::Entity b = w.Make(glm::vec2(2.0f, 0.0f), 0.0f);   // x diverges here
+        const Astra::Entity c = w.Make(glm::vec2(1.0f, 0.0f), 0.0f);   // and matches the SEED again
+        const std::array<Astra::Entity, 3> sel{ a, b, c };
+        const Arcane::Editor::FieldMixedMask m =
+            Arcane::Editor::ComputeFieldMixed(w.reg, sel, w.TransformHash(), *pos);
+        CHECK(m.Test(0));         // still mixed despite c agreeing with a
+        CHECK_FALSE(m.Test(1));
+    }
+
+    SECTION("x returns to the PREVIOUS value (1, 2, 2)")
+    {
+        // Added after the 2026-07-26 review: the (1,2,1) fixture above cannot
+        // fail for an implementation that compares against the PREVIOUS entity
+        // and ASSIGNS instead of OR-ing -- with 1,2,1 every step differs from its
+        // predecessor, so the mark survives by accident. Here c EQUALS its
+        // predecessor, so an assigning implementation clears the mark and this
+        // fails, while both OR-ing implementations keep it.
+        MixedWorld w;
+        const Astra::Entity a = w.Make(glm::vec2(1.0f, 0.0f), 0.0f);
+        const Astra::Entity b = w.Make(glm::vec2(2.0f, 0.0f), 0.0f);   // x diverges
+        const Astra::Entity c = w.Make(glm::vec2(2.0f, 0.0f), 0.0f);   // agrees with b, NOT with a
+        const std::array<Astra::Entity, 3> sel{ a, b, c };
+        const Arcane::Editor::FieldMixedMask m =
+            Arcane::Editor::ComputeFieldMixed(w.reg, sel, w.TransformHash(), *pos);
+        CHECK(m.Test(0));
+        CHECK_FALSE(m.Test(1));
+    }
 }
 
 TEST_CASE("ComputeFieldMixed skips dead entities and non-carriers", "[editor]")

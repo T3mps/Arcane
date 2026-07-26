@@ -25,7 +25,10 @@ int main(int argc, char** argv)
     // no-project gate -- it hosts Sandbox.dll by default with no flags, by design.
     if (parsed.config->printEngineInfo)
     {
-        std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(argv[0]).c_str());
+        // ExecutablePathUtf8, NOT argv[0]: argv[0] is whatever the launcher typed
+        // (a bare relative name under the documented cd-then-run workflow) and is
+        // ANSI-codepage bytes under MSVC, which a strict-UTF-8 dump() rejects.
+        std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
         return 0;
     }
 

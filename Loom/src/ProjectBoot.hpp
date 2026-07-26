@@ -13,9 +13,11 @@
 
 #include <Json.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace Arcane::HostBoot
@@ -27,15 +29,31 @@ namespace Arcane::HostBoot
     // would mint stale-ABI projects the moment the engine bumps, and those
     // crash on open. The Hub probes, then stamps whatever the engine reports.
     //
-    // Single line on purpose: the caller reads one line from stdout. Paths use
-    // generic_string() so the Hub never has to unescape backslashes.
-    inline std::string EngineInfoJson(const std::filesystem::path& exePath)
+    // Single line on purpose: the caller reads one line from stdout.
+    //
+    // `exePathUtf8` is UTF-8 BYTES, not a std::filesystem::path: callers pass
+    // Arcane::ExecutablePathUtf8(). Taking a path here and calling
+    // generic_string() would re-encode through the implementation's native narrow
+    // encoding -- the ANSI-codepage round-trip that made this throw on non-ASCII
+    // install paths in the first place. Backslashes are normalised here since we
+    // no longer get generic_string()'s normalisation for free.
+    inline std::string EngineInfoJson(std::string exePathUtf8)
     {
+        std::replace(exePathUtf8.begin(), exePathUtf8.end(), '\\', '/');
         nlohmann::json j;
-        j["engineAbi"] = Arcane::kGamePluginABIVersion;
+        // PluginABIVersion(), NOT the kGamePluginABIVersion header constant: the
+        // constant is whatever THIS module was compiled against, while the gate
+        // that rejects a plugin lives in Arcane.dll. A partially-updated install
+        // would otherwise publish a number the runtime refuses.
+        j["engineAbi"] = Arcane::PluginABIVersion();
         j["build"]     = Arcane::BuildInfo();
-        j["exePath"]   = exePath.generic_string();
-        return j.dump();   // compact: no indent argument
+        j["exePath"]   = std::move(exePathUtf8);
+        // error_handler_t::replace, not the default throw: this probe is the ONE
+        // thing the Hub relies on to learn the ABI, so a malformed byte must
+        // degrade to U+FFFD in the output, never an exception escaping main()
+        // into terminate(). ExecutablePathUtf8 already yields well-formed UTF-8;
+        // this is the belt for every other caller.
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // Load the input action maps from the layered config's "input" category (engine

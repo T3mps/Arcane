@@ -40,7 +40,8 @@ namespace Arcane::Editor
     {
         return typeName == "Arcane::WorldTransform"
             || typeName == "Arcane::PreviousTransform"
-            || typeName == "Arcane::PhysicsBodyRef";
+            || typeName == "Arcane::PhysicsBodyRef"
+            || typeName == "Arcane::EntityInfo";
     }
 
     std::vector<ComponentCatalogEntry> BuildComponentCatalog(

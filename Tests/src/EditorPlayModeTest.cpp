@@ -136,10 +136,10 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
     Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); });
 
     // Edit-mode edit, committed BEFORE Play: before={1,0}, after={5,0}.
-    stack.Begin("edit");
+    const Arcane::TransactionId txn = stack.Begin("edit");
     stack.SnapshotComponent(e, desc);
     reg.GetComponent<Arcane::Transform>(e)->position = glm::vec2(5.0f, 0.0f);
-    stack.Commit();
+    stack.Commit(txn);
     REQUIRE(stack.CanUndo());
 
     // Play: snapshot captures the authored {5,0} state.

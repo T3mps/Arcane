@@ -197,7 +197,10 @@ namespace Arcane
             try
             {
                 // Create sinks
-                auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+                // stderr, not stdout: hosts use stdout as a DATA channel (the
+                // engine-identity probe prints one line of JSON there for the
+                // Arcane Hub to parse). See Arcane/Base/Log.cpp for the full note.
+                auto consoleSink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
                 consoleSink->set_level(static_cast<spdlog::level::level_enum>(consoleLevel));
                 consoleSink->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
 
