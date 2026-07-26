@@ -2,7 +2,6 @@
 
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Scene/Components.hpp>
-#include <Arcane/Scene/PhysicsComponents.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -39,16 +38,6 @@ namespace
         }
         return a.size() < b.size();
     }
-
-    // Priority table, first hit wins. Extend here when a new component type
-    // deserves its own type-column string.
-    std::string TypeLabel(Astra::Registry& reg, Astra::Entity e)
-    {
-        if (reg.HasComponent<Arcane::PostProcess>(e))    return "Post Process";
-        if (reg.HasComponent<Arcane::RigidBody2D>(e))    return "Rigid Body";
-        if (reg.HasComponent<Arcane::SpriteRenderer>(e)) return "Sprite";
-        return "Entity";
-    }
 }
 
 namespace Arcane::Editor
@@ -66,18 +55,12 @@ namespace Arcane::Editor
             r.entity = e;
             r.depth = depth;
             r.label = Edit::DisplayName(reg, e);
-            r.type = TypeLabel(reg, e);
             r.hidden = reg.HasComponent<Hidden>(e);
             r.childCount = reg.GetChildCount(e);
             r.hasChildren = r.childCount > 0;
             return r;
         };
 
-        auto sortKey = [&](Astra::Entity e) -> std::string
-        {
-            return sort.column == OutlinerSort::Column::Type ? TypeLabel(reg, e)
-                                                             : Edit::DisplayName(reg, e);
-        };
         auto sortSiblings = [&](std::vector<Astra::Entity>& kids)
         {
             if (sort.column == OutlinerSort::Column::None)
@@ -85,7 +68,8 @@ namespace Arcane::Editor
             std::stable_sort(kids.begin(), kids.end(),
                 [&](Astra::Entity a, Astra::Entity b)
                 {
-                    const std::string ka = sortKey(a), kb = sortKey(b);
+                    const std::string ka = Edit::DisplayName(reg, a);
+                    const std::string kb = Edit::DisplayName(reg, b);
                     return sort.ascending ? LessCI(ka, kb) : LessCI(kb, ka);
                 });
         };

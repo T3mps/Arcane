@@ -77,15 +77,19 @@ Pure-core + ImGui-shell, like AssetBrowser:
   tested): flat, depth-annotated rows in tree order from the relationship
   graph, plus roots-without-parents; case-insensitive substring filter over
   display names — matches AND their ancestors stay visible (non-matching
-  ancestors render dimmed); per-row: entity, depth, label, type string,
-  hidden flag, child count. Label = EntityInfo.name, else `Entity <id>`.
-  Type column by component priority: PostProcess → "Post Process",
-  RigidBody2D → "Rigid Body", SpriteRenderer → "Sprite", else "Entity"
-  (extensible table).
+  ancestors render dimmed); per-row: entity, depth, label, hidden flag,
+  child count. Label = EntityInfo.name, else `Entity <id>`.
+- **AMENDED 2026-07-25 (USER DIRECTIVE, post-slice-2): there is NO type
+  column.** It was built and then removed: every row IS an entity, and
+  entities are *composed of* components rather than being of a type, so a
+  column labelling one row "Sprite" and another "Rigid Body" asserted a
+  taxonomy the ECS does not have. Removed with all related logic (the
+  priority table, `OutlinerRow::type`, and sort-by-type). Do not reintroduce
+  it in a later slice; component composition belongs in the Inspector.
 - **`DrawOutlinerPanel`**: `ImGui::BeginTable` (RowBg striping, sortable
-  Label/Type header, frozen header row). Column 0 = eye icon
-  (ICON_LC_EYE / _OFF, dimmed when off); column 1 = TreeNodeEx arrow + label;
-  column 2 = type. Footer: `N entities (M selected)`. Search box above the
+  Label header, frozen header row). Column 0 = eye icon
+  (ICON_LC_EYE / _OFF, dimmed when off); column 1 = TreeNodeEx arrow + label.
+  Footer: `N entities (M selected)`. Search box above the
   table. Renaming = F2 or slow-double-click → inline InputText in the row.
 - **Interactions:** click selects (plain = replace, Ctrl = toggle, Shift =
   range over visible row order); right-click row → New Child Entity / Rename /
@@ -151,5 +155,6 @@ Estimated 3–4 sessions. Each slice lands green independently.
 - Mixed-value display in multi-edit widgets; multi-rename with numbering.
 - Editor-only-vs-game visibility split (`Hidden` is one serialized bit;
   UE's bHiddenEd/bHidden distinction can layer on later if wanted).
-- Unreal's pin/star columns, per-type row icons beyond the type string.
+- Unreal's pin/star columns; per-type row icons (and the type column itself,
+  removed 2026-07-25 -- see the amendment in section 3).
 - Outlining more than 64 selected entities.

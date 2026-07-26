@@ -7,8 +7,8 @@
 // Row semantics:
 // - Roots = entities without a parent, in EntityManager order; children in
 //   GetChildren order; depth-first emission.
-// - `sort` reorders SIBLING groups (and roots) case-insensitively by label
-//   or type; the tree structure is never broken.
+// - `sort` reorders SIBLING groups (and roots) case-insensitively by label;
+//   the tree structure is never broken.
 // - `filter`: case-insensitive substring over labels. A match keeps itself
 //   AND all its ancestors; kept non-matching ancestors get dimmed = true.
 //   A non-empty filter ignores `collapsed` (search auto-expands).
@@ -32,7 +32,6 @@ namespace Arcane::Editor
         Astra::Entity entity;
         int           depth = 0;
         std::string   label;
-        std::string   type;
         bool          hidden = false;
         bool          dimmed = false;
         bool          hasChildren = false;
@@ -41,7 +40,7 @@ namespace Arcane::Editor
 
     struct OutlinerSort
     {
-        enum class Column { None, Label, Type };
+        enum class Column { None, Label };
         Column column = Column::None;
         bool   ascending = true;
     };

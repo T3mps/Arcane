@@ -11,7 +11,6 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Scene/Components.hpp>
-#include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
 #include <Astra/Registry/Registry.hpp>
@@ -37,7 +36,6 @@ namespace
             }();
             (void)s_ctxPinned;
             RegisterSceneComponents(reg);
-            RegisterPhysicsComponents(reg);
         }
         Astra::Entity Make(const char* name, Astra::Entity parent = Astra::Entity::Invalid())
         {
@@ -87,31 +85,6 @@ TEST_CASE("Labels use DisplayName; hidden flag rides Arcane::Hidden", "[editor][
     CHECK(find(named).hidden);
     CHECK(find(anon).label == Edit::DisplayName(w.reg, anon));   // "Entity <id>" fallback
     CHECK_FALSE(find(anon).hidden);
-}
-
-TEST_CASE("Type column follows the priority table", "[editor][outliner]")
-{
-    World w;
-    Astra::Entity plain = w.Make("P");
-    Astra::Entity sprite = w.Make("S");
-    w.reg.AddComponent<SpriteRenderer>(sprite, SpriteRenderer{});
-    Astra::Entity body = w.Make("B");
-    w.reg.AddComponent<SpriteRenderer>(body, SpriteRenderer{});
-    w.reg.AddComponent<RigidBody2D>(body, RigidBody2D{});
-    Astra::Entity post = w.Make("PP");
-    w.reg.AddComponent<PostProcess>(post, PostProcess{});
-    w.reg.AddComponent<RigidBody2D>(post, RigidBody2D{});
-
-    auto rows = BuildOutlinerRows(w.reg, "", kNoSort, kNoneCollapsed);
-    auto typeOf = [&](Astra::Entity e) -> std::string
-    {
-        for (const auto& r : rows) if (r.entity == e) return r.type;
-        return "<missing>";
-    };
-    CHECK(typeOf(plain) == "Entity");
-    CHECK(typeOf(sprite) == "Sprite");
-    CHECK(typeOf(body) == "Rigid Body");        // RigidBody2D outranks Sprite
-    CHECK(typeOf(post) == "Post Process");      // PostProcess outranks everything
 }
 
 TEST_CASE("Filter keeps matches and their ancestors; ancestors dim", "[editor][outliner]")

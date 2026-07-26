@@ -439,28 +439,26 @@ namespace Arcane::Editor
         const float footerH = ImGui::GetFrameHeightWithSpacing();
         const ImGuiTableFlags tflags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
                                      | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
-        if (ImGui::BeginTable("##outliner_rows", 3, tflags, ImVec2(0.0f, -footerH)))
+        if (ImGui::BeginTable("##outliner_rows", 2, tflags, ImVec2(0.0f, -footerH)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn(ICON_LC_EYE,
                 ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed,
                 ImGui::GetFrameHeight());
             ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_DefaultSort);
-            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed,
-                                    ImGui::CalcTextSize("Post Process").x * 1.4f);
             ImGui::TableHeadersRow();
 
             // Header sort -> state.sort; rows were built with LAST frame's
-            // sort (one-frame lag, rebuilt every frame anyway).
+            // sort (one-frame lag, rebuilt every frame anyway). Label is the
+            // only sortable column, so any spec means sort-by-label.
             if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs())
             {
                 state.sort = OutlinerSort{};
                 if (specs->SpecsCount > 0)
                 {
-                    const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
-                    state.sort.column = (s.ColumnIndex == 2) ? OutlinerSort::Column::Type
-                                                             : OutlinerSort::Column::Label;
-                    state.sort.ascending = s.SortDirection != ImGuiSortDirection_Descending;
+                    state.sort.column = OutlinerSort::Column::Label;
+                    state.sort.ascending =
+                        specs->Specs[0].SortDirection != ImGuiSortDirection_Descending;
                 }
             }
 
@@ -647,13 +645,6 @@ namespace Arcane::Editor
                     if (indent > 0.0f)
                         ImGui::Unindent(indent);
                 }
-
-                // -- column 2: type -----------------------------------------
-                ImGui::TableSetColumnIndex(2);
-                if (row.dimmed)
-                    ImGui::TextDisabled("%s", row.type.c_str());
-                else
-                    ImGui::TextUnformatted(row.type.c_str());
 
                 ImGui::PopID();
             }
