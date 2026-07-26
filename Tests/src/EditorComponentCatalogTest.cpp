@@ -252,6 +252,45 @@ TEST_CASE("catalog add/remove round-trip through ApplyRegistryMutation", "[edito
     CHECK(w.reg->HasComponentByHash(b, spriteHash));
 }
 
+TEST_CASE("a fresh Runtime registers the engine's own component roster", "[editor][outliner]")
+{
+    // THE regression this exists for (found at desk 2026-07-26, Aphelyon
+    // project): the Add Component catalog can only offer what the runtime
+    // ComponentRegistry knows, and NOTHING registered the engine's own scene
+    // components in a live host -- the roster came entirely from whatever the
+    // hosted game plugin chose to ReRegisterComponent<T>() in its Init. A
+    // project whose plugin registered two types showed a two-row, fully
+    // disabled catalog, so "+ Add Component" appeared to do nothing.
+    //
+    // The same gap silently dropped EntityInfo/Hidden when a runtime host
+    // loaded a scene the editor saved: SceneSerializer skips a type that is
+    // reflected but not REGISTERED as a component.
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Astra::Registry& reg = rt.Registry();
+    const Astra::Entity e = reg.CreateEntity();
+    const std::array<Astra::Entity, 1> sel{ e };
+
+    const std::vector<ComponentCatalogEntry> cat = BuildComponentCatalog(reg, sel, "");
+
+    CHECK(Find(cat, "Arcane::Transform") != nullptr);
+    CHECK(Find(cat, "Arcane::SpriteRenderer") != nullptr);
+    CHECK(Find(cat, "Arcane::PostProcess") != nullptr);
+    CHECK(Find(cat, "Arcane::EntityInfo") != nullptr);
+    CHECK(Find(cat, "Arcane::Hidden") != nullptr);
+    CHECK(Find(cat, "Arcane::RigidBody2D") != nullptr);
+    CHECK(Find(cat, "Arcane::Collider2D") != nullptr);
+
+    // The hide-list still applies to the engine roster.
+    CHECK(Find(cat, "Arcane::WorldTransform") == nullptr);
+    CHECK(Find(cat, "Arcane::PreviousTransform") == nullptr);
+    CHECK(Find(cat, "Arcane::PhysicsBodyRef") == nullptr);
+
+    // A bare entity lacks all of them, so every row is offered as addable --
+    // this is exactly the state that was broken at desk.
+    for (const ComponentCatalogEntry& c : cat)
+        CHECK(c.missingCount == 1);
+}
+
 TEST_CASE("no-op add pushes no undo step", "[editor][outliner]")
 {
     World w;

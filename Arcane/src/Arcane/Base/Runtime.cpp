@@ -9,6 +9,8 @@
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Scene/PhysicsComponents.hpp>   // RegisterPhysicsComponents (engine roster)
+#include <Arcane/Scene/SceneModule.hpp>         // RegisterSceneComponents   (engine roster)
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
@@ -117,6 +119,28 @@ namespace Arcane
             // Install the shared context in THIS module BEFORE any TypeID/Registry use.
             Astra::SetTypeContext(context);
             components = std::make_shared<Astra::ComponentRegistry>();
+
+            // The engine's OWN component roster, registered here so every host
+            // has it before any plugin loads. Previously nothing registered it
+            // outside tests: the live roster was whatever the hosted game
+            // plugin happened to ReRegisterComponent<T>() in its Init, which
+            // (a) left the editor's Add Component catalog offering only the
+            // plugin's handful of types, and (b) silently DROPPED EntityInfo /
+            // Hidden when a runtime host loaded an editor-saved scene --
+            // SceneSerializer skips a type that is reflected but not
+            // REGISTERED as a component.
+            //
+            // Safe to do unconditionally, and safe for plugins to re-register
+            // over: RegisterComponent<T> is idempotent (it early-returns when
+            // the id is already registered), and ComponentIDs come from
+            // TypeID<T> resolved through the shared TypeContext BY HASH, not
+            // from a registration counter -- so this cannot renumber anything
+            // or invalidate an existing save. A plugin's later
+            // ReRegisterComponent<T> still rebinds the descriptor's function
+            // pointers to that module, which is the whole point of the
+            // hot-reload path.
+            RegisterSceneComponents(*components);
+            RegisterPhysicsComponents(*components);
 
             Astra::Registry::Config cfg;
             cfg.workScheduler = sched;
