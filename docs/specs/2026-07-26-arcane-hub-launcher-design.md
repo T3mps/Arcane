@@ -231,9 +231,46 @@ Slice 1 is independently valuable: it closes the hole even if the Hub slips.
 
 ## Open questions for review
 
-1. **Where does `ArcaneHub.exe` live and ship?** `Setup.exe` is a raw portable
-   binary at the repo root. Same treatment, or does the Hub belong in an
-   installed location once engine installs are real?
+1. ~~**Where does `ArcaneHub.exe` live and ship?**~~ **ANSWERED 2026-07-26 by the
+   user: the Hub is INSTALLED to a universal per-user location on the machine —
+   NOT a repo-root portable binary. Arcane will eventually be distributed
+   without users building it from this repo at all.**
+
+   **This reverses the earlier reading in question 2**, which assumed the Hub
+   would inherit `Setup.exe`'s repo-root portable packaging. It does not. What
+   the Hub absorbs is Setup.exe's *role*, not its shape.
+
+   Concretely, and following the convention Unity Hub and VS Code both use:
+   install per-user to `%LOCALAPPDATA%\Programs\ArcaneHub\` so no admin rights
+   are needed and auto-update stays simple. The already-chosen state directory
+   `%APPDATA%\Arcane\hub\` sits naturally beside that.
+
+   **Consequences that change the design:**
+
+   - **Engine discovery inverts.** The earlier draft defaulted `engines.json` to
+     "an `ArcaneEditor.exe` next to `ArcaneHub.exe`, or the repo-relative
+     `bin/` path". An installed Hub has no sibling engine, so there is no
+     sensible default. Engines become **explicitly registered**, and the Hub
+     must ship with an empty engine list as a normal first-run state.
+   - **Two classes of engine install must coexist**, for a long time:
+     *released binary installs* (the eventual distribution model) and
+     *source/dev builds* out of this repo's
+     `bin/<Config>-windows-x86_64-md/ArcaneEditor/`. "Register an existing dev
+     build by path" is therefore a **day-one slice-2 feature**, not a later
+     convenience — without it the Hub is useless to the person building the
+     engine.
+   - **`--print-engine-info` (slice 1) becomes load-bearing.** It is how the Hub
+     validates a registered path regardless of provenance, and how it tells a
+     dev build from a released one. Already built, and this confirms the shape
+     was right.
+   - **Tauri is confirmed a third time.** Its bundler produces MSI/NSIS
+     installers as a first-class output. A portable ImGui exe has no installer
+     story at all, and an installed product needs one.
+   - **`Setup.exe`'s portable repo-root form is transitional.** It exists
+     because today the only way to get Arcane is clone-and-build. Once the Hub
+     can install engine binaries, that bootstrap moves inside the Hub, and the
+     "set up a machine to build Arcane from source" flow survives only as a
+     contributor-facing path within it.
 2. ~~**Does the Hub replace `Setup.exe`'s role over time?**~~ **ANSWERED
    2026-07-26 by the user: YES, the Hub absorbs `Setup.exe`.**
 
@@ -259,9 +296,17 @@ Slice 1 is independently valuable: it closes the hole even if the Hub slips.
    - Migration is NOT free: `Setup.exe` is shipped and CI-maintained
      (`.github/workflows/build-setup-wizard.yml`). Absorbing it means either
      growing `Tools/setup-wizard/` into the Hub in place, or standing the Hub up
-     and retiring `Setup.exe` once parity is reached. That choice should be made
-     before slice 2 starts, since it decides whether slice 2 is a new scaffold
-     or a rename-and-extend of the existing app.
+     and retiring `Setup.exe` once parity is reached.
+     **RESOLVED by the answer to question 1: stand up a NEW app.** The two have
+     different packaging models — `Setup.exe` is a repo-root portable binary
+     that must run in place, the Hub is an installed per-user product with an
+     installer and an update path. Growing in place would mean changing the
+     packaging of a shipped tool mid-flight. Slice 2 is therefore a **new Tauri
+     scaffold** that borrows `Tools/setup-wizard/`'s patterns and CI shape as a
+     template, with `Setup.exe` retired only once the Hub reaches parity.
+     (An earlier draft of this spec leaned the other way — grow-in-place — on
+     the assumption the Hub would inherit Setup.exe's portable packaging. The
+     question-1 answer removed that assumption.)
 3. ~~**Should slice 1's gate exit non-zero, or pop a native message box?**~~
    **RESOLVED as built (slice 1, 2026-07-26): exits 2 with a stderr message, no
    message box.** No window or device exists at that point, so creating one just
