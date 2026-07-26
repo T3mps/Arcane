@@ -60,7 +60,7 @@
 | `Arcane/Hub/src/lib/views/EnginesView.svelte` | **Create.** Register / select / forget / nearby suggestion. |
 | `Arcane/Hub/src/routes/+page.svelte` | **Rewrite.** State, `guard()`, error banner, shell layout, view switch. |
 | `Arcane/Hub/src/app.html` | **Unchanged.** No edit needed — `theme.css` is imported from `+page.svelte`, which Vite hoists into the bundle as global CSS. |
-| `Arcane/Hub/src-tauri/tauri.conf.json` | **Modify.** `"decorations": false`. |
+| `Arcane/Hub/src-tauri/tauri.conf.json` | **Modify in Task 10** (not Task 4). `"decorations": false`, landed together with mounting WindowChrome. |
 | `Arcane/Hub/src-tauri/capabilities/default.json` | **Modify.** Add `core:window:allow-toggle-maximize`. |
 | `Arcane/Hub/static/{svelte,tauri,vite}.svg` | **Delete.** Scaffolding leftovers. |
 
@@ -615,22 +615,20 @@ The full array becomes:
   ]
 ```
 
-- [ ] **Step 2: Turn off OS decorations**
+- [ ] **Step 2: (moved) Do NOT turn off decorations in this task**
 
-In `Arcane/Hub/src-tauri/tauri.conf.json`, inside the single entry of `app.windows`, add `"decorations": false` after `"resizable": true`:
-
-```json
-      {
-        "title": "Arcane Hub",
-        "width": 1000,
-        "height": 680,
-        "minWidth": 800,
-        "minHeight": 520,
-        "resizable": true,
-        "decorations": false,
-        "center": true
-      }
-```
+> **CORRECTED DURING EXECUTION.** This step originally set
+> `"decorations": false` here. Task 4's reviewer raised it as a cross-task
+> sequencing hazard and was right: `WindowChrome` is not mounted until Task 10,
+> so between Task 4 and Task 10 the window would have **no OS titlebar and no
+> replacement** — un-draggable, and unclosable except by Alt+F4 or Task Manager.
+> `"decorations": false` now lands in **Task 10**, in the same change that mounts
+> `WindowChrome`, which is the only point at which both are correct together.
+> Same reasoning as deferring the `theme.css` import: never leave the interim app
+> in a state a human would call broken.
+>
+> Nothing to do in this step. The capability added in Step 1 is additive and
+> harmless before the chrome exists.
 
 - [ ] **Step 3: Write WindowChrome**
 
@@ -1226,6 +1224,7 @@ git commit -m "feat(hub): engines view"
 
 **Files:**
 - Modify (full rewrite): `Arcane/Hub/src/routes/+page.svelte`
+- Modify: `Arcane/Hub/src-tauri/tauri.conf.json` (add `"decorations": false`)
 
 **Interfaces:**
 - Consumes: everything from Tasks 1-9.
@@ -1233,7 +1232,29 @@ git commit -m "feat(hub): engines view"
 
 This is the integration task. `+page.svelte` keeps every `invoke` call and all `$state`; nothing below it touches the API. Behaviour to preserve exactly: `refresh()` re-selects the first engine when the current one vanishes; `suggestEngine()` is only asked when there are zero engines; `guard()` clears the error, sets busy, refreshes on success, and always clears busy.
 
-- [ ] **Step 1: Rewrite the page**
+- [ ] **Step 1: Turn off OS decorations**
+
+Deferred here from Task 4 on purpose: this is the same change that mounts
+`WindowChrome`, so it is the first moment the window can lose its OS titlebar
+without losing every way to move or close it.
+
+In `Arcane/Hub/src-tauri/tauri.conf.json`, inside the single entry of
+`app.windows`, add `"decorations": false` after `"resizable": true`:
+
+```json
+      {
+        "title": "Arcane Hub",
+        "width": 1000,
+        "height": 680,
+        "minWidth": 800,
+        "minHeight": 520,
+        "resizable": true,
+        "decorations": false,
+        "center": true
+      }
+```
+
+- [ ] **Step 2: Rewrite the page**
 
 Replace the entire contents of `Arcane/Hub/src/routes/+page.svelte`:
 
@@ -1353,7 +1374,7 @@ Replace the entire contents of `Arcane/Hub/src/routes/+page.svelte`:
 </style>
 ```
 
-- [ ] **Step 2: Verify the legacy global styles are gone**
+- [ ] **Step 3: Verify the legacy global styles are gone**
 
 The replacement above is a FULL-FILE rewrite, which is what finally removes the
 old `<style>` block's `:global(:root)` token declarations, `:global(body)`, and
@@ -1377,20 +1398,20 @@ grep -o '\-\-text: #[0-9a-f]\{6\}' build/_app/immutable/assets/*.css
 ```
 Expected: a single line, `--text: #eef2fa`.
 
-- [ ] **Step 3: Verify typecheck and build**
+- [ ] **Step 4: Verify typecheck and build**
 
 Run: `cd Arcane/Hub && npm run check && npm test && npm run build`
 Expected: svelte-check 0 errors; 17 tests pass; build completes.
 
-- [ ] **Step 4: Confirm the API surface really is untouched**
+- [ ] **Step 5: Confirm the API surface really is untouched**
 
 Run: `cd D:/dev/starworks/Gacha && git diff --stat Arcane/Hub/src/lib/api.ts Arcane/Hub/src-tauri/src/`
 Expected: **no output.** Any output here means the plan's core constraint was violated.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add Arcane/Hub/src/routes/+page.svelte
+git add Arcane/Hub/src/routes/+page.svelte Arcane/Hub/src-tauri/tauri.conf.json
 git commit -m "feat(hub): sidebar shell, view switch, and error banner placement"
 ```
 
