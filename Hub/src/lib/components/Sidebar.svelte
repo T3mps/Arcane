@@ -22,8 +22,12 @@
 <aside class="side">
   <nav>
     {#each items as it (it.id)}
-      <button class="nav" class:on={view === it.id} onclick={() => onNavigate(it.id)}
-              aria-current={view === it.id ? "page" : undefined}>
+      <!-- aria-current="true", not "page": these are buttons switching an
+           in-app view, not links to documents, so the generic boolean form is
+           the accurate one. EngineRow uses the same value for the same reason. -->
+      <button class="nav" type="button" class:on={view === it.id}
+              onclick={() => onNavigate(it.id)}
+              aria-current={view === it.id ? "true" : undefined}>
         <span class="g" aria-hidden="true">{it.glyph}</span>{it.label}
       </button>
     {/each}

@@ -10,7 +10,11 @@
 </script>
 
 <div class="row" class:sel={selected}>
-  <button class="pick" onclick={onSelect} aria-pressed={selected}>
+  <!-- aria-current, not aria-pressed: picking an engine is "this one is now
+       current" in a mutually exclusive set, not a two-state toggle you can
+       un-press. Same vocabulary as Sidebar's active nav item. -->
+  <button class="pick" type="button" onclick={onSelect}
+          aria-current={selected ? "true" : undefined}>
     <span class="nm">{engine.build}</span>
     <code class="path">{engine.path}</code>
   </button>
