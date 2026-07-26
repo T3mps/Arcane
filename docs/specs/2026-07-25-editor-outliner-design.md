@@ -131,6 +131,24 @@ Pure-core + ImGui-shell, like AssetBrowser:
   protects system-managed ones from removal; everything else, Transform
   included, is removable — the user asked for it by name).
 
+**Slice-4 amendments (2026-07-25, as built):**
+- The hide-list is ONE predicate, `Arcane::Editor::IsSystemManagedComponent`
+  (`ArcaneEditor/src/ComponentCatalog.hpp`). The Inspector's section filter, the
+  Add catalog, and Remove Component all consult it, so they cannot drift.
+- Unreflected components are omitted from the catalog: the Inspector can only
+  render reflected types, so adding one would be an invisible edit the header
+  menu could never remove.
+- Tag (empty) components now DO get an Inspector header, showing
+  "(tag component -- no fields)". Without one they were invisible and therefore
+  unremovable. The multi-select intersection test switched from
+  `GetComponentByHash` to `HasComponentByHash` for the same reason — the getter
+  returns null for a tag component the entity really carries.
+- A catalog row whose `missingCount` is 0 (every selected entity already has it)
+  renders disabled rather than hidden.
+- Removal is deferred past the `InspectEntity` loop: the archetype move dangles
+  every `ci.data` pointer in the vector being iterated.
+- `OutlinerBinding` was renamed `SceneEditBinding` — two panels share it now.
+
 ## 6. Slices
 
 1. **Components + commands** — §1 + §2 + tests (EntityInfo JSON/binary
