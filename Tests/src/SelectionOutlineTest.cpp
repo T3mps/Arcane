@@ -412,6 +412,104 @@ namespace
         CHECK(Arcane::RenderErrorCount() == 0);
     }
 
+    // Touching-rect union: id=5 and id=7 share an edge at 1x x=24 (2x x=48), both
+    // selected, no hover. Reuses MakeIdTexture2Rects (still two SQUARE rects, same
+    // 16x16 shape as the other composite tests) but places id=7 flush against id=5
+    // instead of leaving a gap, so this pins the property the disjoint multi-select
+    // tests above cannot: the shared interior edge must NOT seed (no seam), while
+    // the union's true outer edges still do. A regression from the union-aware
+    // boundary test (chosenIsSelection => IsSelected(neighbour)) back to a
+    // single-id neighbour comparison would seed the shared edge from BOTH sides,
+    // painting a spurious amber seam at x=23/x=24 -- exactly what this test catches.
+    void CheckSelectionCompositeTouchingUnion(Arcane::GraphicsBackend backend)
+    {
+        constexpr uint32_t kSize = 64;   // 1x (composite) size
+        Arcane::RenderDeviceDesc desc;
+        desc.backend = backend;
+        auto device = Arcane::RenderDevice::Create(desc);
+        REQUIRE(device != nullptr);
+        nvrhi::IDevice* nv = device->Nvrhi();
+
+        auto shaders = Arcane::ShaderLibrary::Create(nv, backend, "shaders");
+        REQUIRE(shaders != nullptr);
+
+        auto outline = Arcane::SelectionOutline::Create(nv, *shaders, kSize, kSize);
+        REQUIRE(outline != nullptr);
+
+        // Two ADJACENT rects, BOTH selected: id=5 at 2x [16,48)^2 -> 1x [8,24)^2;
+        // id=7 at 2x [48,80)^2 -> 1x [24,40)^2. They abut exactly at 1x x=24
+        // (2x x=48) with NO gap -- unlike CheckSelectionCompositeMultiSelect's
+        // disjoint rects (id=7 there starts at 2x lo=80), this pair shares a real
+        // silhouette edge.
+        nvrhi::TextureHandle idTex =
+            MakeIdTexture2Rects(nv, kSize * 2u, 5u, 16u, 48u, 7u, 48u, 80u);
+
+        auto targetDesc = nvrhi::TextureDesc()
+            .setWidth(kSize).setHeight(kSize)
+            .setFormat(nvrhi::Format::BGRA8_UNORM)
+            .setIsRenderTarget(true)
+            .setInitialState(nvrhi::ResourceStates::RenderTarget)
+            .setKeepInitialState(true)
+            .setDebugName("SelectionOutline.CompositeTargetTouching");
+        nvrhi::TextureHandle target = nv->createTexture(targetDesc);
+        REQUIRE(target != nullptr);
+        nvrhi::FramebufferHandle targetFb = nv->createFramebuffer(
+            nvrhi::FramebufferDesc().addColorAttachment(target));
+        REQUIRE(targetFb != nullptr);
+
+        Arcane::SelectionOutline::Params p;
+        const std::vector<uint32_t> ids{ 5u, 7u };
+        p.selectedIds       = ids;
+        p.cursorPx          = glm::ivec2(-1, -1);   // no hover: both rects select-only
+        p.selectThicknessPx = 3.0f;
+        p.hoverThicknessPx  = 3.0f;
+        p.edgeSoftnessPx    = 2.0f;
+
+        nvrhi::CommandListHandle cmd = nv->createCommandList();
+        cmd->open();
+        cmd->clearTextureFloat(target, nvrhi::AllSubresources, nvrhi::Color(0.2f, 0.2f, 0.2f, 1.0f));
+        outline->Render(cmd, idTex, targetFb, p);
+        cmd->close();
+        nv->executeCommandList(cmd);
+        nv->waitForIdle();
+
+        const std::vector<uint8_t> px = ReadBgra(nv, target, kSize);
+        auto B = [&](int x, int y) { return (int)px[(static_cast<size_t>(y) * kSize + x) * 4 + 0]; };
+        auto G = [&](int x, int y) { return (int)px[(static_cast<size_t>(y) * kSize + x) * 4 + 1]; };
+        auto R = [&](int x, int y) { return (int)px[(static_cast<size_t>(y) * kSize + x) * 4 + 2]; };
+
+        // (1) NO SEAM -- the shared interior edge: id=5's last covered column
+        //     (x=23) and id=7's first covered column (x=24), both at mid-y=15,
+        //     must stay the untouched 0.2 gray background because both are
+        //     interior to the UNION silhouette, not a boundary. (This is the same
+        //     texel pair that reads amber in CheckSelectionCompositeMultiSelect's
+        //     disjoint layout -- here they must NOT.)
+        CHECK(std::abs(R(23, 15) - 51) <= 3);
+        CHECK(std::abs(G(23, 15) - 51) <= 3);
+        CHECK(std::abs(B(23, 15) - 51) <= 3);
+        CHECK(std::abs(R(24, 15) - 51) <= 3);
+        CHECK(std::abs(G(24, 15) - 51) <= 3);
+        CHECK(std::abs(B(24, 15) - 51) <= 3);
+
+        // (2) OUTER EDGES still outline -- the union's true left edge (8,15) and
+        //     true right edge (39,15, id=7's rightmost covered column) both paint
+        //     amber ON the object, exactly like an isolated silhouette would.
+        CHECK(R(8, 15)  > 150);
+        CHECK(R(8, 15)  > G(8, 15));
+        CHECK(G(8, 15)  > B(8, 15));
+        CHECK(R(39, 15) > 150);
+        CHECK(R(39, 15) > G(39, 15));
+        CHECK(G(39, 15) > B(39, 15));
+
+        // Background far from both outlines stays untouched.
+        CHECK(std::abs(R(62, 62) - 51) <= 3);
+        CHECK(std::abs(G(62, 62) - 51) <= 3);
+        CHECK(std::abs(B(62, 62) - 51) <= 3);
+
+        nv->runGarbageCollection();
+        CHECK(Arcane::RenderErrorCount() == 0);
+    }
+
     // Multi-select composite: the same two ids, no hover, must BOTH paint the
     // amber (select) ring in the display-referred target -- exercises the
     // union-aware boundary test (chosenIsSelection => IsSelected(neighbour)),
@@ -538,4 +636,16 @@ TEST_CASE("vulkan: SelectionOutline composite paints amber on two selected ids",
           "[gpu][selection][vulkan]")
 {
     CheckSelectionCompositeMultiSelect(Arcane::GraphicsBackend::Vulkan);
+}
+
+TEST_CASE("d3d12: selection outline treats touching selected entities as one silhouette (no seam)",
+          "[gpu][selection][d3d12]")
+{
+    CheckSelectionCompositeTouchingUnion(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("vulkan: selection outline treats touching selected entities as one silhouette (no seam)",
+          "[gpu][selection][vulkan]")
+{
+    CheckSelectionCompositeTouchingUnion(Arcane::GraphicsBackend::Vulkan);
 }
