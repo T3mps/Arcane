@@ -9,6 +9,9 @@
 // engine sits beside it. That is setup-wizard's repo-root-portable assumption
 // and it is wrong here.
 
+pub mod paths;
+pub mod state;
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

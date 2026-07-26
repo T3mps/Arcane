@@ -1,0 +1,7 @@
+# Cargo intermediates land under Arcane/bin-int/, matching premake's
+# objdir convention for every C++ project in this workspace
+# (objdir "bin-int/<Config>-windows-x86_64-md/<Project>").
+# The final exe is copied into Arcane/bin/<Config>-windows-x86_64-md/Hub/
+# by the `stage` npm script -- see package.json.
+[build]
+target-dir = "../../bin-int/hub-cargo"
