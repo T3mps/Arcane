@@ -63,6 +63,13 @@ describe("coverFor", () => {
     expect(coverFor("---", "x").monogram).toBe("?");
     expect(coverFor("", "x").monogram).toBe("?");
   });
+  it("accepts non-Latin letters as the monogram", () => {
+    expect(coverFor("守护者", "x").monogram).toBe("守");
+    expect(coverFor("éclair", "x").monogram).toBe("É");
+  });
+  it("still falls back for a name with no letter or digit", () => {
+    expect(coverFor("--- ***", "x").monogram).toBe("?");
+  });
   it("angle is deterministic for the same path", () => {
     // THE requirement: a card must not change appearance between launches.
     expect(coverFor("A", "D:/one").angle).toBe(coverFor("A", "D:/one").angle);

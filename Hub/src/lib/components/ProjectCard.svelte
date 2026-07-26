@@ -19,7 +19,7 @@
 </script>
 
 <div class="card" class:bad={!compatible}>
-  <button class="hit" {disabled} onclick={onLaunch} title={why} aria-label={project.name}>
+  <button class="hit" type="button" {disabled} onclick={onLaunch} title={why} aria-label={project.name}>
     <span class="cover" style="--a: {cover.angle}deg" aria-hidden="true">{cover.monogram}</span>
     <span class="cb">
       <span class="nm">{project.name}</span>
@@ -27,13 +27,14 @@
         {#if compatible}
           <span>abi {project.engineAbi ? project.engineAbi : "?"}</span>
         {:else}
-          <em class="badge">abi {project.engineAbi}</em>
+          <span class="badge">abi {project.engineAbi}</span>
         {/if}
         <span>{since(project.lastOpenedUtc)}</span>
       </span>
     </span>
   </button>
-  <button class="x" onclick={onForget} aria-label="Remove {project.name} from the list"
+  <button class="x" type="button" {disabled} onclick={onForget}
+          aria-label="Remove {project.name} from the list"
           title="Remove from list">&#10005;</button>
 </div>
 
@@ -72,7 +73,7 @@
      visible; only its hue changes. */
   .card.bad :focus-visible { outline-color: var(--fail); }
   /* Second, non-chromatic signal: a bordered badge (coral is 8.2:1 here). */
-  .card.bad .badge { font-style: normal; font-weight: 600; color: var(--fail);
+  .card.bad .badge { font-weight: 600; color: var(--fail);
            border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent); border-radius: 3px; padding: 0 4px; }
 
   .x { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px;

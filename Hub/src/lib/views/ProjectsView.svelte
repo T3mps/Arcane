@@ -9,7 +9,7 @@
     {
       recents: RecentProject[]; engine: EngineEntry | null; busy: boolean;
       onLaunch: (p: RecentProject) => void; onForget: (p: RecentProject) => void;
-      onOpen: () => void; onCreate: (name: string) => void;
+      onOpen: () => void; onCreate: (name: string) => Promise<boolean>;
     } = $props();
 
   let query = $state("");
@@ -22,11 +22,15 @@
     recents.filter((p) => !isCompatible(p.engineAbi, engineAbi)).length,
   );
 
-  function submit() {
+  async function submit() {
     if (!newName.trim()) return;
-    onCreate(newName.trim());
-    creating = false;
-    newName = "";
+    // Only clear on SUCCESS: cancelling the folder picker must leave the panel
+    // open with the typed name intact, which is how this behaved pre-arc.
+    const ok = await onCreate(newName.trim());
+    if (ok) {
+      creating = false;
+      newName = "";
+    }
   }
 </script>
 

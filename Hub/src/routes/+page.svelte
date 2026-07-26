@@ -62,13 +62,18 @@
     if (selectedEngine) await openProject(p.path, selectedEngine.path);
   });
 
-  const makeProject = (name: string) => guard(async () => {
-    if (!selectedEngine) return;
-    const dir = await open({ directory: true, title: "Where should the project live?" });
-    if (typeof dir !== "string") return;
-    const root = await createProject(dir, name, selectedEngine.path);
-    await openProject(root, selectedEngine.path);
-  });
+  const makeProject = async (name: string): Promise<boolean> => {
+    let ok = false;
+    await guard(async () => {
+      if (!selectedEngine) return;
+      const dir = await open({ directory: true, title: "Where should the project live?" });
+      if (typeof dir !== "string") return;   // cancelled: leave the panel open
+      const root = await createProject(dir, name, selectedEngine.path);
+      await openProject(root, selectedEngine.path);
+      ok = true;
+    });
+    return ok;
+  };
 </script>
 
 <div class="app">

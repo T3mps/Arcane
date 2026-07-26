@@ -18,7 +18,7 @@
   } = $props();
 </script>
 
-<button class="btn {variant}" {disabled} {title} {onclick}>{@render children()}</button>
+<button class="btn {variant}" type="button" {disabled} {title} {onclick}>{@render children()}</button>
 
 <style>
   .btn {

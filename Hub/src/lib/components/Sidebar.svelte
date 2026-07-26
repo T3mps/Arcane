@@ -61,7 +61,10 @@
   .eng { margin-top: auto; background: var(--surface); border: 1px solid var(--border-soft);
          border-radius: var(--r-panel); padding: 10px 11px; }
   .v { font-size: 12px; margin-top: 5px; display: flex; align-items: center; gap: 6px; }
-  .v.none { color: var(--warn); }
+  /* --text-dim, NOT --warn: in this palette --warn and --gold are the same hex,
+     and gold means "act" here. Rendering an absent engine in the action colour
+     would say the opposite of what it means. Absent state reads as inert. */
+  .v.none { color: var(--text-dim); }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }
   code { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
 </style>

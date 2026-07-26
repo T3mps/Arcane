@@ -40,7 +40,7 @@ export type Cover = { monogram: string; angle: number };
  * is required here.
  */
 export function coverFor(name: string, path: string): Cover {
-  const ch = [...name].find((c) => /[a-z0-9]/i.test(c));
+  const ch = [...name].find((c) => /[\p{L}\p{N}]/u.test(c));
   const monogram = ch ? ch.toUpperCase() : "?";
 
   let h = 0x811c9dc5;

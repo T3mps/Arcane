@@ -16,18 +16,18 @@
   <img class="mark" src="/logo.png" alt="" />
   <span class="title display">Arcane Hub</span>
   <div class="ctrls">
-    <button class="ctrl" aria-label="Minimize" onclick={() => win.minimize()}>
+    <button class="ctrl" type="button" aria-label="Minimize" onclick={() => win.minimize()}>
       <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
         <rect x="1" y="5" width="9" height="1" fill="currentColor" />
       </svg>
     </button>
-    <button class="ctrl" aria-label="Maximize" onclick={() => win.toggleMaximize()}>
+    <button class="ctrl" type="button" aria-label="Maximize" onclick={() => win.toggleMaximize()}>
       <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
         <rect x="1.5" y="1.5" width="8" height="8" fill="none"
               stroke="currentColor" stroke-width="1" />
       </svg>
     </button>
-    <button class="ctrl close" aria-label="Close" onclick={() => win.close()}>
+    <button class="ctrl close" type="button" aria-label="Close" onclick={() => win.close()}>
       <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
         <path d="M1 1l9 9M10 1l-9 9" stroke="currentColor" stroke-width="1.2" />
       </svg>
