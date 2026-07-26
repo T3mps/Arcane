@@ -1,5 +1,6 @@
 #include "EditorPanels.hpp"
 #include "AssetBrowser.hpp"
+#include "ComponentCatalog.hpp"
 #include "ConsoleBuffer.hpp"
 #include "EditorFonts.hpp"
 #include "EntityList.hpp"
@@ -26,6 +27,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace Arcane::Editor
 {
@@ -365,7 +367,7 @@ namespace Arcane::Editor
         // source/target sites below so the string only ever appears once.
         constexpr const char* kOutlinerDragType = "ARC_OUTLINER_ENTITY";
 
-        bool ApplyStructural(Arcane::CommandStack& undo, const OutlinerBinding& b,
+        bool ApplyStructural(Arcane::CommandStack& undo, const SceneEditBinding& b,
                              std::string label, Arcane::FunctionRef<bool()> mutate)
         {
             if (!b.editMode)
@@ -382,7 +384,7 @@ namespace Arcane::Editor
         }
 
         void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
-                             Arcane::CommandStack& undo, const OutlinerBinding& binding)
+                             Arcane::CommandStack& undo, const SceneEditBinding& binding)
         {
             const std::vector<Astra::Entity> doomed = sel.Entities();   // copy: sel mutates after
             if (doomed.empty())
@@ -394,7 +396,7 @@ namespace Arcane::Editor
     }
 
     void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
-                           Arcane::CommandStack& undo, const OutlinerBinding& binding,
+                           Arcane::CommandStack& undo, const SceneEditBinding& binding,
                            OutlinerState& state)
     {
         ImGui::Begin("Outliner");
@@ -941,7 +943,7 @@ namespace Arcane::Editor
     }
 
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo, bool editMode,
+                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
                             const Arcane::Project* project)
     {
         ImGui::Begin("Inspector");
@@ -960,31 +962,40 @@ namespace Arcane::Editor
             ImGui::TextUnformatted(primaryName.c_str());
         ImGui::Separator();
 
+        // Removal is DEFERRED past the loop: Edit::RemoveComponent moves the
+        // entity to a different archetype, which dangles every ci.data pointer
+        // in the vector being iterated. Descriptor pointers themselves are
+        // stable (they live in ComponentRegistry's fixed array).
+        const Astra::ComponentDescriptor* pendingRemove = nullptr;
+
         for (const Astra::Registry::ComponentInfo& ci : registry.InspectEntity(primary))
         {
-            if (!ci.descriptor || !ci.descriptor->visitFields || !ci.data)
+            // An unreflected component has no name to show and no fields to
+            // visit: visitFields is populated FROM TypeMeta at registration, so
+            // meta != null implies visitFields != null.
+            if (!ci.descriptor || !ci.meta)
                 continue;
             // TypeMeta::typeName is a std::string_view into a substring of a larger
             // compile-time literal (__FUNCSIG__/__PRETTY_FUNCTION__) -- NOT
             // guaranteed NUL-terminated, so it is copied into a std::string before
             // handing a `const char*` to ImGui.
-            const std::string typeName = ci.meta ? std::string(ci.meta->typeName)
-                                                 : std::string("<unreflected>");
-            // Derived transform state is never authored: WorldTransform is
-            // recomputed by TransformPropagationSystem every frame and
-            // PreviousTransform is the physics-capture interpolation pose.
-            // Editing either would be stomped next frame -- the Inspector shows
-            // only the authored Transform (the UE/Unity convention: relative/
-            // local is the editable truth, world is display-only derived data).
-            if (typeName == "Arcane::WorldTransform" || typeName == "Arcane::PreviousTransform")
+            const std::string typeName(ci.meta->typeName);
+            // Derived/runtime-owned state is never authored. ONE hide-list, in
+            // ComponentCatalog.hpp: the same predicate gates these sections, the
+            // Add Component catalog, and Remove Component, so the three cannot
+            // drift apart.
+            if (IsSystemManagedComponent(typeName))
                 continue;
 
             // Component-type INTERSECTION: editing a component only some of the
             // selection carries would silently edit a subset, so hide it entirely.
+            // HasComponentByHash, NOT GetComponentByHash: an empty (tag) component
+            // has no storage array, so the getter returns null even when present,
+            // which used to make every tag component look unshared.
             bool sharedByAll = true;
             for (Astra::Entity e : sel.Entities())
             {
-                if (e != primary && !registry.GetComponentByHash(e, ci.descriptor->hash))
+                if (e != primary && !registry.HasComponentByHash(e, ci.descriptor->hash))
                 {
                     sharedByAll = false;
                     break;
@@ -993,22 +1004,59 @@ namespace Arcane::Editor
             if (!sharedByAll)
                 continue;
 
-            if (ImGui::CollapsingHeader(typeName.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+            const bool open = ImGui::CollapsingHeader(typeName.c_str(),
+                                                      ImGuiTreeNodeFlags_DefaultOpen);
+            // Header context menu. A null str_id makes the popup inherit the
+            // HEADER's item id, so each component gets its own popup -- a shared
+            // literal id would make every header open the same popup and the
+            // first-drawn component would swallow the click.
+            if (ImGui::BeginPopupContextItem())
             {
-                ImGuiFieldVisitor visitor;
-                // Null while Play is running: BeginGestureIfActivated/EndGesture both
-                // early-return on a null stack, so gesture bracketing is fully inert
-                // (no Begin, no Commit/Cancel) against the live simulating registry.
-                visitor.stack      = editMode ? &undo : nullptr;
-                visitor.entity     = primary;
-                visitor.descriptor = ci.descriptor;
-                visitor.typeName   = typeName;
-                visitor.project    = project;
-                visitor.registry   = &registry;
-                visitor.selection  = &sel.Entities();
-                ci.descriptor->visitFields(ci.data, visitor);
+                if (!binding.editMode)
+                    ImGui::BeginDisabled();
+                if (ImGui::MenuItem("Remove Component"))
+                    pendingRemove = ci.descriptor;
+                if (!binding.editMode)
+                    ImGui::EndDisabled();
+                ImGui::EndPopup();
             }
+            if (!open)
+                continue;
+
+            // Tag components (Astra's is_empty optimization) have no storage
+            // array, so ci.data is null even though the entity carries them.
+            // They still get a header: that is what makes them visible at all,
+            // and what makes them removable through the menu above.
+            if (!ci.data)
+            {
+                ImGui::TextDisabled("(tag component -- no fields)");
+                continue;
+            }
+
+            ImGuiFieldVisitor visitor;
+            // Null while Play is running: BeginGestureIfActivated/EndGesture both
+            // early-return on a null stack, so gesture bracketing is fully inert
+            // (no Begin, no Commit/Cancel) against the live simulating registry.
+            visitor.stack      = binding.editMode ? &undo : nullptr;
+            visitor.entity     = primary;
+            visitor.descriptor = ci.descriptor;
+            visitor.typeName   = typeName;
+            visitor.project    = project;
+            visitor.registry   = &registry;
+            visitor.selection  = &sel.Entities();
+            ci.descriptor->visitFields(ci.data, visitor);
         }
+
+        if (pendingRemove)
+        {
+            // Copy the selection: ApplyStructural's mutate runs immediately and
+            // the span must outlive it.
+            const std::vector<Astra::Entity> targets = sel.Entities();
+            const Astra::ComponentDescriptor& desc = *pendingRemove;
+            ApplyStructural(undo, binding, "Remove Component",
+                [&] { return Arcane::Edit::RemoveComponent(registry, targets, desc) > 0; });
+        }
+
         ImGui::End();
     }
 }

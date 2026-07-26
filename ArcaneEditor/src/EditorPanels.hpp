@@ -92,7 +92,10 @@ namespace Arcane::Editor
     // over binding.snapshot/restore (Runtime::SnapshotRegistry/RestoreRegistry).
     // binding.editMode == false (Play running) disables structural edits --
     // the slice-2 resolution of RegistryStateCommand.hpp's native-state note.
-    struct OutlinerBinding
+    //
+    // Named SceneEditBinding rather than OutlinerBinding since slice 4: the
+    // Inspector's Add/Remove Component are structural edits too and share it.
+    struct SceneEditBinding
     {
         Arcane::RegistryStateCommand::SnapshotFn snapshot;
         Arcane::RegistryStateCommand::RestoreFn  restore;
@@ -108,25 +111,33 @@ namespace Arcane::Editor
         bool renameFocusPending = false;
         Astra::Entity lastClicked = Astra::Entity::Invalid();
         double lastClickTime = 0.0;
+        // Latched by the row menu's "Add Component..." and consumed at panel
+        // scope one step later: ImGui cannot open a popup from inside another
+        // popup's scope.
+        bool addComponentPending = false;
     };
     void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
-                           Arcane::CommandStack& undo, const OutlinerBinding& binding,
+                           Arcane::CommandStack& undo, const SceneEditBinding& binding,
                            OutlinerState& state);
 
     // Show the selected entity's components (via Registry::InspectEntity) and edit
     // reflected fields in place; unsupported types render read-only. Each field
     // edit gesture is bracketed into `undo` (Begin+SnapshotComponent on first
     // activation, Commit on release-after-edit, Cancel on a pure click) so every
-    // Inspector edit becomes a Ctrl+Z/Y-undoable step -- but ONLY when `editMode`
-    // is true. While Play is running, `editMode` is false and the visitor's stack
+    // Inspector edit becomes a Ctrl+Z/Y-undoable step -- but ONLY when
+    // `binding.editMode` is true. While Play is running, it is false and the visitor's stack
     // pointer is left null, so the gesture bracketing fully no-ops (no Begin, no
     // Commit/Cancel): a play-time edit must not write against the live simulating
     // registry through the Edit-mode undo stack (Stop's Runtime::RestoreRegistry
     // swaps the registry back but does not touch the stack, so a stale entry here
     // would let a later Ctrl+Z overwrite the restored value with play-time bytes).
+    // `binding` also carries the registry snapshot/restore seam, which is what
+    // makes Add/Remove Component (structural, whole-registry memento) possible
+    // from this panel -- the field-edit path above still uses the fine-grained
+    // ComponentEditCommand gestures.
     // `project` (may be null) resolves Guid asset-ref fields to display names and
     // feeds the pick popup; null renders asset refs read-only-with-guid.
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo, bool editMode,
+                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
                             const Arcane::Project* project);
 }

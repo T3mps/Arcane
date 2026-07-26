@@ -302,12 +302,12 @@ namespace Arcane::Editor
 
         // Structural-edit binding: whole-registry snapshot/restore through the
         // SAME Runtime the resolver reads, so the memento survives registry swaps.
-        m_outlinerBinding.snapshot = [rt = &*m_runtime]() -> std::vector<std::byte>
+        m_editBinding.snapshot = [rt = &*m_runtime]() -> std::vector<std::byte>
         {
             auto r = rt->SnapshotRegistry();
             return r.IsOk() ? std::move(*r) : std::vector<std::byte>{};
         };
-        m_outlinerBinding.restore = [rt = &*m_runtime](std::span<const std::byte> bytes)
+        m_editBinding.restore = [rt = &*m_runtime](std::span<const std::byte> bytes)
         {
             return rt->RestoreRegistry(bytes);
         };
@@ -1393,11 +1393,11 @@ namespace Arcane::Editor
 
             m_selection.Prune([reg = &m_runtime->Registry()](Astra::Entity e)
                               { return reg->IsValid(e); });
-            m_outlinerBinding.editMode = !m_play.IsPlaying();
+            m_editBinding.editMode = !m_play.IsPlaying();
             Arcane::Editor::DrawOutlinerPanel(m_runtime->Registry(), m_selection,
-                                              *m_undo, m_outlinerBinding, m_outliner);
+                                              *m_undo, m_editBinding, m_outliner);
             Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
-                                               !m_play.IsPlaying(), m_runtime->CurrentProject());
+                                               m_editBinding, m_runtime->CurrentProject());
 
             // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
             // composited into the viewport texture above -- not the editor context.)
