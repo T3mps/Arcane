@@ -171,16 +171,17 @@ namespace Arcane
 
                 SeedCB sc{};
                 const std::size_t idCount = std::min(p.selectedIds.size(), kMaxSelectedOutlineIds);
-                if (p.selectedIds.size() > kMaxSelectedOutlineIds)
+                if (p.selectedIds.size() > kMaxSelectedOutlineIds && !m_warnedOverflow)
                 {
-                    static bool s_warnedOverflow = false;
-                    if (!s_warnedOverflow)
-                    {
-                        s_warnedOverflow = true;
-                        ARC_WARN("SelectionOutline: {} selected ids exceeds the {} the seed CB holds -- "
-                                 "outlining the first {}", p.selectedIds.size(),
-                                 kMaxSelectedOutlineIds, kMaxSelectedOutlineIds);
-                    }
+                    // Per-INSTANCE, not process-wide: a process can host more than
+                    // one outline (a second viewport, a tool window, or just the
+                    // next one after a device reset), and a function-local static
+                    // would silence every instance after the first ever warned --
+                    // so the one that actually overflowed could report nothing.
+                    m_warnedOverflow = true;
+                    ARC_WARN("SelectionOutline: {} selected ids exceeds the {} the seed CB holds -- "
+                             "outlining the first {}", p.selectedIds.size(),
+                             kMaxSelectedOutlineIds, kMaxSelectedOutlineIds);
                 }
                 sc.selectedCount = static_cast<uint32_t>(idCount);
                 for (std::size_t i = 0; i < idCount; ++i)
@@ -492,6 +493,10 @@ namespace Arcane
             // hash (format may vary) -- mirrors v1's per-target pipeline cache.
             std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_compositePipelines;
             uint64_t                   m_pipelineGeneration = 0;
+            // Latched once per instance when a selection exceeds the seed CB's
+            // id capacity, so the warning names the overflow without spamming
+            // every frame of a large selection.
+            bool                       m_warnedOverflow = false;
 
             // Owned distance-field targets: seed pass writes m_seed0, JFA ping-pongs
             // between m_ping[0]/m_ping[1]; m_field points at the last-written one.
