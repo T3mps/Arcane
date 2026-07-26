@@ -393,6 +393,79 @@ namespace Arcane::Editor
                     [&] { return Arcane::Edit::DeleteEntities(registry, doomed) > 0; }))
                 sel.Clear();
         }
+
+        // Popup id shared by the Inspector's "+ Add Component" button and the
+        // Outliner row menu's "Add Component...". Both open it at their own
+        // panel-window scope, so the id resolves identically at both sites.
+        constexpr const char* kAddComponentPopup = "##addcomponent";
+
+        // The searchable Add Component popup: draws the catalog, applies the
+        // pick as ONE undo step over the whole selection. The caller opens it
+        // with ImGui::OpenPopup(kAddComponentPopup) and then calls this every
+        // frame at the same id-stack level.
+        //
+        // One popup is open at a time, so a function-local search buffer serves
+        // both call sites (same rationale as the asset-ref pick popup below).
+        void DrawAddComponentPopup(Astra::Registry& registry,
+                                   const std::vector<Astra::Entity>& selection,
+                                   Arcane::CommandStack& undo,
+                                   const SceneEditBinding& binding)
+        {
+            static char s_search[64] = {};
+            const Astra::ComponentDescriptor* chosen = nullptr;
+
+            if (ImGui::BeginPopup(kAddComponentPopup))
+            {
+                if (ImGui::IsWindowAppearing())
+                {
+                    s_search[0] = '\0';
+                    ImGui::SetKeyboardFocusHere();
+                }
+                ImGui::SetNextItemWidth(260.0f);
+                ImGui::InputTextWithHint("##compsearch", "Search...",
+                                         s_search, sizeof(s_search));
+                ImGui::Separator();
+
+                const std::vector<ComponentCatalogEntry> entries =
+                    BuildComponentCatalog(registry, selection, s_search);
+                if (entries.empty())
+                {
+                    ImGui::TextDisabled("no matching components");
+                }
+                else
+                {
+                    ImGui::BeginChild("##complist", ImVec2(260.0f, 260.0f));
+                    for (const ComponentCatalogEntry& e : entries)
+                    {
+                        // missingCount == 0 means every selected entity already
+                        // carries it, so the add would be a no-op. Shown
+                        // disabled rather than hidden: "you already have this"
+                        // reads better than a row that silently vanishes.
+                        const bool addable = e.missingCount > 0;
+                        if (!addable)
+                            ImGui::BeginDisabled();
+                        if (ImGui::Selectable(e.typeName.c_str()) && addable)
+                            chosen = e.desc;
+                        if (!addable)
+                            ImGui::EndDisabled();
+                    }
+                    ImGui::EndChild();
+                }
+
+                if (chosen)
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            // Applied OUTSIDE the popup scope: the mutation invalidates the
+            // catalog vector the loop above is still holding.
+            if (chosen)
+            {
+                const Astra::ComponentDescriptor& desc = *chosen;
+                ApplyStructural(undo, binding, "Add Component",
+                    [&] { return Arcane::Edit::AddComponent(registry, selection, desc) > 0; });
+            }
+        }
     }
 
     void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
@@ -1056,6 +1129,18 @@ namespace Arcane::Editor
             ApplyStructural(undo, binding, "Remove Component",
                 [&] { return Arcane::Edit::RemoveComponent(registry, targets, desc) > 0; });
         }
+
+        // Bottom of the panel, full width -- the UE/Unity placement.
+        ImGui::Separator();
+        if (!binding.editMode)
+            ImGui::BeginDisabled();
+        if (ImGui::Button(ICON_LC_PLUS " Add Component", ImVec2(-FLT_MIN, 0.0f)))
+            ImGui::OpenPopup(kAddComponentPopup);
+        if (!binding.editMode)
+            ImGui::EndDisabled();
+        // Drawn unconditionally at window scope: BeginPopup is a no-op until
+        // the button above (or a previous frame's click) opened it.
+        DrawAddComponentPopup(registry, sel.Entities(), undo, binding);
 
         ImGui::End();
     }
