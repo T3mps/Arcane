@@ -23,6 +23,16 @@
 - **Contrast is already verified**, do not re-derive: coral `#f1949f` on `--surface-2 #10151f` = 8.2:1; `#120e04` on gold `#f0c869` = 12.1:1; `--text-muted #8593aa` on `#10151f` = 5.9:1. All pass AA. If you change a colour, re-measure.
 - **Window minimum is 800x680**, so the project grid must reflow (`auto-fill`/`minmax`), never a hardcoded `repeat(3, 1fr)`.
 - Run all `npm` commands from `Arcane/Hub/`. `node_modules` is already installed.
+- **Never name a variable `state` in a `.svelte` file.** Diagnosed during
+  execution: `let state = $state<HubState>(...)` makes svelte2tsx resolve
+  `$state` as a legacy store-subscription of the variable `state`, so
+  `npm run check` reports 6 bogus errors ("Block-scoped variable '$state' used
+  before its declaration", "Untyped function calls may not accept type
+  arguments"). The runtime compiler picks runes mode correctly, which is why the
+  app runs fine and this is invisible until you typecheck. The Hub's current
+  `+page.svelte` has exactly this bug; **Task 2 renames it to `hub`**, and
+  Task 10 keeps that name. Verified: the rename alone takes svelte-check from
+  6 errors to 0.
 
 ## File Structure
 
@@ -247,10 +257,14 @@ Run: `cd Arcane/Hub && npm test`
 Expected: PASS — 17 tests across 3 suites (5 `isCompatible`, 6 `filterProjects`,
 6 `coverFor`), exit code 0.
 
-- [ ] **Step 6: Verify typecheck is clean**
+- [ ] **Step 6: Verify typecheck introduces nothing new**
 
 Run: `cd Arcane/Hub && npm run check`
-Expected: `svelte-check found 0 errors and 0 warnings`.
+Expected: **6 errors, all in `src/routes/+page.svelte` lines 10-21**, all
+pre-existing and none in the files this task created. They are the
+`state`/`$state` naming bug described in Global Constraints and are fixed in
+Task 2. Confirm no error names `format.ts`, `format.test.ts`, or
+`vitest.config.ts`; if one does, that is yours to fix.
 
 - [ ] **Step 7: Commit**
 
@@ -395,15 +409,51 @@ In `Arcane/Hub/src/routes/+page.svelte`, add this as the first line of the exist
   import "$lib/theme.css";
 ```
 
-- [ ] **Step 5: Verify it builds and the fonts resolve**
+- [ ] **Step 5: Fix the `state`/`$state` typecheck bug**
+
+Still in `Arcane/Hub/src/routes/+page.svelte`, rename the `state` variable to
+`hub`. See Global Constraints for why: a variable named `state` makes
+svelte2tsx read the `$state` rune as a store-subscription, producing 6 bogus
+`npm run check` errors. There are five occurrences. Line 10 becomes:
+
+```ts
+  // NOT `state`: a variable of that name makes svelte2tsx parse the `$state`
+  // rune as a legacy store-subscription and svelte-check reports 6 phantom
+  // errors. The runtime compiler is unaffected, so this only shows up on
+  // typecheck.
+  let hub = $state<HubState>({ recents: [], engines: [] });
+```
+
+Then update its four readers:
+
+```ts
+    hub = await loadState();
+```
+```ts
+    if (!selectedEngine || !hub.engines.some((e) => e.id === selectedEngine!.id)) {
+      selectedEngine = hub.engines[0] ?? null;
+    }
+    suggestion = hub.engines.length === 0 ? await suggestEngine() : null;
+```
+
+and in the markup, every `state.engines` becomes `hub.engines` and every
+`state.recents` becomes `hub.recents`.
+
+Verify none remain: `grep -n '\bstate\.' src/routes/+page.svelte` must print
+nothing, and `grep -c 'let state' src/routes/+page.svelte` must print `0`.
+
+- [ ] **Step 6: Verify it builds, typechecks clean, and the fonts resolve**
 
 Run: `cd Arcane/Hub && npm run check && npm run build`
-Expected: svelte-check reports 0 errors; `vite build` completes; `build/_app/` exists.
+Expected: **`svelte-check found 0 errors and 0 warnings`** — the 6 pre-existing
+errors are gone as of Step 5. This is the first task whose gate is genuinely
+clean, and every later task must keep it that way. `vite build` completes;
+`build/_app/` exists.
 
 Run: `ls Arcane/Hub/build/fonts`
 Expected: the four font files were copied through by adapter-static.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 # The svg deletions were already staged by `git rm` in Step 2.
@@ -1181,7 +1231,10 @@ Replace the entire contents of `Arcane/Hub/src/routes/+page.svelte`:
     type HubState, type EngineEntry, type RecentProject,
   } from "$lib/api";
 
-  let state = $state<HubState>({ recents: [], engines: [] });
+  // NOT `state` -- see Global Constraints. A variable of that name makes
+  // svelte2tsx read the `$state` rune as a legacy store-subscription, and
+  // svelte-check reports 6 phantom errors while the app still runs fine.
+  let hub = $state<HubState>({ recents: [], engines: [] });
   let selectedEngine = $state<EngineEntry | null>(null);
   let suggestion = $state<EngineEntry | null>(null);
   let error = $state("");
@@ -1189,19 +1242,19 @@ Replace the entire contents of `Arcane/Hub/src/routes/+page.svelte`:
   let view = $state<View>("projects");
 
   async function refresh() {
-    state = await loadState();
-    if (!selectedEngine || !state.engines.some((e) => e.id === selectedEngine!.id)) {
-      selectedEngine = state.engines[0] ?? null;
+    hub = await loadState();
+    if (!selectedEngine || !hub.engines.some((e) => e.id === selectedEngine!.id)) {
+      selectedEngine = hub.engines[0] ?? null;
     }
     // Adjacency is a suggestion for the dev loop, never an assumption.
-    suggestion = state.engines.length === 0 ? await suggestEngine() : null;
+    suggestion = hub.engines.length === 0 ? await suggestEngine() : null;
   }
 
   onMount(async () => {
     await refresh();
     // Land on Engines when there is nothing to launch with -- the one thing the
     // user must do first. Replaces the old force-showing engines section.
-    if (state.engines.length === 0) view = "engines";
+    if (hub.engines.length === 0) view = "engines";
   });
 
   async function guard(fn: () => Promise<unknown>) {
@@ -1246,11 +1299,11 @@ Replace the entire contents of `Arcane/Hub/src/routes/+page.svelte`:
         <p class="error" role="alert">{error}</p>
       {/if}
       {#if view === "projects"}
-        <ProjectsView recents={state.recents} engine={selectedEngine} {busy}
+        <ProjectsView recents={hub.recents} engine={selectedEngine} {busy}
                       onLaunch={launch} onForget={(p) => guard(() => forgetProject(p.path))}
                       onOpen={addProject} onCreate={makeProject} />
       {:else}
-        <EnginesView engines={state.engines} selected={selectedEngine} {suggestion} {busy}
+        <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion} {busy}
                      onRegister={addEngine}
                      onRegisterPath={(path) => guard(() => registerEngine(path))}
                      onSelect={(e) => (selectedEngine = e)}
