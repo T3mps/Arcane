@@ -683,6 +683,11 @@ namespace Arcane::Editor
                         }
                         if (ImGui::MenuItem("Rename", "F2"))
                             BeginRename(state, row.entity, row.label);
+                        // ImGui cannot open a popup from inside another popup's
+                        // scope, so the request is latched and consumed at panel
+                        // scope below (the standard deferred-OpenPopup pattern).
+                        if (ImGui::MenuItem("Add Component..."))
+                            state.addComponentPending = true;
                         if (ImGui::MenuItem("Delete", "Del"))
                         {
                             if (!sel.Contains(row.entity))
@@ -778,6 +783,17 @@ namespace Arcane::Editor
             }
             ImGui::EndPopup();
         }
+
+        // Latched by the row menu one step earlier -- see the comment there.
+        // The right-clicked row is already in the selection (the row's
+        // right-click handler selects it when it was outside), so the popup
+        // operates on exactly what the user aimed at.
+        if (state.addComponentPending)
+        {
+            state.addComponentPending = false;
+            ImGui::OpenPopup(kAddComponentPopup);
+        }
+        DrawAddComponentPopup(registry, sel.Entities(), undo, binding);
 
         std::size_t total = 0;
         for (Astra::Entity e : registry.GetEntityManager())
