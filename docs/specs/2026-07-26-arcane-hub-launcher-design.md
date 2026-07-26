@@ -245,6 +245,14 @@ Slice 1 is independently valuable: it closes the hole even if the Hub slips.
    are needed and auto-update stays simple. The already-chosen state directory
    `%APPDATA%\Arcane\hub\` sits naturally beside that.
 
+   **Source location (user, 2026-07-26): `Arcane/Hub/`, NOT `Tools/`.**
+   `Tools/` is slated for deletion — it holds the retired ImGui editor prototype
+   — so nothing new goes there. The Hub is an Arcane product and lives beside
+   `Arcane/ArcaneEditor/` and `Arcane/Loom/`. It is NOT a member of
+   `Arcane.slnx` (different toolchain: Rust + node, built by its own CI job).
+   `Tools/setup-wizard/` is read as a TEMPLATE and copied from, never extended
+   in place; it disappears with `Tools/`.
+
    **Consequences that change the design:**
 
    - **Engine discovery inverts.** The earlier draft defaulted `engines.json` to
