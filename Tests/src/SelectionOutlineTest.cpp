@@ -212,6 +212,39 @@ namespace
         return tex;
     }
 
+    // Two axis-aligned rects with INDEPENDENT x/y ranges, so callers can place
+    // them side by side (MakeIdTexture2Rects only does squares, always on the
+    // diagonal, because it reuses one lo/hi pair for both axes). Same desc and
+    // upload path as MakeIdTexture2Rects.
+    nvrhi::TextureHandle MakeIdTextureRectsXY(nvrhi::IDevice* nv, uint32_t size,
+                                              uint32_t id1, uint32_t x1lo, uint32_t x1hi, uint32_t y1lo, uint32_t y1hi,
+                                              uint32_t id2, uint32_t x2lo, uint32_t x2hi, uint32_t y2lo, uint32_t y2hi)
+    {
+        auto desc = nvrhi::TextureDesc()
+            .setWidth(size).setHeight(size)
+            .setFormat(nvrhi::Format::R32_UINT)
+            .setInitialState(nvrhi::ResourceStates::ShaderResource)
+            .setKeepInitialState(true)
+            .setDebugName("SelectionOutline.IdTexXY");
+        nvrhi::TextureHandle tex = nv->createTexture(desc);
+        REQUIRE(tex != nullptr);
+
+        std::vector<uint32_t> ids(static_cast<size_t>(size) * size, 0u);
+        for (uint32_t y = y1lo; y < y1hi; ++y)
+            for (uint32_t x = x1lo; x < x1hi; ++x)
+                ids[static_cast<size_t>(y) * size + x] = id1;
+        for (uint32_t y = y2lo; y < y2hi; ++y)
+            for (uint32_t x = x2lo; x < x2hi; ++x)
+                ids[static_cast<size_t>(y) * size + x] = id2;
+
+        nvrhi::CommandListHandle upload = nv->createCommandList();
+        upload->open();
+        upload->writeTexture(tex, 0, 0, ids.data(), static_cast<size_t>(size) * sizeof(uint32_t));
+        upload->close();
+        nv->executeCommandList(upload);
+        return tex;
+    }
+
     // Read a BGRA8_UNORM target into a row-major vector<uint8_t> (4/px, BGRA order),
     // handling the staging row pitch.
     std::vector<uint8_t> ReadBgra(nvrhi::IDevice* nv, nvrhi::ITexture* tex, uint32_t size)
@@ -413,11 +446,12 @@ namespace
     }
 
     // Touching-rect union: id=5 and id=7 share an edge at 1x x=24 (2x x=48), both
-    // selected, no hover. Reuses MakeIdTexture2Rects (still two SQUARE rects, same
-    // 16x16 shape as the other composite tests) but places id=7 flush against id=5
-    // instead of leaving a gap, so this pins the property the disjoint multi-select
-    // tests above cannot: the shared interior edge must NOT seed (no seam), while
-    // the union's true outer edges still do. A regression from the union-aware
+    // selected, no hover. Uses MakeIdTextureRectsXY (two SQUARE rects, same 16x16
+    // shape as the other composite tests, but with independent x/y ranges) to
+    // place id=7 flush against id=5's RIGHT side -- same y range, no gap -- rather
+    // than diagonally, so this pins the property the disjoint multi-select tests
+    // above cannot: the shared interior edge must NOT seed (no seam), while the
+    // union's true outer edges still do. A regression from the union-aware
     // boundary test (chosenIsSelection => IsSelected(neighbour)) back to a
     // single-id neighbour comparison would seed the shared edge from BOTH sides,
     // painting a spurious amber seam at x=23/x=24 -- exactly what this test catches.
@@ -436,13 +470,19 @@ namespace
         auto outline = Arcane::SelectionOutline::Create(nv, *shaders, kSize, kSize);
         REQUIRE(outline != nullptr);
 
-        // Two ADJACENT rects, BOTH selected: id=5 at 2x [16,48)^2 -> 1x [8,24)^2;
-        // id=7 at 2x [48,80)^2 -> 1x [24,40)^2. They abut exactly at 1x x=24
-        // (2x x=48) with NO gap -- unlike CheckSelectionCompositeMultiSelect's
-        // disjoint rects (id=7 there starts at 2x lo=80), this pair shares a real
-        // silhouette edge.
+        // Two ADJACENT rects, BOTH selected, with the SAME y range so they abut
+        // along a full edge rather than only at a corner (MakeIdTexture2Rects
+        // can't express this -- it fills squares on the diagonal, one lo/hi pair
+        // for both axes). id=5 at 2x x[16,48) y[16,48) -> 1x x[8,24) y[8,24);
+        // id=7 at 2x x[48,80) y[16,48) -> 1x x[24,40) y[8,24). They abut exactly
+        // at 1x x=24 (2x x=48) with NO gap, sharing the full y=[8,24) run --
+        // unlike CheckSelectionCompositeMultiSelect's disjoint rects (id=7 there
+        // is also offset in y), this pair shares a real silhouette edge, and the
+        // probe row y=15 lies inside both rects' y range.
         nvrhi::TextureHandle idTex =
-            MakeIdTexture2Rects(nv, kSize * 2u, 5u, 16u, 48u, 7u, 48u, 80u);
+            MakeIdTextureRectsXY(nv, kSize * 2u,
+                                 5u, 16u, 48u, 16u, 48u,
+                                 7u, 48u, 80u, 16u, 48u);
 
         auto targetDesc = nvrhi::TextureDesc()
             .setWidth(kSize).setHeight(kSize)

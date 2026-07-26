@@ -36,12 +36,12 @@ namespace
             // Arcane.dll) would be invisible to GetComponent<EntityInfo> called
             // from this module.
             //
-            // Re-pin EVERY construction, not once: any Arcane::Runtime built
-            // without the shared context installs ITS context into Arcane.dll's
-            // slot, so a one-shot pin silently goes stale and Edit:: calls then
-            // resolve component IDs against the wrong context (symptom: the op
-            // reports 0 changes). Cheap insurance -- the Runtime is a throwaway
-            // and the slot persists after it is destroyed.
+            // Belt-and-braces: test_main pins Arcane.dll's TypeContext slot once
+            // before any test runs, which is the real guarantee (per-type IDs are
+            // cached in per-module magic statics and never re-resolve, so a late
+            // pin cannot repair an already-cached id). Re-pinning here only keeps
+            // the slot pointed at the shared context; never install an unshared
+            // one anywhere in this suite.
             Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
             RegisterSceneComponents(reg);
         }

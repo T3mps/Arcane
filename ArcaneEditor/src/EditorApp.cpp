@@ -840,8 +840,17 @@ namespace Arcane::Editor
                                                        (!shift && snap.ScancodeDown(kScY)));
 
                     const bool active = !m_play.IsPlaying() && !snap.wantCaptureKeyboard;
-                    if (active && undoKeyDown && !m_prevUndoKeyDown) m_undo->Undo();
-                    if (active && redoKeyDown && !m_prevRedoKeyDown) m_undo->Redo();
+                    // Also refuse while a transaction is open (e.g. a live gizmo drag):
+                    // CommandStack::Undo()/Redo() have no open-transaction guard, and this
+                    // keybind block runs earlier in the frame than the gizmo block below,
+                    // so an Undo here would apply the previous entry while the drag's own
+                    // "Gizmo" transaction is still holding pre-undo `before` bytes -- its
+                    // later Commit then pushes a transaction whose `before` predates the
+                    // undo and clobbers the redo entry. Ctrl is also the gizmo SNAP
+                    // modifier, so Ctrl-held drags are the normal case, not an edge case.
+                    const bool noOpenTxn = !m_undo->InTransaction();
+                    if (active && noOpenTxn && undoKeyDown && !m_prevUndoKeyDown) m_undo->Undo();
+                    if (active && noOpenTxn && redoKeyDown && !m_prevRedoKeyDown) m_undo->Redo();
                     m_prevUndoKeyDown = undoKeyDown;
                     m_prevRedoKeyDown = redoKeyDown;
                 }
