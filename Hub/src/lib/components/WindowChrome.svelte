@@ -16,20 +16,22 @@
   <img class="mark" src="/logo.png" alt="" />
   <span class="title display">Arcane Hub</span>
   <div class="ctrls">
+    <!-- 12px glyphs in a 12-unit viewBox: Windows draws its own caption marks
+         at 10-12px, so anything smaller reads as a scaled-down imitation. -->
     <button class="ctrl" type="button" aria-label="Minimize" onclick={() => win.minimize()}>
-      <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
-        <rect x="1" y="5" width="9" height="1" fill="currentColor" />
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+        <rect x="1" y="5.5" width="10" height="1" fill="currentColor" />
       </svg>
     </button>
     <button class="ctrl" type="button" aria-label="Maximize" onclick={() => win.toggleMaximize()}>
-      <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
-        <rect x="1.5" y="1.5" width="8" height="8" fill="none"
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+        <rect x="1.5" y="1.5" width="9" height="9" fill="none"
               stroke="currentColor" stroke-width="1" />
       </svg>
     </button>
     <button class="ctrl close" type="button" aria-label="Close" onclick={() => win.close()}>
-      <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
-        <path d="M1 1l9 9M10 1l-9 9" stroke="currentColor" stroke-width="1.2" />
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" stroke-width="1.2" />
       </svg>
     </button>
   </div>
@@ -37,20 +39,26 @@
 </div>
 
 <style>
-  .chrome { position: sticky; top: 0; z-index: 10; height: 34px; flex: none;
-            display: flex; align-items: center; gap: 9px; padding: 0 6px 0 13px; }
+  .chrome { position: sticky; top: 0; z-index: 10; height: var(--h-titlebar); flex: none;
+            display: flex; align-items: center; gap: 11px; padding: 0 6px 0 16px; }
   /* pointer-events:none so the logo and title are part of the drag region
      rather than dead spots in the middle of it. */
-  .mark { width: 15px; height: 15px; object-fit: contain; pointer-events: none; }
-  .title { font-size: 11px; letter-spacing: .19em; color: var(--text-muted);
+  .mark { width: 20px; height: 20px; object-fit: contain; pointer-events: none; }
+  .title { font-size: 12.5px; letter-spacing: .17em; color: var(--text-muted);
            pointer-events: none; }
   .ctrls { margin-left: auto; display: flex; gap: 2px; }
-  .ctrl { width: 34px; height: 26px; display: grid; place-items: center;
+  /* 46x32 is the native Windows caption-button metric. Matching it makes the
+     controls land where muscle memory expects and gives a comfortable hit
+     target; the old 34x26 was noticeably under-sized against every other
+     window on the desktop. */
+  .ctrl { width: 46px; height: 32px; display: grid; place-items: center;
           background: transparent; border: 0; border-radius: 5px;
           color: var(--text-dim); cursor: default;
           transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
   .ctrl:hover { background: rgba(255, 255, 255, .07); color: var(--text); }
   .close:hover { background: color-mix(in srgb, var(--fail-accent) 85%, transparent); color: #fff; }
+  /* Neutral hairline. This was a gold gradient spanning the full titlebar --
+     a permanent band of colour across the top of every screen. */
   .rule { position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
-          background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--gold) 50%, transparent), transparent); }
+          background: linear-gradient(90deg, transparent, var(--border), transparent); }
 </style>

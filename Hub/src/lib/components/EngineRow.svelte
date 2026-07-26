@@ -23,18 +23,20 @@
 </div>
 
 <style>
-  .row { display: flex; align-items: center; gap: 12px; padding: 9px 11px;
+  .row { display: flex; align-items: center; gap: 14px; padding: 13px 14px;
          border: 1px solid var(--border-soft); border-radius: var(--r-panel);
          background: var(--surface); margin-bottom: 8px;
          transition: border-color var(--dur) var(--ease); }
-  .row:hover { border-color: #2d3750; }
-  /* Selection is the gold rail, same vocabulary as the sidebar's active item. */
-  .sel { box-shadow: inset 2px 0 0 var(--gold); }
+  .row:hover { border-color: var(--border-hover); }
+  /* Selection is a lighter surface, same vocabulary as the sidebar's active
+     item. `.row.sel`, not bare `.sel`: `.row` sets background at equal
+     specificity, so a bare class would win only by declaration order. */
+  .row.sel { background: var(--surface-sel); border-color: var(--border-hover); }
   .pick { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px;
           background: none; border: 0; padding: 0; text-align: left;
           font: inherit; color: inherit; cursor: default; }
-  .nm { font-size: 13px; font-weight: 600; }
-  .path { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-dim);
+  .nm { font-size: 14px; font-weight: 600; }
+  .path { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .abi { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); flex: none; }
+  .abi { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); flex: none; }
 </style>

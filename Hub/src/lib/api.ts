@@ -1,12 +1,15 @@
 // Typed wrappers over the Rust commands. Keeping the invoke strings in one
 // place means a renamed command breaks here, not in a component.
 import { invoke } from "@tauri-apps/api/core";
+import type { ProjectView } from "$lib/format";
 
 export type RecentProject = {
   path: string;
   name: string;
   lastOpenedUtc: string;
   engineAbi: number;
+  /** Pinned engine id, or null to follow the Hub default. See resolveEngine. */
+  engineId: string | null;
 };
 
 export type EngineEntry = {
@@ -19,17 +22,52 @@ export type EngineEntry = {
 export type HubState = {
   recents: RecentProject[];
   engines: EngineEntry[];
+  /**
+   * Problems found while loading state -- currently, a state file that existed
+   * but could not be parsed and has been set aside. Recovering from that used
+   * to be silent, so the user just found an empty project list.
+   */
+  warnings: string[];
+};
+
+/** Mirrors `settings::Settings`. Every field is read somewhere. */
+export type Settings = {
+  /** Starting directory for the New Project and Open dialogs; "" = OS default. */
+  defaultProjectDir: string;
+  /** Close the Hub once a project launches. Read in `launch()`. */
+  closeAfterLaunch: boolean;
+  /**
+   * Project list layout. Rust normalises this through `clean_view` on both
+   * load and save, so it is always one of the two -- never a stray string.
+   */
+  projectView: ProjectView;
 };
 
 export const loadState = () => invoke<HubState>("load_state");
 export const registerEngine = (path: string) => invoke<EngineEntry>("register_engine", { path });
 export const forgetEngine = (path: string) => invoke<void>("forget_engine", { path });
+/** Hub state only -- this never deletes the project on disk. */
 export const forgetProject = (path: string) => invoke<void>("forget_project", { path });
+/** Hub state only -- same contract as forgetProject, for the whole list. */
+export const clearRecents = () => invoke<void>("clear_recents");
+/** Pin a project to an engine, or pass null to send it back to the default. */
+export const setProjectEngine = (path: string, engineId: string | null) =>
+  invoke<void>("set_project_engine", { path, engineId });
 export const suggestEngine = () => invoke<EngineEntry | null>("suggest_engine");
 
+export const loadSettings = () => invoke<Settings>("load_settings");
+export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });
+/** The configured start folder, or null when unset or no longer on disk. */
+export const defaultDialogDir = () => invoke<string | null>("default_dialog_dir");
+export const hubDataDir = () => invoke<string>("hub_data_dir");
+export const revealHubDataDir = () => invoke<void>("reveal_hub_data_dir");
+export const hubVersion = () => invoke<string>("hub_version");
+
+/** `projectPath` is a `.arcproj` file or a project folder; the engine takes both. */
 export const openProject = (projectPath: string, enginePath: string) =>
   invoke<void>("open_project", { projectPath, enginePath });
 
+/** Returns the path of the `.arcproj` it wrote, ready to hand to openProject. */
 export const createProject = (dir: string, name: string, enginePath: string) =>
   invoke<string>("create_project", { dir, name, enginePath });
 
