@@ -6,6 +6,12 @@
   const win = getCurrentWindow();
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- The drag region is chrome, not a control. Double-click-to-maximize is a
+     redundant MOUSE convenience for an action already exposed on the focusable
+     Maximize button below, so there is nothing a keyboard user loses and no
+     sensible ARIA role for "titlebar". Svelte's rule cannot see that the
+     behaviour is duplicated, hence the explicit suppression. -->
 <div class="chrome" data-tauri-drag-region ondblclick={() => win.toggleMaximize()}>
   <img class="mark" src="/logo.png" alt="" />
   <span class="title display">Arcane Hub</span>
