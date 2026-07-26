@@ -25,6 +25,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -864,6 +865,96 @@ namespace Arcane::Editor
                 }
             }
 
+            // UE parity: a multi-selection gets NO drag widget and ignores every
+            // non-committed change. Both belts are Unreal's, in
+            // ComponentTransformDetails.cpp -- `.AllowSpin(SelectedObjects.Num()
+            // == 1)` (:505/:551/:628) and, at :1248, "Ignore interactive changes
+            // when we have more than one selected object". A single selection
+            // keeps the drag exactly as before.
+            [[nodiscard]] bool Multi() const noexcept
+            { return selection && selection->size() > 1; }
+
+            [[nodiscard]] Arcane::Editor::FieldMixedMask MixedFor(const Astra::FieldInfo& f) const
+            {
+                if (!registry || !selection || !descriptor)
+                    return {};
+                return Arcane::Editor::ComputeFieldMixed(*registry, *selection,
+                                                         descriptor->hash, f);
+            }
+
+            // Single-shot fan-out for the multi-select path: the commit is one
+            // discrete event (no widget gesture spanning frames to bracket), so
+            // Begin + snapshot-all + apply + Commit happen in one call. Commit()
+            // closes the stack before the shared EndGesture epilogue runs, whose
+            // Commit/Cancel on a closed stack are no-ops.
+            template<typename Fn>
+            void ApplyImmediate(const std::string& field, void* primaryInstance, Fn&& apply)
+            {
+                if (stack)
+                {
+                    stack->Begin("Edit " + typeName + "." + field);
+                    ForEachTarget(primaryInstance,
+                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
+                }
+                ForEachTarget(primaryInstance, [&](Astra::Entity, void* d) { apply(d); });
+                if (stack) stack->Commit();
+            }
+
+            // One multi-select scalar row: `count` TEXT-ENTRY boxes (never a
+            // drag), each rendered BLANK when that component differs across the
+            // selection -- Unreal's "unset means multiple differing values"
+            // (ComponentTransformDetails.cpp:1026). Returns the index of the
+            // component the user COMMITTED this frame, or -1 for none; typing
+            // alone writes nothing. Laid out like ImGui's own InputScalarN.
+            int MultiScalarRow(const std::string& label, int count, const float* vals,
+                               const Arcane::Editor::FieldMixedMask& mask, float& outValue)
+            {
+                int committed = -1;
+                ImGui::BeginGroup();
+                ImGui::PushID(label.c_str());
+                ImGui::PushMultiItemsWidths(count, ImGui::CalcItemWidth());
+                for (int i = 0; i < count; ++i)
+                {
+                    ImGui::PushID(i);
+                    if (i > 0)
+                        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+
+                    char buf[64];
+                    if (mask.Test(i))
+                        buf[0] = '\0';                       // differs: show nothing
+                    else
+                        std::snprintf(buf, sizeof(buf), "%.3f", vals[i]);
+
+                    const bool entered = ImGui::InputText(
+                        "", buf, sizeof(buf),
+                        ImGuiInputTextFlags_CharsDecimal |
+                        ImGuiInputTextFlags_CharsScientific |
+                        ImGuiInputTextFlags_EnterReturnsTrue);
+                    // Enter, or focus lost after an edit: the two ways ImGui says
+                    // "the user is done with this box".
+                    if ((entered || ImGui::IsItemDeactivatedAfterEdit()) && buf[0] != '\0')
+                    {
+                        char* end = nullptr;
+                        const float parsed = std::strtof(buf, &end);
+                        if (end != buf)
+                        {
+                            outValue = parsed;
+                            committed = i;
+                        }
+                    }
+                    ImGui::PopID();
+                    ImGui::PopItemWidth();
+                }
+                ImGui::PopID();
+                if (!label.empty())
+                {
+                    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+                    ImGui::TextUnformatted(label.c_str());
+                }
+                ImGui::EndGroup();
+                return committed;
+            }
+
             void EndGesture()
             {
                 if (!stack) return;
@@ -898,7 +989,17 @@ namespace Arcane::Editor
                     case Arcane::Editor::FieldKind::Bool:
                     {
                         bool v = f.Get<bool>(instance);
+                        // ImGui's native tri-state. ImGuiItemFlags_MixedValue is
+                        // Checkbox-ONLY in our vendored ImGui (imgui_internal.h:984),
+                        // which is why the numeric kinds below blank by hand.
+                        // Clicking a mixed checkbox resolves the whole selection to
+                        // one value -- ImGui's documented behaviour, and UE's.
+                        const bool boolMixed = Multi() && MixedFor(f).Any();
+                        if (boolMixed)
+                            ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
                         bool changed = ImGui::Checkbox(label.c_str(), &v);
+                        if (boolMixed)
+                            ImGui::PopItemFlag();
                         BeginGestureIfActivated(label, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -908,6 +1009,18 @@ namespace Arcane::Editor
                     case Arcane::Editor::FieldKind::Int32:
                     {
                         int v = f.Get<int32_t>(instance);
+                        if (Multi())
+                        {
+                            const float cur = static_cast<float>(v);
+                            float out = cur;
+                            if (MultiScalarRow(label, 1, &cur, MixedFor(f), out) >= 0)
+                            {
+                                const int iv = static_cast<int>(out);
+                                ApplyImmediate(label, instance, [&](void* d)
+                                               { Arcane::Editor::ApplyIntEdit(f, d, iv); });
+                            }
+                            break;
+                        }
                         bool changed = ImGui::DragInt(label.c_str(), &v);
                         BeginGestureIfActivated(label, instance);
                         if (changed)
@@ -918,6 +1031,14 @@ namespace Arcane::Editor
                     case Arcane::Editor::FieldKind::Float:
                     {
                         float v = f.Get<float>(instance);
+                        if (Multi())
+                        {
+                            float out = v;
+                            if (MultiScalarRow(label, 1, &v, MixedFor(f), out) >= 0)
+                                ApplyImmediate(label, instance, [&](void* d)
+                                               { Arcane::Editor::ApplyFloatEdit(f, d, out); });
+                            break;
+                        }
                         bool changed = ImGui::DragFloat(label.c_str(), &v, 0.1f);
                         BeginGestureIfActivated(label, instance);
                         if (changed)
@@ -928,6 +1049,18 @@ namespace Arcane::Editor
                     case Arcane::Editor::FieldKind::Vec2:
                     {
                         glm::vec2 v = f.Get<glm::vec2>(instance);
+                        if (Multi())
+                        {
+                            float out = 0.0f;
+                            // Only the COMMITTED component is written, so typing
+                            // into one blank axis leaves the others alone on every
+                            // target -- the point of per-axis mixed values.
+                            const int c = MultiScalarRow(label, 2, &v.x, MixedFor(f), out);
+                            if (c >= 0)
+                                ApplyImmediate(label, instance, [&](void* d)
+                                               { if (glm::vec2* p = f.GetPtr<glm::vec2>(d)) (*p)[c] = out; });
+                            break;
+                        }
                         bool changed = ImGui::DragFloat2(label.c_str(), &v.x, 0.1f);
                         BeginGestureIfActivated(label, instance);
                         if (changed)
@@ -938,6 +1071,15 @@ namespace Arcane::Editor
                     case Arcane::Editor::FieldKind::Vec3:
                     {
                         glm::vec3 v = f.Get<glm::vec3>(instance);
+                        if (Multi())
+                        {
+                            float out = 0.0f;
+                            const int c = MultiScalarRow(label, 3, &v.x, MixedFor(f), out);
+                            if (c >= 0)
+                                ApplyImmediate(label, instance, [&](void* d)
+                                               { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) (*p)[c] = out; });
+                            break;
+                        }
                         bool changed = ImGui::DragFloat3(label.c_str(), &v.x, 0.1f);
                         BeginGestureIfActivated(label, instance);
                         if (changed)
