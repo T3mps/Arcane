@@ -7,6 +7,9 @@
 #include <Arcane/Base/Log.hpp>
 #include "LoomConfig.hpp"
 #include "Loom.hpp"
+#include "ProjectBoot.hpp"   // HostBoot::EngineInfoJson (the --print-engine-info probe)
+
+#include <cstdio>
 
 int main(int argc, char** argv)
 {
@@ -15,6 +18,17 @@ int main(int argc, char** argv)
     Arcane::Assert::InstallMosaicHandler();
     const LoomConfig::ParseOutcome parsed = LoomConfig::Parse(argc, argv);
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
+
+    // Same probe as the editor: identity to stdout, no window, no device. The
+    // flag lives in the SHARED LoomConfig, so a flag that parsed on both hosts
+    // but only worked on one would be a trap. Loom does NOT get the editor's
+    // no-project gate -- it hosts Sandbox.dll by default with no flags, by design.
+    if (parsed.config->printEngineInfo)
+    {
+        std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(argv[0]).c_str());
+        return 0;
+    }
+
     Loom loom(*parsed.config);
     return loom.Run();
 }

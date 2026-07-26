@@ -85,7 +85,10 @@ namespace Arcane::Editor
         }
 
         // Window title: the project name when a project is open, else the bare
-        // editor name (no --project => legacy data/-next-to-exe boot, unchanged).
+        // editor name. Since the no-project gate landed (main.cpp), a
+        // project-less session is reachable ONLY via an explicit --plugin (the
+        // engine-dev path) or a --project that failed to open -- never from a
+        // bare launch.
         std::string EditorTitle(const Arcane::Project* project)
         {
             if (project)

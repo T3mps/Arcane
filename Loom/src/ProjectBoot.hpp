@@ -5,9 +5,13 @@
 // into the two boot decisions a host makes: which input map to load, and which game
 // module to host.
 
+#include <Arcane/Base/Engine.hpp>        // BuildInfo (engine identity probe)
 #include <Arcane/Config/Config.hpp>
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (engine identity probe)
 #include <Arcane/Project/Project.hpp>
+
+#include <Json.hpp>
 
 #include <filesystem>
 #include <string>
@@ -16,6 +20,24 @@
 
 namespace Arcane::HostBoot
 {
+    // One-line JSON describing this engine build, for `--print-engine-info`.
+    //
+    // This exists so the Arcane Hub never HARDCODES a plugin ABI. A .arcproj
+    // requires `engine.abi` (ProjectManifest.hpp), so a hub that guessed it
+    // would mint stale-ABI projects the moment the engine bumps, and those
+    // crash on open. The Hub probes, then stamps whatever the engine reports.
+    //
+    // Single line on purpose: the caller reads one line from stdout. Paths use
+    // generic_string() so the Hub never has to unescape backslashes.
+    inline std::string EngineInfoJson(const std::filesystem::path& exePath)
+    {
+        nlohmann::json j;
+        j["engineAbi"] = Arcane::kGamePluginABIVersion;
+        j["build"]     = Arcane::BuildInfo();
+        j["exePath"]   = exePath.generic_string();
+        return j.dump();   // compact: no indent argument
+    }
+
     // Load the input action maps from the layered config's "input" category (engine
     // default EngineConfig/input.json, deep-merged with the project's Config/input.json).
     // Sets the "demo" base context on success. Returns false if the category is

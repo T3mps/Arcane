@@ -9,6 +9,7 @@ LoomConfig::ParseOutcome LoomConfig::Parse(int argc, char** argv)
     cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
     cli.Option("plugin",  "",            "game DLL to host (empty = host default: Loom Sandbox.dll, editor none)");
     cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
+    cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
 
     const Arcane::Cli::Result r = cli.Parse(argc, argv);
     if (!r.ok) return { std::nullopt, r.exitCode };
@@ -20,5 +21,6 @@ LoomConfig::ParseOutcome LoomConfig::Parse(int argc, char** argv)
     cfg.perf       = r.Flag("perf");
     cfg.pluginPath = r.Get("plugin");
     cfg.projectPath = r.Get("project");
+    cfg.printEngineInfo = r.Flag("print-engine-info");
     return { cfg, 0 };
 }

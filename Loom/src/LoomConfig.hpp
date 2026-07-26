@@ -17,6 +17,11 @@ struct LoomConfig
     std::string             pluginPath = "";
     std::string             projectPath = "";   // .arcproj or project folder; "" = data/-next-to-exe
 
+    // Print one line of engine-identity JSON to stdout and exit, without creating
+    // a window or device. The Arcane Hub probes this to learn the plugin ABI it
+    // must stamp into a new .arcproj -- see HostBoot::EngineInfoJson.
+    bool                    printEngineInfo = false;
+
     // Forward-declared here so it names LoomConfig::ParseOutcome and can be the
     // return type of Parse; DEFINED below (after the class closes) because its
     // std::optional<LoomConfig> member needs LoomConfig to be a complete type,
