@@ -1184,9 +1184,19 @@ namespace Arcane::Editor
                 const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
                 m_pick->RenderIdPass(m_runtime->Registry(), view);
 
+                // Every selected entity that made it into this frame's id pass.
+                // SelectionOutline caps and warns; no clamping needed here.
+                std::vector<uint32_t> selectedIds;
+                selectedIds.reserve(m_selection.Count());
+                for (Astra::Entity e : m_selection.Entities())
+                {
+                    const uint32_t id = m_pick->PassIdOf(e);
+                    if (id != 0u)
+                        selectedIds.push_back(id);
+                }
+
                 Arcane::SelectionOutline::Params op;
-                op.selectedId = m_selection.HasSelection()
-                              ? m_pick->PassIdOf(m_selection.Primary()) : 0u;
+                op.selectedIds = selectedIds;
                 op.cursorPx   = m_lastInViewport
                               ? glm::ivec2((int)m_lastViewportMouse.x, (int)m_lastViewportMouse.y)
                               : glm::ivec2(-1, -1);

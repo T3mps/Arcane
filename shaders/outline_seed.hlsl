@@ -9,14 +9,30 @@
 
 cbuffer SeedCB : register(b0)
 {
-    uint  gSelectedId;   // 0 = no selection
-    int2  gCursorPx;     // 1x viewport px; x<0 => no hover
-    uint  gSuperSample;  // id-buffer supersample factor (e.g. 2)
-    int2  gDim;          // 1x (composite) dimensions
+    uint  gSelectedCount;   // 0 = no selection
+    int2  gCursorPx;        // 1x viewport px; x<0 => no hover
+    uint  gSuperSample;     // id-buffer supersample factor (e.g. 2)
+    int2  gDim;             // 1x (composite) dimensions
     uint2 _pad;
+    // 64 ids packed 4 per register. A `uint gSelectedIds[64]` would pad each
+    // element to its own 16-byte register (1024B); uint4[16] mirrors the C++
+    // uint32_t[64] exactly. Index as gSelectedIds[i >> 2][i & 3].
+    uint4 gSelectedIds[16];
 };
 
 Texture2D<uint> gIds : register(t0);   // supersampled id buffer (ss*gDim)
+
+// Is `id` part of the selection? The selection is ONE silhouette (union), so
+// adjacent selected entities produce a single outline with no seam. Cost is
+// gSelectedCount (typically 1-3), not the 64 capacity, and background (id 0)
+// early-outs before the loop.
+bool IsSelected(uint id)
+{
+    if (id == 0u) return false;
+    [loop] for (uint i = 0u; i < gSelectedCount; ++i)
+        if (gSelectedIds[i >> 2u][i & 3u] == id) return true;
+    return false;
+}
 
 struct VSOutput { float4 pos : SV_Position; };
 
@@ -40,7 +56,7 @@ float4 ps_main(VSOutput i) : SV_Target0
     {
         int2 c = gCursorPx * ss + (ss / 2);
         hoveredId = gIds.Load(int3(c, 0));
-        if (hoveredId == gSelectedId) hoveredId = 0u;   // hovering the selection => amber only
+        if (IsSelected(hoveredId)) hoveredId = 0u;   // hovering the selection => amber only
     }
 
     // Coverage + sub-pixel centroid of each silhouette within THIS 1x pixel.
@@ -52,7 +68,7 @@ float4 ps_main(VSOutput i) : SV_Target0
     {
         uint   id  = gIds.Load(int3(base + int2(sx, sy), 0));
         float2 sub = (float2(base + int2(sx, sy)) + 0.5) / (float)ss;   // 1x-space subsample center
-        if (gSelectedId != 0u && id == gSelectedId)      { nSel++; sumSel += sub; }
+        if (IsSelected(id))                              { nSel++; sumSel += sub; }
         else if (hoveredId != 0u && id == hoveredId)     { nHov++; sumHov += sub; }
     }
 
@@ -65,8 +81,9 @@ float4 ps_main(VSOutput i) : SV_Target0
     float  tag, cov;
     float2 ctr;
     uint   chosenId;
-    if (nSel > 0 && covSel >= covHov) { tag =  1.0; cov = covSel; ctr = sumSel / (float)nSel; chosenId = gSelectedId; }
-    else if (nHov > 0)                { tag = -1.0; cov = covHov; ctr = sumHov / (float)nHov; chosenId = hoveredId; }
+    bool   chosenIsSelection;
+    if (nSel > 0 && covSel >= covHov) { tag =  1.0; cov = covSel; ctr = sumSel / (float)nSel; chosenId = 0u;        chosenIsSelection = true;  }
+    else if (nHov > 0)                { tag = -1.0; cov = covHov; ctr = sumHov / (float)nHov; chosenId = hoveredId; chosenIsSelection = false; }
     else return float4(0, 0, 0, 0);   // background: empty seed
 
     // BOUNDARY-ONLY SEEDING: keep this seed only if the chosen silhouette has an EDGE
@@ -80,7 +97,9 @@ float4 ps_main(VSOutput i) : SV_Target0
     [loop] for (int bx = -1; bx <= ss; ++bx)
     {
         int2 q = clamp(base + int2(bx, by), int2(0, 0), idMax);
-        if (gIds.Load(int3(q, 0)) != chosenId) boundary = true;
+        uint qid = gIds.Load(int3(q, 0));
+        bool inside = chosenIsSelection ? IsSelected(qid) : (qid == chosenId);
+        if (!inside) boundary = true;
     }
     if (!boundary) return float4(0, 0, 0, 0);   // silhouette interior: flooded, not seeded
 
