@@ -237,6 +237,34 @@ Slice 1 is independently valuable: it closes the hole even if the Hub slips.
 2. **Does the Hub replace `Setup.exe`'s role over time**, or stay strictly
    separate? They overlap conceptually (both are first-run surfaces) and it would
    be worth deciding before both grow.
-3. **Should slice 1's gate exit non-zero, or pop a native message box?** Exiting
-   non-zero is script-friendly; a message box is friendlier to a double-click
-   user who has no console.
+3. ~~**Should slice 1's gate exit non-zero, or pop a native message box?**~~
+   **RESOLVED as built (slice 1, 2026-07-26): exits 2 with a stderr message, no
+   message box.** No window or device exists at that point, so creating one just
+   to say "no" inverts the cost.
+   **New evidence found during the implementation audit, worth revisiting:**
+   `Arcane/scripts/launch.ps1` (untracked convenience launcher) can launch any
+   exe bare and uses `Start-Process` WITHOUT `-NoNewWindow`, so a gated launch
+   flashes a console and vanishes — the message is invisible there. That is the
+   real double-click case. A native `MessageBoxW` needs no SDL and no device, so
+   it is cheap; it was deliberately NOT added because it would put a
+   platform `#ifdef` in `main.cpp` for a state that disappears once
+   `ArcaneHub.exe` exists and the message can just launch it instead.
+
+## Slice 1 status: BUILT 2026-07-26 (`a45cfa03`)
+
+On branch `arcane-hub-slice1-engine-seam`, off `main` @`cfd7558a`.
+
+- `Arcane::HostBoot::EngineInfoJson(exePath)` in `Loom/src/ProjectBoot.hpp` —
+  one line of `{engineAbi, build, exePath}`, `generic_string()` paths.
+- `--print-engine-info` on **both** hosts (shared `LoomConfig`), printing before
+  any engine boot.
+- The editor refuses a bare launch: exit 2 + stderr. `--project` / `--plugin`
+  remain bypasses.
+- ABI tripwire test asserts the probe reports `kGamePluginABIVersion`.
+
+Gate 29648 assertions / 525 cases under seeds 6 and 17. Audit confirmed **no
+tracked caller launches `ArcaneEditor.exe`** (nothing in Jenkinsfile, `ci/`,
+`scripts/`), so the gate breaks no automation.
+
+**The probe has no consumer yet** — the Hub does not exist. Its only current
+protection is the tripwire test.
