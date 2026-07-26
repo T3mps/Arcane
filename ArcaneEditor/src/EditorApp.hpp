@@ -120,6 +120,9 @@ namespace Arcane::Editor
         // Draw's highlight always matches this frame's cursor. m_gizmoDrag spans
         // the mouse-down..mouse-up gesture; `start` is the pre-drag GizmoTransform
         // so ApplyDrag recomputes from origin each frame (no accumulation drift).
+        // Transform is parent-local, but every GizmoTransform stored here is WORLD
+        // space (Unreal parity) -- EditorApp converts through Edit::WorldMatrix on
+        // read and Edit::ParentWorldMatrix's inverse on write-back.
         Arcane::GizmoMode  m_gizmoMode    = Arcane::GizmoMode::Translate;
         Arcane::GizmoSpace m_gizmoSpace   = Arcane::GizmoSpace::World;
         bool               m_gizmoEnabled = false;  // false = Select tool (click-to-pick, no gizmo)
@@ -128,11 +131,11 @@ namespace Arcane::Editor
         {
             bool                   active = false;
             Arcane::GizmoAxis      axis   = Arcane::GizmoAxis::None;
-            Arcane::GizmoTransform start;                    // the PRIMARY's pre-drag pose (gizmo anchor)
+            Arcane::GizmoTransform start;                    // the PRIMARY's pre-drag WORLD pose (gizmo anchor)
             glm::vec2              mouseStartScreen{0.0f, 0.0f};
-            // Every selection ROOT carrying a Transform, with its pre-drag pose.
-            // Rebuilt on press. Roots only: a selected child already rides its
-            // selected parent through WorldTransform propagation.
+            // Every selection ROOT carrying a Transform, with its pre-drag WORLD
+            // pose. Rebuilt on press. Roots only: a selected child already rides
+            // its selected parent through WorldTransform propagation.
             std::vector<std::pair<Astra::Entity, Arcane::GizmoTransform>> targets;
         } m_gizmoDrag;
 

@@ -287,4 +287,44 @@ namespace Arcane
         r.scale    = t.scale * d.scale;
         return r;
     }
+
+    GizmoTransform DecomposeTRS(const glm::mat3& m)
+    {
+        GizmoTransform t;
+        t.position = glm::vec2(m[2]);
+
+        const glm::vec2 col0(m[0]);
+        const glm::vec2 col1(m[1]);
+        const float len0 = glm::length(col0);
+        const float len1 = glm::length(col1);
+        t.scale = glm::vec2(len0, len1);
+
+        if (len0 > kEps)
+        {
+            t.rotation = std::atan2(col0.y, col0.x);
+        }
+        else if (len1 > kEps)
+        {
+            // col1 = R(rotation) applied to (0,1), i.e. col0's direction rotated
+            // +90deg -- back out rotation by undoing that quarter turn.
+            t.rotation = std::atan2(col1.y, col1.x) - 1.57079632679489661923f;
+        }
+        else
+        {
+            t.rotation = 0.0f;   // both axes degenerate: no orientation info, stay finite
+        }
+        return t;
+    }
+
+    glm::mat3 ComposeTRS(const GizmoTransform& t)
+    {
+        // Mirrors Transform::ToMatrix (Scene/Components.hpp) exactly.
+        const float c = std::cos(t.rotation);
+        const float s = std::sin(t.rotation);
+        glm::mat3 m(1.0f);
+        m[0] = glm::vec3(c * t.scale.x,  s * t.scale.x, 0.0f);
+        m[1] = glm::vec3(-s * t.scale.y, c * t.scale.y, 0.0f);
+        m[2] = glm::vec3(t.position.x,   t.position.y,  1.0f);
+        return m;
+    }
 }

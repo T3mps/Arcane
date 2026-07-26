@@ -920,7 +920,13 @@ namespace Arcane::Editor
                     if (lt)
                     {
                         const Astra::Entity sel = m_selection.Primary();
-                        const Arcane::GizmoTransform gt{ lt->position, lt->rotation, lt->scale };
+                        // WORLD pose, not local -- Transform is parent-local, so
+                        // anchoring/hit-testing the gizmo at the local values would
+                        // misplace it for any parented entity (Unreal parity: the
+                        // gizmo pivot is the primary's world location; see the
+                        // group-delta conversion below for the write-back half).
+                        const Arcane::GizmoTransform gt =
+                            Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, sel));
                         const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
 
                         if (!m_gizmoDrag.active)
@@ -958,8 +964,10 @@ namespace Arcane::Editor
                                             if (!ed)
                                                 continue;
                                             m_undo->SnapshotComponent(e, ed);
+                                            // Stored WORLD pose (see gt above) -- the group
+                                            // delta below composes/replays in world space.
                                             m_gizmoDrag.targets.push_back(
-                                                { e, Arcane::GizmoTransform{ et->position, et->rotation, et->scale } });
+                                                { e, Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, e)) });
                                         }
                                         m_gizmoDrag.active           = true;
                                         m_gizmoDrag.axis             = m_gizmoHovered;
@@ -1001,7 +1009,14 @@ namespace Arcane::Editor
                                 Arcane::Transform* et = regPtr->GetComponent<Arcane::Transform>(e);
                                 if (!et)
                                     continue;   // destroyed mid-drag
-                                const Arcane::GizmoTransform r = Arcane::ApplyGroupDelta(startPose, gd);
+                                // startPose/gd are WORLD; convert the new world pose back
+                                // through the parent's inverse before writing the LOCAL
+                                // Transform (Unreal's SetWorldTransform demotes to relative
+                                // when attached -- this is that demotion).
+                                const Arcane::GizmoTransform w = Arcane::ApplyGroupDelta(startPose, gd);
+                                const glm::mat3 localMat =
+                                    glm::inverse(Arcane::Edit::ParentWorldMatrix(*regPtr, e)) * Arcane::ComposeTRS(w);
+                                const Arcane::GizmoTransform r = Arcane::DecomposeTRS(localMat);
                                 et->position = r.position;
                                 et->rotation = r.rotation;
                                 et->scale    = r.scale;
@@ -1133,11 +1148,16 @@ namespace Arcane::Editor
                     // the Inspector, just not be interactable there).
                     if (!m_play.IsPlaying() && m_gizmoEnabled && m_selection.HasSelection())
                     {
-                        Arcane::Transform* lt = m_runtime->Registry().GetComponent<Arcane::Transform>(
+                        Astra::Registry& drawReg = m_runtime->Registry();
+                        Arcane::Transform* lt = drawReg.GetComponent<Arcane::Transform>(
                             m_selection.Primary());
                         if (lt)
                         {
-                            const Arcane::GizmoTransform gt{ lt->position, lt->rotation, lt->scale };
+                            // WORLD pose, matching the interaction block's gt above --
+                            // draws at the same place it hit-tests, including for a
+                            // parented primary.
+                            const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
+                                Arcane::Edit::WorldMatrix(drawReg, m_selection.Primary()));
                             const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
                             Arcane::Draw(b, m_gizmoMode, m_gizmoSpace, gt, view, m_gizmoHovered,
                                         m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);

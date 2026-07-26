@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/Scene/Components.hpp>   // Arcane::Transform::ToMatrix -- pins ComposeTRS against it
 
 using Catch::Matchers::WithinAbs;
 
@@ -232,6 +233,38 @@ TEST_CASE("Gizmo group delta: a degenerate start scale yields ratio 1, not infin
     const Arcane::GizmoGroupDelta d = Arcane::MakeGroupDelta(start, end);
     CHECK_THAT(d.scale.x, WithinAbs(1.0f, 1e-5f));   // guarded
     CHECK_THAT(d.scale.y, WithinAbs(2.0f, 1e-5f));
+}
+
+TEST_CASE("Gizmo DecomposeTRS(ComposeTRS(t)) round-trips a non-trivial pose", "[gizmo]")
+{
+    const Arcane::GizmoTransform t{ glm::vec2(3.5f, -2.25f), 0.7f, glm::vec2(2.0f, 0.5f) };
+    const glm::mat3 m = Arcane::ComposeTRS(t);
+    const Arcane::GizmoTransform r = Arcane::DecomposeTRS(m);
+
+    CHECK_THAT(r.position.x, WithinAbs(t.position.x, 1e-5f));
+    CHECK_THAT(r.position.y, WithinAbs(t.position.y, 1e-5f));
+    CHECK_THAT(r.rotation,   WithinAbs(t.rotation, 1e-5f));
+    CHECK_THAT(r.scale.x,    WithinAbs(t.scale.x, 1e-5f));
+    CHECK_THAT(r.scale.y,    WithinAbs(t.scale.y, 1e-5f));
+}
+
+TEST_CASE("Gizmo ComposeTRS matches Transform::ToMatrix for the same pose", "[gizmo]")
+{
+    // Pins the two composers against each other so they cannot drift --
+    // ComposeTRS is a hand-written duplicate of Transform::ToMatrix (Gizmo
+    // has no Scene dependency), so this is the only thing keeping them in sync.
+    const Arcane::GizmoTransform t{ glm::vec2(-1.5f, 4.0f), 0.7f, glm::vec2(2.0f, 0.5f) };
+    const glm::mat3 gizmoM = Arcane::ComposeTRS(t);
+
+    Arcane::Transform xform;
+    xform.position = t.position;
+    xform.rotation = t.rotation;
+    xform.scale    = t.scale;
+    const glm::mat3 xformM = xform.ToMatrix();
+
+    for (int col = 0; col < 3; ++col)
+        for (int row = 0; row < 3; ++row)
+            CHECK_THAT(gizmoM[col][row], WithinAbs(xformM[col][row], 1e-6f));
 }
 
 TEST_CASE("Gizmo group delta: non-uniform scale is applied BEFORE the rotation", "[gizmo]")

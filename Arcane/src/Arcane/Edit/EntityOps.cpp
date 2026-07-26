@@ -246,4 +246,36 @@ namespace Arcane::Edit
         }
         return roots;
     }
+
+    glm::mat3 WorldMatrix(Astra::Registry& reg, Astra::Entity e)
+    {
+        // Walk up to the root collecting the chain, then fold the local
+        // matrices back down root-first. Cycle-safe like SelectionRoots: a
+        // corrupt deserialized parent table can cycle, so a visited set stops
+        // the climb instead of spinning.
+        std::vector<Astra::Entity> chain;
+        std::unordered_set<Astra::Entity> seen;
+        for (Astra::Entity cur = e; cur.IsValid(); cur = reg.GetParent(cur))
+        {
+            if (!seen.insert(cur).second)
+                break;   // cycle: stop climbing, fold what was collected
+            chain.push_back(cur);
+        }
+
+        glm::mat3 m(1.0f);
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+        {
+            if (Transform* t = reg.GetComponent<Transform>(*it))
+                m = m * t->ToMatrix();
+        }
+        return m;
+    }
+
+    glm::mat3 ParentWorldMatrix(Astra::Registry& reg, Astra::Entity e)
+    {
+        Astra::Entity parent = reg.GetParent(e);
+        if (!parent.IsValid())
+            return glm::mat3(1.0f);
+        return WorldMatrix(reg, parent);   // cycle-safe via WorldMatrix's own visited set
+    }
 }
