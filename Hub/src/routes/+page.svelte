@@ -1,4 +1,5 @@
 <script lang="ts">
+  import "$lib/theme.css";
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import {
@@ -7,7 +8,11 @@
     type HubState, type EngineEntry, type RecentProject,
   } from "$lib/api";
 
-  let state = $state<HubState>({ recents: [], engines: [] });
+  // NOT `state`: a variable of that name makes svelte2tsx parse the `$state`
+  // rune as a legacy store-subscription and svelte-check reports 6 phantom
+  // errors. The runtime compiler is unaffected, so this only shows up on
+  // typecheck.
+  let hub = $state<HubState>({ recents: [], engines: [] });
   let selectedEngine = $state<EngineEntry | null>(null);
   let suggestion = $state<EngineEntry | null>(null);
   let error = $state("");
@@ -17,12 +22,12 @@
   let newName = $state("");
 
   async function refresh() {
-    state = await loadState();
-    if (!selectedEngine || !state.engines.some((e) => e.id === selectedEngine!.id)) {
-      selectedEngine = state.engines[0] ?? null;
+    hub = await loadState();
+    if (!selectedEngine || !hub.engines.some((e) => e.id === selectedEngine!.id)) {
+      selectedEngine = hub.engines[0] ?? null;
     }
     // Adjacency is a suggestion for the dev loop, never an assumption.
-    suggestion = state.engines.length === 0 ? await suggestEngine() : null;
+    suggestion = hub.engines.length === 0 ? await suggestEngine() : null;
   }
 
   onMount(refresh);
@@ -78,13 +83,13 @@
     <p class="error" role="alert">{error}</p>
   {/if}
 
-  {#if showEngines || state.engines.length === 0}
+  {#if showEngines || hub.engines.length === 0}
     <section>
       <div class="bar">
         <h2>Engines</h2>
         <button onclick={addEngine} disabled={busy}>Register engine</button>
       </div>
-      {#if state.engines.length === 0}
+      {#if hub.engines.length === 0}
         <p class="empty">
           The Hub launches projects with an engine you register. Point it at a folder
           containing <code>ArcaneEditor.exe</code>.
@@ -96,7 +101,7 @@
           </button>
         {/if}
       {:else}
-        {#each state.engines as e (e.id)}
+        {#each hub.engines as e (e.id)}
           <div class="row engine-row" class:sel={selectedEngine?.id === e.id}>
             <button class="pick" onclick={() => (selectedEngine = e)}>
               <strong>{e.build}</strong>
@@ -131,11 +136,11 @@
       </div>
     {/if}
 
-    {#if state.recents.length === 0}
+    {#if hub.recents.length === 0}
       <p class="empty">No projects yet. Open a folder that contains a
         <code>.arcproj</code>, or create one.</p>
     {:else}
-      {#each state.recents as p (p.path)}
+      {#each hub.recents as p (p.path)}
         {@const match = !selectedEngine || p.engineAbi === 0 || p.engineAbi === selectedEngine.engineAbi}
         <div class="row proj" class:mismatch={!match}>
           <span class="abibar" aria-hidden="true"></span>

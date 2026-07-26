@@ -1,0 +1,74 @@
+/* Arcane Hub design tokens. Token NAMES are copied verbatim from
+   Tools/setup-wizard/src/lib/theme.css so the two files stay diffable; the Hub
+   deliberately differs in body font (Inter, not PF DIN -- commercial licence,
+   undocumented in this repo) and in owning its own font copies under static/
+   rather than reaching into Tools/, which is retired prototype.
+
+   Colour logic, enforced by convention everywhere below:
+     --gold  = act        (primary button, active nav rail, cover monogram)
+     --fail  = won't open (the abi badge on an incompatible card)
+     dimmed  = inert      (the whole incompatible card)
+     --ok    = resolved   (engine status dot)
+   Gold never means trouble; coral never means action.
+   ASCII only. */
+
+@font-face {
+  font-family: "Aldo";
+  src: url("/fonts/AldotheApache.ttf") format("truetype");
+  font-weight: 400 700; font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter_18pt-Regular.ttf") format("truetype");
+  font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter_18pt-SemiBold.ttf") format("truetype");
+  font-weight: 600; font-display: swap;
+}
+
+:root {
+  --bg-top: #0a0e17; --bg-bottom: #080b12;
+  --surface: #141927; --surface-2: #10151f; --well: #06090f;
+  --border: #222a3b; --border-soft: #1c2230;
+  --text: #eef2fa; --text-muted: #8593aa; --text-dim: #5d6a82;
+  --gold: #f0c869; --gold-bright: #ffd161;
+  --ok: #74dca2; --warn: #f0c869; --fail: #f1949f; --fail-accent: #ff5c6b;
+
+  --font-display: "Aldo", "Bahnschrift", sans-serif;
+  --font-ui: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  --r-win: 12px; --r-panel: 8px; --r-btn: 7px;
+  --dur: 200ms; --ease: cubic-bezier(.22, .61, .36, 1);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font-ui); color: var(--text); font-size: 13px; line-height: 1.5;
+  background: var(--bg-bottom);
+  -webkit-font-smoothing: antialiased;
+  /* Desktop app, not a document: no text selection, no I-beam, no scroll bounce. */
+  user-select: none; cursor: default; overflow: hidden;
+}
+
+.display { font-family: var(--font-display); text-transform: uppercase; letter-spacing: .07em; }
+.label { font-size: 9.5px; letter-spacing: .15em; text-transform: uppercase; color: var(--text-dim); }
+
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 4px; }
+
+/* WebView2 is Chromium, so this applies. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #283146; border-radius: 5px;
+                            border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #3a4860; background-clip: padding-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
