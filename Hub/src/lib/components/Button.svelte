@@ -38,6 +38,6 @@
                                 border-color: #2d3750; }
 
   .danger { background: none; color: var(--text-dim); }
-  .danger:hover:not(:disabled) { background: rgba(255, 92, 107, .12);
+  .danger:hover:not(:disabled) { background: color-mix(in srgb, var(--fail-accent) 12%, transparent);
                                  color: var(--fail); }
 </style>
