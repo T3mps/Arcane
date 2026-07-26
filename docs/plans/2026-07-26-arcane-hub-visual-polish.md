@@ -10,6 +10,16 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-26-arcane-hub-visual-polish-design.md`. Approved visual reference: `.superpowers/brainstorm/54-1785063500/content/locked.html`.
 
+> **POST-REVIEW NOTE.** All 11 tasks are complete and the whole-branch review's
+> fix wave landed in `476d4f0a`. Six changes were made to shipped code AFTER the
+> task bodies below were written, so a few code blocks here are now behind the
+> repository: the busy gate on ProjectCard's remove button, `onCreate` returning
+> `Promise<boolean>` with clear-on-success, Sidebar's `.v.none` using
+> `--text-dim` rather than `--warn`, `type="button"` on all eight buttons,
+> `coverFor`'s Unicode monogram regex, and the badge as `<span>`. The authoritative
+> record of what shipped and why is `.superpowers/sdd/progress.md` plus the final
+> review; treat the task bodies below as the historical build order.
+
 ## Global Constraints
 
 - **No Rust changes.** No command added, renamed, or altered. `src/lib/api.ts` signatures and `HubState`/`RecentProject`/`EngineEntry` shapes are frozen. The only non-frontend edit in the entire plan is adding the string `"core:window:allow-toggle-maximize"` to `src-tauri/capabilities/default.json` (Task 4).
@@ -1512,6 +1522,14 @@ Launch the staged exe and confirm each:
 - [ ] Removing the selected engine falls back to the first remaining one, or to "None registered".
 - [ ] Tab moves through cards in visual order with a visible gold focus ring.
 - [ ] Trigger an error (register a folder with no `ArcaneEditor.exe`): the banner appears above the view content, full width.
+- [ ] **Window corners are actually rounded.** `decorations: false` without
+      `"transparent": true` renders SQUARE corners regardless of `--r-win: 12px`.
+      Added by the final reviewer; unverified. If they are square, the fix is
+      `"transparent": true` in `tauri.conf.json` (out of scope for this arc).
+- [ ] Type a project name, click "Choose folder and create", then CANCEL the
+      folder picker: the panel must stay open with the name still typed.
+- [ ] Start a launch, then try the remove (x) on a card while it is in flight:
+      the x must be disabled, not firing a second overlapping operation.
 
 - [x] **Step 5: Commit the verification record**
 
