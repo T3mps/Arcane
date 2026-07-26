@@ -645,6 +645,12 @@ Create `Arcane/Hub/src/lib/components/WindowChrome.svelte`:
   const win = getCurrentWindow();
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- The drag region is chrome, not a control. Double-click-to-maximize is a
+     redundant MOUSE convenience for an action already exposed on the focusable
+     Maximize button below, so there is nothing a keyboard user loses and no
+     sensible ARIA role for "titlebar". Svelte's rule cannot see that the
+     behaviour is duplicated, hence the explicit suppression. -->
 <div class="chrome" data-tauri-drag-region ondblclick={() => win.toggleMaximize()}>
   <img class="mark" src="/logo.png" alt="" />
   <span class="title display">Arcane Hub</span>
@@ -699,7 +705,10 @@ cp Arcane/data/images/arcane_logo.png Arcane/Hub/static/logo.png
 - [ ] **Step 5: Verify typecheck and build**
 
 Run: `cd Arcane/Hub && npm run check && npm run build`
-Expected: 0 errors; build completes.
+Expected: **0 errors AND 0 warnings**; build completes. Warnings count: without
+the `svelte-ignore` above, svelte-check emits
+`a11y_no_static_element_interactions` for the drag region's `ondblclick`, which
+would leave every later task's gate non-pristine.
 
 - [ ] **Step 6: Commit**
 
