@@ -23,6 +23,13 @@
 - **Contrast is already verified**, do not re-derive: coral `#f1949f` on `--surface-2 #10151f` = 8.2:1; `#120e04` on gold `#f0c869` = 12.1:1; `--text-muted #8593aa` on `#10151f` = 5.9:1. All pass AA. If you change a colour, re-measure.
 - **Window minimum is 800x680**, so the project grid must reflow (`auto-fill`/`minmax`), never a hardcoded `repeat(3, 1fr)`.
 - Run all `npm` commands from `Arcane/Hub/`. `node_modules` is already installed.
+- **Never hardcode a colour that a token already defines.** To use a token at
+  partial alpha, write `color-mix(in srgb, var(--token) N%, transparent)` --
+  already the Hub's own idiom (`+page.svelte:196,237,238`) and safe on WebView2,
+  which is Chromium. Writing `rgba(255, 92, 107, .12)` when `--fail-accent` is
+  `#ff5c6b` desyncs silently the moment the token changes. The one intentional
+  exception is the nebula tint `rgba(80, 150, 200, .06)` in Task 10's background,
+  which corresponds to no token in this theme.
 - **Never name a variable `state` in a `.svelte` file.** Diagnosed during
   execution: `let state = $state<HubState>(...)` makes svelte2tsx resolve
   `$state` as a legacy store-subscription of the variable `state`, so
@@ -527,7 +534,7 @@ Create `Arcane/Hub/src/lib/components/Button.svelte`:
                                 border-color: #2d3750; }
 
   .danger { background: none; color: var(--text-dim); }
-  .danger:hover:not(:disabled) { background: rgba(255, 92, 107, .12);
+  .danger:hover:not(:disabled) { background: color-mix(in srgb, var(--fail-accent) 12%, transparent);
                                  color: var(--fail); }
 </style>
 ```
@@ -676,9 +683,9 @@ Create `Arcane/Hub/src/lib/components/WindowChrome.svelte`:
           color: var(--text-dim); cursor: default;
           transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
   .ctrl:hover { background: rgba(255, 255, 255, .07); color: var(--text); }
-  .close:hover { background: rgba(255, 92, 107, .85); color: #fff; }
+  .close:hover { background: color-mix(in srgb, var(--fail-accent) 85%, transparent); color: #fff; }
   .rule { position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
-          background: linear-gradient(90deg, transparent, rgba(240, 200, 105, .5), transparent); }
+          background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--gold) 50%, transparent), transparent); }
 </style>
 ```
 
@@ -771,7 +778,7 @@ Create `Arcane/Hub/src/lib/components/Sidebar.svelte`:
          background: none; border: 0; color: var(--text-muted); cursor: default;
          transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
   .nav:hover:not(.on) { background: rgba(255, 255, 255, .04); color: var(--text); }
-  .nav.on { background: rgba(240, 200, 105, .12); color: #f7dda0;
+  .nav.on { background: color-mix(in srgb, var(--gold) 12%, transparent); color: #f7dda0;
             box-shadow: inset 2px 0 0 var(--gold); }
   .g { width: 14px; text-align: center; opacity: .8; }
 
@@ -879,7 +886,7 @@ Create `Arcane/Hub/src/lib/components/ProjectCard.svelte`:
   .bad .nm { color: var(--text-muted); }
   /* Second, non-chromatic signal: a bordered badge (coral is 8.2:1 here). */
   .badge { font-style: normal; font-weight: 600; color: var(--fail);
-           border: 1px solid rgba(241, 148, 159, .45); border-radius: 3px; padding: 0 4px; }
+           border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent); border-radius: 3px; padding: 0 4px; }
 
   .x { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px;
        display: grid; place-items: center; border: 0; border-radius: 4px;
@@ -1079,7 +1086,7 @@ Create `Arcane/Hub/src/lib/views/ProjectsView.svelte`:
   .top { display: flex; align-items: flex-end; justify-content: space-between;
          gap: 16px; margin-bottom: 15px; }
   h2 { font-size: 22px; margin: 0; color: #f3f6fc;
-       text-shadow: 0 0 20px rgba(240, 205, 130, .2); }
+       text-shadow: 0 0 20px color-mix(in srgb, var(--gold) 20%, transparent); }
   .sub { font-size: 11.5px; color: var(--text-muted); margin: 2px 0 0; }
   .acts { display: flex; gap: 8px; flex: none; }
 
@@ -1186,7 +1193,7 @@ Create `Arcane/Hub/src/lib/views/EnginesView.svelte`:
   .top { display: flex; align-items: flex-end; justify-content: space-between;
          gap: 16px; margin-bottom: 15px; }
   h2 { font-size: 22px; margin: 0; color: #f3f6fc;
-       text-shadow: 0 0 20px rgba(240, 205, 130, .2); }
+       text-shadow: 0 0 20px color-mix(in srgb, var(--gold) 20%, transparent); }
   .sub { font-size: 11.5px; color: var(--text-muted); margin: 2px 0 0; }
   .hint { font-size: 11.5px; color: var(--text-dim); margin: 12px 0 0; }
 </style>
@@ -1324,14 +1331,14 @@ Replace the entire contents of `Arcane/Hub/src/routes/+page.svelte`:
   .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden;
          border-radius: var(--r-win);
          background:
-           radial-gradient(760px 320px at 82% -14%, rgba(240, 200, 105, .075), transparent 62%),
+           radial-gradient(760px 320px at 82% -14%, color-mix(in srgb, var(--gold) 7.5%, transparent), transparent 62%),
            radial-gradient(560px 260px at 4% 106%, rgba(80, 150, 200, .06), transparent 60%),
            linear-gradient(var(--bg-top), var(--bg-bottom)); }
   .body { flex: 1; display: flex; min-height: 0; }
   main { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 24px 22px; }
 
-  .error { background: rgba(255, 92, 107, .12);
-           border: 1px solid rgba(255, 92, 107, .4);
+  .error { background: color-mix(in srgb, var(--fail-accent) 12%, transparent);
+           border: 1px solid color-mix(in srgb, var(--fail-accent) 40%, transparent);
            border-radius: var(--r-btn); color: var(--text); font-size: 12.5px;
            padding: 9px 12px; margin: 0 0 14px; user-select: text; }
 </style>
