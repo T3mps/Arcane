@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "ShaderEditorDocument.hpp"
+#include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
@@ -114,7 +115,7 @@ TEST_CASE("ShaderEditorDocument resolves, and refuses, instance parent chains", 
     orphan.name = "Orphan";
     REQUIRE(Arcane::SaveMaterialAsset(content / "orphan.arcmat", orphan));
 
-    Arcane::Runtime rt;
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     REQUIRE(rt.OpenProject(dir / "Game"));
 
     DocServices services;
@@ -290,7 +291,7 @@ TEST_CASE("ReloadFromDisk discards the working copy; DependsOn walks the chain",
     inst.name = "Inst";
     REQUIRE(Arcane::SaveMaterialAsset(content / "inst.arcmat", inst));
 
-    Arcane::Runtime rt;
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     REQUIRE(rt.OpenProject(dir / "Game"));
     DocServices services;
     services.runtime = &rt;

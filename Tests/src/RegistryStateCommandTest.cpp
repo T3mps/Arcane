@@ -40,16 +40,17 @@ namespace
             // Edit::CreateEntity's reg.AddComponent<T>(...) resolves component IDs
             // through Arcane.dll's own per-module TypeContext slot, not the one
             // main() installs in this test module. Pin that DLL slot to the shared
-            // test context once (a throwaway Runtime installs it in Arcane.dll; the
-            // slot persists after the Runtime is destroyed) so both modules agree on
-            // component IDs -- otherwise EntityInfo (added inside Arcane.dll) would
-            // be invisible to GetComponent<EntityInfo> called from this module.
-            static const bool s_ctxPinned = []
-            {
-                Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
-                return true;
-            }();
-            (void)s_ctxPinned;
+            // test context so both modules agree on component IDs -- otherwise
+            // EntityInfo (added inside Arcane.dll) would be invisible to
+            // GetComponent<EntityInfo> called from this module.
+            //
+            // Re-pin EVERY construction, not once: any Arcane::Runtime built
+            // without the shared context installs ITS context into Arcane.dll's
+            // slot, so a one-shot pin silently goes stale and Edit:: calls then
+            // resolve component IDs against the wrong context (symptom: the op
+            // reports 0 changes). Cheap insurance -- the Runtime is a throwaway
+            // and the slot persists after it is destroyed.
+            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
             RegisterSceneComponents(*reg);
         }
 

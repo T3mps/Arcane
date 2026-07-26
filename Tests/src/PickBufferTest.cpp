@@ -49,12 +49,13 @@ namespace
     // component IDs -- otherwise [pick] run in isolation would see 0 sprites.
     std::unique_ptr<Astra::Registry> MakePickRegistry()
     {
-        static const bool s_ctxPinned = []
-        {
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
-            return true;
-        }();
-        (void)s_ctxPinned;
+        // Re-pin EVERY construction, not once: any Arcane::Runtime built
+        // without the shared context installs ITS context into Arcane.dll's
+        // slot, so a one-shot pin silently goes stale and Edit:: calls then
+        // resolve component IDs against the wrong context (symptom: the op
+        // reports 0 changes). Cheap insurance -- the Runtime is a throwaway
+        // and the slot persists after it is destroyed.
+        Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
 
         auto components = std::make_shared<Astra::ComponentRegistry>();
         auto reg = std::make_unique<Astra::Registry>(components);

@@ -29,12 +29,13 @@ namespace
         Astra::Registry reg{ creg };
         World()
         {
-            static const bool s_ctxPinned = []
-            {
-                Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
-                return true;
-            }();
-            (void)s_ctxPinned;
+            // Re-pin EVERY construction, not once: any Arcane::Runtime built
+            // without the shared context installs ITS context into Arcane.dll's
+            // slot, so a one-shot pin silently goes stale and Edit:: calls then
+            // resolve component IDs against the wrong context (symptom: the op
+            // reports 0 changes). Cheap insurance -- the Runtime is a throwaway
+            // and the slot persists after it is destroyed.
+            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
             RegisterSceneComponents(reg);
         }
         Astra::Entity Make(const char* name, Astra::Entity parent = Astra::Entity::Invalid())

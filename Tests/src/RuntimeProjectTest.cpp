@@ -6,6 +6,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Helpers/TestTypeContext.hpp"
+
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -37,7 +39,7 @@ TEST_CASE("Runtime::OpenProject adopts a valid project", "[project]")
     const fs::path dir = MakeTempDir("valid");
     REQUIRE(Arcane::Project::Create(dir / "Game", "MyGame").has_value());  // abi == this engine
 
-    Arcane::Runtime rt;
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     REQUIRE(rt.CurrentProject() == nullptr);
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.CurrentProject() != nullptr);
@@ -54,7 +56,7 @@ TEST_CASE("Runtime::OpenProject refuses a mismatched engine ABI", "[project]")
         R"("gameModule":"","plugins":[],"bootScene":""})");
     std::error_code ec; fs::create_directories(dir / "Content", ec);
 
-    Arcane::Runtime rt;
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     REQUIRE(rt.OpenProject(dir) == false);
     REQUIRE(rt.CurrentProject() == nullptr);   // state untouched
 
@@ -67,7 +69,7 @@ TEST_CASE("Runtime::OpenProject sets the Assets content root", "[project]")
     REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
     WriteFile(dir / "Game" / "Content" / "probe.json", R"({"ok":true})");
 
-    Arcane::Runtime rt;
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     auto doc = rt.AssetsFacade().GetJson("probe.json");   // relative -> under Content/
     REQUIRE(doc != nullptr);
@@ -97,7 +99,7 @@ TEST_CASE("Runtime::OpenProject layers an enabled plugin's Config under the proj
     // The project's own Config/game.json overrides the shared key (project beats plugin).
     WriteFile(dir / "Config" / "game.json", R"({"shared":"project"})");
 
-    Arcane::Runtime rt;
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     REQUIRE(rt.OpenProject(dir) == true);
     REQUIRE(rt.CurrentProject()->ActivePluginRoots().size() == 1);
 
@@ -114,7 +116,7 @@ TEST_CASE("Runtime::OpenProject switches projects on re-open", "[project]")
     REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
     REQUIRE(Arcane::Project::Create(dir / "B", "Beta").has_value());
 
-    Arcane::Runtime rt;
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     REQUIRE(rt.OpenProject(dir / "A") == true);
     REQUIRE(rt.CurrentProject()->Manifest().name == "Alpha");
     REQUIRE(rt.OpenProject(dir / "B") == true);
