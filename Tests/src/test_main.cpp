@@ -17,6 +17,11 @@ int main(int argc, char* argv[]) {
     // dies. This must happen up front because per-type IDs are cached in
     // per-module magic statics and never re-resolve -- pinning later cannot
     // repair an id the DLL already cached.
-    Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+    // Scoped so it really is throwaway: otherwise it would hold an enkiTS
+    // worker pool, an Assets facade and a loaded EngineConfig alive for the
+    // whole session.
+    {
+        Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+    }
     return Catch::Session().run(argc, argv);
 }
