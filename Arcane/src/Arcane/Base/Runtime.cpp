@@ -9,6 +9,8 @@
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Scene/PhysicsComponents.hpp>   // RegisterPhysicsComponents (engine roster)
+#include <Arcane/Scene/SceneModule.hpp>         // RegisterSceneComponents   (engine roster)
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
@@ -117,6 +119,28 @@ namespace Arcane
             // Install the shared context in THIS module BEFORE any TypeID/Registry use.
             Astra::SetTypeContext(context);
             components = std::make_shared<Astra::ComponentRegistry>();
+
+            // The engine's OWN component roster, registered here so every host
+            // has it before any plugin loads. Previously nothing registered it
+            // outside tests: the live roster was whatever the hosted game
+            // plugin happened to ReRegisterComponent<T>() in its Init, which
+            // (a) left the editor's Add Component catalog offering only the
+            // plugin's handful of types, and (b) silently DROPPED EntityInfo /
+            // Hidden when a runtime host loaded an editor-saved scene --
+            // SceneSerializer skips a type that is reflected but not
+            // REGISTERED as a component.
+            //
+            // Safe to do unconditionally, and safe for plugins to re-register
+            // over: RegisterComponent<T> is idempotent (it early-returns when
+            // the id is already registered), and ComponentIDs come from
+            // TypeID<T> resolved through the shared TypeContext BY HASH, not
+            // from a registration counter -- so this cannot renumber anything
+            // or invalidate an existing save. A plugin's later
+            // ReRegisterComponent<T> still rebinds the descriptor's function
+            // pointers to that module, which is the whole point of the
+            // hot-reload path.
+            RegisterSceneComponents(*components);
+            RegisterPhysicsComponents(*components);
 
             Astra::Registry::Config cfg;
             cfg.workScheduler = sched;
@@ -245,6 +269,13 @@ namespace Arcane
                             static_cast<float>(Loop().Alpha())});
     }
 
+    void Runtime::SetSpriteMaterials(const std::unordered_map<Guid, std::uint16_t>* materials)
+    {
+        // Same rule as SetRenderContext: SetResource<SpriteMaterialTable> runs
+        // IN Arcane.dll so the scene TypeID resolves against the shared context.
+        m_impl->registry->SetResource<SpriteMaterialTable>(SpriteMaterialTable{materials});
+    }
+
     Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const
     {
         // A real Save failure must be named at its source: an empty-but-"ok"
@@ -343,6 +374,11 @@ namespace Arcane
         m_impl->project = std::move(*proj);
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
+        // GUID loads resolve through THIS project's registry (Assets AssetId seam).
+        // The raw pointer is safe: the optional's storage is stable, Runtime owns
+        // both objects, and every OpenProject reinstalls the resolver.
+        m_impl->assets->SetAssetResolver(
+            [proj = &*m_impl->project](const AssetId& id) { return proj->ResolveAsset(id); });
         // Re-layer config: engine defaults (kept) + each enabled plugin's Config/ + this
         // project's Config/ + user overrides (Saved/Config/). Precedence engine -> plugins ->
         // project -> user (a project overrides the plugins it enables). Rebuild-from-defaults
@@ -358,6 +394,17 @@ namespace Arcane
     const Project* Runtime::CurrentProject() const noexcept
     {
         return m_impl->project ? &*m_impl->project : nullptr;
+    }
+
+    std::optional<Guid> Runtime::RegisterCreatedAsset(const std::filesystem::path& file)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::RegisterCreatedAsset: no project open -- '{}' not registered",
+                     file.generic_string());
+            return std::nullopt;
+        }
+        return m_impl->project->RegisterAsset(file);
     }
 
     Config& Runtime::Configuration() noexcept

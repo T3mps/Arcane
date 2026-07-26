@@ -20,7 +20,7 @@ namespace Arcane
     enum class GizmoAxis  { None, X, Y, Center };
 
     // Decoupled from Scene so Edit/Gizmo has no Scene dependency; Arcane Editor maps
-    // LocalTransform <-> this.
+    // Transform <-> this.
     struct GizmoTransform
     {
         glm::vec2 position{0.0f, 0.0f};
@@ -61,4 +61,39 @@ namespace Arcane
                                         const GizmoTransform& start, const GizmoView& view,
                                         glm::vec2 mouseStartScreen, glm::vec2 mouseCurScreen,
                                         const GizmoSnap& snap);
+
+    // A drag's effect on the PRIMARY, expressed so it can be replayed onto the
+    // rest of a multi-selection. `translate` is a shared world delta;
+    // `rotate`/`scale` act about `pivot`, so a group rotate ORBITS the other
+    // members rather than spinning each in place.
+    struct GizmoGroupDelta
+    {
+        glm::vec2 translate{0.0f, 0.0f};
+        float     rotate = 0.0f;        // radians
+        glm::vec2 scale{1.0f, 1.0f};    // ratio, component-wise
+        glm::vec2 pivot{0.0f, 0.0f};    // the primary's PRE-drag position
+    };
+
+    // Delta from the primary's pre-drag pose to its post-drag pose. A start
+    // scale component under 1e-6 yields a ratio of 1 on that axis instead of
+    // infinity.
+    ARCANE_API GizmoGroupDelta MakeGroupDelta(const GizmoTransform& start,
+                                              const GizmoTransform& end);
+
+    // Replay a group delta onto a member's PRE-drag pose. Replaying onto the
+    // primary's own start reproduces ApplyDrag's result, so callers may apply
+    // this uniformly across the whole selection without special-casing.
+    ARCANE_API GizmoTransform ApplyGroupDelta(const GizmoTransform& t,
+                                              const GizmoGroupDelta& d);
+
+    // A 2D TRS mat3 (the shape Transform::ToMatrix produces) split back into
+    // position/rotation/scale. Assumes no shear -- true for any product of TRS
+    // matrices with non-negative scale, which is what the scene graph builds.
+    // A zero-length basis axis yields scale 0 on that axis and leaves the
+    // rotation taken from the other axis.
+    ARCANE_API GizmoTransform DecomposeTRS(const glm::mat3& m);
+
+    // Inverse of DecomposeTRS; identical to Transform::ToMatrix for the same
+    // position/rotation/scale.
+    ARCANE_API glm::mat3 ComposeTRS(const GizmoTransform& t);
 }

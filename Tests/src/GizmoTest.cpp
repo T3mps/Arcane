@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/Scene/Components.hpp>   // Arcane::Transform::ToMatrix -- pins ComposeTRS against it
 
 using Catch::Matchers::WithinAbs;
 
@@ -148,4 +149,145 @@ TEST_CASE("Gizmo HitTest: rotate ring band, scale axes", "[gizmo]")
     // Scale: on the +X handle.
     CHECK(Arcane::HitTest(Arcane::GizmoMode::Scale, Arcane::GizmoSpace::Local, t, v,
                           glm::vec2(450, 300)) == Arcane::GizmoAxis::X);
+}
+
+TEST_CASE("Gizmo group delta: translate is shared, pivot-independent", "[gizmo]")
+{
+    // Translate mode: ApplyDrag moves only position, so the delta carries a
+    // pure translation and every member shifts by the same world vector.
+    const Arcane::GizmoTransform start{ glm::vec2(1.0f, 1.0f), 0.0f, glm::vec2(1.0f, 1.0f) };
+    Arcane::GizmoTransform end = start;
+    end.position = glm::vec2(4.0f, -1.0f);
+
+    const Arcane::GizmoGroupDelta d = Arcane::MakeGroupDelta(start, end);
+    CHECK_THAT(d.translate.x, WithinAbs(3.0f, 1e-5f));
+    CHECK_THAT(d.translate.y, WithinAbs(-2.0f, 1e-5f));
+
+    const Arcane::GizmoTransform other{ glm::vec2(-5.0f, 10.0f), 0.5f, glm::vec2(2.0f, 3.0f) };
+    const Arcane::GizmoTransform moved = Arcane::ApplyGroupDelta(other, d);
+    CHECK_THAT(moved.position.x, WithinAbs(-2.0f, 1e-5f));
+    CHECK_THAT(moved.position.y, WithinAbs(8.0f, 1e-5f));
+    CHECK_THAT(moved.rotation, WithinAbs(0.5f, 1e-5f));   // untouched
+    CHECK_THAT(moved.scale.x, WithinAbs(2.0f, 1e-5f));    // untouched
+}
+
+TEST_CASE("Gizmo group delta: rotate ORBITS others about the primary's pivot", "[gizmo]")
+{
+    // The whole point of a group rotate: a member one unit to the +X of the
+    // pivot swings to +Y under a quarter turn, AND spins by the same angle.
+    const float quarter = 1.5707963268f;
+    const Arcane::GizmoTransform start{ glm::vec2(0.0f, 0.0f), 0.0f, glm::vec2(1.0f, 1.0f) };
+    Arcane::GizmoTransform end = start;
+    end.rotation = quarter;
+
+    const Arcane::GizmoGroupDelta d = Arcane::MakeGroupDelta(start, end);
+    CHECK_THAT(d.rotate, WithinAbs(quarter, 1e-5f));
+    CHECK_THAT(d.translate.x, WithinAbs(0.0f, 1e-5f));   // rotate does not translate
+
+    const Arcane::GizmoTransform other{ glm::vec2(1.0f, 0.0f), 0.0f, glm::vec2(1.0f, 1.0f) };
+    const Arcane::GizmoTransform r = Arcane::ApplyGroupDelta(other, d);
+    CHECK_THAT(r.position.x, WithinAbs(0.0f, 1e-5f));
+    CHECK_THAT(r.position.y, WithinAbs(1.0f, 1e-5f));    // orbited
+    CHECK_THAT(r.rotation, WithinAbs(quarter, 1e-5f));   // and spun
+}
+
+TEST_CASE("Gizmo group delta: scale multiplies and moves others along the pivot ray", "[gizmo]")
+{
+    const Arcane::GizmoTransform start{ glm::vec2(2.0f, 2.0f), 0.0f, glm::vec2(1.0f, 1.0f) };
+    Arcane::GizmoTransform end = start;
+    end.scale = glm::vec2(2.0f, 2.0f);
+
+    const Arcane::GizmoGroupDelta d = Arcane::MakeGroupDelta(start, end);
+    CHECK_THAT(d.scale.x, WithinAbs(2.0f, 1e-5f));
+
+    const Arcane::GizmoTransform other{ glm::vec2(3.0f, 2.0f), 0.0f, glm::vec2(4.0f, 0.5f) };
+    const Arcane::GizmoTransform r = Arcane::ApplyGroupDelta(other, d);
+    CHECK_THAT(r.position.x, WithinAbs(4.0f, 1e-5f));    // pivot + 1*2
+    CHECK_THAT(r.position.y, WithinAbs(2.0f, 1e-5f));    // on the pivot line: unmoved
+    CHECK_THAT(r.scale.x, WithinAbs(8.0f, 1e-5f));       // 4 * 2
+    CHECK_THAT(r.scale.y, WithinAbs(1.0f, 1e-5f));       // 0.5 * 2
+}
+
+TEST_CASE("Gizmo group delta: replaying onto the primary reproduces ApplyDrag", "[gizmo]")
+{
+    // EditorApp applies the delta UNIFORMLY across the selection, primary
+    // included -- that is only sound if the primary round-trips exactly.
+    const Arcane::GizmoTransform start{ glm::vec2(1.0f, -2.0f), 0.3f, glm::vec2(2.0f, 0.5f) };
+    Arcane::GizmoTransform end{ glm::vec2(4.0f, 1.0f), 1.1f, glm::vec2(3.0f, 1.5f) };
+
+    const Arcane::GizmoGroupDelta d = Arcane::MakeGroupDelta(start, end);
+    const Arcane::GizmoTransform r = Arcane::ApplyGroupDelta(start, d);
+    CHECK_THAT(r.position.x, WithinAbs(end.position.x, 1e-5f));
+    CHECK_THAT(r.position.y, WithinAbs(end.position.y, 1e-5f));
+    CHECK_THAT(r.rotation, WithinAbs(end.rotation, 1e-5f));
+    CHECK_THAT(r.scale.x, WithinAbs(end.scale.x, 1e-5f));
+    CHECK_THAT(r.scale.y, WithinAbs(end.scale.y, 1e-5f));
+}
+
+TEST_CASE("Gizmo group delta: a degenerate start scale yields ratio 1, not infinity", "[gizmo]")
+{
+    const Arcane::GizmoTransform start{ glm::vec2(0.0f, 0.0f), 0.0f, glm::vec2(0.0f, 1.0f) };
+    Arcane::GizmoTransform end = start;
+    end.scale = glm::vec2(5.0f, 2.0f);
+
+    const Arcane::GizmoGroupDelta d = Arcane::MakeGroupDelta(start, end);
+    CHECK_THAT(d.scale.x, WithinAbs(1.0f, 1e-5f));   // guarded
+    CHECK_THAT(d.scale.y, WithinAbs(2.0f, 1e-5f));
+}
+
+TEST_CASE("Gizmo DecomposeTRS(ComposeTRS(t)) round-trips a non-trivial pose", "[gizmo]")
+{
+    const Arcane::GizmoTransform t{ glm::vec2(3.5f, -2.25f), 0.7f, glm::vec2(2.0f, 0.5f) };
+    const glm::mat3 m = Arcane::ComposeTRS(t);
+    const Arcane::GizmoTransform r = Arcane::DecomposeTRS(m);
+
+    CHECK_THAT(r.position.x, WithinAbs(t.position.x, 1e-5f));
+    CHECK_THAT(r.position.y, WithinAbs(t.position.y, 1e-5f));
+    CHECK_THAT(r.rotation,   WithinAbs(t.rotation, 1e-5f));
+    CHECK_THAT(r.scale.x,    WithinAbs(t.scale.x, 1e-5f));
+    CHECK_THAT(r.scale.y,    WithinAbs(t.scale.y, 1e-5f));
+}
+
+TEST_CASE("Gizmo ComposeTRS matches Transform::ToMatrix for the same pose", "[gizmo]")
+{
+    // Pins the two composers against each other so they cannot drift --
+    // ComposeTRS is a hand-written duplicate of Transform::ToMatrix (Gizmo
+    // has no Scene dependency), so this is the only thing keeping them in sync.
+    const Arcane::GizmoTransform t{ glm::vec2(-1.5f, 4.0f), 0.7f, glm::vec2(2.0f, 0.5f) };
+    const glm::mat3 gizmoM = Arcane::ComposeTRS(t);
+
+    Arcane::Transform xform;
+    xform.position = t.position;
+    xform.rotation = t.rotation;
+    xform.scale    = t.scale;
+    const glm::mat3 xformM = xform.ToMatrix();
+
+    for (int col = 0; col < 3; ++col)
+        for (int row = 0; row < 3; ++row)
+            CHECK_THAT(gizmoM[col][row], WithinAbs(xformM[col][row], 1e-6f));
+}
+
+TEST_CASE("Gizmo group delta: non-uniform scale is applied BEFORE the rotation", "[gizmo]")
+{
+    // Order matters the moment scale is non-uniform and rotation is non-zero:
+    // scale-then-rotate and rotate-then-scale diverge, and every other test
+    // here is order-invariant (rotate=0, or replayed onto the pivot itself).
+    // Member 2 units along +X of the pivot, scaled 2x on X only, then turned a
+    // quarter: scale-then-rotate lands it at (0,4); rotate-then-scale would
+    // land it at (0,2).
+    const float quarter = 1.5707963268f;
+    const Arcane::GizmoTransform start{ glm::vec2(0.0f, 0.0f), 0.0f, glm::vec2(1.0f, 1.0f) };
+    Arcane::GizmoTransform end = start;
+    end.rotation = quarter;
+    end.scale    = glm::vec2(2.0f, 1.0f);
+
+    const Arcane::GizmoGroupDelta d = Arcane::MakeGroupDelta(start, end);
+    const Arcane::GizmoTransform other{ glm::vec2(2.0f, 0.0f), 0.0f, glm::vec2(1.0f, 1.0f) };
+    const Arcane::GizmoTransform r = Arcane::ApplyGroupDelta(other, d);
+
+    CHECK_THAT(r.position.x, WithinAbs(0.0f, 1e-5f));
+    CHECK_THAT(r.position.y, WithinAbs(4.0f, 1e-5f));
+    CHECK_THAT(r.rotation, WithinAbs(quarter, 1e-5f));
+    CHECK_THAT(r.scale.x, WithinAbs(2.0f, 1e-5f));
+    CHECK_THAT(r.scale.y, WithinAbs(1.0f, 1e-5f));
 }

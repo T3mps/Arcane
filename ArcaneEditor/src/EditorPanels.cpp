@@ -1,4 +1,6 @@
 #include "EditorPanels.hpp"
+#include "AssetBrowser.hpp"
+#include "ComponentCatalog.hpp"
 #include "ConsoleBuffer.hpp"
 #include "EditorFonts.hpp"
 #include "EntityList.hpp"
@@ -8,6 +10,7 @@
 #include "SelectionContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 
@@ -19,13 +22,17 @@
 #include <imgui_internal.h>   // DockBuilder* + ImGuiDockNode::LocalFlags (docking layout)
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 namespace Arcane::Editor
 {
-    void BeginDockSpace(Arcane::CommandStack& undo, bool& openProjectRequested)
+    void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -48,10 +55,13 @@ namespace Arcane::Editor
         {
             if (ImGui::BeginMenu("File"))
             {
-                if (ImGui::MenuItem("Open Project...")) openProjectRequested = true;
+                if (ImGui::MenuItem("Open Project...")) requests.openProject = true;
                 ImGui::Separator();
                 ImGui::MenuItem("New Scene");
                 ImGui::MenuItem("Open Scene...");
+                ImGui::Separator();
+                if (ImGui::MenuItem("New Material...")) requests.newMaterial = true;
+                if (ImGui::MenuItem("Open Material...")) requests.openMaterial = true;
                 ImGui::Separator();
                 ImGui::MenuItem("Save Scene");
                 ImGui::MenuItem("Save Scene As...");
@@ -100,7 +110,7 @@ namespace Arcane::Editor
         const ImGuiID rightId  = ImGui::DockBuilderSplitNode(central, ImGuiDir_Right, 0.22f, nullptr, &central);
         const ImGuiID bottomId = ImGui::DockBuilderSplitNode(central, ImGuiDir_Down,  0.25f, nullptr, &central);
 
-        ImGui::DockBuilderDockWindow("Hierarchy", leftId);
+        ImGui::DockBuilderDockWindow("Outliner", leftId);
         ImGui::DockBuilderDockWindow("Inspector", rightId);
         ImGui::DockBuilderDockWindow("Assets",    bottomId);   // Assets tab first...
         ImGui::DockBuilderDockWindow("Console",   bottomId);   // ...then Console
@@ -118,18 +128,21 @@ namespace Arcane::Editor
 
         // Emit the dockspace into the still-open host window. Anything drawn between
         // BeginDockSpace and here is a fixed strip above it.
+        //
+        // The central node is NOT locked anymore: the Viewport is a normal tab
+        // (movable, dockable-over) and editor documents open as tabs beside it
+        // -- the UE/Unity shape where asset editors share the main area with
+        // the scene.
         ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_None);
 
-        // Lock the central node as the Viewport EVERY frame: no tab, not closeable, and
-        // nothing else may dock into or undock it -- so the Viewport is always the centre
-        // and its size is dictated purely by the panels split off around it.
-        // (NoDockingOverMe/NoUndocking are runtime-only flags, not saved to the layout, so
-        // they are re-applied here rather than trusted to persist.)
+        // SCRUB the old lock: NoTabBar/NoCloseButton are SAVED dock flags, so
+        // every imgui.ini written while the lock existed still carries them --
+        // simply not re-applying changes nothing on machines with a layout.
         if (ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockspaceId))
-            central->LocalFlags |= ImGuiDockNodeFlags_NoTabBar
-                                 | ImGuiDockNodeFlags_NoCloseButton
-                                 | ImGuiDockNodeFlags_NoDockingOverMe
-                                 | ImGuiDockNodeFlags_NoUndocking;
+            central->LocalFlags &= ~(ImGuiDockNodeFlags_NoTabBar
+                                   | ImGuiDockNodeFlags_NoCloseButton
+                                   | ImGuiDockNodeFlags_NoDockingOverMe
+                                   | ImGuiDockNodeFlags_NoUndocking);
 
         ImGui::End();
     }
@@ -250,24 +263,6 @@ namespace Arcane::Editor
         ImGui::Separator();
     }
 
-    void DrawAssetsPanel(const Arcane::Project* project)
-    {
-        ImGui::Begin("Assets");
-        if (project)
-        {
-            ImGui::Text("Project: %s", project->Manifest().name.c_str());
-            ImGui::TextDisabled("%s", project->Root().generic_string().c_str());
-        }
-        else
-        {
-            ImGui::TextDisabled("No project open (data/-next-to-exe)");
-        }
-        ImGui::Separator();
-        // Placeholder: the asset browser lands here later.
-        ImGui::TextDisabled("Assets browser -- coming soon");
-        ImGui::End();
-    }
-
     void DrawConsolePanel(const ConsoleBuffer& console)
     {
         ImGui::Begin("Console");
@@ -303,6 +298,7 @@ namespace Arcane::Editor
 
         ViewportPanelResult r;
         ImGui::Begin("Viewport");
+        r.dockId = static_cast<unsigned int>(ImGui::GetWindowDockID());
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         r.desiredW = avail.x > 0 ? static_cast<uint32_t>(avail.x) : 1;
         r.desiredH = avail.y > 0 ? static_cast<uint32_t>(avail.y) : 1;
@@ -358,6 +354,7 @@ namespace Arcane::Editor
             {
                 r.clicked = true;
                 r.altHeld = ImGui::GetIO().KeyAlt;
+                r.ctrlHeld = ImGui::GetIO().KeyCtrl;
                 r.clickLocalX = lx; r.clickLocalY = ly;
             }
         }
@@ -365,18 +362,448 @@ namespace Arcane::Editor
         return r;
     }
 
-    void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel)
+    namespace
     {
-        ImGui::Begin("Hierarchy");
-        for (Astra::Entity e : Arcane::Editor::CollectEntities(registry))
+        // Payload type tag for outliner entity drag/reparent; shared by the
+        // source/target sites below so the string only ever appears once.
+        constexpr const char* kOutlinerDragType = "ARC_OUTLINER_ENTITY";
+
+        bool ApplyStructural(Arcane::CommandStack& undo, const SceneEditBinding& b,
+                             std::string label, Arcane::FunctionRef<bool()> mutate)
         {
-            char label[64];
-            std::snprintf(label, sizeof(label), "Entity %u (v%u)",
-                          (unsigned)e.GetID(), (unsigned)e.GetVersion());
-            const bool isSel = sel.HasSelection() && sel.selected.GetValue() == e.GetValue();
-            if (ImGui::Selectable(label, isSel))
-                sel.Select(e);
+            if (!b.editMode)
+                return false;
+            return Arcane::ApplyRegistryMutation(undo, std::move(label),
+                                                 b.snapshot, b.restore, mutate);
         }
+
+        void BeginRename(OutlinerState& st, Astra::Entity e, const std::string& current)
+        {
+            st.renameTarget = e;
+            std::snprintf(st.renameBuf, sizeof(st.renameBuf), "%s", current.c_str());
+            st.renameFocusPending = true;
+        }
+
+        void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
+                             Arcane::CommandStack& undo, const SceneEditBinding& binding)
+        {
+            const std::vector<Astra::Entity> doomed = sel.Entities();   // copy: sel mutates after
+            if (doomed.empty())
+                return;
+            if (ApplyStructural(undo, binding, "Delete",
+                    [&] { return Arcane::Edit::DeleteEntities(registry, doomed) > 0; }))
+                sel.Clear();
+        }
+
+        // Popup id shared by the Inspector's "+ Add Component" button and the
+        // Outliner row menu's "Add Component...". Both open it at their own
+        // panel-window scope, so the id resolves identically at both sites.
+        constexpr const char* kAddComponentPopup = "##addcomponent";
+
+        // The searchable Add Component popup: draws the catalog, applies the
+        // pick as ONE undo step over the whole selection. The caller opens it
+        // with ImGui::OpenPopup(kAddComponentPopup) and then calls this every
+        // frame at the same id-stack level.
+        //
+        // One popup is open at a time, so a function-local search buffer serves
+        // both call sites (same rationale as the asset-ref pick popup below).
+        void DrawAddComponentPopup(Astra::Registry& registry,
+                                   const std::vector<Astra::Entity>& selection,
+                                   Arcane::CommandStack& undo,
+                                   const SceneEditBinding& binding)
+        {
+            static char s_search[64] = {};
+            const Astra::ComponentDescriptor* chosen = nullptr;
+
+            if (ImGui::BeginPopup(kAddComponentPopup))
+            {
+                if (ImGui::IsWindowAppearing())
+                {
+                    s_search[0] = '\0';
+                    ImGui::SetKeyboardFocusHere();
+                }
+                ImGui::SetNextItemWidth(260.0f);
+                ImGui::InputTextWithHint("##compsearch", "Search...",
+                                         s_search, sizeof(s_search));
+                ImGui::Separator();
+
+                const std::vector<ComponentCatalogEntry> entries =
+                    BuildComponentCatalog(registry, selection, s_search);
+                if (entries.empty())
+                {
+                    ImGui::TextDisabled("no matching components");
+                }
+                else
+                {
+                    ImGui::BeginChild("##complist", ImVec2(260.0f, 260.0f));
+                    for (const ComponentCatalogEntry& e : entries)
+                    {
+                        // missingCount == 0 means every selected entity already
+                        // carries it, so the add would be a no-op. Shown
+                        // disabled rather than hidden: "you already have this"
+                        // reads better than a row that silently vanishes.
+                        const bool addable = e.missingCount > 0;
+                        if (!addable)
+                            ImGui::BeginDisabled();
+                        if (ImGui::Selectable(e.typeName.c_str()) && addable)
+                            chosen = e.desc;
+                        if (!addable)
+                            ImGui::EndDisabled();
+                    }
+                    ImGui::EndChild();
+                }
+
+                if (chosen)
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            // Applied OUTSIDE the popup scope: the mutation invalidates the
+            // catalog vector the loop above is still holding.
+            if (chosen)
+            {
+                const Astra::ComponentDescriptor& desc = *chosen;
+                ApplyStructural(undo, binding, "Add Component",
+                    [&] { return Arcane::Edit::AddComponent(registry, selection, desc) > 0; });
+            }
+        }
+    }
+
+    void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
+                           Arcane::CommandStack& undo, const SceneEditBinding& binding,
+                           OutlinerState& state)
+    {
+        ImGui::Begin("Outliner");
+
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##outliner_search", ICON_LC_SEARCH " Filter",
+                                 state.search, sizeof(state.search));
+
+        const std::vector<OutlinerRow> rows =
+            BuildOutlinerRows(registry, state.search, state.sort, state.collapsed);
+
+        // The rename target can stop being drawable two ways: a structural
+        // undo/redo destroys it, or it simply leaves the visible set (its
+        // parent collapsed, or the filter excludes it). Either way no row
+        // draws the InputText, so IsItemDeactivated never fires -- drop the
+        // target or `renaming` wedges shut, taking F2 and Delete with it.
+        if (state.renameTarget.IsValid())
+        {
+            bool hasRow = false;
+            for (const OutlinerRow& r : rows)
+                if (r.entity == state.renameTarget)
+                {
+                    hasRow = true;
+                    break;
+                }
+            if (!hasRow)
+                state.renameTarget = Astra::Entity::Invalid();
+        }
+
+        const bool renaming = state.renameTarget.IsValid();
+        const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+        // Shortcuts must not fire while any text field owns the keyboard
+        // (e.g. the search box above) -- else Delete/F2 hijack typing.
+        if (binding.editMode && windowFocused && !renaming && !ImGui::GetIO().WantTextInput)
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && sel.Count() == 1)
+                BeginRename(state, sel.Primary(),
+                            Arcane::Edit::DisplayName(registry, sel.Primary()));
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && sel.HasSelection())
+                DeleteSelection(registry, sel, undo, binding);
+        }
+
+        const float footerH = ImGui::GetFrameHeightWithSpacing();
+        const ImGuiTableFlags tflags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
+                                     | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate;
+        if (ImGui::BeginTable("##outliner_rows", 2, tflags, ImVec2(0.0f, -footerH)))
+        {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn(ICON_LC_EYE,
+                ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed,
+                ImGui::GetFrameHeight());
+            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_DefaultSort);
+            ImGui::TableHeadersRow();
+
+            // Header sort -> state.sort; rows were built with LAST frame's
+            // sort (one-frame lag, rebuilt every frame anyway). Label is the
+            // only sortable column, so any spec means sort-by-label.
+            if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs())
+            {
+                state.sort = OutlinerSort{};
+                if (specs->SpecsCount > 0)
+                {
+                    state.sort.column = OutlinerSort::Column::Label;
+                    state.sort.ascending =
+                        specs->Specs[0].SortDirection != ImGuiSortDirection_Descending;
+                }
+            }
+
+            for (const OutlinerRow& row : rows)
+            {
+                ImGui::TableNextRow();
+                ImGui::PushID(static_cast<int>(row.entity.GetValue()));
+
+                // -- column 0: the eye --------------------------------------
+                ImGui::TableSetColumnIndex(0);
+                {
+                    const char* icon = row.hidden ? ICON_LC_EYE_OFF : ICON_LC_EYE;
+                    if (row.hidden)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    if (binding.editMode)
+                    {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                        if (ImGui::SmallButton(icon))
+                        {
+                            const Astra::Entity e = row.entity;
+                            const bool hide = !row.hidden;
+                            ApplyStructural(undo, binding, hide ? "Hide" : "Show",
+                                [&] { return Arcane::Edit::SetHiddenRecursive(registry, e, hide) > 0; });
+                        }
+                        ImGui::PopStyleColor();
+                    }
+                    else
+                        ImGui::TextUnformatted(icon);
+                    if (row.hidden)
+                        ImGui::PopStyleColor();
+                }
+
+                // -- column 1: tree arrow + label (or inline rename) --------
+                ImGui::TableSetColumnIndex(1);
+                if (state.renameTarget == row.entity)
+                {
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if (state.renameFocusPending)
+                    {
+                        ImGui::SetKeyboardFocusHere();
+                        state.renameFocusPending = false;
+                    }
+                    bool commit = ImGui::InputText("##rename", state.renameBuf,
+                        sizeof(state.renameBuf),
+                        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+                    if (ImGui::IsItemDeactivated())
+                    {
+                        commit = commit || !ImGui::IsKeyPressed(ImGuiKey_Escape);
+                        if (commit)
+                        {
+                            const Astra::Entity e = row.entity;
+                            ApplyStructural(undo, binding, "Rename",
+                                [&] { return Arcane::Edit::RenameEntity(registry, e, state.renameBuf); });
+                        }
+                        state.renameTarget = Astra::Entity::Invalid();
+                    }
+                }
+                else
+                {
+                    const float indent = row.depth * ImGui::GetStyle().IndentSpacing;
+                    if (indent > 0.0f)
+                        ImGui::Indent(indent);
+
+                    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth
+                                             | ImGuiTreeNodeFlags_OpenOnArrow
+                                             | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+                    if (!row.hasChildren)
+                        flags |= ImGuiTreeNodeFlags_Leaf;
+                    if (sel.Contains(row.entity))
+                        flags |= ImGuiTreeNodeFlags_Selected;
+
+                    const std::uint64_t value = static_cast<std::uint64_t>(row.entity.GetValue());
+                    const bool open = !state.collapsed.contains(value);
+                    ImGui::SetNextItemOpen(open, ImGuiCond_Always);
+                    if (row.dimmed)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    const bool nowOpen = ImGui::TreeNodeEx(row.label.c_str(), flags);
+                    if (row.dimmed)
+                        ImGui::PopStyleColor();
+                    if (row.hasChildren && nowOpen != open)
+                    {
+                        if (nowOpen) state.collapsed.erase(value);
+                        else         state.collapsed.insert(value);
+                    }
+
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)
+                        && !ImGui::IsItemToggledOpen())
+                    {
+                        const double now = ImGui::GetTime();
+                        const bool ctrl = ImGui::GetIO().KeyCtrl;
+                        const bool shift = ImGui::GetIO().KeyShift;
+                        if (ctrl)
+                            sel.Toggle(row.entity);
+                        else if (shift && sel.HasSelection())
+                        {
+                            // An anchor with no visible row (filtered out, or
+                            // under a collapsed parent) yields an empty range;
+                            // degrade to a plain select rather than moving the
+                            // primary outside the selection.
+                            const std::vector<Astra::Entity> range =
+                                RowRange(rows, sel.Primary(), row.entity);
+                            if (range.empty())
+                                sel.Select(row.entity);
+                            else
+                                sel.AddRange(range, row.entity);
+                        }
+                        else
+                        {
+                            // Slow second click on the sole-selected row = rename.
+                            const bool slowSecond = binding.editMode
+                                && sel.Count() == 1 && sel.Primary() == row.entity
+                                && state.lastClicked == row.entity
+                                && (now - state.lastClickTime) > ImGui::GetIO().MouseDoubleClickTime
+                                && (now - state.lastClickTime) < 1.2;
+                            if (slowSecond)
+                                BeginRename(state, row.entity, row.label);
+                            else
+                                sel.Select(row.entity);
+                        }
+                        state.lastClicked = row.entity;
+                        state.lastClickTime = now;
+                    }
+
+                    // Right-click selects (if outside the selection) then menus.
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)
+                        && !sel.Contains(row.entity))
+                        sel.Select(row.entity);
+                    if (ImGui::BeginPopupContextItem("##row_ctx"))
+                    {
+                        if (!binding.editMode)
+                            ImGui::BeginDisabled();
+                        if (ImGui::MenuItem("New Child Entity"))
+                        {
+                            Astra::Entity created = Astra::Entity::Invalid();
+                            const Astra::Entity parent = row.entity;
+                            if (ApplyStructural(undo, binding, "Create Entity",
+                                    [&] { created = Arcane::Edit::CreateEntity(registry, parent);
+                                          return created.IsValid(); }))
+                            {
+                                state.collapsed.erase(
+                                    static_cast<std::uint64_t>(parent.GetValue()));
+                                sel.Select(created);
+                            }
+                        }
+                        if (ImGui::MenuItem("Rename", "F2"))
+                            BeginRename(state, row.entity, row.label);
+                        // ImGui cannot open a popup from inside another popup's
+                        // scope, so the request is latched and consumed at panel
+                        // scope below (the standard deferred-OpenPopup pattern).
+                        if (ImGui::MenuItem("Add Component..."))
+                            state.addComponentPending = true;
+                        if (ImGui::MenuItem("Delete", "Del"))
+                        {
+                            if (!sel.Contains(row.entity))
+                                sel.Select(row.entity);
+                            DeleteSelection(registry, sel, undo, binding);
+                        }
+                        if (!binding.editMode)
+                            ImGui::EndDisabled();
+                        ImGui::EndPopup();
+                    }
+
+                    if (binding.editMode && ImGui::BeginDragDropSource())
+                    {
+                        ImGui::SetDragDropPayload(kOutlinerDragType,
+                                                  &row.entity, sizeof(Astra::Entity));
+                        ImGui::TextUnformatted(row.label.c_str());
+                        ImGui::EndDragDropSource();
+                    }
+                    if (binding.editMode && ImGui::BeginDragDropTarget())
+                    {
+                        if (const ImGuiPayload* p =
+                                ImGui::AcceptDragDropPayload(kOutlinerDragType))
+                        {
+                            Astra::Entity dragged;
+                            std::memcpy(&dragged, p->Data, sizeof(dragged));
+                            const std::vector<Astra::Entity> moving =
+                                sel.Contains(dragged) ? sel.Entities()
+                                                      : std::vector<Astra::Entity>{ dragged };
+                            const Astra::Entity target = row.entity;
+                            ApplyStructural(undo, binding, "Reparent",
+                                [&] { return Arcane::Edit::Reparent(registry, moving, target) > 0; });
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+
+                    if (indent > 0.0f)
+                        ImGui::Unindent(indent);
+                }
+
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+
+        // Drop below the table = unparent to root. Only visible mid-drag, and
+        // only for our own entity payload -- GetDragDropPayload() returns
+        // non-null for ANY active drag (e.g. an asset-browser drag), which
+        // used to show this strip for foreign payloads too.
+        const ImGuiPayload* activeDrag = ImGui::GetDragDropPayload();
+        if (binding.editMode && activeDrag != nullptr
+            && activeDrag->IsDataType(kOutlinerDragType))
+        {
+            ImGui::Selectable("(drop here to unparent)", false,
+                              ImGuiSelectableFlags_Disabled);
+            if (ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* p =
+                        ImGui::AcceptDragDropPayload(kOutlinerDragType))
+                {
+                    Astra::Entity dragged;
+                    std::memcpy(&dragged, p->Data, sizeof(dragged));
+                    const std::vector<Astra::Entity> moving =
+                        sel.Contains(dragged) ? sel.Entities()
+                                              : std::vector<Astra::Entity>{ dragged };
+                    ApplyStructural(undo, binding, "Unparent",
+                        [&] { return Arcane::Edit::Reparent(registry, moving,
+                                                            Astra::Entity::Invalid()) > 0; });
+                }
+                ImGui::EndDragDropTarget();
+            }
+        }
+
+        // BeginPopupContextWindow cannot serve this: the ScrollY rows table
+        // opens a child window that covers the panel, and the window-hover
+        // test behind that helper demands an EXACT window match against the
+        // outer window. Detect the hover across the child hierarchy and open
+        // the popup by hand.
+        if (binding.editMode
+            && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
+            && !ImGui::IsAnyItemHovered()
+            && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+            ImGui::OpenPopup("##outliner_ctx");
+        if (ImGui::BeginPopup("##outliner_ctx"))
+        {
+            if (ImGui::MenuItem("New Entity"))
+            {
+                Astra::Entity created = Astra::Entity::Invalid();
+                if (ApplyStructural(undo, binding, "Create Entity",
+                        [&] { created = Arcane::Edit::CreateEntity(registry,
+                                            Astra::Entity::Invalid());
+                              return created.IsValid(); }))
+                    sel.Select(created);
+            }
+            ImGui::EndPopup();
+        }
+
+        // Latched by the row menu one step earlier -- see the comment there.
+        // The right-clicked row is already in the selection (the row's
+        // right-click handler selects it when it was outside), so the popup
+        // operates on exactly what the user aimed at.
+        if (state.addComponentPending)
+        {
+            state.addComponentPending = false;
+            ImGui::OpenPopup(kAddComponentPopup);
+        }
+        DrawAddComponentPopup(registry, sel.Entities(), undo, binding);
+
+        std::size_t total = 0;
+        for (Astra::Entity e : registry.GetEntityManager())
+        {
+            (void)e;
+            ++total;
+        }
+        ImGui::Text("%zu entities (%zu selected)", total, sel.Count());
+
         ImGui::End();
     }
 
@@ -400,16 +827,132 @@ namespace Arcane::Editor
             Astra::Entity                     entity{};
             const Astra::ComponentDescriptor* descriptor = nullptr;
             std::string                       typeName;
+            const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
+
+            // Fan-out targets. `selection` includes the primary; entities lacking
+            // this component are skipped (the panel only shows components the whole
+            // selection shares, but selection and panel are a frame apart).
+            Astra::Registry*                  registry = nullptr;
+            const std::vector<Astra::Entity>* selection = nullptr;
 
             bool IsWriting() const noexcept override { return true; }
 
-            void BeginGestureIfActivated(const std::string& field)
+            // Run `fn(instanceOfThatEntity)` for every selected entity carrying
+            // this component. Falls back to the primary's own instance when the
+            // fan-out context is absent, so a field is never silently un-editable.
+            template<typename Fn>
+            void ForEachTarget(void* primaryInstance, Fn&& fn)
+            {
+                if (!registry || !selection || selection->empty())
+                {
+                    fn(entity, primaryInstance);
+                    return;
+                }
+                for (Astra::Entity e : *selection)
+                    if (void* data = registry->GetComponentByHash(e, descriptor->hash))
+                        fn(e, data);
+            }
+
+            void BeginGestureIfActivated(const std::string& field, void* primaryInstance)
             {
                 if (stack && ImGui::IsItemActivated())
                 {
                     stack->Begin("Edit " + typeName + "." + field);
-                    stack->SnapshotComponent(entity, descriptor);
+                    // One Begin + N snapshots + one Commit = one undo step for the
+                    // whole fan-out (CommandStack dedupes per (entity, descriptor)).
+                    ForEachTarget(primaryInstance,
+                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
                 }
+            }
+
+            // UE parity: a multi-selection gets NO drag widget and ignores every
+            // non-committed change. Both belts are Unreal's, in
+            // ComponentTransformDetails.cpp -- `.AllowSpin(SelectedObjects.Num()
+            // == 1)` (:505/:551/:628) and, at :1248, "Ignore interactive changes
+            // when we have more than one selected object". A single selection
+            // keeps the drag exactly as before.
+            [[nodiscard]] bool Multi() const noexcept
+            { return selection && selection->size() > 1; }
+
+            [[nodiscard]] Arcane::Editor::FieldMixedMask MixedFor(const Astra::FieldInfo& f) const
+            {
+                if (!registry || !selection || !descriptor)
+                    return {};
+                return Arcane::Editor::ComputeFieldMixed(*registry, *selection,
+                                                         descriptor->hash, f);
+            }
+
+            // Single-shot fan-out for the multi-select path: the commit is one
+            // discrete event (no widget gesture spanning frames to bracket), so
+            // Begin + snapshot-all + apply + Commit happen in one call. Commit()
+            // closes the stack before the shared EndGesture epilogue runs, whose
+            // Commit/Cancel on a closed stack are no-ops.
+            template<typename Fn>
+            void ApplyImmediate(const std::string& field, void* primaryInstance, Fn&& apply)
+            {
+                if (stack)
+                {
+                    stack->Begin("Edit " + typeName + "." + field);
+                    ForEachTarget(primaryInstance,
+                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
+                }
+                ForEachTarget(primaryInstance, [&](Astra::Entity, void* d) { apply(d); });
+                if (stack) stack->Commit();
+            }
+
+            // One multi-select scalar row: `count` TEXT-ENTRY boxes (never a
+            // drag), each rendered BLANK when that component differs across the
+            // selection -- Unreal's "unset means multiple differing values"
+            // (ComponentTransformDetails.cpp:1026). Returns the index of the
+            // component the user COMMITTED this frame, or -1 for none; typing
+            // alone writes nothing. Laid out like ImGui's own InputScalarN.
+            int MultiScalarRow(const std::string& label, int count, const float* vals,
+                               const Arcane::Editor::FieldMixedMask& mask, float& outValue)
+            {
+                int committed = -1;
+                ImGui::BeginGroup();
+                ImGui::PushID(label.c_str());
+                ImGui::PushMultiItemsWidths(count, ImGui::CalcItemWidth());
+                for (int i = 0; i < count; ++i)
+                {
+                    ImGui::PushID(i);
+                    if (i > 0)
+                        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+
+                    char buf[64];
+                    if (mask.Test(i))
+                        buf[0] = '\0';                       // differs: show nothing
+                    else
+                        std::snprintf(buf, sizeof(buf), "%.3f", vals[i]);
+
+                    const bool entered = ImGui::InputText(
+                        "", buf, sizeof(buf),
+                        ImGuiInputTextFlags_CharsDecimal |
+                        ImGuiInputTextFlags_CharsScientific |
+                        ImGuiInputTextFlags_EnterReturnsTrue);
+                    // Enter, or focus lost after an edit: the two ways ImGui says
+                    // "the user is done with this box".
+                    if ((entered || ImGui::IsItemDeactivatedAfterEdit()) && buf[0] != '\0')
+                    {
+                        char* end = nullptr;
+                        const float parsed = std::strtof(buf, &end);
+                        if (end != buf)
+                        {
+                            outValue = parsed;
+                            committed = i;
+                        }
+                    }
+                    ImGui::PopID();
+                    ImGui::PopItemWidth();
+                }
+                ImGui::PopID();
+                if (!label.empty())
+                {
+                    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+                    ImGui::TextUnformatted(label.c_str());
+                }
+                ImGui::EndGroup();
+                return committed;
             }
 
             void EndGesture()
@@ -417,6 +960,24 @@ namespace Arcane::Editor
                 if (!stack) return;
                 if (ImGui::IsItemDeactivatedAfterEdit()) stack->Commit();
                 else if (ImGui::IsItemDeactivated())     stack->Cancel();
+            }
+
+            // Single-shot edit (asset drop / popup pick / clear): no widget gesture
+            // to bracket, so the whole transaction happens in one call. Commit()
+            // closes the stack before the shared EndGesture epilogue runs -- its
+            // Commit/Cancel on a closed stack are no-ops.
+            void ApplyGuidImmediate(const std::string& field, const Astra::FieldInfo& f,
+                                    void* instance, const Arcane::Guid& v)
+            {
+                if (stack)
+                {
+                    stack->Begin("Edit " + typeName + "." + field);
+                    ForEachTarget(instance,
+                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
+                }
+                ForEachTarget(instance, [&](Astra::Entity, void* d)
+                              { Arcane::Editor::ApplyGuidEdit(f, d, v); });
+                if (stack) stack->Commit();
             }
 
             void Visit(const Astra::FieldInfo& f, void* instance) override
@@ -428,41 +989,175 @@ namespace Arcane::Editor
                     case Arcane::Editor::FieldKind::Bool:
                     {
                         bool v = f.Get<bool>(instance);
+                        // ImGui's native tri-state. ImGuiItemFlags_MixedValue is
+                        // Checkbox-ONLY in our vendored ImGui (imgui_internal.h:984),
+                        // which is why the numeric kinds below blank by hand.
+                        // Clicking a mixed checkbox resolves the whole selection to
+                        // one value -- ImGui's documented behaviour, and UE's.
+                        const bool boolMixed = Multi() && MixedFor(f).Any();
+                        if (boolMixed)
+                            ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
                         bool changed = ImGui::Checkbox(label.c_str(), &v);
-                        BeginGestureIfActivated(label);
-                        if (changed) Arcane::Editor::ApplyBoolEdit(f, instance, v);
+                        if (boolMixed)
+                            ImGui::PopItemFlag();
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { Arcane::Editor::ApplyBoolEdit(f, d, v); });
                         break;
                     }
                     case Arcane::Editor::FieldKind::Int32:
                     {
                         int v = f.Get<int32_t>(instance);
+                        if (Multi())
+                        {
+                            const float cur = static_cast<float>(v);
+                            float out = cur;
+                            if (MultiScalarRow(label, 1, &cur, MixedFor(f), out) >= 0)
+                            {
+                                const int iv = static_cast<int>(out);
+                                ApplyImmediate(label, instance, [&](void* d)
+                                               { Arcane::Editor::ApplyIntEdit(f, d, iv); });
+                            }
+                            break;
+                        }
                         bool changed = ImGui::DragInt(label.c_str(), &v);
-                        BeginGestureIfActivated(label);
-                        if (changed) Arcane::Editor::ApplyIntEdit(f, instance, v);
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { Arcane::Editor::ApplyIntEdit(f, d, v); });
                         break;
                     }
                     case Arcane::Editor::FieldKind::Float:
                     {
                         float v = f.Get<float>(instance);
+                        if (Multi())
+                        {
+                            float out = v;
+                            if (MultiScalarRow(label, 1, &v, MixedFor(f), out) >= 0)
+                                ApplyImmediate(label, instance, [&](void* d)
+                                               { Arcane::Editor::ApplyFloatEdit(f, d, out); });
+                            break;
+                        }
                         bool changed = ImGui::DragFloat(label.c_str(), &v, 0.1f);
-                        BeginGestureIfActivated(label);
-                        if (changed) Arcane::Editor::ApplyFloatEdit(f, instance, v);
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { Arcane::Editor::ApplyFloatEdit(f, d, v); });
                         break;
                     }
                     case Arcane::Editor::FieldKind::Vec2:
                     {
                         glm::vec2 v = f.Get<glm::vec2>(instance);
+                        if (Multi())
+                        {
+                            float out = 0.0f;
+                            // Only the COMMITTED component is written, so typing
+                            // into one blank axis leaves the others alone on every
+                            // target -- the point of per-axis mixed values.
+                            const int c = MultiScalarRow(label, 2, &v.x, MixedFor(f), out);
+                            if (c >= 0)
+                                ApplyImmediate(label, instance, [&](void* d)
+                                               { if (glm::vec2* p = f.GetPtr<glm::vec2>(d)) (*p)[c] = out; });
+                            break;
+                        }
                         bool changed = ImGui::DragFloat2(label.c_str(), &v.x, 0.1f);
-                        BeginGestureIfActivated(label);
-                        if (changed) if (glm::vec2* p = f.GetPtr<glm::vec2>(instance)) *p = v;
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { if (glm::vec2* p = f.GetPtr<glm::vec2>(d)) *p = v; });
                         break;
                     }
                     case Arcane::Editor::FieldKind::Vec3:
                     {
                         glm::vec3 v = f.Get<glm::vec3>(instance);
+                        if (Multi())
+                        {
+                            float out = 0.0f;
+                            const int c = MultiScalarRow(label, 3, &v.x, MixedFor(f), out);
+                            if (c >= 0)
+                                ApplyImmediate(label, instance, [&](void* d)
+                                               { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) (*p)[c] = out; });
+                            break;
+                        }
                         bool changed = ImGui::DragFloat3(label.c_str(), &v.x, 0.1f);
-                        BeginGestureIfActivated(label);
-                        if (changed) if (glm::vec3* p = f.GetPtr<glm::vec3>(instance)) *p = v;
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) *p = v; });
+                        break;
+                    }
+                    case Arcane::Editor::FieldKind::AssetRef:
+                    {
+                        // Asset-reference (Guid) field: button shows the resolved
+                        // mount path (or raw guid), opens a pick popup, and accepts
+                        // browser drags; "x" clears. Kind filter is inferred from
+                        // the field name (AssetKindFilterForFieldName).
+                        const Arcane::Guid v = f.Get<Arcane::Guid>(instance);
+                        const int kindFilter = Arcane::Editor::AssetKindFilterForFieldName(label);
+
+                        std::string display = "(none)";
+                        if (v.IsValid())
+                        {
+                            display = v.ToString();
+                            if (project)
+                                if (const auto mount = project->Registry().Resolve(v))
+                                    display = *mount;
+                        }
+
+                        if (ImGui::Button((display + "##assetref").c_str()))
+                            ImGui::OpenPopup("##assetpick");
+                        if (ImGui::BeginDragDropTarget())
+                        {
+                            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(Arcane::Editor::kAssetDragType))
+                            {
+                                const auto* payload = static_cast<const Arcane::Editor::AssetDragPayload*>(p->Data);
+                                if (kindFilter < 0 || static_cast<int>(payload->kind) == kindFilter)
+                                    ApplyGuidImmediate(label, f, instance, payload->guid);
+                            }
+                            ImGui::EndDragDropTarget();
+                        }
+                        if (v.IsValid())
+                        {
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("x##assetclear"))
+                                ApplyGuidImmediate(label, f, instance, Arcane::Guid::Nil());
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(label.c_str());
+
+                        if (ImGui::BeginPopup("##assetpick"))
+                        {
+                            if (!project)
+                            {
+                                ImGui::TextDisabled("no project open");
+                            }
+                            else
+                            {
+                                // Type-to-filter (one popup is open at a time,
+                                // so a function-local buffer serves them all).
+                                static char s_pickSearch[64] = {};
+                                if (ImGui::IsWindowAppearing())
+                                {
+                                    s_pickSearch[0] = '\0';
+                                    ImGui::SetKeyboardFocusHere();
+                                }
+                                ImGui::InputTextWithHint("##assetsearch", "Search...",
+                                                         s_pickSearch, sizeof(s_pickSearch));
+                                ImGui::Separator();
+                                if (ImGui::Selectable("(none)"))
+                                    ApplyGuidImmediate(label, f, instance, Arcane::Guid::Nil());
+                                for (const Arcane::Editor::AssetEntry& e :
+                                     Arcane::Editor::BuildAssetEntries(project->Registry()))
+                                {
+                                    if (!Arcane::Editor::MatchesFilter(e, kindFilter, s_pickSearch))
+                                        continue;
+                                    if (ImGui::Selectable((e.name + "##" + e.mountPath).c_str(), e.guid == v))
+                                        ApplyGuidImmediate(label, f, instance, e.guid);
+                                }
+                            }
+                            ImGui::EndPopup();
+                        }
                         break;
                     }
                     case Arcane::Editor::FieldKind::ReadOnly:
@@ -479,7 +1174,8 @@ namespace Arcane::Editor
     }
 
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo, bool editMode)
+                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
+                            const Arcane::Project* project)
     {
         ImGui::Begin("Inspector");
         if (!sel.HasSelection())
@@ -488,27 +1184,122 @@ namespace Arcane::Editor
             ImGui::End();
             return;
         }
-        for (const Astra::Registry::ComponentInfo& ci : registry.InspectEntity(sel.selected))
+
+        const Astra::Entity primary = sel.Primary();
+        const std::string primaryName = Arcane::Edit::DisplayName(registry, primary);
+        if (sel.Count() > 1)
+            ImGui::Text("%s (+%zu)", primaryName.c_str(), sel.Count() - 1);
+        else
+            ImGui::TextUnformatted(primaryName.c_str());
+        ImGui::Separator();
+
+        // Removal is DEFERRED past the loop: Edit::RemoveComponent moves the
+        // entity to a different archetype, which dangles every ci.data pointer
+        // in the vector being iterated. Descriptor pointers themselves are
+        // stable (they live in ComponentRegistry's fixed array).
+        const Astra::ComponentDescriptor* pendingRemove = nullptr;
+
+        for (const Astra::Registry::ComponentInfo& ci : registry.InspectEntity(primary))
         {
-            if (!ci.descriptor || !ci.descriptor->visitFields || !ci.data) continue;
+            // An unreflected component has no name to show and no fields to
+            // visit: visitFields is populated FROM TypeMeta at registration, so
+            // meta != null implies visitFields != null.
+            if (!ci.descriptor || !ci.meta)
+                continue;
             // TypeMeta::typeName is a std::string_view into a substring of a larger
             // compile-time literal (__FUNCSIG__/__PRETTY_FUNCTION__) -- NOT
             // guaranteed NUL-terminated, so it is copied into a std::string before
             // handing a `const char*` to ImGui.
-            const std::string typeName = ci.meta ? std::string(ci.meta->typeName) : std::string("<unreflected>");
-            if (ImGui::CollapsingHeader(typeName.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+            const std::string typeName(ci.meta->typeName);
+            // Derived/runtime-owned state is never authored. ONE hide-list, in
+            // ComponentCatalog.hpp: the same predicate gates these sections, the
+            // Add Component catalog, and Remove Component, so the three cannot
+            // drift apart.
+            if (IsSystemManagedComponent(typeName))
+                continue;
+
+            // Component-type INTERSECTION: editing a component only some of the
+            // selection carries would silently edit a subset, so hide it entirely.
+            // HasComponentByHash, NOT GetComponentByHash: an empty (tag) component
+            // has no storage array, so the getter returns null even when present,
+            // which used to make every tag component look unshared.
+            bool sharedByAll = true;
+            for (Astra::Entity e : sel.Entities())
             {
-                ImGuiFieldVisitor visitor;
-                // Null while Play is running: BeginGestureIfActivated/EndGesture both
-                // early-return on a null stack, so gesture bracketing is fully inert
-                // (no Begin, no Commit/Cancel) against the live simulating registry.
-                visitor.stack      = editMode ? &undo : nullptr;
-                visitor.entity     = sel.selected;
-                visitor.descriptor = ci.descriptor;
-                visitor.typeName   = typeName;
-                ci.descriptor->visitFields(ci.data, visitor);
+                if (e != primary && !registry.HasComponentByHash(e, ci.descriptor->hash))
+                {
+                    sharedByAll = false;
+                    break;
+                }
             }
+            if (!sharedByAll)
+                continue;
+
+            const bool open = ImGui::CollapsingHeader(typeName.c_str(),
+                                                      ImGuiTreeNodeFlags_DefaultOpen);
+            // Header context menu. A null str_id makes the popup inherit the
+            // HEADER's item id, so each component gets its own popup -- a shared
+            // literal id would make every header open the same popup and the
+            // first-drawn component would swallow the click.
+            if (ImGui::BeginPopupContextItem())
+            {
+                if (!binding.editMode)
+                    ImGui::BeginDisabled();
+                if (ImGui::MenuItem("Remove Component"))
+                    pendingRemove = ci.descriptor;
+                if (!binding.editMode)
+                    ImGui::EndDisabled();
+                ImGui::EndPopup();
+            }
+            if (!open)
+                continue;
+
+            // Tag components (Astra's is_empty optimization) have no storage
+            // array, so ci.data is null even though the entity carries them.
+            // They still get a header: that is what makes them visible at all,
+            // and what makes them removable through the menu above.
+            if (!ci.data)
+            {
+                ImGui::TextDisabled("(tag component -- no fields)");
+                continue;
+            }
+
+            ImGuiFieldVisitor visitor;
+            // Null while Play is running: BeginGestureIfActivated/EndGesture both
+            // early-return on a null stack, so gesture bracketing is fully inert
+            // (no Begin, no Commit/Cancel) against the live simulating registry.
+            visitor.stack      = binding.editMode ? &undo : nullptr;
+            visitor.entity     = primary;
+            visitor.descriptor = ci.descriptor;
+            visitor.typeName   = typeName;
+            visitor.project    = project;
+            visitor.registry   = &registry;
+            visitor.selection  = &sel.Entities();
+            ci.descriptor->visitFields(ci.data, visitor);
         }
+
+        if (pendingRemove)
+        {
+            // Copy the selection: ApplyStructural's mutate runs immediately and
+            // the span must outlive it.
+            const std::vector<Astra::Entity> targets = sel.Entities();
+            const Astra::ComponentDescriptor& desc = *pendingRemove;
+            ApplyStructural(undo, binding, "Remove Component",
+                [&] { return Arcane::Edit::RemoveComponent(registry, targets, desc) > 0; });
+        }
+
+        // Bottom of the panel, full width -- the UE/Unity placement.
+        ImGui::Separator();
+        if (!binding.editMode)
+            ImGui::BeginDisabled();
+        if (ImGui::Button(ICON_LC_PLUS " Add Component", ImVec2(-FLT_MIN, 0.0f)))
+            ImGui::OpenPopup(kAddComponentPopup);
+        if (!binding.editMode)
+            ImGui::EndDisabled();
+        // Drawn unconditionally at window scope: BeginPopup is a no-op until
+        // the button above (or a previous frame's click) opened it.
+        DrawAddComponentPopup(registry, sel.Entities(), undo, binding);
+
         ImGui::End();
     }
 }

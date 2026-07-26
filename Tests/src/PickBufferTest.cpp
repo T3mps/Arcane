@@ -49,12 +49,13 @@ namespace
     // component IDs -- otherwise [pick] run in isolation would see 0 sprites.
     std::unique_ptr<Astra::Registry> MakePickRegistry()
     {
-        static const bool s_ctxPinned = []
-        {
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
-            return true;
-        }();
-        (void)s_ctxPinned;
+        // Belt-and-braces: test_main pins Arcane.dll's TypeContext slot once
+        // before any test runs, which is the real guarantee (per-type IDs are
+        // cached in per-module magic statics and never re-resolve, so a late
+        // pin cannot repair an already-cached id). Re-pinning here only keeps
+        // the slot pointed at the shared context; never install an unshared
+        // one anywhere in this suite.
+        Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
 
         auto components = std::make_shared<Astra::ComponentRegistry>();
         auto reg = std::make_unique<Astra::Registry>(components);
@@ -96,10 +97,10 @@ namespace
     {
         const Astra::Entity e = reg.CreateEntity();
 
-        Arcane::LocalTransform lt;
+        Arcane::Transform lt;
         lt.position = pos;
         lt.scale    = scale;
-        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        reg.AddComponent<Arcane::Transform>(e, lt);
 
         Arcane::RigidBody2D rb;
         rb.type = Manifold2D::Physics::BodyType::Kinematic;

@@ -20,16 +20,35 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace Arcane
 {
     class ShaderLibrary;
+    class MaterialTemplate;
+    class MaterialInstance;
+    struct GlobalParams;
+
+    // A registered scene sprite material (Slice 8): shaders compiled from the
+    // SPRITE template (sprite_material.hlsl register map), the layout/values
+    // pair, and the declared texture params already resolved to GPU handles
+    // (ordinal order -- they bind at t1..; t0 is the sprite's own texture).
+    // The instance is the SAVED asset's values -- scene sprites never render a
+    // document's working copy.
+    struct Material2DDesc
+    {
+        nvrhi::ShaderHandle vs;
+        nvrhi::ShaderHandle ps;
+        std::shared_ptr<const MaterialTemplate> templ;
+        std::shared_ptr<const MaterialInstance> instance;
+        std::vector<nvrhi::TextureHandle> paramTextures;
+    };
 
     // The 4 corners of a quad, in the order Batcher2D emits them: TL, TR, BR, BL.
     // Given a top-left `pos` + `size`, rotated by `rotation` radians about the
     // quad's CENTER. rotation 0 returns EXACTLY the axis-aligned corners (the
     // byte-identical legacy path). The rotation matches the engine convention
-    // R(a)*v = (c*vx - s*vy, s*vx + c*vy) (LocalTransform::ToMatrix /
+    // R(a)*v = (c*vx - s*vy, s*vx + c*vy) (Transform::ToMatrix /
     // Physics::RotateVec), so a sprite turns in lockstep with its physics body.
     [[nodiscard]] inline std::array<glm::vec2, 4>
     QuadCorners(glm::vec2 pos, glm::vec2 size, float rotation) noexcept
@@ -70,6 +89,28 @@ namespace Arcane
 
         virtual ~Batcher2D() = default;
 
+        // The material table (Slice 8): every draw carries a material id; the
+        // built-in pipelines are entries 0..2, so the pre-material path is the
+        // degenerate case. Registered ids start at 3.
+        static constexpr uint16_t kMaterialSprite    = 0;
+        static constexpr uint16_t kMaterialCircle    = 1;
+        static constexpr uint16_t kMaterialText      = 2;
+        static constexpr uint16_t kInvalidMaterialId = 0xFFFF;
+
+        // Register a compiled sprite-surface material; returns its id
+        // (kInvalidMaterialId with ARC_WARN on bad inputs / resource failure).
+        // UpdateMaterial replaces a slot in place (recompile / asset re-save)
+        // and drops that material's cached pipelines + binding sets. Interface
+        // DEFAULTS (not pure): geometry-recording test doubles stay valid --
+        // they refuse registration and QuadMaterial below degrades to Quad.
+        virtual uint16_t RegisterMaterial(Material2DDesc) { return kInvalidMaterialId; }
+        virtual bool UpdateMaterial(uint16_t, Material2DDesc) { return false; }
+
+        // Engine-global shader constants (Time/DeltaTime/ViewportSize) for
+        // registered materials, uploaded once per End(). Sticky -- the host
+        // sets them once per frame before recording. Built-ins ignore them.
+        virtual void SetGlobals(const GlobalParams&) {}
+
         // Begin/End bracket one target per command list recording. The
         // command list must be open; End() records the draws.
         virtual void Begin(nvrhi::ICommandList* commandList,
@@ -79,7 +120,7 @@ namespace Arcane
 
         // Sorting: every draw carries the current (layer, orderInLayer).
         // End() stable-sorts draws by a 64-bit key -- layer(16) | order(16)
-        // | pipelineKind(8) | textureSlot(16) -- giving correct transparency
+        // | materialId(16) | textureSlot(16) -- giving correct transparency
         // ordering AND minimal state changes in one pass. Ordering WITHIN one
         // (layer, order) is non-deterministic and can change frame to frame
         // (texture slots are assigned per-Begin in first-use order) --
@@ -96,6 +137,21 @@ namespace Arcane
                           nvrhi::ITexture* texture,
                           glm::vec2 uvMin, glm::vec2 uvMax,
                           glm::vec4 color, float rotation = 0.0f) = 0;
+
+        // Textured quad through a REGISTERED material's pipeline: identical
+        // geometry/stream to Quad (the tint rides as vertex color -- the
+        // snippet sees it as Varyings.color), the material's params/textures
+        // bind beside it. An unknown/built-in id falls back to the plain
+        // sprite pipeline. Interface default: plain Quad (test doubles record
+        // the same geometry).
+        virtual void QuadMaterial(uint16_t /*materialId*/,
+                                  glm::vec2 dstPos, glm::vec2 dstSize,
+                                  nvrhi::ITexture* texture,
+                                  glm::vec2 uvMin, glm::vec2 uvMax,
+                                  glm::vec4 color, float rotation = 0.0f)
+        {
+            Quad(dstPos, dstSize, texture, uvMin, uvMax, color, rotation);
+        }
 
         // MSDF glyph quad: same geometry as Quad but rendered through the
         // msdf pipeline (median-of-3 distance + screen-space AA). Text

@@ -6,6 +6,7 @@
 // the RunLoop, and the JobSystem. ARCANE_API: the plugin and the host both call it.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
@@ -16,9 +17,12 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace nvrhi { class IDevice; }
@@ -77,10 +81,22 @@ namespace Arcane
         // The open project, or nullptr when none is open (no-project fallback mode).
         const Project* CurrentProject() const noexcept;
 
+        // Register an editor-created asset file with the open project's registry
+        // (Project::RegisterAsset). Idempotent. nullopt when no project is open or
+        // the file lies outside every content root.
+        std::optional<Guid> RegisterCreatedAsset(const std::filesystem::path& file);
+
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
         // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
         // so the PLUGIN owns the camera (via SetCamera) and the host stays camera-agnostic.
         void SetRenderContext(Batcher2D* batcher);
+
+        // Publish the sprite-material resolution map (Guid -> Batcher2D material
+        // id, owned by the host's SpriteMaterialCache) into the registry's
+        // SpriteMaterialTable resource. Runs IN this module so the scene TypeID
+        // resolves against the shared context (SetRenderContext's rule). Null
+        // clears the table (sprites fall back to the plain pipeline).
+        void SetSpriteMaterials(const std::unordered_map<Guid, std::uint16_t>* materials);
 
         // --- render-resources bridge: device + shader library the host owns ---------
         // The plugin reaches the engine ONLY through this Runtime, but the nvrhi device

@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -91,6 +92,32 @@ namespace Arcane
             void SetContentRoot(const std::filesystem::path& root) override
             {
                 m_contentRoot = root;
+            }
+
+            void SetAssetResolver(AssetResolver resolver) override
+            {
+                m_resolver = std::move(resolver);
+                // A new resolver (project open / registry rescan) may know ids that
+                // previously failed -- drop the warn-once memos for a clean retry.
+                m_idFailures.clear();
+            }
+
+            nvrhi::TextureHandle GetTexture(const AssetId& id) override
+            {
+                const auto p = ResolveId(id);
+                return p ? GetTexture(*p) : nullptr;
+            }
+
+            BytesPtr GetBytes(const AssetId& id) override
+            {
+                const auto p = ResolveId(id);
+                return p ? GetBytes(*p) : nullptr;
+            }
+
+            JsonPtr GetJson(const AssetId& id) override
+            {
+                const auto p = ResolveId(id);
+                return p ? GetJson(*p) : nullptr;
             }
 
             nvrhi::TextureHandle GetTexture(
@@ -324,9 +351,36 @@ namespace Arcane
                 return ExeRelative(path);
             }
 
+            // AssetId -> physical file through the installed resolver. Unresolved ids
+            // warn ONCE (per id, until a new resolver is installed) -- a per-frame
+            // caller polling a dead reference must not storm the log. The resolved
+            // path feeds the path loaders, whose own caches key on the file.
+            std::optional<std::filesystem::path> ResolveId(const AssetId& id)
+            {
+                if (!id.IsValid())
+                {
+                    if (m_idFailures.insert(Guid::Nil()).second)
+                        ARC_WARN("Assets: load requested for an invalid (nil) AssetId");
+                    return std::nullopt;
+                }
+                if (!m_resolver)
+                {
+                    if (m_idFailures.insert(id.Value()).second)
+                        ARC_WARN("Assets: no asset resolver installed (open a project first); "
+                                 "id {}", id.Value().ToString());
+                    return std::nullopt;
+                }
+                auto p = m_resolver(id);
+                if (!p && m_idFailures.insert(id.Value()).second)
+                    ARC_WARN("Assets: unresolved asset id {}", id.Value().ToString());
+                return p;
+            }
+
             nvrhi::IDevice* m_device;
             uint64_t m_byteBudget;
             std::filesystem::path m_contentRoot;   // empty => exe-relative (legacy)
+            AssetResolver m_resolver;              // empty => AssetId loads fail
+            std::unordered_set<Guid> m_idFailures; // warn-once memo per unresolved id
 
             // ONE recency clock across the three caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU

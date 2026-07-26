@@ -67,7 +67,7 @@ namespace Arcane
     //      entity, derived from the world matrix + SpriteRenderer::size (same
     //      OBB math the retired CPU sprite-OBB pick used: center = translation
     //      column, angle = atan2 of the local-x column, half-extents = size*0.5
-    //      scaled by the column magnitudes -- LocalTransform.scale baked into
+    //      scaled by the column magnitudes -- Transform.scale baked into
     //      the world matrix), then projected to canvas via `view`.
     //   2. Colliders -- one PickDrawable per Fixture, iterated via an
     //      archetype-stable View<Collider2D, PhysicsBodyRef> (DETERMINISTIC:

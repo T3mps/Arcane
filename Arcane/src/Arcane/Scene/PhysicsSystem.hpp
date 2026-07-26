@@ -1,7 +1,7 @@
 #pragma once
 
 // PhysicsSystem (M6 Physics-v2 T6): Astra fixed-update system that drives the
-// PhysicsWorld from the ECS and writes results back to LocalTransform components.
+// PhysicsWorld from the ECS and writes results back to Transform components.
 //
 // Also defines PhysicsResource: the Registry resource (singleton) holding the
 // PhysicsWorld and the entity<->BodyHandle map. PhysicsResource lives here
@@ -18,7 +18,7 @@
 //      are collected first to keep iteration safe.
 //
 //   2. CREATE/SYNC PASS -- for each entity with RigidBody2D + Collider2D +
-//      PhysicsBodyRef + LocalTransform whose PhysicsBodyRef.handle == kInvalidBody:
+//      PhysicsBodyRef + Transform whose PhysicsBodyRef.handle == kInvalidBody:
 //      - Build a BodyDef from RigidBody2D + fixtures[0] (shape + material).
 //      - Call world->AddBody(def) to create the body with the primary fixture.
 //      - For each subsequent fixture (fixtures[1..N-1]) call world->AddFixture
@@ -36,17 +36,17 @@
 //
 //   4. WRITE-BACK -- for each tracked entity:
 //      - (Epic 04.2, opt-in) if the entity carries a PreviousTransform, stash
-//        the about-to-be-overwritten LocalTransform pose into it first, so
+//        the about-to-be-overwritten Transform pose into it first, so
 //        RenderSubmissionSystem can lerp prev -> current by render alpha.
 //      - Then write:
-//        world->Position(handle) -> LocalTransform.position
-//        world->GetAngle(handle) -> LocalTransform.rotation
+//        world->Position(handle) -> Transform.position
+//        world->GetAngle(handle) -> Transform.rotation
 //      (Also writes Velocity back into RigidBody2D.velocity for Dynamic bodies.)
 //      TransformPropagationSystem (registered after this system) then derives
-//      WorldTransform from the updated LocalTransform.
+//      WorldTransform from the updated Transform.
 //
 // Ordering guarantee: PhysicsSystem is registered in fixedUpdate BEFORE
-// TransformPropagationSystem; the Writes<LocalTransform> trait creates the data
+// TransformPropagationSystem; the Writes<Transform> trait creates the data
 // dependency that the scheduler respects.
 //
 // Determinism contract: fixed dt, stable view iteration (Astra guarantees
@@ -124,7 +124,7 @@ namespace Arcane
 
     // -------------------------------------------------------------------------
     // MakeScaledShape: build a Manifold2D Shape from a Fixture descriptor scaled
-    // by an authored LocalTransform.scale. Aabb scales per-axis exact; Circle uses
+    // by an authored Transform.scale. Aabb scales per-axis exact; Circle uses
     // max(|sx|,|sy|) (a circle has no distinguished axis; max never shrinks below
     // the larger authored axis); Capsule scales its length by |sx| and radius by
     // |sy| (a scalar-radius capsule is approximate under non-uniform scale -- the
@@ -167,7 +167,7 @@ namespace Arcane
 
     // -------------------------------------------------------------------------
     // MakeFixtureDef: build a Core::FixtureDef from a scene-layer Fixture desc,
-    // scaled by the entity's authored LocalTransform.scale (default identity).
+    // scaled by the entity's authored Transform.scale (default identity).
     // -------------------------------------------------------------------------
     // Helper shared by the body-primary and AddFixture paths. Inline to keep
     // PhysicsSystem.hpp header-only.
@@ -233,7 +233,7 @@ namespace Arcane
     // -------------------------------------------------------------------------
     struct PhysicsSystem
         : Astra::SystemTraits<Astra::Reads<Collider2D>,
-                              Astra::Writes<LocalTransform, PreviousTransform, PhysicsBodyRef, RigidBody2D>>
+                              Astra::Writes<Transform, PreviousTransform, PhysicsBodyRef, RigidBody2D>>
     {
         // fixedDt: the fixed timestep (seconds) forwarded to PhysicsWorld::Step.
         // Determinism contract: callers MUST pass the same constant every tick.
@@ -284,12 +284,12 @@ namespace Arcane
             // not depend on unordered_map hash/bucket layout.
             // ------------------------------------------------------------------
             {
-                auto view = reg.CreateView<RigidBody2D, Collider2D, PhysicsBodyRef, LocalTransform>();
+                auto view = reg.CreateView<RigidBody2D, Collider2D, PhysicsBodyRef, Transform>();
                 view.ForEach([&](Astra::Entity   entity,
                                  RigidBody2D&    rb,
                                  Collider2D&     col,
                                  PhysicsBodyRef& ref,
-                                 LocalTransform& lt)
+                                 Transform& lt)
                 {
                     // Skip entities that already have a tracked live handle.
                     if (ref.handle != Phys::kInvalidBody &&
@@ -311,7 +311,7 @@ namespace Arcane
                     def.type     = rb.type;
                     def.position = Phys::Vec2(lt.position.x, lt.position.y);
 
-                    // Primary fixture shape, scaled by the authored LocalTransform.scale.
+                    // Primary fixture shape, scaled by the authored Transform.scale.
                     def.shape = MakeScaledShape(fx0, lt.scale);
 
                     // Material + filter + local transform from fixture[0].
@@ -406,7 +406,7 @@ namespace Arcane
 
             // ------------------------------------------------------------------
             // PASS 3.5: AUTHOR RECONCILE (paused only). When the sim is frozen the
-            // AUTHOR owns pos/rot: push a diverged LocalTransform edit into the body
+            // AUTHOR owns pos/rot: push a diverged Transform edit into the body
             // BEFORE PASS 4 reflects the (now-matching) body pose back. Stateless --
             // a paused body cannot move itself, so the live body pose is the baseline
             // and any divergence is an author edit. Skipped while stepping (Play =
@@ -414,10 +414,10 @@ namespace Arcane
             // ------------------------------------------------------------------
             if (!m_stepWorld)
             {
-                auto view = reg.CreateView<PhysicsBodyRef, LocalTransform, Collider2D, RigidBody2D>();
+                auto view = reg.CreateView<PhysicsBodyRef, Transform, Collider2D, RigidBody2D>();
                 view.ForEach([&](Astra::Entity   /*entity*/,
                                  PhysicsBodyRef&  ref,
-                                 LocalTransform&  lt,
+                                 Transform&  lt,
                                  Collider2D&      col,
                                  RigidBody2D&     /*rb*/)
                 {
@@ -458,15 +458,15 @@ namespace Arcane
             }
 
             // ------------------------------------------------------------------
-            // PASS 4: WRITE-BACK -- propagate post-step poses to LocalTransform.
+            // PASS 4: WRITE-BACK -- propagate post-step poses to Transform.
             // TransformPropagationSystem (ordered after this) then reads
-            // LocalTransform and derives WorldTransform.
+            // Transform and derives WorldTransform.
             // ------------------------------------------------------------------
             {
-                auto view = reg.CreateView<PhysicsBodyRef, LocalTransform, RigidBody2D>();
+                auto view = reg.CreateView<PhysicsBodyRef, Transform, RigidBody2D>();
                 view.ForEach([&](Astra::Entity   entity,
                                  PhysicsBodyRef& ref,
-                                 LocalTransform& lt,
+                                 Transform& lt,
                                  RigidBody2D&    rb)
                 {
                     if (ref.handle == Phys::kInvalidBody) return;

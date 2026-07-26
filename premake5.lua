@@ -46,6 +46,9 @@ workspace "Arcane"
     -- and consumers (ArcaneTests/Loom) import. Without this each module
     -- keeps its own null GImGui and ShowDemoWindow() from the test exe asserts.
     THIRDPARTY_IMGUI_API        = "__declspec(dllexport)"
+    -- imgui-node-editor links into ArcaneEditor.exe, which IMPORTS imgui from
+    -- Arcane.dll -- its ImGui calls must be dllimport (see the wrapper).
+    THIRDPARTY_NODE_EDITOR_IMGUI_API = "__declspec(dllimport)"
 
     IncludeDir = {}
     IncludeDir["Core"]             = "%{wks.location}/Core/src"
@@ -68,6 +71,7 @@ workspace "Arcane"
     IncludeDir["DirectXHeaders"]   = "%{wks.location}/../ThirdParty/DirectX-Headers/include"
     IncludeDir["SDL3"]             = VCPKG_INSTALLED_MD .. "/include"
     IncludeDir["imgui"]            = "%{wks.location}/../ThirdParty/imgui"
+    IncludeDir["imguinodeeditor"]  = "%{wks.location}/../ThirdParty/imgui-node-editor"
     IncludeDir["Manifold2D"]       = "%{wks.location}/../ThirdParty/Manifold2D/include"
     IncludeDir["Mosaic"]           = "%{wks.location}/../ThirdParty/Mosaic/include"
 
@@ -80,6 +84,7 @@ group "Dependencies"
     include "../ThirdParty/msdfgen"
     include "../ThirdParty/nvrhi"
     include "../ThirdParty/imgui"
+    include "../ThirdParty/imgui-node-editor"
     include "../ThirdParty/Manifold2D"
 group ""
 
@@ -126,6 +131,7 @@ project "Core"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
@@ -224,6 +230,7 @@ project "Arcane"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         defines { "VK_USE_PLATFORM_WIN32_KHR" }
         -- d3d12/dxgi/dxguid: D3D12 backend. SDL3-static + system libs:
         -- the platform layer (list mirrors SDL3's pkgconfig Libs line).
@@ -276,6 +283,7 @@ project "PlaygroundGame"
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
         "%{wks.location}/Arcane/src",
+        "%{IncludeDir.Core}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
         "%{IncludeDir.glm}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.Astra}",
@@ -292,6 +300,7 @@ project "PlaygroundGame"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
     filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
@@ -353,6 +362,7 @@ project "Sandbox"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
     filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
@@ -398,12 +408,21 @@ project "Loom"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/PlaygroundGame/PlaygroundGame.dll" "%{cfg.buildtarget.directory}/PlaygroundGame.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        -- Material TEMPLATE SOURCES (not compiled artifacts): the material
+        -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
+        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
         '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
+        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
+        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
     filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
@@ -440,18 +459,23 @@ project "ArcaneEditor"
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.glm}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.imguinodeeditor}",
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
-    links { "Core", "Arcane" }
+    links { "Core", "Arcane", "imgui-node-editor" }
     dependson { "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Sandbox/Sandbox.dll" "%{cfg.buildtarget.directory}/Sandbox.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        -- Material TEMPLATE SOURCES (not compiled artifacts): the material
+        -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
+        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYDIR} "%{wks.location}/EngineConfig" "%{cfg.buildtarget.directory}/EngineConfig"',
         '{COPYDIR} "%{wks.location}/SampleProject" "%{cfg.buildtarget.directory}/SampleProject"',
@@ -469,10 +493,15 @@ project "ArcaneEditor"
         -- (LoadDisplayTexture). Same PNG, exe-relative at "data/images/arcane_logo.png".
         '{MKDIR} "%{cfg.buildtarget.directory}/data/images"',
         '{COPYFILE} "%{wks.location}/data/images/arcane_logo.png" "%{cfg.buildtarget.directory}/data/images/arcane_logo.png"',
+        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
+        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         -- .exe file icon (Explorer/taskbar/Alt-Tab): a Win32 ICON resource. The .rc
         -- references arcane.ico by name; resincludedirs points RC at its folder.
         files { "%{prj.location}/resources/ArcaneEditor.rc" }
@@ -536,6 +565,22 @@ project "ArcaneTests"
         -- drives it directly against a real Arcane::Runtime, same pattern as
         -- ConsoleBuffer/ViewportInput/EntityList/InspectorFields above.
         "%{wks.location}/ArcaneEditor/src/PlayMode.cpp",
+        -- Shader-editor Slice 5: DocumentHost (open-document list + unsaved-
+        -- close confirm state machine + asset->editor routing) source-compiles
+        -- into the test exe so the [editor] units drive the PURE close flow
+        -- with fake documents -- DrawAll (the only ImGui method) is not called.
+        "%{wks.location}/ArcaneEditor/src/DocumentHost.cpp",
+        -- Shader-editor review fixes: ShaderEditorDocument source-compiles into
+        -- the test exe so the [editor] units drive its HEADLESS halves directly
+        -- (save-before-bind, parent-chain resolution, compile-result routing).
+        -- Draw (the ImGui half) is never called; device-less services skip the
+        -- preview resources in the ctor.
+        "%{wks.location}/ArcaneEditor/src/ShaderEditorDocument.cpp",
+        -- Outliner slice 4: ComponentCatalog (registry enumeration + the one
+        -- system-managed hide-list + selection-aware missing counts) source-
+        -- compiles into the test exe so the [editor] units drive it directly --
+        -- no ImGui dependency, same pattern as EntityList/InspectorFields above.
+        "%{wks.location}/ArcaneEditor/src/ComponentCatalog.cpp",
     }
 
     includedirs {
@@ -559,6 +604,7 @@ project "ArcaneTests"
         "%{IncludeDir.msdfgen}",
         "%{IncludeDir.nvrhi}",
         "%{IncludeDir.imgui}",
+        "%{IncludeDir.imguinodeeditor}",   -- ShaderEditorDocument.cpp (graph canvas, Slice 9)
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
@@ -569,7 +615,10 @@ project "ArcaneTests"
     -- imgui is NOT linked here: it is exported from Arcane.dll (IMGUI_API =
     -- dllimport below), so the test exe shares the DLL's single GImGui rather
     -- than carrying a second null context. The import lib comes via "Arcane".
-    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D" }
+    -- imgui-node-editor IS linked (a plain static lib compiled with
+    -- IMGUI_API=dllimport, same as this exe): ShaderEditorDocument.cpp's graph
+    -- canvas calls it, and that TU source-compiles into the tests.
+    links { "Core", "Arcane", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "Manifold2D", "imgui-node-editor" }
 
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "PlaygroundGame", "Sandbox" }
 
@@ -577,6 +626,10 @@ project "ArcaneTests"
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/Arcane/Arcane.dll" "%{cfg.buildtarget.directory}/Arcane.dll"',
         '{COPYDIR} "%{wks.location}/shaders/generated" "%{cfg.buildtarget.directory}/shaders"',
+        -- Material TEMPLATE SOURCES (not compiled artifacts): the material
+        -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
+        '{MKDIR} "%{cfg.buildtarget.directory}/shaders/materials"',
+        '{COPYDIR} "%{wks.location}/shaders/materials" "%{cfg.buildtarget.directory}/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/../Client/data/font/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
@@ -589,6 +642,10 @@ project "ArcaneTests"
         -- lines above create. (The M6 physics_oracle fixtures were retired in
         -- v2 T8; physics_feel_reference/ now holds the Phase-B Lua feel traces.)
         '{COPYDIR} "%{wks.location}/Tests/data" "%{cfg.buildtarget.directory}/data"',
+        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
+        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"',
+        '{COPYFILE} "%{wks.location}/../ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"',
     }
 
     defines {
@@ -602,6 +659,7 @@ project "ArcaneTests"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         links { "ws2_32" }  -- Core TcpSocket
 
     filter "configurations:Debug"
@@ -639,6 +697,7 @@ local function test_plugin(name, defs)
         files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/PluginExport.hpp", "%{prj.location}/HotReloadShared.hpp" }
         includedirs {
             "%{wks.location}/Arcane/src",
+            "%{IncludeDir.Core}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
             "%{IncludeDir.glm}",
             "%{IncludeDir.nvrhi}",
             "%{IncludeDir.Astra}",
@@ -650,6 +709,7 @@ local function test_plugin(name, defs)
         filter "system:windows"
             systemversion "latest"
             buildoptions { "/Zc:__cplusplus", "/bigobj" }
+            fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         filter "configurations:Debug"   defines { "ARCANE_DEBUG" }                    runtime "Debug"   symbols "on"
         filter "configurations:Release" defines { "ARCANE_RELEASE", "NDEBUG" }        runtime "Release" optimize "speed" symbols "on"
         filter "configurations:Dist"    defines { "ARCANE_DIST", "NDEBUG" }           runtime "Release" optimize "speed" symbols "off"

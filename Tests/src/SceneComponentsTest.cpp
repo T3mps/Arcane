@@ -10,9 +10,9 @@
 #include <glm/gtc/epsilon.hpp>
 #include <cmath>
 
-TEST_CASE("LocalTransform::ToMatrix composes translation/scale", "[scene]")
+TEST_CASE("Transform::ToMatrix composes translation/scale", "[scene]")
 {
-    Arcane::LocalTransform t;
+    Arcane::Transform t;
     t.position = glm::vec2(10.0f, 20.0f);
     t.scale = glm::vec2(2.0f, 3.0f);
     t.rotation = 0.0f;
@@ -27,10 +27,10 @@ TEST_CASE("LocalTransform::ToMatrix composes translation/scale", "[scene]")
 TEST_CASE("scene components are reflected (visitFields slot populated)", "[scene]")
 {
     Astra::ComponentRegistry creg;
-    creg.RegisterComponent<Arcane::LocalTransform>();
+    creg.RegisterComponent<Arcane::Transform>();
     creg.RegisterComponent<Arcane::SpriteRenderer>();
 
-    const auto* lt = creg.GetComponentDescriptor(Astra::TypeID<Arcane::LocalTransform>::Value());
+    const auto* lt = creg.GetComponentDescriptor(Astra::TypeID<Arcane::Transform>::Value());
     const auto* sr = creg.GetComponentDescriptor(Astra::TypeID<Arcane::SpriteRenderer>::Value());
     REQUIRE(lt != nullptr);
     REQUIRE(sr != nullptr);

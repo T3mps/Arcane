@@ -31,7 +31,7 @@ namespace Arcane
         // Same OBB derivation as the retired CPU sprite-OBB pick: the world
         // matrix's translation column (matrix[2]) is the world-space center;
         // the local-x column's angle is the world rotation; the column
-        // magnitudes are the baked LocalTransform.scale (LocalTransform::ToMatrix
+        // magnitudes are the baked Transform.scale (Transform::ToMatrix
         // composes rotation*scale into columns 0/1), so half-extents = size*0.5
         // scaled per-axis by those magnitudes.
         {
@@ -87,7 +87,7 @@ namespace Arcane
             const float      bodyAngle = static_cast<float>(world.GetAngle(ref.handle));
 
             // Scale the create pass baked into this body's fixtures (identity
-            // unless the entity carries an authored LocalTransform.scale). Mirrors
+            // unless the entity carries an authored Transform.scale). Mirrors
             // PhysicsSystem::MakeScaledShape: per-axis for Aabb, |sx| length /
             // |sy| radius for Capsule, max(|sx|,|sy|) for Circle.
             const glm::vec2 scale = ref.appliedScale;

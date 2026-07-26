@@ -3,6 +3,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/ShaderLibrary.hpp>
 
+#include <algorithm>
 #include <cstddef>   // offsetof
 #include <cstdint>
 #include <functional>
@@ -25,10 +26,23 @@ namespace Arcane
         // stay empty (w==0, discarded by the composite) by design -- JFA passes scale with thickness, not viewport res.
 
         // BYTE-IDENTICAL to the HLSL `cbuffer SeedCB` in outline_seed.hlsl. HLSL
-        // packing: selectedId(0), int2 cursor(4..12), superSample(12), int2 dim(16..24),
-        // uint2 pad(24..32) -> 32 bytes.
-        struct SeedCB { uint32_t selectedId; int32_t cursorX, cursorY; uint32_t superSample; int32_t dimX, dimY; uint32_t pad0, pad1; };
-        static_assert(sizeof(SeedCB) == 32, "SeedCB must match outline_seed.hlsl SeedCB");
+        // packing: selectedCount(0), int2 cursor(4..12), superSample(12),
+        // int2 dim(16..24), uint2 pad(24..32), then the id array (32..288).
+        // The ids are declared `uint4 gSelectedIds[16]` in HLSL, NOT `uint[64]`:
+        // an array of SCALARS pads every element to its own 16-byte register
+        // (1024 bytes), while uint4[16] packs 4 per register and mirrors a tight
+        // uint32_t[64] here exactly.
+        struct SeedCB
+        {
+            uint32_t selectedCount;
+            int32_t  cursorX, cursorY;
+            uint32_t superSample;
+            int32_t  dimX, dimY;
+            uint32_t pad0, pad1;
+            uint32_t selectedIds[64];
+        };
+        static_assert(sizeof(SeedCB) == 288, "SeedCB must match outline_seed.hlsl SeedCB");
+        static_assert(offsetof(SeedCB, selectedIds) == 32, "id array starts at offset 32");
 
         // BYTE-IDENTICAL to the HLSL `cbuffer JfaCB` in outline_jfa.hlsl. HLSL
         // packing: jump(0), int2 dim(4..12), pad(12) -> 16 bytes.
@@ -156,7 +170,22 @@ namespace Arcane
                 const int ss = (m_width > 0) ? (int)(idW / m_width) : 1;
 
                 SeedCB sc{};
-                sc.selectedId = p.selectedId;
+                const std::size_t idCount = std::min(p.selectedIds.size(), kMaxSelectedOutlineIds);
+                if (p.selectedIds.size() > kMaxSelectedOutlineIds && !m_warnedOverflow)
+                {
+                    // Per-INSTANCE, not process-wide: a process can host more than
+                    // one outline (a second viewport, a tool window, or just the
+                    // next one after a device reset), and a function-local static
+                    // would silence every instance after the first ever warned --
+                    // so the one that actually overflowed could report nothing.
+                    m_warnedOverflow = true;
+                    ARC_WARN("SelectionOutline: {} selected ids exceeds the {} the seed CB holds -- "
+                             "outlining the first {}", p.selectedIds.size(),
+                             kMaxSelectedOutlineIds, kMaxSelectedOutlineIds);
+                }
+                sc.selectedCount = static_cast<uint32_t>(idCount);
+                for (std::size_t i = 0; i < idCount; ++i)
+                    sc.selectedIds[i] = p.selectedIds[i];
                 sc.cursorX = p.cursorPx.x;
                 sc.cursorY = p.cursorPx.y;
                 sc.superSample = (uint32_t)ss;
@@ -464,6 +493,10 @@ namespace Arcane
             // hash (format may vary) -- mirrors v1's per-target pipeline cache.
             std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_compositePipelines;
             uint64_t                   m_pipelineGeneration = 0;
+            // Latched once per instance when a selection exceeds the seed CB's
+            // id capacity, so the warning names the overflow without spamming
+            // every frame of a large selection.
+            bool                       m_warnedOverflow = false;
 
             // Owned distance-field targets: seed pass writes m_seed0, JFA ping-pongs
             // between m_ping[0]/m_ping[1]; m_field points at the last-written one.

@@ -1,0 +1,92 @@
+#include "ComponentCatalog.hpp"
+
+#include <Astra/Component/Component.hpp>
+#include <Astra/Component/ComponentRegistry.hpp>
+#include <Astra/Reflection/TypeMeta.hpp>
+#include <Astra/Registry/Registry.hpp>
+
+#include <algorithm>
+#include <cctype>
+#include <utility>
+
+namespace Arcane::Editor
+{
+    namespace
+    {
+        // Case-insensitive substring. Local twin of AssetBrowser.hpp's
+        // MatchesFilter helper and EntityList.cpp's ContainsCI; each is an
+        // anonymous-namespace local in its own TU, kept that way so no panel
+        // header has to export a string utility.
+        bool ContainsCI(std::string_view hay, std::string_view needle)
+        {
+            if (needle.empty())
+                return true;
+            if (needle.size() > hay.size())
+                return false;
+            auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
+            for (std::size_t i = 0; i + needle.size() <= hay.size(); ++i)
+            {
+                std::size_t j = 0;
+                while (j < needle.size() && lower(hay[i + j]) == lower(needle[j]))
+                    ++j;
+                if (j == needle.size())
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    bool IsSystemManagedComponent(std::string_view typeName)
+    {
+        return typeName == "Arcane::WorldTransform"
+            || typeName == "Arcane::PreviousTransform"
+            || typeName == "Arcane::PhysicsBodyRef";
+    }
+
+    std::vector<ComponentCatalogEntry> BuildComponentCatalog(
+        Astra::Registry& reg,
+        std::span<const Astra::Entity> selection,
+        std::string_view filter)
+    {
+        std::vector<ComponentCatalogEntry> out;
+
+        const Astra::ComponentRegistry* creg = reg.GetComponentRegistry();
+        if (!creg)
+            return out;
+
+        creg->ForEachComponent([&](Astra::ComponentID, const Astra::ComponentDescriptor& desc)
+        {
+            if (!desc.meta)
+                return;   // unreflected: nothing the Inspector could ever show
+            // TypeMeta::typeName is a std::string_view into a substring of a
+            // larger compile-time literal (__FUNCSIG__ / __PRETTY_FUNCTION__)
+            // and is NOT guaranteed NUL-terminated -- copy it before anything
+            // treats it as a C string (the ImGui popup does).
+            std::string typeName(desc.meta->typeName);
+            if (IsSystemManagedComponent(typeName))
+                return;
+            if (!ContainsCI(typeName, filter))
+                return;
+
+            ComponentCatalogEntry e;
+            e.desc = &desc;   // points into ComponentRegistry's fixed array: stable
+            for (Astra::Entity ent : selection)
+            {
+                // HasComponentByHash, NOT GetComponentByHash: an empty (tag)
+                // component has no storage array, so the getter returns null
+                // even when the entity really carries it.
+                if (reg.IsValid(ent) && !reg.HasComponentByHash(ent, desc.hash))
+                    ++e.missingCount;
+            }
+            e.typeName = std::move(typeName);
+            out.push_back(std::move(e));
+        });
+
+        // ForEachComponent walks ascending ComponentID = registration order,
+        // which is meaningless to a user. Name order is the browsable one.
+        std::sort(out.begin(), out.end(),
+                  [](const ComponentCatalogEntry& a, const ComponentCatalogEntry& b)
+                  { return a.typeName < b.typeName; });
+        return out;
+    }
+}

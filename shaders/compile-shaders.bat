@@ -8,6 +8,10 @@
 :: (t=0, s=128, b=256, u=384). ShaderMake (vendored) replaces this script
 :: when the shader count outgrows explicit lines.
 ::
+:: SHARED TRUTH: Arcane/src/Arcane/Render/ShaderConventions.hpp holds the
+:: canonical shift flags + entry/profile conventions for the runtime compile
+:: service (ShaderCompiler). SPIRV_FLAGS below must mirror kSpirvArgs there.
+::
 :: INVARIANT: the output stem's _vs/_ps/_cs suffix (4th arg) must agree with
 :: the entry point's <type>_main prefix (2nd arg) -- ShaderLibrary derives the
 :: SPIR-V entry name from the stem suffix. Mismatch = late Vulkan failure.

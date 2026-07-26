@@ -11,8 +11,10 @@
 #include "GpuContext.hpp"
 #include "FramePerf.hpp"
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 namespace Astra { class TypeContext; }
+namespace Arcane { class FullscreenMaterialChain; class MaterialInstance; }
 class Loom
 {
 public:
@@ -31,4 +33,13 @@ private:
     std::optional<Arcane::PluginHost> m_plugin;       // destructs before m_runtime
     FramePerf                         m_perf;
     std::uint64_t                     m_frameCount = 0;
+
+    // Scene post chain (post arc, slice 2): the canvas -> chain -> tonemap
+    // hook is live in MainLoop; these stay null until slice 3's PostProcess
+    // sweep feeds them (INTERIM inline wiring per the Loom-folds-into-Arcane
+    // directive -- the .arcproj runtime host is the convergence vehicle).
+    // Non-owning; whatever binds them keeps them alive across the frame.
+    Arcane::FullscreenMaterialChain*  m_postChain = nullptr;
+    const Arcane::MaterialInstance*   m_postInstance = nullptr;
+    Arcane::GlobalParams              m_postGlobals{};
 };

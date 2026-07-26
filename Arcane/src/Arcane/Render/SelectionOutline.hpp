@@ -12,7 +12,9 @@
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
 #include <memory>
+#include <span>
 
 namespace Arcane
 {
@@ -21,6 +23,11 @@ namespace Arcane
     // Number of jump-flood passes to resolve distances up to `maxThicknessPx`:
     // ceil(log2(maxThicknessPx)) + 1 (jumps 2^(N-1) .. 1).
     ARCANE_API uint32_t JfaPassCount(uint32_t maxThicknessPx);
+
+    // Max ids the seed pass can outline in one frame -- the CB array is fixed
+    // size. Beyond this, the first kMaxSelectedOutlineIds are outlined and the
+    // rest are dropped with a one-time warning.
+    inline constexpr std::size_t kMaxSelectedOutlineIds = 64;
 
     class ARCANE_API SelectionOutline
     {
@@ -31,7 +38,11 @@ namespace Arcane
 
         struct Params
         {
-            uint32_t   selectedId = 0;                              // 0 = no selection
+            // Pass ids (PickBuffer::PassIdOf) of every selected entity; empty = no
+            // selection. The ids are treated as ONE silhouette: the outline traces
+            // their UNION, so two touching selected entities show a single outline
+            // with no seam between them. Hover stays single-id.
+            std::span<const uint32_t> selectedIds;
             glm::ivec2 cursorPx   = { -1, -1 };                     // viewport-local; <0 => no hover
             glm::vec4  selectColor = { 1.0f, 0.65f, 0.10f, 1.0f };  // amber (display-referred)
             glm::vec4  hoverColor  = { 0.25f, 0.70f, 1.0f, 1.0f };  // cyan  (display-referred)

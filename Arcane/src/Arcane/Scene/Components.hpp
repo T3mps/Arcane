@@ -6,16 +6,19 @@
 // reflect blocks at namespace scope register once per module (MetaRegistry is
 // idempotent), and the simulation Registry is owned by the host module.
 
+#include <Arcane/Guid.hpp>
+
 #include <Astra/Reflection/Reflection.hpp>
 
 #include <glm/glm.hpp>
 
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 namespace Arcane
 {
-    struct LocalTransform
+    struct Transform
     {
         glm::vec2 position{0.0f, 0.0f};
         float     rotation = 0.0f;          // radians
@@ -40,7 +43,7 @@ namespace Arcane
     };
 
     // PreviousTransform (Epic 04.2): an entity's LOCAL pose at the previous fixed
-    // step, captured by PhysicsSystem write-back before it overwrites LocalTransform.
+    // step, captured by PhysicsSystem write-back before it overwrites Transform.
     // RenderSubmissionSystem draws at lerp(previous -> current, alpha) for smooth
     // slow-mo. Decomposed (position + angle) so rotation interpolates on the shortest
     // arc, NOT by lerping matrix components. Purely derived render state: an entity
@@ -72,7 +75,44 @@ namespace Arcane
         int32_t     sortingLayer = 0;
         int32_t     orderInLayer = 0;
         SpriteShape shape = SpriteShape::Rect; // primitive drawn (Rect/Circle/Capsule)
+        // Optional sprite material (Slice 8): the Guid of a SAVED .arcmat asset.
+        // Nil (the default) = the plain sprite pipeline, byte-identical to the
+        // pre-material path. Resolved to a Batcher2D material id through the
+        // SpriteMaterialTable resource at submission; unresolved Guids draw as
+        // plain sprites until their compile lands. Rect shape only.
+        Guid        material{};
     };
+
+    // The scene's post-processing stack (post arc): the Guid of a SAVED
+    // fullscreen .arcmat whose pass DAG runs between the linear canvas and the
+    // tonemap (the material IS the stack; kSceneInput wires read the scene
+    // color). The host sweeps for it each frame -- the FIRST entity with a
+    // valid material wins, nil or unresolved means no chain (today's path,
+    // byte-identical). One scene, one chain; per-camera stacks are a non-goal.
+    struct PostProcess
+    {
+        Guid material{};
+    };
+
+    // The editor-facing identity (Outliner arc): a STABLE Guid + display name.
+    // Policy: the EDITOR adds this (entity create + first rename); runtime
+    // spawns are never forced to carry strings. An entity without one displays
+    // as "Entity <id>". The Guid is generated when the component is added and
+    // is the durable cross-save identity -- entity ids are not.
+    struct EntityInfo
+    {
+        Guid        id{};
+        std::string name;
+        // Non-trivially-copyable: the binary path (Play snapshots, scene
+        // SaveBinary) serializes through this member instead of the POD
+        // memcpy overload (Astra's HasSerializeMethod seam).
+        template<typename Archive> void Serialize(Archive& ar) { ar(id); ar(name); }
+    };
+
+    // Marker ("tag component"): render submission skips entities carrying it
+    // (the Outliner eye). Serialized like any component, so hidden stays
+    // hidden in game; the eye applies it to an entity AND its descendants.
+    struct Hidden {};
 }
 
 // Reflection blocks at namespace scope (NOT anonymous). WorldTransform::matrix is
@@ -80,11 +120,11 @@ namespace Arcane
 // load; binary trivially-copyable path still round-trips it harmlessly).
 namespace Arcane
 {
-    ASTRA_REFLECT_TYPE(LocalTransform)
-        ASTRA_REFLECT_FIELD(LocalTransform, position)
-        ASTRA_REFLECT_FIELD(LocalTransform, rotation)
+    ASTRA_REFLECT_TYPE(Transform)
+        ASTRA_REFLECT_FIELD(Transform, position)
+        ASTRA_REFLECT_FIELD(Transform, rotation)
             ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
-        ASTRA_REFLECT_FIELD(LocalTransform, scale)
+        ASTRA_REFLECT_FIELD(Transform, scale)
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(WorldTransform)
@@ -106,6 +146,14 @@ namespace Arcane
         ASTRA_REFLECT_ENUM_VALUE(SpriteShape, Capsule)
     ASTRA_END_REFLECT_ENUM()
 
+    // Guid reflects as a nested struct (hi/lo scalars) so the reflection->JSON
+    // path round-trips component asset references (SpriteRenderer::material).
+    // Registered here, NOT in Core -- Core stays Astra-free.
+    ASTRA_REFLECT_TYPE(Guid)
+        ASTRA_REFLECT_FIELD(Guid, hi)
+        ASTRA_REFLECT_FIELD(Guid, lo)
+    ASTRA_END_REFLECT_TYPE()
+
     ASTRA_REFLECT_TYPE(SpriteRenderer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, textureId)
         ASTRA_REFLECT_FIELD(SpriteRenderer, size)
@@ -113,5 +161,18 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(SpriteRenderer, sortingLayer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, orderInLayer)
         ASTRA_REFLECT_FIELD(SpriteRenderer, shape)
+        ASTRA_REFLECT_FIELD(SpriteRenderer, material)
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(PostProcess)
+        ASTRA_REFLECT_FIELD(PostProcess, material)
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(EntityInfo)
+        ASTRA_REFLECT_FIELD(EntityInfo, id)
+        ASTRA_REFLECT_FIELD(EntityInfo, name)
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(Hidden)
     ASTRA_END_REFLECT_TYPE()
 }

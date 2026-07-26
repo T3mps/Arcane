@@ -11,8 +11,10 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Device.hpp>
 
 namespace
@@ -317,6 +319,84 @@ TEST_CASE("Assets content-root anchors relative loads", "[assets]")
 
     auto abs = assets->GetJson(root / "probe.json");   // absolute bypasses the root
     REQUIRE(abs != nullptr);
+
+    fs::remove_all(root, ec);
+}
+
+TEST_CASE("Assets resolves AssetId loads through the installed resolver", "[assets]")
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_guid";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    std::ofstream(root / "mat.json", std::ios::binary) << R"({"kind":"material"})";
+    std::ofstream(root / "blob.bin", std::ios::binary) << "0123456789";
+
+    const Arcane::Guid jsonId = Arcane::Guid::Generate();
+    const Arcane::Guid binId = Arcane::Guid::Generate();
+
+    auto assets = Arcane::Assets::Create(nullptr);
+
+    SECTION("no resolver installed -> null (one warning, no crash)")
+    {
+        CHECK(assets->GetJson(Arcane::AssetId::FromGuid(jsonId)) == nullptr);
+        CHECK(assets->GetJson(Arcane::AssetId::FromGuid(jsonId)) == nullptr);
+    }
+
+    SECTION("resolver routes ids into the same cached loaders")
+    {
+        assets->SetAssetResolver(
+            [&](const Arcane::AssetId& id) -> std::optional<fs::path>
+            {
+                if (id.Value() == jsonId) return root / "mat.json";
+                if (id.Value() == binId)  return root / "blob.bin";
+                return std::nullopt;
+            });
+
+        auto doc = assets->GetJson(Arcane::AssetId::FromGuid(jsonId));
+        REQUIRE(doc != nullptr);
+        CHECK((*doc)["kind"].get<std::string>() == "material");
+
+        // Same file by id and by path share ONE cache entry (same shared_ptr).
+        auto byPath = assets->GetJson(root / "mat.json");
+        CHECK(byPath.get() == doc.get());
+
+        auto bytes = assets->GetBytes(Arcane::AssetId::FromGuid(binId));
+        REQUIRE(bytes != nullptr);
+        CHECK(bytes->size() == 10);
+
+        // Unknown id -> null, memoized warn-once. Nil id -> null.
+        CHECK(assets->GetJson(Arcane::AssetId::FromGuid(Arcane::Guid::Generate())) == nullptr);
+        CHECK(assets->GetJson(Arcane::AssetId{}) == nullptr);
+
+        // Texture by id without a device: resolves, then degrades to null
+        // exactly like the path overload (no crash headless).
+        CHECK(assets->GetTexture(Arcane::AssetId::FromGuid(binId)) == nullptr);
+    }
+
+    SECTION("a real Project's ResolveAsset plugs in as the resolver")
+    {
+        // Scaffold a minimal project whose Content/ carries a native asset with
+        // an embedded id -- the exact wiring Runtime::OpenProject installs.
+        const fs::path projDir = root / "proj";
+        fs::create_directories(projDir / "Content");
+        std::ofstream(projDir / "Game.arcproj", std::ios::binary)
+            << R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 } })";
+        std::ofstream(projDir / "Content" / "thing.json", std::ios::binary)
+            << R"({ "id": "b7e0c1de-2222-4333-8444-555566667777", "payload": 7 })";
+
+        auto proj = Arcane::Project::Open(projDir);
+        REQUIRE(proj.has_value());
+        assets->SetAssetResolver(
+            [p = &*proj](const Arcane::AssetId& id) { return p->ResolveAsset(id); });
+
+        const auto g = Arcane::Guid::FromString("b7e0c1de-2222-4333-8444-555566667777");
+        REQUIRE(g.has_value());
+        auto doc = assets->GetJson(Arcane::AssetId::FromGuid(*g));
+        REQUIRE(doc != nullptr);
+        CHECK((*doc)["payload"].get<int>() == 7);
+    }
 
     fs::remove_all(root, ec);
 }

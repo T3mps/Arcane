@@ -29,7 +29,30 @@ namespace Arcane
     //     Mosaic, so workScheduler is now Mosaic::IWorkScheduler (per-lane worker id
     //     + FunctionRef callback) -- a DIFFERENT vtable than the prior Astra-native
     //     IWorkScheduler. A stale plugin would vtable-mismatch; reject the pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 5;
+    // v6 (2026-07-24): shader-editor Slice 8 changed the cross-DLL surface twice:
+    //     Batcher2D gained RegisterMaterial/UpdateMaterial/SetGlobals/QuadMaterial
+    //     mid-vtable, and SpriteRenderer grew a Guid `material` field (+16 bytes;
+    //     plugins compile the header-only RenderSubmissionSystem + components).
+    //     A stale plugin's SetLayer call lands on UpdateMaterial and its Quad on
+    //     SetGlobals -- observed as an AV on project open; reject the pairing.
+    // v7 (2026-07-24): LocalTransform renamed to Transform. The reflected type
+    //     name IS the cross-module component identity (TypeID name hash +
+    //     name-keyed scene JSON), so a stale plugin would register/query the
+    //     old name and silently diverge from engine systems; reject the pairing.
+    //     NOTE (2026-07-25, post arc slices 2+3, deliberately NO bump):
+    //     OffscreenCanvas gained SetPostChain/SetPostGlobals APPENDED at the
+    //     END of its vtable (every pre-existing slot index unchanged; only
+    //     hosts -- in-tree, rebuilt with the engine -- call the new slots),
+    //     and PostProcess is an ADDED component type (name-keyed identity; a
+    //     stale plugin's roster simply lacks it -- typed views come back
+    //     empty, nothing smashes). Neither changes EngineContext, the entry
+    //     points, or any existing layout, so a v7<->v7 cross-build pairing
+    //     stays memory-safe in both directions.
+    //     Outliner slice 1 rides the same argument: EntityInfo + Hidden are
+    //     two more appended name-keyed component types, and the Not<Hidden>
+    //     filter in the plugin-compiled RenderSubmissionSystem is behavioral
+    //     (a stale plugin just doesn't honor hiding). Still NO bump.
+    inline constexpr uint32_t kGamePluginABIVersion = 7;
 
     struct EngineContext
     {

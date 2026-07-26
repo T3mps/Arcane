@@ -17,6 +17,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace Arcane
 {
@@ -40,8 +42,22 @@ namespace Arcane
         // assets newly registered by THIS call (duplicates keep the first + warn).
         std::size_t AddContent(const std::filesystem::path& contentDir, std::string_view scheme);
 
+        // Register ONE file under `scheme`, relative to `contentDir` -- the incremental
+        // sibling of AddContent for assets created AFTER the open-time scan (the editor's
+        // New Material / New Instance / save flows). Same kind rules as the scan (native
+        // embedded id / imported-binary sidecar; ids minted + written back when missing).
+        // Idempotent for an already-registered mapping. nullopt when the file is not a
+        // trackable asset kind, cannot be read, or lies outside `contentDir`.
+        std::optional<Guid> AddFile(const std::filesystem::path& file,
+                                    const std::filesystem::path& contentDir,
+                                    std::string_view scheme);
+
         // Guid -> mount path ("game://a/b.json"); nullopt if the id is unknown.
         std::optional<std::string> Resolve(const Guid& id) const;
+
+        // Snapshot of every (guid, mount path) pair -- the asset browser's feed.
+        // Unordered (map iteration order); presentation sorts as it likes.
+        std::vector<std::pair<Guid, std::string>> All() const;
 
         std::size_t Count() const { return m_byGuid.size(); }
         void        Clear()       { m_byGuid.clear(); }

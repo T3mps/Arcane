@@ -27,15 +27,16 @@
 namespace Arcane
 {
     struct RenderSubmissionSystem
-        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, PreviousTransform>>
+        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, PreviousTransform, Hidden>>
     {
         void operator()(Astra::Registry& reg)
         {
             RenderContext2D* ctx = reg.GetResource<RenderContext2D>();
             if (!ctx || !ctx->batcher) return;
             const TextureTable* textures = reg.GetResource<TextureTable>();
+            const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
 
-            auto view = reg.CreateView<WorldTransform, SpriteRenderer>();
+            auto view = reg.CreateView<WorldTransform, SpriteRenderer, Astra::Not<Hidden>>();
             view.ForEach([&](Astra::Entity e, WorldTransform& world, SpriteRenderer& sprite)
             {
                 const glm::mat3& m = world.matrix;
@@ -43,7 +44,7 @@ namespace Arcane
                 const glm::vec2 worldScale(glm::length(glm::vec2(m[0])),
                                            glm::length(glm::vec2(m[1])));
                 // World rotation from the first basis column (matches
-                // LocalTransform::ToMatrix: m[0] = (c*scale.x, s*scale.x)). The
+                // Transform::ToMatrix: m[0] = (c*scale.x, s*scale.x)). The
                 // camera applies a uniform zoom (no rotation), so the screen-space
                 // sprite rotates by the same angle as its physics body.
                 float worldRot = std::atan2(m[0].y, m[0].x);
@@ -109,7 +110,18 @@ namespace Arcane
                 default:
                 {
                     nvrhi::ITexture* tex = textures ? textures->Resolve(sprite.textureId) : nullptr;
-                    if (tex)
+                    // Sprite material (Slice 8): a valid Guid resolves to a
+                    // registered Batcher2D material id; 0 (unresolved / nil) is
+                    // the plain sprite path -- byte-identical when no sprite in
+                    // the scene carries a material.
+                    const uint16_t materialId =
+                        materials && sprite.material.IsValid()
+                            ? materials->Resolve(sprite.material) : 0;
+                    if (materialId != 0)
+                        ctx->batcher->QuadMaterial(materialId, dstPos, dstSize, tex,
+                                                   glm::vec2(0, 0), glm::vec2(1, 1),
+                                                   sprite.tint, worldRot);
+                    else if (tex)
                         ctx->batcher->Quad(dstPos, dstSize, tex,
                                            glm::vec2(0, 0), glm::vec2(1, 1),
                                            sprite.tint, worldRot);

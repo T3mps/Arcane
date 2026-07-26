@@ -1,9 +1,14 @@
 #pragma once
 
+#include "EntityList.hpp"
 #include "ViewportInput.hpp"
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
+#include <Arcane/Edit/RegistryStateCommand.hpp>
 #include <cstdint>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace Arcane { class RunLoop; class Runtime; class Project; struct PluginVTable; }
 namespace Astra { class Registry; }
@@ -14,14 +19,22 @@ namespace Arcane::Editor
     class PlaySession;
     struct SelectionContext;
 
+    // Menu-bar requests the app resolves AFTER the frame's dockspace is drawn
+    // (dialog launches happen at the call site, never inside the menu draw).
+    struct MenuRequests
+    {
+        bool openProject = false;    // File -> Open Project...   (folder dialog)
+        bool newMaterial = false;    // File -> New Material...   (save dialog; graph-owned)
+        bool openMaterial = false;   // File -> Open Material...  (open-file dialog)
+    };
+
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
     // OPEN (call once per frame right after ImGui BeginFrame). Draw the fixed toolbar
     // strip (DrawSimTimeToolbar) into it, then close it with EndDockSpace(); dockable
     // panels are drawn AFTER EndDockSpace. `undo` drives the Edit menu's Undo/Redo
     // (same CommandStack as the Ctrl+Z / Ctrl+Y shortcuts handled in the app input loop).
-    // `openProjectRequested` is set true when the File -> Open Project... menu item is
-    // clicked; the caller is responsible for launching the folder dialog and clearing it.
-    void BeginDockSpace(Arcane::CommandStack& undo, bool& openProjectRequested);
+    // Menu clicks land in `requests`; the caller launches the dialogs.
+    void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
     // Everything drawn in between becomes a fixed (non-dockable, tab-less) strip above
@@ -43,10 +56,9 @@ namespace Arcane::Editor
     void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                             const Arcane::PluginVTable* plugin, uint64_t logoTex = 0);
 
-    // Placeholder asset-browser panel (dummy for now); docks as a tab before Console.
-    // Shows the open project's name + root when one is open (see EditorApp::Init),
-    // else "No project open" (the legacy data/-next-to-exe boot, unchanged).
-    void DrawAssetsPanel(const Arcane::Project* project);
+    // (The Assets panel is the REAL browser now -- AssetBrowser.hpp's
+    // DrawAssetBrowserPanel; the placeholder stub retired in Slice 6.)
+
 
     // Scrolling read-only console of captured log lines (autoscroll).
     void DrawConsolePanel(const ConsoleBuffer& console);
@@ -60,8 +72,12 @@ namespace Arcane::Editor
         uint32_t     desiredH = 0;
         bool         clicked = false;       // left-click landed inside the image this frame
         bool         altHeld  = false;      // alt modifier at click time (cycle stack)
+        bool         ctrlHeld = false;      // ctrl modifier at click time (multi-select toggle)
         float        clickLocalX = 0.0f;    // viewport-local px of the click
         float        clickLocalY = 0.0f;
+        // The dock node the Viewport currently lives in (0 = floating) --
+        // where new editor documents dock as sibling tabs.
+        unsigned int dockId = 0;
     };
 
     // Draw the scene texture into a dockable Viewport window; report its rect,
@@ -70,21 +86,58 @@ namespace Arcane::Editor
                                           bool& gizmoEnabled, Arcane::GizmoMode& mode,
                                           Arcane::GizmoSpace& space);
 
-    // List every live entity; clicking a row selects it. Labels rows by id
-    // ("Entity <id> (v<version>)") since no Name component exists yet.
-    void DrawHierarchyPanel(Astra::Registry& registry, SelectionContext& sel);
+    // The Outliner (replaces the flat Hierarchy panel). Pure row data comes
+    // from BuildOutlinerRows (EntityList.hpp, headless-tested); this shell
+    // draws it and routes EVERY structural edit through ApplyRegistryMutation
+    // over binding.snapshot/restore (Runtime::SnapshotRegistry/RestoreRegistry).
+    // binding.editMode == false (Play running) disables structural edits --
+    // the slice-2 resolution of RegistryStateCommand.hpp's native-state note.
+    //
+    // Named SceneEditBinding rather than OutlinerBinding since slice 4: the
+    // Inspector's Add/Remove Component are structural edits too and share it.
+    struct SceneEditBinding
+    {
+        Arcane::RegistryStateCommand::SnapshotFn snapshot;
+        Arcane::RegistryStateCommand::RestoreFn  restore;
+        bool editMode = true;    // false during Play: structural edits disabled
+    };
+    struct OutlinerState
+    {
+        char search[128] = {};
+        std::unordered_set<std::uint64_t> collapsed;
+        OutlinerSort sort;
+        Astra::Entity renameTarget = Astra::Entity::Invalid();
+        char renameBuf[256] = {};
+        bool renameFocusPending = false;
+        Astra::Entity lastClicked = Astra::Entity::Invalid();
+        double lastClickTime = 0.0;
+        // Latched by the row menu's "Add Component..." and consumed at panel
+        // scope one step later: ImGui cannot open a popup from inside another
+        // popup's scope.
+        bool addComponentPending = false;
+    };
+    void DrawOutlinerPanel(Astra::Registry& registry, SelectionContext& sel,
+                           Arcane::CommandStack& undo, const SceneEditBinding& binding,
+                           OutlinerState& state);
 
     // Show the selected entity's components (via Registry::InspectEntity) and edit
     // reflected fields in place; unsupported types render read-only. Each field
     // edit gesture is bracketed into `undo` (Begin+SnapshotComponent on first
     // activation, Commit on release-after-edit, Cancel on a pure click) so every
-    // Inspector edit becomes a Ctrl+Z/Y-undoable step -- but ONLY when `editMode`
-    // is true. While Play is running, `editMode` is false and the visitor's stack
+    // Inspector edit becomes a Ctrl+Z/Y-undoable step -- but ONLY when
+    // `binding.editMode` is true. While Play is running, it is false and the visitor's stack
     // pointer is left null, so the gesture bracketing fully no-ops (no Begin, no
     // Commit/Cancel): a play-time edit must not write against the live simulating
     // registry through the Edit-mode undo stack (Stop's Runtime::RestoreRegistry
     // swaps the registry back but does not touch the stack, so a stale entry here
     // would let a later Ctrl+Z overwrite the restored value with play-time bytes).
+    // `binding` also carries the registry snapshot/restore seam, which is what
+    // makes Add/Remove Component (structural, whole-registry memento) possible
+    // from this panel -- the field-edit path above still uses the fine-grained
+    // ComponentEditCommand gestures.
+    // `project` (may be null) resolves Guid asset-ref fields to display names and
+    // feeds the pick popup; null renders asset refs read-only-with-guid.
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo, bool editMode);
+                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
+                            const Arcane::Project* project);
 }

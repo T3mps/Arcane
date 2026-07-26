@@ -10,13 +10,20 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <LoomConfig.hpp>
 #include <GpuContext.hpp>
 #include <FramePerf.hpp>
+#include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
+#include "DocumentHost.hpp"
+#include "EditorPanels.hpp"
 #include "PlayMode.hpp"
 #include "SelectionContext.hpp"
+#include "ShaderEditorDocument.hpp"
 #include "ViewportInput.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
@@ -27,7 +34,11 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
+#include <Arcane/Render/PostChainCache.hpp>
 #include <Arcane/Render/SelectionOutline.hpp>
+#include <Arcane/Render/ShaderCompiler.hpp>
+#include <Arcane/Render/ShaderSourceProvider.hpp>
+#include <Arcane/Render/SpriteMaterialCache.hpp>
 
 #include <spdlog/sinks/callback_sink.h>
 
@@ -81,9 +92,14 @@ namespace Arcane::Editor
         // plugin loads).
         Arcane::Editor::PlaySession m_play;
 
-        // The one selected-entity source of truth, shared by the Hierarchy panel
-        // (and, later, the Inspector + viewport pick -- see SelectionContext.hpp).
+        // Ordered multi-select source of truth (set + primary); slice-2 consumers
+        // operate on Primary(), shared by the Hierarchy panel (and, later, the
+        // Inspector + viewport pick -- see SelectionContext.hpp).
         Arcane::Editor::SelectionContext m_selection;
+
+        // Outliner panel state + structural-edit binding (slice 2)
+        Arcane::Editor::OutlinerState   m_outliner;
+        Arcane::Editor::SceneEditBinding m_editBinding;
 
         // Editor undo/redo history (Edit-mode; cleared on Play). Constructed in
         // Init once the runtime's registry exists; optional so it can be built
@@ -104,6 +120,9 @@ namespace Arcane::Editor
         // Draw's highlight always matches this frame's cursor. m_gizmoDrag spans
         // the mouse-down..mouse-up gesture; `start` is the pre-drag GizmoTransform
         // so ApplyDrag recomputes from origin each frame (no accumulation drift).
+        // Transform is parent-local, but every GizmoTransform stored here is WORLD
+        // space (Unreal parity) -- EditorApp converts through Edit::WorldMatrix on
+        // read and Edit::ParentWorldMatrix's inverse on write-back.
         Arcane::GizmoMode  m_gizmoMode    = Arcane::GizmoMode::Translate;
         Arcane::GizmoSpace m_gizmoSpace   = Arcane::GizmoSpace::World;
         bool               m_gizmoEnabled = false;  // false = Select tool (click-to-pick, no gizmo)
@@ -112,8 +131,12 @@ namespace Arcane::Editor
         {
             bool                   active = false;
             Arcane::GizmoAxis      axis   = Arcane::GizmoAxis::None;
-            Arcane::GizmoTransform start;
+            Arcane::GizmoTransform start;                    // the PRIMARY's pre-drag WORLD pose (gizmo anchor)
             glm::vec2              mouseStartScreen{0.0f, 0.0f};
+            // Every selection ROOT carrying a Transform, with its pre-drag WORLD
+            // pose. Rebuilt on press. Roots only: a selected child already rides
+            // its selected parent through WorldTransform propagation.
+            std::vector<std::pair<Astra::Entity, Arcane::GizmoTransform>> targets;
         } m_gizmoDrag;
 
         // W/E/R mode-key edge-tracking (same pattern as m_prevUndoKeyDown/
@@ -165,6 +188,60 @@ namespace Arcane::Editor
         // uses (the two are mutually exclusive by mode).
         std::unique_ptr<Arcane::SelectionOutline> m_outline;
 
+        // Shader-editor services + open documents (Slice 5). The compiler is the
+        // app-shared compile service (documents Submit through it; MainLoop
+        // Polls/Drains it once per frame and routes results to documents -- the
+        // drain site is the ONE place compile results become NVRHI shaders).
+        // Documents hold NVRHI resources -> declared after m_gpu (destruct
+        // before the device) and after m_runtime (they borrow its Assets).
+        std::unique_ptr<Arcane::ShaderCompiler> m_shaderCompiler;
+        Arcane::ShaderSourceProvider            m_shaderSources;
+        // Scene sprite materials (Slice 8): resolves SAVED .arcmat assets
+        // referenced by SpriteRenderer::material into registered Batcher2D
+        // materials; the drain site feeds it, the frame loop publishes its
+        // table through Runtime::SetSpriteMaterials.
+        std::unique_ptr<Arcane::SpriteMaterialCache> m_spriteMaterials;
+        // Scene post chain (post arc, slice 2): resolves the assigned post
+        // material into a bound FullscreenMaterialChain for the viewport's
+        // SetPostChain hook. Same drain site, same invalidation rides
+        // (onAssetSaved + the material watcher); slice 3's PostProcess sweep
+        // drives Request and hands Chain()/Instance() to the viewport.
+        std::unique_ptr<Arcane::PostChainCache> m_postChains;
+        Arcane::Editor::DocumentHost            m_documents;
+        Arcane::Editor::AssetBrowserState       m_assetBrowser;
+        double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
+
+        // Material file watcher: a ~1 Hz mtime sweep over the registry's
+        // .arcmat files (ShaderLibrary's hot-reload pattern). An EXTERNAL
+        // change (git pull, sibling repo, hand edit) invalidates the sprite
+        // cache and reloads/refreshes open documents; our own saves
+        // re-baseline through onAssetSaved so they never bounce back.
+        void PollMaterialWatch();
+        std::unordered_map<std::string, std::filesystem::file_time_type> m_materialMtimes;
+        double m_materialWatchNext = 0.0;
+        // >1 PostProcess assignments in the scene: warned once, reset when the
+        // count drops back (the post sweep in MainLoop).
+        bool m_warnedMultiPost = false;
+
+        // Async file-dialog results for the material flows (same background-
+        // thread stash pattern as m_pendingProjectPath below).
+        std::string m_pendingMaterialNewPath;
+        std::string m_pendingMaterialOpenPath;
+        std::string m_pendingInstanceNewPath;
+        std::mutex  m_pendingMaterialMutex;
+        // Parent for a pending "New Instance..." save dialog. Main-thread only:
+        // written on the menu click, read when the dialog result lands.
+        Arcane::Guid m_pendingInstanceParent;
+
+        static void MaterialNewPickedThunk(const char* path, void* user);
+        static void MaterialOpenPickedThunk(const char* path, void* user);
+        static void InstanceNewPickedThunk(const char* path, void* user);
+        // Mint a GRAPH-owned .arcmat (UE-model: nodes are the authoring tier)
+        // + open its doc. Legacy text-owned files still open via OpenPath.
+        void CreateMaterialAt(std::filesystem::path path);
+        void CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);
+        Arcane::Editor::DocServices MakeDocServices();
+
         // The Arcane logo, shown at the left of the transport toolbar (Unity-style). A
         // display-referred (UNORM) texture -- NOT Assets::GetTexture's sRGB -- so it
         // composites correctly through the ImGui backend. Loaded once in Init; passed to
@@ -184,17 +261,27 @@ namespace Arcane::Editor
         std::uint32_t m_pendingViewportH = 0;
 
         // File -> Open Project (soft-restart). The menu sets m_openProjectRequested;
-        // MainLoop launches the async folder dialog; SDL runs FolderPickedThunk on an
-        // SDL-owned BACKGROUND thread (NOT the main thread -- the Windows backend's
-        // folder-picker callback fires off a detached worker), which stashes the chosen
-        // path in m_pendingProjectPath under m_pendingProjectMutex; the next frame's
-        // top of MainLoop takes the lock, swaps the path out, and (outside the lock)
-        // runs SwitchProject at a safe point.
-        bool        m_openProjectRequested = false;
+        // MainLoop launches the async .arcproj FILE dialog; SDL runs
+        // ProjectPickedThunk on an SDL-owned BACKGROUND thread (NOT the main
+        // thread -- the Windows backend's dialog callback fires off a detached
+        // worker), which stashes the chosen path in m_pendingProjectPath under
+        // m_pendingProjectMutex; the next frame's top of MainLoop takes the
+        // lock, swaps the path out, and (outside the lock) runs SwitchProject
+        // at a safe point. (Project::Open accepts the .arcproj file directly.)
         std::string m_pendingProjectPath;
         std::mutex  m_pendingProjectMutex;   // guards m_pendingProjectPath across the SDL callback thread
 
-        static void FolderPickedThunk(const char* path, void* user);   // -> m_pendingProjectPath (background thread)
+        static void ProjectPickedThunk(const char* path, void* user);  // -> m_pendingProjectPath (background thread)
         void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
+
+        // The dock node the Viewport occupied LAST frame (0 = floating):
+        // where new document windows dock as sibling tabs (DrawAll).
+        unsigned int m_viewportDockId = 0;
+
+        // Open-failure surfacing: SwitchProject's refusals used to be console-only
+        // and were repeatedly missed at the desk. Any refusal/failure sets this;
+        // MainLoop shows it as a blocking modal (main thread only -- set inside
+        // SwitchProject/Init, read in the ImGui frame; no lock needed).
+        std::string m_projectOpenError;
     };
 }

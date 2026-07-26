@@ -184,6 +184,37 @@ namespace Arcane
         return Open(dir);
     }
 
+    std::optional<Guid> Project::RegisterAsset(const std::filesystem::path& file)
+    {
+        std::error_code ec;
+        const auto canon = std::filesystem::weakly_canonical(file, ec);
+        const std::filesystem::path& target = ec ? file : canon;
+
+        // Candidate content roots, game:// first (mirrors Open's mount order).
+        struct ContentRoot { std::string scheme; std::filesystem::path dir; };
+        std::vector<ContentRoot> roots;
+        roots.push_back({ "game", m_root / "Content" });
+        for (const auto& pluginRoot : m_activePluginRoots)
+            roots.push_back({ "plugin/" + pluginRoot.filename().string(),
+                              pluginRoot / "Content" });
+
+        for (const ContentRoot& root : roots)
+        {
+            std::error_code canonEc, relEc;
+            const auto rootCanon = std::filesystem::weakly_canonical(root.dir, canonEc);
+            const std::filesystem::path& rootDir = canonEc ? root.dir : rootCanon;
+            const auto rel = std::filesystem::relative(target, rootDir, relEc);
+            if (relEc || rel.empty() || rel.is_absolute() || *rel.begin() == "..")
+                continue;   // not under this root
+            return m_registry.AddFile(target, rootDir, root.scheme);
+        }
+
+        ARC_WARN("Project::RegisterAsset: '{}' is outside every content root -- it will "
+                 "not appear in the asset registry or resolve by GUID",
+                 file.generic_string());
+        return std::nullopt;
+    }
+
     std::optional<std::filesystem::path> Project::ResolveAsset(const AssetId& id) const
     {
         if (!id.IsValid())

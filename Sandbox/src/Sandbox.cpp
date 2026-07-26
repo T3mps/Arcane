@@ -110,10 +110,13 @@ extern "C"
         //    pointers (ctor/dtor/serialize) target the plugin's code, not the previously
         //    loaded image's. Scene + physics components both.
         auto creg = ctx->engine->Components();
-        creg->ReRegisterComponent<Arcane::LocalTransform>();
+        creg->ReRegisterComponent<Arcane::Transform>();
         creg->ReRegisterComponent<Arcane::WorldTransform>();
         creg->ReRegisterComponent<Arcane::PreviousTransform>();
         creg->ReRegisterComponent<Arcane::SpriteRenderer>();
+        creg->ReRegisterComponent<Arcane::PostProcess>();
+        creg->ReRegisterComponent<Arcane::EntityInfo>();
+        creg->ReRegisterComponent<Arcane::Hidden>();
         creg->ReRegisterComponent<Arcane::RigidBody2D>();
         creg->ReRegisterComponent<Arcane::Collider2D>();
         creg->ReRegisterComponent<Arcane::PhysicsBodyRef>();
@@ -126,7 +129,7 @@ extern "C"
         //    update:      TransformPropagationSystem. Propagation runs once per frame -- the
         //                 update phase always runs, even paused -- AFTER the fixed steps, so
         //                 both a stepped body and a body authored while frozen get their
-        //                 LocalTransform -> WorldTransform derived for the render phase.
+        //                 Transform -> WorldTransform derived for the render phase.
         //    render: sprites first, then the physics-debug overlay on top.
         auto& sch = ctx->engine->Schedulers();
         sch.update.AddSystem<Arcane::TransformPropagationSystem>();

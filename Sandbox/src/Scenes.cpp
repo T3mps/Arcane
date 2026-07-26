@@ -21,10 +21,10 @@
 //
 // TWO BODY-AUTHORING PATHS (both feed the SAME PhysicsWorld owned by PhysicsResource):
 //
-//   (A) ASTRA COMPONENTS -- the default. An entity carries LocalTransform + WorldTransform +
+//   (A) ASTRA COMPONENTS -- the default. An entity carries Transform + WorldTransform +
 //       RigidBody2D + Collider2D (a Fixture list) + PhysicsBodyRef. PhysicsSystem creates
 //       the body on the first fixedUpdate and writes the post-step pose back into
-//       LocalTransform. Used by scenes 0,1,2,5,6,8 and the circle/capsule bodies of 7.
+//       Transform. Used by scenes 0,1,2,5,6,8 and the circle/capsule bodies of 7.
 //
 //   (B) WORLD-DIRECT -- create the body straight on the PhysicsWorld in the builder. Needed
 //       when the Astra Fixture descriptor cannot express the body:
@@ -91,7 +91,7 @@ namespace Arcane::Sandbox
         Astra::Entity MakeRoot(Astra::Registry& reg)
         {
             Astra::Entity root = reg.CreateEntity();
-            reg.AddComponent<Arcane::LocalTransform>(root, Arcane::LocalTransform{});
+            reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
             reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
             reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
             return root;
@@ -108,8 +108,8 @@ namespace Arcane::Sandbox
         {
             Astra::Entity e = reg.CreateEntity();
 
-            Arcane::LocalTransform lt; lt.position = pos;
-            reg.AddComponent<Arcane::LocalTransform>(e, lt);
+            Arcane::Transform lt; lt.position = pos;
+            reg.AddComponent<Arcane::Transform>(e, lt);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
@@ -151,8 +151,8 @@ namespace Arcane::Sandbox
         {
             Astra::Entity e = reg.CreateEntity();
 
-            Arcane::LocalTransform lt; lt.position = pos;
-            reg.AddComponent<Arcane::LocalTransform>(e, lt);
+            Arcane::Transform lt; lt.position = pos;
+            reg.AddComponent<Arcane::Transform>(e, lt);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
@@ -187,8 +187,8 @@ namespace Arcane::Sandbox
         {
             Astra::Entity e = reg.CreateEntity();
 
-            Arcane::LocalTransform lt; lt.position = pos;
-            reg.AddComponent<Arcane::LocalTransform>(e, lt);
+            Arcane::Transform lt; lt.position = pos;
+            reg.AddComponent<Arcane::Transform>(e, lt);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
@@ -635,8 +635,8 @@ namespace Arcane::Sandbox
             // The bullet: a fast box fired right at the wall. fixedRotation (Aabb) +
             // bullet=true (enables the GJK-TOI CCD clamp) + a high +X authored velocity.
             Astra::Entity e = reg.CreateEntity();
-            Arcane::LocalTransform lt; lt.position = glm::vec2(1.2f, 6.6f);
-            reg.AddComponent<Arcane::LocalTransform>(e, lt);
+            Arcane::Transform lt; lt.position = glm::vec2(1.2f, 6.6f);
+            reg.AddComponent<Arcane::Transform>(e, lt);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
             Arcane::RigidBody2D rb;
@@ -682,8 +682,8 @@ namespace Arcane::Sandbox
             auto makeLopsided = [&](glm::vec2 pos, float heavySign, glm::vec4 tint)
             {
                 Astra::Entity e = reg.CreateEntity();
-                Arcane::LocalTransform lt; lt.position = pos;
-                reg.AddComponent<Arcane::LocalTransform>(e, lt);
+                Arcane::Transform lt; lt.position = pos;
+                reg.AddComponent<Arcane::Transform>(e, lt);
                 reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
                 Arcane::RigidBody2D rb; rb.type = Phys::BodyType::Dynamic;  // free to rotate
@@ -1053,8 +1053,8 @@ namespace Arcane::Sandbox
 
         Astra::Entity e = reg.CreateEntity();
 
-        Arcane::LocalTransform lt; lt.position = pos;
-        reg.AddComponent<Arcane::LocalTransform>(e, lt);
+        Arcane::Transform lt; lt.position = pos;
+        reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
         Arcane::RigidBody2D rb;
