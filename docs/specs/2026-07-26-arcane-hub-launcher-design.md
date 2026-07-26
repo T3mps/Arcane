@@ -274,18 +274,28 @@ Slice 1 is independently valuable: it closes the hole even if the Hub slips.
    - **Tauri is confirmed a third time.** Its bundler produces MSI/NSIS
      installers as a first-class output. A portable ImGui exe has no installer
      story at all, and an installed product needs one.
-   - **`Setup.exe`'s portable repo-root form is transitional** — but its JOB is
-     not. **USER, 2026-07-26: the Hub must absorb Setup.exe because the full
-     engine will always require dependencies to be set up/installed.** Prereq
-     provisioning (vcpkg deps, toolchains, runtimes, the server's Postgres) is a
-     PERMANENT Hub responsibility, not a migration artifact.
+   - **Absorbing `Setup.exe` is a LONG-TERM goal, explicitly NOT near-term
+     scope (USER, clarified 2026-07-26).** Prereq provisioning is a permanent
+     Hub responsibility *eventually*; the trigger is **when Arcane is positioned
+     to set up client-server projects and multiplayer**, i.e. when a project
+     needs server-side dependencies (the Server workspace's Postgres/db-setup,
+     toolchains, runtimes) rather than just an engine binary. Until then
+     `Setup.exe` keeps its job and stays untouched.
 
-     This is the pillar that justifies the Hub existing at all, and it is one
-     the editor structurally cannot own: it runs *before* and *without* an
-     engine. It also **retires the "fold the project selector back into the
-     editor" idea** floated earlier (the Godot model) — Godot needs no
-     bootstrap because it ships one self-contained portable binary; Arcane will
-     not.
+     **Correction to an earlier draft of this section:** it said provisioning
+     "is the pillar that justifies the Hub existing at all". That is wrong for
+     today. Today the Hub is justified by being an installed, distributable
+     project selector + creator with presentation quality — provisioning
+     justifies it *later*.
+
+     This also softens the earlier claim that provisioning "retires" the
+     fold-back-into-the-editor (Godot) idea. Honestly stated: that idea is
+     still technically viable *today* — Godot proves a distributed engine binary
+     can host its own project manager. It is foreclosed by the LONG-TERM
+     direction, not by current requirements. We are building the separate app
+     now because it is where this is going, accepting that today it is slightly
+     more than the minimum. That is a deliberate build-toward-the-destination
+     call, not a claim that today's needs demand it.
 
    - **Presentation is a requirement, not polish (USER, 2026-07-26).** Arcane is
      primarily for Starworks' own games AND open source, so the Hub is the first
