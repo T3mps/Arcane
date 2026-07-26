@@ -1,5 +1,4 @@
 <script lang="ts">
-  import "$lib/theme.css";
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import {

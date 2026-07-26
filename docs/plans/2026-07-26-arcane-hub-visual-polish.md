@@ -401,15 +401,20 @@ body {
 }
 ```
 
-- [ ] **Step 4: Import the theme once, from the page**
+> **CORRECTED DURING EXECUTION — do not re-add a theme import here.** This step
+> originally imported `theme.css` from `+page.svelte` "so the theme is live for
+> Tasks 3-9". Task 2's reviewer caught that this collides with the legacy
+> `<style>` block still in that file, which declares its own
+> `:global(:root)` tokens including `--text`, plus `:global(body)` and
+> `:global(*:focus-visible)`. Measured in the built bundle: legacy
+> `--text: #c8cede` lands at byte offset 2002, AFTER `theme.css`'s
+> `#eef2fa` at 528, so the legacy value wins and the focus ring renders violet
+> instead of gold. Nothing in Tasks 3-9 renders or visually verifies anything,
+> so the import bought nothing and cost a wrong-looking interim app.
+> **`theme.css` is imported in Task 10**, in the same change that deletes the
+> legacy block — the only point where both can be correct at once.
 
-In `Arcane/Hub/src/routes/+page.svelte`, add this as the first line of the existing `<script lang="ts">` block (the rest of the file is rewritten in Task 10; this is only so the theme is live for Tasks 3-9):
-
-```ts
-  import "$lib/theme.css";
-```
-
-- [ ] **Step 5: Fix the `state`/`$state` typecheck bug**
+- [ ] **Step 4: Fix the `state`/`$state` typecheck bug**
 
 Still in `Arcane/Hub/src/routes/+page.svelte`, rename the `state` variable to
 `hub`. See Global Constraints for why: a variable named `state` makes
@@ -442,18 +447,18 @@ and in the markup, every `state.engines` becomes `hub.engines` and every
 Verify none remain: `grep -n '\bstate\.' src/routes/+page.svelte` must print
 nothing, and `grep -c 'let state' src/routes/+page.svelte` must print `0`.
 
-- [ ] **Step 6: Verify it builds, typechecks clean, and the fonts resolve**
+- [ ] **Step 5: Verify it builds, typechecks clean, and the fonts resolve**
 
 Run: `cd Arcane/Hub && npm run check && npm run build`
 Expected: **`svelte-check found 0 errors and 0 warnings`** — the 6 pre-existing
-errors are gone as of Step 5. This is the first task whose gate is genuinely
+errors are gone as of Step 4. This is the first task whose gate is genuinely
 clean, and every later task must keep it that way. `vite build` completes;
 `build/_app/` exists.
 
 Run: `ls Arcane/Hub/build/fonts`
 Expected: the four font files were copied through by adapter-static.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 # The svg deletions were already staged by `git rm` in Step 2.
@@ -1332,17 +1337,41 @@ Replace the entire contents of `Arcane/Hub/src/routes/+page.svelte`:
 </style>
 ```
 
-- [ ] **Step 2: Verify typecheck and build**
+- [ ] **Step 2: Verify the legacy global styles are gone**
+
+The replacement above is a FULL-FILE rewrite, which is what finally removes the
+old `<style>` block's `:global(:root)` token declarations, `:global(body)`, and
+`:global(*:focus-visible)`. Those collide with `theme.css` by name (measured:
+legacy `--text: #c8cede` landed after `theme.css`'s `#eef2fa` in the bundle and
+won), which is why `theme.css` is imported here and not earlier.
+
+Run these and expect no output from either:
+
+```bash
+cd Arcane/Hub
+grep -n ':global(' src/routes/+page.svelte
+grep -nE '\-\-(void|panel|line|arc|ember|bad|display|body|mono)\s*:' src/routes/+page.svelte
+```
+
+Then confirm exactly one `--text` declaration survives in the built CSS:
+
+```bash
+npm run build
+grep -o '\-\-text: #[0-9a-f]\{6\}' build/_app/immutable/assets/*.css
+```
+Expected: a single line, `--text: #eef2fa`.
+
+- [ ] **Step 3: Verify typecheck and build**
 
 Run: `cd Arcane/Hub && npm run check && npm test && npm run build`
 Expected: svelte-check 0 errors; 17 tests pass; build completes.
 
-- [ ] **Step 3: Confirm the API surface really is untouched**
+- [ ] **Step 4: Confirm the API surface really is untouched**
 
 Run: `cd D:/dev/starworks/Gacha && git diff --stat Arcane/Hub/src/lib/api.ts Arcane/Hub/src-tauri/src/`
 Expected: **no output.** Any output here means the plan's core constraint was violated.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add Arcane/Hub/src/routes/+page.svelte
