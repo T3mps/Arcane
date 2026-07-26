@@ -1,0 +1,21 @@
+[package]
+name = "arcane-hub"
+version = "0.1.0"
+description = "Arcane Hub -- engine and project launcher"
+authors = ["Starworks"]
+edition = "2021"
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name, which
+# otherwise conflicts on Windows (rust-lang/cargo#8519).
+name = "arcane_hub_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
