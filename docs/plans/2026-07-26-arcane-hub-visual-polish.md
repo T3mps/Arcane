@@ -887,17 +887,29 @@ Create `Arcane/Hub/src/lib/components/ProjectCard.svelte`:
         margin-top: 5px; font-family: var(--font-mono); font-size: 9.5px;
         color: var(--text-dim); }
 
-  /* INERT: no gold anywhere, surfaces drop back, name recedes to muted (5.9:1). */
-  .bad { background: var(--surface-2); border-color: var(--border); }
-  .bad .cover { background: linear-gradient(var(--a), #20242e, #14171e); color: #4d566a; }
-  .bad .nm { color: var(--text-muted); }
+  /* INERT: no gold anywhere, surfaces drop back, name recedes to muted (5.9:1).
+     `.card.bad` rather than bare `.bad` on purpose: the base `.card` rule sets
+     the same two properties at equal specificity, so a bare `.bad` would win
+     only by declaration order. This rule is absolute in the spec, so it should
+     not depend on where it sits in the file. */
+  .card.bad { background: var(--surface-2); border-color: var(--border); }
+  .card.bad .cover { background: linear-gradient(var(--a), #20242e, #14171e); color: #4d566a; }
+  .card.bad .nm { color: var(--text-muted); }
+  /* The app-wide focus ring is GOLD (theme.css `:focus-visible`), which would
+     paint gold onto an incompatible card the instant it is tabbed to -- the one
+     thing this variant must never show, and a case no automated gate catches
+     because it only exists in the focus state. Coral is the card's own state
+     colour and measures 8.2:1 against this surface, so the ring stays plainly
+     visible; only its hue changes. */
+  .card.bad :focus-visible { outline-color: var(--fail); }
   /* Second, non-chromatic signal: a bordered badge (coral is 8.2:1 here). */
-  .badge { font-style: normal; font-weight: 600; color: var(--fail);
+  .card.bad .badge { font-style: normal; font-weight: 600; color: var(--fail);
            border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent); border-radius: 3px; padding: 0 4px; }
 
   .x { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px;
        display: grid; place-items: center; border: 0; border-radius: 4px;
-       background: rgba(8, 11, 18, .6); color: var(--text-dim); font-size: 10px;
+       background: color-mix(in srgb, var(--bg-bottom) 60%, transparent);
+       color: var(--text-dim); font-size: 10px;
        cursor: default; opacity: 0;
        transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease); }
   .card:hover .x, .x:focus-visible { opacity: 1; }
