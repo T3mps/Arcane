@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace Astra { class Registry; struct ComponentDescriptor; }
 

@@ -233,3 +233,28 @@ TEST_CASE("Gizmo group delta: a degenerate start scale yields ratio 1, not infin
     CHECK_THAT(d.scale.x, WithinAbs(1.0f, 1e-5f));   // guarded
     CHECK_THAT(d.scale.y, WithinAbs(2.0f, 1e-5f));
 }
+
+TEST_CASE("Gizmo group delta: non-uniform scale is applied BEFORE the rotation", "[gizmo]")
+{
+    // Order matters the moment scale is non-uniform and rotation is non-zero:
+    // scale-then-rotate and rotate-then-scale diverge, and every other test
+    // here is order-invariant (rotate=0, or replayed onto the pivot itself).
+    // Member 2 units along +X of the pivot, scaled 2x on X only, then turned a
+    // quarter: scale-then-rotate lands it at (0,4); rotate-then-scale would
+    // land it at (0,2).
+    const float quarter = 1.5707963268f;
+    const Arcane::GizmoTransform start{ glm::vec2(0.0f, 0.0f), 0.0f, glm::vec2(1.0f, 1.0f) };
+    Arcane::GizmoTransform end = start;
+    end.rotation = quarter;
+    end.scale    = glm::vec2(2.0f, 1.0f);
+
+    const Arcane::GizmoGroupDelta d = Arcane::MakeGroupDelta(start, end);
+    const Arcane::GizmoTransform other{ glm::vec2(2.0f, 0.0f), 0.0f, glm::vec2(1.0f, 1.0f) };
+    const Arcane::GizmoTransform r = Arcane::ApplyGroupDelta(other, d);
+
+    CHECK_THAT(r.position.x, WithinAbs(0.0f, 1e-5f));
+    CHECK_THAT(r.position.y, WithinAbs(4.0f, 1e-5f));
+    CHECK_THAT(r.rotation, WithinAbs(quarter, 1e-5f));
+    CHECK_THAT(r.scale.x, WithinAbs(2.0f, 1e-5f));
+    CHECK_THAT(r.scale.y, WithinAbs(1.0f, 1e-5f));
+}

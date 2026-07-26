@@ -222,9 +222,17 @@ namespace Arcane::Edit
         {
             if (!reg.IsValid(e) || emitted.contains(e))
                 continue;
+            // A cycle is impossible through SetParent (it refuses them) but
+            // RelationshipGraph::Deserialize installs the parent table
+            // unchecked, so a corrupt scene can produce one. Walking it
+            // unguarded would hang the editor; stop and treat `e` as a root,
+            // which is the safe answer.
             bool covered = false;
+            std::unordered_set<Astra::Entity> seen;
             for (Astra::Entity a = reg.GetParent(e); a.IsValid(); a = reg.GetParent(a))
             {
+                if (!seen.insert(a).second)
+                    break;   // cycle
                 if (members.contains(a))
                 {
                     covered = true;
