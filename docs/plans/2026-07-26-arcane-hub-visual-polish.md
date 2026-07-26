@@ -1446,7 +1446,7 @@ git commit -m "feat(hub): sidebar shell, view switch, and error banner placement
 - Consumes: the finished app.
 - Produces: a recorded verification result.
 
-- [ ] **Step 1: Full automated gate**
+- [x] **Step 1: Full automated gate**
 
 Run from `Arcane/Hub/`:
 
@@ -1458,7 +1458,13 @@ npm run build
 
 Expected: 0 svelte-check errors; 17 tests pass; build succeeds.
 
-- [ ] **Step 2: Prove the Rust side is genuinely untouched**
+Actual (2026-07-26, HEAD @8e341a7b): `svelte-check` reported
+`0 ERRORS 0 WARNINGS`; `vitest run` reported `Test Files 1 passed (1)`,
+`Tests 17 passed (17)`; `vite build` completed, `build/` written via
+adapter-static. All as expected. Full output in
+`.superpowers/sdd/hub-task-11-report.md`.
+
+- [x] **Step 2: Prove the Rust side is genuinely untouched**
 
 ```bash
 cd D:/dev/starworks/Gacha/Arcane/Hub/src-tauri
@@ -1468,12 +1474,29 @@ cargo clippy --all-targets -- -D warnings
 
 Expected: 26 tests pass; clippy clean. (Nothing in this plan edits Rust, so a failure here means something unrelated broke.)
 
-- [ ] **Step 3: Build and stage the real binary**
+Actual: `cargo test` -> `test result: ok. 26 passed; 0 failed; 0 ignored`.
+`cargo clippy --all-targets -- -D warnings` -> clean compile, zero
+warnings/errors. Also confirmed directly: `git diff --stat
+4f1076d0..HEAD -- Arcane/Hub/src/lib/api.ts Arcane/Hub/src-tauri/src/`
+produced no output -- the frozen surface held across the entire arc.
+
+- [x] **Step 3: Build and stage the real binary**
 
 Run: `cd Arcane/Hub && npm run build:hub`
 Expected: `stage: .../Arcane/bin/Release-windows-x86_64-md/Hub/arcane-hub.exe`.
 
+Actual: `tauri build` compiled the release profile, bundled the NSIS
+installer, then `npm run stage` printed
+`stage: D:\dev\starworks\Gacha\Arcane\bin\Release-windows-x86_64-md\Hub\arcane-hub.exe`.
+Confirmed on disk (9,659,392 bytes).
+
 - [ ] **Step 4: Desk-verify — nothing below has automated coverage**
+
+> **Not performed in this pass.** These 12 items require launching the
+> staged exe and visually/interactively confirming behavior; that was
+> explicitly out of scope for this automated verification session
+> (windowed launches are unreliable in this environment). They remain
+> owed by a human. See `.superpowers/sdd/hub-task-11-report.md`.
 
 Launch the staged exe and confirm each:
 
@@ -1490,7 +1513,7 @@ Launch the staged exe and confirm each:
 - [ ] Tab moves through cards in visual order with a visible gold focus ring.
 - [ ] Trigger an error (register a folder with no `ArcaneEditor.exe`): the banner appears above the view content, full width.
 
-- [ ] **Step 5: Commit the verification record**
+- [x] **Step 5: Commit the verification record**
 
 ```bash
 git add docs/superpowers/plans/2026-07-26-arcane-hub-visual-polish.md
