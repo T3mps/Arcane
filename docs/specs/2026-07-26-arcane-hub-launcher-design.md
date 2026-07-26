@@ -274,11 +274,25 @@ Slice 1 is independently valuable: it closes the hole even if the Hub slips.
    - **Tauri is confirmed a third time.** Its bundler produces MSI/NSIS
      installers as a first-class output. A portable ImGui exe has no installer
      story at all, and an installed product needs one.
-   - **`Setup.exe`'s portable repo-root form is transitional.** It exists
-     because today the only way to get Arcane is clone-and-build. Once the Hub
-     can install engine binaries, that bootstrap moves inside the Hub, and the
-     "set up a machine to build Arcane from source" flow survives only as a
-     contributor-facing path within it.
+   - **`Setup.exe`'s portable repo-root form is transitional** — but its JOB is
+     not. **USER, 2026-07-26: the Hub must absorb Setup.exe because the full
+     engine will always require dependencies to be set up/installed.** Prereq
+     provisioning (vcpkg deps, toolchains, runtimes, the server's Postgres) is a
+     PERMANENT Hub responsibility, not a migration artifact.
+
+     This is the pillar that justifies the Hub existing at all, and it is one
+     the editor structurally cannot own: it runs *before* and *without* an
+     engine. It also **retires the "fold the project selector back into the
+     editor" idea** floated earlier (the Godot model) — Godot needs no
+     bootstrap because it ships one self-contained portable binary; Arcane will
+     not.
+
+   - **Presentation is a requirement, not polish (USER, 2026-07-26).** Arcane is
+     primarily for Starworks' own games AND open source, so the Hub is the first
+     surface both an internal dev and an external contributor meet. That is an
+     independent argument for the web stack over ImGui chrome, and it means the
+     Svelte screens in slices 2-3 deserve real design attention rather than the
+     functional-only treatment the plan currently specifies for them.
 2. ~~**Does the Hub replace `Setup.exe`'s role over time?**~~ **ANSWERED
    2026-07-26 by the user: YES, the Hub absorbs `Setup.exe`.**
 
