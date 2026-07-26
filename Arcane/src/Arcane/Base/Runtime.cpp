@@ -132,13 +132,34 @@ namespace Arcane
             //
             // Safe to do unconditionally, and safe for plugins to re-register
             // over: RegisterComponent<T> is idempotent (it early-returns when
-            // the id is already registered), and ComponentIDs come from
-            // TypeID<T> resolved through the shared TypeContext BY HASH, not
-            // from a registration counter -- so this cannot renumber anything
-            // or invalidate an existing save. A plugin's later
+            // the id is already registered), and a plugin's later
             // ReRegisterComponent<T> still rebinds the descriptor's function
             // pointers to that module, which is the whole point of the
             // hot-reload path.
+            //
+            // ComponentID NUMBERING (corrected 2026-07-26 -- the previous comment
+            // here claimed ids are resolved BY HASH and therefore order-
+            // independent, which is FALSE): the type HASH is only the lookup key.
+            // The id itself is a monotonic per-process counter assigned in
+            // first-touch order -- TypeContext.hpp:93, `const ComponentID id =
+            // m_next++`. Registration order fully determines numbering, and
+            // registering the engine roster here DOES shift it (a plugin that
+            // registered Transform + SpriteRenderer used to get 0,1; it now gets
+            // 0,3). Ids are process-local; only the hash is stable across
+            // processes.
+            //
+            // Nothing in this engine is hurt by that today: every binary blob is
+            // memory-only and same-process (Play snapshots, structural undo, hot
+            // reload), so the ids written and the ids read always come from one
+            // counter. The one path that could bite is a PATH-BASED Save then Load
+            // in a different process -- the vendored Astra still rebuilds an
+            // archetype straight from the on-disk mask words
+            // (Archetype.hpp:871, `make_unique<Archetype>(mask)`), which assumes
+            // the ids mean the same thing in both runs. That is already fixed
+            // upstream in the dev Astra (marked "CR-4": the mask is rebuilt from
+            // hash-resolved descriptors plus a popcount integrity check) and lands
+            // on the next vendor sync. Until then, treat cross-process
+            // Save/Load of a registry snapshot as unsupported.
             RegisterSceneComponents(*components);
             RegisterPhysicsComponents(*components);
 

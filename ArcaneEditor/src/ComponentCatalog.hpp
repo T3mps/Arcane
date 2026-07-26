@@ -16,14 +16,31 @@ namespace Astra { class Registry; struct ComponentDescriptor; }
 
 namespace Arcane::Editor
 {
-    // System-managed components: derived or runtime-owned state a user must
-    // never hand-add or hand-remove.
+    // Components whose lifecycle something OTHER than the generic component UI
+    // owns, so a user must never hand-add, hand-remove, or hand-edit them.
+    //
+    // Derived / runtime-owned state:
     //   Arcane::WorldTransform    -- recomputed by TransformPropagationSystem
     //                                every frame; an edit would be stomped.
     //   Arcane::PreviousTransform -- the physics-capture interpolation pose.
     //   Arcane::PhysicsBodyRef    -- a live BodyHandle PhysicsSystem owns and
     //                                re-establishes; hand-adding one installs
     //                                a dangling handle.
+    // Identity the Outliner owns:
+    //   Arcane::EntityInfo        -- documents "the Guid is generated when the
+    //                                component is added and is the durable
+    //                                cross-save identity". Both real creation
+    //                                paths honour that with Guid::Generate(),
+    //                                but Edit::AddComponent default-constructs,
+    //                                so a generic add stamped the SAME NIL Guid
+    //                                on every selected entity and a generic
+    //                                remove wiped the name AND that identity for
+    //                                the whole selection. The Outliner owns this
+    //                                component through create + rename; a
+    //                                descriptor-driven add cannot mint a
+    //                                per-entity Guid without a post-construct
+    //                                hook, which nothing else needs yet.
+    //
     // This is THE hide-list. The Inspector's per-component sections, the Add
     // Component catalog, and Remove Component all consult this one predicate,
     // so the three can never drift apart.

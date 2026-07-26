@@ -1,0 +1,125 @@
+/* Arcane Hub design tokens. Token NAMES are copied verbatim from
+   Tools/setup-wizard/src/lib/theme.css so the two files stay diffable; the Hub
+   deliberately differs in body font (Inter, not PF DIN -- commercial licence,
+   undocumented in this repo) and in owning its own font copies under static/
+   rather than reaching into Tools/, which is retired prototype.
+
+   MONOCHROMATIC. The neutral ramp carries no hue at all -- it was previously
+   blue-tinted (surface #141927, muted text #8593aa), which read as a "dark blue
+   app" rather than a neutral one. Chroma is now rationed:
+
+     --accent = act        (primary button, focus ring, chosen radio/checkbox)
+     --fail   = won't open (the abi badge on an incompatible card)
+     --ok     = resolved   (engine status dot)
+     neutral  = everything else, INCLUDING selection and active states
+
+   Selection is carried by a lighter surface, not by an accent colour. That is
+   the single biggest lever on how monochrome the app reads, because active nav,
+   the layout toggle, engine rows and cover art were all accent-tinted and they
+   are on screen constantly, while the primary button is one control.
+
+   NOTE: --accent and --fail now sit in the same hue family (a dark red and a
+   light coral). They are separated by lightness and by never appearing in the
+   same control, not by hue -- which the gold palette did give for free. If
+   that proves too subtle, --fail is the one to move, not the accent.
+   ASCII only. */
+
+@font-face {
+  font-family: "Aldo";
+  src: url("/fonts/AldotheApache.ttf") format("truetype");
+  font-weight: 400 700; font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter_18pt-Regular.ttf") format("truetype");
+  font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter_18pt-SemiBold.ttf") format("truetype");
+  font-weight: 600; font-display: swap;
+}
+
+:root {
+  /* Pure neutral: R == G == B on every step of the ramp. */
+  --bg-top: #131313; --bg-bottom: #0e0e0e;
+  --surface: #1b1b1b; --surface-2: #161616; --well: #0a0a0a;
+  --border: #2f2f2f; --border-soft: #242424;
+  /* Hover/emphasis border. Was the literal #2d3750 repeated in four files. */
+  --border-hover: #3d3d3d;
+  /* Selected/active surface. The monochrome replacement for a gold tint. */
+  --surface-sel: #2b2b2b;
+  --text: #f2f2f3; --text-muted: #a1a1a4; --text-dim: #7c7c81;
+  /* Headings. Was the literal #f3f6fc repeated in three views. */
+  --text-bright: #ffffff;
+  /* Project cover art. Shared by the tile and the list row so a project looks
+     the same in both. Neutral: this used to be a gold/brown gradient with a
+     gold monogram, repeated across every card in the grid. */
+  --cover-from: #3a3a3a; --cover-to: #171717; --cover-ink: #b4b4b8;
+  /* Accent, sampled from arcane_logo.png. Named for its ROLE, not its hue --
+     it was `--gold` through one re-hue already, and a token whose name lies is
+     how a palette drifts.
+     THREE values because this red is dark (luminance .12), unlike the light
+     gold it replaces, and one value cannot do all three jobs:
+       --accent      fill only. Near-black ink on it is 3.2:1, so the ink is
+                     WHITE (6.1:1) -- the inverse of what gold needed.
+       --accent-hover  lighter fill; white ink still clears 4.5 (4.98:1).
+       --accent-ring   for STROKES on dark surfaces. The base accent is only
+                     2.8:1 on --surface and 2.3:1 on --surface-sel, both under
+                     the 3:1 floor for non-text, so a focus ring drawn in it
+                     would be near-invisible. This clears it (4.6 / 3.8). */
+  --accent: #A24349; --accent-hover: #B54F56; --accent-ring: #C9666C;
+  --accent-ink: #ffffff;
+  /* No --warn: it only ever existed as a duplicate of the old gold, nothing
+     read it, and its "same hex as the accent" rationale died with the re-hue. */
+  --ok: #74dca2; --fail: #f1949f; --fail-accent: #ff5c6b;
+
+  --font-display: "Aldo", "Bahnschrift", sans-serif;
+  --font-ui: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  --r-win: 12px; --r-panel: 8px; --r-btn: 7px;
+  /* Owned chrome height. Shared so a modal scrim can stop below the titlebar
+     instead of hardcoding the same number in two files.
+     44px leaves room for native-metric caption buttons (46x32) with even
+     padding; the previous 34px forced them down to 34x26. */
+  --h-titlebar: 44px;
+  --dur: 200ms; --ease: cubic-bezier(.22, .61, .36, 1);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  /* 14px base, matching the reference. The whole UI ran 1.5-3px under it and
+     read as cramped, most visibly in list rows and secondary meta. */
+  font-family: var(--font-ui); color: var(--text); font-size: 14px; line-height: 1.5;
+  background: var(--bg-bottom);
+  -webkit-font-smoothing: antialiased;
+  /* Desktop app, not a document: no text selection, no I-beam, no scroll bounce. */
+  user-select: none; cursor: default; overflow: hidden;
+}
+
+.display { font-family: var(--font-display); text-transform: uppercase; letter-spacing: .07em; }
+.label { font-size: 10.5px; letter-spacing: .15em; text-transform: uppercase; color: var(--text-dim); }
+
+/* View header, shared by Projects / Engines / Settings. These three rules were
+   copied verbatim into all three views; with the sizes changing they are now
+   defined once. Used as `<h2 class="display view-title">` plus `<p class="view-sub">`. */
+.view-title { font-size: 26px; margin: 0; color: var(--text-bright); }
+.view-sub { font-size: 12.5px; color: var(--text-muted); margin: 3px 0 0; }
+
+:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; border-radius: 4px; }
+
+/* WebView2 is Chromium, so this applies. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333333; border-radius: 5px;
+                            border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #474747; background-clip: padding-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

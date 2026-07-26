@@ -9,6 +9,50 @@ test adequacy.
 
 ---
 
+## DISPOSITION (2026-07-26, same day)
+
+Every finding worked. Gate green at **29724 assertions / 530 cases**, verified
+under `--rng-seed 6`, `--rng-seed 17`, and two random seeds (2010332980,
+1809940436). Build clean; the only warnings are the pre-existing C4251
+dll-interface noise on `std::` members.
+
+| # | Finding | Disposition |
+|---|---|---|
+| CRITICAL 1 | `ApplyImmediate` commits a transaction it does not own | **FIXED.** `CommandStack::Begin` now mints a `TransactionId` owner token; `Commit`/`Cancel` ignore any other token, so a joiner and a stale owner are both inert. Gizmo parks its token in `GizmoDrag::txn`; the Inspector's cross-frame gesture parks it in the new `InspectorState`; both single-shot immediate paths use `ScopedTransaction`, which now only closes what it opened. 5 new regression cases. |
+| MAJOR 2 | Two `material` fields collide on one popup id | **FIXED.** `PushID(ci.descriptor->hash)` scopes each component section (branches renested so the ID stack stays balanced — no `continue` between push and pop). Asset-ref button id switched to `###assetref`; verified against `ImHashStr` (`imgui.cpp:2557`) that only `###` resets the hash. |
+| MAJOR 3 | `EntityInfo` add/remove wipes the durable Guid | **FIXED** via the hide-list, as the audit's first option. Decision recorded in `ComponentCatalog.hpp`: the Outliner owns this component through create + rename, and a descriptor-driven add cannot mint a per-entity Guid without a post-construct hook nothing else needs yet. The roster-registration test no longer witnesses `EntityInfo` through the catalog, so it now asserts registration against the `ComponentRegistry` directly. |
+| MAJOR 4 | The gate strands `File → Open Project` | **FIXED**, second option. A bare *interactive* launch boots and raises the shipped picker on frame 1 (`EditorApp::RaiseOpenProjectOnStart`, routed through `MenuRequests` so there is one launch site). A *scripted* run (`--frames N`, no project) still exits 2 — verified by hand. Note: `ArcaneEditor` MUST stay a ConsoleApp; the console flash the audit noted is the price of the probe's stdout, and a WindowedApp would silently break the Hub. |
+| MAJOR 5 | `EngineInfoJson` takes `argv[0]` | **FIXED.** New `ARCANE_API Arcane::ExecutablePathUtf8()` (GetModuleFileNameW + explicit `CP_UTF8`, grow-and-retry, forward-slashed). `EngineInfoJson` now takes UTF-8 *bytes* rather than a `std::filesystem::path`, so nothing re-encodes through the native narrow encoding, and `dump()` runs with `error_handler_t::replace` so a malformed byte can never throw out of `main`. Verified by hand on both hosts: exactly one stdout line, absolute path. |
+| — | Runtime roster comment factually wrong | **FIXED.** Re-verified in the vendored source before rewriting: `TypeContext.hpp:93` is `m_next++`, and vendored `Archetype.hpp:871` still rebuilds from the raw on-disk mask. The comment now states the real invariant (ids are process-local and counter-assigned; only the hash is stable) and names the vendor-sync dependency. |
+| — | ABI tripwire is a tautology | **FIXED, and made real.** Comment corrected in `HostBootTest.cpp` and in the plan's Verification Summary. Beyond the comment, minor 7's `PluginABIVersion()` means the probe now reports the **DLL's** ABI while the test compares against the **test exe's** constant — so a stale-binary mismatch is now genuinely detectable, which is the failure the design cared about. |
+| Minor 1 | Structural edits refuse silently | **FIXED.** One `CanEditStructure(undo, binding)` predicate (`editMode && !InTransaction()`) now disables every structural affordance: both context menus, Add/Remove Component, and the drag-reparent source/target. |
+| Minor 2 | Add-Component popup rows not gated on editMode | **FIXED** — same predicate, evaluated once per popup. |
+| Minor 3 | Int fields lossy through `float`/`%.3f` | **FIXED.** `MultiScalarRow` carries `double` + an `integral` flag; ints format `%lld`, parse via `strtod`, and clamp before the narrowing cast (out-of-range double → int32 is UB). |
+| Minor 4 | AssetRef mixed computed then discarded | **FIXED.** Mixed asset refs render `--`, and the clear button is offered on a mixed selection. |
+| Minor 5 | `kAddComponentPopup` comment inverted | **FIXED.** Verified `OpenPopup` seeds the id with `g.CurrentWindow->GetID` (`imgui.cpp:12956`): the two sites' ids DIFFER, and the shared buffer is justified by one-popup-at-a-time. |
+| Minor 6 | Probe shares stdout with the log sink | **FIXED.** Both the `Arcane` logger and Core's console sink moved to **stderr**. The editor Console reads the Mosaic sink, so it is unaffected. |
+| Minor 7 | Probe reports the exe's ABI, not the DLL's | **FIXED.** New `ARCANE_API uint32_t Arcane::PluginABIVersion()` compiled into Arcane.dll; the probe calls it. |
+| Minor 8 | `Runtime`'s `externalContext = nullptr` default | **FIXED.** Default removed — every caller already passed a context, so the TypeContext-theft guardrail is now compiler-enforced instead of conventional. |
+| Minor 9 | `m_componentNames` never trimmed | **DEFERRED, deliberately.** It lives in vendored `ThirdParty/Astra/.../ComponentRegistry.hpp:178` where it is already documented as an accepted upstream tradeoff (pointer-stable `c_str()` storage). Patching vendored source would be lost on the next Astra sync — same lesson as the Manifold2D vendor-back. Belongs upstream, alongside CR-4. |
+| Tests | 4 vacuous/weak + 1 latent | **FIXED.** `ClassifyField` gained a per-arm witness test (Bool/Float via `RigidBody2D`, Vec2/Float via `Transform`, and a local reflected `ClassifyProbe` for Vec3 — nothing in the engine roster declares a `glm::vec3`, which is exactly why that arm was unpinned). Sticky mask gained the `1,2,2` fixture. The forward-slash assertion is now fed backslashes. `MixedWorld::TransformHash()` REQUIREs a non-zero hash instead of returning 0. |
+
+**A bug introduced by the CRITICAL fix, caught and closed during the work:**
+clicking field B while field A is mid-gesture moves ImGui's ActiveId in one
+frame, and if B is drawn ABOVE A then B activates before A's `EndGesture` runs.
+B's `Begin` would see A's transaction still open, get `None`, and A's later
+`Commit(None)` would no-op — stranding A's transaction open forever on stale
+`before` bytes. `BeginGestureIfActivated` now commits a still-parked token before
+opening its own.
+
+**STILL OWED: desk-verify.** None of the ImGui surfaces have automated coverage.
+Specifically worth clicking: the CRITICAL repro (type into a multi-select
+`position.x`, do not press Enter, then drag a gizmo handle — the drag must be one
+undo step), two `material` fields on one entity (`SpriteRenderer` +
+`PostProcess`), a bare `ArcaneEditor.exe` launch raising the picker, and the
+disabled-during-gesture structural menus.
+
+---
+
 ## CRITICAL 1 — `ApplyImmediate` commits a CommandStack transaction it does not own
 
 `EditorPanels.cpp` `ApplyImmediate` / `ApplyGuidImmediate`; `CommandStack.cpp:14-21`.

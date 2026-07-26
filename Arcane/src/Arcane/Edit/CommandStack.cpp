@@ -11,19 +11,20 @@ namespace Arcane
     {
     }
 
-    void CommandStack::Begin(std::string label)
+    TransactionId CommandStack::Begin(std::string label)
     {
-        if (m_open)
-            return;   // already open (exclusive gestures); keep the first
-        m_open = true;
+        if (m_openId != TransactionId::None)
+            return TransactionId::None;   // already open; keep the first, caller JOINS it
+        m_openId = static_cast<TransactionId>(m_nextId++);
         m_openLabel = std::move(label);
         m_pending.clear();
+        return m_openId;
     }
 
     void CommandStack::SnapshotComponent(Astra::Entity entity,
                                          const Astra::ComponentDescriptor* descriptor)
     {
-        if (!m_open || !descriptor)
+        if (m_openId == TransactionId::None || !descriptor)
             return;
         // Idempotent: first touch of (entity, descriptor) snapshots; later ones no-op.
         for (const Pending& p : m_pending)
@@ -34,9 +35,11 @@ namespace Arcane
             ComponentEditCommand::Snapshot(m_resolve(), entity, descriptor) });
     }
 
-    void CommandStack::Commit()
+    void CommandStack::Commit(TransactionId owner)
     {
-        if (!m_open)
+        // Not the owner (a joiner passes None; a committed consumer passes a
+        // stale id) -> leave the open transaction to whoever owns it.
+        if (owner == TransactionId::None || owner != m_openId)
             return;
         Transaction txn;
         txn.label = m_openLabel;
@@ -52,7 +55,7 @@ namespace Arcane
         }
         for (auto& c : m_pendingGeneric)
             txn.commands.push_back(std::move(c));
-        m_open = false;
+        m_openId = TransactionId::None;
         m_pending.clear();
         m_pendingGeneric.clear();
         if (txn.commands.empty())
@@ -64,9 +67,11 @@ namespace Arcane
             m_undo.pop_front();   // drop the oldest
     }
 
-    void CommandStack::Cancel()
+    void CommandStack::Cancel(TransactionId owner)
     {
-        m_open = false;
+        if (owner == TransactionId::None || owner != m_openId)
+            return;   // see Commit: only the owner may discard.
+        m_openId = TransactionId::None;
         m_pending.clear();
         m_pendingGeneric.clear();
     }
@@ -75,7 +80,7 @@ namespace Arcane
     {
         if (!command)
             return;
-        if (m_open)
+        if (m_openId != TransactionId::None)
         {
             m_pendingGeneric.push_back(std::move(command));
             return;
@@ -124,21 +129,23 @@ namespace Arcane
     {
         m_undo.clear();
         m_redo.clear();
-        m_open = false;
+        m_openId = TransactionId::None;
         m_pending.clear();
         m_pendingGeneric.clear();
     }
 
     // ---- ScopedTransaction --------------------------------------------------
     ScopedTransaction::ScopedTransaction(CommandStack& stack, std::string label)
-        : m_stack(stack)
+        : m_stack(stack), m_id(stack.Begin(std::move(label)))
     {
-        m_stack.Begin(std::move(label));
     }
     ScopedTransaction::~ScopedTransaction()
     {
-        if (m_cancelled) m_stack.Cancel();
-        else             m_stack.Commit();
+        // Both are no-ops when m_id is None (this scope joined an already-open
+        // transaction) -- the owner closes it, so a nested scope never commits
+        // or discards someone else's gesture.
+        if (m_cancelled) m_stack.Cancel(m_id);
+        else             m_stack.Commit(m_id);
     }
     void ScopedTransaction::Snapshot(Astra::Entity entity,
                                      const Astra::ComponentDescriptor* descriptor)

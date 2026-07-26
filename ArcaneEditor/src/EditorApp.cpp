@@ -956,7 +956,9 @@ namespace Arcane::Editor
                                             Arcane::Edit::SelectionRoots(*regPtr, m_selection.Entities());
                                         m_gizmoDrag.targets.clear();
                                         m_gizmoDrag.targets.reserve(roots.size());
-                                        m_undo->Begin("Gizmo");
+                                        // Keep the token: only its holder may close
+                                        // this transaction (see GizmoDrag::txn).
+                                        m_gizmoDrag.txn = m_undo->Begin("Gizmo");
                                         for (Astra::Entity e : roots)
                                         {
                                             Arcane::Transform* et = regPtr->GetComponent<Arcane::Transform>(e);
@@ -1028,8 +1030,8 @@ namespace Arcane::Editor
 
                             if (mouseReleasedLeft)
                             {
-                                m_undo->Commit();   // no-move drag self-drops (after == before)
-                                m_gizmoDrag          = {};
+                                m_undo->Commit(m_gizmoDrag.txn);   // no-move drag self-drops (after == before)
+                                m_gizmoDrag          = {};         // clears txn back to None
                                 m_gizmoCapturedClick = true;
                             }
                         }
@@ -1042,7 +1044,7 @@ namespace Arcane::Editor
                         // now-meaningless transaction.
                         if (m_gizmoDrag.active)
                         {
-                            m_undo->Cancel();
+                            m_undo->Cancel(m_gizmoDrag.txn);
                             m_gizmoDrag = {};
                         }
                     }
@@ -1293,6 +1295,15 @@ namespace Arcane::Editor
             Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin ? m_plugin->Vtable() : nullptr,
                                                (uint64_t)(intptr_t)m_toolbarLogo.Get());
             Arcane::Editor::EndDockSpace();
+            // Bare interactive launch: raise the picker as if the user had clicked
+            // File -> Open Project, once. Routed through menuReq (rather than
+            // calling the dialog directly) so there is exactly ONE launch site and
+            // the cold-start path cannot drift from the menu path.
+            if (m_raiseOpenProjectOnStart)
+            {
+                m_raiseOpenProjectOnStart = false;
+                menuReq.openProject       = true;
+            }
             if (menuReq.openProject)
                 m_gpu->Win().ShowOpenFileDialog(&EditorApp::ProjectPickedThunk, this,
                                                 "Arcane Project", "arcproj");
@@ -1400,7 +1411,8 @@ namespace Arcane::Editor
             Arcane::Editor::DrawOutlinerPanel(m_runtime->Registry(), m_selection,
                                               *m_undo, m_editBinding, m_outliner);
             Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
-                                               m_editBinding, m_runtime->CurrentProject());
+                                               m_editBinding, m_runtime->CurrentProject(),
+                                               m_inspector);
 
             // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
             // composited into the viewport texture above -- not the editor context.)

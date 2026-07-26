@@ -26,28 +26,41 @@ int main(int argc, char** argv)
     // registry to answer.
     if (parsed.config->printEngineInfo)
     {
-        std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(argv[0]).c_str());
+        // ExecutablePathUtf8, NOT argv[0]: argv[0] is whatever the launcher typed
+        // (a bare relative name under the documented cd-then-run workflow) and is
+        // ANSI-codepage bytes under MSVC, which a strict-UTF-8 dump() rejects.
+        std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
         return 0;
     }
 
-    // No project and no explicit plugin: refuse rather than boot a project-less
-    // session. This used to fall through to a "data/-next-to-exe" boot with no
-    // asset registry, no mounts and no identity -- a half-configured editor
-    // nothing downstream expects.
+    // No project and no explicit plugin. A SCRIPTED run (--frames N) still
+    // refuses: it cannot answer a dialog, and booting project-less used to mean a
+    // "data/-next-to-exe" session with no asset registry, no mounts and no
+    // identity -- a half-configured editor nothing downstream expects.
     //
-    // Both flags stay as bypasses ON PURPOSE: CI and the headless
-    // `--project <p> --frames N` harness depend on --project, and --plugin is
-    // the engine-dev path (hosting a plugin without a project). Exiting beats a
-    // message box here because no window or device exists yet.
-    if (parsed.config->projectPath.empty() && parsed.config->pluginPath.empty())
+    // An INTERACTIVE bare launch does NOT refuse. It boots and immediately raises
+    // the shipped File -> Open Project dialog (EditorApp::m_raiseOpenProjectOnStart).
+    // Exiting here removed the only cold-start path into that dialog, even though
+    // the project-less state is explicitly supported everywhere else -- see
+    // SwitchProject's failure path: "editor left with no plugin; user can Open
+    // another project". The Arcane Hub is the normal entry point and always passes
+    // --project; this is the fallback for anyone who runs the exe directly.
+    //
+    // Both flags remain bypasses ON PURPOSE: CI and the headless
+    // `--project <p> --frames N` harness depend on --project, and --plugin is the
+    // engine-dev path (hosting a plugin without a project).
+    const bool noProject = parsed.config->projectPath.empty() && parsed.config->pluginPath.empty();
+    if (noProject && parsed.config->maxFrames != 0)
     {
         std::fprintf(stderr,
-            "Arcane Editor: no project selected.\n"
+            "Arcane Editor: no project selected, and --frames makes this a scripted run.\n"
             "  Pass --project <folder-or-.arcproj> to open one,\n"
             "  or --plugin <dll> to host a plugin without a project.\n");
         return 2;
     }
 
     Arcane::Editor::EditorApp app(*parsed.config);
+    if (noProject)
+        app.RaiseOpenProjectOnStart();
     return app.Run();
 }

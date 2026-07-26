@@ -29,6 +29,10 @@ pub fn engines_file() -> PathBuf {
     hub_dir().join("engines.json")
 }
 
+pub fn settings_file() -> PathBuf {
+    hub_dir().join("settings.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -38,7 +42,19 @@ mod tests {
         let dir = hub_dir();
         assert!(recents_file().starts_with(&dir));
         assert!(engines_file().starts_with(&dir));
-        assert_ne!(recents_file(), engines_file());
+        assert!(settings_file().starts_with(&dir));
+    }
+
+    #[test]
+    fn every_state_file_is_distinct() {
+        // Two of these sharing a name would have one silently overwrite the
+        // other on save, and the loss would only show up on next launch.
+        let all = [recents_file(), engines_file(), settings_file()];
+        for (i, a) in all.iter().enumerate() {
+            for b in all.iter().skip(i + 1) {
+                assert_ne!(a, b);
+            }
+        }
     }
 
     #[test]

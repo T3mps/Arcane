@@ -24,9 +24,12 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -368,6 +371,23 @@ namespace Arcane::Editor
         // source/target sites below so the string only ever appears once.
         constexpr const char* kOutlinerDragType = "ARC_OUTLINER_ENTITY";
 
+        // Whether a structural (whole-registry memento) edit can run RIGHT NOW.
+        // Two independent refusals, both of which used to be invisible in the UI:
+        //   editMode      -- false during Play (a play-time structural edit would
+        //                    be undone against the restored registry).
+        //   InTransaction -- ApplyRegistryMutation refuses inside an open gesture
+        //                    (Cancel discards pending commands WITHOUT reverting,
+        //                    so a memento pushed mid-gesture could strand an
+        //                    already-applied edit with no undo coverage).
+        // The second one only ARC_WARN'd, which presents at the desk as "the
+        // right-click menu stopped working". Every structural affordance disables
+        // on this predicate so the refusal is visible before the click.
+        [[nodiscard]] bool CanEditStructure(const Arcane::CommandStack& undo,
+                                            const SceneEditBinding& b) noexcept
+        {
+            return b.editMode && !undo.InTransaction();
+        }
+
         bool ApplyStructural(Arcane::CommandStack& undo, const SceneEditBinding& b,
                              std::string label, Arcane::FunctionRef<bool()> mutate)
         {
@@ -396,8 +416,13 @@ namespace Arcane::Editor
         }
 
         // Popup id shared by the Inspector's "+ Add Component" button and the
-        // Outliner row menu's "Add Component...". Both open it at their own
-        // panel-window scope, so the id resolves identically at both sites.
+        // Outliner row menu's "Add Component...".
+        //
+        // NOTE the ids at those two sites are NOT equal -- ImGui seeds a popup id
+        // with the CURRENT WINDOW, so this literal resolves to a different id in
+        // the Inspector than in the Outliner. (The previous comment here claimed
+        // the opposite. Corrected 2026-07-26.) That is harmless: each panel opens
+        // and draws its own popup at its own scope, and each is self-consistent.
         constexpr const char* kAddComponentPopup = "##addcomponent";
 
         // The searchable Add Component popup: draws the catalog, applies the
@@ -405,8 +430,9 @@ namespace Arcane::Editor
         // with ImGui::OpenPopup(kAddComponentPopup) and then calls this every
         // frame at the same id-stack level.
         //
-        // One popup is open at a time, so a function-local search buffer serves
-        // both call sites (same rationale as the asset-ref pick popup below).
+        // The function-local search buffer is justified by ONE POPUP BEING OPEN AT
+        // A TIME (not by the ids being equal -- see above), same as the asset-ref
+        // pick popup below.
         void DrawAddComponentPopup(Astra::Registry& registry,
                                    const std::vector<Astra::Entity>& selection,
                                    Arcane::CommandStack& undo,
@@ -414,6 +440,10 @@ namespace Arcane::Editor
         {
             static char s_search[64] = {};
             const Astra::ComponentDescriptor* chosen = nullptr;
+            // Evaluated ONCE for the whole popup: a popup left open when Play
+            // starts used to keep its rows fully interactive and then silently
+            // no-op in ApplyStructural.
+            const bool canEdit = CanEditStructure(undo, binding);
 
             if (ImGui::BeginPopup(kAddComponentPopup))
             {
@@ -442,7 +472,7 @@ namespace Arcane::Editor
                         // carries it, so the add would be a no-op. Shown
                         // disabled rather than hidden: "you already have this"
                         // reads better than a row that silently vanishes.
-                        const bool addable = e.missingCount > 0;
+                        const bool addable = e.missingCount > 0 && canEdit;
                         if (!addable)
                             ImGui::BeginDisabled();
                         if (ImGui::Selectable(e.typeName.c_str()) && addable)
@@ -474,6 +504,10 @@ namespace Arcane::Editor
                            OutlinerState& state)
     {
         ImGui::Begin("Outliner");
+
+        // Hoisted once per frame: every structural affordance in this panel keys
+        // off it, and BeginDisabled/EndDisabled pairs must agree.
+        const bool canEditStructure = CanEditStructure(undo, binding);
 
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputTextWithHint("##outliner_search", ICON_LC_SEARCH " Filter",
@@ -667,7 +701,11 @@ namespace Arcane::Editor
                         sel.Select(row.entity);
                     if (ImGui::BeginPopupContextItem("##row_ctx"))
                     {
-                        if (!binding.editMode)
+                        // CanEditStructure, not just editMode: a memento refuses
+                        // inside an open gesture too, and that refusal used to be an
+                        // ARC_WARN only -- i.e. invisible, reading as "the menu
+                        // stopped working".
+                        if (!canEditStructure)
                             ImGui::BeginDisabled();
                         if (ImGui::MenuItem("New Child Entity"))
                         {
@@ -695,19 +733,21 @@ namespace Arcane::Editor
                                 sel.Select(row.entity);
                             DeleteSelection(registry, sel, undo, binding);
                         }
-                        if (!binding.editMode)
+                        if (!canEditStructure)
                             ImGui::EndDisabled();
                         ImGui::EndPopup();
                     }
 
-                    if (binding.editMode && ImGui::BeginDragDropSource())
+                    // Reparent-by-drag is structural too, so it honours the same
+                    // predicate rather than starting a drag that will refuse.
+                    if (canEditStructure && ImGui::BeginDragDropSource())
                     {
                         ImGui::SetDragDropPayload(kOutlinerDragType,
                                                   &row.entity, sizeof(Astra::Entity));
                         ImGui::TextUnformatted(row.label.c_str());
                         ImGui::EndDragDropSource();
                     }
-                    if (binding.editMode && ImGui::BeginDragDropTarget())
+                    if (canEditStructure && ImGui::BeginDragDropTarget())
                     {
                         if (const ImGuiPayload* p =
                                 ImGui::AcceptDragDropPayload(kOutlinerDragType))
@@ -738,7 +778,7 @@ namespace Arcane::Editor
         // non-null for ANY active drag (e.g. an asset-browser drag), which
         // used to show this strip for foreign payloads too.
         const ImGuiPayload* activeDrag = ImGui::GetDragDropPayload();
-        if (binding.editMode && activeDrag != nullptr
+        if (canEditStructure && activeDrag != nullptr
             && activeDrag->IsDataType(kOutlinerDragType))
         {
             ImGui::Selectable("(drop here to unparent)", false,
@@ -766,7 +806,7 @@ namespace Arcane::Editor
         // test behind that helper demands an EXACT window match against the
         // outer window. Detect the hover across the child hierarchy and open
         // the popup by hand.
-        if (binding.editMode
+        if (canEditStructure
             && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
             && !ImGui::IsAnyItemHovered()
             && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
@@ -828,6 +868,11 @@ namespace Arcane::Editor
             const Astra::ComponentDescriptor* descriptor = nullptr;
             std::string                       typeName;
             const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
+            // The in-flight gesture's CommandStack ownership token, owned by the
+            // panel's persistent InspectorState -- the visitor is rebuilt every
+            // frame but the gesture it brackets is not. Never null when `stack` is
+            // non-null.
+            Arcane::TransactionId*            gestureTxn = nullptr;
 
             // Fan-out targets. `selection` includes the primary; entities lacking
             // this component are skipped (the panel only shows components the whole
@@ -857,7 +902,21 @@ namespace Arcane::Editor
             {
                 if (stack && ImGui::IsItemActivated())
                 {
-                    stack->Begin("Edit " + typeName + "." + field);
+                    // Clicking field B while field A is mid-gesture moves ActiveId in
+                    // ONE frame, and if B is drawn ABOVE A then B activates before A's
+                    // EndGesture runs. Without this, B's Begin would see A's
+                    // transaction still open, return None, and A's later Commit(None)
+                    // would no-op -- leaving A's transaction open forever holding
+                    // stale `before` bytes. Close A's here so its edit lands, then
+                    // open ours; A's own EndGesture then passes a stale token, which
+                    // the stack correctly ignores.
+                    if (*gestureTxn != Arcane::TransactionId::None)
+                        stack->Commit(*gestureTxn);
+                    // Park the token for the deactivation frame (EndGesture). None
+                    // means a gizmo drag already owns the stack -- this gesture then
+                    // JOINS it: the snapshots below still land, and the drag's own
+                    // Commit records them, so the edit is never lost.
+                    *gestureTxn = stack->Begin("Edit " + typeName + "." + field);
                     // One Begin + N snapshots + one Commit = one undo step for the
                     // whole fan-out (CommandStack dedupes per (entity, descriptor)).
                     ForEachTarget(primaryInstance,
@@ -884,20 +943,26 @@ namespace Arcane::Editor
 
             // Single-shot fan-out for the multi-select path: the commit is one
             // discrete event (no widget gesture spanning frames to bracket), so
-            // Begin + snapshot-all + apply + Commit happen in one call. Commit()
-            // closes the stack before the shared EndGesture epilogue runs, whose
-            // Commit/Cancel on a closed stack are no-ops.
+            // Begin + snapshot-all + apply + Commit happen in one call.
+            //
+            // ScopedTransaction, NOT a bare Begin/Commit pair: this can fire in the
+            // same frame as a gizmo press (clicking a handle deactivates a text box
+            // that still holds typed text), and an unconditional Commit here used to
+            // close the DRAG's transaction -- the rest of the drag then ran against a
+            // closed stack and lost its entire undo record. The scope commits only
+            // what it opened; when it joins a live drag instead, the snapshots ride
+            // along and the drag's own Commit records them.
             template<typename Fn>
             void ApplyImmediate(const std::string& field, void* primaryInstance, Fn&& apply)
             {
+                std::optional<Arcane::ScopedTransaction> txn;
                 if (stack)
                 {
-                    stack->Begin("Edit " + typeName + "." + field);
+                    txn.emplace(*stack, "Edit " + typeName + "." + field);
                     ForEachTarget(primaryInstance,
-                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
+                                  [&](Astra::Entity e, void*) { txn->Snapshot(e, descriptor); });
                 }
                 ForEachTarget(primaryInstance, [&](Astra::Entity, void* d) { apply(d); });
-                if (stack) stack->Commit();
             }
 
             // One multi-select scalar row: `count` TEXT-ENTRY boxes (never a
@@ -906,8 +971,16 @@ namespace Arcane::Editor
             // (ComponentTransformDetails.cpp:1026). Returns the index of the
             // component the user COMMITTED this frame, or -1 for none; typing
             // alone writes nothing. Laid out like ImGui's own InputScalarN.
-            int MultiScalarRow(const std::string& label, int count, const float* vals,
-                               const Arcane::Editor::FieldMixedMask& mask, float& outValue)
+            //
+            // DOUBLE, not float, and an `integral` flag: an int32 field used to
+            // round-trip int32 -> float -> "%.3f" -> strtof -> int, which both
+            // showed "7.000" in an integer box and TRUNCATED silently past 2^24
+            // where float can no longer represent consecutive integers. double
+            // represents every int32 and every float exactly, so this row is now
+            // lossless for both kinds and `integral` picks the formatting.
+            int MultiScalarRow(const std::string& label, int count, const double* vals,
+                               const Arcane::Editor::FieldMixedMask& mask, bool integral,
+                               double& outValue)
             {
                 int committed = -1;
                 ImGui::BeginGroup();
@@ -922,20 +995,25 @@ namespace Arcane::Editor
                     char buf[64];
                     if (mask.Test(i))
                         buf[0] = '\0';                       // differs: show nothing
+                    else if (integral)
+                        std::snprintf(buf, sizeof(buf), "%lld",
+                                      static_cast<long long>(vals[i]));
                     else
                         std::snprintf(buf, sizeof(buf), "%.3f", vals[i]);
 
+                    // Scientific notation is offered only for real numbers -- "1e3"
+                    // in an integer box is not something to encourage.
                     const bool entered = ImGui::InputText(
                         "", buf, sizeof(buf),
                         ImGuiInputTextFlags_CharsDecimal |
-                        ImGuiInputTextFlags_CharsScientific |
+                        (integral ? 0 : ImGuiInputTextFlags_CharsScientific) |
                         ImGuiInputTextFlags_EnterReturnsTrue);
                     // Enter, or focus lost after an edit: the two ways ImGui says
                     // "the user is done with this box".
                     if ((entered || ImGui::IsItemDeactivatedAfterEdit()) && buf[0] != '\0')
                     {
                         char* end = nullptr;
-                        const float parsed = std::strtof(buf, &end);
+                        const double parsed = std::strtod(buf, &end);
                         if (end != buf)
                         {
                             outValue = parsed;
@@ -958,26 +1036,30 @@ namespace Arcane::Editor
             void EndGesture()
             {
                 if (!stack) return;
-                if (ImGui::IsItemDeactivatedAfterEdit()) stack->Commit();
-                else if (ImGui::IsItemDeactivated())     stack->Cancel();
+                // Both no-op on TransactionId::None, so a field that never opened a
+                // gesture -- and a gesture that JOINED a gizmo drag -- leaves the
+                // stack strictly alone here.
+                if (ImGui::IsItemDeactivatedAfterEdit()) stack->Commit(*gestureTxn);
+                else if (ImGui::IsItemDeactivated())     stack->Cancel(*gestureTxn);
+                else return;
+                *gestureTxn = Arcane::TransactionId::None;   // spent
             }
 
             // Single-shot edit (asset drop / popup pick / clear): no widget gesture
-            // to bracket, so the whole transaction happens in one call. Commit()
-            // closes the stack before the shared EndGesture epilogue runs -- its
-            // Commit/Cancel on a closed stack are no-ops.
+            // to bracket, so the whole transaction happens in one call. Scoped for
+            // the same ownership reason as ApplyImmediate above.
             void ApplyGuidImmediate(const std::string& field, const Astra::FieldInfo& f,
                                     void* instance, const Arcane::Guid& v)
             {
+                std::optional<Arcane::ScopedTransaction> txn;
                 if (stack)
                 {
-                    stack->Begin("Edit " + typeName + "." + field);
+                    txn.emplace(*stack, "Edit " + typeName + "." + field);
                     ForEachTarget(instance,
-                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
+                                  [&](Astra::Entity e, void*) { txn->Snapshot(e, descriptor); });
                 }
                 ForEachTarget(instance, [&](Astra::Entity, void* d)
                               { Arcane::Editor::ApplyGuidEdit(f, d, v); });
-                if (stack) stack->Commit();
             }
 
             void Visit(const Astra::FieldInfo& f, void* instance) override
@@ -1011,11 +1093,16 @@ namespace Arcane::Editor
                         int v = f.Get<int32_t>(instance);
                         if (Multi())
                         {
-                            const float cur = static_cast<float>(v);
-                            float out = cur;
-                            if (MultiScalarRow(label, 1, &cur, MixedFor(f), out) >= 0)
+                            const double cur = static_cast<double>(v);
+                            double out = cur;
+                            if (MultiScalarRow(label, 1, &cur, MixedFor(f), /*integral*/ true, out) >= 0)
                             {
-                                const int iv = static_cast<int>(out);
+                                // Clamp before the narrowing cast: converting an
+                                // out-of-range double to int32 is UB, and the box
+                                // accepts arbitrary digits.
+                                const double lo = static_cast<double>(std::numeric_limits<int32_t>::min());
+                                const double hi = static_cast<double>(std::numeric_limits<int32_t>::max());
+                                const int32_t iv = static_cast<int32_t>(std::clamp(out, lo, hi));
                                 ApplyImmediate(label, instance, [&](void* d)
                                                { Arcane::Editor::ApplyIntEdit(f, d, iv); });
                             }
@@ -1033,10 +1120,14 @@ namespace Arcane::Editor
                         float v = f.Get<float>(instance);
                         if (Multi())
                         {
-                            float out = v;
-                            if (MultiScalarRow(label, 1, &v, MixedFor(f), out) >= 0)
+                            const double cur = static_cast<double>(v);
+                            double out = cur;
+                            if (MultiScalarRow(label, 1, &cur, MixedFor(f), /*integral*/ false, out) >= 0)
+                            {
+                                const float fv = static_cast<float>(out);
                                 ApplyImmediate(label, instance, [&](void* d)
-                                               { Arcane::Editor::ApplyFloatEdit(f, d, out); });
+                                               { Arcane::Editor::ApplyFloatEdit(f, d, fv); });
+                            }
                             break;
                         }
                         bool changed = ImGui::DragFloat(label.c_str(), &v, 0.1f);
@@ -1051,14 +1142,18 @@ namespace Arcane::Editor
                         glm::vec2 v = f.Get<glm::vec2>(instance);
                         if (Multi())
                         {
-                            float out = 0.0f;
+                            const double cur[2]{ v.x, v.y };
+                            double out = 0.0;
                             // Only the COMMITTED component is written, so typing
                             // into one blank axis leaves the others alone on every
                             // target -- the point of per-axis mixed values.
-                            const int c = MultiScalarRow(label, 2, &v.x, MixedFor(f), out);
+                            const int c = MultiScalarRow(label, 2, cur, MixedFor(f), /*integral*/ false, out);
                             if (c >= 0)
+                            {
+                                const float fv = static_cast<float>(out);
                                 ApplyImmediate(label, instance, [&](void* d)
-                                               { if (glm::vec2* p = f.GetPtr<glm::vec2>(d)) (*p)[c] = out; });
+                                               { if (glm::vec2* p = f.GetPtr<glm::vec2>(d)) (*p)[c] = fv; });
+                            }
                             break;
                         }
                         bool changed = ImGui::DragFloat2(label.c_str(), &v.x, 0.1f);
@@ -1073,11 +1168,15 @@ namespace Arcane::Editor
                         glm::vec3 v = f.Get<glm::vec3>(instance);
                         if (Multi())
                         {
-                            float out = 0.0f;
-                            const int c = MultiScalarRow(label, 3, &v.x, MixedFor(f), out);
+                            const double cur[3]{ v.x, v.y, v.z };
+                            double out = 0.0;
+                            const int c = MultiScalarRow(label, 3, cur, MixedFor(f), /*integral*/ false, out);
                             if (c >= 0)
+                            {
+                                const float fv = static_cast<float>(out);
                                 ApplyImmediate(label, instance, [&](void* d)
-                                               { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) (*p)[c] = out; });
+                                               { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) (*p)[c] = fv; });
+                            }
                             break;
                         }
                         bool changed = ImGui::DragFloat3(label.c_str(), &v.x, 0.1f);
@@ -1096,8 +1195,20 @@ namespace Arcane::Editor
                         const Arcane::Guid v = f.Get<Arcane::Guid>(instance);
                         const int kindFilter = Arcane::Editor::AssetKindFilterForFieldName(label);
 
+                        // Mixed asset refs render BLANK, same rule as the numeric
+                        // kinds. This was the one kind the "mixed shows blank" work
+                        // missed: ComputeFieldMixed already handles AssetRef (width
+                        // 1), but the result was never consulted here, so a
+                        // multi-selection showed the PRIMARY's asset as if the whole
+                        // selection shared it.
+                        const bool refMixed = Multi() && MixedFor(f).Any();
+
                         std::string display = "(none)";
-                        if (v.IsValid())
+                        if (refMixed)
+                        {
+                            display = "--";   // differing values across the selection
+                        }
+                        else if (v.IsValid())
                         {
                             display = v.ToString();
                             if (project)
@@ -1105,7 +1216,12 @@ namespace Arcane::Editor
                                     display = *mount;
                         }
 
-                        if (ImGui::Button((display + "##assetref").c_str()))
+                        // "###", not "##": only "###" resets the id hash
+                        // (ImHashStr, imgui.cpp:2557), so with "##" the button's id
+                        // was seeded by `display` -- a MUTABLE string that changes
+                        // the moment an asset is picked. The id then changed under
+                        // ImGui mid-interaction, dropping the item's state.
+                        if (ImGui::Button((display + "###assetref").c_str()))
                             ImGui::OpenPopup("##assetpick");
                         if (ImGui::BeginDragDropTarget())
                         {
@@ -1117,7 +1233,9 @@ namespace Arcane::Editor
                             }
                             ImGui::EndDragDropTarget();
                         }
-                        if (v.IsValid())
+                        // Offered when MIXED too: "clear all of them" is a
+                        // meaningful action even though the primary may be nil.
+                        if (v.IsValid() || refMixed)
                         {
                             ImGui::SameLine();
                             if (ImGui::SmallButton("x##assetclear"))
@@ -1175,7 +1293,7 @@ namespace Arcane::Editor
 
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                            const Arcane::Project* project)
+                            const Arcane::Project* project, InspectorState& state)
     {
         ImGui::Begin("Inspector");
         if (!sel.HasSelection())
@@ -1192,6 +1310,11 @@ namespace Arcane::Editor
         else
             ImGui::TextUnformatted(primaryName.c_str());
         ImGui::Separator();
+
+        // Hoisted once per frame; see the Outliner's copy. Add/Remove Component
+        // are structural (whole-registry memento), so they refuse during Play AND
+        // inside an open field/gizmo gesture -- both now visible as disabled.
+        const bool canEditStructure = CanEditStructure(undo, binding);
 
         // Removal is DEFERRED past the loop: Edit::RemoveComponent moves the
         // entity to a different archetype, which dangles every ci.data pointer
@@ -1235,6 +1358,19 @@ namespace Arcane::Editor
             if (!sharedByAll)
                 continue;
 
+            // PER-COMPONENT ID SCOPE. Without it every id inside this section is
+            // seeded only by the BARE field name (FieldInfo::nameHash), so two
+            // components on one entity that share a field name collide --
+            // SpriteRenderer::material and PostProcess::material resolved to ONE
+            // "##assetpick" popup id, both BeginPopup calls returned true in the
+            // same frame, and a pick landed on the wrong field. Scoped for the
+            // header too so the context menu (which inherits the header's item id)
+            // is distinct even for identically-named component types.
+            //
+            // Nothing between this push and its pop may `continue`: the branches
+            // below are deliberately nested rather than early-outs so the ID stack
+            // stays balanced on every path.
+            ImGui::PushID(static_cast<int>(ci.descriptor->hash));
             const bool open = ImGui::CollapsingHeader(typeName.c_str(),
                                                       ImGuiTreeNodeFlags_DefaultOpen);
             // Header context menu. A null str_id makes the popup inherit the
@@ -1243,39 +1379,43 @@ namespace Arcane::Editor
             // first-drawn component would swallow the click.
             if (ImGui::BeginPopupContextItem())
             {
-                if (!binding.editMode)
+                if (!canEditStructure)
                     ImGui::BeginDisabled();
                 if (ImGui::MenuItem("Remove Component"))
                     pendingRemove = ci.descriptor;
-                if (!binding.editMode)
+                if (!canEditStructure)
                     ImGui::EndDisabled();
                 ImGui::EndPopup();
             }
-            if (!open)
-                continue;
-
-            // Tag components (Astra's is_empty optimization) have no storage
-            // array, so ci.data is null even though the entity carries them.
-            // They still get a header: that is what makes them visible at all,
-            // and what makes them removable through the menu above.
-            if (!ci.data)
+            if (open)
             {
-                ImGui::TextDisabled("(tag component -- no fields)");
-                continue;
+                // Tag components (Astra's is_empty optimization) have no storage
+                // array, so ci.data is null even though the entity carries them.
+                // They still get a header: that is what makes them visible at all,
+                // and what makes them removable through the menu above.
+                if (!ci.data)
+                {
+                    ImGui::TextDisabled("(tag component -- no fields)");
+                }
+                else
+                {
+                    ImGuiFieldVisitor visitor;
+                    // Null while Play is running: BeginGestureIfActivated/EndGesture
+                    // both early-return on a null stack, so gesture bracketing is
+                    // fully inert (no Begin, no Commit/Cancel) against the live
+                    // simulating registry.
+                    visitor.stack      = binding.editMode ? &undo : nullptr;
+                    visitor.entity     = primary;
+                    visitor.descriptor = ci.descriptor;
+                    visitor.typeName   = typeName;
+                    visitor.project    = project;
+                    visitor.gestureTxn = &state.gestureTxn;
+                    visitor.registry   = &registry;
+                    visitor.selection  = &sel.Entities();
+                    ci.descriptor->visitFields(ci.data, visitor);
+                }
             }
-
-            ImGuiFieldVisitor visitor;
-            // Null while Play is running: BeginGestureIfActivated/EndGesture both
-            // early-return on a null stack, so gesture bracketing is fully inert
-            // (no Begin, no Commit/Cancel) against the live simulating registry.
-            visitor.stack      = binding.editMode ? &undo : nullptr;
-            visitor.entity     = primary;
-            visitor.descriptor = ci.descriptor;
-            visitor.typeName   = typeName;
-            visitor.project    = project;
-            visitor.registry   = &registry;
-            visitor.selection  = &sel.Entities();
-            ci.descriptor->visitFields(ci.data, visitor);
+            ImGui::PopID();
         }
 
         if (pendingRemove)
@@ -1290,11 +1430,11 @@ namespace Arcane::Editor
 
         // Bottom of the panel, full width -- the UE/Unity placement.
         ImGui::Separator();
-        if (!binding.editMode)
+        if (!canEditStructure)
             ImGui::BeginDisabled();
         if (ImGui::Button(ICON_LC_PLUS " Add Component", ImVec2(-FLT_MIN, 0.0f)))
             ImGui::OpenPopup(kAddComponentPopup);
-        if (!binding.editMode)
+        if (!canEditStructure)
             ImGui::EndDisabled();
         // Drawn unconditionally at window scope: BeginPopup is a no-op until
         // the button above (or a previous frame's click) opened it.

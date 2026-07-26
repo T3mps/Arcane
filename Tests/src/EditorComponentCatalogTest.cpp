@@ -14,6 +14,8 @@
 #include <Arcane/Scene/SceneModule.hpp>
 
 #include <Astra/Component/Component.hpp>
+#include <Astra/Component/ComponentRegistry.hpp>
+#include <Astra/Reflection/TypeMeta.hpp>
 #include <Astra/Registry/Registry.hpp>
 
 #include <algorithm>
@@ -91,16 +93,20 @@ namespace
     }
 }
 
-TEST_CASE("IsSystemManagedComponent covers exactly the three derived types", "[editor][outliner]")
+TEST_CASE("IsSystemManagedComponent covers the derived types plus EntityInfo", "[editor][outliner]")
 {
     CHECK(IsSystemManagedComponent("Arcane::WorldTransform"));
     CHECK(IsSystemManagedComponent("Arcane::PreviousTransform"));
     CHECK(IsSystemManagedComponent("Arcane::PhysicsBodyRef"));
+    // EntityInfo joined the list in the 2026-07-26 review fix: Edit::AddComponent
+    // default-constructs, so a generic add stamped a NIL Guid on every selected
+    // entity and a generic remove wiped the durable cross-save identity. The
+    // Outliner owns this component via create + rename.
+    CHECK(IsSystemManagedComponent("Arcane::EntityInfo"));
 
     // Transform is deliberately REMOVABLE (spec section 5).
     CHECK_FALSE(IsSystemManagedComponent("Arcane::Transform"));
     CHECK_FALSE(IsSystemManagedComponent("Arcane::SpriteRenderer"));
-    CHECK_FALSE(IsSystemManagedComponent("Arcane::EntityInfo"));
     CHECK_FALSE(IsSystemManagedComponent("Arcane::Hidden"));
     CHECK_FALSE(IsSystemManagedComponent(""));
 }
@@ -275,7 +281,6 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
     CHECK(Find(cat, "Arcane::Transform") != nullptr);
     CHECK(Find(cat, "Arcane::SpriteRenderer") != nullptr);
     CHECK(Find(cat, "Arcane::PostProcess") != nullptr);
-    CHECK(Find(cat, "Arcane::EntityInfo") != nullptr);
     CHECK(Find(cat, "Arcane::Hidden") != nullptr);
     CHECK(Find(cat, "Arcane::RigidBody2D") != nullptr);
     CHECK(Find(cat, "Arcane::Collider2D") != nullptr);
@@ -284,6 +289,22 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
     CHECK(Find(cat, "Arcane::WorldTransform") == nullptr);
     CHECK(Find(cat, "Arcane::PreviousTransform") == nullptr);
     CHECK(Find(cat, "Arcane::PhysicsBodyRef") == nullptr);
+    CHECK(Find(cat, "Arcane::EntityInfo") == nullptr);
+
+    // EntityInfo is hidden from the CATALOG but must still be REGISTERED -- the
+    // other half of the roster bug (SceneSerializer silently drops a type that is
+    // reflected but not registered as a component, so an editor-saved scene lost
+    // its entity names and identities in a runtime host). Asserted against the
+    // ComponentRegistry directly, since the catalog can no longer witness it.
+    const Astra::ComponentRegistry* creg = reg.GetComponentRegistry();
+    REQUIRE(creg != nullptr);
+    bool sawEntityInfo = false;
+    creg->ForEachComponent([&](Astra::ComponentID, const Astra::ComponentDescriptor& d)
+    {
+        if (d.meta && d.meta->typeName == "Arcane::EntityInfo")
+            sawEntityInfo = true;
+    });
+    CHECK(sawEntityInfo);
 
     // A bare entity lacks all of them, so every row is offered as addable --
     // this is exactly the state that was broken at desk.

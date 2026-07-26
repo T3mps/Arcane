@@ -159,14 +159,14 @@ TEST_CASE("ApplyRegistryMutation refuses inside an open transaction", "[outliner
     World w;
     Astra::Entity a = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
 
-    w.stack.Begin("gesture");
+    const Arcane::TransactionId txn = w.stack.Begin("gesture");
     REQUIRE(w.stack.InTransaction());
 
     CHECK_FALSE(ApplyRegistryMutation(w.stack, "Hide", w.Snapshot(), w.Restore(),
         [&] { return Edit::SetHiddenRecursive(*w.reg, a, true) > 0; }));
     CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);   // mutate() never ran
 
-    w.stack.Cancel();
+    w.stack.Cancel(txn);
     CHECK_FALSE(w.stack.CanUndo());
 }
 

@@ -52,6 +52,11 @@ namespace Arcane::Editor
         explicit EditorApp(LoomConfig cfg);
         int Run();   // Init() -> MainLoop() -> Shutdown(); process exit code
 
+        // Raise File -> Open Project on the FIRST frame. Set by main() for a bare
+        // interactive launch (no --project, no --plugin): the editor supports the
+        // project-less state, and this is its cold-start path into the picker.
+        void RaiseOpenProjectOnStart() noexcept { m_raiseOpenProjectOnStart = true; }
+
     private:
         bool Init();
         void MainLoop();
@@ -100,6 +105,9 @@ namespace Arcane::Editor
         // Outliner panel state + structural-edit binding (slice 2)
         Arcane::Editor::OutlinerState   m_outliner;
         Arcane::Editor::SceneEditBinding m_editBinding;
+        // Inspector panel state: holds the field-edit gesture's CommandStack
+        // ownership token across the frames the gesture spans (see InspectorState).
+        Arcane::Editor::InspectorState  m_inspector;
 
         // Editor undo/redo history (Edit-mode; cleared on Play). Constructed in
         // Init once the runtime's registry exists; optional so it can be built
@@ -137,6 +145,12 @@ namespace Arcane::Editor
             // pose. Rebuilt on press. Roots only: a selected child already rides
             // its selected parent through WorldTransform propagation.
             std::vector<std::pair<Astra::Entity, Arcane::GizmoTransform>> targets;
+            // Ownership token for the drag's undo transaction, minted on press
+            // and spent on release (CommandStack::Begin). Parked here because the
+            // gesture spans frames and the Inspector shares the same stack: only
+            // the token holder may Commit/Cancel, so an Inspector edit landing in
+            // the same frame can no longer close this drag out from under it.
+            Arcane::TransactionId txn = Arcane::TransactionId::None;
         } m_gizmoDrag;
 
         // W/E/R mode-key edge-tracking (same pattern as m_prevUndoKeyDown/
@@ -283,5 +297,10 @@ namespace Arcane::Editor
         // MainLoop shows it as a blocking modal (main thread only -- set inside
         // SwitchProject/Init, read in the ImGui frame; no lock needed).
         std::string m_projectOpenError;
+
+        // One-shot latch for RaiseOpenProjectOnStart: consumed on the first frame
+        // that draws the menu bar, so the picker appears over a live editor window
+        // rather than before one exists.
+        bool m_raiseOpenProjectOnStart = false;
     };
 }

@@ -54,6 +54,18 @@ namespace Arcane
     //     (a stale plugin just doesn't honor hiding). Still NO bump.
     inline constexpr uint32_t kGamePluginABIVersion = 7;
 
+    // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
+    // plugin gate actually enforces at runtime.
+    //
+    // kGamePluginABIVersion above is a header constant, so every module bakes in
+    // its OWN copy at compile time. A host exe reporting that constant reports
+    // what IT was built against, which is not necessarily what the DLL beside it
+    // enforces: a partially-updated install (fresh Arcane.dll, stale
+    // ArcaneEditor.exe, or the reverse) stamps a number the runtime will reject.
+    // Anything PUBLISHING the ABI -- the `--print-engine-info` probe the Arcane
+    // Hub stamps into new .arcproj files -- must ask the DLL, not itself.
+    ARCANE_API uint32_t PluginABIVersion();
+
     struct EngineContext
     {
         uint32_t               abiVersion;     // == kGamePluginABIVersion at the host

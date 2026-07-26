@@ -435,12 +435,31 @@ current protection is the ABI tripwire test.
 
 ## Verification Summary
 
+> **CORRECTED 2026-07-26** after the independent review
+> (`docs/superpowers/audits/2026-07-26-outliner-s4-multiselect-hub-s1-review.md`).
+> Two rows below overstated what was verified, and one behaviour has since changed:
+> - The ABI test is **not** an ABI-bump tripwire. `EngineInfoJson` is an `inline`
+>   header function reading `kGamePluginABIVersion`, and the test compares against
+>   `kGamePluginABIVersion`; both expand to the same constant in one TU, so a bump
+>   moves both sides and the test cannot fail. It pins the key, the type, and
+>   "sourced from the constant, not a literal". The failure the design cares about
+>   — a **stale built binary** — is only caught by spawning the exe and parsing
+>   stdout, which is what the Hub does at registration.
+> - The bare-launch gate was **replaced** (review MAJOR 4): exiting 2 removed the
+>   only cold-start path into the shipped `File -> Open Project` UI. A bare
+>   *interactive* launch now boots and raises that dialog; only a *scripted* run
+>   (`--frames N` with no project) still exits 2.
+
 | What | How | Where |
 |---|---|---|
-| Probe reports the real ABI | Catch2 tripwire vs `kGamePluginABIVersion` | Task 1 |
+| Probe sources the ABI from the engine constant (key/type/no literal) | Catch2 | Task 1 |
 | Probe JSON shape / single line | Catch2 | Task 1 |
+| Probe survives a non-ASCII install path | Catch2 (added post-review) | Task 1 |
+| `ExecutablePathUtf8` is absolute + forward-slashed | Catch2 (added post-review) | Task 1 |
 | Flag parses, defaults off | Catch2 | Task 2 |
 | Probe works on both real binaries, no window | Hand-run, exit code checked | Task 2 Step 7 |
-| Gate refuses bare launch | Hand-run, exit 2 | Task 3 Step 3 |
+| Scripted bare launch (`--frames`) refuses | Hand-run, exit 2 | Task 3 Step 3 |
+| Interactive bare launch raises Open Project | **Desk-verify — OWED** | post-review |
 | `--project` + `--frames` harness still works | Hand-run against Aphelyon | Task 3 Step 3 |
 | No repo caller launches the editor bare | `git grep` audit | Task 3 Step 1 |
+| A stale built binary reports a stale ABI | **NOT covered by any test** — Hub-side only | — |
