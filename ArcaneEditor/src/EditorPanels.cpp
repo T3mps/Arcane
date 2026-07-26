@@ -351,6 +351,7 @@ namespace Arcane::Editor
             {
                 r.clicked = true;
                 r.altHeld = ImGui::GetIO().KeyAlt;
+                r.ctrlHeld = ImGui::GetIO().KeyCtrl;
                 r.clickLocalX = lx; r.clickLocalY = ly;
             }
         }

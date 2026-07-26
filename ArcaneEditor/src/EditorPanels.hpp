@@ -72,6 +72,7 @@ namespace Arcane::Editor
         uint32_t     desiredH = 0;
         bool         clicked = false;       // left-click landed inside the image this frame
         bool         altHeld  = false;      // alt modifier at click time (cycle stack)
+        bool         ctrlHeld = false;      // ctrl modifier at click time (multi-select toggle)
         float        clickLocalX = 0.0f;    // viewport-local px of the click
         float        clickLocalY = 0.0f;
         // The dock node the Viewport currently lives in (0 = floating) --

@@ -11,6 +11,8 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <LoomConfig.hpp>
 #include <GpuContext.hpp>
@@ -126,8 +128,12 @@ namespace Arcane::Editor
         {
             bool                   active = false;
             Arcane::GizmoAxis      axis   = Arcane::GizmoAxis::None;
-            Arcane::GizmoTransform start;
+            Arcane::GizmoTransform start;                    // the PRIMARY's pre-drag pose (gizmo anchor)
             glm::vec2              mouseStartScreen{0.0f, 0.0f};
+            // Every selection ROOT carrying a Transform, with its pre-drag pose.
+            // Rebuilt on press. Roots only: a selected child already rides its
+            // selected parent through WorldTransform propagation.
+            std::vector<std::pair<Astra::Entity, Arcane::GizmoTransform>> targets;
         } m_gizmoDrag;
 
         // W/E/R mode-key edge-tracking (same pattern as m_prevUndoKeyDown/

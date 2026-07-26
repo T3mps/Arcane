@@ -21,6 +21,7 @@
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -929,8 +930,28 @@ namespace Arcane::Editor
                                         FindTransformDescriptor(*regPtr, sel);
                                     if (desc)
                                     {
+                                        // Roots only -- see GizmoDrag::targets. One
+                                        // Begin + N SnapshotComponent = ONE undo step:
+                                        // CommandStack dedupes per (entity, descriptor)
+                                        // and Commit packs them all into one transaction.
+                                        const std::vector<Astra::Entity> roots =
+                                            Arcane::Edit::SelectionRoots(*regPtr, m_selection.Entities());
+                                        m_gizmoDrag.targets.clear();
+                                        m_gizmoDrag.targets.reserve(roots.size());
                                         m_undo->Begin("Gizmo");
-                                        m_undo->SnapshotComponent(sel, desc);
+                                        for (Astra::Entity e : roots)
+                                        {
+                                            Arcane::Transform* et = regPtr->GetComponent<Arcane::Transform>(e);
+                                            if (!et)
+                                                continue;   // non-spatial node in the selection
+                                            const Astra::ComponentDescriptor* ed =
+                                                FindTransformDescriptor(*regPtr, e);
+                                            if (!ed)
+                                                continue;
+                                            m_undo->SnapshotComponent(e, ed);
+                                            m_gizmoDrag.targets.push_back(
+                                                { e, Arcane::GizmoTransform{ et->position, et->rotation, et->scale } });
+                                        }
                                         m_gizmoDrag.active           = true;
                                         m_gizmoDrag.axis             = m_gizmoHovered;
                                         m_gizmoDrag.start            = gt;
@@ -959,9 +980,23 @@ namespace Arcane::Editor
                             const Arcane::GizmoTransform nt = Arcane::ApplyDrag(
                                 m_gizmoMode, m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
                                 m_gizmoDrag.mouseStartScreen, dragMouse, gsnap);
-                            lt->position = nt.position;
-                            lt->rotation = nt.rotation;
-                            lt->scale    = nt.scale;
+                            // One delta from the primary's drag, replayed onto every
+                            // target's PRE-drag pose -- recomputed from `start` each
+                            // frame, so nothing accumulates drift. The primary is in
+                            // `targets` when it is itself a root and round-trips
+                            // exactly (see ApplyGroupDelta).
+                            const Arcane::GizmoGroupDelta gd =
+                                Arcane::MakeGroupDelta(m_gizmoDrag.start, nt);
+                            for (const auto& [e, startPose] : m_gizmoDrag.targets)
+                            {
+                                Arcane::Transform* et = regPtr->GetComponent<Arcane::Transform>(e);
+                                if (!et)
+                                    continue;   // destroyed mid-drag
+                                const Arcane::GizmoTransform r = Arcane::ApplyGroupDelta(startPose, gd);
+                                et->position = r.position;
+                                et->rotation = r.rotation;
+                                et->scale    = r.scale;
+                            }
                             m_gizmoHovered = m_gizmoDrag.axis;   // keep the active handle highlighted
 
                             if (mouseReleasedLeft)
@@ -1303,9 +1338,18 @@ namespace Arcane::Editor
                     m_runtime->Registry(), view,
                     glm::vec2(vp.clickLocalX, vp.clickLocalY));
                 if (picked.IsValid())
-                    m_selection.Select(picked);
-                else
+                {
+                    if (vp.ctrlHeld)
+                        m_selection.Toggle(picked);
+                    else
+                        m_selection.Select(picked);
+                }
+                else if (!vp.ctrlHeld)
+                {
+                    // Ctrl+click on empty space is a miss, not a deselect-all --
+                    // otherwise one stray click discards a built-up selection.
                     m_selection.Clear();
+                }
             }
 
             m_selection.Prune([reg = &m_runtime->Registry()](Astra::Entity e)
