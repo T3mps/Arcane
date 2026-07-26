@@ -737,14 +737,39 @@ namespace Arcane::Editor
             std::string                       typeName;
             const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
 
+            // Fan-out targets. `selection` includes the primary; entities lacking
+            // this component are skipped (the panel only shows components the whole
+            // selection shares, but selection and panel are a frame apart).
+            Astra::Registry*                  registry = nullptr;
+            const std::vector<Astra::Entity>* selection = nullptr;
+
             bool IsWriting() const noexcept override { return true; }
 
-            void BeginGestureIfActivated(const std::string& field)
+            // Run `fn(instanceOfThatEntity)` for every selected entity carrying
+            // this component. Falls back to the primary's own instance when the
+            // fan-out context is absent, so a field is never silently un-editable.
+            template<typename Fn>
+            void ForEachTarget(void* primaryInstance, Fn&& fn)
+            {
+                if (!registry || !selection || selection->empty())
+                {
+                    fn(entity, primaryInstance);
+                    return;
+                }
+                for (Astra::Entity e : *selection)
+                    if (void* data = registry->GetComponentByHash(e, descriptor->hash))
+                        fn(e, data);
+            }
+
+            void BeginGestureIfActivated(const std::string& field, void* primaryInstance)
             {
                 if (stack && ImGui::IsItemActivated())
                 {
                     stack->Begin("Edit " + typeName + "." + field);
-                    stack->SnapshotComponent(entity, descriptor);
+                    // One Begin + N snapshots + one Commit = one undo step for the
+                    // whole fan-out (CommandStack dedupes per (entity, descriptor)).
+                    ForEachTarget(primaryInstance,
+                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
                 }
             }
 
@@ -765,9 +790,11 @@ namespace Arcane::Editor
                 if (stack)
                 {
                     stack->Begin("Edit " + typeName + "." + field);
-                    stack->SnapshotComponent(entity, descriptor);
+                    ForEachTarget(instance,
+                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
                 }
-                Arcane::Editor::ApplyGuidEdit(f, instance, v);
+                ForEachTarget(instance, [&](Astra::Entity, void* d)
+                              { Arcane::Editor::ApplyGuidEdit(f, d, v); });
                 if (stack) stack->Commit();
             }
 
@@ -781,40 +808,50 @@ namespace Arcane::Editor
                     {
                         bool v = f.Get<bool>(instance);
                         bool changed = ImGui::Checkbox(label.c_str(), &v);
-                        BeginGestureIfActivated(label);
-                        if (changed) Arcane::Editor::ApplyBoolEdit(f, instance, v);
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { Arcane::Editor::ApplyBoolEdit(f, d, v); });
                         break;
                     }
                     case Arcane::Editor::FieldKind::Int32:
                     {
                         int v = f.Get<int32_t>(instance);
                         bool changed = ImGui::DragInt(label.c_str(), &v);
-                        BeginGestureIfActivated(label);
-                        if (changed) Arcane::Editor::ApplyIntEdit(f, instance, v);
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { Arcane::Editor::ApplyIntEdit(f, d, v); });
                         break;
                     }
                     case Arcane::Editor::FieldKind::Float:
                     {
                         float v = f.Get<float>(instance);
                         bool changed = ImGui::DragFloat(label.c_str(), &v, 0.1f);
-                        BeginGestureIfActivated(label);
-                        if (changed) Arcane::Editor::ApplyFloatEdit(f, instance, v);
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { Arcane::Editor::ApplyFloatEdit(f, d, v); });
                         break;
                     }
                     case Arcane::Editor::FieldKind::Vec2:
                     {
                         glm::vec2 v = f.Get<glm::vec2>(instance);
                         bool changed = ImGui::DragFloat2(label.c_str(), &v.x, 0.1f);
-                        BeginGestureIfActivated(label);
-                        if (changed) if (glm::vec2* p = f.GetPtr<glm::vec2>(instance)) *p = v;
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { if (glm::vec2* p = f.GetPtr<glm::vec2>(d)) *p = v; });
                         break;
                     }
                     case Arcane::Editor::FieldKind::Vec3:
                     {
                         glm::vec3 v = f.Get<glm::vec3>(instance);
                         bool changed = ImGui::DragFloat3(label.c_str(), &v.x, 0.1f);
-                        BeginGestureIfActivated(label);
-                        if (changed) if (glm::vec3* p = f.GetPtr<glm::vec3>(instance)) *p = v;
+                        BeginGestureIfActivated(label, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) *p = v; });
                         break;
                     }
                     case Arcane::Editor::FieldKind::AssetRef:
@@ -914,14 +951,25 @@ namespace Arcane::Editor
             ImGui::End();
             return;
         }
-        for (const Astra::Registry::ComponentInfo& ci : registry.InspectEntity(sel.Primary()))
+
+        const Astra::Entity primary = sel.Primary();
+        const std::string primaryName = Arcane::Edit::DisplayName(registry, primary);
+        if (sel.Count() > 1)
+            ImGui::Text("%s (+%zu)", primaryName.c_str(), sel.Count() - 1);
+        else
+            ImGui::TextUnformatted(primaryName.c_str());
+        ImGui::Separator();
+
+        for (const Astra::Registry::ComponentInfo& ci : registry.InspectEntity(primary))
         {
-            if (!ci.descriptor || !ci.descriptor->visitFields || !ci.data) continue;
+            if (!ci.descriptor || !ci.descriptor->visitFields || !ci.data)
+                continue;
             // TypeMeta::typeName is a std::string_view into a substring of a larger
             // compile-time literal (__FUNCSIG__/__PRETTY_FUNCTION__) -- NOT
             // guaranteed NUL-terminated, so it is copied into a std::string before
             // handing a `const char*` to ImGui.
-            const std::string typeName = ci.meta ? std::string(ci.meta->typeName) : std::string("<unreflected>");
+            const std::string typeName = ci.meta ? std::string(ci.meta->typeName)
+                                                 : std::string("<unreflected>");
             // Derived transform state is never authored: WorldTransform is
             // recomputed by TransformPropagationSystem every frame and
             // PreviousTransform is the physics-capture interpolation pose.
@@ -930,6 +978,21 @@ namespace Arcane::Editor
             // local is the editable truth, world is display-only derived data).
             if (typeName == "Arcane::WorldTransform" || typeName == "Arcane::PreviousTransform")
                 continue;
+
+            // Component-type INTERSECTION: editing a component only some of the
+            // selection carries would silently edit a subset, so hide it entirely.
+            bool sharedByAll = true;
+            for (Astra::Entity e : sel.Entities())
+            {
+                if (e != primary && !registry.GetComponentByHash(e, ci.descriptor->hash))
+                {
+                    sharedByAll = false;
+                    break;
+                }
+            }
+            if (!sharedByAll)
+                continue;
+
             if (ImGui::CollapsingHeader(typeName.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             {
                 ImGuiFieldVisitor visitor;
@@ -937,10 +1000,12 @@ namespace Arcane::Editor
                 // early-return on a null stack, so gesture bracketing is fully inert
                 // (no Begin, no Commit/Cancel) against the live simulating registry.
                 visitor.stack      = editMode ? &undo : nullptr;
-                visitor.entity     = sel.Primary();
+                visitor.entity     = primary;
                 visitor.descriptor = ci.descriptor;
                 visitor.typeName   = typeName;
                 visitor.project    = project;
+                visitor.registry   = &registry;
+                visitor.selection  = &sel.Entities();
                 ci.descriptor->visitFields(ci.data, visitor);
             }
         }
