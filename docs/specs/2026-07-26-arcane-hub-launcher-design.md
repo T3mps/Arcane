@@ -234,9 +234,34 @@ Slice 1 is independently valuable: it closes the hole even if the Hub slips.
 1. **Where does `ArcaneHub.exe` live and ship?** `Setup.exe` is a raw portable
    binary at the repo root. Same treatment, or does the Hub belong in an
    installed location once engine installs are real?
-2. **Does the Hub replace `Setup.exe`'s role over time**, or stay strictly
-   separate? They overlap conceptually (both are first-run surfaces) and it would
-   be worth deciding before both grow.
+2. ~~**Does the Hub replace `Setup.exe`'s role over time?**~~ **ANSWERED
+   2026-07-26 by the user: YES, the Hub absorbs `Setup.exe`.**
+
+   This is a bigger constraint than it first looks, and it reshapes the roadmap:
+
+   - `Setup.exe` orchestrates `scripts/setup.ps1` — doctor, vcpkg deps, project
+     generation, Postgres/db-setup. It runs **when no engine binary exists**,
+     because it is what produces one.
+   - So the absorbed Hub must function with **zero engine present**. It cannot
+     assume `ArcaneEditor.exe` exists, which means `engines.json` must tolerate
+     being empty and "build/install an engine" becomes a first-class Hub action
+     rather than an afterthought.
+   - This **independently confirms the Tauri choice**. The original argument for
+     ImGui was that the launcher could live inside `ArcaneEditor.exe`; an
+     absorbed Hub provably cannot, because it has to run before that binary is
+     built. The two arguments now agree.
+   - The full arc becomes: bootstrap a dev machine -> build/manage engine
+     versions -> create/open projects. That is Unity Hub plus the from-source
+     step Unity does not need because they ship binaries.
+   - **Consequence for slice 1's probe:** `--print-engine-info` must be treated
+     as *may fail because there is no engine yet*, not merely *may fail because
+     the path is wrong*. "No engine installed" is a normal Hub state.
+   - Migration is NOT free: `Setup.exe` is shipped and CI-maintained
+     (`.github/workflows/build-setup-wizard.yml`). Absorbing it means either
+     growing `Tools/setup-wizard/` into the Hub in place, or standing the Hub up
+     and retiring `Setup.exe` once parity is reached. That choice should be made
+     before slice 2 starts, since it decides whether slice 2 is a new scaffold
+     or a rename-and-extend of the existing app.
 3. ~~**Should slice 1's gate exit non-zero, or pop a native message box?**~~
    **RESOLVED as built (slice 1, 2026-07-26): exits 2 with a stderr message, no
    message box.** No window or device exists at that point, so creating one just
