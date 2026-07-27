@@ -121,6 +121,51 @@ fn manifest_abi(project_path: &Path) -> Option<u32> {
     project::parse_manifest_abi(&std::fs::read_to_string(file).ok()?)
 }
 
+// The FOLDER a project lives in: the parent of its .arcproj, or the recorded
+// path itself when the entry is folder-shaped (how opens were recorded before
+// the dialog asked for a manifest). Paired with `projectDir` in
+// src/lib/format.ts, which does the same job for display.
+fn project_dir(p: &Path) -> PathBuf {
+    if p.extension().is_some_and(|e| e.eq_ignore_ascii_case(project::MANIFEST_EXT)) {
+        return p.parent().map(Path::to_path_buf).unwrap_or_else(|| p.to_path_buf());
+    }
+    p.to_path_buf()
+}
+
+// A recorded path resolved to (project root, manifest file).
+//
+// Applies the engine's own rule for a folder: exactly one .arcproj, or it is
+// ambiguous and refused (Project.cpp:29-41). Renaming a project we could not
+// unambiguously identify would rename the wrong thing.
+fn resolve_project(recorded: &Path) -> Result<(PathBuf, PathBuf), String> {
+    if recorded.is_file() {
+        if !recorded.extension().is_some_and(|e| e.eq_ignore_ascii_case(project::MANIFEST_EXT)) {
+            return Err(format!("{} is not a .arcproj file", recorded.display()));
+        }
+        let root = recorded
+            .parent()
+            .ok_or_else(|| format!("{} has no parent folder", recorded.display()))?;
+        return Ok((root.to_path_buf(), recorded.to_path_buf()));
+    }
+    if !recorded.is_dir() {
+        return Err(format!("{} is no longer on disk", recorded.display()));
+    }
+    let names: Vec<String> = std::fs::read_dir(recorded)
+        .map_err(|e| format!("could not read {}: {e}", recorded.display()))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    let file = project::pick_manifest(&names).ok_or_else(|| {
+        format!(
+            "{} does not contain exactly one .arcproj, so there is no single \
+             project to act on",
+            recorded.display()
+        )
+    })?;
+    Ok((recorded.to_path_buf(), recorded.join(file)))
+}
+
 #[tauri::command]
 fn load_state() -> state::HubState {
     state::load()
@@ -176,17 +221,175 @@ fn set_project_engine(path: String, engine_id: Option<String>) -> Result<(), Str
     state::save(&s)
 }
 
-// Removes the entry from the Hub's OWN recents list. It does not touch the
-// project on disk -- there is deliberately no filesystem-delete command in this
-// crate, and the UI says so on the control.
+// Delete a project from disk, then drop it from the list.
+//
+// To the RECYCLE BIN, never remove_dir_all: this erases a whole project folder
+// on one confirmation, and the difference between "recoverable" and "gone" is
+// the difference between a bad afternoon and a lost one. `trash` goes through
+// the Windows shell's IFileOperation, which is the same path Explorer's Delete
+// takes, so the folder lands somewhere the user already knows how to restore
+// from.
+//
+// Three things have to hold before anything is deleted:
+//   1. the path resolves to a folder holding EXACTLY ONE .arcproj
+//      (resolve_project, the engine's own rule) -- so this can never be aimed
+//      at a folder that is not unambiguously a single project;
+//   2. it is absolute and is not a drive root (project::delete_guard);
+//   3. it still exists -- and if it does not, the entry is simply unlisted.
+//      A project already gone from disk still has to be removable, or its row
+//      would be stuck in the list with no control that can shift it.
 #[tauri::command]
-fn forget_project(path: String) -> Result<(), String> {
+fn delete_project(path: String) -> Result<(), String> {
+    let recorded = PathBuf::from(&path);
+
+    if recorded.exists() {
+        let (root, _) = resolve_project(&recorded)?;
+        if let Some(why) = project::delete_guard(&root) {
+            return Err(format!("refusing to delete {}: {why}", root.display()));
+        }
+        trash::delete(&root).map_err(|e| {
+            format!(
+                "could not delete {}: {e}. Is the project open in the editor?",
+                root.display()
+            )
+        })?;
+    }
+
     let mut s = state::load();
     state::remove_recent(&mut s.recents, &path);
     state::save(&s)
 }
 
-// Same contract as forget_project, for the whole list: Hub state only.
+// Extra arguments appended after `--project <path>` when this project launches.
+#[tauri::command]
+fn set_project_args(path: String, args: String) -> Result<(), String> {
+    let mut s = state::load();
+    if !state::set_project_args(&mut s.recents, &path, args.trim()) {
+        return Err(format!("'{path}' is not in the project list"));
+    }
+    state::save(&s)
+}
+
+// Open the project's folder in Explorer.
+#[tauri::command]
+fn reveal_project(path: String) -> Result<(), String> {
+    let recorded = PathBuf::from(&path);
+    let dir = project_dir(&recorded);
+    if !dir.is_dir() {
+        return Err(format!("{} is no longer on disk", dir.display()));
+    }
+
+    let mut cmd = Command::new("explorer");
+    if recorded.is_file() {
+        // `/select,<file>` opens the folder with the manifest highlighted.
+        // raw_arg, not arg: Command would quote the whole `/select,C:\My
+        // Games\x.arcproj` token as one string once it contains a space, and
+        // explorer parses its own command line and does not accept that form.
+        cmd.raw_arg(format!("/select,\"{}\"", recorded.display()));
+    } else {
+        cmd.arg(&dir);
+    }
+    // NOT status-checked: explorer.exe returns a non-zero exit code even when
+    // it opens the window successfully.
+    cmd.spawn()
+        .map_err(|e| format!("could not open {}: {e}", dir.display()))?;
+    Ok(())
+}
+
+// Rename a project: its folder, its .arcproj file, the `name` inside that
+// manifest, and the Hub's own entry -- in that order, so the step most likely
+// to fail comes first and every later failure rolls back cleanly.
+//
+// This is safe to do because NOTHING inside a project stores an absolute path.
+// `Project::Open` derives the root from whatever path it is handed, mounts
+// `game://` at `<root>/Content` and REBUILDS the Guid -> mount-path map from
+// scratch on every open (AssetRegistry::ScanContent), with the GUIDs living in
+// the asset files or their `.meta` sidecars -- so they travel with the files.
+// `bootScene` is a `game://` URI and plugins resolve at `<root>/Plugins/<name>`.
+// The manifest's `name` has one consumer, the editor window title
+// (EditorApp.cpp:95).
+//
+// What this deliberately does NOT touch: `gameModule` (build output named by
+// the project's own build scripts), anything under Source/, and generated
+// solution files. Renaming a project is not renaming its game module, and
+// quietly rewriting build inputs would be worse than leaving them alone.
+#[tauri::command]
+fn rename_project(path: String, new_name: String) -> Result<String, String> {
+    let new_name = new_name.trim().to_string();
+    if let Some(why) = project::name_error(&new_name) {
+        return Err(why);
+    }
+
+    // Membership is checked BEFORE any disk work, so the state update at the
+    // end cannot fail after the folder has already moved.
+    let mut s = state::load();
+    let key = state::normalise_path(&path);
+    if !s.recents.iter().any(|e| state::normalise_path(&e.path) == key) {
+        return Err(format!("'{path}' is not in the project list"));
+    }
+
+    let (root, manifest) = resolve_project(Path::new(&path))?;
+    let parent = root
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| format!("{} has no parent folder to rename within", root.display()))?;
+    let new_root = parent.join(&new_name);
+
+    // Read and edit the manifest in memory first: a malformed .arcproj is
+    // discovered while nothing has moved.
+    let text = std::fs::read_to_string(&manifest)
+        .map_err(|e| format!("could not read {}: {e}", manifest.display()))?;
+    let edited = project::rename_in_manifest(&text, &new_name)?;
+
+    // A case-only rename ("mygame" -> "MyGame") normalises to the same key, so
+    // the collision check must not fire on the project's own folder.
+    let renaming_folder = state::normalise_path(&new_root.to_string_lossy())
+        != state::normalise_path(&root.to_string_lossy());
+    if renaming_folder && new_root.exists() {
+        return Err(format!("{} already exists", new_root.display()));
+    }
+
+    if renaming_folder {
+        std::fs::rename(&root, &new_root).map_err(|e| {
+            format!(
+                "could not rename {} to {}: {e}. Is the project open in the editor?",
+                root.display(),
+                new_root.display()
+            )
+        })?;
+    }
+    let undo_folder = || {
+        if renaming_folder {
+            let _ = std::fs::rename(&new_root, &root);
+        }
+    };
+
+    // The manifest, now inside the renamed folder.
+    let old_manifest = new_root.join(manifest.file_name().unwrap_or_default());
+    let new_manifest = new_root.join(format!("{new_name}.{}", project::MANIFEST_EXT));
+    if old_manifest != new_manifest {
+        if let Err(e) = std::fs::rename(&old_manifest, &new_manifest) {
+            undo_folder();
+            return Err(format!("could not rename {}: {e}", old_manifest.display()));
+        }
+    }
+
+    if let Err(e) = std::fs::write(&new_manifest, edited) {
+        if old_manifest != new_manifest {
+            let _ = std::fs::rename(&new_manifest, &old_manifest);
+        }
+        undo_folder();
+        return Err(format!("could not write {}: {e}", new_manifest.display()));
+    }
+
+    let new_path = new_manifest.to_string_lossy().to_string();
+    state::rename_recent(&mut s.recents, &path, &new_path, &new_name);
+    state::save(&s)?;
+    Ok(new_path)
+}
+
+// Hub state ONLY -- unlike delete_project, this removes nothing from disk. It
+// empties the whole list; there is deliberately no per-project equivalent.
 #[tauri::command]
 fn clear_recents() -> Result<(), String> {
     let mut s = state::load();
@@ -259,9 +462,25 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
         return Err(format!("engine not found: {}", exe.display()));
     }
 
+    // Loaded before the spawn so this project's saved extra arguments can go on
+    // the command line. Passed as an argv ARRAY, never a joined string: each
+    // token reaches the child exactly as typed, with no shell in between.
+    let mut s = state::load();
+    let key = state::normalise_path(&project_path);
+    let extra: Vec<String> = s
+        .recents
+        .iter()
+        .find(|e| state::normalise_path(&e.path) == key)
+        .map(|e| project::split_args(&e.args))
+        .unwrap_or_default();
+
     Command::new(&exe)
         .arg("--project")
         .arg(&proj)
+        // AFTER --project, so a later flag wins if the editor takes the last
+        // occurrence -- the user's own switches should override, not be
+        // overridden by, the one the Hub always passes.
+        .args(&extra)
         // The editor resolves shaders and plugin DLLs relative to its own
         // directory, so it must start there (same reason scripts/launch.ps1
         // sets the working directory).
@@ -269,10 +488,6 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("could not launch the editor: {e}"))?;
-
-    // Record the open. A project the user just opened belongs at the top of
-    // the list even if the editor later fails to load it.
-    let mut s = state::load();
     // display_name, not file_name(): project_path may be a .arcproj FILE (what
     // the Open dialog now yields) or a folder (what older entries hold), and
     // both must record the same name.
@@ -297,6 +512,9 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
             // pinned project stays pinned and an unpinned one keeps following
             // the default instead of silently pinning itself on first launch.
             engine_id: None,
+            // Empty for the same reason: touch_recent carries the saved
+            // arguments across, so launching never wipes them.
+            args: String::new(),
         },
     );
     state::save(&s)
@@ -355,9 +573,12 @@ pub fn run() {
             load_state,
             register_engine,
             forget_engine,
-            forget_project,
+            delete_project,
             clear_recents,
             set_project_engine,
+            set_project_args,
+            reveal_project,
+            rename_project,
             open_project,
             create_project,
             suggest_engine,

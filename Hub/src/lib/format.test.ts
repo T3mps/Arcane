@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isCompatible, filterProjects, coverFor,
-  projectKey, projectNameError, projectPathPreview, resolveEngine,
+  projectKey, projectDir, projectNameError, projectPathPreview, resolveEngine,
   engineChipText, engineChipTitle, compatibilityNote,
 } from "./format";
 
@@ -96,6 +96,35 @@ describe("coverFor", () => {
     // projects by file path. Their cards must not change appearance.
     expect(coverFor("MyGame", "D:/Games/MyGame/MyGame.arcproj").angle)
       .toBe(coverFor("MyGame", "D:/Games/MyGame").angle);
+  });
+});
+
+describe("projectDir", () => {
+  it("drops the manifest, leaving the folder", () => {
+    expect(projectDir("D:\\Games\\MyGame\\MyGame.arcproj")).toBe("D:\\Games\\MyGame");
+    expect(projectDir("D:/Games/MyGame/MyGame.arcproj")).toBe("D:/Games/MyGame");
+  });
+  it("keeps the original spelling, unlike projectKey", () => {
+    // projectKey lowercases and rewrites separators because it is an identity.
+    // This value is displayed, so it must be the path the user actually has.
+    expect(projectDir("D:\\Games\\MyGame\\MyGame.arcproj")).toBe("D:\\Games\\MyGame");
+  });
+  it("leaves a folder-shaped entry alone", () => {
+    // Entries recorded before the dialog asked for a .arcproj are folders.
+    expect(projectDir("D:/Games/MyGame")).toBe("D:/Games/MyGame");
+  });
+  it("ignores a trailing separator", () => {
+    expect(projectDir("D:/Games/MyGame/")).toBe("D:/Games/MyGame");
+  });
+  it("ignores the extension's case", () => {
+    expect(projectDir("D:/G/MyGame.ARCPROJ")).toBe("D:/G");
+  });
+  it("does not strip a folder that merely ends in .arcproj-like text", () => {
+    expect(projectDir("D:/Games/MyGame.arcprojects")).toBe("D:/Games/MyGame.arcprojects");
+  });
+  it("keeps a bare manifest name when there is no folder to show", () => {
+    // Returning "" here would render an empty path line, which reads as a bug.
+    expect(projectDir("MyGame.arcproj")).toBe("MyGame.arcproj");
   });
 });
 

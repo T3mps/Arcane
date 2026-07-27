@@ -8,13 +8,17 @@
   import ProjectsView from "$lib/views/ProjectsView.svelte";
   import EnginesView from "$lib/views/EnginesView.svelte";
   import PackagesView from "$lib/views/PackagesView.svelte";
-  import SettingsView from "$lib/views/SettingsView.svelte";
+  import SettingsModal from "$lib/components/SettingsModal.svelte";
   import NewProjectModal from "$lib/components/NewProjectModal.svelte";
   import ProjectEngineModal from "$lib/components/ProjectEngineModal.svelte";
+  import RenameProjectModal from "$lib/components/RenameProjectModal.svelte";
+  import DeleteProjectModal from "$lib/components/DeleteProjectModal.svelte";
+  import ProjectArgsModal from "$lib/components/ProjectArgsModal.svelte";
   import { resolveEngine } from "$lib/format";
   import {
-    loadState, registerEngine, forgetEngine, forgetProject, clearRecents,
+    loadState, registerEngine, forgetEngine, deleteProject, clearRecents,
     openProject, createProject, suggestEngine, setProjectEngine,
+    setProjectArgs, revealProject, renameProject,
     loadSettings, saveSettings, defaultDialogDir,
     hubDataDir, revealHubDataDir, hubVersion,
     type HubState, type EngineEntry, type RecentProject, type Settings,
@@ -31,6 +35,7 @@
   let view = $state<View>("projects");
   let settings = $state<Settings>({
     defaultProjectDir: "", closeAfterLaunch: false, projectView: "grid",
+    confirmDelete: true,
   });
   let hubDir = $state("");
   let version = $state("");
@@ -39,6 +44,19 @@
   let creating = $state(false);
   // The project whose engine is being chosen, or null when the picker is shut.
   let choosingFor = $state<RecentProject | null>(null);
+  let settingsOpen = $state(false);
+  // The project being renamed / having its launch arguments edited, or null.
+  let renaming = $state<RecentProject | null>(null);
+  let editingArgs = $state<RecentProject | null>(null);
+  let deleting = $state<RecentProject | null>(null);
+  // Any modal covers the main area, so the banner under it is unreadable and
+  // the dialog that is up renders `error` itself. Derived rather than checked
+  // inline, because the list has grown once already and a missed entry shows up
+  // as a message the user can see but cannot read.
+  const modalUp = $derived(
+    creating || choosingFor !== null || settingsOpen ||
+    renaming !== null || editingArgs !== null || deleting !== null,
+  );
   // Load-time notices, ACCUMULATED rather than read straight off `hub`.
   // Recovery renames the bad file aside, so the very next load reports nothing
   // -- and since refresh() replaces `hub` after every action, rendering
@@ -146,6 +164,61 @@
     return ok;
   };
 
+  // Both of these follow makeProject's shape: the dialog closes only on
+  // SUCCESS, so a failure keeps the typed value with the message beside it
+  // instead of dropping the user back to a banner they cannot read.
+  const doRename = async (newName: string): Promise<boolean> => {
+    const p = renaming;
+    if (!p) return false;
+    let ok = false;
+    await guard(async () => { await renameProject(p.path, newName); ok = true; });
+    if (ok) renaming = null;
+    return ok;
+  };
+
+  const doArgs = async (args: string): Promise<boolean> => {
+    const p = editingArgs;
+    if (!p) return false;
+    let ok = false;
+    await guard(async () => { await setProjectArgs(p.path, args); ok = true; });
+    if (ok) editingArgs = null;
+    return ok;
+  };
+
+  // The menu item's entry point. Reads the setting at CLICK time rather than
+  // caching it, so turning the confirmation off takes effect immediately.
+  const askDelete = (p: RecentProject) => {
+    if (settings.confirmDelete) {
+      deleting = p;
+      return;
+    }
+    // Straight through, because the user asked for that. The safety net is
+    // still there and is why this is offerable at all: delete_project moves the
+    // folder to the Recycle Bin, so an unconfirmed mis-click is recoverable.
+    guard(() => deleteProject(p.path));
+  };
+
+  const doDelete = async (): Promise<boolean> => {
+    const p = deleting;
+    if (!p) return false;
+    let ok = false;
+    await guard(async () => { await deleteProject(p.path); ok = true; });
+    if (ok) deleting = null;
+    return ok;
+  };
+
+  // Chromium's own menu -- Back, Reload, Save as, Inspect -- is webview
+  // furniture that means nothing in a launcher, and it appeared everywhere a
+  // project card was not. Suppressed app-wide so right-clicking one pixel
+  // beside a card does not produce a completely different kind of menu.
+  //
+  // Text fields are the exception: cut/copy/paste and select-all there are
+  // genuinely useful, and we offer no replacement for them.
+  function onContextMenu(e: MouseEvent) {
+    if ((e.target as HTMLElement).closest("input, textarea")) return;
+    e.preventDefault();
+  }
+
   const applySettings = (next: Settings) => guard(async () => {
     await saveSettings(next);
     // Re-read rather than trusting the local copy: Rust normalises the folder
@@ -154,14 +227,17 @@
   });
 </script>
 
+<svelte:window oncontextmenu={onContextMenu} />
+
 <div class="app">
   <WindowChrome />
   <div class="body">
-    <Sidebar {view} engine={selectedEngine} onNavigate={(v) => (view = v)} />
+    <Sidebar {view} engine={selectedEngine} {settingsOpen}
+             onNavigate={(v) => (view = v)} onSettings={() => (settingsOpen = true)} />
     <main>
-      <!-- Suppressed while the dialog is up: the banner sits under the scrim,
+      <!-- Suppressed while a dialog is up: the banner sits under the scrim,
            so the dialog renders the same message itself. -->
-      {#if error && !creating}
+      {#if error && !modalUp}
         <p class="error" role="alert">{error}</p>
       {/if}
       <!-- Distinct from `error`: these are not a failed action but state the Hub
@@ -176,9 +252,13 @@
         <ProjectsView recents={hub.recents} engines={hub.engines}
                       defaultEngine={selectedEngine} {busy}
                       layout={settings.projectView}
-                      onLaunch={launch} onForget={(p) => guard(() => forgetProject(p.path))}
+                      confirmDelete={settings.confirmDelete}
+                      onLaunch={launch} onDelete={askDelete}
                       onOpen={addProject} onNew={() => (creating = true)}
                       onChangeEngine={(p) => (choosingFor = p)}
+                      onReveal={(p) => guard(() => revealProject(p.path))}
+                      onRename={(p) => (renaming = p)}
+                      onArgs={(p) => (editingArgs = p)}
                       onLayout={(v) => applySettings({ ...settings, projectView: v })} />
       {:else if view === "engines"}
         <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion} {busy}
@@ -186,15 +266,8 @@
                      onRegisterPath={(path) => guard(() => registerEngine(path))}
                      onSelect={(e) => (selectedEngine = e)}
                      onForget={(e) => guard(() => forgetEngine(e.path))} />
-      {:else if view === "packages"}
-        <PackagesView />
       {:else}
-        <SettingsView {settings} {busy} {hubDir} {version}
-                      recentCount={hub.recents.length}
-                      onSave={applySettings}
-                      onBrowseDir={() => pickFolder("Default location for projects")}
-                      onReveal={() => guard(revealHubDataDir)}
-                      onClearRecents={() => guard(clearRecents)} />
+        <PackagesView />
       {/if}
     </main>
   </div>
@@ -210,6 +283,31 @@
     <ProjectEngineModal project={choosingFor} engines={hub.engines}
                         defaultEngine={selectedEngine} {busy}
                         onChoose={chooseEngine} onCancel={() => (choosingFor = null)} />
+  {/if}
+
+  {#if renaming}
+    <RenameProjectModal project={renaming} {busy} {error}
+                        onRename={doRename} onCancel={() => (renaming = null)} />
+  {/if}
+
+  {#if editingArgs}
+    <ProjectArgsModal project={editingArgs} {busy} {error}
+                      onSave={doArgs} onCancel={() => (editingArgs = null)} />
+  {/if}
+
+  {#if deleting}
+    <DeleteProjectModal project={deleting} {busy} {error}
+                        onDelete={doDelete} onCancel={() => (deleting = null)} />
+  {/if}
+
+  {#if settingsOpen}
+    <SettingsModal {settings} {busy} {hubDir} {version} {error}
+                   recentCount={hub.recents.length}
+                   onSave={applySettings}
+                   onBrowseDir={() => pickFolder("Default location for projects")}
+                   onReveal={() => guard(revealHubDataDir)}
+                   onClearRecents={() => guard(clearRecents)}
+                   onClose={() => (settingsOpen = false)} />
   {/if}
 </div>
 

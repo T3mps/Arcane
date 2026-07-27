@@ -79,6 +79,131 @@ pub fn parse_manifest_abi(text: &str) -> Option<u32> {
     u32::try_from(n).ok()
 }
 
+/// Split a typed argument string into argv tokens.
+///
+/// Whitespace separates; double quotes group a token containing spaces and are
+/// stripped from the result. There is no escape character -- this is a
+/// convenience field for `--backend vulkan` and `--scene "My Level"`, not a
+/// shell, and inventing backslash escaping on Windows would mean a path
+/// argument could not be pasted in as written.
+///
+/// Tokenising HERE and passing an argv array is the whole point: `Command`
+/// passes each token to the child as-is, so nothing the user types can be
+/// re-interpreted as shell syntax.
+pub fn split_args(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut has = false; // distinguishes an empty quoted token from no token
+
+    for c in s.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                has = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if has {
+                    out.push(std::mem::take(&mut cur));
+                    has = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has = true;
+            }
+        }
+    }
+    if has {
+        out.push(cur);
+    }
+    out
+}
+
+// Characters Windows rejects in a file or folder name, plus the reserved DOS
+// device names. Spaces and hyphens are deliberately absent -- "My Game" and
+// "3d-demo" are ordinary folder names.
+const ILLEGAL_NAME_CHARS: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+const RESERVED_STEMS: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+const MAX_NAME_LEN: usize = 64;
+
+/// Why `name` is not usable as a project (and therefore folder) name, or None.
+///
+/// PAIRED with `projectNameError` in src/lib/format.ts, which runs the same
+/// rules as you type. That one is for feedback; this one is the gate -- these
+/// are IPC arguments, and `rename_project` turns them into a directory name and
+/// a file name, so it cannot rely on the caller having checked.
+pub fn name_error(name: &str) -> Option<String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Some("Enter a project name.".into());
+    }
+    if let Some(c) = n.chars().find(|c| ILLEGAL_NAME_CHARS.contains(c)) {
+        return Some(format!("A project name cannot contain \"{c}\"."));
+    }
+    if n.chars().any(|c| c.is_control()) {
+        return Some("A project name cannot contain a control character.".into());
+    }
+    // Windows silently strips a trailing dot, so the folder on disk would not
+    // match the name the user typed. Trailing SPACE is not checked because it
+    // cannot reach here: `n` is trimmed above, and callers use the trimmed
+    // value, so "MyGame " really does become the folder "MyGame".
+    if n.ends_with('.') {
+        return Some("A project name cannot end with a dot.".into());
+    }
+    let stem = n.split('.').next().unwrap_or(n).to_ascii_lowercase();
+    if RESERVED_STEMS.contains(&stem.as_str()) {
+        return Some(format!("\"{n}\" is a name Windows reserves."));
+    }
+    if n.chars().count() > MAX_NAME_LEN {
+        return Some(format!(
+            "Keep the name under {MAX_NAME_LEN} characters (this one is {}).",
+            n.chars().count()
+        ));
+    }
+    None
+}
+
+/// Why `root` must not be handed to a recursive delete, or None if it is safe.
+///
+/// The caller has already established that `root` is a folder holding exactly
+/// one `.arcproj` -- that is the real guard, and it is what makes "delete this
+/// folder" a defined operation at all. These two are the belt: a relative path
+/// would be resolved against whatever the Hub's working directory happens to
+/// be, and a path with no parent is a drive or filesystem root.
+///
+/// Pure so the refusals can be tested without a filesystem, which is not
+/// something to arrange by hand for a delete.
+pub fn delete_guard(root: &std::path::Path) -> Option<String> {
+    if !root.is_absolute() {
+        return Some(format!("{} is not an absolute path", root.display()));
+    }
+    if root.parent().is_none_or(|p| p.as_os_str().is_empty()) {
+        return Some(format!("{} is a drive root", root.display()));
+    }
+    None
+}
+
+/// Rewrite only the `name` field of a `.arcproj` document, leaving every other
+/// key -- and their order -- exactly as found.
+///
+/// Order survives because serde_json is built with `preserve_order`. Keys we do
+/// not understand survive because the document is edited as a `Value` rather
+/// than parsed into a struct and re-emitted: a project may carry fields a newer
+/// engine added, and a rename must not silently delete them.
+pub fn rename_in_manifest(text: &str, new_name: &str) -> Result<String, String> {
+    let mut doc: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("the .arcproj is not valid JSON: {e}"))?;
+    let obj = doc
+        .as_object_mut()
+        .ok_or_else(|| "the .arcproj is not a JSON object".to_string())?;
+    obj.insert("name".to_string(), serde_json::Value::String(new_name.to_string()));
+    serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
+}
+
 pub fn manifest_json(name: &str, engine_abi: u32) -> Result<String, String> {
     // serde_json, not string concatenation -- a project name with a quote in it
     // must not produce a corrupt manifest.
@@ -94,6 +219,7 @@ pub fn manifest_json(name: &str, engine_abi: u32) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn manifest_has_the_three_required_fields() {
@@ -234,6 +360,157 @@ mod tests {
         assert_eq!(display_name("/"), "/");
         assert_eq!(display_name(""), "");
         assert_eq!(display_name(".arcproj"), ".arcproj");
+    }
+
+    #[test]
+    fn split_args_splits_on_whitespace() {
+        assert_eq!(split_args("--backend vulkan"), vec!["--backend", "vulkan"]);
+        assert_eq!(split_args("  --a   --b  "), vec!["--a", "--b"]);
+        assert!(split_args("").is_empty());
+        assert!(split_args("   ").is_empty());
+    }
+
+    #[test]
+    fn split_args_keeps_a_quoted_token_together() {
+        // The case this exists for: a path or a level name with a space in it.
+        assert_eq!(
+            split_args(r#"--scene "My Level" --frames 5"#),
+            vec!["--scene", "My Level", "--frames", "5"],
+        );
+    }
+
+    #[test]
+    fn split_args_strips_quotes_and_joins_adjacent_pieces() {
+        // `--path="C:/a b"` is one argv token, exactly as a shell would pass it.
+        assert_eq!(split_args(r#"--path="C:/a b""#), vec!["--path=C:/a b"]);
+    }
+
+    #[test]
+    fn split_args_keeps_an_empty_quoted_token() {
+        // "" is a real, meaningful argument; dropping it would silently shift
+        // every positional argument after it.
+        assert_eq!(split_args(r#"--name "" --x"#), vec!["--name", "", "--x"]);
+    }
+
+    #[test]
+    fn split_args_tolerates_an_unterminated_quote() {
+        // Half-typed input must not lose the text, and must never panic.
+        assert_eq!(split_args(r#"--scene "My Lev"#), vec!["--scene", "My Lev"]);
+    }
+
+    #[test]
+    fn name_error_accepts_ordinary_names() {
+        assert_eq!(name_error("MyGame"), None);
+        assert_eq!(name_error("My Game"), None);
+        assert_eq!(name_error("3d-demo"), None);
+        assert_eq!(name_error("My.Game"), None);
+    }
+
+    #[test]
+    fn name_error_rejects_what_windows_rejects() {
+        // This is the GATE, not the hint: rename_project turns the value into a
+        // directory name, so every one of these has to be refused here even if
+        // the UI never sends it.
+        assert!(name_error("").is_some());
+        assert!(name_error("   ").is_some());
+        assert!(name_error("a/b").is_some());
+        assert!(name_error("a\\b").is_some());
+        assert!(name_error("a:b").is_some());
+        assert!(name_error("a*b").is_some());
+        assert!(name_error("a\u{7}b").is_some(), "control characters");
+        assert!(name_error("trailing.").is_some());
+        assert!(name_error("CON").is_some());
+        assert!(name_error("nul.txt").is_some());
+        assert!(name_error(&"x".repeat(65)).is_some());
+    }
+
+    #[test]
+    fn name_error_accepts_a_trailing_space_because_it_is_trimmed_away() {
+        // Not an oversight: callers use the TRIMMED name, so "MyGame " creates
+        // the folder "MyGame" -- there is nothing for Windows to strip and
+        // nothing for the user to be surprised by.
+        assert_eq!(name_error("MyGame "), None);
+    }
+
+    #[test]
+    fn name_error_refuses_dot_dot_traversal() {
+        // ".." has no illegal character and is not reserved, but as a folder
+        // name it would move the project UP a level. It ends with a dot, which
+        // is what catches it -- asserted explicitly so that rule cannot be
+        // relaxed without this failing.
+        assert!(name_error("..").is_some());
+        assert!(name_error(".").is_some());
+    }
+
+    #[test]
+    fn delete_guard_passes_an_ordinary_project_folder() {
+        assert_eq!(delete_guard(Path::new("D:\\Games\\MyGame")), None);
+        assert_eq!(delete_guard(Path::new("C:\\Users\\me\\Projects\\G")), None);
+    }
+
+    #[test]
+    fn delete_guard_refuses_a_drive_root() {
+        assert!(delete_guard(Path::new("C:\\")).is_some());
+        assert!(delete_guard(Path::new("D:/")).is_some());
+    }
+
+    #[test]
+    fn delete_guard_refuses_a_relative_path() {
+        // Resolved against the Hub's working directory, which is not anywhere
+        // the user chose.
+        assert!(delete_guard(Path::new("MyGame")).is_some());
+        assert!(delete_guard(Path::new("..\\MyGame")).is_some());
+        assert!(delete_guard(Path::new("")).is_some());
+    }
+
+    #[test]
+    fn delete_guard_allows_a_folder_one_level_under_a_drive() {
+        // C:\Projects is a perfectly ordinary place to keep a project; the
+        // guard is about roots, not about depth.
+        assert_eq!(delete_guard(Path::new("C:\\Projects")), None);
+    }
+
+    #[test]
+    fn rename_in_manifest_replaces_only_the_name() {
+        let before = r#"{"formatVersion":1,"name":"Old","description":"d",
+                         "engine":{"abi":7},"gameModule":"Old.dll","plugins":[],
+                         "bootScene":"game://s.ascene"}"#;
+        let after = rename_in_manifest(before, "New").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v["name"], "New");
+        assert_eq!(v["description"], "d");
+        assert_eq!(v["engine"]["abi"], 7);
+        assert_eq!(v["bootScene"], "game://s.ascene");
+        // NOT rewritten on purpose: the game module is build output named by the
+        // project's own build scripts, and the Hub cannot rebuild it.
+        assert_eq!(v["gameModule"], "Old.dll");
+    }
+
+    #[test]
+    fn rename_in_manifest_keeps_unknown_keys_and_their_order() {
+        let before = r#"{"formatVersion":1,"name":"Old","zzzFutureField":42,"aaa":1}"#;
+        let after = rename_in_manifest(before, "New").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v["zzzFutureField"], 42, "a field a newer engine added must survive");
+        // preserve_order: without it serde_json sorts keys and the whole file
+        // comes back reordered for a one-field edit.
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        assert_eq!(keys, ["formatVersion", "name", "zzzFutureField", "aaa"]);
+    }
+
+    #[test]
+    fn rename_in_manifest_adds_the_name_when_it_is_missing() {
+        // FromJson requires `name`, so a manifest without one is already broken;
+        // writing it is a repair, not a surprise.
+        let after = rename_in_manifest(r#"{"formatVersion":1}"#, "New").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v["name"], "New");
+    }
+
+    #[test]
+    fn rename_in_manifest_refuses_a_document_it_cannot_edit() {
+        assert!(rename_in_manifest("not json", "New").is_err());
+        assert!(rename_in_manifest("[1,2,3]", "New").is_err());
     }
 
     #[test]

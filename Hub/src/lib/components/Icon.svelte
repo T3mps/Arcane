@@ -9,7 +9,8 @@
   // have -- which is neither the UI font nor consistent between machines.
   //
   // Path data only, no <rect>/<circle>, so one loop renders every icon.
-  export type IconName = "folder" | "box" | "layers" | "gear" | "grid" | "list";
+  export type IconName =
+    "folder" | "box" | "layers" | "gear" | "grid" | "list" | "x" | "ellipsis";
 
   const PATHS: Record<IconName, string[]> = {
     folder: [
@@ -41,6 +42,15 @@
       "M3 6h.01", "M3 12h.01", "M3 18h.01",
       "M8 6h13", "M8 12h13", "M8 18h13",
     ],
+    // Dismissal. Distinct from WindowChrome's close mark, which is drawn to the
+    // native 12px caption metric rather than in this 24-unit geometry -- the
+    // window control has to match Windows, an in-app control has to match the
+    // other in-app icons.
+    x: ["M18 6 6 18", "m6 6 12 12"],
+    // Lucide draws MoreHorizontal as three circles; these are zero-length
+    // strokes with the round linecap this file already sets, which renders the
+    // same three dots through the one path loop.
+    ellipsis: ["M5 12h.01", "M12 12h.01", "M19 12h.01"],
   };
 </script>
 

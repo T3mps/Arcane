@@ -12,15 +12,31 @@
     } = $props();
 </script>
 
+<!-- Same header shape as ProjectsView: title hard left, actions hard right on
+     ONE row, with the count dropping to a slim second row. The two views are
+     the same kind of surface and should not be laid out differently.
+     Ghost-left / primary-right also matches the order there. -->
 <header class="top">
-  <div>
-    <h2 class="display view-title">Engines</h2>
-    <p class="view-sub">
-      {engines.length} registered{#if selected} &middot; using {selected.build}{/if}
-    </p>
+  <h2 class="display view-title">Engines</h2>
+  <div class="acts">
+    <!-- "Locate", not "Register engine": it names what you DO (point the Hub at
+         an engine already on disk), which is the distinction from the Install
+         button beside it. The prop and the Rust command stay `register` -- that
+         is still the effect. -->
+    <Button disabled={busy} onclick={onRegister}
+            title="Point the Hub at a folder containing ArcaneEditor.exe">Locate</Button>
+    <!-- Wrapped in a titled span because a DISABLED button receives no mouse
+         events, so its own title never renders a tooltip -- and a greyed
+         control with no explanation is just a dead end. -->
+    <span title="Downloading and installing engines is not built yet">
+      <Button variant="primary" disabled>Install engine</Button>
+    </span>
   </div>
-  <Button variant="primary" disabled={busy} onclick={onRegister}>Register engine</Button>
 </header>
+
+<p class="view-sub meta">
+  {engines.length} registered{#if selected} &middot; using {selected.build}{/if}
+</p>
 
 {#if engines.length === 0}
   <EmptyState title="No engine registered"
@@ -44,7 +60,15 @@
 {/if}
 
 <style>
-  .top { display: flex; align-items: flex-end; justify-content: space-between;
-         gap: 16px; margin-bottom: 15px; }
+  /* Identical to ProjectsView's .top/.acts, less the search field: there is
+     nothing between the title and the buttons here, so the group is pushed
+     right by its own margin rather than by the field's. */
+  .top { display: flex; align-items: center; gap: 12px; }
+  .acts { display: flex; gap: 8px; flex: none; margin-left: auto; }
+
+  /* Same rhythm as ProjectsView's second row. Beats the global .view-sub
+     margin, which is written for a subtitle tucked under a title. */
+  .meta { margin: 10px 0 14px; }
+
   .hint { font-size: 12.5px; color: var(--text-dim); margin: 14px 0 0; }
 </style>

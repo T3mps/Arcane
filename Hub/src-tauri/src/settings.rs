@@ -56,10 +56,26 @@ pub struct Settings {
     /// own Default, leaving two answers to "what does a fresh install show".
     #[serde(default = "default_view")]
     pub project_view: String,
+
+    /// Ask before deleting a project. Read in `+page.svelte`'s delete handler,
+    /// which skips straight to `delete_project` when this is off.
+    ///
+    /// ON by default, and `default = "yes"` rather than a bare
+    /// `#[serde(default)]` for a reason that matters more here than anywhere
+    /// else in this struct: the bare form uses `bool::default()`, which is
+    /// FALSE. Every settings file written before this field existed would then
+    /// load with confirmation silently disabled -- turning a menu item into a
+    /// one-click delete for exactly the users who never asked for it.
+    #[serde(default = "yes")]
+    pub confirm_delete: bool,
 }
 
 fn default_view() -> String {
     VIEW_GRID.to_string()
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -68,6 +84,7 @@ impl Default for Settings {
             default_project_dir: String::new(),
             close_after_launch: false,
             project_view: default_view(),
+            confirm_delete: yes(),
         }
     }
 }
@@ -116,6 +133,25 @@ mod tests {
         assert_eq!(s.default_project_dir, "");
         assert!(!s.close_after_launch, "the Hub stayed open before settings existed");
         assert_eq!(s.project_view, VIEW_GRID, "the grid is what shipped first");
+        assert!(s.confirm_delete, "deleting has always asked first");
+    }
+
+    #[test]
+    fn a_file_written_before_confirm_delete_existed_still_confirms() {
+        // THE regression this field's `default = "yes"` exists to stop. With a
+        // bare #[serde(default)] this loads as false, and every user who had
+        // ever saved a setting would get a one-click project delete on the next
+        // launch without touching anything.
+        let back: Settings = serde_json::from_str(r#"{"closeAfterLaunch":true}"#).unwrap();
+        assert!(back.confirm_delete);
+    }
+
+    #[test]
+    fn confirm_delete_can_actually_be_turned_off() {
+        // The other half: an explicit false must survive the round trip, or the
+        // setting would be permanently stuck on.
+        let back: Settings = serde_json::from_str(r#"{"confirmDelete":false}"#).unwrap();
+        assert!(!back.confirm_delete);
     }
 
     #[test]
@@ -145,6 +181,7 @@ mod tests {
             default_project_dir: "D:/Games".to_string(),
             close_after_launch: true,
             project_view: VIEW_LIST.to_string(),
+            confirm_delete: false,
         };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
@@ -155,6 +192,7 @@ mod tests {
         let text = serde_json::to_string(&Settings::default()).unwrap();
         assert!(text.contains("defaultProjectDir"), "got {text}");
         assert!(text.contains("closeAfterLaunch"), "got {text}");
+        assert!(text.contains("confirmDelete"), "got {text}");
     }
 
     #[test]

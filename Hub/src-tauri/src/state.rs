@@ -30,6 +30,19 @@ pub struct RecentProject {
     /// that design avoids.
     #[serde(default)]
     pub engine_id: Option<String>,
+
+    /// Extra command-line arguments appended after `--project <path>`, as the
+    /// user typed them. Empty = launch with no extras.
+    ///
+    /// Stored RAW rather than pre-split: what the user typed is what the field
+    /// must show them next time, and a re-joined token list is not that. It is
+    /// split at launch, by `project::split_args`.
+    ///
+    /// Hub state, not the .arcproj, for the same reason as `engine_id`: these
+    /// are one person's local switches (a backend override, a scene to boot
+    /// into), not a property of the project that belongs in shared content.
+    #[serde(default)]
+    pub args: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -97,14 +110,62 @@ pub fn touch_recent(v: &mut Vec<RecentProject>, mut entry: RecentProject) {
     // Carry the per-project engine pin across the re-insert. open_project builds
     // a fresh entry from the launch and has no reason to know about the pin, so
     // without this every launch would silently reset the project to the default.
-    if entry.engine_id.is_none() {
+    // Same for the saved command-line arguments. Clearing them is done through
+    // set_project_args, which edits the entry in place, so an empty string
+    // arriving HERE always means "the caller had nothing to say", never
+    // "the user emptied the field".
+    if entry.engine_id.is_none() || entry.args.is_empty() {
         if let Some(prev) = v.iter().find(|e| normalise_path(&e.path) == key) {
-            entry.engine_id.clone_from(&prev.engine_id);
+            if entry.engine_id.is_none() {
+                entry.engine_id.clone_from(&prev.engine_id);
+            }
+            if entry.args.is_empty() {
+                entry.args.clone_from(&prev.args);
+            }
         }
     }
 
     v.retain(|e| normalise_path(&e.path) != key);
     v.insert(0, entry);
+}
+
+/// Save the extra launch arguments for one project. False if it is not listed.
+pub fn set_project_args(v: &mut [RecentProject], path: &str, args: &str) -> bool {
+    let key = normalise_path(path);
+    match v.iter_mut().find(|e| normalise_path(&e.path) == key) {
+        Some(e) => {
+            e.args = args.to_string();
+            true
+        }
+        None => false,
+    }
+}
+
+/// Repoint a listed project at its new path and name after a rename.
+///
+/// Edits IN PLACE rather than remove-then-touch: everything else on the entry
+/// (the engine pin, the saved arguments, the ABI, when it was last opened) has
+/// to survive, and a rename is not an open, so it must not jump to the top of
+/// the list either. Any other entry that would now collide with the new path is
+/// dropped, so a rename can never mint a duplicate.
+pub fn rename_recent(v: &mut Vec<RecentProject>, old_path: &str, new_path: &str, new_name: &str) -> bool {
+    let old_key = normalise_path(old_path);
+    let new_key = normalise_path(new_path);
+
+    let Some(i) = v.iter().position(|e| normalise_path(&e.path) == old_key) else {
+        return false;
+    };
+    v[i].path = new_path.to_string();
+    v[i].name = new_name.to_string();
+
+    // Retain by index so the entry just edited survives its own key check.
+    let mut n = 0;
+    v.retain(|e| {
+        let keep = n == i || normalise_path(&e.path) != new_key;
+        n += 1;
+        keep
+    });
+    true
 }
 
 // Pin a project to a registered engine, or clear the pin with `None` to send it
@@ -180,6 +241,7 @@ mod tests {
             last_opened_utc: when.to_string(),
             engine_abi: 7,
             engine_id: None,
+            args: String::new(),
         }
     }
 
@@ -305,6 +367,92 @@ mod tests {
         )
         .unwrap();
         assert_eq!(back[0].engine_id, None);
+    }
+
+    #[test]
+    fn touch_recent_preserves_saved_launch_arguments() {
+        // Same regression class as the pin: open_project rebuilds the entry, so
+        // without carry-over launching a project would wipe its own arguments.
+        let mut v = Vec::new();
+        touch_recent(&mut v, rp("C:/a", "1"));
+        assert!(set_project_args(&mut v, "C:/a", "--backend vulkan"));
+        touch_recent(&mut v, rp("C:/a", "2"));
+        assert_eq!(v[0].args, "--backend vulkan");
+    }
+
+    #[test]
+    fn set_project_args_can_clear_and_reports_unknown_paths() {
+        let mut v = Vec::new();
+        touch_recent(&mut v, rp("C:/a", "1"));
+        assert!(set_project_args(&mut v, "C:/a", "--frames 10"));
+        // Clearing has to survive the next touch_recent, which is why the
+        // carry-over above is keyed on "the caller said nothing" -- not on the
+        // stored value being non-empty.
+        assert!(set_project_args(&mut v, "c:\\a", ""));
+        assert_eq!(v[0].args, "");
+        touch_recent(&mut v, rp("C:/a", "2"));
+        assert_eq!(v[0].args, "", "a cleared field must stay cleared");
+        assert!(!set_project_args(&mut v, "C:/nope", "x"));
+    }
+
+    #[test]
+    fn a_recents_file_written_before_args_existed_still_loads() {
+        let back: Vec<RecentProject> = serde_json::from_str(
+            r#"[{"path":"C:/a","name":"N","lastOpenedUtc":"1","engineAbi":7}]"#,
+        )
+        .unwrap();
+        assert_eq!(back[0].args, "");
+    }
+
+    #[test]
+    fn rename_recent_keeps_everything_except_path_and_name() {
+        let mut v = Vec::new();
+        touch_recent(&mut v, rp("C:/Games/Old/Old.arcproj", "1"));
+        set_project_engine(&mut v, "C:/Games/Old/Old.arcproj", Some("eng-1".into()));
+        set_project_args(&mut v, "C:/Games/Old/Old.arcproj", "--frames 3");
+
+        assert!(rename_recent(
+            &mut v,
+            "C:/Games/Old/Old.arcproj",
+            "C:/Games/New/New.arcproj",
+            "New",
+        ));
+        assert_eq!(v[0].path, "C:/Games/New/New.arcproj");
+        assert_eq!(v[0].name, "New");
+        assert_eq!(v[0].engine_id.as_deref(), Some("eng-1"), "the pin must survive");
+        assert_eq!(v[0].args, "--frames 3", "the arguments must survive");
+        assert_eq!(v[0].engine_abi, 7);
+        assert_eq!(v[0].last_opened_utc, "1", "renaming is not opening");
+    }
+
+    #[test]
+    fn rename_recent_does_not_reorder_the_list() {
+        let mut v = Vec::new();
+        touch_recent(&mut v, rp("C:/a", "1"));
+        touch_recent(&mut v, rp("C:/b", "2"));
+        // b is at the front; renaming a must not promote it.
+        assert!(rename_recent(&mut v, "C:/a", "C:/z", "z"));
+        assert_eq!(v[0].path, "C:/b");
+        assert_eq!(v[1].path, "C:/z");
+    }
+
+    #[test]
+    fn rename_recent_absorbs_a_colliding_entry() {
+        // Renaming onto a path already in the list must leave ONE row, not two
+        // rows the user then has to reconcile by hand.
+        let mut v = Vec::new();
+        touch_recent(&mut v, rp("C:/a", "1"));
+        touch_recent(&mut v, rp("C:/b", "2"));
+        assert!(rename_recent(&mut v, "C:/a", "c:\\b", "b"));
+        assert_eq!(v.len(), 1);
+        // The RENAMED entry is the survivor, spelled as the caller passed it.
+        assert_eq!(v[0].path, "c:\\b");
+    }
+
+    #[test]
+    fn rename_recent_reports_an_unknown_project() {
+        let mut v = Vec::new();
+        assert!(!rename_recent(&mut v, "C:/a", "C:/b", "b"));
     }
 
     #[test]

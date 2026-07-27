@@ -1,8 +1,11 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   // `primary` is the single primary action per view; `ghost` is everything
-  // secondary; `danger` is destructive (Remove) and only ever coloured on hover
-  // so a list of rows is not a wall of red.
+  // secondary; `danger` is a destructive action sitting among ordinary ones and
+  // is only coloured on hover, so a list of rows is not a wall of red;
+  // `destructive` is the FILLED form, for the confirm button of a dialog whose
+  // whole purpose is the destruction -- there the colour is the point, and a
+  // quiet control would understate what pressing it does.
   let {
     variant = "ghost",
     disabled = false,
@@ -10,7 +13,7 @@
     onclick,
     children,
   }: {
-    variant?: "primary" | "ghost" | "danger";
+    variant?: "primary" | "ghost" | "danger" | "destructive";
     disabled?: boolean;
     title?: string;
     onclick?: () => void;
@@ -42,4 +45,10 @@
   .danger { background: none; color: var(--text-dim); }
   .danger:hover:not(:disabled) { background: color-mix(in srgb, var(--fail-accent) 12%, transparent);
                                  color: var(--fail); }
+
+  /* Near-black ink, not white: --fail-accent is a LIGHT coral (luminance .35),
+     so it is the mirror of --accent -- white on it measures 2.6:1 and fails,
+     while this reads 7.4:1. The same inversion the accent tokens document. */
+  .destructive { background: var(--fail-accent); color: #1a0508; }
+  .destructive:hover:not(:disabled) { background: var(--fail); }
 </style>

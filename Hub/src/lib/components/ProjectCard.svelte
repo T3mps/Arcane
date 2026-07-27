@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { coverFor, engineChipText, engineChipTitle, compatibilityNote } from "$lib/format";
+  import ProjectMenu from "$lib/components/ProjectMenu.svelte";
+  import { coverFor, engineChipText, engineChipTitle, compatibilityNote,
+           projectDir } from "$lib/format";
   import { since, type RecentProject } from "$lib/api";
 
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
-        disabled = false, onLaunch, onForget, onChangeEngine }:
+        disabled = false, confirmDelete, onLaunch, onDelete, onChangeEngine,
+        onReveal, onRename, onArgs }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       /** Build name of the engine that will actually launch this project. */
@@ -12,11 +15,17 @@
       pinned: boolean;
       /** Pinned to an engine that is no longer registered. */
       dangling: boolean;
-      disabled?: boolean; onLaunch: () => void; onForget: () => void;
+      disabled?: boolean; confirmDelete: boolean;
+      onLaunch: () => void; onDelete: () => void;
       onChangeEngine: () => void;
+      onReveal: () => void; onRename: () => void; onArgs: () => void;
     } = $props();
 
   const cover = $derived(coverFor(project.name, project.path));
+  // The same folder line the list row shows. A tile that named the project and
+  // nothing else was the one place in the Hub where you could not tell two
+  // same-named projects apart.
+  const dir = $derived(projectDir(project.path));
 
   // Shared with ProjectRow via format.ts: the two layouts must say the same
   // thing about the same project, and this copy states facts about the system,
@@ -26,30 +35,61 @@
   const why = $derived(
     compatibilityNote(compatible, project.path, project.engineAbi, engineLabel, engineAbi),
   );
+
+  // Right-click opens the SAME menu the ellipsis does, at the cursor.
+  let menu: ProjectMenu;
 </script>
 
-<!-- `incompat` / `missing` rather than `bad` on both: the card and the engine
+<!-- The tile carries EXACTLY what the list row carries -- name, folder, opened,
+     engine, abi -- stacked instead of in columns. They are two views of one
+     record, so a fact that only appears in one of them is a reason to pick a
+     layout for the wrong reason.
+     `incompat` / `missing` rather than `bad` on both: the card and the engine
      row have independent failure states, and one class name meaning two things
      in one file is a trap for the next edit. -->
-<div class="card" class:incompat={!compatible}>
-  <button class="hit" type="button" {disabled} onclick={onLaunch} title={why} aria-label={project.name}>
-    <span class="cover" style="--a: {cover.angle}deg" aria-hidden="true">{cover.monogram}</span>
-    <span class="cb">
-      <span class="nm">{project.name}</span>
-      <span class="mt">
-        {#if compatible}
-          <span>abi {project.engineAbi ? project.engineAbi : "?"}</span>
-        {:else}
-          <span class="badge">abi {project.engineAbi}</span>
-        {/if}
-        <span>{since(project.lastOpenedUtc)}</span>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- Right-click is a redundant MOUSE affordance for a menu already sitting on
+     a focusable button on this card, so a keyboard user loses nothing and there
+     is no role that means "card you may right-click". Same reasoning as the
+     modal scrim and WindowChrome's double-click-to-maximize. -->
+<div class="card" class:incompat={!compatible}
+     oncontextmenu={(e) => { e.preventDefault(); menu.openAt(e.clientX, e.clientY); }}>
+  <div class="top">
+    <button class="hit" type="button" {disabled} onclick={onLaunch}
+            title={why} aria-label={project.name}>
+      <!-- The monogram, at BADGE scale. It was a 76px gradient band across the
+           head of every card -- the last of the decorative-slab styling, and by
+           some distance the least like anything else left in the Hub. Shrunk
+           rather than dropped: it is the only per-project identity a grid has,
+           and at 40px the gradient reads as a tint instead of as a picture. -->
+      <span class="mono" style="--a: {cover.angle}deg" aria-hidden="true">{cover.monogram}</span>
+      <span class="txt">
+        <span class="nm">{project.name}</span>
+        <span class="path">{dir}</span>
       </span>
-    </span>
-  </button>
+    </button>
+
+    <!-- The SAME action menu the list row uses, so both layouts offer the same
+         things. In flow at the end of the header rather than floating over the
+         card: absolutely positioned, it sat on top of whatever the name line
+         needed, and the name is the one thing a tile must always show. -->
+    <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete}
+                 {onReveal} {onRename} {onArgs} {onDelete} />
+  </div>
+
+  <div class="meta">
+    {#if compatible}
+      <span>abi {project.engineAbi ? project.engineAbi : "?"}</span>
+    {:else}
+      <span class="badge">abi {project.engineAbi}</span>
+    {/if}
+    <span>{since(project.lastOpenedUtc)}</span>
+  </div>
 
   <!-- A SIBLING of .hit, not a child: nesting an interactive control inside a
        button is invalid HTML and browsers do not deliver its clicks reliably.
-       Same reason the remove button below sits outside .hit. -->
+       Behind a hairline because it is a different action from the rest of the
+       card -- everything above launches, this changes what launches it. -->
   <button class="eng" type="button" {disabled} onclick={onChangeEngine}
           class:pin={pinned} class:missing={dangling} title={engineTitle}
           aria-label="Engine for {project.name}: {engineText}">
@@ -59,42 +99,54 @@
     <span class="mark" class:filled={pinned || dangling} aria-hidden="true"></span>
     <span class="lbl">{engineText}</span>
   </button>
-
-  <!-- Says "nothing is deleted" outright. A bare X on a card is exactly the
-       control users assume is destructive, and it is not: forget_project only
-       edits the Hub's own recents list. -->
-  <button class="x" type="button" {disabled} onclick={onForget}
-          aria-label="Remove {project.name} from the list. Does not delete it from disk."
-          title="Remove from this list &mdash; does not delete the project from disk">&#10005;</button>
 </div>
 
 <style>
   .card { position: relative; border: 1px solid var(--border-soft);
           border-radius: var(--r-panel); overflow: hidden; background: var(--surface);
-          transition: border-color var(--dur) var(--ease); }
-  .card:hover { border-color: var(--border-hover); }
-  .hit { display: block; width: 100%; text-align: left; background: none;
-         border: 0; padding: 0; font: inherit; color: inherit; cursor: default; }
+          transition: border-color var(--dur) var(--ease),
+                      background var(--dur) var(--ease); }
+  /* A surface wash as well as the border, matching the list row and the nav.
+     Border-only was the app's hover idiom before the monochrome pass; every
+     other hoverable surface has since moved to lightening. */
+  .card:hover { border-color: var(--border-hover);
+                background: color-mix(in srgb, #ffffff 4%, var(--surface)); }
+
+  .top { display: flex; align-items: flex-start; gap: 10px; padding: 11px 11px 0 13px; }
+  .hit { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+         background: none; border: 0; padding: 0; text-align: left;
+         font: inherit; color: inherit; cursor: default; }
   .hit:disabled { opacity: .5; }
 
-  .cover { display: grid; place-items: center; height: 76px;
-           font-family: var(--font-display); font-size: 24px; color: var(--cover-ink);
-           background: linear-gradient(var(--a), var(--cover-from), var(--cover-to)); }
-  .cb { display: block; padding: 11px 13px; }
-  .nm { display: block; font-size: 14px; font-weight: 600; color: var(--text);
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mt { display: flex; justify-content: space-between; align-items: center;
-        margin-top: 7px; font-family: var(--font-mono); font-size: 11px;
-        color: var(--text-dim); }
+  .mono { flex: none; width: 40px; height: 40px; display: grid; place-items: center;
+          border-radius: 6px; font-family: var(--font-display); font-size: 17px;
+          color: var(--cover-ink);
+          background: linear-gradient(var(--a), var(--cover-from), var(--cover-to)); }
 
-  /* INERT: no gold anywhere, surfaces drop back, name recedes to muted (5.9:1).
-     `.card.incompat` rather than bare `.bad` on purpose: the base `.card` rule sets
-     the same two properties at equal specificity, so a bare `.bad` would win
+  /* Same type as the list row's name cell, deliberately: one record, two
+     layouts, and a project should not change weight or colour between them. */
+  .txt { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .nm { max-width: 100%; font-size: 14px; font-weight: 600; color: var(--text);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .path { max-width: 100%; font-family: var(--font-mono); font-size: 11.5px;
+          color: var(--text-dim);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .meta { display: flex; justify-content: space-between; align-items: center;
+          gap: 8px; padding: 9px 13px 10px; font-family: var(--font-mono);
+          font-size: 11px; color: var(--text-dim); }
+
+  /* INERT: surfaces drop back, name recedes to muted (5.9:1). The tile CAN dim
+     its surface where the flat list row cannot -- there the surface carries
+     hover and a permanent tint would swallow it.
+     `.card.incompat` rather than a bare class on purpose: the base `.card` rule
+     sets the same two properties at equal specificity, so a bare one would win
      only by declaration order. This rule is absolute in the spec, so it should
      not depend on where it sits in the file. */
   .card.incompat { background: var(--surface-2); border-color: var(--border); }
-  .card.incompat .cover { background: linear-gradient(var(--a), var(--border-soft), var(--bg-bottom));
-                          color: var(--text-dim); }
+  .card.incompat:hover { background: color-mix(in srgb, #ffffff 4%, var(--surface-2)); }
+  .card.incompat .mono { background: linear-gradient(var(--a), var(--border-soft), var(--bg-bottom));
+                         color: var(--text-dim); }
   .card.incompat .nm { color: var(--text-muted); }
   /* The app-wide focus ring is the ACCENT (theme.css `:focus-visible`), which
      would paint the act colour onto an incompatible card the instant it is
@@ -106,15 +158,19 @@
   .card.incompat :focus-visible { outline-color: var(--fail); }
   /* Second, non-chromatic signal: a bordered badge (coral is 8.2:1 here). */
   .card.incompat .badge { font-weight: 600; color: var(--fail);
-           border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent); border-radius: 3px; padding: 0 4px; }
+           border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent);
+           border-radius: 3px; padding: 0 4px; }
 
-  /* Its own row under the meta line rather than squeezed into it: at the 190px
-     grid minimum an engine name has nowhere to go beside "abi N" and "2m ago". */
+  /* Its own band behind a hairline, the separator idiom the list and the
+     settings sheet both use for "a different kind of thing starts here". */
   .eng { display: flex; align-items: center; gap: 7px; width: 100%;
-         padding: 7px 13px 11px; background: none; border: 0; text-align: left;
+         padding: 9px 13px; background: none; border: 0;
+         border-top: 1px solid var(--border-soft); text-align: left;
          font: inherit; font-size: 11.5px; color: var(--text-dim);
-         cursor: default; transition: color var(--dur) var(--ease); }
-  .eng:hover:not(:disabled) { color: var(--text-muted); }
+         cursor: default;
+         transition: color var(--dur) var(--ease), background var(--dur) var(--ease); }
+  .eng:hover:not(:disabled) { color: var(--text-muted);
+                              background: rgba(255, 255, 255, .04); }
   .eng:disabled { opacity: .5; }
   .mark { flex: none; width: 7px; height: 7px; border-radius: 50%;
           border: 1.5px solid currentColor; }
@@ -123,13 +179,4 @@
   /* Pinned reads as deliberate, not as a warning -- no accent, which means act. */
   .eng.pin { color: var(--text-muted); }
   .eng.missing { color: var(--fail); }
-
-  .x { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px;
-       display: grid; place-items: center; border: 0; border-radius: 4px;
-       background: color-mix(in srgb, var(--bg-bottom) 60%, transparent);
-       color: var(--text-dim); font-size: 10px;
-       cursor: default; opacity: 0;
-       transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease); }
-  .card:hover .x, .x:focus-visible { opacity: 1; }
-  .x:hover { color: var(--fail); }
 </style>

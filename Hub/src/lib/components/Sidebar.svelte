@@ -2,38 +2,42 @@
   // MODULE script, not the instance script: a type has to be exported at module
   // scope to be importable as `import Sidebar, { type View } from "..."`.
   // Declaring it in the instance <script> below would not export it.
-  export type View = "projects" | "engines" | "packages" | "settings";
+  // Settings is deliberately absent: it is a sheet you open over the current
+  // view, not a destination the rail can point at.
+  export type View = "projects" | "engines" | "packages";
 </script>
 
 <script lang="ts">
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
   import type { EngineEntry } from "$lib/api";
-  let { view, engine, onNavigate }:
-    { view: View; engine: EngineEntry | null; onNavigate: (v: View) => void } = $props();
+  let { view, engine, settingsOpen, onNavigate, onSettings }: {
+    view: View;
+    engine: EngineEntry | null;
+    settingsOpen: boolean;
+    onNavigate: (v: View) => void;
+    onSettings: () => void;
+  } = $props();
 
   type NavItem = { id: View; label: string; icon: IconName };
 
-  // Two groups. What you DO with the Hub sits at the top; how the Hub itself
-  // behaves sits at the bottom, out of the way of the daily path.
+  // What you DO with the Hub sits at the top; how the Hub itself behaves sits
+  // at the bottom, out of the way of the daily path.
   //
   // The gear belongs to Settings, where it is the near-universal convention;
   // Engines takes the box, reading as the thing that gets installed and picked;
   // Packages takes stacked layers.
-  const primary: NavItem[] = [
+  const items: NavItem[] = [
     { id: "projects", label: "Projects", icon: "folder" },
     { id: "engines", label: "Engines", icon: "box" },
     { id: "packages", label: "Packages", icon: "layers" },
   ];
-  const secondary: NavItem[] = [
-    { id: "settings", label: "Settings", icon: "gear" },
-  ];
 </script>
 
-<!-- aria-current="true", not "page": these are buttons switching an in-app
-     view, not links to documents, so the generic boolean form is the accurate
-     one. EngineRow uses the same value for the same reason. -->
-{#snippet navGroup(items: NavItem[], label: string)}
-  <nav aria-label={label}>
+<aside class="side">
+  <!-- aria-current="true", not "page": these are buttons switching an in-app
+       view, not links to documents, so the generic boolean form is the accurate
+       one. EngineRow uses the same value for the same reason. -->
+  <nav aria-label="Main">
     {#each items as it (it.id)}
       <button class="nav" type="button" class:on={view === it.id}
               onclick={() => onNavigate(it.id)}
@@ -42,15 +46,19 @@
       </button>
     {/each}
   </nav>
-{/snippet}
-
-<aside class="side">
-  {@render navGroup(primary, "Main")}
 
   <!-- Pushed to the bottom as one block so Settings sits directly above the
        engine card rather than floating in the middle of the empty rail. -->
   <div class="foot">
-    {@render navGroup(secondary, "Hub")}
+    <!-- Outside the <nav> and carrying aria-haspopup, because it opens a sheet
+         over the current view rather than changing which view the rail points
+         at. Same pill styling regardless, so the rail still reads as one
+         column; `on` here means "the sheet is up", not "you are here". -->
+    <button class="nav" type="button" class:on={settingsOpen}
+            aria-haspopup="dialog" aria-expanded={settingsOpen}
+            onclick={onSettings}>
+      <Icon name="gear" />Settings
+    </button>
     <div class="eng">
       <!-- "Default", not "Active": a project with its own pinned engine ignores
            this, so calling it active would misdescribe what launches. -->

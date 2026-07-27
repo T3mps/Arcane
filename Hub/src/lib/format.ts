@@ -45,6 +45,27 @@ export function projectKey(path: string): string {
   return folder === "" ? norm : folder;
 }
 
+/**
+ * The FOLDER a project lives in: the recorded path with a trailing
+ * `<name>.arcproj` segment removed.
+ *
+ * What a project list should show is where the project IS, not the name of one
+ * file inside it repeated after the name already in the row. Distinct from
+ * `projectKey`, which folds the same shape but also lowercases and rewrites
+ * separators -- that output is an identity, and showing it would display a path
+ * the user never typed.
+ *
+ * Paired with `project_dir` in src-tauri/src/lib.rs, which resolves the same
+ * folder for Show in Explorer.
+ */
+export function projectDir(path: string): string {
+  const trimmed = path.replace(/[/\\]+$/, "");
+  // The separator right before the manifest goes with it; a path that is
+  // nothing but a manifest name has no folder to show, so it stays as-is.
+  const cut = trimmed.replace(/[/\\][^/\\]+\.arcproj$/i, "");
+  return cut === "" ? trimmed : cut;
+}
+
 // Characters Windows rejects in a file or folder name. Spaces and hyphens are
 // deliberately absent -- "My Game" and "3d-demo" are ordinary folder names.
 const ILLEGAL_NAME_CHARS = /[<>:"/\\|?*]/;

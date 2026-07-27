@@ -10,6 +10,8 @@ export type RecentProject = {
   engineAbi: number;
   /** Pinned engine id, or null to follow the Hub default. See resolveEngine. */
   engineId: string | null;
+  /** Extra launch arguments, as typed. Empty = none. Split Rust-side at launch. */
+  args: string;
 };
 
 export type EngineEntry = {
@@ -41,19 +43,35 @@ export type Settings = {
    * load and save, so it is always one of the two -- never a stray string.
    */
   projectView: ProjectView;
+  /** Show the confirmation dialog before deleting. Read in the delete handler. */
+  confirmDelete: boolean;
 };
 
 export const loadState = () => invoke<HubState>("load_state");
 export const registerEngine = (path: string) => invoke<EngineEntry>("register_engine", { path });
 export const forgetEngine = (path: string) => invoke<void>("forget_engine", { path });
-/** Hub state only -- this never deletes the project on disk. */
-export const forgetProject = (path: string) => invoke<void>("forget_project", { path });
-/** Hub state only -- same contract as forgetProject, for the whole list. */
+/**
+ * Delete the project's folder to the RECYCLE BIN, then drop it from the list.
+ * A project whose folder is already gone is simply unlisted.
+ */
+export const deleteProject = (path: string) => invoke<void>("delete_project", { path });
+/** Hub state ONLY -- unlike deleteProject, nothing is removed from disk. */
 export const clearRecents = () => invoke<void>("clear_recents");
 /** Pin a project to an engine, or pass null to send it back to the default. */
 export const setProjectEngine = (path: string, engineId: string | null) =>
   invoke<void>("set_project_engine", { path, engineId });
 export const suggestEngine = () => invoke<EngineEntry | null>("suggest_engine");
+/** Extra arguments appended after `--project <path>` for this project only. */
+export const setProjectArgs = (path: string, args: string) =>
+  invoke<void>("set_project_args", { path, args });
+/** Open the project's folder in Explorer, with its .arcproj selected. */
+export const revealProject = (path: string) => invoke<void>("reveal_project", { path });
+/**
+ * Rename the folder, the `.arcproj`, the name inside it, and the Hub entry.
+ * Returns the new manifest path.
+ */
+export const renameProject = (path: string, newName: string) =>
+  invoke<string>("rename_project", { path, newName });
 
 export const loadSettings = () => invoke<Settings>("load_settings");
 export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });

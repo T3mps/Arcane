@@ -79,11 +79,21 @@
   --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
 
   --r-win: 12px; --r-panel: 8px; --r-btn: 7px;
-  /* Owned chrome height. Shared so a modal scrim can stop below the titlebar
-     instead of hardcoding the same number in two files.
-     44px leaves room for native-metric caption buttons (46x32) with even
-     padding; the previous 34px forced them down to 34x26. */
+  /* Owned chrome height. 44px leaves room for native-metric caption buttons
+     (46x32) with even padding; the previous 34px forced them down to 34x26.
+     Modals no longer read this: their scrim covers the whole window, chrome
+     included, rather than starting below it. */
   --h-titlebar: 44px;
+
+  /* Project list columns: Name | Opened | Engine | ABI | remove.
+     Shared by the header strip in ProjectsView and by every ProjectRow --
+     two components drawing one table, so the track list and the gap have to be
+     one value each or the labels drift off the data the first time either
+     side changes. minmax(0, 1fr) on the name lets a long path shrink the
+     cell instead of widening the whole grid. */
+  --cols-project: minmax(0, 1fr) 78px 170px 62px 26px;
+  --gap-project: 12px;
+
   --dur: 200ms; --ease: cubic-bezier(.22, .61, .36, 1);
 }
 
@@ -102,9 +112,10 @@ body {
 .display { font-family: var(--font-display); text-transform: uppercase; letter-spacing: .07em; }
 .label { font-size: 10.5px; letter-spacing: .15em; text-transform: uppercase; color: var(--text-dim); }
 
-/* View header, shared by Projects / Engines / Settings. These three rules were
+/* View header, shared by Projects / Engines / Packages. These three rules were
    copied verbatim into all three views; with the sizes changing they are now
-   defined once. Used as `<h2 class="display view-title">` plus `<p class="view-sub">`. */
+   defined once. Used as `<h2 class="display view-title">` plus `<p class="view-sub">`.
+   Settings is not among them: it is a sheet, and its title is the modal's. */
 .view-title { font-size: 26px; margin: 0; color: var(--text-bright); }
 .view-sub { font-size: 12.5px; color: var(--text-muted); margin: 3px 0 0; }
 

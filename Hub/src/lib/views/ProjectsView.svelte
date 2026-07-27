@@ -10,16 +10,22 @@
   // Both dialogs are owned by +page.svelte, not by this view: they are
   // app-level overlays that have to sit above the error banner, and +page is
   // the only stateful file by design.
-  let { recents, engines, defaultEngine, busy, layout,
-        onLaunch, onForget, onOpen, onNew, onChangeEngine, onLayout }:
+  let { recents, engines, defaultEngine, busy, layout, confirmDelete,
+        onLaunch, onDelete, onOpen, onNew, onChangeEngine, onLayout,
+        onReveal, onRename, onArgs }:
     {
       recents: RecentProject[]; engines: EngineEntry[];
       defaultEngine: EngineEntry | null; busy: boolean;
       layout: ProjectView;
-      onLaunch: (p: RecentProject) => void; onForget: (p: RecentProject) => void;
+      /** Passed straight through to the action menu, which labels Delete by it. */
+      confirmDelete: boolean;
+      onLaunch: (p: RecentProject) => void; onDelete: (p: RecentProject) => void;
       onOpen: () => void; onNew: () => void;
       onChangeEngine: (p: RecentProject) => void;
       onLayout: (v: ProjectView) => void;
+      onReveal: (p: RecentProject) => void;
+      onRename: (p: RecentProject) => void;
+      onArgs: (p: RecentProject) => void;
     } = $props();
 
   // Both layouts take the SAME props, so switching is a component swap rather
@@ -85,7 +91,17 @@
 {:else if shown.length === 0}
   <EmptyState title="No matches" body={`Nothing matches "${query}".`} />
 {:else}
-  <div class:grid={layout === "grid"}>
+  <!-- Column labels for the list layout, on the same track list as the rows.
+       aria-hidden because this is not a real table: each row's controls already
+       carry a full accessible name ("Engine for X: Default: ..."), so announcing
+       these words as well would read the header of every column twice over. -->
+  {#if layout === "list"}
+    <div class="cols" aria-hidden="true">
+      <span>Name</span><span>Opened</span><span>Engine</span><span>ABI</span><span></span>
+    </div>
+  {/if}
+
+  <div class:grid={layout === "grid"} class:list={layout === "list"}>
     {#each shown as p (p.path)}
       {@const r = resolvedFor(p)}
       {@const shared = {
@@ -96,9 +112,13 @@
         pinned: r.pinned,
         dangling: r.dangling,
         disabled: busy || !r.engine,
+        confirmDelete,
         onLaunch: () => onLaunch(p),
-        onForget: () => onForget(p),
+        onDelete: () => onDelete(p),
         onChangeEngine: () => onChangeEngine(p),
+        onReveal: () => onReveal(p),
+        onRename: () => onRename(p),
+        onArgs: () => onArgs(p),
       }}
       {#if layout === "grid"}
         <ProjectCard {...shared} />
@@ -143,8 +163,25 @@
   /* Same neutral active treatment as the sidebar's current nav item. */
   .layouts button.on { background: var(--surface-sel); color: var(--text); }
 
-  /* auto-fill, NOT repeat(3, 1fr): the window minimum is 800px wide. 210px
-     tracks, up from 190px, so a card fits the larger type without clipping. */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  /* Same tracks, gap and horizontal padding as a ProjectRow, so a label sits
+     over its column. Uses the shared tokens rather than repeating the values. */
+  .cols { display: grid; grid-template-columns: var(--cols-project);
+          gap: var(--gap-project); align-items: center; padding: 0 12px 8px;
+          border-bottom: 1px solid var(--border-soft); }
+  .cols span { font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase;
+               color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; }
+
+  /* Separating adjacent rows is the list's job, not a row's: a row cannot see
+     whether it has a neighbour, and `+` between two neighbours leaves the last
+     one without a trailing edge for free. :global because the children are
+     ProjectRow component roots, outside this file's scope. */
+  .list > :global(* + *) { border-top: 1px solid var(--border-soft); }
+
+  /* auto-fill, NOT repeat(3, 1fr): the window minimum is 800px wide. 230px
+     tracks -- 190 originally, then 210 for the larger type, now 230 because a
+     tile carries the folder path as well. Still three columns at the default
+     window size, so this costs no density. */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
           gap: 12px; }
 </style>

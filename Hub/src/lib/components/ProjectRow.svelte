@@ -1,43 +1,56 @@
 <script lang="ts">
-  import { coverFor, engineChipText, engineChipTitle, compatibilityNote } from "$lib/format";
+  import ProjectMenu from "$lib/components/ProjectMenu.svelte";
+  import { engineChipText, engineChipTitle, compatibilityNote, projectDir } from "$lib/format";
   import { since, type RecentProject } from "$lib/api";
 
   // IDENTICAL prop contract to ProjectCard, so ProjectsView can swap the two
-  // without a second set of wiring. Shape follows EngineRow, which already
-  // establishes what a row looks like in this app: a wide pick button carrying
-  // name + path, then fixed-width meta, then the destructive action last.
+  // without a second set of wiring.
+  //
+  // A TABLE ROW, not a card: one grid cell per column, on the track list shared
+  // with the header strip in ProjectsView. The cover art the tile carries is
+  // deliberately absent -- at row scale a monogram is decoration that pushes
+  // every other column right, and what makes a list scannable is the meta
+  // lining up down the page, not each row being individually recognisable.
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
-        disabled = false, onLaunch, onForget, onChangeEngine }:
+        disabled = false, confirmDelete, onLaunch, onDelete, onChangeEngine,
+        onReveal, onRename, onArgs }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       engineLabel: string; pinned: boolean; dangling: boolean;
-      disabled?: boolean; onLaunch: () => void; onForget: () => void;
+      disabled?: boolean; confirmDelete: boolean;
+      onLaunch: () => void; onDelete: () => void;
       onChangeEngine: () => void;
+      onReveal: () => void; onRename: () => void; onArgs: () => void;
     } = $props();
 
-  const cover = $derived(coverFor(project.name, project.path));
+  // The FOLDER, not the .arcproj inside it. The file name only ever repeats the
+  // project name already in the row above it, and where the project lives is
+  // the thing this line is for.
+  const dir = $derived(projectDir(project.path));
   const engineText = $derived(engineChipText(engineLabel, pinned, dangling));
   const engineTitle = $derived(engineChipTitle(engineLabel, pinned, dangling));
   const why = $derived(
     compatibilityNote(compatible, project.path, project.engineAbi, engineLabel, engineAbi),
   );
+
+  // Right-click opens the SAME menu the ellipsis does, at the cursor.
+  let menu: ProjectMenu;
 </script>
 
-<div class="row" class:incompat={!compatible}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- Right-click is a redundant MOUSE affordance for a menu already sitting on
+     a focusable button in this row, so a keyboard user loses nothing and there
+     is no role that means "row you may right-click". Same reasoning as the
+     modal scrim and WindowChrome's double-click-to-maximize. -->
+<div class="row" class:incompat={!compatible}
+     oncontextmenu={(e) => { e.preventDefault(); menu.openAt(e.clientX, e.clientY); }}>
   <button class="hit" type="button" {disabled} onclick={onLaunch}
           title={why} aria-label={project.name}>
-    <span class="cover" style="--a: {cover.angle}deg" aria-hidden="true">{cover.monogram}</span>
-    <span class="txt">
-      <span class="nm">{project.name}</span>
-      <span class="path">{project.path}</span>
-    </span>
+    <span class="nm">{project.name}</span>
+    <span class="path">{dir}</span>
   </button>
 
-  {#if compatible}
-    <code class="abi">abi {project.engineAbi ? project.engineAbi : "?"}</code>
-  {:else}
-    <code class="abi badge">abi {project.engineAbi}</code>
-  {/if}
+  <span class="when">{since(project.lastOpenedUtc)}</span>
 
   <!-- Sibling of .hit, not nested: an interactive control inside a button is
        invalid HTML and its clicks are not reliably delivered. -->
@@ -51,42 +64,53 @@
     <span class="lbl">{engineText}</span>
   </button>
 
-  <span class="when">{since(project.lastOpenedUtc)}</span>
+  {#if compatible}
+    <code class="abi">abi {project.engineAbi ? project.engineAbi : "?"}</code>
+  {:else}
+    <code class="abi badge">abi {project.engineAbi}</code>
+  {/if}
 
-  <button class="x" type="button" {disabled} onclick={onForget}
-          aria-label="Remove {project.name} from the list. Does not delete it from disk."
-          title="Remove from this list &mdash; does not delete the project from disk">&#10005;</button>
+  <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete}
+               {onReveal} {onRename} {onArgs} {onDelete} />
 </div>
 
 <style>
-  .row { display: flex; align-items: center; gap: 14px; padding: 12px 14px;
-         border: 1px solid var(--border-soft); border-radius: var(--r-panel);
-         background: var(--surface); margin-bottom: 7px;
-         transition: border-color var(--dur) var(--ease); }
-  .row:hover { border-color: var(--border-hover); }
+  /* No card: no border box, no radius, no gap between rows. A separator
+     between neighbours and a hover wash is what a list of records looks like;
+     bordered pills stacked 7px apart read as a column of small panels.
+     The separator itself is drawn by the PARENT (.list in ProjectsView): a
+     `.row + .row` rule here matches nothing, because from inside the component
+     `.row` is the root and it has no sibling to pair with -- Svelte's scoped
+     CSS analysis sees that and drops the rule. */
+  .row { display: grid; grid-template-columns: var(--cols-project);
+         gap: var(--gap-project); align-items: center; padding: 11px 12px;
+         transition: background var(--dur) var(--ease); }
+  .row:hover { background: rgba(255, 255, 255, .04); }
 
-  .hit { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px;
-         background: none; border: 0; padding: 0; text-align: left;
+  /* The name cell IS the launch target -- the whole two-line stack, so the
+     click area matches what reads as "the project". */
+  .hit { min-width: 0; display: flex; flex-direction: column; align-items: flex-start;
+         gap: 1px; background: none; border: 0; padding: 0; text-align: left;
          font: inherit; color: inherit; cursor: default; }
   .hit:disabled { opacity: .5; }
 
-  /* Same gradient and monogram as the tile, at row scale, so a project is
-     recognisable across both layouts. */
-  .cover { flex: none; width: 38px; height: 38px; display: grid; place-items: center;
-           border-radius: 6px; font-family: var(--font-display); font-size: 16px;
-           color: var(--cover-ink);
-           background: linear-gradient(var(--a), var(--cover-from), var(--cover-to)); }
-  .txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .nm { font-size: 14px; font-weight: 600; color: var(--text);
+  .nm { max-width: 100%; font-size: 14px; font-weight: 600; color: var(--text);
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .path { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);
+  .path { max-width: 100%; font-family: var(--font-mono); font-size: 11.5px;
+          color: var(--text-dim);
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .abi { flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
-  .when { flex: none; font-family: var(--font-mono); font-size: 11px;
-          color: var(--text-dim); width: 66px; text-align: right; }
+  /* Left-aligned, like every other column: a right-aligned cell in the middle
+     of a table only lines up with itself. */
+  .abi { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
+         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .when { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .eng { flex: none; max-width: 210px; display: flex; align-items: center; gap: 7px;
+  /* Negative inline margin so the button's own padding does not indent its
+     label past the column it sits in: the hover surface should overhang the
+     track, the text should not. */
+  .eng { min-width: 0; margin: 0 -8px; display: flex; align-items: center; gap: 7px;
          background: none; border: 0; padding: 6px 8px; border-radius: 5px;
          font: inherit; font-size: 11.5px; color: var(--text-dim); cursor: default;
          transition: color var(--dur) var(--ease), background var(--dur) var(--ease); }
@@ -99,23 +123,16 @@
   .eng.pin { color: var(--text-muted); }
   .eng.missing { color: var(--fail); }
 
-  /* Same three-state logic as the tile: inert surfaces plus a coral badge, so
-     the meaning does not change with the layout. */
-  .row.incompat { background: var(--surface-2); border-color: var(--border); }
-  .row.incompat .cover { background: linear-gradient(var(--a), var(--border-soft), var(--bg-bottom));
-                          color: var(--text-dim); }
+  /* Dimmed name plus a coral badge, the same pair the tile uses. The tile also
+     dims its SURFACE; a flat row cannot, because the surface is what carries
+     hover here and a permanent tint would swallow it. */
   .row.incompat .nm { color: var(--text-muted); }
   .row.incompat :focus-visible { outline-color: var(--fail); }
   .row.incompat .badge { font-weight: 600; color: var(--fail);
            border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent);
            border-radius: 3px; padding: 0 4px; }
 
-  /* Always visible here, unlike the tile's hover-reveal: a row has room, and a
-     control that appears only on hover is undiscoverable in a dense list. */
-  .x { flex: none; width: 26px; height: 26px; display: grid; place-items: center;
-       border: 0; border-radius: 4px; background: none; color: var(--text-dim);
-       font-size: 11px; cursor: default;
-       transition: color var(--dur) var(--ease), background var(--dur) var(--ease); }
-  .x:hover:not(:disabled) { color: var(--fail); background: rgba(255, 255, 255, .05); }
-  .x:disabled { opacity: .5; }
+  /* The action menu occupies the last column. It is always visible here, unlike
+     the tile's hover-reveal: a row has room, and a control that appears only on
+     hover is undiscoverable in a dense list. */
 </style>
