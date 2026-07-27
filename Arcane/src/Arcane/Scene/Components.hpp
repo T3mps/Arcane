@@ -171,10 +171,17 @@ namespace Arcane
             ASTRA_REFLECT_ATTR(Tooltip, "World-space size in meters (MKS), NOT pixels. The 32x32 default is a pixel-era leftover and is 32 meters; author explicit sizes (a 1 meter box is {1, 1}).")
         ASTRA_REFLECT_FIELD(SpriteRenderer, tint)
             ASTRA_REFLECT_ATTR(Category, "Appearance")
+        // Both are int32_t here but reach the batcher through
+        // static_cast<uint16_t> (RenderSystems.hpp:77-78), which WRAPS rather
+        // than clamps -- an authored -1 would sort as 65535, in front of
+        // everything. The Range is the cast's own domain, so the Inspector
+        // cannot author a value the renderer will silently reinterpret.
         ASTRA_REFLECT_FIELD(SpriteRenderer, sortingLayer)
             ASTRA_REFLECT_ATTR(Category, "Sorting")
+            ASTRA_REFLECT_ATTR(Range, 0.0, 65535.0, 1.0)
         ASTRA_REFLECT_FIELD(SpriteRenderer, orderInLayer)
             ASTRA_REFLECT_ATTR(Category, "Sorting")
+            ASTRA_REFLECT_ATTR(Range, 0.0, 65535.0, 1.0)
         ASTRA_REFLECT_FIELD(SpriteRenderer, shape)
             ASTRA_REFLECT_ATTR(Category, "Shape")
         ASTRA_REFLECT_FIELD(SpriteRenderer, material)
