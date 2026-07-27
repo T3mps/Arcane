@@ -37,6 +37,14 @@ namespace Arcane::Editor
         return false;
     }
 
+    SceneSession::PendingRequest SceneSession::TakePending() noexcept
+    {
+        PendingRequest req{m_pending, std::move(m_pendingPath)};
+        m_pending = SceneIntent::None;
+        m_pendingPath.clear();
+        return req;
+    }
+
     void SceneSession::ClearPending() noexcept
     {
         m_pending = SceneIntent::None;

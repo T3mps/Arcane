@@ -123,10 +123,15 @@ TEST_CASE("Adopt retargets path and id and marks clean", "[editor][scene]")
 
 TEST_CASE("Reset returns the session to Untitled and clean", "[editor][scene]")
 {
+    // Adopt must run against a NONZERO StateId (i.e. after an edit), or
+    // m_savedStateId lands on 0 -- the same value Clear() leaves StateId() at
+    // -- and the final IsDirty check would pass even if Reset forgot to call
+    // MarkSaved. Edit again after Adopt so Reset is the thing that re-cleans.
     Harness h;
     SceneSession s;
-    s.Adopt("D:/a/b.arcscene", Arcane::Guid::Generate(), h.stack);
     h.Edit(1.0f);
+    s.Adopt("D:/a/b.arcscene", Arcane::Guid::Generate(), h.stack);
+    h.Edit(2.0f);
 
     // New Scene clears the undo stack, which is what the host does around Reset.
     h.stack.Clear();
@@ -185,6 +190,37 @@ TEST_CASE("saving while an intent is pending lets it proceed", "[editor][scene]"
     CHECK_FALSE(s.IsDirty(h.stack));
     CHECK(s.Pending() == SceneIntent::NewScene);   // still parked for the host to act on
 
+    // Clean is not the same as available: Request checks "already pending"
+    // BEFORE "is dirty", so a competing request must still be refused here --
+    // swapping that order would let this one slip through onto a clean stack.
+    CHECK_FALSE(s.Request(SceneIntent::Exit, {}, h.stack));
+    CHECK(s.Pending() == SceneIntent::NewScene);
+
     s.ClearPending();
     CHECK(s.Pending() == SceneIntent::None);
+}
+
+TEST_CASE("TakePending consumes the parked intent, unwedging future requests", "[editor][scene]")
+{
+    // The bug this exists to prevent: Reset/Adopt do not touch m_pending (see
+    // their doc comments), so a host that forgets to consume the parked intent
+    // wedges every future Request forever -- the pending-check in Request runs
+    // before the dirty-check, so it refuses unconditionally, forever. TakePending
+    // makes forgetting impossible: it is the one call that reads the parked
+    // request and clears it in the same step.
+    Harness h;
+    SceneSession s;
+    h.Edit(1.0f);
+    REQUIRE_FALSE(s.Request(SceneIntent::OpenScene, "D:/a/b.arcscene", h.stack));
+
+    const SceneSession::PendingRequest req = s.TakePending();
+    CHECK(req.intent == SceneIntent::OpenScene);
+    CHECK(req.path == std::filesystem::path("D:/a/b.arcscene"));
+    CHECK(s.Pending() == SceneIntent::None);
+
+    // A wedged session would refuse this unconditionally no matter the stack
+    // state -- prove it is not wedged by going clean and getting an immediate
+    // accept, not another silent refusal.
+    s.MarkSaved(h.stack);
+    CHECK(s.Request(SceneIntent::Exit, {}, h.stack));
 }
