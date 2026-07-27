@@ -1396,10 +1396,12 @@ namespace Arcane::Editor
                 // and the item-state reads that close its transaction.
                 //
                 // The raw identifier is always in the tooltip, so a friendly label
-                // never costs the ability to grep for the field. AllowWhenDisabled
-                // because an Astra::ReadOnly row is the one that most needs to
-                // explain itself.
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                // never costs the ability to grep for the field. ForTooltip adds a
+                // stationary+delay gate (style.HoverFlagsForTooltipMouse, imgui.h:1515)
+                // so sweeping the cursor down the panel does not flicker a tooltip per
+                // row; that default already carries AllowWhenDisabled, so an
+                // Astra::ReadOnly row still explains itself on hover.
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 {
                     const std::string_view tip = Arcane::Editor::TooltipOfField(f);
                     if (tip.empty())
@@ -1504,7 +1506,10 @@ namespace Arcane::Editor
             // which resolves its id from g.LastItemData: SetTooltip opens and
             // closes a window, and ImGui restores LastItemData in End()
             // (imgui.cpp:8849), so the popup still inherits the HEADER's id.
-            if (ImGui::IsItemHovered())
+            // ForTooltip gates on stationary+delay (style.HoverFlagsForTooltipMouse,
+            // imgui.h:1515) so scrolling past headers does not flicker a tooltip per
+            // header.
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 ImGui::SetTooltip("%s", typeName.c_str());
             // Header context menu. A null str_id makes the popup inherit the
             // HEADER's item id, so each component gets its own popup -- a shared
