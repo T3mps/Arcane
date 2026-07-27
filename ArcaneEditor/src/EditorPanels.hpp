@@ -153,6 +153,11 @@ namespace Arcane::Editor
     struct InspectorState
     {
         Arcane::TransactionId gestureTxn = Arcane::TransactionId::None;
+        // Live search text. A fixed buffer rather than std::string because
+        // ImGui::InputText writes into it directly; 128 is far past any
+        // plausible field name. Nothing clears it, so a typed filter persists
+        // across selection changes -- the Outliner's search behaves the same way.
+        char searchBuffer[128] = {};
     };
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,

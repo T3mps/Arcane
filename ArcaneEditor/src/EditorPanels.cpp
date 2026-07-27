@@ -937,6 +937,15 @@ namespace Arcane::Editor
             const Astra::ComponentDescriptor* descriptor = nullptr;
             std::string                       typeName;
             const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
+
+            // The Inspector's live search, set per component before the visit.
+            // `componentDisplayName` is the header's prose name, which is part of
+            // what MatchesInspectorFilter tests: a hit on it shows EVERY field in
+            // this component. `query` views the panel's persistent
+            // InspectorState buffer, which outlives the visitor; empty matches
+            // everything, so the unfiltered case needs no branch of its own.
+            std::string                       componentDisplayName;
+            std::string_view                  query;
             // The in-flight gesture's CommandStack ownership token, owned by the
             // panel's persistent InspectorState -- the visitor is rebuilt every
             // frame but the gesture it brackets is not. Never null when `stack` is
@@ -1142,14 +1151,26 @@ namespace Arcane::Editor
                 if (Arcane::Editor::FieldIsAttributeHidden(f))
                     return;
 
-                ImGui::PushID(static_cast<int>(f.nameHash));
                 // Two names on purpose. `label` is prose for the row; `rawName` is
                 // the C++ identifier and stays the input to everything the user
                 // does not read as prose -- the undo description and the
                 // asset-kind heuristic, both of which would change meaning if
                 // handed a display name.
+                //
+                // Built ABOVE the PushID because the search below needs `label` to
+                // decide, and its skip has to leave from the UNPUSHED scope for the
+                // same reason the Hidden check above does.
                 const std::string label = Arcane::Editor::DisplayNameForField(f);
                 const std::string rawName(f.name);
+                // Both names are searchable: a user who knows the source can type
+                // `sortingLayer`, one who does not can type `sorting`. The
+                // component-name-hit rule (a match on the header shows every field)
+                // lives inside the predicate, not here.
+                if (!Arcane::Editor::MatchesInspectorFilter(componentDisplayName, label,
+                                                            rawName, query))
+                    return;
+
+                ImGui::PushID(static_cast<int>(f.nameHash));
                 // Astra::ReadOnly -- the field is still SHOWN, it just cannot be
                 // edited. Distinct from FieldKind::ReadOnly below, which means
                 // "this panel has no widget for that type"; a field can be either,
@@ -1435,6 +1456,13 @@ namespace Arcane::Editor
             ImGui::TextUnformatted(primaryName.c_str());
         ImGui::Separator();
 
+        // Search, UE's Details-panel shape (SDetailsViewBase.cpp:1016 --
+        // OnFilterTextChanged -> FilterView). Filters components AND fields live.
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##inspector_search", ICON_LC_SEARCH " Filter",
+                                 state.searchBuffer, sizeof(state.searchBuffer));
+        const std::string_view query(state.searchBuffer);
+
         // Hoisted once per frame; see the Outliner's copy. Add/Remove Component
         // are structural (whole-registry memento), so they refuse during Play AND
         // inside an open field/gizmo gesture -- both now visible as disabled.
@@ -1482,6 +1510,41 @@ namespace Arcane::Editor
             if (!sharedByAll)
                 continue;
 
+            // Friendly header, raw type in the tooltip: the label should read as
+            // words, but the C++ type name is what you search the source for. The
+            // hide-list check above and the PushID below both stay keyed on the
+            // real type name -- only the drawn string changes. Built here rather
+            // than after the PushID because the filter decision needs it.
+            const std::string headerLabel = Arcane::Editor::DisplayNameForComponent(typeName);
+
+            // A component survives the filter when its own name matches, or when
+            // at least one of its fields does. Deciding BEFORE the header is drawn
+            // is what makes a component with no matches disappear rather than
+            // render as an empty section; the `continue` lands before the PushID
+            // below so the ID stack stays balanced.
+            //
+            // An empty query matches every component here, so this whole field
+            // sweep is skipped outright in the unfiltered case.
+            bool componentVisible = Arcane::Editor::ComponentMatchesFilter(headerLabel, query);
+            if (!componentVisible)
+            {
+                for (const Astra::FieldInfo& f : ci.meta->fields)
+                {
+                    // Same skip the visitor makes, so a component kept alive only
+                    // by a Hidden field cannot show up empty.
+                    if (Arcane::Editor::FieldIsAttributeHidden(f))
+                        continue;
+                    if (Arcane::Editor::MatchesInspectorFilter(
+                            headerLabel, Arcane::Editor::DisplayNameForField(f), f.name, query))
+                    {
+                        componentVisible = true;
+                        break;
+                    }
+                }
+            }
+            if (!componentVisible)
+                continue;
+
             // PER-COMPONENT ID SCOPE. Without it every id inside this section is
             // seeded only by the BARE field name (FieldInfo::nameHash), so two
             // components on one entity that share a field name collide --
@@ -1495,11 +1558,6 @@ namespace Arcane::Editor
             // below are deliberately nested rather than early-outs so the ID stack
             // stays balanced on every path.
             ImGui::PushID(static_cast<int>(ci.descriptor->hash));
-            // Friendly header, raw type in the tooltip: the label should read as
-            // words, but the C++ type name is what you search the source for. The
-            // hide-list check above and the PushID here both stay keyed on the
-            // real type name -- only the drawn string changes.
-            const std::string headerLabel = Arcane::Editor::DisplayNameForComponent(typeName);
             const bool open = ImGui::CollapsingHeader(headerLabel.c_str(),
                                                       ImGuiTreeNodeFlags_DefaultOpen);
             // Safe to sit between the header and BeginPopupContextItem below,
@@ -1550,6 +1608,10 @@ namespace Arcane::Editor
                     visitor.gestureTxn = &state.gestureTxn;
                     visitor.registry   = &registry;
                     visitor.selection  = &sel.Entities();
+                    // Both outlive the visitor: headerLabel is this iteration's
+                    // local and the query views InspectorState's buffer.
+                    visitor.componentDisplayName = headerLabel;
+                    visitor.query                = query;
                     ci.descriptor->visitFields(ci.data, visitor);
                 }
             }
