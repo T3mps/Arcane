@@ -61,8 +61,9 @@ namespace Arcane
         //
         // The Guid, NOT a mount path: the AssetRegistry rebuilds its Guid ->
         // mount-path map on every open, so a scene that moves on disk keeps
-        // working. Written atomically (temp + rename) so an interrupted write
-        // cannot leave a project with a truncated manifest.
+        // working. Written atomically via a temp file plus a platform atomic
+        // replace (see Project.cpp for the per-platform mechanism) so an
+        // interrupted write cannot leave a project with a truncated manifest.
         bool SetBootScene(const Guid& id);
 
     private:

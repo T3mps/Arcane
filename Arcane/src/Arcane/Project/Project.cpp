@@ -288,12 +288,20 @@ namespace Arcane
             out << doc.dump(2);
             if (!out)
             {
+                // The file exists on disk (open succeeded) but is truncated/partial --
+                // remove it so a failed write does not leave a stray .tmp behind.
+                std::error_code ec;
+                std::filesystem::remove(tmp, ec);
                 ARC_ERROR("SetBootScene: could not write {}", tmp.generic_string());
                 return false;
             }
         }
         catch (const nlohmann::json::exception& e)
         {
+            // dump(2) can throw after `out` already created/truncated tmp -- same
+            // cleanup as the write-failure case above.
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
             ARC_ERROR("SetBootScene: could not serialize {}: {}", file.generic_string(), e.what());
             return false;
         }
@@ -311,7 +319,21 @@ namespace Arcane
             const DWORD err = GetLastError();   // capture before any other call clobbers it
             std::error_code ec;
             std::filesystem::remove(tmp, ec);
-            ARC_ERROR("SetBootScene: could not replace {} (err {})", file.generic_string(), err);
+            // ERROR_SHARING_VIOLATION / ERROR_ACCESS_DENIED mean some other handle on
+            // `file` lacks FILE_SHARE_DELETE (AV scanner, git, a backup tool, or a second
+            // editor window all do this) -- distinguish that from a generic replace
+            // failure so the caller can tell "close the other program and retry" apart
+            // from a genuinely broken manifest.
+            if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED)
+            {
+                ARC_ERROR("SetBootScene: could not replace {} -- another program may have "
+                          "the .arcproj open (err {}); close it and try again",
+                          file.generic_string(), err);
+            }
+            else
+            {
+                ARC_ERROR("SetBootScene: could not replace {} (err {})", file.generic_string(), err);
+            }
             return false;
         }
 #else
