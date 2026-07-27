@@ -728,7 +728,7 @@ namespace Arcane::Editor
                             Astra::Entity created = Astra::Entity::Invalid();
                             const Astra::Entity parent = row.entity;
                             if (ApplyStructural(undo, binding, "Create Entity",
-                                    [&] { created = Arcane::Edit::CreateEntity(registry, parent);
+                                    [&] { created = Arcane::Edit::CreateEntityInScene(registry, parent);
                                           return created.IsValid(); }))
                             {
                                 state.collapsed.erase(
@@ -833,7 +833,7 @@ namespace Arcane::Editor
             {
                 Astra::Entity created = Astra::Entity::Invalid();
                 if (ApplyStructural(undo, binding, "Create Entity",
-                        [&] { created = Arcane::Edit::CreateEntity(registry,
+                        [&] { created = Arcane::Edit::CreateEntityInScene(registry,
                                             Astra::Entity::Invalid());
                               return created.IsValid(); }))
                     sel.Select(created);
