@@ -1240,6 +1240,13 @@ namespace Arcane::Editor
                 if (readOnly)
                     ImGui::BeginDisabled();
 
+                // Does this row want the tooltip below? An arm whose LAST item is
+                // not the thing the user points at has to answer for itself while
+                // its own widget is still the last item -- only the asset-ref arm
+                // is in that position, and it fills this in. Left unset, the tail
+                // asks about the last item, which is that row's own content.
+                std::optional<bool> hovered;
+
                 switch (Arcane::Editor::ClassifyField(f))
                 {
                     case Arcane::Editor::FieldKind::Bool:
@@ -1417,6 +1424,11 @@ namespace Arcane::Editor
                         // ImGui mid-interaction, dropping the item's state.
                         if (ImGui::Button((display + "###assetref").c_str()))
                             ImGui::OpenPopup("##assetpick");
+                        // This row ends with a SameLine'd name, not with its own
+                        // widget, so the tail below would ask about that text and
+                        // the identifier tooltip would never appear over the
+                        // button. Asked here, while the button IS the last item.
+                        hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
                         if (ImGui::BeginDragDropTarget())
                         {
                             if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(Arcane::Editor::kAssetDragType))
@@ -1437,6 +1449,12 @@ namespace Arcane::Editor
                         }
                         ImGui::SameLine();
                         ImGui::TextUnformatted(label.c_str());
+                        // The name counts as part of the row: DragScalar registers
+                        // a rect that spans its own label (imgui_widgets.cpp:2734
+                        // builds total_bb from it, :2738 registers THAT), so
+                        // hovering the name already explains the field on every
+                        // numeric row.
+                        hovered = *hovered || ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
 
                         if (ImGui::BeginPopup("##assetpick"))
                         {
@@ -1483,13 +1501,15 @@ namespace Arcane::Editor
                 if (readOnly)
                     ImGui::EndDisabled();
 
-                // Attached to whatever the case above drew LAST, which is the
-                // field's own widget in every branch: ImGui restores
-                // g.LastItemData when a window closes (imgui.cpp:8849), so
+                // Every arm but the asset-ref one ends on the row's own content, so
+                // asking about the LAST item is asking about the field: ImGui
+                // restores g.LastItemData when a window closes (imgui.cpp:8849), so
                 // neither the asset-pick popup nor the SetTooltip below can
-                // retarget it. Placed after EndGesture for the same reason the
-                // gesture is bracketed at all -- nothing may sit between a widget
-                // and the item-state reads that close its transaction.
+                // retarget it. The asset-ref arm ends on a trailing name instead
+                // and has already answered above. Asked after EndGesture for the
+                // same reason the gesture is bracketed at all -- nothing may sit
+                // between a widget and the item-state reads that close its
+                // transaction.
                 //
                 // The raw identifier is always in the tooltip, so a friendly label
                 // never costs the ability to grep for the field. ForTooltip adds a
@@ -1497,7 +1517,9 @@ namespace Arcane::Editor
                 // so sweeping the cursor down the panel does not flicker a tooltip per
                 // row; that default already carries AllowWhenDisabled, so an
                 // Astra::ReadOnly row still explains itself on hover.
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                if (!hovered.has_value())
+                    hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
+                if (*hovered)
                 {
                     const std::string_view tip = Arcane::Editor::TooltipOfField(f);
                     if (tip.empty())
