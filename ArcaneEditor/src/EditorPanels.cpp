@@ -1458,9 +1458,42 @@ namespace Arcane::Editor
 
         // Search, UE's Details-panel shape (SDetailsViewBase.cpp:1016 --
         // OnFilterTextChanged -> FilterView). Filters components AND fields live.
-        ImGui::SetNextItemWidth(-FLT_MIN);
+        // UE's SSearchBox ships a built-in clear "X" (SSearchBox.cpp:149-161,
+        // OnClearSearch) rather than requiring select-all-delete, and shows no
+        // "no matches" text anywhere in PropertyEditor -- both mirrored below.
+        // The button only claims layout space when there is something to
+        // clear, so an empty query keeps the exact same -FLT_MIN full-width
+        // box every other InputText in this panel uses.
+        const bool hasQuery = state.searchBuffer[0] != '\0';
+        if (hasQuery)
+        {
+            const float clearButtonWidth = ImGui::CalcTextSize(ICON_LC_X).x
+                                          + ImGui::GetStyle().FramePadding.x * 2.0f
+                                          + ImGui::GetStyle().ItemSpacing.x;
+            ImGui::SetNextItemWidth(-clearButtonWidth);
+        }
+        else
+        {
+            ImGui::SetNextItemWidth(-FLT_MIN);
+        }
         ImGui::InputTextWithHint("##inspector_search", ICON_LC_SEARCH " Filter",
                                  state.searchBuffer, sizeof(state.searchBuffer));
+        if (hasQuery)
+        {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(ICON_LC_X))
+                state.searchBuffer[0] = '\0';
+        }
+        // INVARIANT: `searchBuffer` is written ONLY by a widget that takes
+        // ActiveId this same frame -- typing (already owned it from the prior
+        // frame) or a click on the clear button above (takes it fresh, same
+        // as clicking into the box). Either way, whatever field widget was
+        // previously active deactivates THIS frame, so EndGesture() closes
+        // state.gestureTxn before the next frame can redraw under the new
+        // query and make that field vanish. A clear path that does not move
+        // ActiveId (Escape, clear-on-selection-change) would leak an open
+        // gesture and wedge Add/Remove Component off permanently -- see the
+        // Outliner's renameTarget guard (~line 537) for the same hazard class.
         const std::string_view query(state.searchBuffer);
 
         // Hoisted once per frame; see the Outliner's copy. Add/Remove Component
@@ -1530,8 +1563,16 @@ namespace Arcane::Editor
             {
                 for (const Astra::FieldInfo& f : ci.meta->fields)
                 {
-                    // Same skip the visitor makes, so a component kept alive only
-                    // by a Hidden field cannot show up empty.
+                    // Mirrors BOTH skips the visitor applies, in the same order, so
+                    // a field this sweep counts is a field the visitor will actually
+                    // draw. visitFields is Astra's VisitFields (ComponentRegistry.hpp:314),
+                    // which drops non-serializable fields before Visit() ever sees
+                    // them; Visit() then drops Astra::Hidden fields itself (this
+                    // file, ~line 1151). Missing either one lets a component whose
+                    // only matching field fails that skip vote itself visible and
+                    // draw an empty body.
+                    if (!f.IsSerializable())
+                        continue;
                     if (Arcane::Editor::FieldIsAttributeHidden(f))
                         continue;
                     if (Arcane::Editor::MatchesInspectorFilter(
