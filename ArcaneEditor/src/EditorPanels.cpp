@@ -456,6 +456,13 @@ namespace Arcane::Editor
             if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
             {
                 std::string* s = static_cast<std::string*>(data->UserData);
+                // Upstream's own belt, spelled `data->Buf == str->c_str()` in
+                // misc/cpp/imgui_stdlib.cpp -- the same pointer as data(), which is
+                // what the caller below hands ImGui. It catches a user_data that is
+                // not the string ImGui was given the buffer of: the assignment two
+                // lines down would then point the live widget at an unrelated
+                // buffer.
+                IM_ASSERT(data->Buf == s->data());
                 s->resize(static_cast<std::size_t>(data->BufTextLen));
                 data->Buf = s->data();
             }
@@ -476,6 +483,11 @@ namespace Arcane::Editor
         // before any byte lands in it.
         bool InputTextString(const char* label, std::string* s, ImGuiInputTextFlags flags = 0)
         {
+            // Upstream's other belt (same file): CallbackResize is THIS helper's to
+            // set, because it also supplies the callback that services it and `s` as
+            // that callback's user data. A caller passing the flag is asking for a
+            // resize hook it has no parameter to supply.
+            IM_ASSERT((flags & ImGuiInputTextFlags_CallbackResize) == 0);
             flags |= ImGuiInputTextFlags_CallbackResize;
             return ImGui::InputText(label, s->data(), s->capacity() + 1, flags,
                                     StringResizeCallback, s);
@@ -1063,11 +1075,13 @@ namespace Arcane::Editor
                     // Clicking field B while field A is mid-gesture moves ActiveId in
                     // ONE frame, and if B is drawn ABOVE A then B activates before A's
                     // EndGesture runs. Without this, B's Begin would see A's
-                    // transaction still open, return None, and A's later Commit(None)
-                    // would no-op -- leaving A's transaction open forever holding
-                    // stale `before` bytes. Close A's here so its edit lands, then
-                    // open ours; A's own EndGesture then passes a stale token, which
-                    // the stack correctly ignores.
+                    // transaction still open, return None (CommandStack.cpp:16-17),
+                    // and A's later Commit(None) would no-op -- leaving A's
+                    // transaction open forever holding stale `before` bytes. Close
+                    // A's here so its edit lands, then open ours. A's own EndGesture
+                    // still runs later this frame, but the slot below now names B as
+                    // the owner, so EndGesture's ownership guard makes it return --
+                    // it does NOT hand B's LIVE token to Commit/Cancel.
                     if (*gestureTxn != Arcane::TransactionId::None)
                         stack->Commit(*gestureTxn);
                     // Park the token for the deactivation frame (EndGesture). None
@@ -1202,6 +1216,39 @@ namespace Arcane::Editor
             void EndGesture()
             {
                 if (!stack) return;
+                // ONLY THE WIDGET THAT OPENED THE GESTURE MAY CLOSE IT. This runs for
+                // every row, and a row that never opened a gesture still reports its
+                // own deactivation: click into a string box, then press on a drag
+                // drawn ABOVE it, and in ONE frame the drag activates (parking its
+                // LIVE token in *gestureTxn) while the string box, submitted after
+                // it, reports IsItemDeactivated -- imgui.cpp:6559 answers from
+                // DeactivatedItemData.ID, which is the string box's own id. Without
+                // this guard that click-without-typing would Cancel the drag's
+                // transaction, and Cancel discards WITHOUT reverting
+                // (CommandStack.cpp:75-82), so the whole drag stays applied and
+                // permanently un-undoable.
+                //
+                // GetItemID() is g.LastItemData.ID (imgui.cpp:6676-6680), the same
+                // value BeginGestureIfActivated recorded at activation, for every
+                // shape this panel draws:
+                //   - bare DragFloat/DragInt/Checkbox: ItemAdd stamps it on both
+                //     frames (imgui.cpp:11979).
+                //   - ctrl+click temp input: the id comes from the same window+label
+                //     (imgui_widgets.cpp:2727, :4728) and the temp input skips
+                //     ItemAdd (:4791-4792), so the drag's own id stands.
+                //   - DragFloat2/3 and MultiScalarRow (groups): EndGroup re-points
+                //     LastItemData.ID at the group's live ActiveId, ELSE at the child
+                //     that deactivated inside it (imgui.cpp:12477-12482) -- so the
+                //     activation frame yields the child that took ActiveId, and the
+                //     deactivation frame that same child.
+                //     Tabbing .x -> .y inside ONE group is the single frame where
+                //     those two branches disagree (the live-ActiveId one wins and
+                //     forwards .y while .x deactivates), but that frame is also an
+                //     activation: BeginGestureIfActivated has already committed .x's
+                //     gesture and parked .y here, so this compares .y against .y.
+                //     Unchanged by this guard -- it is what that path already did.
+                if (ImGui::GetItemID() != *gestureItem)
+                    return;
                 // Both no-op on TransactionId::None, so a field that never opened a
                 // gesture -- and a gesture that JOINED a gizmo drag -- leaves the
                 // stack strictly alone here.
@@ -1700,8 +1747,8 @@ namespace Arcane::Editor
         // OnClearSearch) rather than requiring select-all-delete, and shows no
         // "no matches" text anywhere in PropertyEditor -- both mirrored below.
         // The button only claims layout space when there is something to
-        // clear, so an empty query keeps the exact same -FLT_MIN full-width
-        // box every other InputText in this panel uses.
+        // clear, so an empty query keeps the box at the full -FLT_MIN width it
+        // would have if the button did not exist.
         const bool hasQuery = state.searchBuffer[0] != '\0';
         if (hasQuery)
         {
