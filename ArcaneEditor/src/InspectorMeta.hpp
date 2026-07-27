@@ -1,8 +1,8 @@
 #pragma once
 
 // InspectorMeta: every decision the Inspector makes ABOUT a field, separated
-// from the drawing of it -- what it is called, what category it sits in,
-// whether a search matches it, whether it still holds its default.
+// from the drawing of it -- what it is called, what category it sits in, what
+// bounds and prose it carries, and whether a search matches it.
 //
 // Pure by construction (no ImGui, no registry mutation) because the test gate
 // does not compile EditorPanels.cpp: anything left in the draw loop is

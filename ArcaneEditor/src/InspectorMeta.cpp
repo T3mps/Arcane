@@ -2,8 +2,6 @@
 
 #include <Astra/Reflection/Attribute.hpp>
 
-#include <cctype>
-
 namespace Arcane::Editor
 {
     namespace
