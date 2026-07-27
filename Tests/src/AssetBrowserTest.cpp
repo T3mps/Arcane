@@ -90,3 +90,45 @@ TEST_CASE("MatchesFilter combines kind filter and case-insensitive search", "[ed
     CHECK(MatchesFilter(mat, static_cast<int>(AssetKind::Material), "glow"));
     CHECK_FALSE(MatchesFilter(mat, static_cast<int>(AssetKind::Texture), "glow"));
 }
+
+TEST_CASE("AssetKindOf classifies scenes", "[editor]")
+{
+    CHECK(AssetKindOf("game://scenes/main.arcscene") == AssetKind::Scene);
+    CHECK(AssetKindOf("game://scenes/MAIN.ARCSCENE") == AssetKind::Scene);
+    // Not the material kind, and not a generic data file.
+    CHECK(AssetKindOf("game://scenes/main.arcscene") != AssetKind::Data);
+    CHECK(AssetKindOf("game://mat/glow.arcmat") == AssetKind::Material);
+}
+
+TEST_CASE("a .arcscene is a native JSON asset and gets a minted id", "[editor][project]")
+{
+    // Native-JSON rule: a top-level "id" is read, or minted and written back.
+    // Without .arcscene on that list a scene would scan as an untracked file,
+    // never get a Guid, and never appear in the browser or resolve as bootScene.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_scene_asset_scan";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "scenes", ec);
+
+    std::ofstream(dir / "scenes" / "main.arcscene")
+        << R"({"version":2,"entities":[]})";   // no id -- must be minted
+
+    Arcane::AssetRegistry reg;
+    const std::size_t n = reg.ScanContent(dir, "game");
+    CHECK(n == 1);
+
+    const auto all = reg.All();
+    REQUIRE(all.size() == 1);
+    CHECK(all[0].first.IsValid());
+    CHECK(all[0].second == "game://scenes/main.arcscene");
+
+    // Written back: a second scan resolves to the SAME Guid.
+    Arcane::AssetRegistry again;
+    again.ScanContent(dir, "game");
+    const auto all2 = again.All();
+    REQUIRE(all2.size() == 1);
+    CHECK(all2[0].first == all[0].first);
+
+    fs::remove_all(dir, ec);
+}

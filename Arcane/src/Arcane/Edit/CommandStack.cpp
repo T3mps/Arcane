@@ -61,6 +61,11 @@ namespace Arcane
         if (txn.commands.empty())
             return;   // nothing changed -> no history entry
 
+        // Stamp the state this transaction produced. m_nextId is the same
+        // monotonic source TransactionId::Begin draws from, so ids are unique
+        // across BOTH uses and a committed state id can never collide with a
+        // live transaction token.
+        txn.id = m_nextId++;
         m_undo.push_back(std::move(txn));
         m_redo.clear();
         while (m_undo.size() > m_maxDepth)
@@ -88,6 +93,8 @@ namespace Arcane
         Transaction txn;
         txn.label = command->Label();
         txn.commands.push_back(std::move(command));
+        // See Commit: same stamp-before-push rule, same shared m_nextId source.
+        txn.id = m_nextId++;
         m_undo.push_back(std::move(txn));
         m_redo.clear();
         while (m_undo.size() > m_maxDepth)

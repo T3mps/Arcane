@@ -5,6 +5,11 @@ Status: design approved, no implementation plan yet
 Scope: scene session core + project integration (Sandbox migration and the
 entity clipboard are explicitly OUT)
 
+> **This document records the design as approved, not the code as shipped.**
+> Where the two differ, the shipped code and the implementation plan are
+> authoritative. The API names below have been corrected against the code;
+> anything else here may still lag it.
+
 ---
 
 ## 1. Problem
@@ -71,8 +76,13 @@ session and its UI.
 **`Arcane/Scene/SceneAsset.hpp` / `.cpp`** -- the *file* layer over the existing
 in-memory `SaveJson`/`LoadJson`:
 
-- `bool SaveSceneFile(const std::filesystem::path&, const Astra::Registry&, const Guid& id)`
-- `bool LoadSceneFile(const std::filesystem::path&, Astra::Registry&, Guid* outId)`
+- `bool SaveSceneFile(const std::filesystem::path&, const Astra::Registry&, const Guid& id, std::string* error)`
+- `std::optional<SceneDocument> ReadSceneFile(const std::filesystem::path&, std::string* error)`
+  and `bool ApplySceneDocument(const SceneDocument&, Astra::Registry&)`
+
+(As shipped: the single `LoadSceneFile` this section originally listed was
+replaced by the read/apply split described just below, which is what makes the
+ordering requirement enforceable rather than merely documented.)
 
 Validates the top-level `id` and `version`. Exception-free (engine rule):
 returns `false` with a logged reason on IO failure, parse failure, version
@@ -90,7 +100,7 @@ failure.
 
 **`HostBoot::BootScene(Runtime&, const Project&)`** -- resolve the manifest's
 boot scene Guid through `Project::ResolveAsset` to a physical file, then
-`Runtime::ResetRegistry()` + `LoadSceneFile`. Must be called *after* the plugin
+`ReadSceneFile` -> `Runtime::ResetRegistry()` -> `ApplySceneDocument`. Must be called *after* the plugin
 loads, so the plugin's reflected component types are registered and its
 components deserialize rather than being silently dropped.
 
@@ -112,11 +122,14 @@ free of ImGui and only the draw call touches it:
 
 - current file path, Guid, and display name (`Untitled` when never saved)
 - `IsDirty()` / `MarkSaved()`
-- `New()`, `Open(path)`, `Save()`, `SaveAs(path)`, each returning a result
-  enum plus a human-readable message for the Console and the error modal
 - an unsaved-changes confirm state machine -- one pending request at a time,
   resolved by Save / Discard / Cancel -- mirroring `DocumentHost`'s close flow
   rather than inventing a second vocabulary
+
+(As shipped: `SceneSession` is pure STATE and performs no IO. The New / Open /
+Save / Save As effects this section originally put on it live in the host, as
+`EditorApp::DoNewScene` / `DoOpenScene` / `DoSaveScene`, which return `bool` and
+leave the human-readable message in `EditorApp::m_sceneError`.)
 
 ImGui touches only the menu wiring and the confirm/error modals.
 
@@ -223,8 +236,10 @@ All headless, no `[gpu]` tag:
   file rejected; a failed load leaves the target registry untouched.
 - **`EditorSceneSessionTest.cpp`** -- dirty transitions across edit/save/undo;
   undo-back-to-clean; the confirm state machine including a second request while
-  one is pending; Save As retargeting the session's path and Guid; Save
-  refusing while in Play.
+  one is pending; Save As retargeting the session's path and Guid. (As shipped:
+  "Save refuses while in Play" is NOT a `SceneSession` test -- that gate lives in
+  `EditorApp::DoSaveScene`, which is host wiring and is desk-verified like every
+  other ImGui-facing surface in this arc.)
 - **`AssetBrowserTest.cpp`** -- a case for `.arcscene` classifying as
   `AssetKind::Scene`.
 - **`ProjectManifestTest.cpp`** -- update for `bootScene` as a Guid; add a

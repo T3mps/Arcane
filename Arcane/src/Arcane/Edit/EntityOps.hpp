@@ -37,6 +37,24 @@ namespace Arcane::Edit
     ARCANE_API Astra::Entity CreateEntity(Astra::Registry& reg,
                                           Astra::Entity parent);
 
+    // Like CreateEntity, but for editor call sites that mean "add to the
+    // scene" rather than "add anywhere in the registry". With a valid
+    // `parent` this is exactly CreateEntity (the Outliner row's "New Child
+    // Entity" contract is unchanged). With an invalid `parent` it attaches
+    // under the SceneRoot entity instead of leaving the new entity an
+    // unparented sibling of SceneRoot -- SceneSerializer::SaveJson and
+    // TransformPropagationSystem both walk ONLY the SceneRoot subtree, so a
+    // sibling of it never renders and is silently dropped by the next Save.
+    // Refuses (returns Astra::Entity::Invalid(), creates nothing) when there
+    // is no SceneRoot resource at all: an entity created here would have
+    // nowhere safe to live, and DoSaveScene already refuses to save a
+    // rootless registry (EditorApp.cpp), so creating one would only relocate
+    // the same data-loss bug rather than fix it. A refused create is
+    // recoverable (open or start a scene, then try again); a silent create-
+    // then-lose is not.
+    ARCANE_API Astra::Entity CreateEntityInScene(Astra::Registry& reg,
+                                                 Astra::Entity parent);
+
     // Delete every entity in `set` (duplicates tolerated). Children of a
     // deleted entity first splice up to its nearest NOT-being-deleted
     // ancestor (or to the root when none). Returns entities destroyed.

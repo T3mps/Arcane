@@ -70,7 +70,11 @@ namespace Arcane
     struct SpriteRenderer
     {
         uint32_t    textureId = 0;          // 0 => untextured tinted quad; resolved via TextureTable
-        glm::vec2   size{32.0f, 32.0f};      // base pixel size before world scale
+        // WORLD units (meters, MKS) -- multiplied by the camera zoom exactly as
+        // position is (RenderSystems.hpp), so a sprite keeps its world size at
+        // every zoom. The 32x32 default is a leftover from the pixel era and is
+        // 32 METRES: authored content must set this (a 1 m box is {1, 1}).
+        glm::vec2   size{32.0f, 32.0f};
         glm::vec4   tint{1.0f, 1.0f, 1.0f, 1.0f};
         int32_t     sortingLayer = 0;
         int32_t     orderInLayer = 0;

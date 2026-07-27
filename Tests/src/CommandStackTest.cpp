@@ -3,6 +3,7 @@
 // descriptor->serialize), never a type-based CreateView<T>.
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -11,11 +12,14 @@
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/ComponentEditCommand.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+
+#include "Helpers/TestTypeContext.hpp"
 
 namespace
 {
@@ -493,4 +497,172 @@ TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
     stack.Undo(); stack.Undo();
     CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 1.0f);
     CHECK_FALSE(stack.CanUndo());          // the oldest (would restore x=0) was evicted
+}
+
+TEST_CASE("StateId identifies the current state, not the number of edits", "[edit]")
+{
+    // This is what scene dirty-tracking is built on: SceneSession records
+    // StateId() at save and compares. Undo back to the save point has to go
+    // CLEAN again, which a monotonic edit counter cannot express.
+    //
+    // Uses a real Arcane::Runtime bound to the process-wide SharedTypeContext
+    // (see Helpers/TestTypeContext.hpp and EditorPlayModeTest.cpp) rather than
+    // a bare Arcane::Runtime -- a test-local Runtime would steal Arcane.dll's
+    // TypeContext slot and Edit:: operations would silently report zero changes.
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Astra::Registry& reg = runtime.Registry();
+    Arcane::RegisterSceneComponents(reg);
+
+    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); });
+
+    const Astra::Entity e = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    // DescriptorFor (above) is the verified path: the brief's literal
+    // `GetComponentRegistry()->GetDescriptor(Astra::TypeId<T>::Hash())` does not
+    // compile -- ComponentRegistry has no GetDescriptor member (the real one is
+    // GetComponentDescriptorByHash) and the type is Astra::TypeID, not TypeId.
+    const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::Transform");
+    REQUIRE(desc != nullptr);
+
+    CHECK(stack.StateId() == 0);   // empty stack
+
+    auto edit = [&](float x)
+    {
+        const Arcane::TransactionId t = stack.Begin("Move");
+        stack.SnapshotComponent(e, desc);
+        reg.GetComponent<Arcane::Transform>(e)->position.x = x;
+        stack.Commit(t);
+    };
+
+    edit(1.0f);
+    const std::uint64_t afterFirst = stack.StateId();
+    CHECK(afterFirst != 0);
+
+    edit(2.0f);
+    const std::uint64_t afterSecond = stack.StateId();
+    CHECK(afterSecond != afterFirst);
+
+    stack.Undo();
+    CHECK(stack.StateId() == afterFirst);   // back at the first state EXACTLY
+
+    stack.Redo();
+    CHECK(stack.StateId() == afterSecond);
+
+    stack.Undo();
+    stack.Undo();
+    CHECK(stack.StateId() == 0);            // back to empty
+
+    // A NEW edit after undoing must not re-mint a retired id -- otherwise a
+    // saved marker could match a state that is not the saved one.
+    edit(3.0f);
+    CHECK(stack.StateId() != afterFirst);
+    CHECK(stack.StateId() != afterSecond);
+
+    stack.Clear();
+    CHECK(stack.StateId() == 0);
+}
+
+TEST_CASE("StateId: Push (one-shot command path) mints and retires ids too, not just Commit", "[edit]")
+{
+    // Gap 1 (review of the StateId() work, 2026-07-27): the test above only
+    // walks the Commit path (Begin/SnapshotComponent/Commit). CommandStack
+    // has a SECOND place that appends to the undo stack -- Push(), the
+    // one-shot-command path used for material-param edits and (later) graph
+    // edits -- and it stamps its own `txn.id = m_nextId++;` in
+    // CommandStack::Push, independently of Commit's. If a refactor merged
+    // the two near-duplicate append blocks and dropped the stamp from Push,
+    // every other test in this file would stay green while StateId() kept
+    // reporting a stale id after a real Push edit -- a caller (scene
+    // dirty-tracking) would then read a genuinely dirty scene as clean.
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Astra::Registry& reg = runtime.Registry();
+    Arcane::RegisterSceneComponents(reg);
+
+    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); });
+    int undos = 0, redos = 0;
+
+    CHECK(stack.StateId() == 0);   // empty stack
+
+    stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "Edit Speed"));
+    const std::uint64_t afterFirstPush = stack.StateId();
+    CHECK(afterFirstPush != 0);
+
+    stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "Edit Speed 2"));
+    const std::uint64_t afterSecondPush = stack.StateId();
+    CHECK(afterSecondPush != afterFirstPush);
+
+    stack.Undo();
+    CHECK(stack.StateId() == afterFirstPush);   // back at the first push's state EXACTLY
+
+    // Distinct from an id minted by the Commit path -- Push and Commit share
+    // the same m_nextId generator (see both sites' comments), so a real bug
+    // that stamped, say, a fixed sentinel from one path could collide with an
+    // id from the other and never show up if the two paths were never mixed
+    // in one test.
+    const Astra::Entity e = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::Transform");
+    REQUIRE(desc != nullptr);
+
+    const Arcane::TransactionId t = stack.Begin("Move");
+    stack.SnapshotComponent(e, desc);
+    reg.GetComponent<Arcane::Transform>(e)->position.x = 9.0f;
+    stack.Commit(t);
+    const std::uint64_t afterCommit = stack.StateId();
+    CHECK(afterCommit != afterFirstPush);
+    CHECK(afterCommit != afterSecondPush);
+
+    stack.Undo();
+    CHECK(stack.StateId() == afterFirstPush);   // back under the Push id, not the Commit's
+}
+
+TEST_CASE("StateId: an id evicted by the depth cap is never observed again", "[edit]")
+{
+    // Gap 2 (review of the StateId() work, 2026-07-27): CommandStack::Commit's
+    // depth cap -- `while (m_undo.size() > m_maxDepth) m_undo.pop_front();` --
+    // physically destroys the oldest Transaction, including its id, and ids
+    // are never re-minted. CommandStack.hpp's StateId comment documents this
+    // as the deliberately safe direction: a caller who recorded an evicted id
+    // can never see it as "clean" again -- it just stays dirty forever,
+    // rather than ever risking a false "clean" read against some later state.
+    // That interaction was never actually exercised. A regression that
+    // weakened the eviction (e.g. popping the wrong end, or the cap
+    // comparison losing its bite) would let the evicted id resurface while
+    // walking Undo() back toward empty; this test walks that whole path and
+    // checks every step, not just the final one.
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Astra::Registry& reg = runtime.Registry();
+    Arcane::RegisterSceneComponents(reg);
+
+    const Astra::Entity e = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::Transform");
+    REQUIRE(desc != nullptr);
+
+    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); },
+                                /*maxDepth*/ 2);
+
+    auto edit = [&](float x)
+    {
+        const Arcane::TransactionId t = stack.Begin("Move");
+        stack.SnapshotComponent(e, desc);
+        reg.GetComponent<Arcane::Transform>(e)->position.x = x;
+        stack.Commit(t);
+    };
+
+    edit(1.0f);
+    const std::uint64_t evicted = stack.StateId();   // the state this edit produced -- about to fall off the cap
+    REQUIRE(evicted != 0);
+
+    edit(2.0f);
+    edit(3.0f);   // cap is 2: this Commit's eviction destroys the first transaction (and `evicted`)
+
+    CHECK(stack.StateId() != evicted);   // the live top is a later state, never the evicted one
+
+    while (stack.CanUndo())
+    {
+        stack.Undo();
+        CHECK(stack.StateId() != evicted);   // must never resurface on the way down to empty
+    }
+    CHECK(stack.StateId() == 0);   // fully unwound past both surviving edits
 }

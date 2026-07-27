@@ -10,6 +10,9 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Serialization/SceneAsset.hpp>
+#include <Arcane/Serialization/SceneSerializer.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -475,4 +478,57 @@ TEST_CASE("Gizmo group delta crosses differently-parented roots correctly in WOR
         CHECK_THAT(worldAfterB.x, WithinAbs(worldBeforeB.x + 5.0f, 1e-4f));
         CHECK_THAT(worldAfterB.y, WithinAbs(worldBeforeB.y, 1e-4f));
     }
+}
+
+TEST_CASE("CreateEntityInScene parents the top-level create under SceneRoot, "
+          "surviving a save/load round trip", "[outliner]")
+{
+    // The regression this test exists for: the Outliner's empty-space "New
+    // Entity" used to call Edit::CreateEntity(reg, Astra::Entity::Invalid())
+    // directly, which left the entity an unparented SIBLING of SceneRoot, not
+    // a descendant. SceneSerializer::SaveJson and TransformPropagationSystem
+    // both walk ONLY the SceneRoot subtree, so that entity never rendered and
+    // was silently dropped by the next Save -- authored, saved, reloaded, gone.
+    World w;
+    Astra::Entity root = Arcane::Scene::CreateEmpty(w.reg);
+
+    Astra::Entity created = Edit::CreateEntityInScene(w.reg, Astra::Entity::Invalid());
+    REQUIRE(created.IsValid());
+    CHECK(w.reg.GetParent(created) == root);
+
+    // An explicit parent (the row context menu's "New Child Entity" path)
+    // must behave exactly as CreateEntity always has -- unification must not
+    // change that path's contract.
+    Astra::Entity child = Edit::CreateEntityInScene(w.reg, created);
+    REQUIRE(child.IsValid());
+    CHECK(w.reg.GetParent(child) == created);
+
+    EntityInfo* createdInfo = w.reg.GetComponent<EntityInfo>(created);
+    REQUIRE(createdInfo != nullptr);
+    const std::string createdName = createdInfo->name;
+
+    const nlohmann::json doc = Arcane::Scene::SaveJson(w.reg);
+
+    auto components2 = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg2(components2);
+    RegisterSceneComponents(reg2);
+    REQUIRE(Arcane::Scene::LoadJson(reg2, doc));
+
+    bool found = false;
+    reg2.CreateView<EntityInfo>().ForEach(
+        [&](Astra::Entity, EntityInfo& info) { found = found || info.name == createdName; });
+    CHECK(found);
+}
+
+TEST_CASE("CreateEntityInScene refuses when there is no SceneRoot at all",
+          "[outliner]")
+{
+    // Mirrors DoSaveScene's existing "no SceneRoot" refusal (EditorApp.cpp):
+    // an entity created outside the SceneRoot subtree can never be rendered
+    // or saved, so silently creating one here would just relocate the same
+    // data-loss bug rather than fix it. Refusing (no entity created) is
+    // recoverable -- create a scene first -- where a create-then-lose is not.
+    World w;
+    Astra::Entity created = Edit::CreateEntityInScene(w.reg, Astra::Entity::Invalid());
+    CHECK_FALSE(created.IsValid());
 }

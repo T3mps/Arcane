@@ -5,6 +5,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
@@ -14,6 +16,8 @@
 
 #include <filesystem>
 #include <memory>
+
+#include "Helpers/TestTypeContext.hpp"
 
 using Catch::Approx;
 
@@ -124,4 +128,61 @@ TEST_CASE("binary scene save/load round-trips transforms and relations", "[scene
     CHECK(reg->HasParent(savedChild));
 
     std::filesystem::remove(path);
+}
+
+// Reported bug: create a child in the Outliner, add a SpriteRenderer, pick a
+// material -- nothing appears in the viewport. Root cause: Edit::CreateEntity
+// (the real Outliner "New Child Entity" path) adds only Transform + EntityInfo,
+// never WorldTransform, and the propagation walk below used to only WRITE an
+// already-present WorldTransform -- it never materialised the missing one. A
+// child created this way therefore could never satisfy RenderSubmissionSystem's
+// view no matter what components got added afterward.
+TEST_CASE("editor-created child under SceneRoot gets a WorldTransform from propagation",
+          "[scene][outliner]")
+{
+    // Cross-DLL: Edit::CreateEntity is compiled into Arcane.dll (see
+    // EntityOpsTest.cpp's World helper) -- without pinning this module and
+    // Arcane.dll would resolve component IDs through different TypeContext
+    // slots, and EntityInfo/SpriteRenderer added by CreateEntity would be
+    // invisible to GetComponent calls made from this module.
+    Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+
+    Astra::Entity root = reg.CreateEntity();
+    Arcane::Transform rootT;
+    rootT.position = glm::vec2(5.0f, 0.0f);
+    reg.AddComponent<Arcane::Transform>(root, rootT);
+    reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+    // The real Outliner path (EditorPanels.cpp's "New Child Entity" menu item).
+    Astra::Entity child = Arcane::Edit::CreateEntity(reg, root);
+    REQUIRE(reg.GetComponent<Arcane::WorldTransform>(child) == nullptr);   // the gap
+
+    if (Arcane::Transform* childLocal = reg.GetComponent<Arcane::Transform>(child))
+        childLocal->position = glm::vec2(2.0f, 3.0f);
+    reg.AddComponent<Arcane::SpriteRenderer>(child, Arcane::SpriteRenderer{});
+
+    Arcane::TransformPropagationSystem propagate;
+    propagate(reg);
+
+    Arcane::WorldTransform* childWorld = reg.GetComponent<Arcane::WorldTransform>(child);
+    REQUIRE(childWorld != nullptr);
+    CHECK(childWorld->matrix[2].x == Catch::Approx(7.0f));   // root(5,0) + local(2,3)
+    CHECK(childWorld->matrix[2].y == Catch::Approx(3.0f));
+
+    // "Has the component" and "renders" must not be allowed to drift apart:
+    // confirm the child is matched by the exact view RenderSubmissionSystem uses.
+    int matched = 0;
+    auto view = reg.CreateView<Arcane::WorldTransform, Arcane::SpriteRenderer,
+                               Astra::Not<Arcane::Hidden>>();
+    view.ForEach([&](Astra::Entity e, Arcane::WorldTransform&, Arcane::SpriteRenderer&)
+    {
+        if (e == child)
+            ++matched;
+    });
+    CHECK(matched == 1);
 }

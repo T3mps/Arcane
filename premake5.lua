@@ -500,7 +500,9 @@ project "ArcaneEditor"
     }
     filter "system:windows"
         systemversion "latest"
-        buildoptions { "/Zc:__cplusplus" }
+        -- /bigobj: EditorApp.cpp exceeded the COFF section limit (C1128) once the
+        -- scene flows landed. Same flag every other C++23-heavy project here carries.
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         -- .exe file icon (Explorer/taskbar/Alt-Tab): a Win32 ICON resource. The .rc
         -- references arcane.ico by name; resincludedirs points RC at its folder.
@@ -581,6 +583,16 @@ project "ArcaneTests"
         -- compiles into the test exe so the [editor] units drive it directly --
         -- no ImGui dependency, same pattern as EntityList/InspectorFields above.
         "%{wks.location}/ArcaneEditor/src/ComponentCatalog.cpp",
+        -- Scene authoring: SceneSession (scene identity + dirty state + the
+        -- unsaved-changes confirm machine) source-compiles into the test exe so
+        -- the [editor] units drive the PURE state machine directly -- there is
+        -- no ImGui in it at all, same pattern as DocumentHost above.
+        "%{wks.location}/ArcaneEditor/src/SceneSession.cpp",
+        -- Scene authoring: EditorCamera (the editor's own viewport pan/zoom/
+        -- framing math + the framing-bounds sweep) source-compiles into the
+        -- test exe so the [editor] units drive the PURE math headlessly -- no
+        -- ImGui and no engine calls in it, same pattern as SceneSession above.
+        "%{wks.location}/ArcaneEditor/src/EditorCamera.cpp",
     }
 
     includedirs {

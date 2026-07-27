@@ -29,7 +29,7 @@ namespace Arcane
         int                    engineAbi = 0;      // "engine": { "abi": N }
         std::string            gameModule;         // may be empty (content-only)
         std::vector<PluginRef> plugins;
-        std::string            bootScene;           // e.g. "game://scenes/main.ascene"
+        std::string            bootScene;           // asset Guid text (see Project::SetBootScene); empty = none
 
         // Parse + validate a JSON document. nullopt on schema violation.
         static ARCANE_API std::optional<ProjectManifest> FromJson(const nlohmann::json& doc);

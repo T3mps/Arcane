@@ -22,6 +22,7 @@ namespace Arcane::Editor
                 case AssetKind::Audio:    return ICON_LC_MUSIC;
                 case AssetKind::Font:     return ICON_LC_TYPE;
                 case AssetKind::Data:     return ICON_LC_FILE_JSON;
+                case AssetKind::Scene:    return ICON_LC_CLAPPERBOARD;
                 case AssetKind::Other:    return ICON_LC_FILE;
             }
             return ICON_LC_FILE;
@@ -36,6 +37,7 @@ namespace Arcane::Editor
                 case AssetKind::Audio:    return "Audio";
                 case AssetKind::Font:     return "Font";
                 case AssetKind::Data:     return "Data";
+                case AssetKind::Scene:    return "Scene";
                 case AssetKind::Other:    return "Other";
             }
             return "Other";
@@ -113,15 +115,29 @@ namespace Arcane::Editor
                         actions.createInstanceOf = e.guid;
                     ImGui::EndPopup();
                 }
+                // Scene rows: context menu -> make this the project's boot scene.
+                if (e.kind == AssetKind::Scene && ImGui::BeginPopupContextItem())
+                {
+                    if (ImGui::MenuItem("Set as Boot Scene"))
+                        actions.setBootScene = e.guid;
+                    ImGui::EndPopup();
+                }
 
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 {
-                    // Route into the document system: resolve the physical file,
-                    // then let the extension registry pick the editor.
+                    // Resolve the physical file either way; a scene is NOT a
+                    // DocumentHost document (it replaces the editing session, it
+                    // does not open beside the Viewport), so it hands the path
+                    // back to the host instead of going through docs.OpenPath.
                     const auto path =
                         project->ResolveAsset(Arcane::AssetId::FromGuid(e.guid));
                     if (path)
-                        docs.OpenPath(*path);
+                    {
+                        if (e.kind == AssetKind::Scene)
+                            actions.openScene = *path;
+                        else
+                            docs.OpenPath(*path);
+                    }
                     else
                         ARC_WARN("Assets: '{}' did not resolve to a file", e.mountPath);
                 }

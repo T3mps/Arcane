@@ -20,8 +20,10 @@
 #include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
 #include "DocumentHost.hpp"
+#include "EditorCamera.hpp"
 #include "EditorPanels.hpp"
 #include "PlayMode.hpp"
+#include "SceneSession.hpp"
 #include "SelectionContext.hpp"
 #include "ShaderEditorDocument.hpp"
 #include "ViewportInput.hpp"
@@ -102,6 +104,12 @@ namespace Arcane::Editor
         // Inspector + viewport pick -- see SelectionContext.hpp).
         Arcane::Editor::SelectionContext m_selection;
 
+        // Which .arcscene is being edited, whether it has unsaved changes, and the
+        // one-at-a-time unsaved-changes confirm machine (SceneSession.hpp). Pure
+        // state: every effect below it (dialogs, file IO, ResetRegistry) is
+        // performed here.
+        Arcane::Editor::SceneSession m_scene;
+
         // Outliner panel state + structural-edit binding (slice 2)
         Arcane::Editor::OutlinerState   m_outliner;
         Arcane::Editor::SceneEditBinding m_editBinding;
@@ -109,7 +117,13 @@ namespace Arcane::Editor
         // ownership token across the frames the gesture spans (see InspectorState).
         Arcane::Editor::InspectorState  m_inspector;
 
-        // Editor undo/redo history (Edit-mode; cleared on Play). Constructed in
+        // Editor undo/redo history. Deliberately NOT cleared on Play: Stop restores
+        // the pre-Play registry, so the edits behind these entries are still on
+        // screen and must stay undoable -- and because SceneSession reads this
+        // stack's StateId as the SOLE input to the scene's dirty flag
+        // (SceneSession.hpp), clearing it would silently report an unsaved scene as
+        // clean. It is cleared only where no entity handle in it could survive:
+        // ClearSceneReferences, ahead of a registry swap. Constructed in
         // Init once the runtime's registry exists; optional so it can be built
         // after m_runtime. Declared AFTER m_runtime/m_plugin so it destructs
         // BEFORE them -- its resolver lambda captures `&*m_runtime` (a raw
@@ -159,8 +173,43 @@ namespace Arcane::Editor
         bool m_prevKeyE = false;
         bool m_prevKeyR = false;
         bool m_prevKeyQ = false;
+        // Ctrl+N / Ctrl+O / Ctrl+S edge-tracking for the File-menu scene shortcuts
+        // (same pattern as the undo/redo keys above).
+        bool m_prevKeyN = false;
+        bool m_prevKeyO = false;
+        bool m_prevKeyS = false;
         // Left-mouse edge-tracking, shared by the gizmo press/release detection.
         bool m_prevLmbDown = false;
+
+        // The EDITOR's viewport camera (Edit mode). Runtime::SetCamera is the
+        // PLUGIN's seam, so a project whose game module never calls it would be
+        // stuck at the identity transform -- offset (0,0), zoom 1, i.e. 1 px per
+        // metre. EditorApp drives this from viewport input and pushes it into
+        // the Runtime in Edit mode only; in Play the plugin's camera wins.
+        // See EditorCamera.hpp for the transform convention.
+        Arcane::Editor::EditorCamera m_camera;
+        // RMB-drag pan gesture. Starts only inside the viewport but keeps
+        // tracking once started (same rule as the gizmo drag), so a pan does not
+        // stall the moment the cursor crosses the panel edge. The cursor is
+        // kept in WINDOW px: the pan only needs the frame-to-frame DELTA, which
+        // is identical in window and viewport-local space (they differ by a
+        // translation), and window px are written every frame regardless of
+        // whether the viewport is active.
+        bool      m_camPanning = false;
+        glm::vec2 m_camPanLastMouse{0.0f, 0.0f};
+        bool      m_prevRmbDown = false;
+        // F (frame selection) / Home (frame scene) edge-tracking, same pattern
+        // as the undo/redo and gizmo mode keys above.
+        bool m_prevKeyF = false;
+        bool m_prevKeyHome = false;
+        // Point the editor camera at the selection (selectionOnly) or at the
+        // whole scene. A no-op when there is nothing framable, so the user's
+        // view is never thrown away by an F press that had no target.
+        void FrameCamera(bool selectionOnly);
+        void FrameSceneIfPending();
+        // Set whenever a scene becomes the current one, consumed on the first frame
+        // the viewport has a real size. See MainLoop for why it cannot be immediate.
+        bool m_frameOnSceneOpen = false;
         // Set for the remainder of THIS frame when a gizmo drag starts or ends,
         // so the click-pick block (later in MainLoop) does not also treat the
         // same click as a selection change. Reset at the top of the input block
@@ -287,6 +336,40 @@ namespace Arcane::Editor
 
         static void ProjectPickedThunk(const char* path, void* user);  // -> m_pendingProjectPath (background thread)
         void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
+
+        // Async scene file-dialog results (same background-thread stash pattern as
+        // m_pendingProjectPath: the SDL dialog backend fires its callback from a
+        // detached worker, so these are swapped out at the top of the next frame
+        // under the mutex).
+        std::string m_pendingSceneOpenPath;
+        std::string m_pendingSceneSavePath;
+        std::mutex  m_pendingSceneMutex;
+
+        static void SceneOpenPickedThunk(const char* path, void* user);
+        static void SceneSavePickedThunk(const char* path, void* user);
+
+        // Editor state naming entities of the OUTGOING scene, torn down before any
+        // registry swap. Shared by SwitchProject and the scene effects below.
+        void ClearSceneReferences();
+        // Establish an empty scene when nothing published a SceneRoot, so the editor
+        // always has one open. Never clears a registry a plugin already populated.
+        void EnsureScene();
+
+        // The scene effects. Each returns false when the effect itself failed, and
+        // sets m_sceneError to the reason (MainLoop draws it as a modal).
+        bool DoNewScene();
+        bool DoOpenScene(const std::filesystem::path& file);
+        bool DoSaveScene(const std::filesystem::path& file);
+
+        // Last scene failure, shown as a blocking modal until dismissed. Main
+        // thread only (set in the effects, read in the ImGui pass).
+        std::string m_sceneError;
+
+        // Window title, recomposed from project + scene + dirty state each frame
+        // and pushed to the window only when it changes (SetTitle is an SDL call,
+        // and the string is identical on the overwhelming majority of frames).
+        std::string m_windowTitle;
+        void        UpdateWindowTitle();
 
         // The dock node the Viewport occupied LAST frame (0 = floating):
         // where new document windows dock as sibling tabs (DrawAll).

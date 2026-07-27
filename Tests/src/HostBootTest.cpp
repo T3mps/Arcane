@@ -2,10 +2,19 @@
 #include <ProjectBoot.hpp>
 
 #include <Arcane/Base/Engine.hpp>        // ExecutablePathUtf8 (the argv[0] replacement)
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/Config.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (the probe tripwire)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Serialization/SceneAsset.hpp>   // kSceneJsonVersion, kSceneExt
+
+#include "Helpers/TestTypeContext.hpp"
+
+#include <Astra/Reflection/Reflection.hpp>
+#include <Astra/Registry/Registry.hpp>
 
 #include <Json.hpp>
 
@@ -18,8 +27,39 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <vector>
 
-namespace { namespace fs = std::filesystem; }
+namespace
+{
+    namespace fs = std::filesystem;
+
+    // Locate the repo's real Arcane/SampleProject from wherever this test exe
+    // happens to run. No other test in this suite reaches into source-tree
+    // content (no SOURCE_DIR-style define, no fixture-copy convention to
+    // follow), so rather than hardcoding a fixed "../../.." depth this walks
+    // UP from the exe's own directory looking for the "SampleProject/
+    // SampleProject.arcproj" landmark. The premake layout
+    // (Arcane/bin/<cfg>-<os>-<arch>-md/<project>/) makes 3 levels the expected
+    // answer today, but verifying-by-search survives a future bin/ layout
+    // change instead of silently opening the wrong directory (or none) with
+    // no diagnostic. Bounded to 8 levels; empty on failure.
+    fs::path FindSampleProjectDir()
+    {
+        std::error_code ec;
+        fs::path dir = fs::path(Arcane::ExecutablePathUtf8()).parent_path();
+        for (int i = 0; i < 8 && !dir.empty(); ++i)
+        {
+            const fs::path candidate = dir / "SampleProject";
+            if (fs::is_regular_file(candidate / "SampleProject.arcproj", ec))
+                return candidate;
+            const fs::path parent = dir.parent_path();
+            if (parent == dir)
+                break;
+            dir = parent;
+        }
+        return {};
+    }
+}
 
 TEST_CASE("LoomConfig parses --project", "[loom]")
 {
@@ -231,4 +271,239 @@ TEST_CASE("LoomConfig parses --print-engine-info and defaults it off", "[loom]")
         REQUIRE(out.config.has_value());
         CHECK(out.config->printEngineInfo);
     }
+}
+
+// --- Task 7: HostBoot::BootSceneFile / BootScene ---------------------------------
+// A project opens into its boot scene. BootSceneFile is the pure Guid -> file
+// resolution (the part with the interesting failure modes: no boot scene, or an
+// id this project's AssetRegistry does not contain); BootScene composes it with
+// Scene::ReadSceneFile/ApplySceneDocument/Runtime::ResetRegistry and hands the
+// resolved file + the scene's asset id BACK to the caller so SceneSession::Adopt
+// does not have to re-open and re-parse the same file just to recover the Guid.
+
+TEST_CASE("BootSceneFile resolves the manifest's bootScene Guid to a file", "[loom][project]")
+{
+    // The pure half: Guid -> physical file, through the AssetRegistry the
+    // project rebuilt at open. Empty when there is no boot scene, or when the
+    // id names nothing this project contains.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_resolve";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content" / "scenes", ec);
+
+    const Arcane::Guid id = Arcane::Guid::Generate();
+    std::ofstream(dir / "Content" / "scenes" / "main.arcscene")
+        << R"({"id":")" << id.ToString() << R"(","version":2,"entities":[]})";
+
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion)
+        << R"(},"gameModule":"","plugins":[],"bootScene":")" << id.ToString() << R"("})";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    const fs::path file = Arcane::HostBoot::BootSceneFile(*proj);
+    REQUIRE_FALSE(file.empty());
+    CHECK(file.filename() == "main.arcscene");
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("BootSceneFile is empty for no boot scene and for an unknown id", "[loom][project]")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_absent";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content", ec);
+
+    SECTION("empty bootScene")
+    {
+        std::ofstream(dir / "P.arcproj") <<
+            R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+            << static_cast<int>(Arcane::kGamePluginABIVersion)
+            << R"(},"gameModule":"","plugins":[],"bootScene":""})";
+        auto proj = Arcane::Project::Open(dir);
+        REQUIRE(proj.has_value());
+        CHECK(Arcane::HostBoot::BootSceneFile(*proj).empty());
+    }
+    SECTION("a Guid this project does not contain")
+    {
+        std::ofstream(dir / "P.arcproj") <<
+            R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+            << static_cast<int>(Arcane::kGamePluginABIVersion)
+            << R"(},"gameModule":"","plugins":[],"bootScene":")"
+            << Arcane::Guid::Generate().ToString() << R"("})";
+        auto proj = Arcane::Project::Open(dir);
+        REQUIRE(proj.has_value());
+        CHECK(Arcane::HostBoot::BootSceneFile(*proj).empty());
+    }
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("BootScene loads the resolved scene into the runtime and reports the file + id back",
+          "[loom][project]")
+{
+    // The integration the brief's editor snippet got wrong: BootScene must hand
+    // the caller enough to Adopt() the scene WITHOUT a second ReadSceneFile of
+    // the same path -- this pins that the returned file/id actually match what
+    // was applied, not just that loading succeeded.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_load";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content" / "scenes", ec);
+
+    const Arcane::Guid id = Arcane::Guid::Generate();
+    const std::string ltName(Astra::GetMeta<Arcane::Transform>()->typeName);
+
+    nlohmann::json e0;
+    e0["components"][ltName]["position"] = { 3.0, 4.0 };
+    nlohmann::json doc;
+    doc["id"] = id.ToString();
+    doc["version"] = Arcane::Scene::kSceneJsonVersion;
+    doc["entities"] = nlohmann::json::array({ e0 });
+    std::ofstream(dir / "Content" / "scenes" / "main.arcscene") << doc.dump();
+
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion)
+        << R"(},"gameModule":"","plugins":[],"bootScene":")" << id.ToString() << R"("})";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    // Stands in for whatever the plugin's Init built before the boot scene
+    // loads -- BootScene must DISCARD this, not merge into it.
+    rt.Registry().CreateEntity();
+    REQUIRE(rt.Registry().Size() == 1);
+
+    const auto result = Arcane::HostBoot::BootScene(rt, *proj);
+    REQUIRE(result.has_value());
+    CHECK(result->file.filename() == "main.arcscene");
+    CHECK(result->id == id);
+
+    // The sentinel is gone, replaced by the one boot-scene entity -- proves
+    // ResetRegistry ran BEFORE ApplySceneDocument, not merged after it.
+    REQUIRE(rt.Registry().Size() == 1);
+    const Arcane::Transform* loaded = nullptr;
+    rt.Registry().CreateView<Arcane::Transform>().ForEach(
+        [&](Astra::Entity, Arcane::Transform& t) { loaded = &t; });
+    REQUIRE(loaded != nullptr);
+    CHECK(loaded->position.x == 3.0f);
+    CHECK(loaded->position.y == 4.0f);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("BootScene leaves the registry untouched when there is no boot scene", "[loom][project]")
+{
+    // No boot scene configured: a project with none keeps whatever the plugin's
+    // Init already built (EditorApp::Init's own comment) -- BootScene must not
+    // reset anything in this branch.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_none";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content", ec);
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion)
+        << R"(},"gameModule":"","plugins":[],"bootScene":""})";
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Registry().CreateEntity();
+    REQUIRE(rt.Registry().Size() == 1);
+
+    CHECK_FALSE(Arcane::HostBoot::BootScene(rt, *proj).has_value());
+    CHECK(rt.Registry().Size() == 1);   // untouched -- nothing to load
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("BootScene leaves the registry untouched when the resolved file fails to parse",
+          "[loom][project]")
+{
+    // A boot scene IS configured and DOES resolve to a file, but the file
+    // itself is bad (wrong schema version here). Distinct from the "unknown
+    // id" BootSceneFile case above: this drives BootScene's OWN
+    // ReadSceneFile-failure branch, which must run BEFORE ResetRegistry, same
+    // ordering rule as the editor's Open Scene.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_badfile";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content" / "scenes", ec);
+
+    const Arcane::Guid id = Arcane::Guid::Generate();
+    std::ofstream(dir / "Content" / "scenes" / "main.arcscene")
+        << R"({"id":")" << id.ToString() << R"(","version":1,"entities":[]})";   // wrong version
+
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion)
+        << R"(},"gameModule":"","plugins":[],"bootScene":")" << id.ToString() << R"("})";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Registry().CreateEntity();
+    REQUIRE(rt.Registry().Size() == 1);
+
+    CHECK_FALSE(Arcane::HostBoot::BootScene(rt, *proj).has_value());
+    CHECK(rt.Registry().Size() == 1);   // untouched -- read failed before any reset
+
+    fs::remove_all(dir, ec);
+}
+
+// --- Task 9: SampleProject ships an authored scene and opens into it --------
+// The end-to-end proof: the shipped Content/scenes/main.arcscene resolves
+// through the real .arcproj's bootScene Guid and loads into a real Runtime.
+// Opened IN PLACE, not a copy -- Project::Open only ever writes an asset file
+// back when it is missing/invalid a native "id" (AssetRegistry.cpp's
+// ResolveNativeId), and both SampleProject content files already carry one
+// (main.arcscene's id was stamped by Scene::SaveSceneFile when it was
+// generated), so this is a read-only pass over the real repo tree -- no
+// mutation risk to source-controlled fixtures from running the test suite.
+
+TEST_CASE("SampleProject opens into its authored boot scene end to end", "[loom][project]")
+{
+    const fs::path dir = FindSampleProjectDir();
+    REQUIRE_FALSE(dir.empty());   // if this fails, FindSampleProjectDir's search bound needs raising
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    REQUIRE_FALSE(proj->Manifest().bootScene.empty());
+
+    const fs::path sceneFile = Arcane::HostBoot::BootSceneFile(*proj);
+    REQUIRE_FALSE(sceneFile.empty());
+    CHECK(sceneFile.filename() == "main.arcscene");
+
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    const auto result = Arcane::HostBoot::BootScene(runtime, *proj);
+    REQUIRE(result.has_value());
+    CHECK(result->id.ToString() == proj->Manifest().bootScene);
+
+    const Arcane::SceneRoot* sceneRoot = runtime.Registry().GetResource<Arcane::SceneRoot>();
+    REQUIRE(sceneRoot != nullptr);
+
+    const auto children = runtime.Registry().GetChildren(sceneRoot->entity);
+    REQUIRE(children.size() == 3);
+
+    std::vector<std::string> names;
+    for (Astra::Entity child : children)
+    {
+        const Arcane::EntityInfo* info = runtime.Registry().GetComponent<Arcane::EntityInfo>(child);
+        REQUIRE(info != nullptr);
+        names.push_back(info->name);
+    }
+    std::sort(names.begin(), names.end());
+    CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground"});
 }

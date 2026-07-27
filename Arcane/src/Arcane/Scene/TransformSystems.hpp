@@ -11,6 +11,8 @@
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/System/System.hpp>
 
+#include <vector>
+
 namespace Arcane
 {
     struct TransformPropagationSystem
@@ -21,6 +23,33 @@ namespace Arcane
             const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
             if (!sceneRoot) return;
             const Astra::Entity root = sceneRoot->entity;
+
+            // WorldTransform is derived, never authored: an entity that reaches
+            // this subtree with a Transform but no WorldTransform yet (a node
+            // Edit::CreateEntity just created, or a SceneRoot minted by
+            // SceneAsset::CreateEmpty, or one loaded from a pre-fix .arcscene)
+            // must get one here, or it can never satisfy RenderSubmissionSystem's
+            // view no matter what components get added to it afterward.
+            //
+            // Collected into a vector and added only AFTER this walk finishes:
+            // Registry::AddComponent moves the entity to a different archetype,
+            // which would invalidate the Transform/WorldTransform pointers this
+            // same walk is handing out for OTHER entities if done inline. Astra's
+            // ForEachDescendant only snapshots the entity-id list itself (see
+            // Relations::ForEachDescendant in Astra), not per-entity component
+            // storage, so mutating structure mid-callback is exactly the hazard
+            // it does not protect against.
+            std::vector<Astra::Entity> needsWorld;
+            if (reg.GetComponent<Transform>(root) && !reg.GetComponent<WorldTransform>(root))
+                needsWorld.push_back(root);
+            reg.GetRelations(root).ForEachDescendant(
+                [&](Astra::Entity e, size_t /*depth*/)
+                {
+                    if (reg.GetComponent<Transform>(e) && !reg.GetComponent<WorldTransform>(e))
+                        needsWorld.push_back(e);
+                });
+            for (Astra::Entity e : needsWorld)
+                reg.AddComponent<WorldTransform>(e, WorldTransform{});
 
             // Root: world = local (no parent).
             if (auto* rootLocal = reg.GetComponent<Transform>(root))

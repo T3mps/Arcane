@@ -1,6 +1,7 @@
 #include <Arcane/Edit/EntityOps.hpp>
 
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -62,6 +63,16 @@ namespace Arcane::Edit
         if (parent.IsValid())
             reg.SetParent(e, parent);
         return e;
+    }
+
+    Astra::Entity CreateEntityInScene(Astra::Registry& reg, Astra::Entity parent)
+    {
+        if (parent.IsValid())
+            return CreateEntity(reg, parent);
+        const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
+        if (!sceneRoot)
+            return Astra::Entity::Invalid();
+        return CreateEntity(reg, sceneRoot->entity);
     }
 
     std::size_t DeleteEntities(Astra::Registry& reg,

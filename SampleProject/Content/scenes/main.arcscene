@@ -1,0 +1,158 @@
+{
+  "entities": [
+    {
+      "components": {
+        "Arcane::EntityInfo": {
+          "id": {
+            "hi": 3508969169540367876,
+            "lo": 11771136940507535956
+          },
+          "name": "Scene"
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "parent": -1
+    },
+    {
+      "components": {
+        "Arcane::EntityInfo": {
+          "id": {
+            "hi": 12452576733452912617,
+            "lo": 11602874688866321559
+          },
+          "name": "Ground"
+        },
+        "Arcane::SpriteRenderer": {
+          "material": {
+            "hi": 0,
+            "lo": 0
+          },
+          "orderInLayer": 0,
+          "shape": "Rect",
+          "size": [
+            10.0,
+            0.5
+          ],
+          "sortingLayer": 0,
+          "textureId": 0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::EntityInfo": {
+          "id": {
+            "hi": 16179426780818260900,
+            "lo": 11571053343175331356
+          },
+          "name": "BoxA"
+        },
+        "Arcane::SpriteRenderer": {
+          "material": {
+            "hi": 0,
+            "lo": 0
+          },
+          "orderInLayer": 0,
+          "shape": "Rect",
+          "size": [
+            1.0,
+            1.0
+          ],
+          "sortingLayer": 0,
+          "textureId": 0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Arcane::Transform": {
+          "position": [
+            -1.0,
+            -0.75
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::EntityInfo": {
+          "id": {
+            "hi": 770975471762686771,
+            "lo": 10273594696484882624
+          },
+          "name": "BoxB"
+        },
+        "Arcane::SpriteRenderer": {
+          "material": {
+            "hi": 0,
+            "lo": 0
+          },
+          "orderInLayer": 0,
+          "shape": "Rect",
+          "size": [
+            1.0,
+            1.0
+          ],
+          "sortingLayer": 0,
+          "textureId": 0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Arcane::Transform": {
+          "position": [
+            1.0,
+            -0.75
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "parent": 0
+    }
+  ],
+  "id": "10d8ff06-45c2-47f2-90cb-ab7ac29cb51d",
+  "version": 2
+}

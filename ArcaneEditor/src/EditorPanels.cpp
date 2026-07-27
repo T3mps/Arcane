@@ -35,7 +35,8 @@
 
 namespace Arcane::Editor
 {
-    void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests)
+    void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
+                        bool sceneDirty, bool playing)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -51,23 +52,38 @@ namespace Arcane::Editor
         ImGui::Begin("EditorDockHost", nullptr, flags);
         ImGui::PopStyleVar(3);
 
-        // Editor menu bar. File items + Edit's Cut/Copy/Paste are placeholders for now;
-        // Edit's Undo/Redo drive the CommandStack; Preferences is a leaf item that will
-        // open a settings window later.
+        // Editor menu bar. File's project/scene/material items all land in `requests`;
+        // File -> Exit and Edit's Cut/Copy/Paste are still placeholders. Edit's
+        // Undo/Redo drive the CommandStack; Preferences is a leaf item that will open a
+        // settings window later.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
             {
                 if (ImGui::MenuItem("Open Project...")) requests.openProject = true;
                 ImGui::Separator();
-                ImGui::MenuItem("New Scene");
-                ImGui::MenuItem("Open Scene...");
+                if (ImGui::MenuItem("New Scene", "Ctrl+N")) requests.newScene = true;
+                if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) requests.openScene = true;
                 ImGui::Separator();
                 if (ImGui::MenuItem("New Material...")) requests.newMaterial = true;
                 if (ImGui::MenuItem("Open Material...")) requests.openMaterial = true;
                 ImGui::Separator();
-                ImGui::MenuItem("Save Scene");
-                ImGui::MenuItem("Save Scene As...");
+                // Disabled during Play: the authored scene is the pre-Play snapshot,
+                // and the live registry is play-time mutation that PlaySession::Stop
+                // exists to discard, so saving it would persist garbage. Both items
+                // carry the same tooltip because IsItemHovered names the LAST
+                // submitted item -- one call after the pair would explain the greying
+                // of "Save Scene As..." only, and "Save Scene" (the item carrying the
+                // Ctrl+S hint) is the one users reach for.
+                if (ImGui::MenuItem(sceneDirty ? "Save Scene *" : "Save Scene",
+                                    "Ctrl+S", false, !playing))
+                    requests.saveScene = true;
+                if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Stop play mode to save the scene");
+                if (ImGui::MenuItem("Save Scene As...", nullptr, false, !playing))
+                    requests.saveSceneAs = true;
+                if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Stop play mode to save the scene");
                 ImGui::Separator();
                 ImGui::MenuItem("Exit");
                 ImGui::EndMenu();
@@ -712,7 +728,7 @@ namespace Arcane::Editor
                             Astra::Entity created = Astra::Entity::Invalid();
                             const Astra::Entity parent = row.entity;
                             if (ApplyStructural(undo, binding, "Create Entity",
-                                    [&] { created = Arcane::Edit::CreateEntity(registry, parent);
+                                    [&] { created = Arcane::Edit::CreateEntityInScene(registry, parent);
                                           return created.IsValid(); }))
                             {
                                 state.collapsed.erase(
@@ -817,7 +833,7 @@ namespace Arcane::Editor
             {
                 Astra::Entity created = Astra::Entity::Invalid();
                 if (ApplyStructural(undo, binding, "Create Entity",
-                        [&] { created = Arcane::Edit::CreateEntity(registry,
+                        [&] { created = Arcane::Edit::CreateEntityInScene(registry,
                                             Astra::Entity::Invalid());
                               return created.IsValid(); }))
                     sel.Select(created);

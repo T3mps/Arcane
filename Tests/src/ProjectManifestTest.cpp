@@ -2,9 +2,17 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
 
+#include <Arcane/Plugin/PluginABI.hpp>
+
 #include <Json.hpp>
+
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
 
 TEST_CASE("ProjectManifest parses a full valid document", "[project]")
 {
@@ -74,4 +82,53 @@ TEST_CASE("ProjectManifest returns nullopt (never throws) on type-mismatched opt
             "formatVersion": 1, "name": "X", "engine": { "abi": 4 },
             "plugins": [ { "name": "Sandbox", "enabled": "yes" } ]
         })")).has_value());
+}
+
+TEST_CASE("SetBootScene rewrites only that field, preserving key order", "[project]")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_set_boot_scene";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content", ec);
+
+    // Hand-written so key ORDER is known and an unknown field is present.
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","description":"d","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion)
+        << R"(},"gameModule":"","plugins":[],"bootScene":"","zzzFuture":42})";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Manifest().bootScene.empty());
+
+    const Arcane::Guid id = Arcane::Guid::Generate();
+    REQUIRE(proj->SetBootScene(id));
+    CHECK(proj->Manifest().bootScene == id.ToString());
+
+    // Re-open from disk: the write actually landed.
+    auto again = Arcane::Project::Open(dir);
+    REQUIRE(again.has_value());
+    CHECK(again->Manifest().bootScene == id.ToString());
+
+    // Unknown keys and their ORDER survive -- a project may carry fields a newer
+    // engine added, and pointing at a scene must not reorder or drop them.
+    // Braced so `in` closes before the next SetBootScene call: Windows will not let
+    // an atomic replace (ReplaceFileW/rename) swap over a path some other handle
+    // still has open, even just for reading.
+    {
+        std::ifstream in(dir / "P.arcproj");
+        const nlohmann::ordered_json doc = nlohmann::ordered_json::parse(in);
+        CHECK(doc["zzzFuture"] == 42);
+        std::vector<std::string> keys;
+        for (auto it = doc.begin(); it != doc.end(); ++it) keys.push_back(it.key());
+        CHECK(keys == std::vector<std::string>{"formatVersion", "name", "description", "engine",
+                                               "gameModule", "plugins", "bootScene", "zzzFuture"});
+    }
+
+    // A nil Guid clears the field rather than writing "00000000-...".
+    REQUIRE(proj->SetBootScene(Arcane::Guid{}));
+    CHECK(proj->Manifest().bootScene.empty());
+
+    fs::remove_all(dir, ec);
 }
