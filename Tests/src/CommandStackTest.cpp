@@ -3,6 +3,7 @@
 // descriptor->serialize), never a type-based CreateView<T>.
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -11,11 +12,14 @@
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/ComponentEditCommand.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+
+#include "Helpers/TestTypeContext.hpp"
 
 namespace
 {
@@ -493,4 +497,67 @@ TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
     stack.Undo(); stack.Undo();
     CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 1.0f);
     CHECK_FALSE(stack.CanUndo());          // the oldest (would restore x=0) was evicted
+}
+
+TEST_CASE("StateId identifies the current state, not the number of edits", "[edit]")
+{
+    // This is what scene dirty-tracking is built on: SceneSession records
+    // StateId() at save and compares. Undo back to the save point has to go
+    // CLEAN again, which a monotonic edit counter cannot express.
+    //
+    // Uses a real Arcane::Runtime bound to the process-wide SharedTypeContext
+    // (see Helpers/TestTypeContext.hpp and EditorPlayModeTest.cpp) rather than
+    // a bare Arcane::Runtime -- a test-local Runtime would steal Arcane.dll's
+    // TypeContext slot and Edit:: operations would silently report zero changes.
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Astra::Registry& reg = runtime.Registry();
+    Arcane::RegisterSceneComponents(reg);
+
+    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); });
+
+    const Astra::Entity e = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    // DescriptorFor (above) is the verified path: the brief's literal
+    // `GetComponentRegistry()->GetDescriptor(Astra::TypeId<T>::Hash())` does not
+    // compile -- ComponentRegistry has no GetDescriptor member (the real one is
+    // GetComponentDescriptorByHash) and the type is Astra::TypeID, not TypeId.
+    const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::Transform");
+    REQUIRE(desc != nullptr);
+
+    CHECK(stack.StateId() == 0);   // empty stack
+
+    auto edit = [&](float x)
+    {
+        const Arcane::TransactionId t = stack.Begin("Move");
+        stack.SnapshotComponent(e, desc);
+        reg.GetComponent<Arcane::Transform>(e)->position.x = x;
+        stack.Commit(t);
+    };
+
+    edit(1.0f);
+    const std::uint64_t afterFirst = stack.StateId();
+    CHECK(afterFirst != 0);
+
+    edit(2.0f);
+    const std::uint64_t afterSecond = stack.StateId();
+    CHECK(afterSecond != afterFirst);
+
+    stack.Undo();
+    CHECK(stack.StateId() == afterFirst);   // back at the first state EXACTLY
+
+    stack.Redo();
+    CHECK(stack.StateId() == afterSecond);
+
+    stack.Undo();
+    stack.Undo();
+    CHECK(stack.StateId() == 0);            // back to empty
+
+    // A NEW edit after undoing must not re-mint a retired id -- otherwise a
+    // saved marker could match a state that is not the saved one.
+    edit(3.0f);
+    CHECK(stack.StateId() != afterFirst);
+    CHECK(stack.StateId() != afterSecond);
+
+    stack.Clear();
+    CHECK(stack.StateId() == 0);
 }

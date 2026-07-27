@@ -99,11 +99,31 @@ namespace Arcane
         [[nodiscard]] const char* RedoLabel() const noexcept;
         void Clear() noexcept;
 
+        // Identifies the CURRENT state: the id of the transaction on top of the
+        // undo stack, 0 when the stack is empty.
+        //
+        // Exists so a caller can record "the state I saved" and later ask
+        // whether anything has changed since. Undoing back to that state
+        // restores its id, so undo-to-the-save-point reads as clean -- which a
+        // simple change counter gets wrong. If the recorded transaction is
+        // evicted by the depth cap its id becomes unreachable and the caller
+        // stays dirty; that is the safe direction, and the same caveat Qt
+        // documents for QUndoStack's clean state.
+        [[nodiscard]] std::uint64_t StateId() const noexcept
+        {
+            return m_undo.empty() ? 0u : m_undo.back().id;
+        }
+
     private:
         struct Transaction
         {
             std::string label;
             std::vector<std::unique_ptr<ICommand>> commands;
+            // Identifies the STATE this transaction produced. Stamped from
+            // m_nextId (the same monotonic generator TransactionId uses), so an
+            // id is never re-minted and a retired state can never be mistaken
+            // for a live one.
+            std::uint64_t id = 0;
         };
         struct Pending
         {
