@@ -6,6 +6,7 @@
 #include "EntityList.hpp"
 #include "IconsLucide.h"
 #include "InspectorFields.hpp"
+#include "InspectorMeta.hpp"
 #include "PlayMode.hpp"
 #include "SelectionContext.hpp"
 
@@ -31,6 +32,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Arcane::Editor
@@ -865,6 +867,57 @@ namespace Arcane::Editor
 
     namespace
     {
+        // Astra::Range is authored in double; ImGui's drags take float and int.
+        // Clamping through double BEFORE the narrowing cast is the point:
+        // converting an out-of-range double to a narrower type is UB, and a Range
+        // holds whatever the author typed at the ASTRA_REFLECT_ATTR site.
+        [[nodiscard]] float ToFloatClamped(double d) noexcept
+        {
+            return static_cast<float>(std::clamp(d, static_cast<double>(-FLT_MAX),
+                                                    static_cast<double>(FLT_MAX)));
+        }
+
+        [[nodiscard]] int ToInt32Clamped(double d) noexcept
+        {
+            const double lo = static_cast<double>(std::numeric_limits<int32_t>::min());
+            const double hi = static_cast<double>(std::numeric_limits<int32_t>::max());
+            return static_cast<int>(std::clamp(d, lo, hi));
+        }
+
+        // Range::step is the author's drag increment and DEFAULTS TO 0
+        // (Attribute.hpp:77), which means "unspecified" -- not "frozen". A zero
+        // therefore keeps the speed the widget used before ranges were read at
+        // all; handed to ImGui it would instead be REPLACED by a speed derived
+        // from the bounds (imgui_widgets.cpp:2546), changing the feel of every
+        // range-annotated-but-unstepped field as a side effect of clamping it.
+        [[nodiscard]] float DragSpeedFor(const Astra::Range& r, float fallbackSpeed) noexcept
+        {
+            return r.step > 0.0 ? ToFloatClamped(r.step) : fallbackSpeed;
+        }
+
+        // Drags that honour the field's Astra::Range when it carries one, and are
+        // otherwise the exact call these sites made before ranges were read.
+        // A degenerate authored range costs nothing: ImGui reads v_min >= v_max as
+        // "no bound" (imgui.h:687) rather than pinning the value.
+        [[nodiscard]] bool RangedDragFloat(const Astra::FieldInfo& f, const char* label,
+                                           float* v, float fallbackSpeed)
+        {
+            if (const std::optional<Astra::Range> r = Arcane::Editor::RangeOfField(f))
+                return ImGui::DragFloat(label, v, DragSpeedFor(*r, fallbackSpeed),
+                                        ToFloatClamped(r->min), ToFloatClamped(r->max));
+            return ImGui::DragFloat(label, v, fallbackSpeed);
+        }
+
+        [[nodiscard]] bool RangedDragInt(const Astra::FieldInfo& f, const char* label, int* v)
+        {
+            if (const std::optional<Astra::Range> r = Arcane::Editor::RangeOfField(f))
+                // 1.0f is DragInt's own default speed (imgui.h:692), passed
+                // explicitly because the bounded overload leaves no way to omit it.
+                return ImGui::DragInt(label, v, DragSpeedFor(*r, 1.0f),
+                                      ToInt32Clamped(r->min), ToInt32Clamped(r->max));
+            return ImGui::DragInt(label, v);
+        }
+
         // Renders one widget per reflected field and applies edits through the
         // pure InspectorFields writers (kept ImGui-free so the write-back is unit-
         // testable). Unsupported/compound types (e.g. glm::mat3, enums) render
@@ -1080,8 +1133,34 @@ namespace Arcane::Editor
 
             void Visit(const Astra::FieldInfo& f, void* instance) override
             {
+                // Astra::Hidden -- the FIELD ATTRIBUTE, "do not show this
+                // property". Nothing to do with Arcane::Hidden, the marker
+                // component that makes render submission skip an entity; the
+                // names collide, the meanings do not. Returning BEFORE the PushID
+                // below is what keeps the ID stack balanced without an early-out
+                // inside the scope.
+                if (Arcane::Editor::FieldIsAttributeHidden(f))
+                    return;
+
                 ImGui::PushID(static_cast<int>(f.nameHash));
-                const std::string label(f.name);
+                // Two names on purpose. `label` is prose for the row; `rawName` is
+                // the C++ identifier and stays the input to everything the user
+                // does not read as prose -- the undo description and the
+                // asset-kind heuristic, both of which would change meaning if
+                // handed a display name.
+                const std::string label = Arcane::Editor::DisplayNameForField(f);
+                const std::string rawName(f.name);
+                // Astra::ReadOnly -- the field is still SHOWN, it just cannot be
+                // edited. Distinct from FieldKind::ReadOnly below, which means
+                // "this panel has no widget for that type"; a field can be either,
+                // both, or neither. When it is both, the two BeginDisabled pairs
+                // nest, which ImGui supports and does not double-dim: the inner
+                // Begin sees the flag already set and skips the alpha change
+                // (imgui.cpp:8893-8906).
+                const bool readOnly = Arcane::Editor::FieldIsReadOnly(f);
+                if (readOnly)
+                    ImGui::BeginDisabled();
+
                 switch (Arcane::Editor::ClassifyField(f))
                 {
                     case Arcane::Editor::FieldKind::Bool:
@@ -1098,7 +1177,7 @@ namespace Arcane::Editor
                         bool changed = ImGui::Checkbox(label.c_str(), &v);
                         if (boolMixed)
                             ImGui::PopItemFlag();
-                        BeginGestureIfActivated(label, instance);
+                        BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
                                           { Arcane::Editor::ApplyBoolEdit(f, d, v); });
@@ -1119,13 +1198,13 @@ namespace Arcane::Editor
                                 const double lo = static_cast<double>(std::numeric_limits<int32_t>::min());
                                 const double hi = static_cast<double>(std::numeric_limits<int32_t>::max());
                                 const int32_t iv = static_cast<int32_t>(std::clamp(out, lo, hi));
-                                ApplyImmediate(label, instance, [&](void* d)
+                                ApplyImmediate(rawName, instance, [&](void* d)
                                                { Arcane::Editor::ApplyIntEdit(f, d, iv); });
                             }
                             break;
                         }
-                        bool changed = ImGui::DragInt(label.c_str(), &v);
-                        BeginGestureIfActivated(label, instance);
+                        bool changed = RangedDragInt(f, label.c_str(), &v);
+                        BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
                                           { Arcane::Editor::ApplyIntEdit(f, d, v); });
@@ -1141,13 +1220,13 @@ namespace Arcane::Editor
                             if (MultiScalarRow(label, 1, &cur, MixedFor(f), /*integral*/ false, out) >= 0)
                             {
                                 const float fv = static_cast<float>(out);
-                                ApplyImmediate(label, instance, [&](void* d)
+                                ApplyImmediate(rawName, instance, [&](void* d)
                                                { Arcane::Editor::ApplyFloatEdit(f, d, fv); });
                             }
                             break;
                         }
-                        bool changed = ImGui::DragFloat(label.c_str(), &v, 0.1f);
-                        BeginGestureIfActivated(label, instance);
+                        bool changed = RangedDragFloat(f, label.c_str(), &v, 0.1f);
+                        BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
                                           { Arcane::Editor::ApplyFloatEdit(f, d, v); });
@@ -1167,13 +1246,13 @@ namespace Arcane::Editor
                             if (c >= 0)
                             {
                                 const float fv = static_cast<float>(out);
-                                ApplyImmediate(label, instance, [&](void* d)
+                                ApplyImmediate(rawName, instance, [&](void* d)
                                                { if (glm::vec2* p = f.GetPtr<glm::vec2>(d)) (*p)[c] = fv; });
                             }
                             break;
                         }
                         bool changed = ImGui::DragFloat2(label.c_str(), &v.x, 0.1f);
-                        BeginGestureIfActivated(label, instance);
+                        BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
                                           { if (glm::vec2* p = f.GetPtr<glm::vec2>(d)) *p = v; });
@@ -1190,13 +1269,13 @@ namespace Arcane::Editor
                             if (c >= 0)
                             {
                                 const float fv = static_cast<float>(out);
-                                ApplyImmediate(label, instance, [&](void* d)
+                                ApplyImmediate(rawName, instance, [&](void* d)
                                                { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) (*p)[c] = fv; });
                             }
                             break;
                         }
                         bool changed = ImGui::DragFloat3(label.c_str(), &v.x, 0.1f);
-                        BeginGestureIfActivated(label, instance);
+                        BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
                                           { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) *p = v; });
@@ -1209,7 +1288,10 @@ namespace Arcane::Editor
                         // browser drags; "x" clears. Kind filter is inferred from
                         // the field name (AssetKindFilterForFieldName).
                         const Arcane::Guid v = f.Get<Arcane::Guid>(instance);
-                        const int kindFilter = Arcane::Editor::AssetKindFilterForFieldName(label);
+                        // rawName, NOT the display label: this heuristic reads the
+                        // C++ identifier, which is what its documented contract
+                        // (AssetBrowser.hpp) is written against.
+                        const int kindFilter = Arcane::Editor::AssetKindFilterForFieldName(rawName);
 
                         // Mixed asset refs render BLANK, same rule as the numeric
                         // kinds. This was the one kind the "mixed shows blank" work
@@ -1245,7 +1327,7 @@ namespace Arcane::Editor
                             {
                                 const auto* payload = static_cast<const Arcane::Editor::AssetDragPayload*>(p->Data);
                                 if (kindFilter < 0 || static_cast<int>(payload->kind) == kindFilter)
-                                    ApplyGuidImmediate(label, f, instance, payload->guid);
+                                    ApplyGuidImmediate(rawName, f, instance, payload->guid);
                             }
                             ImGui::EndDragDropTarget();
                         }
@@ -1255,7 +1337,7 @@ namespace Arcane::Editor
                         {
                             ImGui::SameLine();
                             if (ImGui::SmallButton("x##assetclear"))
-                                ApplyGuidImmediate(label, f, instance, Arcane::Guid::Nil());
+                                ApplyGuidImmediate(rawName, f, instance, Arcane::Guid::Nil());
                         }
                         ImGui::SameLine();
                         ImGui::TextUnformatted(label.c_str());
@@ -1280,14 +1362,14 @@ namespace Arcane::Editor
                                                          s_pickSearch, sizeof(s_pickSearch));
                                 ImGui::Separator();
                                 if (ImGui::Selectable("(none)"))
-                                    ApplyGuidImmediate(label, f, instance, Arcane::Guid::Nil());
+                                    ApplyGuidImmediate(rawName, f, instance, Arcane::Guid::Nil());
                                 for (const Arcane::Editor::AssetEntry& e :
                                      Arcane::Editor::BuildAssetEntries(project->Registry()))
                                 {
                                     if (!Arcane::Editor::MatchesFilter(e, kindFilter, s_pickSearch))
                                         continue;
                                     if (ImGui::Selectable((e.name + "##" + e.mountPath).c_str(), e.guid == v))
-                                        ApplyGuidImmediate(label, f, instance, e.guid);
+                                        ApplyGuidImmediate(rawName, f, instance, e.guid);
                                 }
                             }
                             ImGui::EndPopup();
@@ -1302,6 +1384,30 @@ namespace Arcane::Editor
                         break;
                 }
                 EndGesture();
+                if (readOnly)
+                    ImGui::EndDisabled();
+
+                // Attached to whatever the case above drew LAST, which is the
+                // field's own widget in every branch: ImGui restores
+                // g.LastItemData when a window closes (imgui.cpp:8849), so
+                // neither the asset-pick popup nor the SetTooltip below can
+                // retarget it. Placed after EndGesture for the same reason the
+                // gesture is bracketed at all -- nothing may sit between a widget
+                // and the item-state reads that close its transaction.
+                //
+                // The raw identifier is always in the tooltip, so a friendly label
+                // never costs the ability to grep for the field. AllowWhenDisabled
+                // because an Astra::ReadOnly row is the one that most needs to
+                // explain itself.
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                {
+                    const std::string_view tip = Arcane::Editor::TooltipOfField(f);
+                    if (tip.empty())
+                        ImGui::SetTooltip("%s", rawName.c_str());
+                    else
+                        ImGui::SetTooltip("%.*s\n\n%s", static_cast<int>(tip.size()),
+                                          tip.data(), rawName.c_str());
+                }
                 ImGui::PopID();
             }
         };
@@ -1387,8 +1493,19 @@ namespace Arcane::Editor
             // below are deliberately nested rather than early-outs so the ID stack
             // stays balanced on every path.
             ImGui::PushID(static_cast<int>(ci.descriptor->hash));
-            const bool open = ImGui::CollapsingHeader(typeName.c_str(),
+            // Friendly header, raw type in the tooltip: the label should read as
+            // words, but the C++ type name is what you search the source for. The
+            // hide-list check above and the PushID here both stay keyed on the
+            // real type name -- only the drawn string changes.
+            const std::string headerLabel = Arcane::Editor::DisplayNameForComponent(typeName);
+            const bool open = ImGui::CollapsingHeader(headerLabel.c_str(),
                                                       ImGuiTreeNodeFlags_DefaultOpen);
+            // Safe to sit between the header and BeginPopupContextItem below,
+            // which resolves its id from g.LastItemData: SetTooltip opens and
+            // closes a window, and ImGui restores LastItemData in End()
+            // (imgui.cpp:8849), so the popup still inherits the HEADER's id.
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", typeName.c_str());
             // Header context menu. A null str_id makes the popup inherit the
             // HEADER's item id, so each component gets its own popup -- a shared
             // literal id would make every header open the same popup and the
