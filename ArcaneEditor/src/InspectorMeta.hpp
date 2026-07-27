@@ -14,6 +14,7 @@
 // (Astra/Reflection/Attribute.hpp) attachable with ASTRA_REFLECT_ATTR; until
 // this module they were declared and never read.
 
+#include <Astra/Reflection/Attribute.hpp>
 #include <Astra/Reflection/FieldInfo.hpp>
 
 #include <optional>
@@ -36,4 +37,25 @@ namespace Arcane::Editor
     // Component headers: strip the namespace, then derive.
     // "Arcane::SpriteRenderer" -> "Sprite Renderer".
     [[nodiscard]] std::string DisplayNameForComponent(std::string_view typeName);
+
+    // The Astra::Category attribute's value, or empty for "uncategorised".
+    // Empty is a real, common answer -- it renders ungrouped ABOVE any named
+    // category, matching UE's NoCategory fallback
+    // (DetailCategoryBuilderImpl.cpp:230).
+    [[nodiscard]] std::string_view CategoryOfField(const Astra::FieldInfo& field);
+
+    // Astra::Tooltip's text, or empty.
+    [[nodiscard]] std::string_view TooltipOfField(const Astra::FieldInfo& field);
+
+    // Astra::Range, for drag bounds. nullopt when the field has none, which is
+    // NOT the same as a zero range -- an unbounded drag is the default.
+    [[nodiscard]] std::optional<Astra::Range> RangeOfField(const Astra::FieldInfo& field);
+
+    // Astra::ReadOnly: draw the field disabled rather than hiding it.
+    [[nodiscard]] bool FieldIsReadOnly(const Astra::FieldInfo& field);
+
+    // Astra::Hidden -- the FIELD ATTRIBUTE meaning "do not show this property".
+    // Nothing to do with Arcane::Hidden, the marker component that makes render
+    // submission skip an entity. The names collide; the meanings do not.
+    [[nodiscard]] bool FieldIsAttributeHidden(const Astra::FieldInfo& field);
 }

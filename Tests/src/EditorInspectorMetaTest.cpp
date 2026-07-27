@@ -42,3 +42,73 @@ TEST_CASE("DisplayNameForComponent strips the namespace first", "[editor]")
     CHECK(DisplayNameForComponent("A::B::PostProcess") == "Post Process");
     CHECK(DisplayNameForComponent("") == "");
 }
+
+#include <Astra/Reflection/Reflection.hpp>
+
+namespace
+{
+    // A throwaway reflected type carrying one of every attribute this module
+    // reads, plus a bare field, so both the present and absent paths are real
+    // rather than hand-built FieldInfo values.
+    struct MetaProbe
+    {
+        float ranged   = 0.0f;
+        int   locked   = 0;
+        int   secret   = 0;
+        float described = 0.0f;
+        int   bare     = 0;
+    };
+
+    ASTRA_REFLECT_TYPE(MetaProbe)
+        ASTRA_REFLECT_FIELD(MetaProbe, ranged)
+            ASTRA_REFLECT_ATTR(Range, 0.0, 10.0, 0.5)
+            ASTRA_REFLECT_ATTR(Category, "Bounds")
+        ASTRA_REFLECT_FIELD(MetaProbe, locked)
+            ASTRA_REFLECT_ATTR(ReadOnly)
+        ASTRA_REFLECT_FIELD(MetaProbe, secret)
+            ASTRA_REFLECT_ATTR(Hidden)
+        ASTRA_REFLECT_FIELD(MetaProbe, described)
+            ASTRA_REFLECT_ATTR(DisplayName, "Custom Label")
+            ASTRA_REFLECT_ATTR(Tooltip, "explains itself")
+        ASTRA_REFLECT_FIELD(MetaProbe, bare)
+    ASTRA_REFLECT_TYPE_END()
+
+    const Astra::FieldInfo& ProbeField(std::string_view name)
+    {
+        const Astra::TypeMeta* meta = Astra::GetMeta<MetaProbe>();
+        REQUIRE(meta != nullptr);
+        for (const Astra::FieldInfo& f : meta->fields)
+            if (f.name == name) return f;
+        FAIL("no such field: " << std::string(name));
+        return meta->fields[0];   // unreachable; keeps the compiler happy
+    }
+}
+
+TEST_CASE("attributes are read when present", "[editor]")
+{
+    const auto range = RangeOfField(ProbeField("ranged"));
+    REQUIRE(range.has_value());
+    CHECK(range->min == 0.0);
+    CHECK(range->max == 10.0);
+    CHECK(range->step == 0.5);
+
+    CHECK(CategoryOfField(ProbeField("ranged")) == "Bounds");
+    CHECK(FieldIsReadOnly(ProbeField("locked")));
+    CHECK(FieldIsAttributeHidden(ProbeField("secret")));
+    CHECK(TooltipOfField(ProbeField("described")) == "explains itself");
+
+    // An explicit DisplayName beats derivation -- the author overriding it is
+    // the whole point of the attribute.
+    CHECK(DisplayNameForField(ProbeField("described")) == "Custom Label");
+}
+
+TEST_CASE("a field with no attributes falls back cleanly", "[editor]")
+{
+    const Astra::FieldInfo& bare = ProbeField("bare");
+    CHECK_FALSE(RangeOfField(bare).has_value());
+    CHECK(CategoryOfField(bare).empty());
+    CHECK(TooltipOfField(bare).empty());
+    CHECK_FALSE(FieldIsReadOnly(bare));
+    CHECK_FALSE(FieldIsAttributeHidden(bare));
+    CHECK(DisplayNameForField(bare) == "Bare");
+}

@@ -76,4 +76,35 @@ namespace Arcane::Editor
             (sep == std::string_view::npos) ? typeName : typeName.substr(sep + 2);
         return DeriveDisplayName(leaf);
     }
+
+    std::string_view CategoryOfField(const Astra::FieldInfo& field)
+    {
+        if (const Astra::Category* c = field.GetAttribute<Astra::Category>())
+            return c->category;
+        return {};
+    }
+
+    std::string_view TooltipOfField(const Astra::FieldInfo& field)
+    {
+        if (const Astra::Tooltip* t = field.GetAttribute<Astra::Tooltip>())
+            return t->text;
+        return {};
+    }
+
+    std::optional<Astra::Range> RangeOfField(const Astra::FieldInfo& field)
+    {
+        if (const Astra::Range* r = field.GetAttribute<Astra::Range>())
+            return *r;
+        return std::nullopt;
+    }
+
+    bool FieldIsReadOnly(const Astra::FieldInfo& field)
+    {
+        return field.GetAttribute<Astra::ReadOnly>() != nullptr;
+    }
+
+    bool FieldIsAttributeHidden(const Astra::FieldInfo& field)
+    {
+        return field.GetAttribute<Astra::Hidden>() != nullptr;
+    }
 }
