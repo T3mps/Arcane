@@ -206,6 +206,10 @@ namespace Arcane::Editor
         // whole scene. A no-op when there is nothing framable, so the user's
         // view is never thrown away by an F press that had no target.
         void FrameCamera(bool selectionOnly);
+        void FrameSceneIfPending();
+        // Set whenever a scene becomes the current one, consumed on the first frame
+        // the viewport has a real size. See MainLoop for why it cannot be immediate.
+        bool m_frameOnSceneOpen = false;
         // Set for the remainder of THIS frame when a gizmo drag starts or ends,
         // so the click-pick block (later in MainLoop) does not also treat the
         // same click as a selection change. Reset at the top of the input block

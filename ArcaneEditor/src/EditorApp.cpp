@@ -437,7 +437,10 @@ namespace Arcane::Editor
         if (const Arcane::Project* proj = m_runtime->CurrentProject())
         {
             if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+            {
                 m_scene.Adopt(boot->file, boot->id, *m_undo);
+                m_frameOnSceneOpen = true;
+            }
         }
         EnsureScene();
 
@@ -463,7 +466,34 @@ namespace Arcane::Editor
 
         Arcane::Scene::CreateEmpty(reg);
         m_scene.Reset(*m_undo);
+        m_frameOnSceneOpen = true;
         ARC_INFO("No scene loaded -- started an empty one");
+    }
+
+    // Put the newly-opened scene on screen.
+    //
+    // Deferred rather than framed on the spot: a scene can become current before
+    // the Viewport panel has ever been laid out (Init, and a project switch), and
+    // framing into a zero-sized panel fits nothing. The default camera puts the
+    // world ORIGIN at the panel's top-left, so without this, opening a project
+    // shows mostly empty space until the user discovers Home -- which reads as
+    // the content having failed to load.
+    void EditorApp::FrameSceneIfPending()
+    {
+        if (!m_frameOnSceneOpen) return;
+        if (m_viewport->Width() == 0 || m_viewport->Height() == 0) return;
+        m_frameOnSceneOpen = false;
+
+        const glm::vec2 panel((float)m_viewport->Width(), (float)m_viewport->Height());
+        Arcane::TransformPropagationSystem{}(m_runtime->Registry());
+        if (Arcane::Editor::SceneFramingBounds(m_runtime->Registry()).Valid())
+        {
+            FrameCamera(/*selectionOnly*/false);
+            return;
+        }
+        // An empty scene has nothing to fit, but the origin is where the user is
+        // about to build -- centre it rather than leaving it in the corner.
+        m_camera.offset = panel * 0.5f;
     }
 
     Arcane::Editor::DocServices EditorApp::MakeDocServices()
@@ -701,6 +731,7 @@ namespace Arcane::Editor
         m_runtime->ResetRegistry();
         Arcane::Scene::CreateEmpty(m_runtime->Registry());
         m_scene.Reset(*m_undo);
+        m_frameOnSceneOpen = true;
         ARC_INFO("New scene");
         return true;
     }
@@ -738,6 +769,7 @@ namespace Arcane::Editor
         }
 
         m_scene.Adopt(file, doc->id, *m_undo);
+        m_frameOnSceneOpen = true;
         ARC_INFO("Opened scene {}", file.generic_string());
         return true;
     }
@@ -932,7 +964,10 @@ namespace Arcane::Editor
             if (const Arcane::Project* proj = m_runtime->CurrentProject())
             {
                 if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+                {
                     m_scene.Adopt(boot->file, boot->id, *m_undo);
+                    m_frameOnSceneOpen = true;
+                }
             }
         }
         EnsureScene();
@@ -1607,7 +1642,10 @@ namespace Arcane::Editor
                 // World transforms are DERIVED data: whoever reads them is responsible
                 // for them being current, and in Edit mode that is the editor.
                 if (!m_play.IsPlaying())
+                {
                     Arcane::TransformPropagationSystem{}(m_runtime->Registry());
+                    FrameSceneIfPending();
+                }
 
                 // Editor camera -> the Runtime slot SetRenderContext reads, for
                 // the SECOND time this frame (the first is in the input block, so
