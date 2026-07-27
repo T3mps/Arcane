@@ -1805,11 +1805,16 @@ namespace Arcane::Editor
             // guaranteed NUL-terminated, so it is copied into a std::string before
             // handing a `const char*` to ImGui.
             const std::string typeName(ci.meta->typeName);
-            // Derived/runtime-owned state is never authored. ONE hide-list, in
-            // ComponentCatalog.hpp: the same predicate gates these sections, the
-            // Add Component catalog, and Remove Component, so the three cannot
-            // drift apart.
-            if (IsSystemManagedComponent(typeName))
+            // Derived/runtime-owned state is never authored -- but as of task 5
+            // this DISPLAY gate no longer matches the Add Component catalog or
+            // Remove Component below: those two consult IsStructureLocked
+            // (ComponentCatalog.hpp), which also covers Arcane::EntityInfo, so
+            // that identity renders its own section here (name editable, id
+            // view-only) while staying un-addable and un-removable. The three
+            // sites used to share one predicate by construction; splitting it
+            // was the whole point of task 5, so read each site's predicate
+            // rather than assuming parity.
+            if (IsHiddenInInspector(typeName))
                 continue;
 
             // Component-type INTERSECTION: editing a component only some of the
@@ -1902,12 +1907,21 @@ namespace Arcane::Editor
             // first-drawn component would swallow the click.
             if (ImGui::BeginPopupContextItem())
             {
-                if (!canEditStructure)
-                    ImGui::BeginDisabled();
-                if (ImGui::MenuItem("Remove Component"))
-                    pendingRemove = ci.descriptor;
-                if (!canEditStructure)
-                    ImGui::EndDisabled();
+                // Structure-locked types (EntityInfo, now that it reaches this
+                // loop at all -- task 5) never offer Remove: the display gate
+                // above stopped implying structure-locked the moment it became
+                // just IsHiddenInInspector, so this menu checks
+                // IsStructureLocked itself instead of inheriting the display
+                // filter's old guarantee.
+                if (!Arcane::Editor::IsStructureLocked(typeName))
+                {
+                    if (!canEditStructure)
+                        ImGui::BeginDisabled();
+                    if (ImGui::MenuItem("Remove Component"))
+                        pendingRemove = ci.descriptor;
+                    if (!canEditStructure)
+                        ImGui::EndDisabled();
+                }
                 ImGui::EndPopup();
             }
             if (open)

@@ -36,12 +36,22 @@ namespace Arcane::Editor
         }
     }
 
-    bool IsSystemManagedComponent(std::string_view typeName)
+    bool IsHiddenInInspector(std::string_view typeName)
     {
+        // Derived per-frame caches: showing them is noise and editing them is
+        // overwritten by the next propagation pass.
         return typeName == "Arcane::WorldTransform"
             || typeName == "Arcane::PreviousTransform"
-            || typeName == "Arcane::PhysicsBodyRef"
-            || typeName == "Arcane::EntityInfo";
+            || typeName == "Arcane::PhysicsBodyRef";
+    }
+
+    bool IsStructureLocked(std::string_view typeName)
+    {
+        // The hidden caches, plus identity. EntityInfo is VISIBLE (name edits,
+        // id view-only) but never user-added or user-removed -- the ECS
+        // equivalent of AActor's intrinsic ActorLabel/ActorGuid
+        // (Actor.h:1055/:1188), which are not components at all.
+        return IsHiddenInInspector(typeName) || typeName == "Arcane::EntityInfo";
     }
 
     std::vector<ComponentCatalogEntry> BuildComponentCatalog(
@@ -64,7 +74,11 @@ namespace Arcane::Editor
             // and is NOT guaranteed NUL-terminated -- copy it before anything
             // treats it as a C string (the ImGui popup does).
             std::string typeName(desc.meta->typeName);
-            if (IsSystemManagedComponent(typeName))
+            // The catalog is the Add Component source, so it must exclude
+            // EntityInfo too (structure-locked), not just the hidden caches --
+            // IsHiddenInInspector alone would offer a redundant "add EntityInfo"
+            // row that Edit::AddComponent would answer with a fresh NIL Guid.
+            if (IsStructureLocked(typeName))
                 return;
             if (!ContainsCI(typeName, filter))
                 return;

@@ -33,7 +33,8 @@
 using namespace Arcane;
 using Arcane::Editor::BuildComponentCatalog;
 using Arcane::Editor::ComponentCatalogEntry;
-using Arcane::Editor::IsSystemManagedComponent;
+using Arcane::Editor::IsHiddenInInspector;
+using Arcane::Editor::IsStructureLocked;
 
 namespace
 {
@@ -93,22 +94,42 @@ namespace
     }
 }
 
-TEST_CASE("IsSystemManagedComponent covers the derived types plus EntityInfo", "[editor][outliner]")
+TEST_CASE("IsHiddenInInspector covers only the derived per-frame caches", "[editor][outliner]")
 {
-    CHECK(IsSystemManagedComponent("Arcane::WorldTransform"));
-    CHECK(IsSystemManagedComponent("Arcane::PreviousTransform"));
-    CHECK(IsSystemManagedComponent("Arcane::PhysicsBodyRef"));
+    CHECK(IsHiddenInInspector("Arcane::WorldTransform"));
+    CHECK(IsHiddenInInspector("Arcane::PreviousTransform"));
+    CHECK(IsHiddenInInspector("Arcane::PhysicsBodyRef"));
+
+    // 2026-07-27 entity-identity-rename task 5: EntityInfo is now VISIBLE in
+    // the Inspector (name editable, id view-only) -- it moved out of the
+    // display gate. It is still structure-locked; see the next TEST_CASE.
+    CHECK_FALSE(IsHiddenInInspector("Arcane::EntityInfo"));
+
+    // Transform is deliberately REMOVABLE (spec section 5).
+    CHECK_FALSE(IsHiddenInInspector("Arcane::Transform"));
+    CHECK_FALSE(IsHiddenInInspector("Arcane::SpriteRenderer"));
+    CHECK_FALSE(IsHiddenInInspector("Arcane::Hidden"));
+    CHECK_FALSE(IsHiddenInInspector(""));
+}
+
+TEST_CASE("IsStructureLocked covers the derived types plus EntityInfo", "[editor][outliner]")
+{
+    CHECK(IsStructureLocked("Arcane::WorldTransform"));
+    CHECK(IsStructureLocked("Arcane::PreviousTransform"));
+    CHECK(IsStructureLocked("Arcane::PhysicsBodyRef"));
     // EntityInfo joined the list in the 2026-07-26 review fix: Edit::AddComponent
     // default-constructs, so a generic add stamped a NIL Guid on every selected
     // entity and a generic remove wiped the durable cross-save identity. The
-    // Outliner owns this component via create + rename.
-    CHECK(IsSystemManagedComponent("Arcane::EntityInfo"));
+    // Outliner owns this component via create + rename. Task 5 made it VISIBLE
+    // (IsHiddenInInspector is false for it) while keeping it structure-locked
+    // here, so Add Component and Remove Component still refuse it.
+    CHECK(IsStructureLocked("Arcane::EntityInfo"));
 
     // Transform is deliberately REMOVABLE (spec section 5).
-    CHECK_FALSE(IsSystemManagedComponent("Arcane::Transform"));
-    CHECK_FALSE(IsSystemManagedComponent("Arcane::SpriteRenderer"));
-    CHECK_FALSE(IsSystemManagedComponent("Arcane::Hidden"));
-    CHECK_FALSE(IsSystemManagedComponent(""));
+    CHECK_FALSE(IsStructureLocked("Arcane::Transform"));
+    CHECK_FALSE(IsStructureLocked("Arcane::SpriteRenderer"));
+    CHECK_FALSE(IsStructureLocked("Arcane::Hidden"));
+    CHECK_FALSE(IsStructureLocked(""));
 }
 
 TEST_CASE("BuildComponentCatalog hides system-managed types and sorts by name", "[editor][outliner]")
