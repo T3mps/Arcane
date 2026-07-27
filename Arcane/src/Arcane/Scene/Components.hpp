@@ -174,8 +174,10 @@ namespace Arcane
         // Both are int32_t here but reach the batcher through
         // static_cast<uint16_t> (RenderSystems.hpp:77-78), which WRAPS rather
         // than clamps -- an authored -1 would sort as 65535, in front of
-        // everything. The Range is the cast's own domain, so the Inspector
-        // cannot author a value the renderer will silently reinterpret.
+        // everything. The Range is the cast's own domain, and the Inspector
+        // clamps to it on every path that writes these fields (drag, Ctrl+click
+        // entry, and the multi-selection box), so an out-of-range value has to
+        // come from somewhere other than the property panel.
         ASTRA_REFLECT_FIELD(SpriteRenderer, sortingLayer)
             ASTRA_REFLECT_ATTR(Category, "Sorting")
             ASTRA_REFLECT_ATTR(Range, 0.0, 65535.0, 1.0)

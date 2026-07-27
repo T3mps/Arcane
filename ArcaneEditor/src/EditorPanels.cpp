@@ -33,6 +33,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Arcane::Editor
@@ -895,16 +896,46 @@ namespace Arcane::Editor
             return r.step > 0.0 ? ToFloatClamped(r.step) : fallbackSpeed;
         }
 
+        // The authored Range as a [lo, hi] pair, or nullopt when the field has no
+        // Range or the authored one does not actually bind.
+        //
+        // "Binds" is ImGui's own rule for the drags below, so the typed paths that
+        // call this agree with them: min < max, or a NON-ZERO min == max
+        // (imgui_widgets.cpp:2540, minus its ClampZeroRange term -- these calls do
+        // not pass that flag). imgui.h:687's "if v_min >= v_max we have no bound"
+        // is only the header's doc comment; the implementation pins Range(5, 5) at
+        // 5 and leaves just min > max and Range(0, 0) unbounded.
+        [[nodiscard]] std::optional<std::pair<double, double>>
+        BindingRange(const Astra::FieldInfo& f)
+        {
+            const std::optional<Astra::Range> r = Arcane::Editor::RangeOfField(f);
+            if (!r)
+                return std::nullopt;
+            if (r->min < r->max || (r->min == r->max && r->min != 0.0))
+                return std::make_pair(r->min, r->max);
+            return std::nullopt;
+        }
+
         // Drags that honour the field's Astra::Range when it carries one, and are
         // otherwise the exact call these sites made before ranges were read.
-        // A degenerate authored range costs nothing: ImGui reads v_min >= v_max as
-        // "no bound" (imgui.h:687) rather than pinning the value.
+        //
+        // ClampOnInput is what makes the bound real. Dragging clamps on its own,
+        // but Ctrl+click text entry into the same widget is clamped ONLY under
+        // this flag (imgui_widgets.cpp:2783 -> :2703-2706), so without it a typed
+        // value passes the bounds untouched. Deliberately NOT AlwaysClamp, which
+        // is ClampOnInput|ClampZeroRange (imgui.h:2034) and would change which
+        // degenerate ranges bind -- see BindingRange above.
+        //
+        // The format strings are spelled out only because `flags` sits after them
+        // in the signature; both are the header's own defaults (imgui.h:687/692),
+        // so nothing about how a value reads changes.
         [[nodiscard]] bool RangedDragFloat(const Astra::FieldInfo& f, const char* label,
                                            float* v, float fallbackSpeed)
         {
             if (const std::optional<Astra::Range> r = Arcane::Editor::RangeOfField(f))
                 return ImGui::DragFloat(label, v, DragSpeedFor(*r, fallbackSpeed),
-                                        ToFloatClamped(r->min), ToFloatClamped(r->max));
+                                        ToFloatClamped(r->min), ToFloatClamped(r->max),
+                                        "%.3f", ImGuiSliderFlags_ClampOnInput);
             return ImGui::DragFloat(label, v, fallbackSpeed);
         }
 
@@ -914,7 +945,8 @@ namespace Arcane::Editor
                 // 1.0f is DragInt's own default speed (imgui.h:692), passed
                 // explicitly because the bounded overload leaves no way to omit it.
                 return ImGui::DragInt(label, v, DragSpeedFor(*r, 1.0f),
-                                      ToInt32Clamped(r->min), ToInt32Clamped(r->max));
+                                      ToInt32Clamped(r->min), ToInt32Clamped(r->max),
+                                      "%d", ImGuiSliderFlags_ClampOnInput);
             return ImGui::DragInt(label, v);
         }
 
@@ -1239,9 +1271,21 @@ namespace Arcane::Editor
                             double out = cur;
                             if (MultiScalarRow(label, 1, &cur, MixedFor(f), /*integral*/ true, out) >= 0)
                             {
-                                // Clamp before the narrowing cast: converting an
+                                // The field's Range binds here too. This row is a
+                                // raw text box rather than a drag, so ImGui clamps
+                                // nothing for it -- and an out-of-range value typed
+                                // into a multi-selection reaches the same
+                                // narrowing casts downstream as one typed into the
+                                // single-selection drag.
+                                if (const auto bound = BindingRange(f))
+                                    out = std::clamp(out, bound->first, bound->second);
+                                // Then the cast's own domain: converting an
                                 // out-of-range double to int32 is UB, and the box
-                                // accepts arbitrary digits.
+                                // accepts arbitrary digits. Two clamps rather than
+                                // one intersected pair because an authored range
+                                // lying entirely outside int32 would invert the
+                                // intersection and break std::clamp's lo <= hi
+                                // precondition.
                                 const double lo = static_cast<double>(std::numeric_limits<int32_t>::min());
                                 const double hi = static_cast<double>(std::numeric_limits<int32_t>::max());
                                 const int32_t iv = static_cast<int32_t>(std::clamp(out, lo, hi));
@@ -1266,6 +1310,11 @@ namespace Arcane::Editor
                             double out = cur;
                             if (MultiScalarRow(label, 1, &cur, MixedFor(f), /*integral*/ false, out) >= 0)
                             {
+                                // Same rule as the Int32 row above and as the drag
+                                // one branch down: a Range bounds the typed value,
+                                // because nothing in a plain text box does.
+                                if (const auto bound = BindingRange(f))
+                                    out = std::clamp(out, bound->first, bound->second);
                                 const float fv = static_cast<float>(out);
                                 ApplyImmediate(rawName, instance, [&](void* d)
                                                { Arcane::Editor::ApplyFloatEdit(f, d, fv); });
