@@ -70,10 +70,16 @@ namespace Arcane::Editor
                 ImGui::Separator();
                 // Disabled during Play: the authored scene is the pre-Play snapshot,
                 // and the live registry is play-time mutation that PlaySession::Stop
-                // exists to discard, so saving it would persist garbage.
+                // exists to discard, so saving it would persist garbage. Both items
+                // carry the same tooltip because IsItemHovered names the LAST
+                // submitted item -- one call after the pair would explain the greying
+                // of "Save Scene As..." only, and "Save Scene" (the item carrying the
+                // Ctrl+S hint) is the one users reach for.
                 if (ImGui::MenuItem(sceneDirty ? "Save Scene *" : "Save Scene",
                                     "Ctrl+S", false, !playing))
                     requests.saveScene = true;
+                if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Stop play mode to save the scene");
                 if (ImGui::MenuItem("Save Scene As...", nullptr, false, !playing))
                     requests.saveSceneAs = true;
                 if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))

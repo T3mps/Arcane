@@ -116,7 +116,13 @@ namespace Arcane::Editor
         // ownership token across the frames the gesture spans (see InspectorState).
         Arcane::Editor::InspectorState  m_inspector;
 
-        // Editor undo/redo history (Edit-mode; cleared on Play). Constructed in
+        // Editor undo/redo history. Deliberately NOT cleared on Play: Stop restores
+        // the pre-Play registry, so the edits behind these entries are still on
+        // screen and must stay undoable -- and because SceneSession reads this
+        // stack's StateId as the SOLE input to the scene's dirty flag
+        // (SceneSession.hpp), clearing it would silently report an unsaved scene as
+        // clean. It is cleared only where no entity handle in it could survive:
+        // ClearSceneReferences, ahead of a registry swap. Constructed in
         // Init once the runtime's registry exists; optional so it can be built
         // after m_runtime. Declared AFTER m_runtime/m_plugin so it destructs
         // BEFORE them -- its resolver lambda captures `&*m_runtime` (a raw

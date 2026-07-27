@@ -33,6 +33,7 @@
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
+#include <Arcane/Scene/SceneResources.hpp>   // Arcane::SceneRoot (DoSaveScene's empty-scene guard)
 #include <Arcane/Serialization/SceneAsset.hpp>   // .arcscene read/apply/save (New/Open/Save Scene)
 
 #include <Astra/Core/TypeContext.hpp>
@@ -46,6 +47,7 @@
 #include <spdlog/sinks/callback_sink.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -76,6 +78,35 @@ namespace Arcane::Editor
         constexpr uint32_t kScN = 17;   // SDL_SCANCODE_N
         constexpr uint32_t kScO = 18;   // SDL_SCANCODE_O
         constexpr uint32_t kScS = 22;   // SDL_SCANCODE_S
+
+        // Same FILE, not the same spelling. The Open-Scene dialog and the Save-Scene
+        // dialog can hand back different-but-equivalent paths for one file
+        // (separator style, casing, a non-canonical prefix), and DoSaveScene keys
+        // the scene's asset Guid off this compare -- a false "different file"
+        // re-mints the Guid and dangles the id the asset registry already holds for
+        // that file (which boot-scene references store BY Guid). weakly_canonical
+        // does not require the file to exist; the error_code overload keeps this
+        // exception-free, and a filesystem error falls back to the lexical compare
+        // rather than reporting a bogus match.
+        bool SameSceneFile(const std::filesystem::path& a, const std::filesystem::path& b)
+        {
+            std::error_code ea, eb;
+            const std::filesystem::path ca = std::filesystem::weakly_canonical(a, ea);
+            const std::filesystem::path cb = std::filesystem::weakly_canonical(b, eb);
+            if (ea || eb) return a == b;
+            return ca == cb;
+        }
+
+        // ASCII-lowercased extension, for a case-insensitive suffix check: a
+        // hand-typed "MyScene.ARCSCENE" already names an .arcscene, and stapling a
+        // second suffix onto it produces a file the user did not ask for.
+        std::string LowerExtension(const std::filesystem::path& p)
+        {
+            std::string ext = p.extension().string();
+            for (char& c : ext)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return ext;
+        }
 
         // Resolve the ComponentDescriptor for Transform on `e`, for bracketing
         // a gizmo drag into the undo stack via CommandStack::SnapshotComponent.
@@ -671,9 +702,44 @@ namespace Arcane::Editor
 
     bool EditorApp::DoSaveScene(const std::filesystem::path& file)
     {
+        // Play BACKSTOP, enforced here -- where the bytes are written -- rather than
+        // only at the UI call sites. During Play the registry holds play-time
+        // mutation that PlaySession::Stop exists to DISCARD; the authored scene is
+        // the pre-Play snapshot. Serializing the live registry would therefore
+        // overwrite the user's authored file with throwaway state AND report
+        // success. The File-menu items and the Ctrl+S edge gate themselves, but
+        // gating only there is what let this through: New Scene and Open Scene are
+        // deliberately NOT disabled during Play, so the unsaved-changes confirm
+        // modal is reachable mid-Play and its Save button lands straight here (it
+        // now stops Play first, and satisfies this rather than tripping it), and
+        // Play can still begin between a Save As dialog's launch and the frame its
+        // result arrives on. From here, no call site can bypass the invariant.
+        if (m_play.IsPlaying())
+        {
+            ARC_ERROR("Save Scene: refused -- play mode is running");
+            m_sceneError = "Cannot save while play mode is running.\n"
+                           "Stop play mode -- which restores the authored scene -- and save again.";
+            return false;
+        }
+
+        // SaveJson walks the SceneRoot subtree and returns an EMPTY document when
+        // that resource is absent (SceneSerializer.hpp), so without this guard a
+        // rootless registry writes {version, entities: []} over the target file,
+        // registers it, marks the session clean and logs success -- silent data
+        // loss dressed as a save. SceneAsset::CreateEmpty documents the same hazard
+        // for New Scene; the write path needs the same care.
+        if (!m_runtime->Registry().GetResource<Arcane::SceneRoot>())
+        {
+            ARC_ERROR("Save Scene: refused -- the registry has no SceneRoot");
+            m_sceneError = "There is no scene to save.\n"
+                           "Create one with File -> New Scene, or open an existing scene.";
+            return false;
+        }
+
         // Reuse the scene's existing id when saving over itself; mint one for a new
         // file so the asset registry has something stable to register it under.
-        const bool sameFile = !m_scene.Path().empty() && m_scene.Path() == file;
+        // Identity is by canonical path, not by spelling -- see SameSceneFile.
+        const bool sameFile = !m_scene.Path().empty() && SameSceneFile(m_scene.Path(), file);
         const Arcane::Guid id = (sameFile && m_scene.Id().IsValid())
                               ? m_scene.Id() : Arcane::Guid::Generate();
 
@@ -903,8 +969,10 @@ namespace Arcane::Editor
             {
                 std::filesystem::path p = sceneSave;
                 // The save dialog does not force the extension (Window.hpp), and a
-                // scene without it does not scan as an asset.
-                if (p.extension() != Arcane::Scene::kSceneExt)
+                // scene without it does not scan as an asset. Case-insensitive:
+                // a hand-typed "MyScene.ARCSCENE" must not become
+                // "MyScene.ARCSCENE.arcscene".
+                if (LowerExtension(p) != Arcane::Scene::kSceneExt)
                     p += Arcane::Scene::kSceneExt;
                 const bool saved = DoSaveScene(p);
 
@@ -1083,8 +1151,16 @@ namespace Arcane::Editor
 
                     // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
                     // beside New Scene / Open Scene / Save Scene. Raised as requests
-                    // rather than acted on here: the menu-request site owns the guard
-                    // and dialog launches, and Ctrl+S there is also the Play gate.
+                    // rather than acted on here so both routes share ONE handler: the
+                    // menu-request site (below, after BeginDockSpace) owns the
+                    // unsaved-changes guard and the dialog launches.
+                    // It owns NO Play gate. These edges are Play-gated by `active`
+                    // above and the menu items by their own !playing enable flag
+                    // inside BeginDockSpace (EditorPanels.cpp) -- but neither
+                    // covers the routes that reach a save without passing through
+                    // them (the confirm modal's Save button, the Save As dialog
+                    // result). The gate that holds for all of them is DoSaveScene's
+                    // own refusal while playing.
                     const bool nDown = ctrl && !shift && snap.ScancodeDown(kScN);
                     const bool oDown = ctrl && !shift && snap.ScancodeDown(kScO);
                     const bool sDown = ctrl && !shift && snap.ScancodeDown(kScS);
@@ -1673,6 +1749,17 @@ namespace Arcane::Editor
                     ImGui::Separator();
                     if (ImGui::Button("Save", ImVec2(90, 0)))
                     {
+                        // Stop Play BEFORE saving, in both branches below. Stop
+                        // restores the pre-Play snapshot, which IS the authored
+                        // state -- so what reaches disk is exactly what the user
+                        // believes they are saving, and DoSaveScene's Play refusal
+                        // (which would otherwise turn this button into an error
+                        // popup) is satisfied. Not a surprising side effect: no
+                        // intent parkable here leaves Play running anyway -- New
+                        // Scene, Open Scene and Open Project all stop it through
+                        // ClearSceneReferences, and Exit ends the process.
+                        if (m_play.IsPlaying())
+                            m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
                         if (m_scene.Path().empty())
                         {
                             // Never saved: this needs a filename first. The intent
