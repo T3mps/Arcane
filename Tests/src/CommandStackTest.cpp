@@ -16,6 +16,8 @@
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/ComponentEditCommand.hpp>
+#include <Arcane/Edit/EntityOps.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
@@ -725,4 +727,48 @@ TEST_CASE("StateId: an id evicted by the depth cap is never observed again", "[e
         CHECK(stack.StateId() != evicted);   // must never resurface on the way down to empty
     }
     CHECK(stack.StateId() == 0);   // fully unwound past both surviving edits
+}
+
+TEST_CASE("a rename is one ComponentEditCommand undo step", "[edit]")
+{
+    // Task 1 (Edit::RenameEntity) gave rename its new contract; this pins the
+    // mechanism Tasks 4/6 build the Inspector/Outliner rename UI on TOP of --
+    // Begin/SnapshotComponent(EntityInfo desc)/Commit around the call, same as
+    // any other component edit. MakeReg() registers EntityInfo via
+    // RegisterSceneComponents (SceneModule.hpp:26), so no extra setup is needed.
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    // SSO-defeating on purpose: a heap-owning string is the case a raw byte
+    // snapshot would corrupt; the serialized-blob path must round-trip it.
+    const std::string longName = "A name long enough to defeat SSO ................";
+    reg->AddComponent<Arcane::EntityInfo>(e, Arcane::EntityInfo{ Arcane::Guid::Generate(), longName });
+
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::EntityInfo");
+    REQUIRE(desc != nullptr);
+
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    SECTION("undo restores the exact prior name; redo reapplies")
+    {
+        const Arcane::TransactionId id = stack.Begin("Rename");
+        stack.SnapshotComponent(e, desc);
+        REQUIRE(Arcane::Edit::RenameEntity(*reg, e, "Short"));
+        stack.Commit(id);
+
+        stack.Undo();
+        CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == longName);
+        stack.Redo();
+        CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "Short");
+    }
+
+    SECTION("a no-op rename pushes no history entry")
+    {
+        const Arcane::TransactionId id = stack.Begin("Rename");
+        stack.SnapshotComponent(e, desc);
+        CHECK_FALSE(Arcane::Edit::RenameEntity(*reg, e, longName));   // unchanged
+        stack.Commit(id);
+        // Commit re-snapshots and drops unchanged components
+        // (CommandStack.cpp:47-50), then pushes nothing (:61-62).
+        CHECK_FALSE(stack.CanUndo());
+    }
 }
