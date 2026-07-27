@@ -586,6 +586,12 @@ project "ArcaneTests"
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
         "%{wks.location}/ArcaneEditor/src/SceneSession.cpp",
+        -- Inspector polish: InspectorMeta (display-name derivation, attribute
+        -- extraction, filter matching) source-compiles into the test exe so the
+        -- [editor] units drive it directly. It is the whole surface the user
+        -- reads in the Inspector, and EditorPanels.cpp is not compiled here --
+        -- so anything left in the draw loop would have no coverage at all.
+        "%{wks.location}/ArcaneEditor/src/InspectorMeta.cpp",
         -- Scene authoring: EditorCamera (the editor's own viewport pan/zoom/
         -- framing math + the framing-bounds sweep) source-compiles into the
         -- test exe so the [editor] units drive the PURE math headlessly -- no
