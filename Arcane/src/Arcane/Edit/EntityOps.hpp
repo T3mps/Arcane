@@ -75,9 +75,15 @@ namespace Arcane::Edit
     ARCANE_API std::size_t SetHiddenRecursive(Astra::Registry& reg,
                                               Astra::Entity e, bool hidden);
 
-    // Set the display name; adds EntityInfo{Generate(), name} when absent.
-    // Returns false for a dead entity OR when the name is already exactly
-    // `name` (no-op).
+    // Rename an existing EntityInfo. Returns false (mutating nothing) when the
+    // entity is invalid, lacks EntityInfo, or the name is unchanged -- so a
+    // false return always means "no undo step needed". Never adds the
+    // component: identity is minted at creation only.
+    //
+    // Names are deliberately NOT unique. Uniqueness is a creation-time policy
+    // (AutoEntityName); duplicates are legal on rename -- UE's split exactly
+    // (SetActorLabelUnique on spawn/paste/duplicate, EditorEngine.cpp:6154;
+    // plain SetActorLabel on rename, EditorEngine.cpp:6193-6205).
     ARCANE_API bool RenameEntity(Astra::Registry& reg, Astra::Entity e,
                                  std::string name);
 

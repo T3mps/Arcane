@@ -169,17 +169,26 @@ TEST_CASE("SetHiddenRecursive covers the subtree, idempotently", "[outliner]")
     CHECK(w.reg.GetComponent<Hidden>(grandkid) == nullptr);
 }
 
-TEST_CASE("RenameEntity adds EntityInfo when missing", "[outliner]")
+TEST_CASE("RenameEntity requires EntityInfo -- rename never mints identity", "[outliner]")
 {
     World w;
+
+    // A raw registry entity is the runtime-spawn shape: no EntityInfo. The
+    // editor disables rename for these; the op must refuse, not repair.
     Astra::Entity raw = w.reg.CreateEntity();
-    CHECK(Edit::RenameEntity(w.reg, raw, "Boss Arena"));
-    EntityInfo* info = w.reg.GetComponent<EntityInfo>(raw);
+    CHECK_FALSE(Edit::RenameEntity(w.reg, raw, "Boss Arena"));
+    CHECK(w.reg.GetComponent<EntityInfo>(raw) == nullptr);   // nothing added
+
+    // An authored entity renames normally, and its Guid is untouched --
+    // identity is creation-time only (UE: ActorLabel/ActorGuid are intrinsic
+    // AActor fields, Actor.h:1055/:1188; there is no "add identity" edit).
+    Astra::Entity authored = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    EntityInfo* info = w.reg.GetComponent<EntityInfo>(authored);
     REQUIRE(info != nullptr);
-    CHECK(info->id.IsValid());               // fresh stable id minted
-    CHECK(info->name == "Boss Arena");
-    CHECK(Edit::RenameEntity(w.reg, raw, "Boss Arena 2"));
-    CHECK(w.reg.GetComponent<EntityInfo>(raw)->name == "Boss Arena 2");
+    const Guid before = info->id;
+    CHECK(Edit::RenameEntity(w.reg, authored, "Boss Arena"));
+    CHECK(w.reg.GetComponent<EntityInfo>(authored)->name == "Boss Arena");
+    CHECK(w.reg.GetComponent<EntityInfo>(authored)->id == before);
 }
 
 TEST_CASE("Add/RemoveComponent by descriptor over a set", "[outliner]")

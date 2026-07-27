@@ -177,15 +177,16 @@ namespace Arcane::Edit
     {
         if (!reg.IsValid(e))
             return false;
-        if (EntityInfo* info = reg.GetComponent<EntityInfo>(e))
-        {
-            if (info->name == name)
-                return false;   // no-op rename: no change, no memento
-            info->name = std::move(name);
-            return true;
-        }
-        reg.AddComponent<EntityInfo>(e, EntityInfo{ Guid::Generate(),
-                                                    std::move(name) });
+        EntityInfo* info = reg.GetComponent<EntityInfo>(e);
+        // Identity is never minted by a rename. UE's equivalents (ActorLabel,
+        // ActorGuid) are intrinsic AActor fields (Actor.h:1055/:1188) -- there
+        // is no "add identity" edit to mirror. Entities without EntityInfo are
+        // runtime spawns; the editor disables rename for them.
+        if (!info)
+            return false;
+        if (info->name == name)
+            return false;   // no-op rename: no change, no undo step
+        info->name = std::move(name);
         return true;
     }
 
