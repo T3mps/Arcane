@@ -581,6 +581,11 @@ project "ArcaneTests"
         -- compiles into the test exe so the [editor] units drive it directly --
         -- no ImGui dependency, same pattern as EntityList/InspectorFields above.
         "%{wks.location}/ArcaneEditor/src/ComponentCatalog.cpp",
+        -- Scene authoring: SceneSession (scene identity + dirty state + the
+        -- unsaved-changes confirm machine) source-compiles into the test exe so
+        -- the [editor] units drive the PURE state machine directly -- there is
+        -- no ImGui in it at all, same pattern as DocumentHost above.
+        "%{wks.location}/ArcaneEditor/src/SceneSession.cpp",
     }
 
     includedirs {
