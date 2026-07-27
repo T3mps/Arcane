@@ -9,8 +9,10 @@
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Serialization/SceneAsset.hpp>
 
+#include <Astra/Reflection/Reflection.hpp>
 #include <Astra/Registry/Registry.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -178,45 +180,163 @@ TEST_CASE("a file the reader rejects leaves the target registry untouched", "[sc
         CHECK(err.find("entity 1") != std::string::npos);
         assertFixtureUnchanged();
     }
+}
+
+// Review finding: the gate used to reject a non-object `components` field, a
+// non-integer `parent` field, and a malformed `links` field (non-array, or an
+// entry that is not an integer) as if they were structural errors. They are
+// not -- LoadJson (SceneSerializer.hpp:212, :246, :254, :258) tolerates every
+// one of them: it skips the components block, leaves the parent unset, or
+// skips the offending links entry, and still returns true. A gate stricter
+// than the loader it guards would make a scene file the running game loads
+// fine unopenable in the editor, so these SECTIONs assert the opposite of
+// what they used to: ReadSceneFile succeeds, and ApplySceneDocument into a
+// fresh registry also succeeds, reproducing LoadJson's own tolerance end to
+// end through the gate.
+TEST_CASE("a malformed parent, links, or non-object components field is tolerated, not rejected", "[scene][json]")
+{
+    const std::filesystem::path dir = TempDir("arcane_scene_asset_tolerate");
+    const std::string ltName(Astra::GetMeta<Arcane::Transform>()->typeName);
+
+    auto ApplyToFreshRegistry = [](const Arcane::Scene::SceneDocument& read, Astra::Registry& fresh)
+    {
+        Arcane::RegisterSceneComponents(fresh);
+        return Arcane::Scene::ApplySceneDocument(read, fresh);
+    };
+
     SECTION("non-object components")
     {
-        const std::filesystem::path file = dir / "badcomponents.arcscene";
-        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
-                               R"("entities":[{"components":"not-an-object"}]})";
+        // Neither the populated-object branch nor the all-Serializable(false)
+        // null branch (SceneSerializer.hpp:226-227) matches a JSON string, so
+        // LoadJson leaves the whole components block unprocessed -- the
+        // entity is still created, just with none of the usual components.
+        const std::filesystem::path file = dir / "goodcomponents.arcscene";
+        nlohmann::json doc;
+        doc["id"] = "00000000-0000-0000-0000-000000000001";
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
+        doc["entities"] = nlohmann::json::array({ nlohmann::json{{"components", "not-an-object"}} });
+        std::ofstream(file) << doc.dump();
+
         std::string err;
-        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
-        CHECK(err.find("entity 0") != std::string::npos);
-        assertFixtureUnchanged();
+        const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+        REQUIRE(read.has_value());
+        CHECK(err.empty());
+
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry fresh{components};
+        REQUIRE(ApplyToFreshRegistry(*read, fresh));
+
+        const Arcane::SceneRoot* sr = fresh.GetResource<Arcane::SceneRoot>();
+        REQUIRE(sr != nullptr);
+        CHECK(fresh.GetComponent<Arcane::Transform>(sr->entity) == nullptr);
+        CHECK(fresh.GetComponent<Arcane::EntityInfo>(sr->entity) == nullptr);
     }
+
     SECTION("non-integer parent")
     {
-        const std::filesystem::path file = dir / "badparent.arcscene";
-        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
-                               R"("entities":[{"components":{},"parent":"root"}]})";
+        // pit->is_number_integer() (SceneSerializer.hpp:246) fails on a
+        // string, so SetParent is simply never called for this entity -- it
+        // loads as a root-level entity with no parent, not as a rejected file.
+        const std::filesystem::path file = dir / "goodparent.arcscene";
+        nlohmann::json e0, e1;
+        e0["components"][ltName]["position"] = { 100.0, 0.0 };
+        e1["components"][ltName]["position"] = { 5.0, 7.0 };
+        e1["parent"] = "root";
+        nlohmann::json doc;
+        doc["id"] = "00000000-0000-0000-0000-000000000001";
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
+        doc["entities"] = nlohmann::json::array({ e0, e1 });
+        std::ofstream(file) << doc.dump();
+
         std::string err;
-        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
-        CHECK(err.find("entity 0") != std::string::npos);
-        assertFixtureUnchanged();
+        const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+        REQUIRE(read.has_value());
+        CHECK(err.empty());
+
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry fresh{components};
+        REQUIRE(ApplyToFreshRegistry(*read, fresh));
+
+        Astra::Entity malformed{};
+        fresh.CreateView<Arcane::Transform>().ForEach([&](Astra::Entity e, Arcane::Transform& t)
+        {
+            if (t.position.x > 4.0f && t.position.x < 6.0f) malformed = e;
+        });
+        REQUIRE(malformed.IsValid());
+        CHECK_FALSE(fresh.HasParent(malformed));
     }
+
     SECTION("non-array links")
     {
-        const std::filesystem::path file = dir / "badlinksarray.arcscene";
-        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
-                               R"("entities":[{"components":{},"links":0}]})";
+        // lit->is_array() (SceneSerializer.hpp:254) fails on a number, so the
+        // whole links block is skipped for this entity -- no link is formed,
+        // but the entity (and the rest of the file) still loads.
+        const std::filesystem::path file = dir / "goodlinksarray.arcscene";
+        nlohmann::json e0, e1;
+        e0["components"][ltName]["position"] = { 1.0, 1.0 };
+        e0["links"] = 0;
+        e1["components"][ltName]["position"] = { 2.0, 2.0 };
+        nlohmann::json doc;
+        doc["id"] = "00000000-0000-0000-0000-000000000001";
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
+        doc["entities"] = nlohmann::json::array({ e0, e1 });
+        std::ofstream(file) << doc.dump();
+
         std::string err;
-        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
-        CHECK(err.find("entity 0") != std::string::npos);
-        assertFixtureUnchanged();
+        const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+        REQUIRE(read.has_value());
+        CHECK(err.empty());
+
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry fresh{components};
+        REQUIRE(ApplyToFreshRegistry(*read, fresh));
+
+        Astra::Entity first{};
+        fresh.CreateView<Arcane::Transform>().ForEach([&](Astra::Entity e, Arcane::Transform& t)
+        {
+            if (t.position.x > 0.5f && t.position.x < 1.5f) first = e;
+        });
+        REQUIRE(first.IsValid());
+        CHECK(fresh.GetRelationshipGraph().GetLinks(first).empty());
     }
+
     SECTION("non-integer links entry")
     {
-        const std::filesystem::path file = dir / "badlinksentry.arcscene";
-        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
-                               R"("entities":[{"components":{},"links":[0,"1"]}]})";
+        // Each links entry is checked individually (SceneSerializer.hpp:258);
+        // a non-integer entry is `continue`d past, but earlier/later valid
+        // entries in the same array still apply -- partial tolerance within
+        // one field, not an all-or-nothing rejection of the entity.
+        const std::filesystem::path file = dir / "goodlinksentry.arcscene";
+        nlohmann::json e0, e1;
+        e0["components"][ltName]["position"] = { 1.0, 1.0 };
+        e0["links"] = { 1, "not-an-integer" };
+        e1["components"][ltName]["position"] = { 2.0, 2.0 };
+        nlohmann::json doc;
+        doc["id"] = "00000000-0000-0000-0000-000000000001";
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
+        doc["entities"] = nlohmann::json::array({ e0, e1 });
+        std::ofstream(file) << doc.dump();
+
         std::string err;
-        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
-        CHECK(err.find("entity 0") != std::string::npos);
-        assertFixtureUnchanged();
+        const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+        REQUIRE(read.has_value());
+        CHECK(err.empty());
+
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry fresh{components};
+        REQUIRE(ApplyToFreshRegistry(*read, fresh));
+
+        Astra::Entity first{}, second{};
+        fresh.CreateView<Arcane::Transform>().ForEach([&](Astra::Entity e, Arcane::Transform& t)
+        {
+            if (t.position.x > 0.5f && t.position.x < 1.5f) first = e;
+            if (t.position.x > 1.5f && t.position.x < 2.5f) second = e;
+        });
+        REQUIRE(first.IsValid());
+        REQUIRE(second.IsValid());
+        const auto& links = fresh.GetRelationshipGraph().GetLinks(first);
+        CHECK(links.size() == 1);
+        CHECK(std::find(links.begin(), links.end(), second) != links.end());
     }
 }
 
