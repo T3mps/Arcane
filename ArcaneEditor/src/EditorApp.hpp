@@ -4,6 +4,7 @@
 // Member declaration order m_gpu -> m_runtime -> m_plugin is the TEARDOWN
 // CONTRACT (destruct reverse: plugin Unload while the DLL is still mapped ->
 // runtime -> render stack in GpuContext -> window last). Mirrors Loom.
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -45,6 +46,7 @@
 #include <spdlog/sinks/callback_sink.h>
 
 namespace Astra { class TypeContext; }
+namespace Arcane { struct InputSnapshot; }   // by-reference phase parameters only
 
 namespace Arcane::Editor
 {
@@ -65,6 +67,82 @@ namespace Arcane::Editor
         void Shutdown();
         void InstallConsoleSink();   // attach a callback sink on Arcane::Log::Engine() -> m_console
 
+        // ---- Frame loop (EditorAppFrame.cpp) --------------------------------
+        // MainLoop is a straight sequence of the phase methods below, called in
+        // exactly the order the statements inside them ran in when this was one
+        // 1100-line function. That order is LOAD-BEARING and has NO automated
+        // coverage -- EditorApp*.cpp is not compiled into ArcaneTests, so a green
+        // suite proves nothing here. Each phase's definition carries the ordering
+        // constraint it participates in; do not reorder the calls in MainLoop.
+
+        // What PumpFrameEvents decided the rest of the frame should do: the
+        // original block's fallthrough / `continue` / `break` respectively.
+        enum class FramePump { Continue, SkipFrame, Exit };
+
+        // Frame-loop state that outlives ONE frame -- these were MainLoop's
+        // locals declared OUTSIDE the while loop, and MainLoop still owns the
+        // single instance. Deliberately not EditorApp members: the lifetime is
+        // exactly the MainLoop call, as before.
+        struct LoopState
+        {
+            std::chrono::steady_clock::time_point simPrev{};
+            std::chrono::steady_clock::time_point lastFrameTime{};
+            bool running = true;
+            // The answer the confirm modal resolved, carried from the ImGui pass of one
+            // frame to the top of the next. The modal cannot perform the action where the
+            // button is clicked: OpenProject tears down the plugin and closes documents
+            // whose textures the frame's already-built draw lists still reference, and
+            // ImGui replays those lists at Render time.
+            Arcane::Editor::SceneSession::PendingRequest sceneAction;
+        };
+
+        // Values one phase computes and a LATER phase of the SAME frame reads.
+        // These were locals declared at the top of the while body; MainLoop
+        // declares one instance per iteration, so they are as fresh as before.
+        struct FrameState
+        {
+            // Set inside the input phase once inViewport + the game context's
+            // last-frame WantCaptureMouse are known; outlives that phase
+            // so the click-pick further down this same frame can also honor it.
+            bool gameUiClaims = false;
+            // File-menu scene shortcuts, raised in the input phase and folded
+            // into this frame's MenuRequests at the menu-request site (the same shape
+            // m_raiseOpenProjectOnStart uses) so the keybind and the menu item cannot
+            // drift apart.
+            bool scNewScene = false, scOpenScene = false, scSaveScene = false;
+            // This frame's Viewport panel result, read by the click-pick phase.
+            Arcane::Editor::ViewportPanelResult vp{};
+        };
+
+        FramePump PumpFrameEvents();
+        void RunSceneAction(const Arcane::Editor::SceneSession::PendingRequest& req,
+                            LoopState& ls);
+        void ConsumeDeferredSceneAction(LoopState& ls);
+        void ConsumeSceneDialogResults(LoopState& ls);
+        void ConsumeProjectDialogResult();
+        void ConsumeMaterialDialogResults();
+        void FrameInput(LoopState& ls, FrameState& fs);
+        void HandleUndoRedoAndSceneShortcuts(const Arcane::InputSnapshot& snap, FrameState& fs);
+        void HandleGizmoModeKeys(const Arcane::InputSnapshot& snap);
+        void UpdateEditorCamera(const Arcane::InputSnapshot& snap, bool inViewport,
+                                float lx, float ly);
+        void UpdateGizmoInteraction(const Arcane::InputSnapshot& snap, bool inViewport,
+                                    float lx, float ly, bool gameUiClaims);
+        void AdvanceSim(LoopState& ls);
+        void ApplyPendingViewportResize();
+        void UpdateScenePostChain();
+        void RenderSceneToViewport();
+        void CompositeGameUi();
+        void RenderSelectionOutline();
+        void PumpShaderEditor();
+        void DrawEditorUi(LoopState& ls, const FrameState& fs);
+        void DrawModals(LoopState& ls);
+        void DrawViewportPanelPhase(FrameState& fs);
+        void HandleViewportPick(const FrameState& fs);
+        void DrawSelectionPanels();
+        bool PresentFrame();
+        void EndFrame(LoopState& ls);
+
         LoomConfig                        m_config;
         std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST
 
@@ -78,7 +156,7 @@ namespace Arcane::Editor
         // plugin -- the plugin holds this ctx via SetImGui and may touch ImGui
         // during Unload/Shutdown, so this must outlive it). Its destructor
         // restores the editor context, so ~GpuContext's ImGuiLayer teardown stays
-        // valid. See MainLoop.
+        // valid. See CompositeGameUi.
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
 
         Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
@@ -132,7 +210,7 @@ namespace Arcane::Editor
 
         // Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y edge-tracking for the undo/redo keybinds
         // (InputSnapshot only reports held-state, not rising-edge; tracked here
-        // across frames -- see MainLoop's input block).
+        // across frames -- see HandleUndoRedoAndSceneShortcuts).
         bool m_prevUndoKeyDown = false;
         bool m_prevRedoKeyDown = false;
 
@@ -208,11 +286,12 @@ namespace Arcane::Editor
         void FrameCamera(bool selectionOnly);
         void FrameSceneIfPending();
         // Set whenever a scene becomes the current one, consumed on the first frame
-        // the viewport has a real size. See MainLoop for why it cannot be immediate.
+        // the viewport has a real size. See FrameSceneIfPending for why it cannot
+        // be immediate.
         bool m_frameOnSceneOpen = false;
         // Set for the remainder of THIS frame when a gizmo drag starts or ends,
-        // so the click-pick block (later in MainLoop) does not also treat the
-        // same click as a selection change. Reset at the top of the input block
+        // so the click-pick phase (later in the frame) does not also treat the
+        // same click as a selection change. Reset at the top of FrameInput
         // each frame.
         bool m_gizmoCapturedClick = false;
 
@@ -220,15 +299,15 @@ namespace Arcane::Editor
         // drives the backbuffer with, rendered into a panel texture instead. Resized
         // to the Viewport panel's content region each frame; input into the plugin
         // is gated on m_viewportActive and remapped through m_viewportRect (see
-        // ViewportInput.hpp + MainLoop's input block).
+        // ViewportInput.hpp + FrameInput).
         std::unique_ptr<Arcane::OffscreenCanvas> m_viewport;
         Arcane::Editor::ViewportRect                   m_viewportRect{};
         bool                                     m_viewportActive = false;
 
         // Viewport-local input snapshot for the game ImGui pass, captured inside
-        // MainLoop's input block (whose locals are out of scope at the render
+        // FrameInput (whose locals are out of scope at the render
         // site) and read where the game UI is composited into the viewport. Only
-        // the few values the game context needs are hoisted -- the input block's
+        // the few values the game context needs are hoisted -- the input phase's
         // scope is deliberately NOT widened.
         glm::vec2 m_lastViewportMouse{0.0f, 0.0f};   // viewport-local cursor px
         std::uint8_t m_lastMouseButtons = 0;         // raw snap.mouseButtons (LMB=bit0)
@@ -246,13 +325,13 @@ namespace Arcane::Editor
         // Per-frame selection + hover outline (Edit-mode only), a sibling of m_pick:
         // created and resized at the same viewport size, it edge-detects m_pick's
         // (supersampled) id buffer into the viewport's post-tonemap output texture
-        // (amber selected, cyan hovered). See MainLoop, right after
-        // m_viewport->Draw -- the same slot the Play-only game-imgui overlay pass
-        // uses (the two are mutually exclusive by mode).
+        // (amber selected, cyan hovered). See RenderSelectionOutline, right after
+        // RenderSceneToViewport -- the same slot the Play-only game-imgui overlay
+        // pass uses (the two are mutually exclusive by mode).
         std::unique_ptr<Arcane::SelectionOutline> m_outline;
 
         // Shader-editor services + open documents (Slice 5). The compiler is the
-        // app-shared compile service (documents Submit through it; MainLoop
+        // app-shared compile service (documents Submit through it; PumpShaderEditor
         // Polls/Drains it once per frame and routes results to documents -- the
         // drain site is the ONE place compile results become NVRHI shaders).
         // Documents hold NVRHI resources -> declared after m_gpu (destruct
@@ -283,7 +362,7 @@ namespace Arcane::Editor
         std::unordered_map<std::string, std::filesystem::file_time_type> m_materialMtimes;
         double m_materialWatchNext = 0.0;
         // >1 PostProcess assignments in the scene: warned once, reset when the
-        // count drops back (the post sweep in MainLoop).
+        // count drops back (the post sweep in UpdateScenePostChain).
         bool m_warnedMultiPost = false;
 
         // Async file-dialog results for the material flows (same background-
@@ -319,17 +398,17 @@ namespace Arcane::Editor
         // a same-frame use-after-free where OffscreenCanvas::Resize (called right after
         // ImGui::Image bakes the current texture pointer into this frame's draw list)
         // synchronously frees that very texture before ImGui replays the draw list at
-        // Render time. See MainLoop for the full sequencing rationale.
+        // Render time. See ApplyPendingViewportResize for the full sequencing rationale.
         std::uint32_t m_pendingViewportW = 0;
         std::uint32_t m_pendingViewportH = 0;
 
         // File -> Open Project (soft-restart). The menu sets m_openProjectRequested;
-        // MainLoop launches the async .arcproj FILE dialog; SDL runs
+        // DrawEditorUi launches the async .arcproj FILE dialog; SDL runs
         // ProjectPickedThunk on an SDL-owned BACKGROUND thread (NOT the main
         // thread -- the Windows backend's dialog callback fires off a detached
         // worker), which stashes the chosen path in m_pendingProjectPath under
-        // m_pendingProjectMutex; the next frame's top of MainLoop takes the
-        // lock, swaps the path out, and (outside the lock) runs SwitchProject
+        // m_pendingProjectMutex; the next frame's ConsumeProjectDialogResult takes
+        // the lock, swaps the path out, and (outside the lock) runs SwitchProject
         // at a safe point. (Project::Open accepts the .arcproj file directly.)
         std::string m_pendingProjectPath;
         std::mutex  m_pendingProjectMutex;   // guards m_pendingProjectPath across the SDL callback thread
@@ -355,8 +434,14 @@ namespace Arcane::Editor
         // always has one open. Never clears a registry a plugin already populated.
         void EnsureScene();
 
+        // Scene dialog launches, shared by the menu-request site and the
+        // unsaved-scene confirm modal (they were one lambda pair inside
+        // MainLoop, called from both).
+        std::string SceneDialogDir();
+        void        ShowSceneSaveDialog();
+
         // The scene effects. Each returns false when the effect itself failed, and
-        // sets m_sceneError to the reason (MainLoop draws it as a modal).
+        // sets m_sceneError to the reason (DrawModals draws it as a modal).
         bool DoNewScene();
         bool DoOpenScene(const std::filesystem::path& file);
         bool DoSaveScene(const std::filesystem::path& file);
@@ -377,7 +462,7 @@ namespace Arcane::Editor
 
         // Open-failure surfacing: SwitchProject's refusals used to be console-only
         // and were repeatedly missed at the desk. Any refusal/failure sets this;
-        // MainLoop shows it as a blocking modal (main thread only -- set inside
+        // DrawModals shows it as a blocking modal (main thread only -- set inside
         // SwitchProject/Init, read in the ImGui frame; no lock needed).
         std::string m_projectOpenError;
 
