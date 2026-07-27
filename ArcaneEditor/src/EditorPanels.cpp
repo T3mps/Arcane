@@ -444,6 +444,43 @@ namespace Arcane::Editor
         // and draws its own popup at its own scope, and each is self-consistent.
         constexpr const char* kAddComponentPopup = "##addcomponent";
 
+        // std::string-backed InputText. misc/cpp/imgui_stdlib is NOT vendored, so
+        // this inlines its CallbackResize pattern: ImGui tells the callback how
+        // long the text is about to be, the string resizes to fit, and the
+        // callback hands back the (possibly reallocated) data() pointer.
+        //
+        // Declared here rather than beside the Inspector's other small helpers so
+        // both panels in this file can reach it.
+        int StringResizeCallback(ImGuiInputTextCallbackData* data)
+        {
+            if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
+            {
+                std::string* s = static_cast<std::string*>(data->UserData);
+                s->resize(static_cast<std::size_t>(data->BufTextLen));
+                data->Buf = s->data();
+            }
+            return 0;
+        }
+
+        // While the widget is ACTIVE, ImGui edits its own copy of the text and
+        // ignores the buffer passed in -- it re-reads that buffer only when
+        // WantReloadUserBuf is set (imgui_widgets.cpp:4834-4849, restated at
+        // :5417-5419). Call sites may therefore pass a per-frame local reseeded
+        // from live data every frame without fighting the user's typing.
+        //
+        // capacity() + 1 is BufSize's own C++ spelling (imgui.h:2772); the +1 is
+        // the terminator slot past capacity(). It cannot under-report the room
+        // available, because ImGui's ONLY write into the buffer runs the resize
+        // callback above first and then copies into the pointer that callback
+        // returned (imgui_widgets.cpp:5423-5447) -- the string is grown to fit
+        // before any byte lands in it.
+        bool InputTextString(const char* label, std::string* s, ImGuiInputTextFlags flags = 0)
+        {
+            flags |= ImGuiInputTextFlags_CallbackResize;
+            return ImGui::InputText(label, s->data(), s->capacity() + 1, flags,
+                                    StringResizeCallback, s);
+        }
+
         // The searchable Add Component popup: draws the catalog, applies the
         // pick as ONE undo step over the whole selection. The caller opens it
         // with ImGui::OpenPopup(kAddComponentPopup) and then calls this every
@@ -1488,6 +1525,39 @@ namespace Arcane::Editor
                             }
                             ImGui::EndPopup();
                         }
+                        break;
+                    }
+                    case Arcane::Editor::FieldKind::String:
+                    {
+                        const std::string* live = f.GetPtr<std::string>(instance);
+                        // Blank when the selection disagrees -- the same "unset
+                        // means multiple differing values" rule the numeric rows
+                        // above use.
+                        const bool strMixed = Multi() && MixedFor(f).Any();
+                        // Reseeded from the component every frame while the box is
+                        // idle; once it is active ImGui's own state owns the text
+                        // and this local is ignored (see InputTextString), so the
+                        // per-frame seed cannot stomp what the user is typing.
+                        std::string text = (strMixed || !live) ? std::string() : *live;
+                        const std::string seed = text;
+                        InputTextString(label.c_str(), &text);
+                        // Commit on deactivation, guarded by an equality test --
+                        // and that guard IS the cancel path, not a nicety. Escape
+                        // restores the activation-time text AND sets value_changed
+                        // (imgui_widgets.cpp:5300-5309), so
+                        // IsItemDeactivatedAfterEdit reports a revert as an edit;
+                        // "it deactivated and ended up different" is the honest
+                        // predicate, and it also makes a plain click-in-click-out
+                        // write nothing.
+                        //
+                        // ApplyImmediate, not a widget gesture: the commit is one
+                        // discrete event, and it fans the typed text to every
+                        // selected entity as ONE undo step. A mixed row left alone
+                        // still commits nothing, because its seed is the blank it
+                        // renders.
+                        if (ImGui::IsItemDeactivated() && text != seed)
+                            ApplyImmediate(rawName, instance, [&](void* d)
+                                           { Arcane::Editor::ApplyStringEdit(f, d, text); });
                         break;
                     }
                     case Arcane::Editor::FieldKind::ReadOnly:
