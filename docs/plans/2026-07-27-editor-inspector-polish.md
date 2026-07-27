@@ -610,6 +610,25 @@ git commit -m "feat(editor): Inspector filter matching over friendly and raw nam
 
 ### Task 4: Default-value comparison
 
+> **CUT 2026-07-27, by user decision.** Almost no component value will ever be
+> the default, so a revert affordance would be lit on nearly every field --
+> clutter, not an affordance. This task was implemented (`4cfffcf6`) and then
+> reverted, because its only consumer was Task 8, which was cut for the same
+> reason. Left here, unexecuted, as a record of what was tried.
+>
+> Two findings survive the revert for anyone who revisits reset-to-default:
+> - A **byte** comparison cannot work for `std::string`. Under `/MDd`,
+>   `_ITERATOR_DEBUG_LEVEL=2` gives every `std::string` a `_Container_proxy*`,
+>   and MSVC never initialises the small-string buffer past the terminator --
+>   so two default-constructed empty strings are not byte-identical. This was
+>   measured, not assumed: the reverted implementation's byte-comparison arm
+>   failed against its own test before it was replaced with a value comparison.
+> - The right foundation for a typed reset is Astra's `FieldInfo::setter`
+>   (`ThirdParty/Astra/include/Astra/Reflection/FieldInfo.hpp:379-382`) -- a
+>   type-erased assignment (`obj->*FieldPtr = *static_cast<const
+>   DecayedType*>(inValue)`) that goes through `DecayedType::operator=` and so
+>   deep-copies a `std::string` correctly. A raw-bytes approach never can.
+
 **Files:**
 - Modify: `Arcane/ArcaneEditor/src/InspectorMeta.hpp` / `.cpp`
 - Test: `Arcane/Tests/src/EditorInspectorMetaTest.cpp`
@@ -1008,6 +1027,12 @@ git commit -m "feat(editor): group Inspector fields by category"
 
 ### Task 8: Reset-to-default affordance
 
+> **CUT 2026-07-27, by user decision.** Almost no component value will ever be
+> the default, so a revert affordance would be lit on nearly every field --
+> clutter, not an affordance. Never implemented. Task 4, which existed solely
+> to feed this task, was reverted as a consequence (`4cfffcf6` implemented,
+> then reverted the same day).
+
 **Files:**
 - Modify: `Arcane/ArcaneEditor/src/EditorPanels.cpp`
 
@@ -1090,13 +1115,13 @@ git commit -m "feat(arcane): categorise and document the scene components' field
 | §3 naming hazard (`Astra::Hidden` vs `Arcane::Hidden`) | Global Constraints, 2, 5 |
 | §4 search box, grouping, labels, tooltips, ReadOnly/Hidden, ranges | 5, 6, 7 |
 | §4 no regression in PushID / pendingRemove / intersection / mixed / gestures | 5, 6, 7 (stated per task) |
-| §5 reset-to-default, resolved as feasible | 4, 8 |
+| §5 reset-to-default, resolved as feasible | CUT 2026-07-27 (was 4, 8) -- see per-task notes |
 | §6 annotate `Components.hpp`, do not change the size default | 9 |
-| §7 test roster | 1, 2, 3, 4 |
-| §8 exe-timestamp verification | Global Constraints, 5, 6, 7, 8 |
+| §7 test roster | 1, 2, 3 (4 implemented then CUT -- its three test cases were reverted with it) |
+| §8 exe-timestamp verification | Global Constraints, 5, 6, 7 (8 CUT -- see per-task note) |
 
-**Placeholders:** none. Tasks 5-8 have no unit tests by design and say so with the reason, rather than leaving a gap unexplained. Task 4 carries an explicit fallback instruction if byte comparison proves unworkable for `std::string`, rather than leaving the implementer to improvise.
+**Placeholders:** none. Tasks 5-7 have no unit tests by design and say so with the reason, rather than leaving a gap unexplained. Task 4 carried an explicit fallback instruction if byte comparison proved unworkable for `std::string` (it did; see the per-task note), and Task 8 was cut before that instruction mattered.
 
-**Type consistency:** `DeriveDisplayName`, `DisplayNameForField`, `DisplayNameForComponent`, `CategoryOfField`, `TooltipOfField`, `RangeOfField`, `FieldIsReadOnly`, `FieldIsAttributeHidden`, `ComponentMatchesFilter`, `MatchesInspectorFilter`, `ReadDefaultFieldBytes`, `FieldDiffersFromDefault` are each defined once and used with the same spelling and signature throughout.
+**Type consistency:** `DeriveDisplayName`, `DisplayNameForField`, `DisplayNameForComponent`, `CategoryOfField`, `TooltipOfField`, `RangeOfField`, `FieldIsReadOnly`, `FieldIsAttributeHidden`, `ComponentMatchesFilter`, `MatchesInspectorFilter` are each defined once and used with the same spelling and signature throughout. `ReadDefaultFieldBytes` and `FieldDiffersFromDefault` were implemented for Task 4 and then reverted with it (2026-07-27); they no longer exist in the codebase.
 
 **Three places the implementer must verify against the codebase rather than trust this plan:** `ComponentDescriptor`'s exact member spellings (`DefaultConstruct`, `Destruct`, `size`, `alignment`, `meta`); `ComponentRegistry`'s descriptor accessor name; and the existing `ImGuiFieldVisitor`'s structure, since Tasks 5-8 all modify it and this plan describes its shape rather than reproducing it.
