@@ -124,16 +124,19 @@ namespace Arcane
 // load; binary trivially-copyable path still round-trips it harmlessly).
 namespace Arcane
 {
+    // NO Category on these three. The Inspector draws uncategorised fields
+    // directly under the component header and each named category under a
+    // collapsible sub-header, so a component whose every field shares one
+    // category renders as "Transform > Transform > fields" -- a click and an
+    // indent that separate nothing from anything. Categories earn their keep
+    // where a component has several groups; SpriteRenderer below is that case.
     ASTRA_REFLECT_TYPE(Transform)
         ASTRA_REFLECT_FIELD(Transform, position)
-            ASTRA_REFLECT_ATTR(Category, "Transform")
             ASTRA_REFLECT_ATTR(Tooltip, "World position in meters (MKS units). The renderer applies no Y-flip, so +Y moves an entity DOWN on screen, not up.")
         ASTRA_REFLECT_FIELD(Transform, rotation)
             ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
-            ASTRA_REFLECT_ATTR(Category, "Transform")
             ASTRA_REFLECT_ATTR(Tooltip, "Rotation in radians.")
         ASTRA_REFLECT_FIELD(Transform, scale)
-            ASTRA_REFLECT_ATTR(Category, "Transform")
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(WorldTransform)
@@ -190,9 +193,9 @@ namespace Arcane
             ASTRA_REFLECT_ATTR(Category, "Appearance")
     ASTRA_END_REFLECT_TYPE()
 
+    // One field, so no Category -- see Transform above.
     ASTRA_REFLECT_TYPE(PostProcess)
         ASTRA_REFLECT_FIELD(PostProcess, material)
-            ASTRA_REFLECT_ATTR(Category, "Post Processing")
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(EntityInfo)
