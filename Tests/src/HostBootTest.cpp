@@ -27,8 +27,39 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <vector>
 
-namespace { namespace fs = std::filesystem; }
+namespace
+{
+    namespace fs = std::filesystem;
+
+    // Locate the repo's real Arcane/SampleProject from wherever this test exe
+    // happens to run. No other test in this suite reaches into source-tree
+    // content (no SOURCE_DIR-style define, no fixture-copy convention to
+    // follow), so rather than hardcoding a fixed "../../.." depth this walks
+    // UP from the exe's own directory looking for the "SampleProject/
+    // SampleProject.arcproj" landmark. The premake layout
+    // (Arcane/bin/<cfg>-<os>-<arch>-md/<project>/) makes 3 levels the expected
+    // answer today, but verifying-by-search survives a future bin/ layout
+    // change instead of silently opening the wrong directory (or none) with
+    // no diagnostic. Bounded to 8 levels; empty on failure.
+    fs::path FindSampleProjectDir()
+    {
+        std::error_code ec;
+        fs::path dir = fs::path(Arcane::ExecutablePathUtf8()).parent_path();
+        for (int i = 0; i < 8 && !dir.empty(); ++i)
+        {
+            const fs::path candidate = dir / "SampleProject";
+            if (fs::is_regular_file(candidate / "SampleProject.arcproj", ec))
+                return candidate;
+            const fs::path parent = dir.parent_path();
+            if (parent == dir)
+                break;
+            dir = parent;
+        }
+        return {};
+    }
+}
 
 TEST_CASE("LoomConfig parses --project", "[loom]")
 {
@@ -430,4 +461,49 @@ TEST_CASE("BootScene leaves the registry untouched when the resolved file fails 
     CHECK(rt.Registry().Size() == 1);   // untouched -- read failed before any reset
 
     fs::remove_all(dir, ec);
+}
+
+// --- Task 9: SampleProject ships an authored scene and opens into it --------
+// The end-to-end proof: the shipped Content/scenes/main.arcscene resolves
+// through the real .arcproj's bootScene Guid and loads into a real Runtime.
+// Opened IN PLACE, not a copy -- Project::Open only ever writes an asset file
+// back when it is missing/invalid a native "id" (AssetRegistry.cpp's
+// ResolveNativeId), and both SampleProject content files already carry one
+// (main.arcscene's id was stamped by Scene::SaveSceneFile when it was
+// generated), so this is a read-only pass over the real repo tree -- no
+// mutation risk to source-controlled fixtures from running the test suite.
+
+TEST_CASE("SampleProject opens into its authored boot scene end to end", "[loom][project]")
+{
+    const fs::path dir = FindSampleProjectDir();
+    REQUIRE_FALSE(dir.empty());   // if this fails, FindSampleProjectDir's search bound needs raising
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    REQUIRE_FALSE(proj->Manifest().bootScene.empty());
+
+    const fs::path sceneFile = Arcane::HostBoot::BootSceneFile(*proj);
+    REQUIRE_FALSE(sceneFile.empty());
+    CHECK(sceneFile.filename() == "main.arcscene");
+
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    const auto result = Arcane::HostBoot::BootScene(runtime, *proj);
+    REQUIRE(result.has_value());
+    CHECK(result->id.ToString() == proj->Manifest().bootScene);
+
+    const Arcane::SceneRoot* sceneRoot = runtime.Registry().GetResource<Arcane::SceneRoot>();
+    REQUIRE(sceneRoot != nullptr);
+
+    const auto children = runtime.Registry().GetChildren(sceneRoot->entity);
+    REQUIRE(children.size() == 3);
+
+    std::vector<std::string> names;
+    for (Astra::Entity child : children)
+    {
+        const Arcane::EntityInfo* info = runtime.Registry().GetComponent<Arcane::EntityInfo>(child);
+        REQUIRE(info != nullptr);
+        names.push_back(info->name);
+    }
+    std::sort(names.begin(), names.end());
+    CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground"});
 }
