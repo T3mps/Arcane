@@ -33,6 +33,7 @@
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
+#include <Arcane/Scene/TransformSystems.hpp>   // Edit-mode derived-transform refresh
 #include <Arcane/Scene/SceneResources.hpp>   // Arcane::SceneRoot (DoSaveScene's empty-scene guard)
 #include <Arcane/Serialization/SceneAsset.hpp>   // .arcscene read/apply/save (New/Open/Save Scene)
 
@@ -1483,6 +1484,22 @@ namespace Arcane::Editor
                 postGlobals.deltaTime = (float)m_lastFrameDt;
                 postGlobals.viewportWidth = (float)m_viewport->Width();
                 postGlobals.viewportHeight = (float)m_viewport->Height();
+                // Derived transforms, refreshed for THIS frame before anything reads
+                // them.
+                //
+                // TransformPropagationSystem is a fixedUpdate system, and Edit mode
+                // holds the RunLoop paused -- so the whole fixed phase is frozen while
+                // SubmitRender still runs every frame. Without this, WorldTransform is
+                // never computed (nor materialised) in Edit mode: sprites do not draw
+                // at all until you press Play, and a gizmo drag moves Transform with
+                // nothing on screen following it. Play mode does not need this, since
+                // the fixed phase is running and would do the same work twice.
+                //
+                // World transforms are DERIVED data: whoever reads them is responsible
+                // for them being current, and in Edit mode that is the editor.
+                if (!m_play.IsPlaying())
+                    Arcane::TransformPropagationSystem{}(m_runtime->Registry());
+
                 m_viewport->SetPostGlobals(postGlobals);
                 m_viewport->SetPostChain(postChain, postInst,
                                          &m_runtime->AssetsFacade());
