@@ -20,6 +20,7 @@
 // Exception-free: every failure returns nullopt/false and writes a reason to
 // the caller's `error` string.
 
+#include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
@@ -194,41 +195,15 @@ namespace Arcane::Scene
 
     // Serialize `reg`'s SceneRoot subtree to `file`, stamping `id` as the
     // top-level asset id. The parent directory must already exist.
-    inline bool SaveSceneFile(const std::filesystem::path& file, const Astra::Registry& reg,
-                              const Arcane::Guid& id, std::string* error)
-    {
-        if (!id.IsValid())
-        {
-            Detail::SetError(error, "refusing to save a scene with no asset id");
-            return false;
-        }
-        try
-        {
-            nlohmann::json doc = SaveJson(reg);
-            // Inserted after SaveJson so the id survives even though SaveJson
-            // owns the rest of the document's shape.
-            doc["id"] = id.ToString();
-
-            std::ofstream out(file, std::ios::binary | std::ios::trunc);
-            if (!out)
-            {
-                Detail::SetError(error, "could not open " + file.generic_string() + " for writing");
-                return false;
-            }
-            out << doc.dump(2);
-            if (!out)
-            {
-                Detail::SetError(error, "could not write " + file.generic_string());
-                return false;
-            }
-            return true;
-        }
-        catch (const nlohmann::json::exception& e)
-        {
-            Detail::SetError(error, std::string("could not serialize the scene: ") + e.what());
-            return false;
-        }
-    }
+    //
+    // Writes a temp sibling and atomically replaces `file` (SceneAsset.cpp),
+    // so every failure path leaves the previously-saved scene byte-for-byte
+    // intact -- the same rule Project::SetBootScene follows for the .arcproj,
+    // and it matters more here: this file holds the level. Out of line because
+    // the Windows replace needs <windows.h>, which does not belong in a header
+    // this widely included.
+    ARCANE_API bool SaveSceneFile(const std::filesystem::path& file, const Astra::Registry& reg,
+                                  const Arcane::Guid& id, std::string* error);
 
     // The New Scene registry shape: one root entity carrying Transform +
     // EntityInfo, published as the SceneRoot resource.

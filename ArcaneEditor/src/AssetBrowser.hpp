@@ -172,9 +172,12 @@ namespace Arcane::Editor
 
     // The "Assets" panel: filter row + entry table over the open project's
     // registry (rebuilt per frame -- registries are small; revisit with caching
-    // when they are not). Double-click routes into `docs` (materials open the
-    // shader editor); every row is a kAssetDragType drag source; material rows
-    // carry a context menu.
+    // when they are not). Every row is a kAssetDragType drag source.
+    // Double-click routes into `docs` (materials open the shader editor) for
+    // every kind EXCEPT Scene, which is not a document: its path comes back in
+    // AssetBrowserActions::openScene for the host to load. Material rows and
+    // scene rows each carry their own context menu ("New Instance..." /
+    // "Set as Boot Scene"); other kinds have none.
     AssetBrowserActions DrawAssetBrowserPanel(AssetBrowserState& state,
                                               const Arcane::Project* project,
                                               DocumentHost& docs);

@@ -114,6 +114,18 @@ bool Loom::Init()
         return false;
     }
 
+    // Open into the project's boot scene, so `--project X` shows the SAME world
+    // the editor shows for X instead of only whatever the plugin's Init spawned.
+    // After the plugin load for the same reason EditorApp::Init does it there: a
+    // scene naming a component the game module registers would otherwise be
+    // silently dropped. The result is discarded -- Loom has no scene session to
+    // adopt it into, and BootScene already logs both the file it loaded and every
+    // reason it did not, so a project with no/broken boot scene just keeps what
+    // the plugin built rather than failing the host. No --project means no
+    // project, hence no call: the scripted Sandbox.dll GPU-verify is untouched.
+    if (const Arcane::Project* proj = m_runtime->CurrentProject())
+        (void)Arcane::HostBoot::BootScene(*m_runtime, *proj);
+
     return true;
 }
 

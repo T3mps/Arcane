@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
+#include <string>
 
 namespace
 {
@@ -54,6 +56,12 @@ namespace
         std::filesystem::remove_all(dir, ec);
         std::filesystem::create_directories(dir, ec);
         return dir;
+    }
+
+    std::string ReadAll(const std::filesystem::path& file)
+    {
+        std::ifstream in(file, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     }
 }
 
@@ -375,4 +383,78 @@ TEST_CASE("SaveSceneFile reports an unwritable path instead of throwing", "[scen
         std::filesystem::temp_directory_path() / "arcane_no_such_dir_xyz" / "s.arcscene";
     CHECK_FALSE(Arcane::Scene::SaveSceneFile(bad, f.reg, Arcane::Guid::Generate(), &err));
     CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("a failed save leaves the previously-saved scene byte-for-byte intact", "[scene][json]")
+{
+    // The review finding this covers: SaveSceneFile used to open the destination
+    // with std::ios::trunc, so the authored level was destroyed at OPEN and any
+    // later failure returned a tidy `false` over an already-empty file that
+    // ReadSceneFile then rejects. The temp-sibling + atomic-replace route means
+    // every failure path must leave the ORIGINAL readable.
+    const std::filesystem::path dir  = TempDir("arcane_scene_asset_failed_save");
+    const std::filesystem::path file = dir / ("level" + std::string(Arcane::Scene::kSceneExt));
+    const std::filesystem::path tmp  = file.string() + ".tmp";
+    const Arcane::Guid id = Arcane::Guid::Generate();
+
+    // The authored work a failed save must not take with it.
+    {
+        Fixture f;
+        std::string err;
+        REQUIRE(Arcane::Scene::SaveSceneFile(file, f.reg, id, &err));
+    }
+    const std::string original = ReadAll(file);
+    REQUIRE_FALSE(original.empty());
+
+    // Each SECTION re-saves from a FRESH Fixture, whose EntityInfo Guids are
+    // freshly generated -- so a save that wrongly succeeded would change the
+    // file's bytes and the trailing comparison would catch it.
+    SECTION("the serializer throws mid-write")
+    {
+        // This one genuinely reaches the post-truncate window rather than
+        // approximating it. nlohmann accepts arbitrary bytes INTO a json string
+        // and only rejects invalid UTF-8 at dump() -- so the throw lands after
+        // the old code's truncating open had already zeroed the file, which is
+        // exactly the ordering the fix changes.
+        Fixture f;
+        Arcane::EntityInfo* info = f.reg.GetComponent<Arcane::EntityInfo>(f.root);
+        REQUIRE(info != nullptr);
+        info->name = "bad\xC3\x28";   // 0xC3 opens a 2-byte sequence; 0x28 is no continuation byte
+
+        // Proof that this really is the post-open window and not a failure that
+        // happens harmlessly early: the document ASSEMBLES fine and only the
+        // serialization of it throws. SaveSceneFile calls dump() with the output
+        // stream already open, so the old truncating version had zeroed the
+        // destination by the time this throw arrived.
+        const nlohmann::json built = Arcane::Scene::SaveJson(f.reg);
+        CHECK_THROWS_AS(built.dump(2), nlohmann::json::exception);
+
+        std::string err;
+        CHECK_FALSE(Arcane::Scene::SaveSceneFile(file, f.reg, id, &err));
+        CHECK_FALSE(err.empty());
+    }
+    SECTION("the temp sibling cannot be created")
+    {
+        // A directory squatting on the temp path makes the ofstream open fail --
+        // the failure that happens BEFORE any byte is written.
+        std::error_code ec;
+        std::filesystem::create_directory(tmp, ec);
+        REQUIRE_FALSE(ec);
+
+        Fixture f;
+        std::string err;
+        CHECK_FALSE(Arcane::Scene::SaveSceneFile(file, f.reg, id, &err));
+        CHECK_FALSE(err.empty());
+
+        std::filesystem::remove(tmp, ec);
+    }
+
+    CHECK(ReadAll(file) == original);
+    CHECK_FALSE(std::filesystem::exists(tmp));   // no stray temp left behind
+
+    // Still a scene the editor will open, not truncated remains.
+    std::string err;
+    const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+    REQUIRE(read.has_value());
+    CHECK(read->id == id);
 }

@@ -40,8 +40,8 @@
           "orderInLayer": 0,
           "shape": "Rect",
           "size": [
-            32.0,
-            32.0
+            10.0,
+            0.5
           ],
           "sortingLayer": 0,
           "textureId": 0,
@@ -83,8 +83,8 @@
           "orderInLayer": 0,
           "shape": "Rect",
           "size": [
-            32.0,
-            32.0
+            1.0,
+            1.0
           ],
           "sortingLayer": 0,
           "textureId": 0,
@@ -98,7 +98,7 @@
         "Arcane::Transform": {
           "position": [
             -1.0,
-            1.0
+            -0.75
           ],
           "rotation": 0.0,
           "scale": [
@@ -126,8 +126,8 @@
           "orderInLayer": 0,
           "shape": "Rect",
           "size": [
-            32.0,
-            32.0
+            1.0,
+            1.0
           ],
           "sortingLayer": 0,
           "textureId": 0,
@@ -141,7 +141,7 @@
         "Arcane::Transform": {
           "position": [
             1.0,
-            2.0
+            -0.75
           ],
           "rotation": 0.0,
           "scale": [
