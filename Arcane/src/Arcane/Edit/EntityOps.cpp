@@ -181,7 +181,7 @@ namespace Arcane::Edit
         // Identity is never minted by a rename. UE's equivalents (ActorLabel,
         // ActorGuid) are intrinsic AActor fields (Actor.h:1055/:1188) -- there
         // is no "add identity" edit to mirror. Entities without EntityInfo are
-        // runtime spawns; the editor disables rename for them.
+        // runtime spawns with no durable identity to rename.
         if (!info)
             return false;
         if (info->name == name)

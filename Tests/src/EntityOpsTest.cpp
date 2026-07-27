@@ -173,8 +173,8 @@ TEST_CASE("RenameEntity requires EntityInfo -- rename never mints identity", "[o
 {
     World w;
 
-    // A raw registry entity is the runtime-spawn shape: no EntityInfo. The
-    // editor disables rename for these; the op must refuse, not repair.
+    // A raw registry entity is the runtime-spawn shape: no EntityInfo.
+    // Runtime spawns have no durable identity; the op must refuse, not repair.
     Astra::Entity raw = w.reg.CreateEntity();
     CHECK_FALSE(Edit::RenameEntity(w.reg, raw, "Boss Arena"));
     CHECK(w.reg.GetComponent<EntityInfo>(raw) == nullptr);   // nothing added
