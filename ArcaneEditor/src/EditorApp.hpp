@@ -22,6 +22,7 @@
 #include "DocumentHost.hpp"
 #include "EditorPanels.hpp"
 #include "PlayMode.hpp"
+#include "SceneSession.hpp"
 #include "SelectionContext.hpp"
 #include "ShaderEditorDocument.hpp"
 #include "ViewportInput.hpp"
@@ -102,6 +103,12 @@ namespace Arcane::Editor
         // Inspector + viewport pick -- see SelectionContext.hpp).
         Arcane::Editor::SelectionContext m_selection;
 
+        // Which .arcscene is being edited, whether it has unsaved changes, and the
+        // one-at-a-time unsaved-changes confirm machine (SceneSession.hpp). Pure
+        // state: every effect below it (dialogs, file IO, ResetRegistry) is
+        // performed here.
+        Arcane::Editor::SceneSession m_scene;
+
         // Outliner panel state + structural-edit binding (slice 2)
         Arcane::Editor::OutlinerState   m_outliner;
         Arcane::Editor::SceneEditBinding m_editBinding;
@@ -159,6 +166,11 @@ namespace Arcane::Editor
         bool m_prevKeyE = false;
         bool m_prevKeyR = false;
         bool m_prevKeyQ = false;
+        // Ctrl+N / Ctrl+O / Ctrl+S edge-tracking for the File-menu scene shortcuts
+        // (same pattern as the undo/redo keys above).
+        bool m_prevKeyN = false;
+        bool m_prevKeyO = false;
+        bool m_prevKeyS = false;
         // Left-mouse edge-tracking, shared by the gizmo press/release detection.
         bool m_prevLmbDown = false;
         // Set for the remainder of THIS frame when a gizmo drag starts or ends,
@@ -287,6 +299,37 @@ namespace Arcane::Editor
 
         static void ProjectPickedThunk(const char* path, void* user);  // -> m_pendingProjectPath (background thread)
         void        SwitchProject(const std::filesystem::path& path);  // validate-then-soft-restart
+
+        // Async scene file-dialog results (same background-thread stash pattern as
+        // m_pendingProjectPath: the SDL dialog backend fires its callback from a
+        // detached worker, so these are swapped out at the top of the next frame
+        // under the mutex).
+        std::string m_pendingSceneOpenPath;
+        std::string m_pendingSceneSavePath;
+        std::mutex  m_pendingSceneMutex;
+
+        static void SceneOpenPickedThunk(const char* path, void* user);
+        static void SceneSavePickedThunk(const char* path, void* user);
+
+        // Editor state naming entities of the OUTGOING scene, torn down before any
+        // registry swap. Shared by SwitchProject and the scene effects below.
+        void ClearSceneReferences();
+
+        // The scene effects. Each returns false when the effect itself failed, and
+        // sets m_sceneError to the reason (MainLoop draws it as a modal).
+        bool DoNewScene();
+        bool DoOpenScene(const std::filesystem::path& file);
+        bool DoSaveScene(const std::filesystem::path& file);
+
+        // Last scene failure, shown as a blocking modal until dismissed. Main
+        // thread only (set in the effects, read in the ImGui pass).
+        std::string m_sceneError;
+
+        // Window title, recomposed from project + scene + dirty state each frame
+        // and pushed to the window only when it changes (SetTitle is an SDL call,
+        // and the string is identical on the overwhelming majority of frames).
+        std::string m_windowTitle;
+        void        UpdateWindowTitle();
 
         // The dock node the Viewport occupied LAST frame (0 = floating):
         // where new document windows dock as sibling tabs (DrawAll).

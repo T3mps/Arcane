@@ -33,6 +33,7 @@
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
+#include <Arcane/Serialization/SceneAsset.hpp>   // .arcscene read/apply/save (New/Open/Save Scene)
 
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Registry/Registry.hpp>   // Registry::InspectEntity/GetComponent (gizmo descriptor resolve)
@@ -70,6 +71,12 @@ namespace Arcane::Editor
         constexpr uint32_t kScR = 21;   // SDL_SCANCODE_R
         constexpr uint32_t kScQ = 20;   // SDL_SCANCODE_Q
 
+        // File-menu scene shortcuts: Ctrl+N / Ctrl+O / Ctrl+S (see MainLoop's input
+        // block). The menu advertises these, so they are handled rather than drawn.
+        constexpr uint32_t kScN = 17;   // SDL_SCANCODE_N
+        constexpr uint32_t kScO = 18;   // SDL_SCANCODE_O
+        constexpr uint32_t kScS = 22;   // SDL_SCANCODE_S
+
         // Resolve the ComponentDescriptor for Transform on `e`, for bracketing
         // a gizmo drag into the undo stack via CommandStack::SnapshotComponent.
         // Mirrors EditorPanels.cpp's Inspector loop (InspectEntity + meta->typeName
@@ -88,12 +95,19 @@ namespace Arcane::Editor
         // editor name. Since the no-project gate landed (main.cpp), a
         // project-less session is reachable ONLY via an explicit --plugin (the
         // engine-dev path) or a --project that failed to open -- never from a
-        // bare launch.
-        std::string EditorTitle(const Arcane::Project* project)
+        // bare launch. `scene` is SceneSession::DisplayName ("Untitled" until the
+        // scene has been saved somewhere); the trailing * is the unsaved marker,
+        // matching the one on File -> Save Scene.
+        std::string EditorTitle(const Arcane::Project* project,
+                                const std::string& scene, bool sceneDirty)
         {
+            std::string title = "Arcane Editor";
             if (project)
-                return "Arcane Editor -- " + project->Manifest().name;
-            return "Arcane Editor";
+                title += " -- " + project->Manifest().name;
+            title += " -- " + scene;
+            if (sceneDirty)
+                title += "*";
+            return title;
         }
     }
 
@@ -193,7 +207,7 @@ namespace Arcane::Editor
         }
         if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
             ARC_WARN("Arcane Editor: input actions failed to load");
-        m_gpu->Win().SetTitle(EditorTitle(m_runtime->CurrentProject()));
+        UpdateWindowTitle();
 
         // The hosted plugin draws its debug UI into its OWN "game" ImGui context,
         // composited INTO the viewport texture (see MainLoop), instead of the
@@ -572,6 +586,130 @@ namespace Arcane::Editor
         m_documents.OpenPath(path);
     }
 
+    void EditorApp::SceneOpenPickedThunk(const char* path, void* user)
+    {
+        // SDL dialog callback thread (see ProjectPickedThunk).
+        auto* self = static_cast<EditorApp*>(user);
+        if (!path) return;
+        std::lock_guard<std::mutex> lk(self->m_pendingSceneMutex);
+        self->m_pendingSceneOpenPath = path;
+    }
+
+    void EditorApp::SceneSavePickedThunk(const char* path, void* user)
+    {
+        auto* self = static_cast<EditorApp*>(user);
+        if (!path) return;
+        std::lock_guard<std::mutex> lk(self->m_pendingSceneMutex);
+        self->m_pendingSceneSavePath = path;
+    }
+
+    void EditorApp::ClearSceneReferences()
+    {
+        // Every entity handle the editor is holding names an entity of the OUTGOING
+        // scene, and none of them survive the registry swap that follows (Runtime::
+        // ResetRegistry, or PlaySession::Stop's RestoreRegistry). Play is stopped
+        // FIRST because Stop restores the pre-Play snapshot: left running, it would
+        // later overwrite whatever scene is loaded after this.
+        if (m_play.IsPlaying())
+            m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
+        m_selection.Clear();
+        m_outliner = {};
+        // A gizmo drag holds pre-drag poses for entities that are about to stop
+        // existing, and both it and the Inspector park a CommandStack ownership
+        // token that Clear() below retires.
+        m_gizmoDrag = {};
+        m_inspector = {};
+        if (m_undo) m_undo->Clear();
+    }
+
+    bool EditorApp::DoNewScene()
+    {
+        ClearSceneReferences();
+        m_runtime->ResetRegistry();
+        Arcane::Scene::CreateEmpty(m_runtime->Registry());
+        m_scene.Reset(*m_undo);
+        ARC_INFO("New scene");
+        return true;
+    }
+
+    bool EditorApp::DoOpenScene(const std::filesystem::path& file)
+    {
+        // READ FIRST. A rejected file must leave the current scene exactly as it is,
+        // not empty the editor and then report a failure -- which is what a
+        // ResetRegistry-then-load would do. This is the whole reason ReadSceneFile
+        // and ApplySceneDocument are separate calls (SceneAsset.hpp).
+        std::string err;
+        const auto doc = Arcane::Scene::ReadSceneFile(file, &err);
+        if (!doc)
+        {
+            ARC_ERROR("Open Scene: {}", err);
+            m_sceneError = err;
+            return false;
+        }
+
+        ClearSceneReferences();
+        m_runtime->ResetRegistry();
+        if (!Arcane::Scene::ApplySceneDocument(*doc, m_runtime->Registry()))
+        {
+            // Validated but unloadable -- the failure mode ReadSceneFile's structural
+            // gate cannot see (a component whose reflected field type is unsupported).
+            // The registry is already empty by contract, so nothing of the previous
+            // scene was overwritten; give the user a well-formed empty scene rather
+            // than the half-populated one this left behind.
+            Arcane::Scene::CreateEmpty(m_runtime->Registry());
+            m_scene.Reset(*m_undo);
+            m_sceneError = "'" + file.generic_string() +
+                           "' parsed but could not be loaded (see Console).";
+            ARC_ERROR("Open Scene: ApplySceneDocument failed for {}", file.generic_string());
+            return false;
+        }
+
+        m_scene.Adopt(file, doc->id, *m_undo);
+        ARC_INFO("Opened scene {}", file.generic_string());
+        return true;
+    }
+
+    bool EditorApp::DoSaveScene(const std::filesystem::path& file)
+    {
+        // Reuse the scene's existing id when saving over itself; mint one for a new
+        // file so the asset registry has something stable to register it under.
+        const bool sameFile = !m_scene.Path().empty() && m_scene.Path() == file;
+        const Arcane::Guid id = (sameFile && m_scene.Id().IsValid())
+                              ? m_scene.Id() : Arcane::Guid::Generate();
+
+        std::string err;
+        if (!Arcane::Scene::SaveSceneFile(file, m_runtime->Registry(), id, &err))
+        {
+            ARC_ERROR("Save Scene: {}", err);
+            m_sceneError = err;
+            return false;
+        }
+
+        // Register the written file so it resolves by Guid and lists in the browser.
+        // AssetRegistry reads the id back out of the file, so the registered Guid is
+        // the one just stamped. A scene saved outside the project's content root
+        // cannot be registered -- Runtime/Project already log exactly why, and it is
+        // not a save failure: the bytes are on disk either way.
+        m_runtime->RegisterCreatedAsset(file);
+
+        m_scene.Adopt(file, id, *m_undo);
+        ARC_INFO("Saved scene {}", file.generic_string());
+        return true;
+    }
+
+    void EditorApp::UpdateWindowTitle()
+    {
+        // m_undo is built later in Init than the first title push; a session with no
+        // command stack yet has nothing authored, so it reads as clean.
+        const bool dirty = m_undo && m_scene.IsDirty(*m_undo);
+        std::string title = EditorTitle(m_runtime ? m_runtime->CurrentProject() : nullptr,
+                                        m_scene.DisplayName(), dirty);
+        if (title == m_windowTitle)
+            return;
+        m_windowTitle = std::move(title);
+        m_gpu->Win().SetTitle(m_windowTitle);
+    }
+
     void EditorApp::ProjectPickedThunk(const char* path, void* user)
     {
         // Runs on an SDL-owned BACKGROUND thread (the Windows dialog backend
@@ -630,11 +768,13 @@ namespace Arcane::Editor
             m_postChains->Clear();
 
         // Return to Edit + clear editor state that references the outgoing scene.
-        if (m_play.IsPlaying())
-            m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
-        m_selection.Clear();
-        m_outliner = {};
-        if (m_undo) m_undo->Clear();
+        ClearSceneReferences();
+        // The scene the session named belonged to the OUTGOING project, and the new
+        // project's registry is built by its plugin, not loaded from an .arcscene --
+        // so the session goes back to Untitled/clean here rather than at the end,
+        // where the "OpenProject failed after validation" return would skip it and
+        // leave a stale path with a spurious dirty marker.
+        if (m_undo) m_scene.Reset(*m_undo);
 
         // Idle the GPU before freeing plugin-owned GPU resources, then unload the plugin
         // (dtor: Unload -> ClearSystems + ResetRegistry, DLL still mapped).
@@ -675,7 +815,7 @@ namespace Arcane::Editor
         }
 
         m_runtime->Loop().SetPaused(true);   // back to Edit
-        m_gpu->Win().SetTitle(EditorTitle(m_runtime->CurrentProject()));
+        UpdateWindowTitle();
     }
 
     void EditorApp::InstallConsoleSink()
@@ -695,15 +835,89 @@ namespace Arcane::Editor
         auto lastFrameTime = simPrev;
         bool running = true;
 
+        // Perform a scene intent SceneSession parked (or one that needed no
+        // confirmation). Only ever called from the top-of-frame block below -- see
+        // sceneAction.
+        auto runSceneAction = [&](const Arcane::Editor::SceneSession::PendingRequest& req)
+        {
+            switch (req.intent)
+            {
+                case Arcane::Editor::SceneIntent::NewScene:    DoNewScene(); break;
+                case Arcane::Editor::SceneIntent::OpenScene:   DoOpenScene(req.path); break;
+                case Arcane::Editor::SceneIntent::OpenProject: SwitchProject(req.path); break;
+                case Arcane::Editor::SceneIntent::Exit:        running = false; break;
+                case Arcane::Editor::SceneIntent::None:        break;
+            }
+        };
+        // The answer the confirm modal resolved, carried from the ImGui pass of one
+        // frame to the top of the next. The modal cannot perform the action where the
+        // button is clicked: OpenProject tears down the plugin and closes documents
+        // whose textures the frame's already-built draw lists still reference, and
+        // ImGui replays those lists at Render time.
+        Arcane::Editor::SceneSession::PendingRequest sceneAction;
+
         while (running)
         {
             auto events = m_gpu->Win().PumpEvents();
-            if (events.quitRequested) break;
+            if (events.quitRequested)
+            {
+                // Unsaved scene: park the quit behind the confirm modal rather than
+                // dropping the user's work on a window close. Request returns false
+                // when it parks, and this frame then runs normally so the modal draws.
+                if (m_scene.Request(Arcane::Editor::SceneIntent::Exit, {}, *m_undo))
+                    break;
+            }
             if (events.resized) m_gpu->OnResize(events.width, events.height);
             if (m_gpu->Win().IsMinimized())
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
+            }
+
+            // The confirm modal's answer from LAST frame, run here at the same safe
+            // point the project switch uses. Taken before any new Request below: the
+            // session allows only one parked intent at a time.
+            if (sceneAction.intent != Arcane::Editor::SceneIntent::None)
+            {
+                const Arcane::Editor::SceneSession::PendingRequest req = sceneAction;
+                sceneAction = {};
+                runSceneAction(req);
+            }
+
+            // Scene file-dialog results (same background-thread stash pattern as the
+            // project/material dialogs below).
+            std::string sceneOpen, sceneSave;
+            {
+                std::lock_guard<std::mutex> lk(m_pendingSceneMutex);
+                sceneOpen.swap(m_pendingSceneOpenPath);
+                sceneSave.swap(m_pendingSceneSavePath);
+            }
+            if (!sceneOpen.empty())
+            {
+                // Guarded: opening over unsaved work parks the intent for the confirm
+                // modal (drawn later this frame) instead of discarding it.
+                if (m_scene.Request(Arcane::Editor::SceneIntent::OpenScene, sceneOpen, *m_undo))
+                    DoOpenScene(sceneOpen);
+            }
+            if (!sceneSave.empty())
+            {
+                std::filesystem::path p = sceneSave;
+                // The save dialog does not force the extension (Window.hpp), and a
+                // scene without it does not scan as an asset.
+                if (p.extension() != Arcane::Scene::kSceneExt)
+                    p += Arcane::Scene::kSceneExt;
+                const bool saved = DoSaveScene(p);
+
+                // This save may be the confirm modal's "Save" answer on a never-saved
+                // scene: that branch launches this dialog and leaves the intent parked
+                // until the path lands, which is now. Proceed only if the bytes
+                // actually went to disk -- a failed save must not go on to discard the
+                // work it was meant to preserve.
+                if (m_scene.Pending() != Arcane::Editor::SceneIntent::None)
+                {
+                    if (saved) runSceneAction(m_scene.TakePending());
+                    else       m_scene.ClearPending();
+                }
             }
 
             // File->Open Project: run a pending soft-restart at a safe point (top of
@@ -717,7 +931,12 @@ namespace Arcane::Editor
                 pending.swap(m_pendingProjectPath);
             }
             if (!pending.empty())
-                SwitchProject(pending);
+            {
+                // Same guard as Open Scene: the outgoing project's scene may have
+                // unsaved changes, and switching would drop them.
+                if (m_scene.Request(Arcane::Editor::SceneIntent::OpenProject, pending, *m_undo))
+                    SwitchProject(pending);
+            }
 
             // Material file-dialog results (same background-thread stash
             // pattern): create/open at the top of the frame, never mid-render.
@@ -740,6 +959,11 @@ namespace Arcane::Editor
             // last-frame WantCaptureMouse are known; stays in scope past the block
             // so the click-pick further down this same frame can also honor it.
             bool gameUiClaims = false;
+            // File-menu scene shortcuts, raised in the input block below and folded
+            // into this frame's MenuRequests at the menu-request site (the same shape
+            // m_raiseOpenProjectOnStart uses) so the keybind and the menu item cannot
+            // drift apart.
+            bool scNewScene = false, scOpenScene = false, scSaveScene = false;
             {
                 // Cleared here, set below if a gizmo drag starts or ends THIS frame --
                 // the click-pick block (later, after ImGui builds the Viewport panel)
@@ -856,6 +1080,20 @@ namespace Arcane::Editor
                     if (active && noOpenTxn && redoKeyDown && !m_prevRedoKeyDown) m_undo->Redo();
                     m_prevUndoKeyDown = undoKeyDown;
                     m_prevRedoKeyDown = redoKeyDown;
+
+                    // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
+                    // beside New Scene / Open Scene / Save Scene. Raised as requests
+                    // rather than acted on here: the menu-request site owns the guard
+                    // and dialog launches, and Ctrl+S there is also the Play gate.
+                    const bool nDown = ctrl && !shift && snap.ScancodeDown(kScN);
+                    const bool oDown = ctrl && !shift && snap.ScancodeDown(kScO);
+                    const bool sDown = ctrl && !shift && snap.ScancodeDown(kScS);
+                    scNewScene  = active && nDown && !m_prevKeyN;
+                    scOpenScene = active && oDown && !m_prevKeyO;
+                    scSaveScene = active && sDown && !m_prevKeyS;
+                    m_prevKeyN = nDown;
+                    m_prevKeyO = oDown;
+                    m_prevKeyS = sDown;
                 }
 
                 // Gizmo mode keys: W=Translate, E=Rotate, R=Scale (SDL_SCANCODE_W/E/R --
@@ -1289,9 +1527,11 @@ namespace Arcane::Editor
 
             // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
             // + the Viewport panel showing the scene texture just rendered above.
+            UpdateWindowTitle();   // project + scene name + unsaved marker
             m_gpu->Imgui().BeginFrame();
             Arcane::Editor::MenuRequests menuReq;
-            Arcane::Editor::BeginDockSpace(*m_undo, menuReq);
+            Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
+                                           m_play.IsPlaying());
             Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin ? m_plugin->Vtable() : nullptr,
                                                (uint64_t)(intptr_t)m_toolbarLogo.Get());
             Arcane::Editor::EndDockSpace();
@@ -1322,6 +1562,54 @@ namespace Arcane::Editor
                     m_gpu->Win().ShowOpenFileDialog(&EditorApp::MaterialOpenPickedThunk, this,
                                                     "Arcane Material", "arcmat", defaultPath);
             }
+
+            // Scene menu items + their Ctrl+N/O/S shortcuts (raised in the input
+            // block above). Folded together here so both routes hit the same guard.
+            menuReq.newScene  |= scNewScene;
+            menuReq.openScene |= scOpenScene;
+            menuReq.saveScene |= scSaveScene;
+
+            // Scene dialogs start in the project's Content/scenes, created on demand:
+            // a project scaffolded before scenes existed has no such folder, and the
+            // dialog would silently fall back to the OS default.
+            auto sceneDir = [this]() -> std::string
+            {
+                const Arcane::Project* proj = m_runtime->CurrentProject();
+                if (!proj) return {};
+                const std::filesystem::path dir = proj->Root() / "Content" / "scenes";
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                return dir.string();
+            };
+            auto showSceneSaveDialog = [this, &sceneDir]()
+            {
+                const std::string dir = sceneDir();
+                m_gpu->Win().ShowSaveFileDialog(&EditorApp::SceneSavePickedThunk, this,
+                                                "Arcane Scene", "arcscene",
+                                                dir.empty() ? nullptr : dir.c_str());
+            };
+
+            if (menuReq.newScene &&
+                m_scene.Request(Arcane::Editor::SceneIntent::NewScene, {}, *m_undo))
+            {
+                // Deferred to the top of the next frame for the same reason the
+                // confirm modal's answer is -- see sceneAction.
+                sceneAction = { Arcane::Editor::SceneIntent::NewScene, {} };
+            }
+            if (menuReq.openScene)
+            {
+                const std::string dir = sceneDir();
+                m_gpu->Win().ShowOpenFileDialog(&EditorApp::SceneOpenPickedThunk, this,
+                                                "Arcane Scene", "arcscene",
+                                                dir.empty() ? nullptr : dir.c_str());
+            }
+            // Save on a never-saved scene IS Save As -- otherwise the item would look
+            // enabled and do nothing.
+            if (menuReq.saveScene && !m_scene.Path().empty())
+                DoSaveScene(m_scene.Path());
+            if (menuReq.saveSceneAs || (menuReq.saveScene && m_scene.Path().empty()))
+                showSceneSaveDialog();
+
             const Arcane::Editor::AssetBrowserActions browserActions =
                 Arcane::Editor::DrawAssetBrowserPanel(m_assetBrowser,
                                                       m_runtime->CurrentProject(), m_documents);
@@ -1356,6 +1644,87 @@ namespace Arcane::Editor
                     ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
                 {
                     m_projectOpenError.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
+            // Unsaved-scene confirm. SceneSession parked the intent (New Scene, Open
+            // Scene, Open Project, Exit) because the scene is dirty; this popup is
+            // where it is answered. Same re-arm shape as the modal above.
+            if (m_scene.Pending() != Arcane::Editor::SceneIntent::None &&
+                !ImGui::IsPopupOpen("Unsaved Scene"))
+                ImGui::OpenPopup("Unsaved Scene");
+            if (ImGui::BeginPopupModal("Unsaved Scene", nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                if (m_scene.Pending() == Arcane::Editor::SceneIntent::None)
+                {
+                    // The intent was taken OUTSIDE this popup: the Save button's
+                    // never-saved branch launches a file dialog and leaves the popup
+                    // up, and the save (and with it the action) lands at the top of a
+                    // later frame. Nothing left to ask about.
+                    ImGui::CloseCurrentPopup();
+                }
+                else
+                {
+                    ImGui::TextUnformatted(("'" + m_scene.DisplayName() +
+                                            "' has unsaved changes.").c_str());
+                    ImGui::Separator();
+                    if (ImGui::Button("Save", ImVec2(90, 0)))
+                    {
+                        if (m_scene.Path().empty())
+                        {
+                            // Never saved: this needs a filename first. The intent
+                            // stays parked and this popup stays up until the dialog
+                            // resolves, so cancelling the dialog cancels only the
+                            // save, not the action behind it.
+                            showSceneSaveDialog();
+                        }
+                        else if (DoSaveScene(m_scene.Path()))
+                        {
+                            sceneAction = m_scene.TakePending();
+                            ImGui::CloseCurrentPopup();
+                        }
+                        else
+                        {
+                            // The save failed (m_sceneError says why). Drop the action
+                            // rather than proceed -- proceeding would discard exactly
+                            // the work the save was meant to preserve.
+                            m_scene.ClearPending();
+                            ImGui::CloseCurrentPopup();
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Discard", ImVec2(90, 0)))
+                    {
+                        sceneAction = m_scene.TakePending();
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Cancel", ImVec2(90, 0)) ||
+                        ImGui::IsKeyPressed(ImGuiKey_Escape))
+                    {
+                        m_scene.ClearPending();
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+
+            // Scene failure modal (bad file, failed write). Same re-arm shape.
+            if (!m_sceneError.empty() && !ImGui::IsPopupOpen("Scene Error"))
+                ImGui::OpenPopup("Scene Error");
+            if (ImGui::BeginPopupModal("Scene Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+                ImGui::TextUnformatted(m_sceneError.c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::Separator();
+                if (ImGui::Button("OK", ImVec2(120, 0)) ||
+                    ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
+                {
+                    m_sceneError.clear();
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();

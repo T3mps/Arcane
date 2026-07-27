@@ -26,6 +26,10 @@ namespace Arcane::Editor
         bool openProject = false;    // File -> Open Project...   (folder dialog)
         bool newMaterial = false;    // File -> New Material...   (save dialog; graph-owned)
         bool openMaterial = false;   // File -> Open Material...  (open-file dialog)
+        bool newScene = false;       // File -> New Scene
+        bool openScene = false;      // File -> Open Scene...     (open-file dialog)
+        bool saveScene = false;      // File -> Save Scene        (Save As when never saved)
+        bool saveSceneAs = false;    // File -> Save Scene As...  (save dialog)
     };
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
@@ -34,7 +38,9 @@ namespace Arcane::Editor
     // panels are drawn AFTER EndDockSpace. `undo` drives the Edit menu's Undo/Redo
     // (same CommandStack as the Ctrl+Z / Ctrl+Y shortcuts handled in the app input loop).
     // Menu clicks land in `requests`; the caller launches the dialogs.
-    void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests);
+    // `sceneDirty` puts the * on Save Scene; `playing` greys both Save items out.
+    void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
+                        bool sceneDirty, bool playing);
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
     // Everything drawn in between becomes a fixed (non-dockable, tab-less) strip above
