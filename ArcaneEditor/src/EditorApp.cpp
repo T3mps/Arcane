@@ -421,6 +421,19 @@ namespace Arcane::Editor
                 std::make_unique<Arcane::PostChainCache>(std::move(postServices));
         }
 
+        // Task 7: open into the project's boot scene, now that the plugin has
+        // loaded (a scene naming a component the game module registers would
+        // otherwise silently drop it) and m_undo exists (Adopt records the
+        // clean baseline against it). A project with no boot scene, or one
+        // that fails to resolve/load, keeps whatever the plugin's Init built --
+        // code-spawned scenes are legacy, but nothing clears them unless a
+        // scene actually takes ownership (BootScene already logged the reason).
+        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+        {
+            if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+                m_scene.Adopt(boot->file, boot->id, *m_undo);
+        }
+
         return true;
     }
 
@@ -877,6 +890,20 @@ namespace Arcane::Editor
                                      "failed to load (see Console).\nCheck the DLL paths in "
                                      "the manifest and that they are built against ABI " +
                                      std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".";
+            }
+        }
+
+        // Task 7: same boot-scene handoff as Init, after THIS project's plugin
+        // load (not the outgoing project's) so a component type the new game
+        // module registers deserializes rather than being dropped. m_scene was
+        // already reset to Untitled above, before OpenProject -- Adopt() here
+        // retargets it onto the new project's boot scene when it has one.
+        if (m_undo)
+        {
+            if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            {
+                if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+                    m_scene.Adopt(boot->file, boot->id, *m_undo);
             }
         }
 
