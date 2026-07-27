@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <span>
+#include <string>
 
 namespace Arcane::Editor
 {
@@ -33,6 +34,7 @@ namespace Arcane::Editor
         static const uint64_t kVec2 = Astra::TypeID<glm::vec2>::Hash();
         static const uint64_t kVec3 = Astra::TypeID<glm::vec3>::Hash();
         static const uint64_t kGuid = Astra::TypeID<Arcane::Guid>::Hash();
+        static const uint64_t kStr  = Astra::TypeID<std::string>::Hash();
 
         if (f.typeHash == kBool) return FieldKind::Bool;
         if (f.typeHash == kF32)  return FieldKind::Float;
@@ -40,6 +42,7 @@ namespace Arcane::Editor
         if (f.typeHash == kVec2) return FieldKind::Vec2;
         if (f.typeHash == kVec3) return FieldKind::Vec3;
         if (f.typeHash == kGuid) return FieldKind::AssetRef;
+        if (f.typeHash == kStr)  return FieldKind::String;
 
         return FieldKind::ReadOnly;
     }
@@ -55,6 +58,9 @@ namespace Arcane::Editor
 
     void ApplyGuidEdit(const Astra::FieldInfo& f, void* instance, const Arcane::Guid& v) noexcept
     { if (Arcane::Guid* p = f.GetPtr<Arcane::Guid>(instance)) *p = v; }
+
+    void ApplyStringEdit(const Astra::FieldInfo& f, void* instance, const std::string& v) noexcept
+    { if (std::string* p = f.GetPtr<std::string>(instance)) *p = v; }
 
     int FieldComponentCount(FieldKind kind) noexcept
     {
@@ -86,6 +92,7 @@ namespace Arcane::Editor
         std::int32_t seedI = 0;
         bool         seedB = false;
         Arcane::Guid seedG{};
+        std::string  seedS;
 
         for (Astra::Entity e : selection)
         {
@@ -97,6 +104,7 @@ namespace Arcane::Editor
             std::int32_t curI = 0;
             bool         curB = false;
             Arcane::Guid curG{};
+            std::string  curS;
 
             switch (kind)
             {
@@ -120,6 +128,9 @@ namespace Arcane::Editor
                 case FieldKind::AssetRef:
                     if (const Arcane::Guid* p = f.GetPtr<Arcane::Guid>(data)) curG = *p;
                     break;
+                case FieldKind::String:
+                    if (const std::string* p = f.GetPtr<std::string>(data)) curS = *p;
+                    break;
                 default:
                     return mask;
             }
@@ -127,7 +138,7 @@ namespace Arcane::Editor
             if (!seeded)
             {
                 seeded = true;
-                seedB = curB; seedI = curI; seedG = curG;
+                seedB = curB; seedI = curI; seedG = curG; seedS = curS;
                 for (int i = 0; i < count; ++i) seedF[i] = curF[i];
                 continue;
             }
@@ -145,6 +156,9 @@ namespace Arcane::Editor
                     break;
                 case FieldKind::AssetRef:
                     if (curG != seedG) mask.bits |= 1u;
+                    break;
+                case FieldKind::String:
+                    if (curS != seedS) mask.bits |= 1u;
                     break;
                 default:
                     for (int i = 0; i < count; ++i)

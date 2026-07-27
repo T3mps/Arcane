@@ -77,6 +77,15 @@ namespace
             return e;
         }
 
+        // EntityInfo carrier for the string-field mixed-mask test. `name` is the
+        // only reflected std::string on the engine's own component roster.
+        Astra::Entity MakeNamed(const std::string& name)
+        {
+            Astra::Entity e = reg.CreateEntity();
+            reg.AddComponent<Arcane::EntityInfo>(e, Arcane::EntityInfo{ Arcane::Guid::Generate(), name });
+            return e;
+        }
+
         std::uint64_t TransformHash() const
         {
             const Astra::ComponentDescriptor* d =
@@ -90,11 +99,30 @@ namespace
             REQUIRE(d->hash != 0);
             return d->hash;
         }
+
+        std::uint64_t EntityInfoHash() const
+        {
+            const Astra::ComponentDescriptor* d =
+                creg->GetComponentDescriptor(Astra::TypeID<Arcane::EntityInfo>::Value());
+            REQUIRE(d != nullptr);
+            REQUIRE(d->hash != 0);
+            return d->hash;
+        }
     };
 
     const Astra::FieldInfo* TransformField(const char* name)
     {
         const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::Transform>();
+        if (!meta) return nullptr;
+        for (const Astra::FieldInfo& f : meta->fields)
+            if (f.name == name)
+                return &f;
+        return nullptr;
+    }
+
+    const Astra::FieldInfo* EntityInfoField(const char* name)
+    {
+        const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::EntityInfo>();
         if (!meta) return nullptr;
         for (const Astra::FieldInfo& f : meta->fields)
             if (f.name == name)
@@ -346,4 +374,57 @@ TEST_CASE("ComputeFieldMixed on an empty selection is not mixed", "[editor]")
     REQUIRE(pos != nullptr);
     CHECK_FALSE(Arcane::Editor::ComputeFieldMixed(
         w.reg, std::span<const Astra::Entity>{}, w.TransformHash(), *pos).Any());
+}
+
+// --- FieldKind::String -----------------------------------------------------
+
+TEST_CASE("std::string fields classify as String and round-trip edits", "[editor]")
+{
+    auto creg = std::make_shared<Astra::ComponentRegistry>();
+    Arcane::RegisterSceneComponents(*creg);
+    const Astra::ComponentDescriptor* desc =
+        creg->GetComponentDescriptorByHash(Astra::TypeID<Arcane::EntityInfo>::Hash());
+    REQUIRE(desc != nullptr);
+    REQUIRE(desc->meta != nullptr);
+
+    const Astra::FieldInfo* nameField = nullptr;
+    for (const Astra::FieldInfo& f : desc->meta->fields)
+        if (f.name == "name") nameField = &f;
+    REQUIRE(nameField != nullptr);
+
+    CHECK(Arcane::Editor::ClassifyField(*nameField) == Arcane::Editor::FieldKind::String);
+    CHECK(Arcane::Editor::FieldComponentCount(Arcane::Editor::FieldKind::String) == 1);
+
+    Arcane::EntityInfo info;
+    // SSO-defeating: the write-back must survive a heap-owning assignment.
+    Arcane::Editor::ApplyStringEdit(*nameField, &info,
+        "A name long enough to defeat SSO ................");
+    CHECK(info.name == "A name long enough to defeat SSO ................");
+    Arcane::Editor::ApplyStringEdit(*nameField, &info, "");
+    CHECK(info.name.empty());
+}
+
+TEST_CASE("ComputeFieldMixed sees string disagreement", "[editor]")
+{
+    MixedWorld w;
+    const Astra::Entity a = w.MakeNamed("Alice");
+    const Astra::Entity b = w.MakeNamed("Alice");
+    const Astra::Entity c = w.MakeNamed("Bob");
+    const Astra::Entity bare = w.reg.CreateEntity();   // no EntityInfo at all
+
+    const Astra::FieldInfo* name = EntityInfoField("name");
+    REQUIRE(name != nullptr);
+
+    const std::array<Astra::Entity, 2> samePair{ a, b };
+    CHECK_FALSE(Arcane::Editor::ComputeFieldMixed(w.reg, samePair, w.EntityInfoHash(), *name).Any());
+
+    const std::array<Astra::Entity, 3> withDiffering{ a, b, c };
+    const Arcane::Editor::FieldMixedMask mixed =
+        Arcane::Editor::ComputeFieldMixed(w.reg, withDiffering, w.EntityInfoHash(), *name);
+    CHECK(mixed.Test(0));
+
+    // The bare entity carries no EntityInfo at all, so it must not be counted
+    // as a voter: pairing it with the agreeing pair leaves the mask unmixed.
+    const std::array<Astra::Entity, 3> withBare{ a, b, bare };
+    CHECK_FALSE(Arcane::Editor::ComputeFieldMixed(w.reg, withBare, w.EntityInfoHash(), *name).Any());
 }
