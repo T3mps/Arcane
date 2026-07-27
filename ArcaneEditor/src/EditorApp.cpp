@@ -433,8 +433,31 @@ namespace Arcane::Editor
             if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
                 m_scene.Adopt(boot->file, boot->id, *m_undo);
         }
+        EnsureScene();
 
         return true;
+    }
+
+    // There is ALWAYS a scene open, the way Unity and UE always have a level open.
+    //
+    // Without this, a project with no bootScene whose game module does not spawn
+    // anything (the correct shape for a data-driven project) opens with no SceneRoot
+    // at all -- and since both the render walk and the save walk are subtree walks
+    // rooted there, the editor would silently refuse the first thing anyone does:
+    // Outliner > New Entity returns invalid and the menu item appears to do nothing.
+    //
+    // Deliberately does NOT reset the registry. A plugin that spawned its own entities
+    // and published its own SceneRoot keeps them -- "no scene loaded means nothing
+    // clears" is what makes data-driven scenes safe to adopt one project at a time.
+    void EditorApp::EnsureScene()
+    {
+        Astra::Registry& reg = m_runtime->Registry();
+        if (reg.GetResource<Arcane::SceneRoot>())
+            return;
+
+        Arcane::Scene::CreateEmpty(reg);
+        m_scene.Reset(*m_undo);
+        ARC_INFO("No scene loaded -- started an empty one");
     }
 
     Arcane::Editor::DocServices EditorApp::MakeDocServices()
@@ -906,6 +929,7 @@ namespace Arcane::Editor
                     m_scene.Adopt(boot->file, boot->id, *m_undo);
             }
         }
+        EnsureScene();
 
         m_runtime->Loop().SetPaused(true);   // back to Edit
         UpdateWindowTitle();

@@ -320,6 +320,9 @@ namespace Arcane::Editor
         // Editor state naming entities of the OUTGOING scene, torn down before any
         // registry swap. Shared by SwitchProject and the scene effects below.
         void ClearSceneReferences();
+        // Establish an empty scene when nothing published a SceneRoot, so the editor
+        // always has one open. Never clears a registry a plugin already populated.
+        void EnsureScene();
 
         // The scene effects. Each returns false when the effect itself failed, and
         // sets m_sceneError to the reason (MainLoop draws it as a modal).
