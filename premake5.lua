@@ -500,9 +500,7 @@ project "ArcaneEditor"
     }
     filter "system:windows"
         systemversion "latest"
-        -- /bigobj: EditorApp.cpp exceeded the COFF section limit (C1128) once the
-        -- scene flows landed. Same flag every other C++23-heavy project here carries.
-        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        buildoptions { "/Zc:__cplusplus" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         -- .exe file icon (Explorer/taskbar/Alt-Tab): a Win32 ICON resource. The .rc
         -- references arcane.ico by name; resincludedirs points RC at its folder.
