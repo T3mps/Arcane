@@ -58,4 +58,23 @@ namespace Arcane::Editor
     // Nothing to do with Arcane::Hidden, the marker component that makes render
     // submission skip an entity. The names collide; the meanings do not.
     [[nodiscard]] bool FieldIsAttributeHidden(const Astra::FieldInfo& field);
+
+    // Case-insensitive substring, for the Inspector's search box.
+    //
+    // An empty query matches EVERYTHING, so the unfiltered case needs no
+    // special-casing at the call site.
+    [[nodiscard]] bool ComponentMatchesFilter(std::string_view componentDisplayName,
+                                              std::string_view query);
+
+    // Matches against the component name, the field's display name AND its raw
+    // identifier -- a user who knows the source can search `sortingLayer` and a
+    // user who does not can search `sorting`.
+    //
+    // A component-name hit matches every field in it: searching "sprite" should
+    // show the whole Sprite Renderer, not an empty one. That rule lives here
+    // rather than in the draw loop so a test pins it.
+    [[nodiscard]] bool MatchesInspectorFilter(std::string_view componentDisplayName,
+                                              std::string_view fieldDisplayName,
+                                              std::string_view rawFieldName,
+                                              std::string_view query);
 }

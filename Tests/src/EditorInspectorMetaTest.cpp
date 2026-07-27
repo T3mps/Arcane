@@ -112,3 +112,26 @@ TEST_CASE("a field with no attributes falls back cleanly", "[editor]")
     CHECK_FALSE(FieldIsAttributeHidden(bare));
     CHECK(DisplayNameForField(bare) == "Bare");
 }
+
+TEST_CASE("the Inspector filter matches either spelling", "[editor]")
+{
+    // Friendly name and raw identifier both hit, so it does not matter whether
+    // the user knows the code.
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Sorting Layer", "sortingLayer", "sorting"));
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Sorting Layer", "sortingLayer", "sortingLayer"));
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Sorting Layer", "sortingLayer", "LAYER"));
+
+    // A component-name hit keeps every field, so searching "sprite" shows the
+    // whole component rather than none of it.
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Tint", "tint", "sprite"));
+    CHECK(ComponentMatchesFilter("Sprite Renderer", "sprite"));
+
+    // Empty query matches everything -- the unfiltered case is not special-cased
+    // at the call site.
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Tint", "tint", ""));
+    CHECK(ComponentMatchesFilter("Sprite Renderer", ""));
+
+    // A genuine miss.
+    CHECK_FALSE(MatchesInspectorFilter("Sprite Renderer", "Tint", "tint", "physics"));
+    CHECK_FALSE(ComponentMatchesFilter("Sprite Renderer", "physics"));
+}

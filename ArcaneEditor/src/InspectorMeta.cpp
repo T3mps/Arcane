@@ -26,6 +26,25 @@ namespace Arcane::Editor
             if (IsUpper(prev) && i + 1 < s.size() && IsLower(s[i + 1])) return true;
             return false;
         }
+
+        // Case-insensitive substring. ASCII-only folding is sufficient: these
+        // are C++ identifiers and author-written attribute strings.
+        bool ContainsFold(std::string_view haystack, std::string_view needle)
+        {
+            if (needle.empty()) return true;
+            if (needle.size() > haystack.size()) return false;
+            const auto lower = [](char c) {
+                return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+            };
+            for (std::size_t i = 0; i + needle.size() <= haystack.size(); ++i)
+            {
+                std::size_t j = 0;
+                for (; j < needle.size(); ++j)
+                    if (lower(haystack[i + j]) != lower(needle[j])) break;
+                if (j == needle.size()) return true;
+            }
+            return false;
+        }
     }
 
     std::string DeriveDisplayName(std::string_view identifier)
@@ -106,5 +125,21 @@ namespace Arcane::Editor
     bool FieldIsAttributeHidden(const Astra::FieldInfo& field)
     {
         return field.GetAttribute<Astra::Hidden>() != nullptr;
+    }
+
+    bool ComponentMatchesFilter(std::string_view componentDisplayName,
+                                std::string_view query)
+    {
+        return ContainsFold(componentDisplayName, query);
+    }
+
+    bool MatchesInspectorFilter(std::string_view componentDisplayName,
+                                std::string_view fieldDisplayName,
+                                std::string_view rawFieldName,
+                                std::string_view query)
+    {
+        if (query.empty()) return true;
+        if (ContainsFold(componentDisplayName, query)) return true;
+        return ContainsFold(fieldDisplayName, query) || ContainsFold(rawFieldName, query);
     }
 }
