@@ -146,6 +146,66 @@ TEST_CASE("CommandStack: empty / no-op transaction is not pushed", "[edit]")
     CHECK_FALSE(stack.CanUndo());
 }
 
+TEST_CASE("CommandStack: Commit is the safe close for an ABANDONED gesture", "[edit]")
+{
+    // The Inspector closes a gesture whose widget stopped being drawn -- its
+    // component header collapsed mid-edit, the search filter hid the field --
+    // with Commit and never Cancel (EditorPanels.cpp, CloseAbandonedGesture).
+    // These three sections are the properties that make that the right call,
+    // for both an edit that was already applied and one that never was.
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
+
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    SECTION("Cancel would STRAND a mid-drag edit: it discards without reverting")
+    {
+        const Arcane::TransactionId txn = stack.Begin("Edit Transform.position");
+        stack.SnapshotComponent(e, desc);
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 5.0f;   // the drag applied it live
+        stack.Cancel(txn);
+        CHECK_FALSE(stack.InTransaction());
+        CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 5.0f);   // still applied...
+        CHECK_FALSE(stack.CanUndo());                                        // ...and unreachable
+    }
+
+    SECTION("Commit keeps that same mid-drag edit undoable")
+    {
+        const Arcane::TransactionId txn = stack.Begin("Edit Transform.position");
+        stack.SnapshotComponent(e, desc);
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 5.0f;
+        stack.Commit(txn);
+        REQUIRE(stack.CanUndo());
+        stack.Undo();
+        CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 0.0f);
+    }
+
+    SECTION("Commit on a gesture that applied nothing leaves the redo stack intact")
+    {
+        // The ctrl+click text-entry orphan: a temp input writes only on submit,
+        // so the abandoned transaction holds an UNCHANGED snapshot. Commit has
+        // to be as inert as Cancel there -- including not clearing a redo the
+        // user had built up, which every non-empty commit does clear.
+        const Arcane::TransactionId first = stack.Begin("Edit Transform.position");
+        stack.SnapshotComponent(e, desc);
+        reg->GetComponent<Arcane::Transform>(e)->position.x = 5.0f;
+        stack.Commit(first);
+        stack.Undo();
+        REQUIRE(stack.CanRedo());
+
+        const Arcane::TransactionId abandoned = stack.Begin("Edit Transform.rotation");
+        stack.SnapshotComponent(e, desc);          // nothing mutated before the close
+        stack.Commit(abandoned);
+        CHECK_FALSE(stack.InTransaction());
+        CHECK_FALSE(stack.CanUndo());              // no spurious history entry
+        REQUIRE(stack.CanRedo());                  // and the redo survived
+        stack.Redo();
+        CHECK(reg->GetComponent<Arcane::Transform>(e)->position.x == 5.0f);
+    }
+}
+
 TEST_CASE("CommandStack: a transaction groups two components into one undo step", "[edit]")
 {
     auto reg = MakeReg();

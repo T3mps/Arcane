@@ -958,6 +958,10 @@ namespace Arcane::Editor
             // frame but the gesture it brackets is not. Never null when `stack` is
             // non-null.
             Arcane::TransactionId*            gestureTxn = nullptr;
+            // ImGui id of the widget that opened that gesture, parked in the same
+            // persistent state for the same reason -- it is what CloseAbandonedGesture
+            // below compares ActiveId against. Never null when `stack` is non-null.
+            ImGuiID*                          gestureItem = nullptr;
 
             // Fan-out targets. `selection` includes the primary; entities lacking
             // this component are skipped (the panel only shows components the whole
@@ -1002,6 +1006,14 @@ namespace Arcane::Editor
                     // JOINS it: the snapshots below still land, and the drag's own
                     // Commit records them, so the edit is never lost.
                     *gestureTxn = stack->Begin("Edit " + typeName + "." + field);
+                    // Remember WHICH widget owns the gesture, so the panel can tell a
+                    // live one from an abandoned one. IsItemActivated() above is true
+                    // exactly when g.ActiveId == g.LastItemData.ID (imgui.cpp:6549),
+                    // so this is ActiveId -- including through a ctrl+click text entry
+                    // (TempInputText re-derives the id from the same window+label) and
+                    // through DragFloat2/3, where EndGroup forwards the live component
+                    // id into LastItemData (imgui.cpp:12480).
+                    *gestureItem = ImGui::GetItemID();
                     // One Begin + N snapshots + one Commit = one undo step for the
                     // whole fan-out (CommandStack dedupes per (entity, descriptor)).
                     ForEachTarget(primaryInstance,
@@ -1127,7 +1139,8 @@ namespace Arcane::Editor
                 if (ImGui::IsItemDeactivatedAfterEdit()) stack->Commit(*gestureTxn);
                 else if (ImGui::IsItemDeactivated())     stack->Cancel(*gestureTxn);
                 else return;
-                *gestureTxn = Arcane::TransactionId::None;   // spent
+                *gestureTxn  = Arcane::TransactionId::None;   // spent
+                *gestureItem = 0;                             // ...and unowned
             }
 
             // Single-shot edit (asset drop / popup pick / clear): no widget gesture
@@ -1447,12 +1460,83 @@ namespace Arcane::Editor
                 ImGui::PopID();
             }
         };
+
+        // Close a field-edit gesture whose widget stopped being drawn.
+        //
+        // BeginGestureIfActivated opens the transaction and EndGesture closes it,
+        // but EndGesture reads item state -- so it can only run while that widget
+        // is still being SUBMITTED. Anything that stops it being submitted while
+        // it owns the gesture strands the transaction open: its component header
+        // (or a category sub-header) collapsing, the search query hiding the
+        // field, the selection turning multi (which swaps the drag for text
+        // boxes), the Inspector window collapsing or its tab going to the
+        // background. That is not cosmetic -- CanEditStructure is
+        // `!undo.InTransaction()`, so Add/Remove Component stay dead until some
+        // LATER gesture force-closes the orphan and silently absorbs its stale
+        // snapshots into an unrelated undo step.
+        //
+        // The collapse case is reachable, not theoretical: a ctrl+click text
+        // entry on a DragFloat leaves g.ActiveIdAllowOverlap = !io.MouseDown[0]
+        // (imgui_widgets.cpp:5004) and nothing resets it, so with the mouse up
+        // the header above is still hoverable -- that flag is exactly what the
+        // hover gate tests (imgui.cpp:5091) -- and a click over its arrow presses
+        // on MouseDown (imgui_widgets.cpp:7012) and flips is_open in the SAME
+        // frame (:7045/:7075), before the field would have been drawn. A
+        // mouse-HELD drag is NOT reachable this way: it never sets
+        // ActiveIdAllowOverlap, so the same gate rejects every other item.
+        //
+        // COMMIT, not Cancel, for both kinds of orphan:
+        //   - mid-drag: the edits are already applied and the user watched them
+        //     happen. Cancel drops the transaction WITHOUT reverting
+        //     (CommandStack.cpp:75-82), which would leave them applied and
+        //     permanently un-undoable -- the same hazard ApplyRegistryMutation
+        //     refuses a structural memento over.
+        //   - ctrl+click text entry: nothing was applied at all (a temp input
+        //     writes only on submit). Commit re-snapshots, drops every component
+        //     whose bytes match, and returns before pushing a step or clearing
+        //     redo when none differ (CommandStack.cpp:61-62) -- so here Commit
+        //     lands exactly where Cancel would.
+        void CloseAbandonedGesture(Arcane::CommandStack& undo, InspectorState& state)
+        {
+            // None also covers the gesture that JOINED a gizmo drag: that drag
+            // owns the transaction and closes it on mouse-up.
+            if (state.gestureTxn == Arcane::TransactionId::None)
+                return;
+            // Healthy for exactly as long as the owning widget still holds
+            // ActiveId. ImGui hands ActiveId over within ONE frame on a
+            // click-through between two fields or into the search box, but the
+            // field losing it is still submitted that frame, so its own
+            // EndGesture has already run and cleared the token above.
+            if (ImGui::GetActiveID() == state.gestureItem)
+                return;
+            undo.Commit(state.gestureTxn);
+            state.gestureTxn  = Arcane::TransactionId::None;
+            state.gestureItem = 0;
+        }
+
+        // Runs CloseAbandonedGesture on EVERY exit from DrawInspectorPanel. RAII
+        // rather than a call before each ImGui::End(): the defect being fixed IS
+        // a missed close path, and the panel already has an early return (no
+        // selection) that is one of them. Declared as the panel's FIRST local so
+        // it destructs LAST -- after ImGui::End(), on both paths, and on frames
+        // where ImGui::Begin returned false (collapsed or background tab), where
+        // every widget inside bails before ItemAdd on window->SkipItems (e.g.
+        // imgui_widgets.cpp:2722) and so cannot report its own deactivation.
+        struct GestureCloseGuard
+        {
+            Arcane::CommandStack& undo;
+            InspectorState&       state;
+            ~GestureCloseGuard() { CloseAbandonedGesture(undo, state); }
+        };
     }
 
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
                             const Arcane::Project* project, InspectorState& state)
     {
+        // FIRST local, so it destructs LAST -- see GestureCloseGuard.
+        const GestureCloseGuard gestureGuard{ undo, state };
+
         ImGui::Begin("Inspector");
         if (!sel.HasSelection())
         {
@@ -1503,10 +1587,11 @@ namespace Arcane::Editor
         // as clicking into the box). Either way, whatever field widget was
         // previously active deactivates THIS frame, so EndGesture() closes
         // state.gestureTxn before the next frame can redraw under the new
-        // query and make that field vanish. A clear path that does not move
-        // ActiveId (Escape, clear-on-selection-change) would leak an open
-        // gesture and wedge Add/Remove Component off permanently -- see the
-        // Outliner's renameTarget guard (~line 537) for the same hazard class.
+        // query and make that field vanish. A clear path that does NOT move
+        // ActiveId (Escape, clear-on-selection-change) would skip that close;
+        // GestureCloseGuard closes it on the way out of this panel instead, so
+        // the leak is contained rather than permanent -- see the Outliner's
+        // renameTarget guard (~line 537) for the same hazard class.
         const std::string_view query(state.searchBuffer);
 
         // Hoisted once per frame; see the Outliner's copy. Add/Remove Component
@@ -1659,7 +1744,8 @@ namespace Arcane::Editor
                     visitor.descriptor = ci.descriptor;
                     visitor.typeName   = typeName;
                     visitor.project    = project;
-                    visitor.gestureTxn = &state.gestureTxn;
+                    visitor.gestureTxn  = &state.gestureTxn;
+                    visitor.gestureItem = &state.gestureItem;
                     visitor.registry   = &registry;
                     visitor.selection  = &sel.Entities();
                     // Both outlive the visitor: headerLabel is this iteration's

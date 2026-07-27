@@ -5,6 +5,7 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
+#include <imgui.h>          // ImGuiID (InspectorState parks the gesture owner's item id)
 #include <cstdint>
 #include <string>
 #include <unordered_set>
@@ -153,6 +154,14 @@ namespace Arcane::Editor
     struct InspectorState
     {
         Arcane::TransactionId gestureTxn = Arcane::TransactionId::None;
+        // ImGui id of the widget that OPENED gestureTxn (0 when none is open).
+        // A gesture closes on the widget's own deactivation, which can only be
+        // observed while that widget is still being SUBMITTED -- so a field
+        // that stops being drawn mid-gesture would strand the transaction
+        // open, and with it every structural edit (CanEditStructure is
+        // `!undo.InTransaction()`). Parking the owner's id lets the panel see
+        // that ImGui's ActiveId has moved on and close the gesture itself.
+        ImGuiID gestureItem = 0;
         // Live search text. A fixed buffer rather than std::string because
         // ImGui::InputText writes into it directly; 128 is far past any
         // plausible field name. Nothing clears it, so a typed filter persists
