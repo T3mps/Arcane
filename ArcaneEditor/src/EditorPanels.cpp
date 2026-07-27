@@ -946,6 +946,13 @@ namespace Arcane::Editor
             // everything, so the unfiltered case needs no branch of its own.
             std::string                       componentDisplayName;
             std::string_view                  query;
+            // Which category group this drive is rendering. Astra's VisitFields
+            // always walks every field, so a visitor that must draw one group at
+            // a time has to select here; the panel re-drives it once per group.
+            // EMPTY IS THE UNCATEGORISED PASS, not "draw everything":
+            // CategoryOfField returns empty for an unannotated field, so the two
+            // compare equal and only those fields draw.
+            std::string_view                  activeCategory{};
             // The in-flight gesture's CommandStack ownership token, owned by the
             // panel's persistent InspectorState -- the visitor is rebuilt every
             // frame but the gesture it brackets is not. Never null when `stack` is
@@ -1142,6 +1149,12 @@ namespace Arcane::Editor
 
             void Visit(const Astra::FieldInfo& f, void* instance) override
             {
+                // Group selector: this drive renders exactly one category, so a
+                // field belonging to any other one is another drive's business.
+                // Leaves from the UNPUSHED scope, like the two skips below.
+                if (Arcane::Editor::CategoryOfField(f) != activeCategory)
+                    return;
+
                 // Astra::Hidden -- the FIELD ATTRIBUTE, "do not show this
                 // property". Nothing to do with Arcane::Hidden, the marker
                 // component that makes render submission skip an entity; the
@@ -1653,7 +1666,70 @@ namespace Arcane::Editor
                     // local and the query views InspectorState's buffer.
                     visitor.componentDisplayName = headerLabel;
                     visitor.query                = query;
+
+                    // Categories, UE's Details shape: the uncategorised fields
+                    // ungrouped FIRST (UE's NoCategory fallback,
+                    // DetailCategoryBuilderImpl.cpp:230), then each named
+                    // category under its own collapsible sub-header. Named
+                    // categories run in first-appearance order over declaration
+                    // order, so the ordering is stable and a component still
+                    // reads in the Inspector the way it reads in source -- the
+                    // fields themselves are never reordered.
+                    //
+                    // A category is collected only when at least one of its
+                    // fields will actually DRAW, which means reproducing every
+                    // skip on the way to the widget: Astra's non-serializable
+                    // drop then Astra::Hidden (both mirrored from the component
+                    // sweep above, in the visitor's own order), plus the live
+                    // filter. Counting a field the visitor then drops is what
+                    // renders a header over an empty body -- the same defect one
+                    // level up that the component sweep exists to avoid.
+                    //
+                    // The cheap `cat.empty()` rejection leads deliberately: it is
+                    // the answer for EVERY field until components carry Category
+                    // attributes, and it keeps the filter's display-name build
+                    // off that path entirely.
+                    std::vector<std::string_view> categories;
+                    for (const Astra::FieldInfo& f : ci.meta->fields)
+                    {
+                        const std::string_view cat = Arcane::Editor::CategoryOfField(f);
+                        if (cat.empty())
+                            continue;
+                        if (!f.IsSerializable())
+                            continue;
+                        if (Arcane::Editor::FieldIsAttributeHidden(f))
+                            continue;
+                        if (!Arcane::Editor::MatchesInspectorFilter(
+                                headerLabel, Arcane::Editor::DisplayNameForField(f), f.name, query))
+                            continue;
+                        if (std::find(categories.begin(), categories.end(), cat) == categories.end())
+                            categories.push_back(cat);
+                    }
+
+                    // Uncategorised pass -- `activeCategory` is empty by
+                    // default. Nothing is pushed or drawn around this call, so
+                    // while no field carries a Category attribute it is the same
+                    // drive, over the same fields, under the same ImGui ids as
+                    // before grouping existed.
                     ci.descriptor->visitFields(ci.data, visitor);
+
+                    for (const std::string_view cat : categories)
+                    {
+                        // The view is into the Category attribute's own literal
+                        // and is NOT guaranteed NUL-terminated, so the name goes
+                        // through the begin/end PushID overload and a "%.*s"
+                        // label rather than a c_str(). The sub-header's id comes
+                        // from that push, not from the drawn text.
+                        ImGui::PushID(cat.data(), cat.data() + cat.size());
+                        if (ImGui::TreeNodeEx("##category", ImGuiTreeNodeFlags_DefaultOpen,
+                                              "%.*s", static_cast<int>(cat.size()), cat.data()))
+                        {
+                            visitor.activeCategory = cat;
+                            ci.descriptor->visitFields(ci.data, visitor);
+                            ImGui::TreePop();
+                        }
+                        ImGui::PopID();
+                    }
                 }
             }
             ImGui::PopID();
