@@ -91,6 +91,15 @@ TEST_CASE("MatchesFilter combines kind filter and case-insensitive search", "[ed
     CHECK_FALSE(MatchesFilter(mat, static_cast<int>(AssetKind::Texture), "glow"));
 }
 
+TEST_CASE("AssetKindOf classifies scenes", "[editor]")
+{
+    CHECK(AssetKindOf("game://scenes/main.arcscene") == AssetKind::Scene);
+    CHECK(AssetKindOf("game://scenes/MAIN.ARCSCENE") == AssetKind::Scene);
+    // Not the material kind, and not a generic data file.
+    CHECK(AssetKindOf("game://scenes/main.arcscene") != AssetKind::Data);
+    CHECK(AssetKindOf("game://mat/glow.arcmat") == AssetKind::Material);
+}
+
 TEST_CASE("a .arcscene is a native JSON asset and gets a minted id", "[editor][project]")
 {
     // Native-JSON rule: a top-level "id" is read, or minted and written back.

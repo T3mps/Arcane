@@ -428,6 +428,16 @@ namespace Arcane
         return m_impl->project->RegisterAsset(file);
     }
 
+    bool Runtime::SetProjectBootScene(const Guid& id)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::SetProjectBootScene: no project open -- boot scene not set");
+            return false;
+        }
+        return m_impl->project->SetBootScene(id);
+    }
+
     Config& Runtime::Configuration() noexcept
     {
         return m_impl->config;

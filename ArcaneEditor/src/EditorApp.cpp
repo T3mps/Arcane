@@ -1726,6 +1726,31 @@ namespace Arcane::Editor
                                                 "Arcane Material", "arcmat",
                                                 contentDir.empty() ? nullptr : contentDir.c_str());
             }
+            if (!browserActions.openScene.empty())
+            {
+                // A scene double-clicked in the browser is not a document -- it
+                // replaces the editing session, so it goes through the same
+                // SceneSession guard as File -> Open Scene. Request() is pure
+                // state and safe to call from here; the load itself is deferred
+                // to sceneAction for the same reason menuReq's scene items above
+                // are (this call site is mid-ImGui-pass, after BeginDockSpace).
+                // A parked (dirty-scene) result is picked up by the "Unsaved
+                // Scene" modal below, whose Save/Discard branches already set
+                // sceneAction via TakePending().
+                if (m_scene.Request(Arcane::Editor::SceneIntent::OpenScene,
+                                    browserActions.openScene, *m_undo))
+                    sceneAction = { Arcane::Editor::SceneIntent::OpenScene,
+                                    browserActions.openScene };
+            }
+            if (browserActions.setBootScene.IsValid())
+            {
+                // No unsaved-changes guard: this only rewrites the project
+                // manifest and does not touch the live registry or session.
+                if (m_runtime->SetProjectBootScene(browserActions.setBootScene))
+                    ARC_INFO("Boot scene set to {}", browserActions.setBootScene.ToString());
+                else
+                    m_sceneError = "Could not write the project's boot scene (see Console).";
+            }
             Arcane::Editor::DrawConsolePanel(m_console);
             // New documents tab into the Viewport's node (captured last frame).
             m_documents.DrawAll(m_viewportDockId);

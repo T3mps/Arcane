@@ -96,6 +96,14 @@ namespace Arcane
         // the file lies outside every content root.
         std::optional<Guid> RegisterCreatedAsset(const std::filesystem::path& file);
 
+        // Point the open project's boot scene at `id` (Project::SetBootScene),
+        // rewriting its .arcproj in place. False when no project is open or the
+        // write failed; Project::SetBootScene already logs the specific cause in
+        // the latter case. Narrow seam (mirrors RegisterCreatedAsset) rather than
+        // a mutable CurrentProject accessor: this is the one mutation the editor
+        // needs, and it keeps Project's mutability from leaking to every caller.
+        bool SetProjectBootScene(const Guid& id);
+
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
         // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
         // so the PLUGIN owns the camera (via SetCamera) and the host stays camera-agnostic.

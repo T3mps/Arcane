@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,9 +30,10 @@ namespace Arcane::Editor
         Audio,
         Font,
         Data,
+        Scene,
         Other,
     };
-    inline constexpr int kAssetKindCount = 6;
+    inline constexpr int kAssetKindCount = 7;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
     // texture slots accept it). Payload bytes = AssetDragPayload (POD).
@@ -55,6 +57,8 @@ namespace Arcane::Editor
 
         if (ext == ".arcmat")
             return AssetKind::Material;
+        if (ext == ".arcscene")
+            return AssetKind::Scene;
         for (const char* e : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" })
             if (ext == e) return AssetKind::Texture;
         for (const char* e : { ".wav", ".ogg", ".mp3", ".flac" })
@@ -154,6 +158,16 @@ namespace Arcane::Editor
     struct AssetBrowserActions
     {
         Arcane::Guid createInstanceOf;   // context menu "New Instance..." on a material
+
+        // A scene is NOT a DocumentHost document -- double-clicking one must load
+        // it into the editor session (replacing the Edit-mode registry), not open
+        // a tab. The panel hands back the resolved path; the host is the one that
+        // knows about SceneSession, so it is the host that calls Request() and
+        // gates the load behind the same unsaved-changes guard the File menu uses.
+        std::filesystem::path openScene;
+
+        // Context menu "Set as Boot Scene" on a scene row.
+        Arcane::Guid setBootScene;
     };
 
     // The "Assets" panel: filter row + entry table over the open project's
