@@ -97,37 +97,126 @@ TEST_CASE("a scene round-trips through a file, preserving its id", "[scene][json
 TEST_CASE("a file the reader rejects leaves the target registry untouched", "[scene][json]")
 {
     // THE ordering guarantee: Open Scene must not empty the editor on a bad file.
+    // Earning that name means there has to be an actual registry with actual
+    // content in the test, and an assertion that it still holds that content
+    // after ReadSceneFile rejects -- ReadSceneFile alone (no registry in sight)
+    // cannot demonstrate "untouched" no matter how many ways it is called.
     const std::filesystem::path dir = TempDir("arcane_scene_asset_reject");
+
+    Fixture f;
+
+    // Snapshot everything CreateEmpty/Fixture established, so each SECTION can
+    // assert the registry still matches it byte-for-byte after a rejection.
+    const auto assertFixtureUnchanged = [&f]()
+    {
+        const Arcane::SceneRoot* sr = f.reg.GetResource<Arcane::SceneRoot>();
+        REQUIRE(sr != nullptr);
+        CHECK(sr->entity == f.root);
+
+        const Arcane::Transform* rootT = f.reg.GetComponent<Arcane::Transform>(f.root);
+        REQUIRE(rootT != nullptr);
+        CHECK(rootT->position.x == 100.0f);
+        CHECK(rootT->position.y == 0.0f);
+
+        const auto kids = f.reg.GetChildren(f.root);
+        REQUIRE(kids.size() == 1);
+        CHECK(kids[0] == f.child);
+
+        const Arcane::EntityInfo* childInfo = f.reg.GetComponent<Arcane::EntityInfo>(f.child);
+        REQUIRE(childInfo != nullptr);
+        CHECK(childInfo->name == "Child");
+        const Arcane::Transform* childT = f.reg.GetComponent<Arcane::Transform>(f.child);
+        REQUIRE(childT != nullptr);
+        CHECK(childT->position.x == 5.0f);
+        CHECK(childT->position.y == 7.0f);
+    };
 
     SECTION("missing file")
     {
         std::string err;
         CHECK_FALSE(Arcane::Scene::ReadSceneFile(dir / "nope.arcscene", &err).has_value());
         CHECK_FALSE(err.empty());
+        assertFixtureUnchanged();
     }
     SECTION("not JSON")
     {
-        const std::filesystem::path f = dir / "bad.arcscene";
-        std::ofstream(f) << "this is not json";
+        const std::filesystem::path file = dir / "bad.arcscene";
+        std::ofstream(file) << "this is not json";
         std::string err;
-        CHECK_FALSE(Arcane::Scene::ReadSceneFile(f, &err).has_value());
+        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
         CHECK_FALSE(err.empty());
+        assertFixtureUnchanged();
     }
     SECTION("wrong schema version")
     {
-        const std::filesystem::path f = dir / "old.arcscene";
-        std::ofstream(f) << R"({"id":"00000000-0000-0000-0000-000000000001","version":1,"entities":[]})";
+        const std::filesystem::path file = dir / "old.arcscene";
+        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":1,"entities":[]})";
         std::string err;
-        CHECK_FALSE(Arcane::Scene::ReadSceneFile(f, &err).has_value());
+        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
         CHECK(err.find("version") != std::string::npos);
+        assertFixtureUnchanged();
     }
     SECTION("malformed id")
     {
-        const std::filesystem::path f = dir / "badid.arcscene";
-        std::ofstream(f) << R"({"id":"not-a-guid","version":2,"entities":[]})";
+        const std::filesystem::path file = dir / "badid.arcscene";
+        std::ofstream(file) << R"({"id":"not-a-guid","version":2,"entities":[]})";
         std::string err;
-        CHECK_FALSE(Arcane::Scene::ReadSceneFile(f, &err).has_value());
+        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
         CHECK_FALSE(err.empty());
+        assertFixtureUnchanged();
+    }
+    SECTION("non-object entity")
+    {
+        // The reviewer's repro: passes the outer envelope (version, id,
+        // entities-is-an-array), then LoadJson would create one entity for
+        // the object element before rejecting the integer one at index 1.
+        const std::filesystem::path file = dir / "badentity.arcscene";
+        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
+                               R"("entities":[{"components":{}}, 42]})";
+        std::string err;
+        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
+        CHECK(err.find("entity 1") != std::string::npos);
+        assertFixtureUnchanged();
+    }
+    SECTION("non-object components")
+    {
+        const std::filesystem::path file = dir / "badcomponents.arcscene";
+        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
+                               R"("entities":[{"components":"not-an-object"}]})";
+        std::string err;
+        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
+        CHECK(err.find("entity 0") != std::string::npos);
+        assertFixtureUnchanged();
+    }
+    SECTION("non-integer parent")
+    {
+        const std::filesystem::path file = dir / "badparent.arcscene";
+        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
+                               R"("entities":[{"components":{},"parent":"root"}]})";
+        std::string err;
+        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
+        CHECK(err.find("entity 0") != std::string::npos);
+        assertFixtureUnchanged();
+    }
+    SECTION("non-array links")
+    {
+        const std::filesystem::path file = dir / "badlinksarray.arcscene";
+        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
+                               R"("entities":[{"components":{},"links":0}]})";
+        std::string err;
+        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
+        CHECK(err.find("entity 0") != std::string::npos);
+        assertFixtureUnchanged();
+    }
+    SECTION("non-integer links entry")
+    {
+        const std::filesystem::path file = dir / "badlinksentry.arcscene";
+        std::ofstream(file) << R"({"id":"00000000-0000-0000-0000-000000000001","version":2,)"
+                               R"("entities":[{"components":{},"links":[0,"1"]}]})";
+        std::string err;
+        CHECK_FALSE(Arcane::Scene::ReadSceneFile(file, &err).has_value());
+        CHECK(err.find("entity 0") != std::string::npos);
+        assertFixtureUnchanged();
     }
 }
 

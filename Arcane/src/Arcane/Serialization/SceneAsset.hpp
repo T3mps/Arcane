@@ -8,8 +8,14 @@
 // The READ and the APPLY are deliberately separate calls. Every caller must
 // validate a file BEFORE destroying the scene it already has: a failed Open
 // Scene must leave the editor exactly as it was, not drop the user into an
-// empty registry with an error. Splitting the API makes that structural rather
-// than a rule someone has to remember.
+// empty registry with an error. ReadSceneFile checks envelope, version, id,
+// and entity-list STRUCTURE without touching any registry, so a rejection
+// there costs the caller nothing -- but it cannot see every way
+// ApplySceneDocument can still fail (see the note on ApplySceneDocument
+// below). The guarantee this split actually buys is narrower than "a bad
+// file can't hurt you": it is "ApplySceneDocument must only ever run against
+// an already-emptied registry, so the worst case is an empty registry, never
+// a half-overwritten previous scene."
 //
 // Exception-free: every failure returns nullopt/false and writes a reason to
 // the caller's `error` string.
@@ -51,7 +57,11 @@ namespace Arcane::Scene
 
     // Read + validate a .arcscene. Touches no registry, so a rejection costs the
     // caller nothing. nullopt on IO failure, parse failure, a missing/malformed
-    // id, or a schema version this build does not speak.
+    // id, a schema version this build does not speak, or an entity list whose
+    // per-entry SHAPE LoadJson would reject (non-object entry, non-object
+    // components, non-integer parent, non-integer-array links). This is a
+    // structural check only -- see the loop below for the one class of
+    // LoadJson failure it deliberately cannot catch.
     inline std::optional<SceneDocument> ReadSceneFile(const std::filesystem::path& file,
                                                       std::string* error)
     {
@@ -114,6 +124,67 @@ namespace Arcane::Scene
                 return std::nullopt;
             }
 
+            // LoadJson (SceneSerializer.hpp) creates entities into the live
+            // registry AS it walks this array, and can bail partway through:
+            // a non-object element is only caught after earlier elements were
+            // already added, and a malformed parent/links shape is likewise
+            // only found mid-walk. Catch every one of those SHAPES here, up
+            // front, so a file LoadJson would reject on structure is rejected
+            // here instead -- before anything is touched.
+            //
+            // This cannot catch everything LoadJson can reject. A component
+            // whose reflected field type is unsupported (the E02-3 latch
+            // inside AddComponentByTypeName) only shows up once the field
+            // reader actually walks the component's data -- there is no way
+            // to see it without applying. That failure mode is why
+            // ApplySceneDocument's contract (below) requires an
+            // already-emptied registry: if E02-3 fires past this gate, the
+            // worst case is an empty registry, never a half-overwritten
+            // previous scene.
+            const nlohmann::json& entities = doc["entities"];
+            for (std::size_t i = 0; i < entities.size(); ++i)
+            {
+                const nlohmann::json& entry = entities[i];
+                if (!entry.is_object())
+                {
+                    Detail::SetError(error, file.generic_string() + " entity " +
+                                            std::to_string(i) + " is not an object");
+                    return std::nullopt;
+                }
+                if (entry.contains("components") && !entry["components"].is_object())
+                {
+                    Detail::SetError(error, file.generic_string() + " entity " +
+                                            std::to_string(i) + " has a non-object components field");
+                    return std::nullopt;
+                }
+                if (entry.contains("parent") && !entry["parent"].is_number_integer())
+                {
+                    Detail::SetError(error, file.generic_string() + " entity " +
+                                            std::to_string(i) + " has a non-integer parent field");
+                    return std::nullopt;
+                }
+                if (entry.contains("links"))
+                {
+                    const nlohmann::json& links = entry["links"];
+                    if (!links.is_array())
+                    {
+                        Detail::SetError(error, file.generic_string() + " entity " +
+                                                std::to_string(i) + " has a non-array links field");
+                        return std::nullopt;
+                    }
+                    for (std::size_t j = 0; j < links.size(); ++j)
+                    {
+                        if (!links[j].is_number_integer())
+                        {
+                            Detail::SetError(error, file.generic_string() + " entity " +
+                                                    std::to_string(i) + " has a non-integer links entry at index " +
+                                                    std::to_string(j));
+                            return std::nullopt;
+                        }
+                    }
+                }
+            }
+
             return SceneDocument{*id, std::move(doc)};
         }
         catch (const nlohmann::json::exception& e)
@@ -128,6 +199,14 @@ namespace Arcane::Scene
     // to have emptied the registry first (Runtime::ResetRegistry) -- this does
     // not clear, because clearing is the caller's decision and its timing is the
     // whole point of the read/apply split.
+    //
+    // That empty-first contract is load-bearing, not defensive style:
+    // ReadSceneFile's structural gate cannot detect an unsupported reflected
+    // field type (E02-3), so this call can still fail on a document
+    // ReadSceneFile accepted. If it does, the registry it partially populated
+    // must already have been the empty one, never the caller's previous
+    // scene -- that is the only failure mode this split does not eliminate,
+    // only contain.
     inline bool ApplySceneDocument(const SceneDocument& scene, Astra::Registry& reg)
     {
         return LoadJson(reg, scene.doc);
