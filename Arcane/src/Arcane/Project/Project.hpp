@@ -55,6 +55,16 @@ namespace Arcane
         // content root -- such a file cannot resolve by GUID by design.
         std::optional<Guid> RegisterAsset(const std::filesystem::path& file);
 
+        // Point this project's bootScene at `id` (nil clears it), rewriting the
+        // .arcproj in place. False on read/parse/write failure, leaving both the
+        // file and the in-memory manifest untouched.
+        //
+        // The Guid, NOT a mount path: the AssetRegistry rebuilds its Guid ->
+        // mount-path map on every open, so a scene that moves on disk keeps
+        // working. Written atomically (temp + rename) so an interrupted write
+        // cannot leave a project with a truncated manifest.
+        bool SetBootScene(const Guid& id);
+
     private:
         // Open()/Create() are the only construction paths (they are static members and
         // can reach this). std::optional<Project> in Runtime move-constructs, never
@@ -62,6 +72,7 @@ namespace Arcane
         Project() = default;
 
         std::filesystem::path m_root;
+        std::filesystem::path m_manifestFile;   // the .arcproj this project was opened from
         ProjectManifest       m_manifest;
         MountTable            m_mounts;
         AssetRegistry         m_registry;
