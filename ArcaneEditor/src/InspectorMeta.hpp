@@ -14,6 +14,7 @@
 // (Astra/Reflection/Attribute.hpp) attachable with ASTRA_REFLECT_ATTR; until
 // this module they were declared and never read.
 
+#include <Astra/Component/Component.hpp>
 #include <Astra/Reflection/Attribute.hpp>
 #include <Astra/Reflection/FieldInfo.hpp>
 
@@ -77,4 +78,49 @@ namespace Arcane::Editor
                                               std::string_view fieldDisplayName,
                                               std::string_view rawFieldName,
                                               std::string_view query);
+
+    // Copy the field's DEFAULT bytes (from a scratch default-constructed
+    // instance of the owning component) into `outBytes`, which must have room
+    // for field.size.
+    //
+    // ONLY writes for a trivially-copyable field; `outBytes` is left untouched
+    // for every other field, and for a tag component or a (desc, field) pair
+    // that do not belong together. A bitwise copy of, say, a std::string would
+    // hand the caller an object owning storage this call is about to free, so
+    // declining is the only safe answer -- callers that must reset a non-trivial
+    // field need a typed path, not raw bytes.
+    //
+    // Builds and DESTROYS a whole component to read one field. That is
+    // deliberate: a default is whatever the type's NSDMIs and default
+    // constructor produce, and there is no cheaper way to ask. The cost is one
+    // construction + destruction PER CALL -- fine on user interaction, and the
+    // reason this is not something to loop over a whole component every frame.
+    void ReadDefaultFieldBytes(const Astra::ComponentDescriptor& desc,
+                               const Astra::FieldInfo& field,
+                               void* outBytes);
+
+    // Whether `instance`'s field still holds the value a freshly default-
+    // constructed component would give it -- the question behind offering a
+    // "revert to default" affordance.
+    //
+    // Compares by VALUE where value and representation diverge, by bytes where
+    // they do not:
+    //   - std::string compares by characters. Two default-constructed empty
+    //     strings are NOT byte-identical (MSVC hangs a per-instance iterator-
+    //     debug proxy off each, and never initialises the small-string buffer
+    //     past the terminator), so a byte compare marks EVERY string modified.
+    //     Measured, not assumed: the byte version failed this repo's own test.
+    //   - Trivially-copyable fields compare by bytes. Padding INSIDE such a
+    //     field is compared too, so a struct field with interior padding can
+    //     read as modified while its members are all equal. Floats compare
+    //     bitwise, so -0.0f reads as modified and two identical NaNs do not.
+    //   - Anything else (a std::vector field, say) reports UNCHANGED. There is
+    //     no safe comparison available here, and a permanently-true "modified"
+    //     would make the affordance meaningless.
+    //
+    // Same per-call cost as ReadDefaultFieldBytes above. Only ever decides
+    // whether to OFFER a revert; never used to skip a write.
+    [[nodiscard]] bool FieldDiffersFromDefault(const Astra::ComponentDescriptor& desc,
+                                               const Astra::FieldInfo& field,
+                                               const void* instance);
 }

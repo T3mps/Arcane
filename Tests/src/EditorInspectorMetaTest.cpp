@@ -135,3 +135,127 @@ TEST_CASE("the Inspector filter matches either spelling", "[editor]")
     CHECK_FALSE(MatchesInspectorFilter("Sprite Renderer", "Tint", "tint", "physics"));
     CHECK_FALSE(ComponentMatchesFilter("Sprite Renderer", "physics"));
 }
+
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
+#include <Astra/Component/ComponentRegistry.hpp>
+
+#include <memory>
+
+namespace
+{
+    // Descriptors come from a plain ComponentRegistry rather than a Runtime:
+    // a bare `Arcane::Runtime` in a test steals Arcane.dll's TypeContext slot,
+    // after which reflection-driven work silently reports nothing.
+    std::shared_ptr<Astra::ComponentRegistry> MakeSceneComponentRegistry()
+    {
+        auto creg = std::make_shared<Astra::ComponentRegistry>();
+        Arcane::RegisterSceneComponents(*creg);
+        return creg;
+    }
+
+    const Astra::FieldInfo* FindField(const Astra::ComponentDescriptor& desc,
+                                      std::string_view name)
+    {
+        if (!desc.meta) return nullptr;
+        for (const Astra::FieldInfo& f : desc.meta->fields)
+            if (f.name == name) return &f;
+        return nullptr;
+    }
+}
+
+TEST_CASE("FieldDiffersFromDefault sees a changed field and not an unchanged one", "[editor]")
+{
+    auto creg = MakeSceneComponentRegistry();
+
+    const Astra::ComponentDescriptor* desc =
+        creg->GetComponentDescriptorByHash(Astra::TypeID<Arcane::Transform>::Hash());
+    REQUIRE(desc != nullptr);
+    REQUIRE(desc->meta != nullptr);
+
+    const Astra::FieldInfo* rotation = FindField(*desc, "rotation");
+    REQUIRE(rotation != nullptr);
+
+    Arcane::Transform t;   // default-constructed: rotation is the default
+    CHECK_FALSE(FieldDiffersFromDefault(*desc, *rotation, &t));
+
+    t.rotation = 1.5f;
+    CHECK(FieldDiffersFromDefault(*desc, *rotation, &t));
+
+    // Reading the default back out gives the value a reset would write.
+    float defaultRotation = -1.0f;
+    ReadDefaultFieldBytes(*desc, *rotation, &defaultRotation);
+    CHECK(defaultRotation == 0.0f);
+
+    // A non-scalar default is the type's NSDMI, not zero -- scale is {1,1}, so
+    // a comparison that only ever saw zeroed memory would get this wrong.
+    const Astra::FieldInfo* scale = FindField(*desc, "scale");
+    REQUIRE(scale != nullptr);
+    CHECK_FALSE(FieldDiffersFromDefault(*desc, *scale, &t));
+
+    glm::vec2 defaultScale{-1.0f, -1.0f};
+    ReadDefaultFieldBytes(*desc, *scale, &defaultScale);
+    CHECK(defaultScale.x == 1.0f);
+    CHECK(defaultScale.y == 1.0f);
+
+    t.scale.y = 2.0f;
+    CHECK(FieldDiffersFromDefault(*desc, *scale, &t));
+}
+
+TEST_CASE("FieldDiffersFromDefault handles a component holding a string", "[editor]")
+{
+    // EntityInfo carries a std::string, so the scratch default instance MUST be
+    // destructed or this leaks. Run under a leak checker if you have one; the
+    // assertion here is just that it behaves.
+    auto creg = MakeSceneComponentRegistry();
+
+    const Astra::ComponentDescriptor* desc =
+        creg->GetComponentDescriptorByHash(Astra::TypeID<Arcane::EntityInfo>::Hash());
+    REQUIRE(desc != nullptr);
+    REQUIRE(desc->meta != nullptr);
+
+    const Astra::FieldInfo* name = FindField(*desc, "name");
+    REQUIRE(name != nullptr);
+
+    Arcane::EntityInfo info;
+    CHECK_FALSE(FieldDiffersFromDefault(*desc, *name, &info));
+
+    info.name = "Player";
+    CHECK(FieldDiffersFromDefault(*desc, *name, &info));
+
+    // Back to the default string: a name the user cleared must stop offering a
+    // revert, so the comparison has to be by VALUE and not by "was it touched".
+    info.name.clear();
+    CHECK_FALSE(FieldDiffersFromDefault(*desc, *name, &info));
+}
+
+TEST_CASE("FieldDiffersFromDefault is inert on a tag component", "[editor]")
+{
+    // Arcane::Hidden is empty, so Astra gives its descriptor size 0 and there is
+    // no scratch to build. A tag has no fields of its own, so the only way to
+    // reach this path is a caller pairing the wrong field with the wrong
+    // descriptor -- which must read nothing rather than run off the allocation.
+    auto creg = MakeSceneComponentRegistry();
+
+    const Astra::ComponentDescriptor* tag =
+        creg->GetComponentDescriptorByHash(Astra::TypeID<Arcane::Hidden>::Hash());
+    REQUIRE(tag != nullptr);
+    REQUIRE(tag->size == 0);
+
+    const Astra::ComponentDescriptor* xform =
+        creg->GetComponentDescriptorByHash(Astra::TypeID<Arcane::Transform>::Hash());
+    REQUIRE(xform != nullptr);
+    const Astra::FieldInfo* rotation = FindField(*xform, "rotation");
+    REQUIRE(rotation != nullptr);
+
+    Arcane::Transform t;
+    t.rotation = 1.5f;
+    CHECK_FALSE(FieldDiffersFromDefault(*tag, *rotation, &t));
+
+    float out = -1.0f;
+    ReadDefaultFieldBytes(*tag, *rotation, &out);
+    CHECK(out == -1.0f);   // untouched: nothing was read
+
+    // A null instance is the Inspector's "no component here" case.
+    CHECK_FALSE(FieldDiffersFromDefault(*xform, *rotation, nullptr));
+}

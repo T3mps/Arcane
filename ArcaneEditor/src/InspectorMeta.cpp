@@ -1,8 +1,17 @@
 #include "InspectorMeta.hpp"
 
+// FieldInfo::typeHash is populated (Detail::MakeFieldInfo) from
+// Astra::TypeID<DecayedType>::Hash(), so comparing against that same accessor
+// is exact. Visible transitively via FieldInfo.hpp; included for clarity, as
+// InspectorFields.cpp does.
+#include <Astra/Core/TypeID.hpp>
 #include <Astra/Reflection/Attribute.hpp>
 
 #include <cctype>
+#include <cstdint>
+#include <cstring>
+#include <new>
+#include <string>
 
 namespace Arcane::Editor
 {
@@ -141,5 +150,94 @@ namespace Arcane::Editor
         if (query.empty()) return true;
         if (ContainsFold(componentDisplayName, query)) return true;
         return ContainsFold(fieldDisplayName, query) || ContainsFold(rawFieldName, query);
+    }
+
+    namespace
+    {
+        // RAII scratch instance: aligned storage + DefaultConstruct on entry,
+        // Destruct + aligned delete on exit. EntityInfo holds a std::string, so
+        // skipping the destruct leaks heap on every call.
+        class ScratchDefault
+        {
+        public:
+            explicit ScratchDefault(const Astra::ComponentDescriptor& d) : m_desc(d)
+            {
+                if (d.size == 0) return;   // tag component: no storage, no fields
+                m_mem = ::operator new(d.size, std::align_val_t(d.alignment));
+                d.DefaultConstruct(m_mem);
+            }
+            ~ScratchDefault()
+            {
+                if (!m_mem) return;
+                m_desc.Destruct(m_mem);
+                ::operator delete(m_mem, std::align_val_t(m_desc.alignment));
+            }
+            ScratchDefault(const ScratchDefault&) = delete;
+            ScratchDefault& operator=(const ScratchDefault&) = delete;
+
+            [[nodiscard]] const void* Get() const { return m_mem; }
+
+        private:
+            const Astra::ComponentDescriptor& m_desc;
+            void* m_mem = nullptr;
+        };
+
+        // The field's bytes inside the scratch, or null when there is nothing
+        // to read. `desc` and `field` are independent parameters, so a caller
+        // pairing a field with the wrong descriptor -- or with a tag component,
+        // whose descriptor Astra gives size 0 -- must read nothing rather than
+        // run off the end of the allocation this file just made.
+        const std::byte* DefaultFieldBytes(const Astra::ComponentDescriptor& desc,
+                                           const Astra::FieldInfo& field,
+                                           const ScratchDefault& scratch)
+        {
+            if (!scratch.Get()) return nullptr;
+            if (field.offset + field.size > desc.size) return nullptr;
+            return static_cast<const std::byte*>(scratch.Get()) + field.offset;
+        }
+
+        // Value comparison wherever value and representation diverge. See the
+        // header for what each arm can and cannot detect.
+        bool FieldValueDiffers(const Astra::FieldInfo& field, const void* a, const void* b)
+        {
+            // std::string is checked FIRST and by characters: it is not
+            // trivially copyable, so it would otherwise fall to the "cannot
+            // compare" arm and never offer a revert.
+            static const std::uint64_t kString = Astra::TypeID<std::string>::Hash();
+            if (field.typeHash == kString)
+                return *static_cast<const std::string*>(a) != *static_cast<const std::string*>(b);
+
+            if (field.isTrivial) return std::memcmp(a, b, field.size) != 0;
+
+            return false;
+        }
+    }
+
+    void ReadDefaultFieldBytes(const Astra::ComponentDescriptor& desc,
+                               const Astra::FieldInfo& field,
+                               void* outBytes)
+    {
+        // Refuse before building anything: a raw-byte copy of a non-trivial
+        // field would alias storage the scratch destructor frees on the way out.
+        if (!outBytes || !field.isTrivial) return;
+
+        ScratchDefault scratch(desc);
+        const std::byte* def = DefaultFieldBytes(desc, field, scratch);
+        if (!def) return;
+        std::memcpy(outBytes, def, field.size);
+    }
+
+    bool FieldDiffersFromDefault(const Astra::ComponentDescriptor& desc,
+                                 const Astra::FieldInfo& field,
+                                 const void* instance)
+    {
+        if (!instance) return false;
+
+        ScratchDefault scratch(desc);
+        const std::byte* def = DefaultFieldBytes(desc, field, scratch);
+        if (!def) return false;
+        return FieldValueDiffers(field,
+                                 static_cast<const std::byte*>(instance) + field.offset,
+                                 def);
     }
 }
