@@ -146,8 +146,8 @@ namespace Arcane::HostBoot
 
     // What BootScene loaded, handed back so the caller (the editor's
     // SceneSession::Adopt) can record the session's file + id WITHOUT a second
-    // ReadSceneFile of the same path just to recover the Guid -- the flaw in an
-    // earlier version of this call, which read and resolved the file twice.
+    // ReadSceneFile of the same path just to recover the Guid, which is what
+    // the original plan for this function would have made every caller do.
     struct BootSceneResult
     {
         std::filesystem::path file;   // the .arcscene BootScene just applied
@@ -156,8 +156,9 @@ namespace Arcane::HostBoot
 
     // Load the project's boot scene into `runtime`, replacing whatever the
     // registry holds. nullopt when there is no boot scene or it could not be
-    // loaded -- callers LOG AND CONTINUE with whatever the registry already
-    // held (a project with no boot scene, or one whose boot scene fails to
+    // loaded -- the reason is logged HERE, and callers simply continue with
+    // whatever the registry already held (a project with no boot scene, or one
+    // whose boot scene fails to
     // resolve/parse, is left exactly as it was -- nothing is reset until a
     // valid document is in hand) rather than refusing to open the project,
     // because the editor is how a broken boot scene gets fixed.
