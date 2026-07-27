@@ -53,7 +53,7 @@ namespace Arcane::Editor
     //                         yet. Structurally this is the ECS equivalent of
     //                         Unreal's intrinsic AActor identity: ActorLabel
     //                         and ActorGuid are plain AActor FIELDS
-    //                         (Actor.h:1055/:1188 in the vendored UE tree),
+    //                         (Actor.h:1188/:1055 in the vendored UE tree),
     //                         not components -- "removable" is not even a
     //                         concept there. Since IsHiddenInInspector does
     //                         NOT cover EntityInfo, it renders its own

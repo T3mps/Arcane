@@ -1901,27 +1901,19 @@ namespace Arcane::Editor
             // header.
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 ImGui::SetTooltip("%s", typeName.c_str());
-            // Header context menu. A null str_id makes the popup inherit the
-            // HEADER's item id, so each component gets its own popup -- a shared
-            // literal id would make every header open the same popup and the
-            // first-drawn component would swallow the click.
-            if (ImGui::BeginPopupContextItem())
+            // Structure-locked components (identity + derived caches) have no context
+            // actions at all, so the popup must not OPEN -- an empty popup frame reads
+            // as a glitch. BeginPopupContextItem is self-balancing (imgui.cpp:13333-13344:
+            // the window is pushed only when it returns true, and EndPopup runs only
+            // inside the branch), so gating the whole block is safe.
+            if (!Arcane::Editor::IsStructureLocked(typeName) && ImGui::BeginPopupContextItem())
             {
-                // Structure-locked types (EntityInfo, now that it reaches this
-                // loop at all -- task 5) never offer Remove: the display gate
-                // above stopped implying structure-locked the moment it became
-                // just IsHiddenInInspector, so this menu checks
-                // IsStructureLocked itself instead of inheriting the display
-                // filter's old guarantee.
-                if (!Arcane::Editor::IsStructureLocked(typeName))
-                {
-                    if (!canEditStructure)
-                        ImGui::BeginDisabled();
-                    if (ImGui::MenuItem("Remove Component"))
-                        pendingRemove = ci.descriptor;
-                    if (!canEditStructure)
-                        ImGui::EndDisabled();
-                }
+                if (!canEditStructure)
+                    ImGui::BeginDisabled();
+                if (ImGui::MenuItem("Remove Component"))
+                    pendingRemove = ci.descriptor;
+                if (!canEditStructure)
+                    ImGui::EndDisabled();
                 ImGui::EndPopup();
             }
             if (open)

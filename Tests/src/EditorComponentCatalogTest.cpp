@@ -132,7 +132,7 @@ TEST_CASE("IsStructureLocked covers the derived types plus EntityInfo", "[editor
     CHECK_FALSE(IsStructureLocked(""));
 }
 
-TEST_CASE("BuildComponentCatalog hides system-managed types and sorts by name", "[editor][outliner]")
+TEST_CASE("BuildComponentCatalog excludes internal types and sorts by name", "[editor][outliner]")
 {
     World w;
     const Astra::Entity a = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
