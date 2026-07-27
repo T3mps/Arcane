@@ -588,6 +588,11 @@ project "ArcaneTests"
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
         "%{wks.location}/ArcaneEditor/src/SceneSession.cpp",
+        -- Scene authoring: EditorCamera (the editor's own viewport pan/zoom/
+        -- framing math + the framing-bounds sweep) source-compiles into the
+        -- test exe so the [editor] units drive the PURE math headlessly -- no
+        -- ImGui and no engine calls in it, same pattern as SceneSession above.
+        "%{wks.location}/ArcaneEditor/src/EditorCamera.cpp",
     }
 
     includedirs {

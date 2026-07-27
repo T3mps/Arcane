@@ -20,6 +20,7 @@
 #include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
 #include "DocumentHost.hpp"
+#include "EditorCamera.hpp"
 #include "EditorPanels.hpp"
 #include "PlayMode.hpp"
 #include "SceneSession.hpp"
@@ -179,6 +180,32 @@ namespace Arcane::Editor
         bool m_prevKeyS = false;
         // Left-mouse edge-tracking, shared by the gizmo press/release detection.
         bool m_prevLmbDown = false;
+
+        // The EDITOR's viewport camera (Edit mode). Runtime::SetCamera is the
+        // PLUGIN's seam, so a project whose game module never calls it would be
+        // stuck at the identity transform -- offset (0,0), zoom 1, i.e. 1 px per
+        // metre. EditorApp drives this from viewport input and pushes it into
+        // the Runtime in Edit mode only; in Play the plugin's camera wins.
+        // See EditorCamera.hpp for the transform convention.
+        Arcane::Editor::EditorCamera m_camera;
+        // RMB-drag pan gesture. Starts only inside the viewport but keeps
+        // tracking once started (same rule as the gizmo drag), so a pan does not
+        // stall the moment the cursor crosses the panel edge. The cursor is
+        // kept in WINDOW px: the pan only needs the frame-to-frame DELTA, which
+        // is identical in window and viewport-local space (they differ by a
+        // translation), and window px are written every frame regardless of
+        // whether the viewport is active.
+        bool      m_camPanning = false;
+        glm::vec2 m_camPanLastMouse{0.0f, 0.0f};
+        bool      m_prevRmbDown = false;
+        // F (frame selection) / Home (frame scene) edge-tracking, same pattern
+        // as the undo/redo and gizmo mode keys above.
+        bool m_prevKeyF = false;
+        bool m_prevKeyHome = false;
+        // Point the editor camera at the selection (selectionOnly) or at the
+        // whole scene. A no-op when there is nothing framable, so the user's
+        // view is never thrown away by an F press that had no target.
+        void FrameCamera(bool selectionOnly);
         // Set for the remainder of THIS frame when a gizmo drag starts or ends,
         // so the click-pick block (later in MainLoop) does not also treat the
         // same click as a selection change. Reset at the top of the input block

@@ -80,6 +80,11 @@ namespace Arcane::Editor
         constexpr uint32_t kScO = 18;   // SDL_SCANCODE_O
         constexpr uint32_t kScS = 22;   // SDL_SCANCODE_S
 
+        // Viewport camera framing keys (see MainLoop's input block): F frames
+        // the selection, Home frames the whole scene.
+        constexpr uint32_t kScF    = 9;    // SDL_SCANCODE_F
+        constexpr uint32_t kScHome = 74;   // SDL_SCANCODE_HOME
+
         // Same FILE, not the same spelling. The Open-Scene dialog and the Save-Scene
         // dialog can hand back different-but-equivalent paths for one file
         // (separator style, casing, a non-canonical prefix), and DoSaveScene keys
@@ -936,6 +941,27 @@ namespace Arcane::Editor
         UpdateWindowTitle();
     }
 
+    void EditorApp::FrameCamera(bool selectionOnly)
+    {
+        // WorldTransform is DERIVED, and in Edit mode the fixed phase (which
+        // owns TransformPropagationSystem) is paused -- the refresh that keeps
+        // it current runs later in the frame than this input-time call. Refresh
+        // it here too, so framing an entity created or moved this frame reads
+        // its real world pose instead of a stale or absent one. Edit-mode only,
+        // which is the only mode that reaches here.
+        Astra::Registry& reg = m_runtime->Registry();
+        Arcane::TransformPropagationSystem{}(reg);
+
+        const Arcane::Editor::FramingBounds bounds =
+            selectionOnly ? Arcane::Editor::SelectionFramingBounds(reg, m_selection.Entities())
+                          : Arcane::Editor::SceneFramingBounds(reg);
+        if (!bounds.Valid())
+            return;   // nothing framable: leave the user's view where it is
+
+        m_camera.Frame(bounds.min, bounds.max,
+                       glm::vec2((float)m_viewport->Width(), (float)m_viewport->Height()));
+    }
+
     void EditorApp::InstallConsoleSink()
     {
         auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
@@ -1163,6 +1189,19 @@ namespace Arcane::Editor
                 // would fall through and spawn/drag gameplay underneath it.
                 if (!m_play.IsPlaying() || gameUiClaims)
                     pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x1u);
+                // Edit mode: the EDITOR camera owns RMB-drag pan and wheel zoom
+                // (see the camera block below), so the plugin must not see those
+                // either. Both cameras write the SAME Runtime slot, and the
+                // editor's push (before SubmitRender) wins in Edit mode -- so a
+                // plugin still panning underneath would just be invisible work
+                // whose result reappears the moment Play starts, from a viewpoint
+                // the user never chose. RMB=bit1; InputSnapshot.hpp. Play is
+                // untouched: the plugin keeps RMB + wheel and its camera wins.
+                if (!m_play.IsPlaying())
+                {
+                    pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x2u);
+                    pluginSnap.wheelY = 0.0f;
+                }
                 m_runtime->SetInputSnapshot(pluginSnap);
                 m_gpu->Input().Update(frameDt, snap);
 
@@ -1244,6 +1283,76 @@ namespace Arcane::Editor
                     m_prevKeyE = eDown;
                     m_prevKeyR = rDown;
                     m_prevKeyQ = qDown;
+                }
+
+                // Editor viewport camera (Edit mode): RMB-drag pans, wheel zooms
+                // at the cursor, F frames the selection (everything when nothing
+                // is selected), Home frames everything. The plugin no longer sees
+                // RMB/wheel in Edit mode (see the pluginSnap mask above), so the
+                // two cameras cannot fight over the same gesture.
+                {
+                    const bool      rmbDown = (snap.mouseButtons & 0x2u) != 0;
+                    const glm::vec2 mouseWindow(snap.mouseX, snap.mouseY);
+                    if (!m_play.IsPlaying())
+                    {
+                        // A pan may only START over the viewport, but once
+                        // started it keeps tracking anywhere -- same rule as the
+                        // gizmo drag, so crossing the panel edge mid-drag does
+                        // not strand the view.
+                        if (rmbDown && !m_prevRmbDown && inViewport)
+                            m_camPanning = true;
+                        if (!rmbDown)
+                            m_camPanning = false;
+                        // RMB held across BOTH frames, so m_camPanLastMouse is a
+                        // real previous cursor and the press edge cannot jump the
+                        // view by the whole distance from wherever the cursor last
+                        // was (same guard as Sandbox's Interaction pan).
+                        if (m_camPanning && m_prevRmbDown)
+                            m_camera.Pan(mouseWindow - m_camPanLastMouse);
+
+                        // Zoom anchors on the viewport-local cursor, the space
+                        // the camera offset itself lives in. Deliberately NOT
+                        // gated on snap.wantCaptureMouse: it is true over the
+                        // viewport image by design (see the pluginSnap comment
+                        // above); inViewport already folds in m_viewportActive,
+                        // which is false whenever another panel owns the cursor.
+                        if (inViewport && snap.wheelY != 0.0f)
+                            m_camera.ZoomAt(glm::vec2(lx, ly), snap.wheelY);
+                    }
+                    else
+                    {
+                        m_camPanning = false;   // Play owns the pointer; drop any live pan
+                    }
+                    m_camPanLastMouse = mouseWindow;
+                    m_prevRmbDown     = rmbDown;
+
+                    // F / Home framing. Gated on wantCaptureKeyboard exactly like
+                    // the Ctrl+N/O/S shortcuts above, so F does not fire while a
+                    // text field or the Outliner rename box has focus. Unlike the
+                    // W/E/R gizmo keys this does NOT require viewport focus:
+                    // those switch a viewport TOOL, while framing acts on the
+                    // selection, and picking an entity in the Outliner and
+                    // pressing F is the point of the shortcut.
+                    const bool fDown    = snap.ScancodeDown(kScF);
+                    const bool homeDown = snap.ScancodeDown(kScHome);
+                    const bool framingActive = !m_play.IsPlaying() && !snap.wantCaptureKeyboard;
+                    if (framingActive && fDown && !m_prevKeyF)
+                        FrameCamera(m_selection.HasSelection());
+                    if (framingActive && homeDown && !m_prevKeyHome)
+                        FrameCamera(false);
+                    m_prevKeyF    = fDown;
+                    m_prevKeyHome = homeDown;
+
+                    // Push the editor camera BEFORE the gizmo block below reads
+                    // Runtime::CameraOffset/CameraZoom. Those reads happen earlier
+                    // in the frame than the pre-SubmitRender push further down, so
+                    // without this the gizmo would hit-test against whatever camera
+                    // was stored LAST frame -- and on the very first frame against
+                    // the identity (zoom 1), placing the handles 100x off the
+                    // sprite. The click-pick and gizmo DRAW sites run after the
+                    // later push and are already consistent with it.
+                    if (!m_play.IsPlaying())
+                        m_runtime->SetCamera(m_camera.offset, m_camera.zoom);
                 }
 
                 // Transform-gizmo interaction: hit-test + drag against the selected
@@ -1499,6 +1608,20 @@ namespace Arcane::Editor
                 // for them being current, and in Edit mode that is the editor.
                 if (!m_play.IsPlaying())
                     Arcane::TransformPropagationSystem{}(m_runtime->Registry());
+
+                // Editor camera -> the Runtime slot SetRenderContext reads, for
+                // the SECOND time this frame (the first is in the input block, so
+                // the gizmo hit-test sees it). It has to be re-pushed HERE, after
+                // the plugin's UpdateAll ran above: a plugin that pushes its own
+                // camera every frame -- Sandbox does -- would otherwise own the
+                // Edit-mode view. Must stay after that Advance and before
+                // SubmitRender below; moving it earlier hands the view back to
+                // the plugin.
+                //
+                // Play mode deliberately does NOT push: the plugin's camera wins
+                // so the game looks like the game.
+                if (!m_play.IsPlaying())
+                    m_runtime->SetCamera(m_camera.offset, m_camera.zoom);
 
                 m_viewport->SetPostGlobals(postGlobals);
                 m_viewport->SetPostChain(postChain, postInst,
