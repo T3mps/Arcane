@@ -13,8 +13,10 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Scene/Components.hpp>   // Arcane::EntityInfo (the rename target)
 #include <Arcane/Sim/RunLoop.hpp>
 
+#include <Astra/Core/TypeID.hpp>
 #include <Astra/Reflection/FieldVisitor.hpp>
 #include <Astra/Registry/Registry.hpp>
 
@@ -416,11 +418,35 @@ namespace Arcane::Editor
                                                  b.snapshot, b.restore, mutate);
         }
 
+        // `current` is EntityInfo::name RAW -- never Edit::DisplayName, which
+        // substitutes "Entity <id>" for an empty name (EntityOps.cpp:49-55).
+        // Seeding that fallback made a no-edit commit on an empty-named entity
+        // write "Entity 7" into the component; seeding the raw (possibly empty)
+        // name keeps Escape and no-edit commits true no-ops.
         void BeginRename(OutlinerState& st, Astra::Entity e, const std::string& current)
         {
             st.renameTarget = e;
-            std::snprintf(st.renameBuf, sizeof(st.renameBuf), "%s", current.c_str());
+            st.renameBuf = current;
             st.renameFocusPending = true;
+        }
+
+        // The EntityInfo ComponentDescriptor on `e`, for the rename's
+        // CommandStack::SnapshotComponent. Registry exposes no
+        // descriptor-by-hash accessor, so this walks InspectEntity the way the
+        // Inspector loop below and the gizmo's FindTransformDescriptor
+        // (EditorAppFrame.cpp) already do. Matched on the descriptor hash
+        // rather than TypeMeta::typeName because that hash IS TypeID<T>::Hash()
+        // by construction (ComponentRegistry.hpp:160), so no string literal has
+        // to stay in sync with the type. Null for a dead entity or one that no
+        // longer carries EntityInfo.
+        const Astra::ComponentDescriptor* EntityInfoDescriptor(Astra::Registry& reg,
+                                                               Astra::Entity e)
+        {
+            for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
+                if (ci.descriptor
+                    && ci.descriptor->hash == Astra::TypeID<Arcane::EntityInfo>::Hash())
+                    return ci.descriptor;
+            return nullptr;
         }
 
         void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
@@ -609,8 +635,16 @@ namespace Arcane::Editor
         if (binding.editMode && windowFocused && !renaming && !ImGui::GetIO().WantTextInput)
         {
             if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && sel.Count() == 1)
-                BeginRename(state, sel.Primary(),
-                            Arcane::Edit::DisplayName(registry, sel.Primary()));
+            {
+                // Rename edits an EXISTING EntityInfo -- Edit::RenameEntity
+                // refuses when there is none and never mints one
+                // (EntityOps.cpp:180-186). An entity without one is a runtime
+                // spawn with no durable identity, so F2 does nothing rather
+                // than opening a box whose commit could not land.
+                if (const Arcane::EntityInfo* info =
+                        registry.GetComponent<Arcane::EntityInfo>(sel.Primary()))
+                    BeginRename(state, sel.Primary(), info->name);
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && sel.HasSelection())
                 DeleteSelection(registry, sel, undo, binding);
         }
@@ -681,17 +715,71 @@ namespace Arcane::Editor
                         ImGui::SetKeyboardFocusHere();
                         state.renameFocusPending = false;
                     }
-                    bool commit = ImGui::InputText("##rename", state.renameBuf,
-                        sizeof(state.renameBuf),
-                        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+                    InputTextString("##rename", &state.renameBuf,
+                                    ImGuiInputTextFlags_AutoSelectAll);
+                    // Commit on deactivate; the equality guard below IS the
+                    // cancel path. Escape reverts the buffer to its
+                    // activation-time text BEFORE deactivating
+                    // (imgui_widgets.cpp:5212 raises revert_edit, :5300-5308
+                    // writes TextToRevertTo back), so a cancelled rename
+                    // arrives here equal to its seed and the guard drops it.
+                    // Enter (:5180) and click-away deactivate the same way, so
+                    // telling the three apart needs neither EnterReturnsTrue
+                    // nor the global IsKeyPressed(Escape) query this replaced
+                    // -- that query answered "was Escape pressed anywhere",
+                    // not "did THIS box cancel".
                     if (ImGui::IsItemDeactivated())
                     {
-                        commit = commit || !ImGui::IsKeyPressed(ImGuiKey_Escape);
-                        if (commit)
+                        const Astra::Entity e = row.entity;
+                        // Re-read rather than trust the frame that opened the
+                        // box: an undo/redo between the two can change or
+                        // remove the component.
+                        const Arcane::EntityInfo* info =
+                            registry.GetComponent<Arcane::EntityInfo>(e);
+                        if (info && state.renameBuf != info->name)
                         {
-                            const Astra::Entity e = row.entity;
-                            ApplyStructural(undo, binding, "Rename",
-                                [&] { return Arcane::Edit::RenameEntity(registry, e, state.renameBuf); });
+                            if (binding.editMode)
+                            {
+                                // ONE ComponentEditCommand -- the same shape as
+                                // an Inspector field edit, not the
+                                // whole-registry memento the structural edits
+                                // in this panel use. A null descriptor means
+                                // nothing could be snapshotted, so the rename is
+                                // refused rather than applied with no undo
+                                // coverage.
+                                if (const Astra::ComponentDescriptor* desc =
+                                        EntityInfoDescriptor(registry, e))
+                                {
+                                    // ScopedTransaction, not a bare Begin/Commit
+                                    // pair: this can fire in the same frame as a
+                                    // gizmo press, and its None-token dtor no-ops
+                                    // so joining a live gesture never closes
+                                    // someone else's transaction
+                                    // (CommandStack.cpp:149-156). The snapshots
+                                    // ride along and that gesture's own Commit
+                                    // records them.
+                                    Arcane::ScopedTransaction txn(undo, "Rename");
+                                    txn.Snapshot(e, desc);
+                                    Arcane::Edit::RenameEntity(registry, e, state.renameBuf);
+                                }
+                            }
+                            else
+                            {
+                                // Play mode: applied WITHOUT undo bracketing,
+                                // matching the Inspector's field visitor, which
+                                // leaves its stack pointer null while Play runs
+                                // (an entry recorded now would let a later
+                                // Ctrl+Z write play-time bytes over the registry
+                                // Stop restored). Deliberate change: this used
+                                // to be refused outright and silently.
+                                //
+                                // Reached only when Play STARTS with a rename
+                                // box already open -- all three entry points
+                                // still require Edit mode to open one -- so it
+                                // is the finish-what-you-typed path, not a
+                                // play-time rename affordance.
+                                Arcane::Edit::RenameEntity(registry, e, state.renameBuf);
+                            }
                         }
                         state.renameTarget = Astra::Entity::Invalid();
                     }
@@ -749,13 +837,18 @@ namespace Arcane::Editor
                         else
                         {
                             // Slow second click on the sole-selected row = rename.
-                            const bool slowSecond = binding.editMode
+                            // Gated on EntityInfo like the other two entry
+                            // points (see the F2 site); without one the click
+                            // stays a plain select.
+                            const Arcane::EntityInfo* info =
+                                registry.GetComponent<Arcane::EntityInfo>(row.entity);
+                            const bool slowSecond = binding.editMode && info != nullptr
                                 && sel.Count() == 1 && sel.Primary() == row.entity
                                 && state.lastClicked == row.entity
                                 && (now - state.lastClickTime) > ImGui::GetIO().MouseDoubleClickTime
                                 && (now - state.lastClickTime) < 1.2;
                             if (slowSecond)
-                                BeginRename(state, row.entity, row.label);
+                                BeginRename(state, row.entity, info->name);
                             else
                                 sel.Select(row.entity);
                         }
@@ -788,8 +881,19 @@ namespace Arcane::Editor
                                 sel.Select(created);
                             }
                         }
-                        if (ImGui::MenuItem("Rename", "F2"))
-                            BeginRename(state, row.entity, row.label);
+                        // Disabled rather than hidden without an EntityInfo, so
+                        // the refusal is visible before the click -- the same
+                        // treatment the structural items get above. ForTooltip's
+                        // default mouse flags include AllowWhenDisabled
+                        // (imgui.cpp:1587, not overridden by this editor), which
+                        // is what lets the explanation reach a greyed item.
+                        const Arcane::EntityInfo* rowInfo =
+                            registry.GetComponent<Arcane::EntityInfo>(row.entity);
+                        if (ImGui::MenuItem("Rename", "F2", false, rowInfo != nullptr))
+                            BeginRename(state, row.entity, rowInfo->name);
+                        if (rowInfo == nullptr
+                            && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                            ImGui::SetTooltip("Runtime entity: no EntityInfo identity to rename");
                         // ImGui cannot open a popup from inside another popup's
                         // scope, so the request is latched and consumed at panel
                         // scope below (the standard deferred-OpenPopup pattern).
