@@ -309,6 +309,31 @@ namespace Arcane::Editor
             }
         }
 
+        // Value equality for a pass's optional graph, for the gesture builders'
+        // no-op guard ONLY. MaterialGraph is a plain aggregate with no
+        // operator== (MaterialGraph.hpp:305-343; neither GraphNode nor
+        // GraphLink has one either), so this rides the existing public
+        // serialization: GraphToJson's text is byte-stable for equal graphs,
+        // which MaterialGraphTest.cpp:695 and :1149 already assert. Doc-local
+        // on purpose -- an engine-header operator== is a wider commitment than
+        // this guard needs.
+        //
+        // Cost is one serialization per GESTURE CLOSE (not per frame, not per
+        // drag tick), against graphs of tens of nodes -- the same order as the
+        // whole-graph copy the step itself carries.
+        //
+        // Conservative in the one direction that matters: any float pair that
+        // dumps differently (0.0 vs -0.0) reads as CHANGED and still pushes.
+        bool GraphOptEqual(const std::optional<Arcane::MaterialGraph>& a,
+                           const std::optional<Arcane::MaterialGraph>& b)
+        {
+            if (a.has_value() != b.has_value())
+                return false;   // nullopt vs engaged: a real difference
+            if (!a.has_value())
+                return true;
+            return Arcane::GraphToJson(*a).dump() == Arcane::GraphToJson(*b).dump();
+        }
+
         // One graph gesture as an undo step (same doc-identity anchor pattern
         // as ParamEditCommand). Whole-graph before/after: our graphs are tens
         // of nodes -- the SG full-snapshot-undo pathology was per-edit JSON
@@ -3286,11 +3311,25 @@ namespace Arcane::Editor
                     // abandoned close runs later still at the ScopeGuard), and
                     // a command pairing pass B's index with pass A's `before`
                     // would have Undo overwrite B's graph with A's.
+                    //
+                    // NO-OP GUARD: the close runs on EVERY close path, including
+                    // the abandonment ones (stale-close, collapsed window,
+                    // document teardown) where the gesture never edited
+                    // anything. Pushing there would leave a junk step whose
+                    // before == after AND clear the redo stack
+                    // (CommandStack.cpp:70) -- a generic Push is its own
+                    // transaction, so it never meets Commit's empty-transaction
+                    // drop at :61-62. So compare first; an EDITED gesture still
+                    // differs and still pushes exactly one step.
                     return std::function<void()>(
                         [this, label = std::string(label),
                          pass = static_cast<std::size_t>((std::max)(0, m_activePass)),
                          before = ActiveGraphOpt()]() mutable
-                        { PushGraphUndo(label.c_str(), std::move(before), pass); });
+                        {
+                            if (GraphOptEqual(before, GraphOptAt(pass)))
+                                return;   // nothing changed -- no step, redo intact
+                            PushGraphUndo(label.c_str(), std::move(before), pass);
+                        });
                 });
         };
         auto gestureEnd = [&] { EditGesture::EndOnDeactivate(m_services.undo, m_gesture); };
@@ -4114,6 +4153,17 @@ namespace Arcane::Editor
             // touched anything. The step itself builds at close (an abandoned
             // drag lands on the stack rather than vanishing), and the
             // transaction carries the label CommandStack::Commit stamps.
+            //
+            // NO-OP GUARD: the close runs on EVERY close path, including the
+            // abandonment ones (stale-close, collapsed window, document
+            // teardown) where the gesture never edited anything. Pushing there
+            // would leave a junk step whose before == after AND clear the redo
+            // stack (CommandStack.cpp:70) -- a generic Push is its own
+            // transaction, so it never meets Commit's empty-transaction drop at
+            // :61-62. The after-state is the CLOSE-TIME override state, so
+            // "no override, nothing typed" reads as unchanged; an EDITED
+            // gesture still differs (its live Set both creates the override and
+            // moves the value) and still pushes exactly one step.
             EditGesture::BeginOnActivate(m_services.undo, m_gesture,
                 [&] { return "Edit " + d.name; },
                 [&]
@@ -4126,10 +4176,21 @@ namespace Arcane::Editor
                         [this, nameHash = d.nameHash, name = d.name, hadBefore, before]
                         {
                             Arcane::MatParamValue after;
-                            if (m_instance && m_instance->GetParam(nameHash, after))
-                                m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                                    m_anchor, nameHash, "Edit " + name,
-                                    hadBefore, before, /*hasAfter=*/true, after));
+                            if (!m_instance || !m_instance->GetParam(nameHash, after))
+                                return;   // the snippet dropped the param
+                            // Read the override flag, not a hardcoded true: it
+                            // is what distinguishes "the drag created an
+                            // override" from "nothing happened", and it is the
+                            // truthful Redo target either way (ApplyParamEdit
+                            // clears the override when hasAfter is false, the
+                            // shape the reset button below pushes).
+                            const bool hasAfter = m_instance->HasOverride(nameHash);
+                            if (hadBefore == hasAfter &&
+                                (!hadBefore || before == after))
+                                return;   // nothing changed -- no step, redo intact
+                            m_services.undo->Push(std::make_unique<ParamEditCommand>(
+                                m_anchor, nameHash, "Edit " + name,
+                                hadBefore, before, hasAfter, after));
                         });
                 });
 
