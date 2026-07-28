@@ -156,9 +156,9 @@ namespace Arcane
         // stores one, so a scene that moves on disk must keep opening, and the
         // asset browser can only list what this registry knows about.
         //
-        // .arcsprite is native for the same reason .arcmat is: SpriteAsset::
-        // SaveSpriteAsset embeds a top-level "id" (SpriteAsset.cpp), so it rides
-        // the same ResolveNativeId path rather than a sidecar.
+        // .arcsprite is native for the same reason .arcmat is: SaveSpriteAsset
+        // embeds a top-level "id" (SpriteAsset.cpp:14), so it rides the same
+        // ResolveNativeId path rather than a sidecar.
         Guid id;
         if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite")
             id = ResolveNativeId(file);
