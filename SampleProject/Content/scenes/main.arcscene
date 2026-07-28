@@ -2,7 +2,7 @@
   "entities": [
     {
       "components": {
-        "Arcane::EntityInfo": {
+        "Arcane::Identity": {
           "id": {
             "hi": 3508969169540367876,
             "lo": 11771136940507535956
@@ -25,7 +25,7 @@
     },
     {
       "components": {
-        "Arcane::EntityInfo": {
+        "Arcane::Identity": {
           "id": {
             "hi": 12452576733452912617,
             "lo": 11602874688866321559
@@ -68,7 +68,7 @@
     },
     {
       "components": {
-        "Arcane::EntityInfo": {
+        "Arcane::Identity": {
           "id": {
             "hi": 16179426780818260900,
             "lo": 11571053343175331356
@@ -111,7 +111,7 @@
     },
     {
       "components": {
-        "Arcane::EntityInfo": {
+        "Arcane::Identity": {
           "id": {
             "hi": 770975471762686771,
             "lo": 10273594696484882624

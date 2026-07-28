@@ -125,7 +125,7 @@ namespace Arcane
             // outside tests: the live roster was whatever the hosted game
             // plugin happened to ReRegisterComponent<T>() in its Init, which
             // (a) left the editor's Add Component catalog offering only the
-            // plugin's handful of types, and (b) silently DROPPED EntityInfo /
+            // plugin's handful of types, and (b) silently DROPPED Identity /
             // Hidden when a runtime host loaded an editor-saved scene --
             // SceneSerializer skips a type that is reflected but not
             // REGISTERED as a component.

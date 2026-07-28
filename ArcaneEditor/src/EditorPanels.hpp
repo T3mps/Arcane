@@ -114,7 +114,7 @@ namespace Arcane::Editor
         std::unordered_set<std::uint64_t> collapsed;
         OutlinerSort sort;
         Astra::Entity renameTarget = Astra::Entity::Invalid();
-        // std::string, not a fixed array: EntityInfo::name is a std::string and
+        // std::string, not a fixed array: Identity::name is a std::string and
         // a 256-byte box silently truncated longer ones on the way in.
         std::string renameBuf;
         bool renameFocusPending = false;

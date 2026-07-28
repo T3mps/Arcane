@@ -107,7 +107,7 @@ extern "C"
         creg->ReRegisterComponent<Arcane::WorldTransform>();
         creg->ReRegisterComponent<Arcane::SpriteRenderer>();
         creg->ReRegisterComponent<Arcane::PostProcess>();
-        creg->ReRegisterComponent<Arcane::EntityInfo>();
+        creg->ReRegisterComponent<Arcane::Identity>();
         creg->ReRegisterComponent<Arcane::Hidden>();
 
         auto& sch = ctx->engine->Schedulers();                 // 3. register systems (functors in this module)

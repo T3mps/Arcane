@@ -47,16 +47,16 @@ namespace Arcane::Editor
 
     bool IsStructureLocked(std::string_view typeName)
     {
-        // The hidden caches, plus identity. EntityInfo is VISIBLE (name edits,
+        // The hidden caches, plus identity. Identity is VISIBLE (name edits,
         // id view-only) but never user-added or user-removed -- the ECS
         // equivalent of AActor's intrinsic ActorLabel/ActorGuid
         // (Actor.h:1055/:1188), which are not components at all.
-        return IsHiddenInInspector(typeName) || typeName == "Arcane::EntityInfo";
+        return IsHiddenInInspector(typeName) || typeName == "Arcane::Identity";
     }
 
     int InspectorSectionRank(std::string_view typeName)
     {
-        if (typeName == "Arcane::EntityInfo")
+        if (typeName == "Arcane::Identity")
             return 0;
         if (typeName == "Arcane::Transform")
             return 1;
@@ -84,8 +84,8 @@ namespace Arcane::Editor
             // treats it as a C string (the ImGui popup does).
             std::string typeName(desc.meta->typeName);
             // The catalog is the Add Component source, so it must exclude
-            // EntityInfo too (structure-locked), not just the hidden caches --
-            // IsHiddenInInspector alone would offer a redundant "add EntityInfo"
+            // Identity too (structure-locked), not just the hidden caches --
+            // IsHiddenInInspector alone would offer a redundant "add Identity"
             // row that Edit::AddComponent would answer with a fresh NIL Guid.
             if (IsStructureLocked(typeName))
                 return;

@@ -101,10 +101,10 @@ TEST_CASE("IsHiddenInInspector covers only the derived per-frame caches", "[edit
     CHECK(IsHiddenInInspector("Arcane::PreviousTransform"));
     CHECK(IsHiddenInInspector("Arcane::PhysicsBodyRef"));
 
-    // 2026-07-27 entity-identity-rename task 5: EntityInfo is now VISIBLE in
+    // 2026-07-27 entity-identity-rename task 5: Identity is now VISIBLE in
     // the Inspector (name editable, id view-only) -- it moved out of the
     // display gate. It is still structure-locked; see the next TEST_CASE.
-    CHECK_FALSE(IsHiddenInInspector("Arcane::EntityInfo"));
+    CHECK_FALSE(IsHiddenInInspector("Arcane::Identity"));
 
     // Transform is deliberately REMOVABLE (spec section 5).
     CHECK_FALSE(IsHiddenInInspector("Arcane::Transform"));
@@ -113,19 +113,19 @@ TEST_CASE("IsHiddenInInspector covers only the derived per-frame caches", "[edit
     CHECK_FALSE(IsHiddenInInspector(""));
 }
 
-TEST_CASE("IsStructureLocked covers the derived types plus EntityInfo", "[editor][outliner]")
+TEST_CASE("IsStructureLocked covers the derived types plus Identity", "[editor][outliner]")
 {
     CHECK(IsStructureLocked("Arcane::WorldTransform"));
     CHECK(IsStructureLocked("Arcane::PreviousTransform"));
     CHECK(IsStructureLocked("Arcane::PhysicsBodyRef"));
-    // EntityInfo joined the list in the 2026-07-26 review fix: Edit::AddComponent
+    // Identity joined the list in the 2026-07-26 review fix: Edit::AddComponent
     // default-constructs, so a generic add stamped a NIL Guid on every selected
     // entity and a generic remove wiped the durable cross-save identity. Its
     // lifecycle is creation-only (Edit::CreateEntity, and scene load) -- rename
     // is an edit of an existing one, never an add. Task 5 made it VISIBLE
     // (IsHiddenInInspector is false for it) while keeping it structure-locked
     // here, so Add Component and Remove Component still refuse it.
-    CHECK(IsStructureLocked("Arcane::EntityInfo"));
+    CHECK(IsStructureLocked("Arcane::Identity"));
 
     // Transform is deliberately REMOVABLE (spec section 5).
     CHECK_FALSE(IsStructureLocked("Arcane::Transform"));
@@ -291,7 +291,7 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
     // project whose plugin registered two types showed a two-row, fully
     // disabled catalog, so "+ Add Component" appeared to do nothing.
     //
-    // The same gap silently dropped EntityInfo/Hidden when a runtime host
+    // The same gap silently dropped Identity/Hidden when a runtime host
     // loaded a scene the editor saved: SceneSerializer skips a type that is
     // reflected but not REGISTERED as a component.
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
@@ -312,22 +312,22 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
     CHECK(Find(cat, "Arcane::WorldTransform") == nullptr);
     CHECK(Find(cat, "Arcane::PreviousTransform") == nullptr);
     CHECK(Find(cat, "Arcane::PhysicsBodyRef") == nullptr);
-    CHECK(Find(cat, "Arcane::EntityInfo") == nullptr);
+    CHECK(Find(cat, "Arcane::Identity") == nullptr);
 
-    // EntityInfo is hidden from the CATALOG but must still be REGISTERED -- the
+    // Identity is hidden from the CATALOG but must still be REGISTERED -- the
     // other half of the roster bug (SceneSerializer silently drops a type that is
     // reflected but not registered as a component, so an editor-saved scene lost
     // its entity names and identities in a runtime host). Asserted against the
     // ComponentRegistry directly, since the catalog can no longer witness it.
     const Astra::ComponentRegistry* creg = reg.GetComponentRegistry();
     REQUIRE(creg != nullptr);
-    bool sawEntityInfo = false;
+    bool sawIdentity = false;
     creg->ForEachComponent([&](Astra::ComponentID, const Astra::ComponentDescriptor& d)
     {
-        if (d.meta && d.meta->typeName == "Arcane::EntityInfo")
-            sawEntityInfo = true;
+        if (d.meta && d.meta->typeName == "Arcane::Identity")
+            sawIdentity = true;
     });
-    CHECK(sawEntityInfo);
+    CHECK(sawIdentity);
 
     // A bare entity lacks all of them, so every row is offered as addable --
     // this is exactly the state that was broken at desk.
@@ -351,23 +351,23 @@ TEST_CASE("no-op add pushes no undo step", "[editor][outliner]")
     CHECK_FALSE(w.stack.CanUndo());
 }
 
-TEST_CASE("InspectorSectionRank pins EntityInfo first and Transform second", "[editor][outliner]")
+TEST_CASE("InspectorSectionRank pins Identity first and Transform second", "[editor][outliner]")
 {
     // Pin the two special ranks by value, not just by relative order: a future
     // editor swapping the constants (0/1 -> 1/0) would still satisfy "ordered"
-    // but would put Transform above EntityInfo in the Inspector.
-    CHECK(InspectorSectionRank("Arcane::EntityInfo") == 0);
+    // but would put Transform above Identity in the Inspector.
+    CHECK(InspectorSectionRank("Arcane::Identity") == 0);
     CHECK(InspectorSectionRank("Arcane::Transform") == 1);
 
     // Ordinary components -- including ones that sort alphabetically before
-    // EntityInfo/Transform -- all share the catch-all rank.
+    // Identity/Transform -- all share the catch-all rank.
     CHECK(InspectorSectionRank("Arcane::SpriteRenderer") == 2);
     CHECK(InspectorSectionRank("Arcane::PostProcess") == 2);
 
     // The three ranks are strictly ordered, so DrawInspectorPanel's
-    // stable_sort places EntityInfo before Transform before everything else
+    // stable_sort places Identity before Transform before everything else
     // rather than relying on the constants happening to compare that way.
-    CHECK(InspectorSectionRank("Arcane::EntityInfo") < InspectorSectionRank("Arcane::Transform"));
+    CHECK(InspectorSectionRank("Arcane::Identity") < InspectorSectionRank("Arcane::Transform"));
     CHECK(InspectorSectionRank("Arcane::Transform") < InspectorSectionRank("Arcane::SpriteRenderer"));
 
     // Degenerate input must not crash or accidentally claim a special rank.

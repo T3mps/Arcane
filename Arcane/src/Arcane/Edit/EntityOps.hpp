@@ -25,13 +25,13 @@ namespace Arcane { class CommandStack; }
 namespace Arcane::Edit
 {
     // First of "Entity", "Entity_2", "Entity_3", ... not already used by an
-    // EntityInfo in `reg`.
+    // Identity in `reg`.
     ARCANE_API std::string AutoEntityName(Astra::Registry& reg);
 
-    // EntityInfo.name when present and non-empty, else "Entity <id>".
+    // Identity.name when present and non-empty, else "Entity <id>".
     ARCANE_API std::string DisplayName(Astra::Registry& reg, Astra::Entity e);
 
-    // New entity carrying Transform{} + EntityInfo{Generate(), AutoEntityName},
+    // New entity carrying Transform{} + Identity{Generate(), AutoEntityName},
     // parented under `parent` when valid. Returns the new entity.
     // A dead (stale) parent handle silently falls back to root creation --
     // Registry::SetParent no-ops on dead parents and a create is still a
@@ -77,8 +77,8 @@ namespace Arcane::Edit
     ARCANE_API std::size_t SetHiddenRecursive(Astra::Registry& reg,
                                               Astra::Entity e, bool hidden);
 
-    // Rename an existing EntityInfo. Returns false (mutating nothing) when the
-    // entity is invalid, lacks EntityInfo, or the name is unchanged -- so a
+    // Rename an existing Identity. Returns false (mutating nothing) when the
+    // entity is invalid, lacks Identity, or the name is unchanged -- so a
     // false return always means "no undo step needed". Never adds the
     // component: identity is minted at creation only.
     //
@@ -98,7 +98,7 @@ namespace Arcane::Edit
     {
         Renamed,    // name changed; exactly one "Rename" transaction pushed
         NoChange,   // name already equal -- nothing mutated, nothing pushed
-        Invalid,    // dead entity, no EntityInfo, or no findable descriptor
+        Invalid,    // dead entity, no Identity, or no findable descriptor
         Deferred,   // a transaction was already open; NOTHING was mutated
     };
 
@@ -109,10 +109,10 @@ namespace Arcane::Edit
     // be permanently un-undoable. The caller re-tries next frame.
     //
     // Deferred is checked FIRST and mutates nothing, so a caller that parks the
-    // request and retries loses no edit. The descriptor for EntityInfo is found
+    // request and retries loses no edit. The descriptor for Identity is found
     // here (Registry exposes no descriptor-by-hash accessor, so this walks
     // InspectEntity and matches on ci.descriptor->hash, which IS
-    // Astra::TypeID<EntityInfo>::Hash() by construction) -- keeping that lookup
+    // Astra::TypeID<Identity>::Hash() by construction) -- keeping that lookup
     // engine-side is what lets every host share one implementation instead of
     // re-deriving the undo shape per panel.
     ARCANE_API RenameResult RenameWithUndo(CommandStack& stack, Astra::Registry& reg,

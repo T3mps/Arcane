@@ -13,7 +13,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Project/Project.hpp>
-#include <Arcane/Scene/Components.hpp>   // Arcane::EntityInfo (the rename target)
+#include <Arcane/Scene/Components.hpp>   // Arcane::Identity (the rename target)
 #include <Arcane/Sim/RunLoop.hpp>
 
 #include <Astra/Reflection/FieldVisitor.hpp>
@@ -417,7 +417,7 @@ namespace Arcane::Editor
                                                  b.snapshot, b.restore, mutate);
         }
 
-        // `current` is EntityInfo::name RAW -- never Edit::DisplayName, which
+        // `current` is Identity::name RAW -- never Edit::DisplayName, which
         // substitutes "Entity <id>" for an empty name (EntityOps.cpp:49-55).
         // Seeding that fallback made a no-edit commit on an empty-named entity
         // write "Entity 7" into the component; seeding the raw (possibly empty)
@@ -590,7 +590,7 @@ namespace Arcane::Editor
         // frame's rows already show the new name. EVERY result but Deferred
         // consumes the slot: Renamed landed it, NoChange means someone else got
         // there first, and Invalid means the entity is gone or lost its
-        // EntityInfo -- retrying any of those forever would be a slow leak that
+        // Identity -- retrying any of those forever would be a slow leak that
         // could also fire long after the user moved on.
         if (state.pendingRename.IsValid())
         {
@@ -657,13 +657,13 @@ namespace Arcane::Editor
         {
             if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && sel.Count() == 1)
             {
-                // Rename edits an EXISTING EntityInfo -- Edit::RenameEntity
+                // Rename edits an EXISTING Identity -- Edit::RenameEntity
                 // refuses when there is none and never mints one
                 // (EntityOps.cpp:180-186). An entity without one is a runtime
                 // spawn with no durable identity, so F2 does nothing rather
                 // than opening a box whose commit could not land.
-                if (const Arcane::EntityInfo* info =
-                        registry.GetComponent<Arcane::EntityInfo>(sel.Primary()))
+                if (const Arcane::Identity* info =
+                        registry.GetComponent<Arcane::Identity>(sel.Primary()))
                     BeginRename(state, sel.Primary(), info->name);
             }
             if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && sel.HasSelection())
@@ -755,8 +755,8 @@ namespace Arcane::Editor
                         // Re-read rather than trust the frame that opened the
                         // box: an undo/redo between the two can change or
                         // remove the component.
-                        const Arcane::EntityInfo* info =
-                            registry.GetComponent<Arcane::EntityInfo>(e);
+                        const Arcane::Identity* info =
+                            registry.GetComponent<Arcane::Identity>(e);
                         if (info && state.renameBuf != info->name)
                         {
                             if (binding.editMode)
@@ -858,11 +858,11 @@ namespace Arcane::Editor
                         else
                         {
                             // Slow second click on the sole-selected row = rename.
-                            // Gated on EntityInfo like the other two entry
+                            // Gated on Identity like the other two entry
                             // points (see the F2 site); without one the click
                             // stays a plain select.
-                            const Arcane::EntityInfo* info =
-                                registry.GetComponent<Arcane::EntityInfo>(row.entity);
+                            const Arcane::Identity* info =
+                                registry.GetComponent<Arcane::Identity>(row.entity);
                             const bool slowSecond = binding.editMode && info != nullptr
                                 && sel.Count() == 1 && sel.Primary() == row.entity
                                 && state.lastClicked == row.entity
@@ -902,19 +902,19 @@ namespace Arcane::Editor
                                 sel.Select(created);
                             }
                         }
-                        // Disabled rather than hidden without an EntityInfo, so
+                        // Disabled rather than hidden without an Identity, so
                         // the refusal is visible before the click -- the same
                         // treatment the structural items get above. ForTooltip's
                         // default mouse flags include AllowWhenDisabled
                         // (imgui.cpp:1587, not overridden by this editor), which
                         // is what lets the explanation reach a greyed item.
-                        const Arcane::EntityInfo* rowInfo =
-                            registry.GetComponent<Arcane::EntityInfo>(row.entity);
+                        const Arcane::Identity* rowInfo =
+                            registry.GetComponent<Arcane::Identity>(row.entity);
                         if (ImGui::MenuItem("Rename", "F2", false, rowInfo != nullptr))
                             BeginRename(state, row.entity, rowInfo->name);
                         if (rowInfo == nullptr
                             && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-                            ImGui::SetTooltip("Runtime entity: no EntityInfo identity to rename");
+                            ImGui::SetTooltip("Runtime entity: no Identity identity to rename");
                         // ImGui cannot open a popup from inside another popup's
                         // scope, so the request is latched and consumed at panel
                         // scope below (the standard deferred-OpenPopup pattern).
@@ -1659,7 +1659,7 @@ namespace Arcane::Editor
                         // AcceptDragDropPayload checks the payload type and the target
                         // rect, nothing about being disabled (imgui.cpp:15860-15905).
                         // So a drag from the Asset Browser onto the disabled
-                        // EntityInfo::id row landed here and fanned that asset's Guid
+                        // Identity::id row landed here and fanned that asset's Guid
                         // into the durable identity of every selected entity --
                         // AssetKindFilterForFieldName("id") returns -1, which accepts
                         // ANY kind. Read-only means read-only on every path in.
@@ -1979,7 +1979,7 @@ namespace Arcane::Editor
         // stable (they live in ComponentRegistry's fixed array).
         const Astra::ComponentDescriptor* pendingRemove = nullptr;
 
-        // Section order: Entity Info first, Transform second, everything else
+        // Section order: Identity first, Transform second, everything else
         // in registry order (matches UE's Details layout). ComponentInfo is
         // three raw pointers -- trivially copyable, and the pointers it holds
         // (descriptor into ComponentRegistry's fixed array, per the comment
@@ -2015,7 +2015,7 @@ namespace Arcane::Editor
             // Derived/runtime-owned state is never authored -- but as of task 5
             // this DISPLAY gate no longer matches the Add Component catalog or
             // Remove Component below: those two consult IsStructureLocked
-            // (ComponentCatalog.hpp), which also covers Arcane::EntityInfo, so
+            // (ComponentCatalog.hpp), which also covers Arcane::Identity, so
             // that identity renders its own section here (name editable, id
             // view-only) while staying un-addable and un-removable. The three
             // sites used to share one predicate by construction; splitting it

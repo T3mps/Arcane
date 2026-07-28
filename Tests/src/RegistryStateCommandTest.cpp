@@ -41,8 +41,8 @@ namespace
             // through Arcane.dll's own per-module TypeContext slot, not the one
             // main() installs in this test module. Pin that DLL slot to the shared
             // test context so both modules agree on component IDs -- otherwise
-            // EntityInfo (added inside Arcane.dll) would be invisible to
-            // GetComponent<EntityInfo> called from this module.
+            // Identity (added inside Arcane.dll) would be invisible to
+            // GetComponent<Identity> called from this module.
             //
             // Belt-and-braces: test_main pins Arcane.dll's TypeContext slot once
             // before any test runs, which is the real guarantee (per-type IDs are
@@ -82,28 +82,28 @@ TEST_CASE("delete-undo resurrects the exact entity id", "[outliner]")
     Astra::Entity top  = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
     Astra::Entity mid  = Edit::CreateEntity(*w.reg, top);
     Astra::Entity leaf = Edit::CreateEntity(*w.reg, mid);
-    const Guid stableId = w.reg->GetComponent<EntityInfo>(mid)->id;
+    const Guid stableId = w.reg->GetComponent<Identity>(mid)->id;
 
     const std::array<Astra::Entity, 1> doomed{ mid };
     REQUIRE(ApplyRegistryMutation(w.stack, "Delete Entity", w.Snapshot(), w.Restore(),
         [&] { return Edit::DeleteEntities(*w.reg, doomed) > 0; }));
-    CHECK(w.reg->GetComponent<EntityInfo>(mid) == nullptr);   // gone
+    CHECK(w.reg->GetComponent<Identity>(mid) == nullptr);   // gone
     CHECK(w.reg->GetParent(leaf) == top);                      // spliced
 
     w.stack.Undo();
     // SAME id/version works against the restored registry -- the whole point.
-    EntityInfo* info = w.reg->GetComponent<EntityInfo>(mid);
+    Identity* info = w.reg->GetComponent<Identity>(mid);
     REQUIRE(info != nullptr);
     CHECK(info->id == stableId);
     CHECK(w.reg->GetParent(mid) == top);
     CHECK(w.reg->GetParent(leaf) == mid);
 
     w.stack.Redo();
-    CHECK(w.reg->GetComponent<EntityInfo>(mid) == nullptr);
+    CHECK(w.reg->GetComponent<Identity>(mid) == nullptr);
     CHECK(w.reg->GetParent(leaf) == top);
 
     w.stack.Undo();   // and back once more -- the memento swap is stable
-    CHECK(w.reg->GetComponent<EntityInfo>(mid) != nullptr);
+    CHECK(w.reg->GetComponent<Identity>(mid) != nullptr);
 }
 
 TEST_CASE("create-undo destroys; redo restores the SAME entity", "[outliner]")
@@ -119,11 +119,11 @@ TEST_CASE("create-undo destroys; redo restores the SAME entity", "[outliner]")
     REQUIRE(created.IsValid());
 
     w.stack.Undo();
-    CHECK(w.reg->GetComponent<EntityInfo>(created) == nullptr);
+    CHECK(w.reg->GetComponent<Identity>(created) == nullptr);
     w.stack.Redo();
     // The after-state restore brings back the entity under its ORIGINAL id --
     // a plain re-run of CreateEntity could not guarantee that.
-    CHECK(w.reg->GetComponent<EntityInfo>(created) != nullptr);
+    CHECK(w.reg->GetComponent<Identity>(created) != nullptr);
 }
 
 TEST_CASE("no-op mutations produce no undo step", "[outliner]")
@@ -197,7 +197,7 @@ TEST_CASE("every structural op round-trips through the memento", "[outliner]")
     w.stack.Undo();
     CHECK(w.reg->GetComponent<SpriteRenderer>(a) == nullptr);
     w.stack.Undo();
-    CHECK(w.reg->GetComponent<EntityInfo>(a)->name == "Entity");   // pre-rename
+    CHECK(w.reg->GetComponent<Identity>(a)->name == "Entity");   // pre-rename
     w.stack.Undo();
     CHECK(w.reg->GetComponent<Hidden>(a) == nullptr);
 
@@ -206,7 +206,7 @@ TEST_CASE("every structural op round-trips through the memento", "[outliner]")
     w.stack.Redo();
     w.stack.Redo();
     CHECK(w.reg->GetComponent<Hidden>(a) != nullptr);
-    CHECK(w.reg->GetComponent<EntityInfo>(a)->name == "Renamed");
+    CHECK(w.reg->GetComponent<Identity>(a)->name == "Renamed");
     CHECK(w.reg->GetComponent<SpriteRenderer>(a) != nullptr);
 }
 

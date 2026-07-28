@@ -32,7 +32,7 @@ namespace Arcane::Edit
                 CollectSubtree(reg, c, out);
         }
 
-        // The EntityInfo ComponentDescriptor on `e`, for
+        // The Identity ComponentDescriptor on `e`, for
         // CommandStack::SnapshotComponent. Registry exposes no
         // descriptor-by-hash accessor, so this walks InspectEntity the way the
         // editor's Inspector loop already does. Matched on the descriptor hash
@@ -41,13 +41,13 @@ namespace Arcane::Edit
         // constexpr XXHash64 of the type name (Astra/Core/TypeID.hpp:199-203,
         // :243-246) -- identical in every module, so no string literal has to
         // stay in sync with the type and no cross-DLL id mapping is involved.
-        // Null for a dead entity or one that no longer carries EntityInfo.
-        const Astra::ComponentDescriptor* FindEntityInfoDescriptor(Astra::Registry& reg,
+        // Null for a dead entity or one that no longer carries Identity.
+        const Astra::ComponentDescriptor* FindIdentityDescriptor(Astra::Registry& reg,
                                                                    Astra::Entity e)
         {
             for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
                 if (ci.descriptor
-                    && ci.descriptor->hash == Astra::TypeID<EntityInfo>::Hash())
+                    && ci.descriptor->hash == Astra::TypeID<Identity>::Hash())
                     return ci.descriptor;
             return nullptr;
         }
@@ -56,8 +56,8 @@ namespace Arcane::Edit
     std::string AutoEntityName(Astra::Registry& reg)
     {
         std::unordered_set<std::string> taken;
-        reg.CreateView<EntityInfo>().ForEach(
-            [&](Astra::Entity, EntityInfo& info) { taken.insert(info.name); });
+        reg.CreateView<Identity>().ForEach(
+            [&](Astra::Entity, Identity& info) { taken.insert(info.name); });
         if (!taken.contains("Entity"))
             return "Entity";
         for (int i = 2;; ++i)
@@ -70,7 +70,7 @@ namespace Arcane::Edit
 
     std::string DisplayName(Astra::Registry& reg, Astra::Entity e)
     {
-        if (EntityInfo* info = reg.GetComponent<EntityInfo>(e))
+        if (Identity* info = reg.GetComponent<Identity>(e))
             if (!info->name.empty())
                 return info->name;
         return "Entity " + std::to_string(e.GetID());
@@ -80,7 +80,7 @@ namespace Arcane::Edit
     {
         Astra::Entity e = reg.CreateEntity();
         reg.AddComponent<Transform>(e, Transform{});
-        reg.AddComponent<EntityInfo>(e, EntityInfo{ Guid::Generate(),
+        reg.AddComponent<Identity>(e, Identity{ Guid::Generate(),
                                                     AutoEntityName(reg) });
         if (parent.IsValid())
             reg.SetParent(e, parent);
@@ -199,10 +199,10 @@ namespace Arcane::Edit
     {
         if (!reg.IsValid(e))
             return false;
-        EntityInfo* info = reg.GetComponent<EntityInfo>(e);
+        Identity* info = reg.GetComponent<Identity>(e);
         // Identity is never minted by a rename. UE's equivalents (ActorLabel,
         // ActorGuid) are intrinsic AActor fields (Actor.h:1055/:1188) -- there
-        // is no "add identity" edit to mirror. Entities without EntityInfo are
+        // is no "add identity" edit to mirror. Entities without Identity are
         // runtime spawns with no durable identity to rename.
         if (!info)
             return false;
@@ -227,9 +227,9 @@ namespace Arcane::Edit
         // unchanged-name case, which a caller cannot act on.
         if (!reg.IsValid(e))
             return RenameResult::Invalid;
-        if (!reg.GetComponent<EntityInfo>(e))
+        if (!reg.GetComponent<Identity>(e))
             return RenameResult::Invalid;
-        const Astra::ComponentDescriptor* desc = FindEntityInfoDescriptor(reg, e);
+        const Astra::ComponentDescriptor* desc = FindIdentityDescriptor(reg, e);
         if (!desc)
             return RenameResult::Invalid;   // nothing to snapshot -> no undo coverage
 

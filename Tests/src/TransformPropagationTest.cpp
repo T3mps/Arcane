@@ -132,7 +132,7 @@ TEST_CASE("binary scene save/load round-trips transforms and relations", "[scene
 
 // Reported bug: create a child in the Outliner, add a SpriteRenderer, pick a
 // material -- nothing appears in the viewport. Root cause: Edit::CreateEntity
-// (the real Outliner "New Child Entity" path) adds only Transform + EntityInfo,
+// (the real Outliner "New Child Entity" path) adds only Transform + Identity,
 // never WorldTransform, and the propagation walk below used to only WRITE an
 // already-present WorldTransform -- it never materialised the missing one. A
 // child created this way therefore could never satisfy RenderSubmissionSystem's
@@ -143,7 +143,7 @@ TEST_CASE("editor-created child under SceneRoot gets a WorldTransform from propa
     // Cross-DLL: Edit::CreateEntity is compiled into Arcane.dll (see
     // EntityOpsTest.cpp's World helper) -- without pinning this module and
     // Arcane.dll would resolve component IDs through different TypeContext
-    // slots, and EntityInfo/SpriteRenderer added by CreateEntity would be
+    // slots, and Identity/SpriteRenderer added by CreateEntity would be
     // invisible to GetComponent calls made from this module.
     Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
 

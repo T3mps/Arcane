@@ -72,7 +72,7 @@ TEST_CASE("Labels use DisplayName; hidden flag rides Arcane::Hidden", "[editor][
 {
     World w;
     Astra::Entity named = w.Make("Player");
-    Astra::Entity anon = w.reg.CreateEntity();            // no EntityInfo at all
+    Astra::Entity anon = w.reg.CreateEntity();            // no Identity at all
     w.reg.AddComponent<Hidden>(named, Hidden{});
 
     auto rows = BuildOutlinerRows(w.reg, "", kNoSort, kNoneCollapsed);

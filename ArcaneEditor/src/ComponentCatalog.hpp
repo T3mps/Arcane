@@ -18,7 +18,7 @@ namespace Arcane::Editor
 {
     // Two predicates, split (2026-07-27 entity-identity-rename, task 5) from a
     // single IsSystemManagedComponent that used to conflate "do not show this"
-    // with "users cannot add/remove this". EntityInfo needed to be VISIBLE
+    // with "users cannot add/remove this". Identity needed to be VISIBLE
     // (its `name` is now editable, `id` view-only via Astra::ReadOnly) while
     // staying just as un-addable and un-removable as before, and one predicate
     // could not express both statements about the same type at once.
@@ -37,7 +37,7 @@ namespace Arcane::Editor
     // the Add Component catalog (BuildComponentCatalog, this TU) and the
     // header context menu's Remove Component item (EditorPanels.cpp). It is
     // IsHiddenInInspector's three types PLUS:
-    //   Arcane::EntityInfo -- documents "the Guid is generated when the
+    //   Arcane::Identity -- documents "the Guid is generated when the
     //                         component is added and is the durable
     //                         cross-save identity". Both real creation paths
     //                         honour that with Guid::Generate(), but
@@ -57,7 +57,7 @@ namespace Arcane::Editor
     //                         (Actor.h:1188/:1055 in the vendored UE tree),
     //                         not components -- "removable" is not even a
     //                         concept there. Since IsHiddenInInspector does
-    //                         NOT cover EntityInfo, it renders its own
+    //                         NOT cover Identity, it renders its own
     //                         Inspector section like any other component; only
     //                         the add/remove affordances are locked.
     //

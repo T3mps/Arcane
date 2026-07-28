@@ -39,8 +39,8 @@ namespace
             // reg.AddComponent<T>(...) resolves component IDs through Arcane.dll's
             // own per-module TypeContext slot, not the one main() installs in this
             // test module. Pin that DLL slot to the shared test context so both
-            // modules agree on component IDs -- otherwise EntityInfo (added inside
-            // Arcane.dll) would be invisible to GetComponent<EntityInfo> called
+            // modules agree on component IDs -- otherwise Identity (added inside
+            // Arcane.dll) would be invisible to GetComponent<Identity> called
             // from this module.
             //
             // Belt-and-braces: test_main pins Arcane.dll's TypeContext slot once
@@ -55,15 +55,15 @@ namespace
     };
 }
 
-TEST_CASE("CreateEntity: Transform + EntityInfo + auto-name + parenting", "[outliner]")
+TEST_CASE("CreateEntity: Transform + Identity + auto-name + parenting", "[outliner]")
 {
     World w;
     Astra::Entity a = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
     Astra::Entity b = Edit::CreateEntity(w.reg, a);
 
     CHECK(w.reg.GetComponent<Transform>(a) != nullptr);
-    EntityInfo* ia = w.reg.GetComponent<EntityInfo>(a);
-    EntityInfo* ib = w.reg.GetComponent<EntityInfo>(b);
+    Identity* ia = w.reg.GetComponent<Identity>(a);
+    Identity* ib = w.reg.GetComponent<Identity>(b);
     REQUIRE(ia != nullptr);
     REQUIRE(ib != nullptr);
     CHECK(ia->id.IsValid());
@@ -169,26 +169,26 @@ TEST_CASE("SetHiddenRecursive covers the subtree, idempotently", "[outliner]")
     CHECK(w.reg.GetComponent<Hidden>(grandkid) == nullptr);
 }
 
-TEST_CASE("RenameEntity requires EntityInfo -- rename never mints identity", "[outliner]")
+TEST_CASE("RenameEntity requires Identity -- rename never mints identity", "[outliner]")
 {
     World w;
 
-    // A raw registry entity is the runtime-spawn shape: no EntityInfo.
+    // A raw registry entity is the runtime-spawn shape: no Identity.
     // Runtime spawns have no durable identity; the op must refuse, not repair.
     Astra::Entity raw = w.reg.CreateEntity();
     CHECK_FALSE(Edit::RenameEntity(w.reg, raw, "Boss Arena"));
-    CHECK(w.reg.GetComponent<EntityInfo>(raw) == nullptr);   // nothing added
+    CHECK(w.reg.GetComponent<Identity>(raw) == nullptr);   // nothing added
 
     // An authored entity renames normally, and its Guid is untouched --
     // identity is creation-time only (UE: ActorLabel/ActorGuid are intrinsic
     // AActor fields, Actor.h:1055/:1188; there is no "add identity" edit).
     Astra::Entity authored = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
-    EntityInfo* info = w.reg.GetComponent<EntityInfo>(authored);
+    Identity* info = w.reg.GetComponent<Identity>(authored);
     REQUIRE(info != nullptr);
     const Guid before = info->id;
     CHECK(Edit::RenameEntity(w.reg, authored, "Boss Arena"));
-    CHECK(w.reg.GetComponent<EntityInfo>(authored)->name == "Boss Arena");
-    CHECK(w.reg.GetComponent<EntityInfo>(authored)->id == before);
+    CHECK(w.reg.GetComponent<Identity>(authored)->name == "Boss Arena");
+    CHECK(w.reg.GetComponent<Identity>(authored)->id == before);
 }
 
 TEST_CASE("Add/RemoveComponent by descriptor over a set", "[outliner]")
@@ -280,7 +280,7 @@ TEST_CASE("Same-name rename is a no-op and reports false", "[outliner]")
     REQUIRE(Edit::RenameEntity(w.reg, e, "Hero"));
     CHECK_FALSE(Edit::RenameEntity(w.reg, e, "Hero"));   // unchanged -> false
     CHECK(Edit::RenameEntity(w.reg, e, "Hero2"));        // real change -> true
-    CHECK(w.reg.GetComponent<EntityInfo>(e)->name == "Hero2");
+    CHECK(w.reg.GetComponent<Identity>(e)->name == "Hero2");
 }
 
 TEST_CASE("CreateEntity under a dead parent creates at root", "[outliner]")
@@ -512,7 +512,7 @@ TEST_CASE("CreateEntityInScene parents the top-level create under SceneRoot, "
     REQUIRE(child.IsValid());
     CHECK(w.reg.GetParent(child) == created);
 
-    EntityInfo* createdInfo = w.reg.GetComponent<EntityInfo>(created);
+    Identity* createdInfo = w.reg.GetComponent<Identity>(created);
     REQUIRE(createdInfo != nullptr);
     const std::string createdName = createdInfo->name;
 
@@ -524,8 +524,8 @@ TEST_CASE("CreateEntityInScene parents the top-level create under SceneRoot, "
     REQUIRE(Arcane::Scene::LoadJson(reg2, doc));
 
     bool found = false;
-    reg2.CreateView<EntityInfo>().ForEach(
-        [&](Astra::Entity, EntityInfo& info) { found = found || info.name == createdName; });
+    reg2.CreateView<Identity>().ForEach(
+        [&](Astra::Entity, Identity& info) { found = found || info.name == createdName; });
     CHECK(found);
 }
 

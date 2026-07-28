@@ -106,7 +106,11 @@ namespace Arcane
     // refuses instead of adding. An entity without one displays as
     // "Entity <id>". The Guid is generated when the component is added and is
     // the durable cross-save identity -- entity ids are not.
-    struct EntityInfo
+    // Renamed from EntityInfo 2026-07-27: it IS the entity's durable identity,
+    // the ECS equivalent of Unreal's intrinsic ActorLabel/ActorGuid, and the
+    // surrounding comments already called it that ("identity is never minted
+    // by rename", "structure-locked identity").
+    struct Identity
     {
         Guid        id{};
         std::string name;
@@ -201,10 +205,10 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(PostProcess, material)
     ASTRA_END_REFLECT_TYPE()
 
-    ASTRA_REFLECT_TYPE(EntityInfo)
-        ASTRA_REFLECT_FIELD(EntityInfo, id)
+    ASTRA_REFLECT_TYPE(Identity)
+        ASTRA_REFLECT_FIELD(Identity, id)
             ASTRA_REFLECT_ATTR(ReadOnly)
-        ASTRA_REFLECT_FIELD(EntityInfo, name)
+        ASTRA_REFLECT_FIELD(Identity, name)
             ASTRA_REFLECT_ATTR(Tooltip, "The Outliner display name for this entity. If empty, the Outliner shows \"Entity <id>\" instead.")
     ASTRA_END_REFLECT_TYPE()
 

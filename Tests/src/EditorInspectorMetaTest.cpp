@@ -36,7 +36,7 @@ TEST_CASE("DeriveDisplayName turns identifiers into words", "[editor]")
 TEST_CASE("DisplayNameForComponent strips the namespace first", "[editor]")
 {
     CHECK(DisplayNameForComponent("Arcane::SpriteRenderer") == "Sprite Renderer");
-    CHECK(DisplayNameForComponent("Arcane::EntityInfo") == "Entity Info");
+    CHECK(DisplayNameForComponent("Arcane::Identity") == "Identity");
     CHECK(DisplayNameForComponent("Transform") == "Transform");
     // Nested namespaces: only the trailing type name matters.
     CHECK(DisplayNameForComponent("A::B::PostProcess") == "Post Process");

@@ -37,12 +37,12 @@ namespace
             root = reg.CreateEntity();
             Arcane::Transform rt; rt.position = glm::vec2(100.0f, 0.0f);
             reg.AddComponent<Arcane::Transform>(root, rt);
-            reg.AddComponent<Arcane::EntityInfo>(root, Arcane::EntityInfo{Arcane::Guid::Generate(), "Root"});
+            reg.AddComponent<Arcane::Identity>(root, Arcane::Identity{Arcane::Guid::Generate(), "Root"});
 
             child = reg.CreateEntity();
             Arcane::Transform ct; ct.position = glm::vec2(5.0f, 7.0f);
             reg.AddComponent<Arcane::Transform>(child, ct);
-            reg.AddComponent<Arcane::EntityInfo>(child, Arcane::EntityInfo{Arcane::Guid::Generate(), "Child"});
+            reg.AddComponent<Arcane::Identity>(child, Arcane::Identity{Arcane::Guid::Generate(), "Child"});
             reg.SetParent(child, root);
 
             reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -99,7 +99,7 @@ TEST_CASE("a scene round-trips through a file, preserving its id", "[scene][json
 
     const auto kids = fresh.GetChildren(sr->entity);
     REQUIRE(kids.size() == 1);
-    const Arcane::EntityInfo* kidInfo = fresh.GetComponent<Arcane::EntityInfo>(kids[0]);
+    const Arcane::Identity* kidInfo = fresh.GetComponent<Arcane::Identity>(kids[0]);
     REQUIRE(kidInfo != nullptr);
     CHECK(kidInfo->name == "Child");
 }
@@ -132,7 +132,7 @@ TEST_CASE("a file the reader rejects leaves the target registry untouched", "[sc
         REQUIRE(kids.size() == 1);
         CHECK(kids[0] == f.child);
 
-        const Arcane::EntityInfo* childInfo = f.reg.GetComponent<Arcane::EntityInfo>(f.child);
+        const Arcane::Identity* childInfo = f.reg.GetComponent<Arcane::Identity>(f.child);
         REQUIRE(childInfo != nullptr);
         CHECK(childInfo->name == "Child");
         const Arcane::Transform* childT = f.reg.GetComponent<Arcane::Transform>(f.child);
@@ -237,7 +237,7 @@ TEST_CASE("a malformed parent, links, or non-object components field is tolerate
         const Arcane::SceneRoot* sr = fresh.GetResource<Arcane::SceneRoot>();
         REQUIRE(sr != nullptr);
         CHECK(fresh.GetComponent<Arcane::Transform>(sr->entity) == nullptr);
-        CHECK(fresh.GetComponent<Arcane::EntityInfo>(sr->entity) == nullptr);
+        CHECK(fresh.GetComponent<Arcane::Identity>(sr->entity) == nullptr);
     }
 
     SECTION("non-integer parent")
@@ -364,7 +364,7 @@ TEST_CASE("CreateEmpty yields a saveable one-entity scene", "[scene][json]")
     REQUIRE(sr != nullptr);
     CHECK(sr->entity == root);
     CHECK(reg.GetComponent<Arcane::Transform>(root) != nullptr);
-    const Arcane::EntityInfo* info = reg.GetComponent<Arcane::EntityInfo>(root);
+    const Arcane::Identity* info = reg.GetComponent<Arcane::Identity>(root);
     REQUIRE(info != nullptr);
     CHECK(info->name == "Scene");
     CHECK(info->id.IsValid());
@@ -406,7 +406,7 @@ TEST_CASE("a failed save leaves the previously-saved scene byte-for-byte intact"
     const std::string original = ReadAll(file);
     REQUIRE_FALSE(original.empty());
 
-    // Each SECTION re-saves from a FRESH Fixture, whose EntityInfo Guids are
+    // Each SECTION re-saves from a FRESH Fixture, whose Identity Guids are
     // freshly generated -- so a save that wrongly succeeded would change the
     // file's bytes and the trailing comparison would catch it.
     SECTION("the serializer throws mid-write")
@@ -417,7 +417,7 @@ TEST_CASE("a failed save leaves the previously-saved scene byte-for-byte intact"
         // the old code's truncating open had already zeroed the file, which is
         // exactly the ordering the fix changes.
         Fixture f;
-        Arcane::EntityInfo* info = f.reg.GetComponent<Arcane::EntityInfo>(f.root);
+        Arcane::Identity* info = f.reg.GetComponent<Arcane::Identity>(f.root);
         REQUIRE(info != nullptr);
         info->name = "bad\xC3\x28";   // 0xC3 opens a 2-byte sequence; 0x28 is no continuation byte
 

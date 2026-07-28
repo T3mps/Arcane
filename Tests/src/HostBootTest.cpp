@@ -500,7 +500,7 @@ TEST_CASE("SampleProject opens into its authored boot scene end to end", "[loom]
     std::vector<std::string> names;
     for (Astra::Entity child : children)
     {
-        const Arcane::EntityInfo* info = runtime.Registry().GetComponent<Arcane::EntityInfo>(child);
+        const Arcane::Identity* info = runtime.Registry().GetComponent<Arcane::Identity>(child);
         REQUIRE(info != nullptr);
         names.push_back(info->name);
     }

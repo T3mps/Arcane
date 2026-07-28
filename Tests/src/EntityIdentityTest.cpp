@@ -1,6 +1,6 @@
-// Outliner slice 1: EntityInfo/Hidden ride every persistence seam. JSON
+// Outliner slice 1: Identity/Hidden ride every persistence seam. JSON
 // (scene files), BINARY (Play snapshots -- the path that exercises
-// EntityInfo::Serialize, the first non-trivially-copyable component), and
+// Identity::Serialize, the first non-trivially-copyable component), and
 // the RenderSubmissionSystem Not<Hidden> skip (recording mock batcher,
 // SpriteRotationTest's harness).
 
@@ -50,10 +50,10 @@ namespace
 }
 
 // Regression guard for the SceneSerializer zero-field-component save fix
-// (commit d0142324): EntityInfo/Hidden are the zero/near-zero-field
+// (commit d0142324): Identity/Hidden are the zero/near-zero-field
 // components that exposed the bug. If this test is ever rewritten, that
 // coverage must move with it, not vanish.
-TEST_CASE("EntityInfo + Hidden round-trip scene JSON", "[outliner][json]")
+TEST_CASE("Identity + Hidden round-trip scene JSON", "[outliner][json]")
 {
     const Arcane::Guid stableId = Arcane::Guid::Generate();
     nlohmann::json doc;
@@ -62,7 +62,7 @@ TEST_CASE("EntityInfo + Hidden round-trip scene JSON", "[outliner][json]")
         auto reg = FreshReg(creg);
         Astra::Entity e = reg->CreateEntity();
         reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
-        reg->AddComponent<Arcane::EntityInfo>(e, Arcane::EntityInfo{ stableId, "Player Spawn" });
+        reg->AddComponent<Arcane::Identity>(e, Arcane::Identity{ stableId, "Player Spawn" });
         reg->AddComponent<Arcane::Hidden>(e, Arcane::Hidden{});
         // SaveJson only walks the SceneRoot subtree (SceneJsonTest.cpp's
         // established pattern) -- without this the entities array is empty.
@@ -74,8 +74,8 @@ TEST_CASE("EntityInfo + Hidden round-trip scene JSON", "[outliner][json]")
     REQUIRE(Arcane::Scene::LoadJson(*reg, doc));
 
     int found = 0;
-    reg->CreateView<Arcane::EntityInfo>().ForEach(
-        [&](Astra::Entity e2, Arcane::EntityInfo& info)
+    reg->CreateView<Arcane::Identity>().ForEach(
+        [&](Astra::Entity e2, Arcane::Identity& info)
     {
         ++found;
         CHECK(info.id == stableId);
@@ -85,13 +85,13 @@ TEST_CASE("EntityInfo + Hidden round-trip scene JSON", "[outliner][json]")
     CHECK(found == 1);
 }
 
-TEST_CASE("EntityInfo survives the binary snapshot path (Play round-trip)", "[outliner]")
+TEST_CASE("Identity survives the binary snapshot path (Play round-trip)", "[outliner]")
 {
     std::shared_ptr<Astra::ComponentRegistry> creg;
     auto reg = FreshReg(creg);
     Astra::Entity e = reg->CreateEntity();
-    reg->AddComponent<Arcane::EntityInfo>(
-        e, Arcane::EntityInfo{ Arcane::Guid{ 1, 2 }, "A name long enough to defeat SSO ................" });
+    reg->AddComponent<Arcane::Identity>(
+        e, Arcane::Identity{ Arcane::Guid{ 1, 2 }, "A name long enough to defeat SSO ................" });
     reg->AddComponent<Arcane::Hidden>(e, Arcane::Hidden{});
 
     auto bytes = reg->Save();
@@ -99,7 +99,7 @@ TEST_CASE("EntityInfo survives the binary snapshot path (Play round-trip)", "[ou
     auto loaded = Astra::Registry::Load(std::span<const std::byte>(*bytes), creg);
     REQUIRE(loaded.IsOk());
 
-    Arcane::EntityInfo* info = (*loaded)->GetComponent<Arcane::EntityInfo>(e);   // SAME entity id
+    Arcane::Identity* info = (*loaded)->GetComponent<Arcane::Identity>(e);   // SAME entity id
     REQUIRE(info != nullptr);
     CHECK(info->id == (Arcane::Guid{ 1, 2 }));
     CHECK(info->name == "A name long enough to defeat SSO ................");

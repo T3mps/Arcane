@@ -206,7 +206,7 @@ namespace Arcane::Scene
                                   const Arcane::Guid& id, std::string* error);
 
     // The New Scene registry shape: one root entity carrying Transform +
-    // EntityInfo, published as the SceneRoot resource.
+    // Identity, published as the SceneRoot resource.
     //
     // Not optional. SaveJson walks the SceneRoot subtree and returns an EMPTY
     // document when the resource is absent, so a New Scene without this would
@@ -215,8 +215,8 @@ namespace Arcane::Scene
     {
         const Astra::Entity root = reg.CreateEntity();
         reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
-        reg.AddComponent<Arcane::EntityInfo>(root,
-                                             Arcane::EntityInfo{Arcane::Guid::Generate(), "Scene"});
+        reg.AddComponent<Arcane::Identity>(root,
+                                             Arcane::Identity{Arcane::Guid::Generate(), "Scene"});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
         return root;
     }
