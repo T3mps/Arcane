@@ -914,7 +914,7 @@ namespace Arcane::Editor
                             BeginRename(state, row.entity, rowInfo->name);
                         if (rowInfo == nullptr
                             && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-                            ImGui::SetTooltip("Runtime entity: no Identity identity to rename");
+                            ImGui::SetTooltip("Runtime entity: no Identity component to rename");
                         // ImGui cannot open a popup from inside another popup's
                         // scope, so the request is latched and consumed at panel
                         // scope below (the standard deferred-OpenPopup pattern).
