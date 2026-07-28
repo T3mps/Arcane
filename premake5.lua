@@ -597,6 +597,12 @@ project "ArcaneTests"
         -- test exe so the [editor] units drive the PURE math headlessly -- no
         -- ImGui and no engine calls in it, same pattern as SceneSession above.
         "%{wks.location}/ArcaneEditor/src/EditorCamera.cpp",
+        -- Widget layer: EditGesture's PURE decision core (gesture ownership +
+        -- close-path verdicts) source-compiles into the test exe so the
+        -- [editor] units drive the full decision table headlessly -- the ImGui
+        -- skin in the same TU is never called, same pattern as
+        -- ShaderEditorDocument above.
+        "%{wks.location}/ArcaneEditor/src/EditGesture.cpp",
     }
 
     includedirs {
