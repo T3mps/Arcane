@@ -46,8 +46,11 @@ job, with a 32-meter default as the symptom.
    scale on a 1x1 m base.
 4. UE-complete asset in v1: sub-rect AND pivot ship now (Approach B).
 5. **Hard break: no migration, no legacy support.** Test projects (Aphelyon
-   sandbox scenes, Sandbox/PlaygroundGame code) get re-authored in-arc. The
-   scene loader's existing unknown-field warning is the only net.
+   sandbox scenes, Sandbox/PlaygroundGame code) get re-authored in-arc.
+   (Corrected at plan time: the loader's warning is COMPONENT-level only,
+   `SceneSerializer.hpp:275-289`; stale `size`/`textureId` keys inside a
+   still-known component are dropped SILENTLY by the generic reader,
+   `ReflectionJson.hpp:379-394`. Accepted under this decision.)
 
 ## Section 1 — The .arcsprite asset
 
