@@ -13,7 +13,9 @@
 // EditorApp drains the service once per frame and offers each result to every
 // document via ConsumeResult.
 
+#include "EditGesture.hpp"
 #include "EditorDocument.hpp"
+#include "EditorWidgets.hpp"   // TextCommitState / StableTextEdit
 
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
@@ -302,7 +304,6 @@ namespace Arcane::Editor
         // index + 1, the Output node is kPassOutputNodeId).
         ax::NodeEditor::EditorContext* m_passCanvasCtx = nullptr;
         bool  m_passCanvasSeeded = false;   // re-seed positions after list edits
-        int   m_passNameEditIdx = -1;       // in-node rename (chain index)
         std::uint32_t m_passCtxNode = 0;    // node the context menu opened on
         float m_passPopupX = 0.0f, m_passPopupY = 0.0f;
         int m_activePass = 0;   // which snippet the text editor shows (0 = base)
@@ -331,11 +332,15 @@ namespace Arcane::Editor
         // focus race.
         int    m_callbackJumpLine = 0;
 
-        // Param-widget gesture capture (before-state on activation, step pushed
-        // on release). Per-document (review m3): same-frame keyboard-nav active-
-        // ID transfer between documents could cross shared statics.
-        bool                  m_gestureHadBefore = false;
-        Arcane::MatParamValue m_gestureBefore{};
+        // The document's ONE edit-gesture bracket (EditGesture; the ScopeGuard
+        // at the top of Draw is its guaranteed close). Param-panel drags carry
+        // the override value, graph value drags the WHOLE graph (small graphs --
+        // the SG full-snapshot-undo pathology was per-edit reserialization plus
+        // full preview regeneration, neither of which applies here). Before-
+        // state on activation, one undo step at close. Per-document (review m3):
+        // same-frame keyboard-nav active-ID transfer between documents could
+        // cross shared statics.
+        EditGesture::GestureState m_gesture;
 
         // ---- Graph mode (Slice 9; per-pass graphs) ----
         ax::NodeEditor::EditorContext* m_graphCtx = nullptr;   // lazy; dtor destroys
@@ -362,14 +367,17 @@ namespace Arcane::Editor
         bool          m_wireIsInput = false;    // dragged pin is an input pin
         std::uint32_t m_wireNode = 0, m_wirePin = 0;
         char          m_createSearch[64] = {};  // create-menu search filter
-        // Whole-graph gesture capture for value drags (small graphs; the SG
-        // full-snapshot-undo pathology was per-edit reserialization + full
-        // preview regeneration, neither of which applies here).
-        std::optional<Arcane::MaterialGraph> m_graphGestureBefore;
-        // In-progress param-name edit (InputText needs a stable buffer while
-        // active; committed on deactivate-after-edit).
-        std::uint32_t m_nameEditNode = 0;
-        char          m_nameBuf[64] = {};
+        // In-progress inline text edits (pass name, comment title, param/
+        // texture name, swizzle mask) all share ONE StableTextEdit buffer --
+        // only one InputText is active at a time. The key is namespaced by SITE
+        // KIND because a pass's CHAIN INDEX and a node's ID are unrelated
+        // counters that would otherwise collide on the same small number (the
+        // pre-widget-layer code kept two separate members for exactly that
+        // reason); the kind tag restores the separation inside one slot.
+        enum class TextEditKind : std::uint64_t { PassName = 1, NodeName, Swizzle, Comment };
+        static constexpr std::uint64_t TextKey(TextEditKind k, std::uint64_t id) noexcept
+        { return (static_cast<std::uint64_t>(k) << 56) | id; }
+        TextCommitState m_textEdit;
         // Custom-node HLSL body editing: the node shows a plain-text preview
         // (child-window widgets drift inside the canvas); the body edits in a
         // Suspend'ed MODAL. Request set by the node's button, consumed in

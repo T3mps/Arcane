@@ -15,7 +15,7 @@ namespace Arcane::Editor
                                    Arcane::SpriteAssetData data)
         : m_services(std::move(services)), m_path(std::move(path)), m_data(std::move(data))
     {
-        // Same name-fallback rule as ShaderEditorDocument (ShaderEditorDocument.cpp:319):
+        // Same name-fallback rule as ShaderEditorDocument (ShaderEditorDocument.cpp:425):
         // an empty asset name (hand-authored file, or a pre-name-field asset)
         // falls back to the file stem rather than showing a blank title.
         m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name;
@@ -43,7 +43,7 @@ namespace Arcane::Editor
         if (!ImGui::Begin(m_windowLabel.c_str(), &open, flags))
         {
             // Collapsed (not closed): ShaderEditorDocument's same early-return
-            // shape (ShaderEditorDocument.cpp:1006-1011) -- `open` only goes
+            // shape (ShaderEditorDocument.cpp:1130-1135) -- `open` only goes
             // false when the titlebar X was clicked, so a merely-collapsed
             // window still reports requestClose=false here.
             ImGui::End();
@@ -124,7 +124,7 @@ namespace Arcane::Editor
                                               static_cast<float>(desc.width));
                 const ImVec2 imgPos = ImGui::GetCursorScreenPos();
                 // ImTextureID convention: the raw ITexture* cast to uintptr_t
-                // (ShaderEditorDocument.cpp:1486,1501; the backend keys its
+                // (ShaderEditorDocument.cpp:1578,1598; the backend keys its
                 // per-frame SRV binding-set cache on that same pointer,
                 // ImGuiNvrhi.cpp:246-252) -- any live ITexture* works, no
                 // per-document binding setup needed.

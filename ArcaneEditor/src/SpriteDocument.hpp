@@ -11,7 +11,7 @@
 // asset-type -> factory routing, and the unsaved-close confirm modal --
 // this class only ever flips m_dirty and answers Save()/Draw() truthfully
 // (same division of responsibility ShaderEditorDocument follows, see its
-// Draw() at ShaderEditorDocument.cpp:1001-1066: requestClose mirrors `open`
+// Draw() at ShaderEditorDocument.cpp:1122-1190: requestClose mirrors `open`
 // from ImGui::Begin, both on the collapsed-early-return path and the normal
 // end-of-frame path -- DocumentHost.cpp:151-157 is what actually turns that
 // into a close or a pending confirm).
@@ -34,7 +34,7 @@ namespace Arcane::Editor
     public:
         // Everything the document borrows from the app (outlives the host's
         // document list -- same "services struct" shape as
-        // ShaderEditorDocument's DocServices, ShaderEditorDocument.hpp:52-71,
+        // ShaderEditorDocument's DocServices, ShaderEditorDocument.hpp:54-73,
         // just with far less in it: a sprite has no compiler/undo/clock).
         struct Services
         {
@@ -51,7 +51,7 @@ namespace Arcane::Editor
         // `data` is already loaded (LoadSpriteAsset happens in the factory,
         // which returns null on failure -- same split as
         // ShaderEditorDocument(DocServices, path, MaterialAssetData),
-        // ShaderEditorDocument.hpp:76-77 / EditorApp.cpp's materialFactory).
+        // ShaderEditorDocument.hpp:78-79 / EditorApp.cpp's materialFactory).
         SpriteDocument(Services services, std::filesystem::path path,
                        Arcane::SpriteAssetData data);
 

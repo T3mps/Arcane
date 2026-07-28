@@ -603,6 +603,12 @@ project "ArcaneTests"
         -- skin in the same TU is never called, same pattern as
         -- ShaderEditorDocument above.
         "%{wks.location}/ArcaneEditor/src/EditGesture.cpp",
+        -- Widget layer: EditorWidgets is here as a LINK dependency, not a unit
+        -- surface -- ShaderEditorDocument.cpp (compiled above) calls
+        -- StableTextEdit for its four inline rename rows, and without this the
+        -- test exe fails to link (LNK2019). Nothing in it is called headlessly;
+        -- it is pure ImGui, like the skin half of EditGesture.cpp.
+        "%{wks.location}/ArcaneEditor/src/EditorWidgets.cpp",
     }
 
     includedirs {

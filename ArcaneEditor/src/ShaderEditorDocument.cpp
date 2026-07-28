@@ -458,6 +458,19 @@ namespace Arcane::Editor
 
     ShaderEditorDocument::~ShaderEditorDocument()
     {
+        // Documents are DESTROYED synchronously on close and there is no
+        // on-close hook (DocumentHost::Close erases the unique_ptr; CloseAll
+        // does it for every document on a project switch). The X-button path is
+        // already safe -- requestClose is raised INSIDE Draw and acted on after
+        // the draw loop, so the ScopeGuard above has run -- but any close that
+        // destroys the document between a gesture parking and its next Draw (a
+        // close hotkey, the project-switch CloseAll) would strand the
+        // transaction open, and a stranded transaction leaves InTransaction()
+        // true editor-wide: structural edits refused AND Ctrl+Z/Ctrl+Y dead.
+        // Closing here is what makes that unreachable.
+        if (m_services.undo)
+            EditGesture::ClosePending(*m_services.undo, m_gesture);
+
         if (m_graphCtx)
         {
             ed::DestroyEditor(m_graphCtx);
@@ -1106,6 +1119,11 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::Draw(bool& requestClose)
     {
+        // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard. It
+        // covers the early return below (Begin refused: collapsed window or a
+        // background tab, where no widget inside can report its deactivation).
+        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+
         bool open = true;
         ImGui::SetNextWindowSize(ImVec2(980, 640), ImGuiCond_FirstUseEver);
         ImGuiWindowFlags flags = Dirty() ? ImGuiWindowFlags_UnsavedDocument : 0;
@@ -1511,35 +1529,23 @@ namespace Arcane::Editor
             else
                 ImGui::TextUnformatted(title.c_str());
 
-            // Extra passes rename in-node (stable-buffer commit; one undo step
-            // on deactivate-after-edit -- renames are not structural, so the
-            // step pushes here rather than riding the structural block).
+            // Extra passes rename in-node (StableTextEdit's stable-buffer
+            // commit; one undo step on deactivate-after-edit -- renames are not
+            // structural, so the step pushes here rather than riding the
+            // structural block).
             if (c >= 1)
             {
                 Arcane::MaterialPass& pass = m_data.passes[c - 1];
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), "%s", pass.name.c_str());
-                if (m_passNameEditIdx == static_cast<int>(c))
-                    std::memcpy(buf, m_nameBuf, sizeof(buf));
-                ImGui::SetNextItemWidth(120.0f);
-                ImGui::InputText("##passname", buf, sizeof(buf));
-                if (ImGui::IsItemActive())
-                {
-                    m_passNameEditIdx = static_cast<int>(c);
-                    std::memcpy(m_nameBuf, buf, sizeof(m_nameBuf));
-                }
-                else if (m_passNameEditIdx == static_cast<int>(c))
-                {
-                    const bool commit = ImGui::IsItemDeactivatedAfterEdit();
-                    m_passNameEditIdx = -1;
-                    if (commit && pass.name != m_nameBuf)
-                    {
-                        PassListState before = CapturePassListState();
-                        pass.name = m_nameBuf;
-                        m_dirty = true;
-                        PushPassUndo("Rename Pass", std::move(before));
-                    }
-                }
+                StableTextEdit("##passname", m_textEdit,
+                               TextKey(TextEditKind::PassName, c),
+                               pass.name, 120.0f,
+                               [&](const char* text)
+                               {
+                                   PassListState before = CapturePassListState();
+                                   pass.name = text;
+                                   m_dirty = true;
+                                   PushPassUndo("Rename Pass", std::move(before));
+                               });
             }
 
             // Input pins: one per wired slot + a spare that accepts a new
@@ -3205,29 +3211,15 @@ namespace Arcane::Editor
             // (possibly user-resized) box.
             ed::BeginNode(ed::NodeId(n.id));
             ImGui::PushID(static_cast<int>(n.id));
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%s", n.paramName.c_str());
-            if (m_nameEditNode == n.id)
-                std::memcpy(buf, m_nameBuf, sizeof(buf));
-            ImGui::SetNextItemWidth((std::max)(120.0f, n.value[0] - 16.0f));
-            ImGui::InputText("##ctitle", buf, sizeof(buf));
-            if (ImGui::IsItemActive())
-            {
-                m_nameEditNode = n.id;
-                std::memcpy(m_nameBuf, buf, sizeof(m_nameBuf));
-            }
-            else if (m_nameEditNode == n.id)
-            {
-                const bool commit = ImGui::IsItemDeactivatedAfterEdit();
-                m_nameEditNode = 0;
-                if (commit && n.paramName != m_nameBuf)
-                {
-                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                    n.paramName = m_nameBuf;
-                    m_dirty = true;   // annotation only -- no recompile
-                    PushGraphUndo("Edit Comment", std::move(before));
-                }
-            }
+            StableTextEdit("##ctitle", m_textEdit, TextKey(TextEditKind::Comment, n.id),
+                           n.paramName, (std::max)(120.0f, n.value[0] - 16.0f),
+                           [&](const char* text)
+                           {
+                               std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                               n.paramName = text;
+                               m_dirty = true;   // annotation only -- no recompile
+                               PushGraphUndo("Edit Comment", std::move(before));
+                           });
             ed::Group(ImVec2((std::max)(80.0f, n.value[0]),
                              (std::max)(60.0f, n.value[1])));
             const ImVec2 gs = ImGui::GetItemRectSize();
@@ -3252,21 +3244,29 @@ namespace Arcane::Editor
             ImGui::TextUnformatted(info.display);
 
         // Gesture helpers (used by pin rows AND payload widgets below). Value
-        // drags bracket a whole-graph gesture (before on activation, one undo
-        // step on release); popup-widgets (combos, color pickers) cannot live
-        // inside the canvas, so types use cycle buttons.
-        auto gestureBegin = [&]
+        // drags bracket a whole-graph gesture through EditGesture (before on
+        // activation, one undo step at close); popup-widgets (combos, color
+        // pickers) cannot live inside the canvas, so types use cycle buttons.
+        // The label rides the OPEN call because the transaction carries it --
+        // CommandStack::Commit stamps the step with Begin's label, not the
+        // pushed command's.
+        auto gestureBegin = [&](const char* label)
         {
-            if (ImGui::IsItemActivated())
-                m_graphGestureBefore = ActiveGraphOpt();
+            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+                [&] { return std::string(label); },
+                [&]
+                {
+                    // Whole-graph before, captured at activation; the command
+                    // builds at CLOSE from this plus whatever the drag did --
+                    // which is why an abandoned drag now lands on the stack
+                    // instead of vanishing.
+                    return std::function<void()>(
+                        [this, label = std::string(label),
+                         before = ActiveGraphOpt()]() mutable
+                        { PushGraphUndo(label.c_str(), std::move(before)); });
+                });
         };
-        auto gestureEnd = [&](const char* label)
-        {
-            if (ImGui::IsItemDeactivatedAfterEdit() && m_graphGestureBefore)
-                PushGraphUndo(label, std::move(m_graphGestureBefore));
-            else if (ImGui::IsItemDeactivated())
-                m_graphGestureBefore.reset();
-        };
+        auto gestureEnd = [&] { EditGesture::EndOnDeactivate(m_services.undo, m_gesture); };
         auto valueEdited = [&]
         {
             m_dirty = true;
@@ -3367,7 +3367,7 @@ namespace Arcane::Editor
                 // Same bracketing as the Const payload drags below, and STRICTLY
                 // safer: the drag wrote `buf`, not the graph, so the snapshot
                 // this takes on the activation frame is always pre-edit.
-                gestureBegin();
+                gestureBegin("Pin Value");
                 if (changed)
                 {
                     // ONE entry per pin, updated IN PLACE. A duplicate would
@@ -3397,7 +3397,7 @@ namespace Arcane::Editor
                         slot->v[i] = i < lanes ? buf[i] : 0.0f;
                     valueEdited();
                 }
-                gestureEnd("Pin Value");
+                gestureEnd();
                 ImGui::PopID();
             }
         }
@@ -3408,18 +3408,18 @@ namespace Arcane::Editor
             {
                 ImGui::SetNextItemWidth(90.0f);
                 const bool changed = ImGui::DragFloat("##v", &n.value[0], 0.01f);
-                gestureBegin();
+                gestureBegin("Edit Value");
                 if (changed) valueEdited();
-                gestureEnd("Edit Value");
+                gestureEnd();
                 break;
             }
             case Arcane::GraphNodeType::ConstFloat2:
             {
                 ImGui::SetNextItemWidth(140.0f);
                 const bool changed = ImGui::DragFloat2("##v", n.value, 0.01f);
-                gestureBegin();
+                gestureBegin("Edit Value");
                 if (changed) valueEdited();
-                gestureEnd("Edit Value");
+                gestureEnd();
                 break;
             }
             case Arcane::GraphNodeType::ConstFloat4:
@@ -3427,9 +3427,9 @@ namespace Arcane::Editor
             {
                 ImGui::SetNextItemWidth(220.0f);
                 const bool changed = ImGui::DragFloat4("##v", n.value, 0.01f);
-                gestureBegin();
+                gestureBegin("Edit Value");
                 if (changed) valueEdited();
-                gestureEnd("Edit Value");
+                gestureEnd();
                 if (n.type == Arcane::GraphNodeType::ConstColor)
                 {
                     ImGui::SameLine();
@@ -3444,35 +3444,28 @@ namespace Arcane::Editor
             case Arcane::GraphNodeType::Param:
             case Arcane::GraphNodeType::TextureSample:
             {
-                // Name: stable buffer while the InputText is active; committed
-                // as ONE undoable edit on deactivate-after-edit.
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), "%s", n.paramName.c_str());
-                if (m_nameEditNode == n.id)
-                    std::memcpy(buf, m_nameBuf, sizeof(buf));
-                ImGui::SetNextItemWidth(110.0f);
-                ImGui::InputText("##pname", buf, sizeof(buf));
-                if (ImGui::IsItemActive())
-                {
-                    m_nameEditNode = n.id;
-                    std::memcpy(m_nameBuf, buf, sizeof(m_nameBuf));
-                }
-                else if (m_nameEditNode == n.id)
-                {
-                    const bool commit = ImGui::IsItemDeactivatedAfterEdit();
-                    m_nameEditNode = 0;
-                    if (commit && n.paramName != m_nameBuf)
-                    {
-                        std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                        const std::string oldName = n.paramName;
-                        n.paramName = m_nameBuf;
-                        valueEdited();
-                        PushGraphUndo("Rename Param", std::move(before));
-                        // Assisted rename: local override fix + the dependent-
-                        // instance walk (arms the propagation modal on hits).
-                        BeginParamRename(oldName, m_nameBuf);
-                    }
-                }
+                // Name: StableTextEdit holds the typed text while the InputText
+                // is active; committed as ONE undoable edit on deactivate-
+                // after-edit.
+                StableTextEdit("##pname", m_textEdit,
+                               TextKey(TextEditKind::NodeName, n.id),
+                               n.paramName, 110.0f,
+                               [&](const char* text)
+                               {
+                                   std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                                   const std::string oldName = n.paramName;
+                                   const std::string newName = text;
+                                   n.paramName = newName;
+                                   valueEdited();
+                                   PushGraphUndo("Rename Param", std::move(before));
+                                   // Assisted rename: local override fix + the
+                                   // dependent-instance walk (arms the
+                                   // propagation modal on hits). Both names are
+                                   // LOCALS: the regenerate above may rebuild
+                                   // the graph, so nothing reads back through
+                                   // `n` after it.
+                                   BeginParamRename(oldName, newName);
+                               });
 
                 if (n.type == Arcane::GraphNodeType::Param)
                 {
@@ -3507,9 +3500,9 @@ namespace Arcane::Editor
                         changed = ImGui::DragFloat2("##pdef", n.paramDefault.f, 0.01f);
                     else
                         changed = ImGui::DragFloat4("##pdef", n.paramDefault.f, 0.01f);
-                    gestureBegin();
+                    gestureBegin("Param Default");
                     if (changed) valueEdited();
-                    gestureEnd("Param Default");
+                    gestureEnd();
 
                     bool ranged = n.hasRange;
                     if (ImGui::Checkbox("range", &ranged))
@@ -3525,14 +3518,14 @@ namespace Arcane::Editor
                         ImGui::SetNextItemWidth(120.0f);
                         float mm[2] = { n.rangeMin, n.rangeMax };
                         const bool rchanged = ImGui::DragFloat2("##prange", mm, 0.05f);
-                        gestureBegin();
+                        gestureBegin("Param Range");
                         if (rchanged)
                         {
                             n.rangeMin = mm[0];
                             n.rangeMax = mm[1];
                             valueEdited();
                         }
-                        gestureEnd("Param Range");
+                        gestureEnd();
                     }
                 }
                 break;
@@ -3578,32 +3571,18 @@ namespace Arcane::Editor
             }
             case Arcane::GraphNodeType::Swizzle:
             {
-                // Mask edit: same stable-buffer commit as param names (the
-                // buffer is shared -- only one InputText is active at a time,
-                // and node ids are unique across types).
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), "%s", n.swizzleMask.c_str());
-                if (m_nameEditNode == n.id)
-                    std::memcpy(buf, m_nameBuf, sizeof(buf));
-                ImGui::SetNextItemWidth(70.0f);
-                ImGui::InputText("##mask", buf, sizeof(buf));
-                if (ImGui::IsItemActive())
-                {
-                    m_nameEditNode = n.id;
-                    std::memcpy(m_nameBuf, buf, sizeof(m_nameBuf));
-                }
-                else if (m_nameEditNode == n.id)
-                {
-                    const bool commit = ImGui::IsItemDeactivatedAfterEdit();
-                    m_nameEditNode = 0;
-                    if (commit && n.swizzleMask != m_nameBuf)
-                    {
-                        std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                        n.swizzleMask = m_nameBuf;
-                        valueEdited();
-                        PushGraphUndo("Edit Swizzle", std::move(before));
-                    }
-                }
+                // Mask edit: same StableTextEdit commit as param names (one
+                // shared TextCommitState -- only one InputText is active at a
+                // time; the keys are namespaced per site kind).
+                StableTextEdit("##mask", m_textEdit, TextKey(TextEditKind::Swizzle, n.id),
+                               n.swizzleMask, 70.0f,
+                               [&](const char* text)
+                               {
+                                   std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                                   n.swizzleMask = text;
+                                   valueEdited();
+                                   PushGraphUndo("Edit Swizzle", std::move(before));
+                               });
                 break;
             }
             case Arcane::GraphNodeType::Custom:
@@ -4030,8 +4009,9 @@ namespace Arcane::Editor
             return;
         }
 
-        // Before-state captured on widget activation (m_gesture*); the undo step
-        // is pushed on release-after-edit (one drag = one step).
+        // Each param row's drag rides the document's EditGesture bracket
+        // (BeginOnActivate / EndOnDeactivate around the live Set below): before-
+        // state on activation, one undo step at close -- one drag = one step.
         if (IsInstance())
             ImGui::Checkbox("Only overridden", &m_showOnlyOverridden);
 
@@ -4098,13 +4078,29 @@ namespace Arcane::Editor
                     break;
             }
 
-            if (ImGui::IsItemActivated())
-            {
-                m_gestureHadBefore = m_instance->HasOverride(d.nameHash);
-                m_gestureBefore = Arcane::MatParamValue{};
-                if (m_gestureHadBefore)
-                    m_instance->GetParam(d.nameHash, m_gestureBefore);
-            }
+            // The override before-state is read INSIDE the open call, which runs
+            // on the activation frame only -- i.e. before the live Set below has
+            // touched anything. The step itself builds at close (an abandoned
+            // drag lands on the stack rather than vanishing), and the
+            // transaction carries the label CommandStack::Commit stamps.
+            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+                [&] { return "Edit " + d.name; },
+                [&]
+                {
+                    const bool hadBefore = m_instance->HasOverride(d.nameHash);
+                    Arcane::MatParamValue before{};
+                    if (hadBefore)
+                        m_instance->GetParam(d.nameHash, before);
+                    return std::function<void()>(
+                        [this, nameHash = d.nameHash, name = d.name, hadBefore, before]
+                        {
+                            Arcane::MatParamValue after;
+                            if (m_instance && m_instance->GetParam(nameHash, after))
+                                m_services.undo->Push(std::make_unique<ParamEditCommand>(
+                                    m_anchor, nameHash, "Edit " + name,
+                                    hadBefore, before, /*hasAfter=*/true, after));
+                        });
+                });
 
             if (edited)
             {
@@ -4113,16 +4109,7 @@ namespace Arcane::Editor
                 m_instance->Set(d.nameHash, value);
             }
 
-            if (ImGui::IsItemDeactivatedAfterEdit() && m_services.undo)
-            {
-                Arcane::MatParamValue after;
-                if (m_instance->GetParam(d.nameHash, after))
-                {
-                    m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                        m_anchor, d.nameHash, "Edit " + d.name,
-                        m_gestureHadBefore, m_gestureBefore, /*hasAfter=*/true, after));
-                }
-            }
+            EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
 
             // Reset-to-default: clears the override so the //@param default (or
             // a parent's value, Slice 7) shows through. Undoable.
