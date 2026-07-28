@@ -16,7 +16,8 @@
   import ProjectArgsModal from "$lib/components/ProjectArgsModal.svelte";
   import { resolveEngine } from "$lib/format";
   import {
-    loadState, registerEngine, forgetEngine, deleteProject, clearRecents,
+    loadState, registerEngine, forgetEngine, deleteProject, forgetProject,
+    clearRecents,
     openProject, createProject, suggestEngine, setProjectEngine,
     setProjectArgs, revealProject, renameProject,
     loadSettings, saveSettings, defaultDialogDir,
@@ -259,6 +260,7 @@
                       onReveal={(p) => guard(() => revealProject(p.path))}
                       onRename={(p) => (renaming = p)}
                       onArgs={(p) => (editingArgs = p)}
+                      onForget={(p) => guard(() => forgetProject(p.path))}
                       onLayout={(v) => applySettings({ ...settings, projectView: v })} />
       {:else if view === "engines"}
         <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion} {busy}

@@ -7,7 +7,7 @@
   // project" is one vocabulary, and defining it per layout is how the two
   // layouts end up offering different things.
   let { project, disabled = false, confirmDelete = true,
-        onReveal, onRename, onArgs, onDelete }: {
+        onReveal, onRename, onArgs, onForget, onDelete }: {
     project: RecentProject;
     disabled?: boolean;
     /** Whether Delete opens a confirmation. Only affects this item's LABEL. */
@@ -15,6 +15,8 @@
     onReveal: () => void;
     onRename: () => void;
     onArgs: () => void;
+    /** Remove from the LIST only -- delete is the one that touches disk. */
+    onForget: () => void;
     onDelete: () => void;
   } = $props();
 
@@ -23,6 +25,11 @@
     { label: "Show in Explorer", run: onReveal },
     { label: "Rename project…", run: onRename },
     { label: "Command-line arguments…", run: onArgs },
+    // No ellipsis and no confirmation: this only edits the list, and the entry
+    // comes back through Add. It sits directly above Delete so the two reads --
+    // "stop showing me this" and "erase the folder" -- are adjacent but
+    // visibly different kinds of item.
+    { label: "Remove from list", run: onForget },
     // Last and set apart -- the only irreversible one. The ellipsis is what
     // every other item here uses to mean "opens something first", so it is
     // DROPPED when confirmation is off: the item then deletes on the click,

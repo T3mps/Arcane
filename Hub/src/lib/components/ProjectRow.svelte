@@ -13,7 +13,7 @@
   // lining up down the page, not each row being individually recognisable.
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
         disabled = false, confirmDelete, onLaunch, onDelete, onChangeEngine,
-        onReveal, onRename, onArgs }:
+        onReveal, onRename, onArgs, onForget }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       engineLabel: string; pinned: boolean; dangling: boolean;
@@ -21,6 +21,7 @@
       onLaunch: () => void; onDelete: () => void;
       onChangeEngine: () => void;
       onReveal: () => void; onRename: () => void; onArgs: () => void;
+      onForget: () => void;
     } = $props();
 
   // The FOLDER, not the .arcproj inside it. The file name only ever repeats the
@@ -71,7 +72,7 @@
   {/if}
 
   <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete}
-               {onReveal} {onRename} {onArgs} {onDelete} />
+               {onReveal} {onRename} {onArgs} {onForget} {onDelete} />
 </div>
 
 <style>

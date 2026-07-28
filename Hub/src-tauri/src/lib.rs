@@ -388,8 +388,19 @@ fn rename_project(path: String, new_name: String) -> Result<String, String> {
     Ok(new_path)
 }
 
-// Hub state ONLY -- unlike delete_project, this removes nothing from disk. It
-// empties the whole list; there is deliberately no per-project equivalent.
+// Remove ONE project from the Hub's own list. It does not touch the project on
+// disk -- that is delete_project's job, and the menu labels the two apart.
+// Restored 2026-07-28: the project-actions wave dropped it when Delete took its
+// place on the card, which left "stop showing me this" impossible without
+// erasing the folder. Unity Hub and Unreal both keep the two separate.
+#[tauri::command]
+fn forget_project(path: String) -> Result<(), String> {
+    let mut s = state::load();
+    state::remove_recent(&mut s.recents, &path);
+    state::save(&s)
+}
+
+// Same contract as forget_project, for the whole list: Hub state only.
 #[tauri::command]
 fn clear_recents() -> Result<(), String> {
     let mut s = state::load();
@@ -574,6 +585,7 @@ pub fn run() {
             register_engine,
             forget_engine,
             delete_project,
+            forget_project,
             clear_recents,
             set_project_engine,
             set_project_args,

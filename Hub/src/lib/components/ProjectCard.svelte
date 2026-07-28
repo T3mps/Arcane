@@ -6,7 +6,7 @@
 
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
         disabled = false, confirmDelete, onLaunch, onDelete, onChangeEngine,
-        onReveal, onRename, onArgs }:
+        onReveal, onRename, onArgs, onForget }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       /** Build name of the engine that will actually launch this project. */
@@ -19,6 +19,7 @@
       onLaunch: () => void; onDelete: () => void;
       onChangeEngine: () => void;
       onReveal: () => void; onRename: () => void; onArgs: () => void;
+      onForget: () => void;
     } = $props();
 
   const cover = $derived(coverFor(project.name, project.path));
@@ -74,7 +75,7 @@
          card: absolutely positioned, it sat on top of whatever the name line
          needed, and the name is the one thing a tile must always show. -->
     <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete}
-                 {onReveal} {onRename} {onArgs} {onDelete} />
+                 {onReveal} {onRename} {onArgs} {onForget} {onDelete} />
   </div>
 
   <div class="meta">

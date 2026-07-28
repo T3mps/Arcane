@@ -12,7 +12,7 @@
   // the only stateful file by design.
   let { recents, engines, defaultEngine, busy, layout, confirmDelete,
         onLaunch, onDelete, onOpen, onNew, onChangeEngine, onLayout,
-        onReveal, onRename, onArgs }:
+        onReveal, onRename, onArgs, onForget }:
     {
       recents: RecentProject[]; engines: EngineEntry[];
       defaultEngine: EngineEntry | null; busy: boolean;
@@ -26,6 +26,7 @@
       onReveal: (p: RecentProject) => void;
       onRename: (p: RecentProject) => void;
       onArgs: (p: RecentProject) => void;
+      onForget: (p: RecentProject) => void;
     } = $props();
 
   // Both layouts take the SAME props, so switching is a component swap rather
@@ -119,6 +120,7 @@
         onReveal: () => onReveal(p),
         onRename: () => onRename(p),
         onArgs: () => onArgs(p),
+        onForget: () => onForget(p),
       }}
       {#if layout === "grid"}
         <ProjectCard {...shared} />

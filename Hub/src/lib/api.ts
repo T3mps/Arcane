@@ -55,6 +55,8 @@ export const forgetEngine = (path: string) => invoke<void>("forget_engine", { pa
  * A project whose folder is already gone is simply unlisted.
  */
 export const deleteProject = (path: string) => invoke<void>("delete_project", { path });
+/** Remove one project from the list. Hub state ONLY -- nothing touches disk. */
+export const forgetProject = (path: string) => invoke<void>("forget_project", { path });
 /** Hub state ONLY -- unlike deleteProject, nothing is removed from disk. */
 export const clearRecents = () => invoke<void>("clear_recents");
 /** Pin a project to an engine, or pass null to send it back to the default. */
