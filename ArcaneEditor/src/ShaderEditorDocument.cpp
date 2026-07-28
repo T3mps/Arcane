@@ -2278,8 +2278,13 @@ namespace Arcane::Editor
     {
         // GraphOptAt range-checks (an out-of-range pass falls back to the base,
         // exactly as ActiveGraphOpt's own clamp does), and ApplyGraphState
-        // refuses a pass that has since been removed -- so a stale pinned index
-        // degrades to an inert step rather than a misdirected write.
+        // refuses a pass that has since been removed -- so an OUT-OF-RANGE
+        // pinned index degrades to an inert step rather than a misdirected
+        // write. An index that is still IN RANGE but now names a DIFFERENT
+        // pass (the list was reordered or an earlier pass removed) is not
+        // covered by either check and would write to that other pass: a
+        // pre-existing GraphEditCommand weakness (every step stores a bare
+        // index), not one this bracket introduces.
         if (m_services.undo)
             m_services.undo->Push(std::make_unique<GraphEditCommand>(
                 m_anchor, label, pass, std::move(before), GraphOptAt(pass)));

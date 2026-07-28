@@ -113,7 +113,7 @@ namespace Arcane::Editor
         EditGesture::GestureState m_gesture;
 
         // Doc-identity handle for undo steps, mirroring ShaderEditorDocument's
-        // m_anchor (ShaderEditorDocument.hpp:273-276, minted
+        // m_anchor (ShaderEditorDocument.hpp:274-277, minted
         // ShaderEditorDocument.cpp:455): commands hold this WEAKLY and forward
         // through the pointee, so steps left on the shared stack after this
         // document closes go inert instead of dereferencing a dead `this`.

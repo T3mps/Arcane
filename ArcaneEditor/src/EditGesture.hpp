@@ -150,8 +150,10 @@ namespace Arcane::Editor::EditGesture
     // SnapshotComponent calls still lands in that open transaction, and the
     // drag's own Commit records them, so the edit is never lost.
     //
-    // The id parked in Slots::item IS ActiveId: IsItemActivated() is true
-    // exactly when g.ActiveId == g.LastItemData.ID (imgui.cpp:6549), so
+    // The id parked in Slots::item IS ActiveId: IsItemActivated() is true only
+    // when g.ActiveId == g.LastItemData.ID (imgui.cpp:6545-6551 -- it also
+    // requires g.ActiveIdPreviousFrame != that id, which is what makes it fire
+    // on the activation frame alone rather than every frame of the drag), so
     // GetItemID() here reads ActiveId -- including through a ctrl+click text
     // entry (TempInputText re-derives the id from the same window+label) and
     // through grouped rows, where EndGroup forwards the live component id into
@@ -212,6 +214,11 @@ namespace Arcane::Editor::EditGesture
     // ImGui::Begin returned false (collapsed window or background tab), where
     // every widget inside bails before ItemAdd on window->SkipItems (e.g.
     // imgui_widgets.cpp:2722) and so cannot report its own deactivation.
+    //
+    // NOEXCEPT CONTRACT: the dtor invokes ClosePending, so a parked
+    // pendingCommit builder runs from a destructor -- a builder that throws
+    // terminates. Repo policy accepts that (the builders only read document
+    // state and push a command); do not park a builder that can throw.
     struct ScopeGuard
     {
         Arcane::CommandStack* stack;   // null tolerated (Play mode)

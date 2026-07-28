@@ -77,7 +77,8 @@ namespace Arcane::Editor
     public:
         ShaderEditorDocument(DocServices services, std::filesystem::path path,
                              Arcane::MaterialAssetData data);
-        ~ShaderEditorDocument() override;   // destroys the node-editor context
+        // Closes a parked edit gesture, then destroys the node-editor contexts.
+        ~ShaderEditorDocument() override;
 
         const std::string& Title() const override { return m_title; }
         Arcane::Guid AssetGuid() const override { return m_data.id; }

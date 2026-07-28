@@ -152,7 +152,7 @@ namespace Arcane::Editor
     void SpriteDocument::Draw(bool& requestClose)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard
-        // (EditGesture.hpp:203-220). It covers the early return below (Begin
+        // (EditGesture.hpp:205-227). It covers the early return below (Begin
         // refused: collapsed window or a background tab, where no widget inside
         // can report its own deactivation), which for a DOCUMENT window is the
         // routine case, not an edge one: any other tab in the same dock node
@@ -223,9 +223,9 @@ namespace Arcane::Editor
         // `before` with an unrelated `after`. Enumerated, this document has no
         // such path. There is ONE m_data and no pass/target selector to drift.
         // Nothing outside this class holds a SpriteDocument (EditorApp.cpp:335-
-        // 372 constructs one and hands it straight to DocumentHost), there is
+        // 373 constructs one and hands it straight to DocumentHost), there is
         // no ReloadFromDisk hook on it (ShaderEditorDocument has one,
-        // ShaderEditorDocument.hpp:139-142; the sprite watcher path does not
+        // ShaderEditorDocument.hpp:140-143; the sprite watcher path does not
         // exist), and re-opening the same asset focuses this document via the
         // registered peek instead of building a second one (EditorApp.cpp:374-
         // 380). The only other writer is ApplySpriteData, i.e. an undo/redo --

@@ -53,8 +53,10 @@ namespace Arcane::Editor
             return std::nullopt;
         }
 
-        // FieldInfo-taking convenience over the range-free drag cores in
-        // EditorWidgets: resolving a field to its Astra::Range is reflection's
+        // FieldInfo-taking convenience over the reflection-free drag cores in
+        // EditorWidgets (they take a RESOLVED std::optional<Astra::Range>, so
+        // they are range-aware; what they do not know is Astra::FieldInfo):
+        // resolving a field to its Astra::Range is reflection's
         // business, which is why the widget layer takes the resolved optional
         // and these two do the resolving. The bodies name the widget-layer
         // cores QUALIFIED because unqualified lookup stops at this namespace,
@@ -107,7 +109,7 @@ namespace Arcane::Editor
             // unconditional ForEachTarget even with stack == nullptr (it only
             // skips opening the ScopedTransaction and taking the per-target
             // Snapshot -- both live inside the same `if (stack)` block,
-            // InspectorView.cpp:340-345). A Play-mode texture drop
+            // InspectorView.cpp:347-352). A Play-mode texture drop
             // therefore mints the file and writes the Guid with NO undo step
             // -- exactly the no-undo-in-Play behavior every other AssetRef
             // drop already has; this branch adds a minted file as a
@@ -322,8 +324,13 @@ namespace Arcane::Editor
             // Close this row's gesture if THIS row is the one that opened it and
             // its widget deactivated. Safe to call for every row every frame --
             // the ownership guard and the Commit-vs-Cancel verdict are
-            // EditGesture's (EvaluateEnd), including the "AxisDragFloatN /
-            // MultiScalarRow are ImGui GROUPS" reasoning its comment spells out.
+            // EditGesture's (EvaluateEnd). Why the GROUP rows above (
+            // AxisDragFloatN, MultiScalarRow) are safe to close through the
+            // same call is spelled out by EndOnDeactivate's own comment
+            // (EditGesture.hpp), whose "groups" bullet reads that EndGroup
+            // re-points LastItemData.ID at the group's live ActiveId, else at
+            // the child that deactivated inside it -- so both the activation
+            // and the deactivation frame yield the child that held ActiveId.
             // Name kept for the same reason BeginGestureIfActivated's is.
             void EndGesture()
             {
