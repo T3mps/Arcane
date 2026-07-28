@@ -85,7 +85,7 @@ namespace
 TEST_CASE("Graph node table covers every type with round-tripping tokens", "[material]")
 {
     const auto infos = AllGraphNodeInfos();
-    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Comment) + 1);
+    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Panner) + 1);
     for (const GraphNodeTypeInfo& info : infos)
     {
         CHECK(GraphNodeInfo(info.type).token == info.token);
@@ -115,6 +115,24 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
     CHECK(GraphNodeInfo(GraphNodeType::PassInput).outputs.size() == 2);    // rgba + a
     CHECK(GraphNodeInfo(GraphNodeType::Comment).inputs.empty());           // furniture
     CHECK(GraphNodeInfo(GraphNodeType::Comment).outputs.empty());
+
+    // Library batch 2: dynamic unaries, the three FIXED scalar outputs (the
+    // SimpleNoise precedent), and the Panner's two float2 pins.
+    CHECK(GraphNodeInfo(GraphNodeType::Exp).inputs.size() == 1);
+    CHECK(GraphNodeInfo(GraphNodeType::Exp).inputs[0].width == 0);         // dynamic
+    CHECK(GraphNodeInfo(GraphNodeType::Negate).outputs[0].width == 0);
+    CHECK(GraphNodeInfo(GraphNodeType::Length).inputs.size() == 1);
+    CHECK(GraphNodeInfo(GraphNodeType::Length).outputs[0].width == 1);     // always float
+    CHECK(GraphNodeInfo(GraphNodeType::Distance).inputs.size() == 2);
+    CHECK(GraphNodeInfo(GraphNodeType::Distance).outputs[0].width == 1);
+    CHECK(GraphNodeInfo(GraphNodeType::Dot).inputs.size() == 2);
+    CHECK(GraphNodeInfo(GraphNodeType::Dot).outputs[0].width == 1);
+    CHECK(GraphNodeInfo(GraphNodeType::Panner).inputs.size() == 2);
+    CHECK(std::string(GraphNodeInfo(GraphNodeType::Panner).inputs[0].name) == "uv");
+    CHECK(GraphNodeInfo(GraphNodeType::Panner).inputs[0].width == 2);
+    CHECK(std::string(GraphNodeInfo(GraphNodeType::Panner).inputs[1].name) == "speed");
+    CHECK(GraphNodeInfo(GraphNodeType::Panner).inputs[1].width == 2);
+    CHECK(GraphNodeInfo(GraphNodeType::Panner).outputs[0].width == 2);
 }
 
 TEST_CASE("Comment nodes are canvas furniture: ignored by codegen, round-trip",
@@ -819,6 +837,350 @@ TEST_CASE("Codegen: library batch 1 kernels and their neutral defaults", "[mater
     }
 }
 
+TEST_CASE("Codegen: library batch 2 unary kernels run at the resolved width",
+          "[material][graph]")
+{
+    SECTION("a float2 source carries the whole chain at width 2")
+    {
+        // One const_float2 threaded through every batch-2 unary: each node's
+        // dynamic width resolves to its single connected input's 2, so the
+        // intrinsic (and Negate's parenthesized minus) applies component-wise.
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode src = Node(2, GraphNodeType::ConstFloat2);
+        src.value[0] = 0.25f;
+        src.value[1] = 0.75f;
+        g.nodes.push_back(src);
+        g.nodes.push_back(Node(3, GraphNodeType::Exp));
+        g.nodes.push_back(Node(4, GraphNodeType::Negate));
+        g.nodes.push_back(Node(5, GraphNodeType::Floor));
+        g.nodes.push_back(Node(6, GraphNodeType::Ceil));
+        g.nodes.push_back(Node(7, GraphNodeType::Round));
+        g.nodes.push_back(Node(8, GraphNodeType::Sign));
+        g.nodes.push_back(Node(9, GraphNodeType::Normalize));
+        for (std::uint32_t k = 2; k < 9; ++k)
+            g.links.push_back(Link(k, 0, k + 1, 0));
+        g.links.push_back(Link(9, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float2 _n2 = float2(0.25, 0.75);\n"
+              "    float2 _n3 = exp(_n2);\n"
+              "    float2 _n4 = -(_n3);\n"
+              "    float2 _n5 = floor(_n4);\n"
+              "    float2 _n6 = ceil(_n5);\n"
+              "    float2 _n7 = round(_n6);\n"
+              "    float2 _n8 = sign(_n7);\n"
+              "    float2 _n9 = normalize(_n8);\n"
+              "    return float4(_n9, 0.0, 1.0);\n"
+              "}\n");
+    }
+
+    SECTION("an unwired operand reads the zero neutral at width 1")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::Exp));
+        g.links.push_back(Link(2, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("float _n2 = exp(0.0);") != std::string::npos);
+    }
+
+    SECTION("the unary pin composes with a Task 1 inline literal")
+    {
+        // The pin routes through arg()/argOr(), so a literal simply outranks
+        // the neutral -- no per-node work in the emission case.
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode neg = Node(2, GraphNodeType::Negate);
+        neg.pinLiterals.push_back(Literal(0, 2.0f));
+        g.nodes.push_back(neg);
+        g.links.push_back(Link(2, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("float _n2 = -(2);") != std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen: batch 2 scalar-out nodes collapse to float, then splat",
+          "[material][graph]")
+{
+    SECTION("length is float even from a float2, and splats into a float2 consumer")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        g.nodes.push_back(Node(3, GraphNodeType::Length));
+        g.nodes.push_back(Node(4, GraphNodeType::Add));
+        g.links.push_back(Link(2, 0, 3, 0));   // float2 -> length.x
+        g.links.push_back(Link(3, 0, 4, 0));   // scalar -> add.a
+        g.links.push_back(Link(2, 0, 4, 1));   // float2 -> add.b (pins the width)
+        g.links.push_back(Link(4, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float2 _n2 = v.uv;\n"
+              "    float _n3 = length(_n2);\n"
+              "    float2 _n4 = (_n3).xx + _n2;\n"
+              "    return float4(_n4, 0.0, 1.0);\n"
+              "}\n");
+    }
+
+    SECTION("distance and dot take two operands and return one float")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        GraphNode c = Node(3, GraphNodeType::ConstFloat2);
+        c.value[0] = 0.5f;
+        c.value[1] = 0.5f;
+        g.nodes.push_back(c);
+        g.nodes.push_back(Node(4, GraphNodeType::Distance));
+        g.nodes.push_back(Node(5, GraphNodeType::Dot));
+        g.nodes.push_back(Node(6, GraphNodeType::Add));
+        g.links.push_back(Link(2, 0, 4, 0));
+        g.links.push_back(Link(3, 0, 4, 1));
+        g.links.push_back(Link(2, 0, 5, 0));
+        g.links.push_back(Link(3, 0, 5, 1));
+        g.links.push_back(Link(4, 0, 6, 0));
+        g.links.push_back(Link(5, 0, 6, 1));
+        g.links.push_back(Link(6, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float2 _n2 = v.uv;\n"
+              "    float2 _n3 = float2(0.5, 0.5);\n"
+              "    float _n4 = distance(_n2, _n3);\n"
+              "    float _n5 = dot(_n2, _n3);\n"
+              "    float _n6 = _n4 + _n5;\n"          // both scalars: width stays 1
+              "    return (_n6).xxxx;\n"
+              "}\n");
+    }
+
+    SECTION("both operands adapt to the resolved width BEFORE the collapse")
+    {
+        // dot's own width still resolves the SG way (the float2 pins it, the
+        // scalar splats); only the OUTPUT is fixed at 1. HLSL would promote a
+        // bare scalar operand on its own, so what this pins is that the splat
+        // is EXPLICIT in the emitted text, like every other dynamic node's.
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode s = Node(2, GraphNodeType::ConstFloat);
+        s.value[0] = 3.0f;
+        g.nodes.push_back(s);
+        g.nodes.push_back(Node(3, GraphNodeType::UV));
+        g.nodes.push_back(Node(4, GraphNodeType::Dot));
+        g.links.push_back(Link(2, 0, 4, 0));
+        g.links.push_back(Link(3, 0, 4, 1));
+        g.links.push_back(Link(4, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float _n2 = 3;\n"
+              "    float2 _n3 = v.uv;\n"
+              "    float _n4 = dot((_n2).xx, _n3);\n"
+              "    return (_n4).xxxx;\n"
+              "}\n");
+    }
+
+    SECTION("unwired operands read the zero neutral")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::Length));
+        g.nodes.push_back(Node(3, GraphNodeType::Distance));
+        g.nodes.push_back(Node(4, GraphNodeType::Add));
+        g.links.push_back(Link(2, 0, 4, 0));
+        g.links.push_back(Link(3, 0, 4, 1));
+        g.links.push_back(Link(4, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("float _n2 = length(0.0);") != std::string::npos);
+        CHECK(r.snippet.find("float _n3 = distance(0.0, 0.0);") != std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen: Panner scrolls uv by Time * speed", "[material][graph]")
+{
+    SECTION("unwired uv keeps the v.uv neutral; unwired speed reads zero")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::Panner));
+        g.links.push_back(Link(2, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float2 _n2 = v.uv + Time * (0.0).xx;\n"
+              "    return float4(_n2, 0.0, 1.0);\n"
+              "}\n");
+    }
+
+    SECTION("FLAGSHIP: a speed literal scrolls with no Const node on the canvas")
+    {
+        // The Task 1 seam paying off: speed reads through arg(), so the pin's
+        // own float2 literal (its declared width is 2, so it stores 2 lanes)
+        // lands verbatim in the expression and the graph stays two nodes.
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode pan = Node(2, GraphNodeType::Panner);
+        pan.pinLiterals.push_back(Literal(1, 0.3f, 0.0f));
+        g.nodes.push_back(pan);
+        g.links.push_back(Link(2, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float2 _n2 = v.uv + Time * float2(0.3, 0);\n"
+              "    return float4(_n2, 0.0, 1.0);\n"
+              "}\n");
+        CHECK(r.lineNodeIds.size() == 5);              // no line for the literal
+        CHECK(r.snippet.find("_n3") == std::string::npos);
+    }
+
+    SECTION("wires beat both neutrals")
+    {
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        GraphNode speed = Node(3, GraphNodeType::ConstFloat2);
+        speed.value[0] = 0.1f;
+        speed.value[1] = 0.2f;
+        g.nodes.push_back(speed);
+        g.nodes.push_back(Node(4, GraphNodeType::Panner));
+        g.links.push_back(Link(2, 0, 4, 0));
+        g.links.push_back(Link(3, 0, 4, 1));
+        g.links.push_back(Link(4, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet ==
+              "float4 shade(Varyings v)\n"
+              "{\n"
+              "    float2 _n2 = v.uv;\n"
+              "    float2 _n3 = float2(0.1, 0.2);\n"
+              "    float2 _n4 = _n2 + Time * _n3;\n"
+              "    return float4(_n4, 0.0, 1.0);\n"
+              "}\n");
+    }
+
+    SECTION("the uv pin takes a literal too -- it reads through the argOr seam")
+    {
+        // Unlike TilingOffset.uv (which reads its v.uv default directly and is
+        // in the header's v1 exclusion set), Panner.uv routes through argOr
+        // with a width-2 default, so a literal outranks v.uv without splatting.
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode pan = Node(2, GraphNodeType::Panner);
+        pan.pinLiterals.push_back(Literal(0, 0.5f, 0.25f));
+        g.nodes.push_back(pan);
+        g.links.push_back(Link(2, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("float2 _n2 = float2(0.5, 0.25) + Time * (0.0).xx;") !=
+              std::string::npos);
+        CHECK(r.snippet.find("(v.uv).xx") == std::string::npos);   // never splatted
+    }
+}
+
+TEST_CASE("Library batch 2 tokens are the serialized identity", "[material][graph]")
+{
+    struct Row { GraphNodeType type; const char* token; };
+    constexpr Row kNew[] = {
+        { GraphNodeType::Exp,       "exp"       },
+        { GraphNodeType::Negate,    "negate"    },
+        { GraphNodeType::Floor,     "floor"     },
+        { GraphNodeType::Ceil,      "ceil"      },
+        { GraphNodeType::Round,     "round"     },
+        { GraphNodeType::Sign,      "sign"      },
+        { GraphNodeType::Normalize, "normalize" },
+        { GraphNodeType::Length,    "length"    },
+        { GraphNodeType::Distance,  "distance"  },
+        { GraphNodeType::Dot,       "dot"       },
+        { GraphNodeType::Panner,    "panner"    },
+    };
+
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    std::uint32_t id = 2;
+    for (const Row& row : kNew)
+        g.nodes.push_back(Node(id++, row.type));
+    g.nextId = id;
+
+    const nlohmann::json j = GraphToJson(g);
+    const auto back = GraphFromJson(j);
+    REQUIRE(back.has_value());
+    REQUIRE(back->nodes.size() == std::size(kNew) + 1);
+    for (std::size_t i = 0; i < std::size(kNew); ++i)
+    {
+        INFO("token " << kNew[i].token);
+        CHECK(std::string(GraphNodeInfo(kNew[i].type).token) == kNew[i].token);
+        // Nodes are written sorted by id, so index i + 1 is id i + 2 (Output is 1).
+        CHECK(j["nodes"][i + 1]["type"] == kNew[i].token);
+        const GraphNode* n = back->FindNode(static_cast<std::uint32_t>(i + 2));
+        REQUIRE(n != nullptr);
+        CHECK(n->type == kNew[i].type);
+        GraphNodeType parsed{};
+        REQUIRE(GraphNodeTypeFromToken(kNew[i].token, parsed));
+        CHECK(parsed == kNew[i].type);
+    }
+    CHECK(GraphToJson(*back).dump() == j.dump());   // byte-stable second pass
+
+    SECTION("a Panner speed literal round-trips as a float2 array")
+    {
+        MaterialGraph p;
+        p.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode pan = Node(2, GraphNodeType::Panner);
+        pan.pinLiterals.push_back(Literal(1, 0.3f, 0.0f));
+        p.nodes.push_back(pan);
+        p.links.push_back(Link(2, 0, 1, 0));
+        p.nextId = 3;
+
+        const nlohmann::json pj = GraphToJson(p);
+        REQUIRE(pj["nodes"][1].contains("pinDefaults"));
+        const nlohmann::json& defs = pj["nodes"][1]["pinDefaults"];
+        REQUIRE(defs.size() == 1);
+        CHECK(defs[0]["pin"] == 1);
+        REQUIRE(defs[0]["value"].is_array());        // declared width 2, not scalar
+        REQUIRE(defs[0]["value"].size() == 2);
+        CHECK(defs[0]["value"][0] == 0.3f);
+        CHECK(defs[0]["value"][1] == 0.0f);
+
+        const auto loaded = GraphFromJson(pj);
+        REQUIRE(loaded.has_value());
+        const GraphPinLiteral* lit = loaded->FindNode(2)->FindPinLiteral(1);
+        REQUIRE(lit != nullptr);
+        CHECK(lit->v[0] == 0.3f);
+        // ...and the reloaded graph emits the same scroll.
+        const GraphCodegenResult r = GenerateGraphSnippet(*loaded);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("float2 _n2 = v.uv + Time * float2(0.3, 0);") !=
+              std::string::npos);
+    }
+}
+
 TEST_CASE("Codegen: Swizzle masks and the SimpleNoise emit-once helper", "[material]")
 {
     SECTION("all-present mask emits a real HLSL swizzle")
@@ -1479,6 +1841,61 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
             *templateText, gen.snippet, "graph_library1", MaterialSurface::Fullscreen);
         REQUIRE(build.errors.empty());
         compileBoth(build.hlsl, "graph_library1.hlsl");
+    }
+
+    SECTION("fullscreen: every library-batch-2 kernel in one graph")
+    {
+        // Real DXC is the check that the emitted intrinsics type-check: HLSL's
+        // sign() returns an INT vector (`dxc -ast-dump` types the call
+        // `vector<int, 2> (vector<float, 2>)`), so the `float2 _nX = sign(...)`
+        // local relies on the implicit int->float conversion, and
+        // length/distance/dot must land in FLOAT locals.
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        g.nodes.push_back(Node(2, GraphNodeType::UV));
+        GraphNode speed = Node(3, GraphNodeType::ConstFloat2);
+        speed.value[0] = 0.1f;
+        speed.value[1] = 0.05f;
+        g.nodes.push_back(speed);
+        g.nodes.push_back(Node(4, GraphNodeType::Panner));
+        g.nodes.push_back(Node(5, GraphNodeType::Exp));
+        g.nodes.push_back(Node(6, GraphNodeType::Negate));
+        g.nodes.push_back(Node(7, GraphNodeType::Floor));
+        g.nodes.push_back(Node(8, GraphNodeType::Ceil));
+        g.nodes.push_back(Node(9, GraphNodeType::Round));
+        g.nodes.push_back(Node(10, GraphNodeType::Sign));
+        g.nodes.push_back(Node(11, GraphNodeType::Normalize));
+        g.nodes.push_back(Node(12, GraphNodeType::Length));
+        g.nodes.push_back(Node(13, GraphNodeType::Distance));
+        g.nodes.push_back(Node(14, GraphNodeType::Dot));
+        g.nodes.push_back(Node(15, GraphNodeType::Combine));
+        g.links.push_back(Link(2, 0, 4, 0));     // uv -> panner.uv
+        g.links.push_back(Link(3, 0, 4, 1));     // const2 -> panner.speed
+        g.links.push_back(Link(4, 0, 5, 0));     // -> exp
+        g.links.push_back(Link(5, 0, 6, 0));     // -> negate
+        g.links.push_back(Link(6, 0, 7, 0));     // -> floor
+        g.links.push_back(Link(7, 0, 8, 0));     // -> ceil
+        g.links.push_back(Link(8, 0, 9, 0));     // -> round
+        g.links.push_back(Link(9, 0, 10, 0));    // -> sign
+        g.links.push_back(Link(10, 0, 11, 0));   // -> normalize
+        g.links.push_back(Link(11, 0, 12, 0));   // -> length   (float)
+        g.links.push_back(Link(11, 0, 13, 0));   // -> distance.a
+        g.links.push_back(Link(2, 0, 13, 1));    // uv -> distance.b
+        g.links.push_back(Link(11, 0, 14, 0));   // -> dot.a
+        g.links.push_back(Link(2, 0, 14, 1));    // uv -> dot.b
+        g.links.push_back(Link(12, 0, 15, 0));   // -> combine.r
+        g.links.push_back(Link(13, 0, 15, 1));   // -> combine.g
+        g.links.push_back(Link(14, 0, 15, 2));   // -> combine.b
+        g.links.push_back(Link(15, 0, 1, 0));
+
+        const GraphCodegenResult gen = GenerateGraphSnippet(g, MaterialSurface::Fullscreen);
+        REQUIRE(gen.Ok());
+        const auto templateText = provider.Get("materials/fullscreen_material.hlsl");
+        REQUIRE(templateText.has_value());
+        const MaterialBuildResult build = BuildMaterialShaderSource(
+            *templateText, gen.snippet, "graph_library2b", MaterialSurface::Fullscreen);
+        REQUIRE(build.errors.empty());
+        compileBoth(build.hlsl, "graph_library2b.hlsl");
     }
 
     SECTION("fullscreen: Swizzle (both forms) + SimpleNoise through the helper")

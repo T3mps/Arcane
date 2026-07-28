@@ -38,6 +38,7 @@ namespace Arcane
         constexpr GraphPinDesc kRemapIn[]     = { { "x", 0 }, { "inRange", 2 }, { "outRange", 2 } };
         constexpr GraphPinDesc kTileIn[]      = { { "uv", 2 }, { "tiling", 2 }, { "offset", 2 } };
         constexpr GraphPinDesc kNoiseIn[]     = { { "uv", 2 }, { "scale", 1 } };
+        constexpr GraphPinDesc kPannerIn[]    = { { "uv", 2 }, { "speed", 2 } };
         constexpr GraphPinDesc kVertexOutIn[] = { { "posOffset", 2 }, { "uvOffset", 2 },
                                                   { "color", 4 } };
 
@@ -88,13 +89,29 @@ namespace Arcane
             { GraphNodeType::PassInput,     "pass_input",     "Pass Input",     Pins(kUvIn),     Pins(kSampleOut)  },
             { GraphNodeType::VertexOutput,  "vertex_output",  "Vertex Output",  Pins(kVertexOutIn), NoPins()        },
             { GraphNodeType::Comment,       "comment",        "Comment",        NoPins(),        NoPins()          },
+            // Library growth batch 2 -- appended in the header's enum order.
+            { GraphNodeType::Exp,           "exp",            "Exponential",    Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Negate,        "negate",         "Negate",         Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Floor,         "floor",          "Floor",          Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Ceil,          "ceil",           "Ceiling",        Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Round,         "round",          "Round",          Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Sign,          "sign",           "Sign",           Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Normalize,     "normalize",      "Normalize",      Pins(kUnaryIn),  Pins(kOutDyn)     },
+            // Fixed width-1 OUTPUT -- the SimpleNoise row above is the
+            // fixed-out-1 precedent (its INPUTS are fixed-width, unlike
+            // these): the emission case adapts the operands to the node's
+            // resolved width, then the intrinsic collapses to one float.
+            { GraphNodeType::Length,        "length",         "Length",         Pins(kUnaryIn),  Pins(kOut1)       },
+            { GraphNodeType::Distance,      "distance",       "Distance",       Pins(kBinaryIn), Pins(kOut1)       },
+            { GraphNodeType::Dot,           "dot",            "Dot Product",    Pins(kBinaryIn), Pins(kOut1)       },
+            { GraphNodeType::Panner,        "panner",         "Panner",         Pins(kPannerIn), Pins(kOut2)       },
         };
     }
 
     const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept
     {
         const auto i = static_cast<std::size_t>(t);
-        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Comment) + 1,
+        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Panner) + 1,
                       "kNodeInfos must cover every GraphNodeType");
         return kNodeInfos[i < std::size(kNodeInfos) ? i : 0];
     }
@@ -586,11 +603,18 @@ namespace Arcane
             // destroying it (unwiring restores the value -- SG behavior), and
             // a literal outranks `def`, which is why it also overrides every
             // NON-ZERO neutral -- Combine alpha, Clamp max, Smoothstep edge1,
-            // Power exponent, TilingOffset tiling, SimpleNoise scale, the six
-            // argOr call sites that pass something other than "0.0".
-            // Unconnected and literal-free inputs read `def` exactly as
+            // Power exponent, TilingOffset tiling, SimpleNoise scale, Panner
+            // uv: the seven argOr call sites that pass something other than
+            // "0.0". Unconnected and literal-free inputs read `def` exactly as
             // before, so a graph with no literals emits byte-identical text.
-            auto argOr = [&](std::uint32_t pin, int t, const char* def) -> std::string
+            //
+            // `defWidth` is the width of `def` ITSELF. Every constant neutral
+            // is a width-1 string that splats (the default), but Panner's
+            // `v.uv` is already a float2 and must be handed to Adapt as one --
+            // Adapt(.., 1, 2) would turn it into "(v.uv).xx" (Adapt's scalar
+            // rule, this file's Adapt above), duplicating u into both lanes.
+            auto argOr = [&](std::uint32_t pin, int t, const char* def,
+                             int defWidth = 1) -> std::string
             {
                 if (t == 0)
                     t = w;
@@ -604,7 +628,7 @@ namespace Arcane
                     const int lanes = PinLiteralLanes(GraphNodeInputPin(*n, pin).width);
                     return Adapt(PinLiteralExpr(*lit, lanes), lanes, t);
                 }
-                return Adapt(def, 1, t);
+                return Adapt(def, defWidth, t);
             };
             auto arg = [&](std::uint32_t pin, int t) { return argOr(pin, t, "0.0"); };
 
@@ -886,6 +910,68 @@ namespace Arcane
                         stmt("float _n" + id + "_a = _n" + id + "_rgba.a;");
                     break;
                 }
+                // --- library growth batch 2 -------------------------------
+                // Dynamic unaries: one operand read through arg(), so the
+                // pin composes with an inline literal for free.
+                case GraphNodeType::Exp:
+                    local(w, "exp(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Negate:
+                    // The spec's shape is parenthesized, so the minus reads
+                    // unambiguously whichever adaptation form the operand took
+                    // ("_n3", "(_n3).xx", "float2(...)").
+                    local(w, "-(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Floor:
+                    local(w, "floor(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Ceil:
+                    local(w, "ceil(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Round:
+                    local(w, "round(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Sign:
+                    // HLSL's sign() returns an INT vector -- `dxc -ast-dump`
+                    // types the call `vector<int, 2> (vector<float, 2>)` --
+                    // so this float local leans on the implicit int -> float
+                    // conversion. The [shadercompile] batch-2 section is the
+                    // proof DXC accepts it on DXIL and SPIR-V both.
+                    local(w, "sign(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Normalize:
+                    local(w, "normalize(" + arg(0, 0) + ")");
+                    break;
+                // Scalar-out kernels: operands adapt to the node's resolved
+                // dynamic width `w` FIRST, then the intrinsic collapses to one
+                // float. HLSL would splat a mismatched scalar operand itself
+                // (verified: `dot(float, float2)` compiles clean under dxc),
+                // but routing through arg() keeps the emitted text explicit
+                // and identical to every other dynamic node's. The local is
+                // width 1 and so is the table's output pin (the SimpleNoise
+                // pattern), so pinExpr hands consumers width 1 and the
+                // adaptation table splats it downstream.
+                case GraphNodeType::Length:
+                    local(1, "length(" + arg(0, 0) + ")");
+                    break;
+                case GraphNodeType::Distance:
+                    local(1, "distance(" + arg(0, 0) + ", " + arg(1, 0) + ")");
+                    break;
+                case GraphNodeType::Dot:
+                    local(1, "dot(" + arg(0, 0) + ", " + arg(1, 0) + ")");
+                    break;
+                case GraphNodeType::Panner:
+                    // Both pins are fixed float2 and BOTH read through the
+                    // argOr seam -- unlike TilingOffset above, whose uv reads
+                    // its v.uv default directly and therefore ignores
+                    // literals. speed going through arg() is the point: a pin
+                    // literal alone can drive the scroll, no Const node.
+                    // `Time` is a Globals cbuffer member declared ABOVE both
+                    // stitched seams (shaders/materials/fullscreen_material.hlsl:
+                    // cbuffer at :26-29, %{MATERIAL_BODY} :39, %{VERTEX_BODY}
+                    // :41), so a Panner may also drive the vertex stage.
+                    local(2, argOr(0, 2, "v.uv", 2) + " + Time * " + arg(1, 2));
+                    break;
             }
 
             st = 2;

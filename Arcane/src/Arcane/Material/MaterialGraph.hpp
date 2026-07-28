@@ -102,6 +102,25 @@ namespace Arcane
                         // pins, emits nothing -- pure canvas furniture that
                         // drags contained nodes. paramName holds the title,
                         // value[0]/value[1] the box size.
+        // Library growth batch 2 (2026-07-28) -- APPEND-ONLY, same contract as
+        // batch 1 above (enum value indexes kNodeInfos; tokens are the
+        // serialized identity). Every operand pin reads through codegen's
+        // argOr seam, so all of these compose with inline pin literals.
+        Exp,            // exp(x)       (dynamic width)
+        Negate,         // -(x)         (dynamic width; parenthesized)
+        Floor,          // floor(x)     (dynamic width)
+        Ceil,           // ceil(x)      (dynamic width)
+        Round,          // round(x)     (dynamic width)
+        Sign,           // sign(x)      (dynamic width)
+        Normalize,      // normalize(x) (dynamic width)
+        // The three scalar-out kernels: operands adapt to the node's resolved
+        // dynamic width, then the intrinsic collapses to ONE float -- a fixed
+        // width-1 output pin (SimpleNoise is the fixed-out-1 precedent), so
+        // consumers splat it like any other scalar.
+        Length,         // length(x)
+        Distance,       // distance(a, b)
+        Dot,            // dot(a, b)
+        Panner,         // uv + Time * speed (float2; uv defaults v.uv)
     };
 
     // One pin on a node type. `width` = component count of the value flowing
@@ -215,13 +234,14 @@ namespace Arcane
         //
         // SEAM SCOPE (v1): a literal reaches codegen only on pins whose
         // emission routes through argOr -- which is every numeric operand
-        // pin, INCLUDING Custom nodes' per-node pins. Pins whose unconnected
-        // default is not a constant read their default directly and ignore
-        // literals: Output.color, the `v.uv` pins (TextureSample /
-        // SpriteTexture / PassInput / TilingOffset.uv / SimpleNoise.uv),
-        // Split/Swizzle's native-width source, Remap's two range pins, and
-        // Vertex Output's connected-only pins. Editors must not offer a
-        // literal widget on those.
+        // pin, INCLUDING Custom nodes' per-node pins. Pins that read their
+        // unconnected default directly instead ignore literals: Output.color,
+        // the v.uv-defaulting pins of TextureSample / SpriteTexture /
+        // PassInput / TilingOffset.uv / SimpleNoise.uv, Split/Swizzle's
+        // native-width source, Remap's two range pins, and Vertex Output's
+        // connected-only pins. Editors must not offer a literal widget on
+        // those. Panner.uv is NOT in that set even though it also defaults to
+        // v.uv: batch 2 routes it through argOr with a width-2 default.
         std::vector<GraphPinLiteral> pinLiterals;
 
         // Null when this pin carries no user literal (the common case).
