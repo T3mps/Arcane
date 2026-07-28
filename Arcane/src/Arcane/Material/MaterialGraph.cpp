@@ -203,9 +203,9 @@ namespace Arcane
 
         // How many lanes a pin literal stores for a pin of declared `width`:
         // fixed 2/4 keep their lanes, everything else -- including DYNAMIC
-        // (width-0) pins -- is a scalar. The scalar rule is what keeps a
-        // literal out of dynamic-width resolution (that loop reads only
-        // CONNECTED inputs) and lets it splat like any width-1 operand.
+        // (width-0) pins -- is a scalar. Width resolution (:591-594) reads
+        // only CONNECTED inputs, excluding a literal regardless of lane
+        // count; the scalar choice instead splats it to the resolved width.
         int PinLiteralLanes(int width)
         {
             return width == 2 ? 2 : width == 4 ? 4 : 1;
@@ -968,7 +968,7 @@ namespace Arcane
                     // literal alone can drive the scroll, no Const node.
                     // `Time` is a Globals cbuffer member declared ABOVE both
                     // stitched seams (shaders/materials/fullscreen_material.hlsl:
-                    // cbuffer at :26-29, %{MATERIAL_BODY} :39, %{VERTEX_BODY}
+                    // cbuffer at :26-31, %{MATERIAL_BODY} :39, %{VERTEX_BODY}
                     // :41), so a Panner may also drive the vertex stage.
                     local(2, argOr(0, 2, "v.uv", 2) + " + Time * " + arg(1, 2));
                     break;

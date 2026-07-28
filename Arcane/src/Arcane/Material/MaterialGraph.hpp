@@ -173,10 +173,12 @@ namespace Arcane
 
     // A user-set constant on an UNWIRED input pin (SG/UE parity: a pin can
     // carry a value without a Const node feeding it). Lane count is the pin's
-    // DECLARED width -- 1/2/4 fixed, and a SCALAR for dynamic (width-0) pins,
-    // which is what keeps a literal out of dynamic-width resolution: that loop
-    // only counts CONNECTED inputs (MaterialGraph.cpp:574-577). Unused lanes
-    // stay 0.
+    // DECLARED width -- 1/2/4 fixed, and a SCALAR for dynamic (width-0) pins.
+    // A literal never enters dynamic-width resolution regardless of lane
+    // count -- that loop reads only CONNECTED inputs (MaterialGraph.cpp:
+    // 591-594). The scalar choice instead means a literal on a dynamic pin
+    // splats to whatever width the node resolves to, so it never needs
+    // re-authoring when wiring changes. Unused lanes stay 0.
     struct GraphPinLiteral
     {
         std::uint32_t pin = 0;
@@ -231,6 +233,12 @@ namespace Arcane
         // while a link exists (MaterialGraph.cpp argOr checks `connected`
         // first), so unwiring restores it, which is SG's behavior. Serialized
         // as the node's "pinDefaults" array.
+        //
+        // INVARIANT: at most one entry per pin. GraphFromJson's pinDefaults
+        // loop keeps the first entry when a pin is duplicated on load
+        // (MaterialGraph.cpp:1394-1395), and FindPinLiteral below returns the
+        // first match, so callers that mutate this vector must update an
+        // existing entry in place rather than append a duplicate.
         //
         // SEAM SCOPE (v1): a literal reaches codegen only on pins whose
         // emission routes through argOr -- which is every numeric operand
