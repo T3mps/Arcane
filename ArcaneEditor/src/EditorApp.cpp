@@ -341,6 +341,27 @@ namespace Arcane::Editor
             m_spriteMaterials =
                 std::make_unique<Arcane::SpriteMaterialCache>(std::move(cacheServices));
 
+            // Sprite-asset arc, Task 3: SpriteRenderer::sprite's .arcsprite
+            // Guids resolve into SpriteEntry records through the same Assets
+            // facade as the material cache above, plus the viewport's scene
+            // batcher for texture eviction (RemoveTexture --
+            // Batcher2D.hpp:181-191). The resolver lambda is AssetId-shaped
+            // (not Guid-shaped like resolveAsset above) because
+            // Project::ResolveAsset already takes an AssetId -- no Guid
+            // round-trip needed.
+            Arcane::Editor::SpriteCache::Services spriteServices;
+            spriteServices.assets = &m_runtime->AssetsFacade();
+            spriteServices.batcher = &m_viewport->Batch();
+            spriteServices.resolveAsset =
+                [rt = &*m_runtime](const Arcane::AssetId& assetId)
+                    -> std::optional<std::filesystem::path>
+            {
+                const Arcane::Project* project = rt->CurrentProject();
+                return project ? project->ResolveAsset(assetId) : std::nullopt;
+            };
+            m_sprites =
+                std::make_unique<Arcane::Editor::SpriteCache>(std::move(spriteServices));
+
             // Post-chain twin (post arc, slice 2): same services, same drain
             // site; slice 3's PostProcess sweep drives Request.
             Arcane::PostChainCache::Services postServices;

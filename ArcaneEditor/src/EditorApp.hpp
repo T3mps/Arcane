@@ -27,6 +27,7 @@
 #include "SceneSession.hpp"
 #include "SelectionContext.hpp"
 #include "ShaderEditorDocument.hpp"
+#include "SpriteCache.hpp"
 #include "ViewportInput.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
@@ -343,6 +344,13 @@ namespace Arcane::Editor
         // materials; the drain site feeds it, the frame loop publishes its
         // table through Runtime::SetSpriteMaterials.
         std::unique_ptr<Arcane::SpriteMaterialCache> m_spriteMaterials;
+        // Sprite-asset arc, Task 3: resolves SpriteRenderer::sprite's
+        // .arcsprite Guids into Arcane::SpriteEntry records (texture + UVs +
+        // size + pivot). Synchronous (no compile pipeline, unlike the
+        // material cache above) -- constructed beside it from the same
+        // services, swept in the same PumpShaderEditor loop, and published
+        // through Runtime::SetSpriteTable.
+        std::unique_ptr<Arcane::Editor::SpriteCache> m_sprites;
         // Scene post chain (post arc, slice 2): resolves the assigned post
         // material into a bound FullscreenMaterialChain for the viewport's
         // SetPostChain hook. Same drain site, same invalidation rides

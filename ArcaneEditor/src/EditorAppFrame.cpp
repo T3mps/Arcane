@@ -994,13 +994,18 @@ namespace Arcane::Editor
             // Request no-ops once a material is known, so this is a cheap
             // per-frame guarantee that whatever the scene references is
             // compiling or bound.
-            if (m_spriteMaterials)
+            if (m_spriteMaterials || m_sprites)
             {
                 auto sprites = m_runtime->Registry().CreateView<Arcane::SpriteRenderer>();
                 sprites.ForEach([&](Astra::Entity, Arcane::SpriteRenderer& s)
                 {
-                    if (s.material.IsValid())
+                    if (m_spriteMaterials && s.material.IsValid())
                         m_spriteMaterials->Request(s.material, m_editorClock);
+                    // Sprite-asset arc, Task 3: same sweep, the OTHER Guid on
+                    // the component -- s.sprite names the .arcsprite asset
+                    // (texture/UVs/size/pivot), independent of s.material.
+                    if (m_sprites && s.sprite.IsValid())
+                        m_sprites->Request(s.sprite);
                 });
             }
 
@@ -1024,6 +1029,8 @@ namespace Arcane::Editor
         // switches and registry swaps).
         if (m_spriteMaterials)
             m_runtime->SetSpriteMaterials(&m_spriteMaterials->Table());
+        if (m_sprites)
+            m_runtime->SetSpriteTable(&m_sprites->Table());
         PollMaterialWatch();   // external .arcmat edits (~1 Hz mtime sweep)
         m_documents.TickAll(m_lastFrameDt);
     }
