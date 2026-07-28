@@ -35,7 +35,15 @@
   let selectedEngine = $state<EngineEntry | null>(null);
   let suggestion = $state<EngineEntry | null>(null);
   let error = $state("");
+  // The re-entry gate: set the instant an action starts, checked at guard()'s
+  // door, so a double-click cannot run two actions. NOT what the controls see.
   let busy = $state(false);
+  // What the controls see. Most actions are a few milliseconds of IPC, and
+  // flipping every disabled={busy} style for two frames dimmed the whole page
+  // to 50% opacity and back -- a full-page flicker on every update. The
+  // disabled visuals only engage when an action is actually SLOW (>150ms,
+  // the spinner-delay rule); fast ones change nothing on screen.
+  let busyUi = $state(false);
   let view = $state<View>("projects");
   let settings = $state<Settings>({
     defaultProjectDir: "", closeAfterLaunch: false, projectView: "grid",
@@ -124,11 +132,19 @@
   });
 
   async function guard(fn: () => Promise<unknown>) {
+    // Dropped, not queued: the second click of an accidental double-click
+    // lands here during the invisible first 150ms and must do nothing.
+    if (busy) return;
     error = "";
     busy = true;
+    const slow = setTimeout(() => (busyUi = true), 150);
     try { await fn(); await refresh(); }
     catch (e) { error = String(e); }
-    finally { busy = false; }
+    finally {
+      clearTimeout(slow);
+      busy = false;
+      busyUi = false;
+    }
   }
 
   const addEngine = () => guard(async () => {
@@ -319,15 +335,15 @@
       {/each}
       {#if view === "projects"}
         <ProjectsView recents={hub.recents} engines={hub.engines}
-                      defaultEngine={selectedEngine} {busy}
+                      defaultEngine={selectedEngine} busy={busyUi}
                       layout={settings.projectView}
                       confirmDelete={settings.confirmDelete}
                       actions={projectActions}
                       onOpen={addProject} onNew={() => (modal = { kind: "new" })}
                       onLayout={(v) => applySettings({ ...settings, projectView: v })} />
       {:else if view === "engines"}
-        <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion} {busy}
-                     actions={engineActions} />
+        <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion}
+                     busy={busyUi} actions={engineActions} />
       {:else}
         <PackagesView />
       {/if}
@@ -335,25 +351,25 @@
   </div>
 
   {#if modal.kind === "new"}
-    <NewProjectModal {busy} {error} engine={selectedEngine}
+    <NewProjectModal busy={busyUi} {error} engine={selectedEngine}
                      defaultDir={settings.defaultProjectDir}
                      onBrowse={() => pickFolder("Where should the project live?")}
                      onCreate={makeProject} onCancel={closeModal} />
   {:else if modal.kind === "engine"}
     <ProjectEngineModal project={modal.p} engines={hub.engines}
-                        defaultEngine={selectedEngine} {busy}
+                        defaultEngine={selectedEngine} busy={busyUi}
                         onChoose={chooseEngine} onCancel={closeModal} />
   {:else if modal.kind === "rename"}
-    <RenameProjectModal project={modal.p} {busy} {error}
+    <RenameProjectModal project={modal.p} busy={busyUi} {error}
                         onRename={doRename} onCancel={closeModal} />
   {:else if modal.kind === "args"}
-    <ProjectArgsModal project={modal.p} {busy} {error}
+    <ProjectArgsModal project={modal.p} busy={busyUi} {error}
                       onSave={doArgs} onCancel={closeModal} />
   {:else if modal.kind === "delete"}
-    <DeleteProjectModal project={modal.p} {busy} {error}
+    <DeleteProjectModal project={modal.p} busy={busyUi} {error}
                         onDelete={doDelete} onCancel={closeModal} />
   {:else if modal.kind === "settings"}
-    <SettingsModal {settings} {busy} {hubDir} {version} {error}
+    <SettingsModal {settings} busy={busyUi} {hubDir} {version} {error}
                    recentCount={hub.recents.length}
                    onSave={applySettings}
                    onBrowseDir={() => pickFolder("Default location for projects")}
