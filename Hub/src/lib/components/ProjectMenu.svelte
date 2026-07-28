@@ -25,11 +25,12 @@
 
 <script lang="ts">
   import Icon from "$lib/components/Icon.svelte";
+  import { menuItemsFor, type MenuItem } from "$lib/format";
 
   // The per-project action menu, shared by the tile and the list row. It owns
-  // the ITEM LIST as well as the popover, deliberately: "what can you do to a
-  // project" is one vocabulary, and defining it per layout is how the two
-  // layouts end up offering different things.
+  // the popover; the ITEM LIST itself lives in format.ts (menuItemsFor) where
+  // it is unit-tested -- "what can you do to a project" is one vocabulary,
+  // and it is copy that states facts, so it gets tested like the chip text.
   let { project, disabled = false, confirmDelete = true, actions }: {
     project: RecentProject;
     disabled?: boolean;
@@ -38,43 +39,7 @@
     actions: ProjectActions;
   } = $props();
 
-  // `sep` draws the divider ABOVE the item; `danger` is only the red hover.
-  // Split on purpose: the divider marks where "act on the project" ends and
-  // "take it off this list" begins, and Remove belongs below that line without
-  // borrowing Delete's warning colour -- it only edits the list.
-  type Item = { label: string; run: () => void; danger?: boolean; sep?: boolean };
-  // A MISSING project gets exactly the two items that still mean something:
-  // repair the row or retire it. Reveal, Rename, arguments and Delete all act
-  // on disk state that is not there, and a menu of disabled items would make
-  // the user hunt for the one that works. Locate is hidden on healthy rows for
-  // the same reason Unity hides it: repointing a project that resolves is not
-  // an action, it is a mistake waiting to be offered.
-  const items = $derived<Item[]>(project.missing
-    ? [
-        { label: "Locate…", run: () => actions.locate(project) },
-        { label: "Remove from list", run: () => actions.forget(project), sep: true },
-      ]
-    : [
-        { label: "Show in Explorer", run: () => actions.reveal(project) },
-        { label: "Rename project…", run: () => actions.rename(project) },
-        { label: "Command-line arguments…", run: () => actions.args(project) },
-        // No ellipsis and no confirmation: this only edits the list, and the
-        // entry comes back through Add. It opens the below-the-line group it
-        // shares with Delete -- the two reads, "stop showing me this" and
-        // "erase the folder", sit together but only Delete carries the
-        // warning colour.
-        { label: "Remove from list", run: () => actions.forget(project), sep: true },
-        // Last -- the only irreversible one. The ellipsis is what every other
-        // item here uses to mean "opens something first", so it is DROPPED
-        // when confirmation is off: the item then deletes on the click, and a
-        // label promising a dialog that will not appear is the worst place in
-        // this app to be inaccurate.
-        {
-          label: confirmDelete ? "Delete project…" : "Delete project",
-          run: () => actions.delete(project),
-          danger: true,
-        },
-      ]);
+  const items = $derived(menuItemsFor(project.missing, confirmDelete));
 
   let open = $state(false);
   let trigger: HTMLButtonElement;
@@ -139,11 +104,13 @@
     if (open && menu) buttons()[0]?.focus();
   });
 
-  function choose(item: Item) {
+  function choose(it: MenuItem) {
     // Close FIRST: several of these open a dialog, and leaving a popover behind
     // the scrim is how a stray click lands on a control the user cannot see.
     open = false;
-    item.run();
+    // The item's kind IS a ProjectActions key: dispatch by lookup, so there is
+    // no hand-written mapping to fall out of step with the vocabulary.
+    actions[it.kind](project);
   }
 
   function onMenuKeys(e: KeyboardEvent) {

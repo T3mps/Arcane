@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isCompatible, filterProjects, coverFor,
   projectKey, projectDir, projectNameError, projectPathPreview, resolveEngine,
-  engineChipText, engineChipTitle, compatibilityNote, missingNote,
+  engineChipText, engineChipTitle, compatibilityNote, missingNote, menuItemsFor,
 } from "./format";
 
 describe("isCompatible", () => {
@@ -276,6 +276,34 @@ describe("project labels", () => {
     expect(note).toContain("D:/g/A.arcproj");
     expect(note).toContain("Locate");
     expect(note).toContain("Remove from list");
+  });
+});
+
+describe("menuItemsFor", () => {
+  it("a missing project offers exactly repair-or-retire", () => {
+    const kinds = menuItemsFor(true, true).map((i) => i.kind);
+    expect(kinds).toEqual(["locate", "forget"]);
+  });
+  it("a healthy project gets the full vocabulary, delete last and danger", () => {
+    const items = menuItemsFor(false, true);
+    expect(items.map((i) => i.kind))
+      .toEqual(["reveal", "rename", "args", "forget", "delete"]);
+    expect(items.at(-1)?.danger).toBe(true);
+    expect(items.filter((i) => i.danger)).toHaveLength(1);
+  });
+  it("remove-from-list opens the below-the-line group in both states", () => {
+    for (const missing of [true, false]) {
+      const items = menuItemsFor(missing, true);
+      expect(items.find((i) => i.kind === "forget")?.sep).toBe(true);
+      expect(items.filter((i) => i.sep)).toHaveLength(1);
+    }
+  });
+  it("the delete ellipsis follows the confirmation setting", () => {
+    // An ellipsis promises a dialog; with confirmation off there is none.
+    const label = (confirm: boolean) =>
+      menuItemsFor(false, confirm).find((i) => i.kind === "delete")?.label;
+    expect(label(true)).toBe("Delete project…");
+    expect(label(false)).toBe("Delete project");
   });
 });
 

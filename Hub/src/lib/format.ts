@@ -214,6 +214,46 @@ export function compatibilityNote(
     "It will refuse to open.";
 }
 
+/**
+ * One entry of the per-project action menu. `kind` doubles as the key into
+ * ProjectActions (ProjectMenu.svelte), so the menu dispatches by lookup with
+ * no hand-written mapping to drift. `sep` opens the below-the-line group;
+ * `danger` is the red hover reserved for the one action that touches disk.
+ */
+export type MenuItemKind = "reveal" | "rename" | "args" | "forget" | "locate" | "delete";
+export type MenuItem = { kind: MenuItemKind; label: string; danger?: boolean; sep?: boolean };
+
+/**
+ * The action-menu vocabulary as data, so it is tested like the chip copy.
+ *
+ * A MISSING project gets exactly the two items that still mean something --
+ * repair the row or retire it; everything else acts on disk state that is not
+ * there, and a menu of disabled items would make the user hunt for the one
+ * that works. Locate is hidden on healthy rows for the same reason Unity
+ * hides it: repointing a project that resolves is a mistake waiting to be
+ * offered. Delete's ellipsis follows the confirmation setting -- a label
+ * promising a dialog that will not appear is the worst place to be inaccurate.
+ */
+export function menuItemsFor(missing: boolean, confirmDelete: boolean): MenuItem[] {
+  if (missing) {
+    return [
+      { kind: "locate", label: "Locate…" },
+      { kind: "forget", label: "Remove from list", sep: true },
+    ];
+  }
+  return [
+    { kind: "reveal", label: "Show in Explorer" },
+    { kind: "rename", label: "Rename project…" },
+    { kind: "args", label: "Command-line arguments…" },
+    { kind: "forget", label: "Remove from list", sep: true },
+    {
+      kind: "delete",
+      label: confirmDelete ? "Delete project…" : "Delete project",
+      danger: true,
+    },
+  ];
+}
+
 export type Cover = { monogram: string; angle: number };
 
 /**
