@@ -297,6 +297,13 @@ namespace Arcane
         m_impl->registry->SetResource<SpriteMaterialTable>(SpriteMaterialTable{materials});
     }
 
+    void Runtime::SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites)
+    {
+        // Same rule as SetRenderContext: SetResource<SpriteTable> runs IN
+        // Arcane.dll so the scene TypeID resolves against the shared context.
+        m_impl->registry->SetResource<SpriteTable>(SpriteTable{sprites});
+    }
+
     Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const
     {
         // A real Save failure must be named at its source: an empty-but-"ok"

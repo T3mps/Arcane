@@ -39,19 +39,28 @@ namespace
         reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
 
+        // A sprite with no .arcsprite asset draws a 1x1 quad, so the entity's
+        // Transform SCALE is its size now (SpriteRenderer carries none).
         Astra::Entity orbiter = reg.CreateEntity();
-        Arcane::Transform ot; ot.position = glm::vec2(640.0f, 360.0f);
+        Arcane::Transform ot; ot.position = glm::vec2(640.0f, 360.0f); ot.scale = glm::vec2(48.0f);
         reg.AddComponent<Arcane::Transform>(orbiter, ot);
         reg.AddComponent<Arcane::WorldTransform>(orbiter, Arcane::WorldTransform{});
-        Arcane::SpriteRenderer os; os.size = glm::vec2(48.0f); os.tint = glm::vec4(0.9f, 0.7f, 0.2f, 1.0f);
+        Arcane::SpriteRenderer os; os.tint = glm::vec4(0.9f, 0.7f, 0.2f, 1.0f);
         reg.AddComponent<Arcane::SpriteRenderer>(orbiter, os);
         reg.SetParent(orbiter, root);
 
+        // The moon is a CHILD, and propagation composes the parent's matrix
+        // (TransformSystems.hpp: world = parentWorld * local), so the orbiter's
+        // 48x scale now multiplies both the moon's local offset and its size.
+        // Divide it back out to keep the fixture's 80-unit orbit and 20-unit
+        // moon exactly as they rendered before.
         Astra::Entity moon = reg.CreateEntity();
-        Arcane::Transform mt; mt.position = glm::vec2(80.0f, 0.0f);
+        Arcane::Transform mt;
+        mt.position = glm::vec2(80.0f / 48.0f, 0.0f);
+        mt.scale    = glm::vec2(20.0f / 48.0f);
         reg.AddComponent<Arcane::Transform>(moon, mt);
         reg.AddComponent<Arcane::WorldTransform>(moon, Arcane::WorldTransform{});
-        Arcane::SpriteRenderer ms; ms.size = glm::vec2(20.0f); ms.tint = glm::vec4(0.4f, 0.8f, 1.0f, 1.0f);
+        Arcane::SpriteRenderer ms; ms.tint = glm::vec4(0.4f, 0.8f, 1.0f, 1.0f);
         reg.AddComponent<Arcane::SpriteRenderer>(moon, ms);
         reg.SetParent(moon, orbiter);
 

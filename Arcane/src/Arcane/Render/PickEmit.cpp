@@ -3,6 +3,7 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -29,28 +30,47 @@ namespace Arcane
     {
         // ---- PASS 1: sprites -------------------------------------------------
         // Same OBB derivation as the retired CPU sprite-OBB pick: the world
-        // matrix's translation column (matrix[2]) is the world-space center;
+        // matrix's translation column (matrix[2]) is the world-space PIVOT;
         // the local-x column's angle is the world rotation; the column
         // magnitudes are the baked Transform.scale (Transform::ToMatrix
-        // composes rotation*scale into columns 0/1), so half-extents = size*0.5
-        // scaled per-axis by those magnitudes.
+        // composes rotation*scale into columns 0/1), so half-extents = the
+        // sprite asset's base size * 0.5 scaled per-axis by those magnitudes.
+        // Base size + pivot come from the SpriteTable exactly as submission
+        // resolves them (RenderSystems.hpp) -- an unresolved or non-Rect sprite
+        // is a 1x1 m quad at the center pivot -- so the silhouette keeps
+        // matching the drawn quad.
         {
+            const SpriteTable* spriteTable = registry.GetResource<SpriteTable>();
             auto spriteView = registry.CreateView<WorldTransform, SpriteRenderer>();
             spriteView.ForEach([&](Astra::Entity e, WorldTransform& xf, SpriteRenderer& sp)
             {
                 const glm::vec2 col0 = glm::vec2(xf.matrix[0]);
                 const glm::vec2 col1 = glm::vec2(xf.matrix[1]);
-                const glm::vec2 worldCenter = glm::vec2(xf.matrix[2]);
+                const glm::vec2 worldPivot = glm::vec2(xf.matrix[2]);
                 const float sx = glm::length(col0);
                 const float sy = glm::length(col1);
                 const float angle = std::atan2(col0.y, col0.x);
+
+                const SpriteEntry* entry =
+                    (sp.shape == SpriteShape::Rect && spriteTable)
+                        ? spriteTable->Resolve(sp.sprite)
+                        : nullptr;
+                const glm::vec2 baseSize = entry ? entry->sizeMeters : glm::vec2(1.0f);
+                const glm::vec2 pivot    = entry ? entry->pivot      : glm::vec2(0.5f);
+
+                // World size of the drawn quad, and the pivot->center offset
+                // turned by the body angle -- exactly zero at the default
+                // center pivot, so this is the historical center for every
+                // sprite that does not move its pivot.
+                const glm::vec2 worldSize(baseSize.x * sx, baseSize.y * sy);
+                const glm::vec2 worldCenter =
+                    worldPivot + RotateVec((glm::vec2(0.5f) - pivot) * worldSize, angle);
 
                 PickDrawable d;
                 d.entity      = e;
                 d.kind        = PickDrawable::Kind::Quad;
                 d.center      = worldCenter * view.worldToScreenScale + view.offset;
-                d.halfExtents = glm::vec2(sp.size.x * 0.5f * sx, sp.size.y * 0.5f * sy)
-                                * view.worldToScreenScale;
+                d.halfExtents = worldSize * 0.5f * view.worldToScreenScale;
                 d.angle       = angle;
                 out.push_back(d);
             });

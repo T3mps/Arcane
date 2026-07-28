@@ -69,12 +69,13 @@ namespace Arcane
 
     struct SpriteRenderer
     {
-        uint32_t    textureId = 0;          // 0 => untextured tinted quad; resolved via TextureTable
-        // WORLD units (meters, MKS) -- multiplied by the camera zoom exactly as
-        // position is (RenderSystems.hpp), so a sprite keeps its world size at
-        // every zoom. The 32x32 default is a leftover from the pixel era and is
-        // 32 METRES: authored content must set this (a 1 m box is {1, 1}).
-        glm::vec2   size{32.0f, 32.0f};
+        // The .arcsprite asset drawn: it supplies the texture, the UV sub-rect,
+        // the world size in meters (sourceSize / ppu) and the pivot. Nil (the
+        // default) or unresolved -> a 1x1 m untextured tint quad. There is NO
+        // size field: an entity is sized by its Transform scale, matching
+        // Unity/Unreal (neither puts a size on the sprite renderer), so one
+        // asset can be shared by many entities at different scales.
+        Guid        sprite{};
         glm::vec4   tint{1.0f, 1.0f, 1.0f, 1.0f};
         int32_t     sortingLayer = 0;
         int32_t     orderInLayer = 0;
@@ -174,15 +175,13 @@ namespace Arcane
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(SpriteRenderer)
-        ASTRA_REFLECT_FIELD(SpriteRenderer, textureId)
+        ASTRA_REFLECT_FIELD(SpriteRenderer, sprite)
             ASTRA_REFLECT_ATTR(Category, "Appearance")
-        ASTRA_REFLECT_FIELD(SpriteRenderer, size)
-            ASTRA_REFLECT_ATTR(Category, "Shape")
-            ASTRA_REFLECT_ATTR(Tooltip, "World-space size in meters (MKS), NOT pixels. The 32x32 default is a pixel-era leftover and is 32 meters; author explicit sizes (a 1 meter box is {1, 1}).")
+            ASTRA_REFLECT_ATTR(Tooltip, "The .arcsprite asset this renderer draws. Nil renders an untextured 1x1 m tint quad scaled by the Transform.")
         ASTRA_REFLECT_FIELD(SpriteRenderer, tint)
             ASTRA_REFLECT_ATTR(Category, "Appearance")
         // Both are int32_t here but reach the batcher through
-        // static_cast<uint16_t> (RenderSystems.hpp:77-78), which WRAPS rather
+        // static_cast<uint16_t> (RenderSystems.hpp:104-105), which WRAPS rather
         // than clamps -- an authored -1 would sort as 65535, in front of
         // everything. The Range is the cast's own domain, and the Inspector
         // clamps to it on every path that writes these fields (drag, Ctrl+click

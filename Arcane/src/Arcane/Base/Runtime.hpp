@@ -33,6 +33,7 @@ namespace Arcane
 {
     class Assets;
     struct ITaskExecutor;
+    struct SpriteEntry;   // Scene/SceneResources.hpp -- only named here (pointer-to-map param)
     class Batcher2D;
     class ShaderLibrary;
     class Project;
@@ -115,6 +116,13 @@ namespace Arcane
         // resolves against the shared context (SetRenderContext's rule). Null
         // clears the table (sprites fall back to the plain pipeline).
         void SetSpriteMaterials(const std::unordered_map<Guid, std::uint16_t>* materials);
+
+        // Publish the sprite-asset resolution map (.arcsprite Guid -> the
+        // resolved texture/UVs/size/pivot record, owned by the host) into the
+        // registry's SpriteTable resource. Same module rule and null semantics
+        // as SetSpriteMaterials above: null clears the table, and every sprite
+        // falls back to the untextured 1x1 m quad.
+        void SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites);
 
         // --- render-resources bridge: device + shader library the host owns ---------
         // The plugin reaches the engine ONLY through this Runtime, but the nvrhi device

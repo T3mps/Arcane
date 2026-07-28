@@ -68,10 +68,11 @@ namespace
         reg.SetParent(child, parent);
 
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
-        // TextureTable is not set: GetResource<TextureTable>() returns nullptr,
-        // so RenderSubmissionSystem falls back to Rect() for all sprites (correct
-        // for textureId==0). Avoids registering a non-trivially-copyable resource
-        // whose unordered_map<uint32_t,ITexture*> the Astra binary writer can't handle.
+        // SpriteTable is not set: GetResource<SpriteTable>() returns nullptr, so
+        // RenderSubmissionSystem falls back to Rect() for all sprites (correct
+        // for a nil .arcsprite Guid anyway). Both sprites therefore draw the
+        // untextured 1x1 m base quad -- still one quad each, which is what the
+        // >= 2 assertion below is about.
 
         Arcane::RunLoop loop(reg, schedulers);
         for (int i = 0; i < 4; ++i)

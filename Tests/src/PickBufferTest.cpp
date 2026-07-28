@@ -73,15 +73,19 @@ namespace
         return reg;
     }
 
+    // `size` is the DRAWN size in world units. A sprite with no .arcsprite asset
+    // draws a 1x1 m quad times the world scale, so the size rides the basis
+    // columns of the world matrix (what Transform::ToMatrix bakes scale into).
     Astra::Entity SpawnSprite(Astra::Registry& reg, glm::vec2 pos, glm::vec2 size)
     {
         const Astra::Entity e = reg.CreateEntity();
         Arcane::WorldTransform wt;
         wt.matrix = glm::mat3(1.0f);
+        wt.matrix[0] = glm::vec3(size.x, 0.0f, 0.0f); // columns 0/1 = rotation*scale
+        wt.matrix[1] = glm::vec3(0.0f, size.y, 0.0f);
         wt.matrix[2] = glm::vec3(pos, 1.0f);          // column 2 = world position
         reg.AddComponent<Arcane::WorldTransform>(e, wt);
         Arcane::SpriteRenderer sp;
-        sp.size = size;
         reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
         return e;
     }

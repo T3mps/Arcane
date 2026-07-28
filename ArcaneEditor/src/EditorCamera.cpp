@@ -1,6 +1,7 @@
 #include "EditorCamera.hpp"
 
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -36,18 +37,40 @@ namespace Arcane::Editor
             ++b.count;
         }
 
-        // Sprite half-extent in world units: SpriteRenderer.size times the world
-        // scale, halved -- the sprite is drawn CENTRED on its world position
-        // (RenderSystems.hpp). abs() keeps min <= max, which Frame relies on; a
-        // negatively authored size would otherwise invert the box.
-        glm::vec2 SpriteHalfExtent(const glm::mat3& world, const SpriteRenderer& sprite) noexcept
+        // Sprite half-extent in world units: the sprite asset's base size times
+        // the world scale, halved. abs() keeps min <= max, which Frame relies
+        // on; a negatively authored base size would otherwise invert the box.
+        glm::vec2 SpriteHalfExtent(const glm::mat3& world, glm::vec2 baseSize) noexcept
         {
-            return glm::abs(sprite.size * WorldScaleOf(world)) * 0.5f;
+            return glm::abs(baseSize * WorldScaleOf(world)) * 0.5f;
         }
 
         glm::vec2 WorldPositionOf(const glm::mat3& m) noexcept
         {
             return glm::vec2(m[2].x, m[2].y);
+        }
+
+        // The drawn quad's CENTRE. The world position is the sprite's PIVOT, and
+        // the quad's centre sits pivot->centre away from it, turned by the world
+        // rotation -- the same offset RenderSubmissionSystem applies
+        // (RenderSystems.hpp). Exactly zero at the default (0.5,0.5) pivot, so
+        // an entity whose pivot is untouched frames exactly as it always did.
+        glm::vec2 SpriteCentre(const glm::mat3& world, glm::vec2 half, glm::vec2 pivot) noexcept
+        {
+            const glm::vec2 off = (glm::vec2(0.5f) - pivot) * (half * 2.0f);
+            const float angle = std::atan2(world[0].y, world[0].x);
+            const float c = std::cos(angle), s = std::sin(angle);
+            return WorldPositionOf(world) + glm::vec2(c * off.x - s * off.y,
+                                                      s * off.x + c * off.y);
+        }
+
+        // The sprite asset a SpriteRenderer resolves to, on submission's rules:
+        // only a Rect consults the table, and an unresolved sprite is a 1x1 m
+        // quad at the centre pivot (RenderSystems.hpp).
+        const SpriteEntry* ResolveEntry(const SpriteTable* table, const SpriteRenderer& sprite) noexcept
+        {
+            return (sprite.shape == SpriteShape::Rect && table) ? table->Resolve(sprite.sprite)
+                                                                : nullptr;
         }
     }
 
@@ -125,6 +148,7 @@ namespace Arcane::Editor
                                          std::span<const Astra::Entity> entities)
     {
         FramingBounds b;
+        const SpriteTable* table = reg.GetResource<SpriteTable>();
         for (Astra::Entity e : entities)
         {
             // No WorldTransform => a dead handle or a non-spatial node: there is
@@ -133,11 +157,20 @@ namespace Arcane::Editor
             if (!world)
                 continue;
 
-            const glm::vec2 pos = WorldPositionOf(world->matrix);
             const SpriteRenderer* sprite = reg.GetComponent<SpriteRenderer>(e);
-            const glm::vec2 half = sprite ? SpriteHalfExtent(world->matrix, *sprite)
-                                          : glm::vec2(0.0f);
-            Grow(b, pos - half, pos + half);
+            if (!sprite)
+            {
+                // A non-drawn node frames as its bare position.
+                const glm::vec2 pos = WorldPositionOf(world->matrix);
+                Grow(b, pos, pos);
+                continue;
+            }
+            const SpriteEntry* entry = ResolveEntry(table, *sprite);
+            const glm::vec2 half = SpriteHalfExtent(world->matrix,
+                                                    entry ? entry->sizeMeters : glm::vec2(1.0f));
+            const glm::vec2 centre = SpriteCentre(world->matrix, half,
+                                                  entry ? entry->pivot : glm::vec2(0.5f));
+            Grow(b, centre - half, centre + half);
         }
         return b;
     }
@@ -145,14 +178,18 @@ namespace Arcane::Editor
     FramingBounds SceneFramingBounds(Astra::Registry& reg)
     {
         FramingBounds b;
+        const SpriteTable* table = reg.GetResource<SpriteTable>();
         // The SAME view RenderSubmissionSystem submits from, so "frame
         // everything" frames exactly what is on screen.
         reg.CreateView<WorldTransform, SpriteRenderer, Astra::Not<Hidden>>().ForEach(
             [&](Astra::Entity, WorldTransform& world, SpriteRenderer& sprite)
             {
-                const glm::vec2 pos  = WorldPositionOf(world.matrix);
-                const glm::vec2 half = SpriteHalfExtent(world.matrix, sprite);
-                Grow(b, pos - half, pos + half);
+                const SpriteEntry* entry = ResolveEntry(table, sprite);
+                const glm::vec2 half = SpriteHalfExtent(world.matrix,
+                                                        entry ? entry->sizeMeters : glm::vec2(1.0f));
+                const glm::vec2 centre = SpriteCentre(world.matrix, half,
+                                                      entry ? entry->pivot : glm::vec2(0.5f));
+                Grow(b, centre - half, centre + half);
             });
         return b;
     }

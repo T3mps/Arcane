@@ -10,7 +10,7 @@
 // CODECS keyed by the resource type's stable name hash. Only explicitly
 // registered resources persist -- SceneRoot (a plain Astra::Entity id, which
 // survives Registry::Save/Load intact) is registered by default; live host/GPU
-// pointer resources (TextureTable, RenderContext2D) are deliberately NOT, since
+// pointer resources (SpriteTable, RenderContext2D) are deliberately NOT, since
 // they must be re-established by the host on load.
 //
 // The section is length-framed per entry so a loader can skip an unknown

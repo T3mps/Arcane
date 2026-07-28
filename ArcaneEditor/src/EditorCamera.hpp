@@ -99,9 +99,9 @@ namespace Arcane::Editor
     };
 
     // Bounds over an explicit entity set (Frame Selected). A sprite contributes
-    // the box RenderSubmissionSystem draws it in -- SpriteRenderer.size times
-    // the world scale, centred on the world position -- so framing and
-    // rendering cannot disagree. An entity with a WorldTransform but no
+    // the box RenderSubmissionSystem draws it in -- its sprite asset's base size
+    // (1x1 m when unresolved) times the world scale, about the asset's pivot --
+    // so framing and rendering cannot disagree. An entity with a WorldTransform but no
     // SpriteRenderer contributes its position as a zero-extent point, so
     // framing a bare node centres on it instead of doing nothing. Entities with
     // no WorldTransform (and dead handles) are skipped. Rotation is NOT

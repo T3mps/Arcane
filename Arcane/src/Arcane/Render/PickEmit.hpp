@@ -64,11 +64,13 @@ namespace Arcane
     // ORDERING (this IS the hit-proxy id assignment: id = index+1):
     //   1. Sprites  -- entities with (WorldTransform, SpriteRenderer), in the
     //      registry's view iteration order (archetype-stable). One Quad per
-    //      entity, derived from the world matrix + SpriteRenderer::size (same
-    //      OBB math the retired CPU sprite-OBB pick used: center = translation
-    //      column, angle = atan2 of the local-x column, half-extents = size*0.5
-    //      scaled by the column magnitudes -- Transform.scale baked into
-    //      the world matrix), then projected to canvas via `view`.
+    //      entity, derived from the world matrix + the sprite ASSET's base size
+    //      (SpriteTable, 1x1 m when unresolved) (same OBB math the retired CPU
+    //      sprite-OBB pick used: angle = atan2 of the local-x column,
+    //      half-extents = base size*0.5 scaled by the column magnitudes --
+    //      Transform.scale baked into the world matrix -- and the centre offset
+    //      from the translation column by the asset's pivot, zero at the
+    //      default centre), then projected to canvas via `view`.
     //   2. Colliders -- one PickDrawable per Fixture, iterated via an
     //      archetype-stable View<Collider2D, PhysicsBodyRef> (DETERMINISTIC:
     //      the id assignment id=index+1 must not depend on unordered_map hash

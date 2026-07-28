@@ -51,14 +51,17 @@ namespace
     }
 
     // Sprite entity with a materialised WorldTransform (the editor refreshes
-    // these before framing; the test sets them directly).
+    // these before framing; the test sets them directly). With no .arcsprite
+    // asset a sprite draws a 1x1 m quad, so its `size` is carried by the world
+    // matrix's basis columns -- `scale` stays a separate argument to keep the
+    // "a scaled sprite grows by its world scale" case reading the same way.
     Astra::Entity MakeSprite(Astra::Registry& reg, glm::vec2 pos, glm::vec2 size,
                              glm::vec2 scale = glm::vec2(1.0f))
     {
         Astra::Entity e = reg.CreateEntity();
-        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{WorldMat(pos, scale)});
+        reg.AddComponent<Arcane::WorldTransform>(e,
+            Arcane::WorldTransform{WorldMat(pos, size * scale)});
         Arcane::SpriteRenderer sr;
-        sr.size = size;
         reg.AddComponent<Arcane::SpriteRenderer>(e, sr);
         return e;
     }
@@ -270,8 +273,9 @@ TEST_CASE("EditorCamera::Frame handles the degenerate AABB and viewport", "[edit
 TEST_CASE("Framing bounds match how sprites are rendered", "[editor]")
 {
     auto reg = MakeSceneRegistry();
-    // World size = SpriteRenderer.size * world scale, centred on the world
-    // position -- exactly RenderSubmissionSystem's dstSize/dstPos derivation.
+    // World size = the sprite asset's base size (1x1 m unresolved) * world
+    // scale, about the pivot (the centre by default) -- exactly
+    // RenderSubmissionSystem's dstSize/dstPos derivation.
     const Astra::Entity a = MakeSprite(*reg, glm::vec2(3.0f, 4.0f), glm::vec2(2.0f, 1.0f));
     const std::vector<Astra::Entity> one{a};
 

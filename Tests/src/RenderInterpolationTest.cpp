@@ -185,12 +185,13 @@ TEST_CASE("RenderSubmissionSystem interpolates a sprite by PreviousTransform + a
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
 
-    // Current world pose at x=10; previous local pose at x=0. Untextured Rect sprite.
+    // Current world pose at x=10; previous local pose at x=0. Untextured Rect
+    // sprite: nil .arcsprite -> a 1x1 m quad, so the scale IS the 4x4 size.
     Astra::Entity e = reg.CreateEntity();
-    Arcane::Transform lt; lt.position = glm::vec2(10.0f, 0.0f);
+    Arcane::Transform lt; lt.position = glm::vec2(10.0f, 0.0f); lt.scale = glm::vec2(4.0f, 4.0f);
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
     reg.AddComponent<Arcane::WorldTransform>(e, wt);
-    Arcane::SpriteRenderer sp; sp.size = glm::vec2(4.0f, 4.0f);
+    Arcane::SpriteRenderer sp;
     reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
     Arcane::PreviousTransform prev; prev.position = glm::vec2(0.0f, 0.0f); prev.rotation = 0.0f;
     reg.AddComponent<Arcane::PreviousTransform>(e, prev);
@@ -219,9 +220,10 @@ TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest a
     Astra::Entity e = reg.CreateEntity();
     Arcane::Transform lt; lt.position = glm::vec2(0.0f, 0.0f);
     lt.rotation = 10.0f * kPi / 180.0f;            // current 10deg
+    lt.scale    = glm::vec2(4.0f, 4.0f);           // the 4x4 quad, sized by scale
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
     reg.AddComponent<Arcane::WorldTransform>(e, wt);
-    Arcane::SpriteRenderer sp; sp.size = glm::vec2(4.0f, 4.0f);
+    Arcane::SpriteRenderer sp;
     reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
     Arcane::PreviousTransform prev; prev.rotation = 350.0f * kPi / 180.0f;  // previous 350deg
     reg.AddComponent<Arcane::PreviousTransform>(e, prev);

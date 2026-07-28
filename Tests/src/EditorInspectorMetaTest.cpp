@@ -15,7 +15,7 @@ TEST_CASE("DeriveDisplayName turns identifiers into words", "[editor]")
     CHECK(DeriveDisplayName("order_in_layer") == "Order In Layer");
     CHECK(DeriveDisplayName("size") == "Size");
     CHECK(DeriveDisplayName("Position") == "Position");
-    CHECK(DeriveDisplayName("textureId") == "Texture Id");
+    CHECK(DeriveDisplayName("sourcePos") == "Source Pos");
 
     // Acronym boundary: the run stays together and the next word splits off.
     CHECK(DeriveDisplayName("HTTPServer") == "HTTP Server");

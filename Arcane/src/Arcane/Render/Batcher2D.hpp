@@ -185,10 +185,10 @@ namespace Arcane
         // DIFFERENT texture if the allocator reuses the freed address (ABA).
         // Mirrors ImGuiNvrhiRenderer::DestroyTexture's evict-before-release
         // order. Intended caller: whichever host/system owns dynamic texture
-        // lifetimes -- today no engine path feeds dynamically-freed textures
-        // into a batcher (the Assets facade's budget eviction releases
-        // textures, but nothing routes Assets textures here yet); the
-        // Assets/TextureTable integration must call this when it lands.
+        // lifetimes -- i.e. whatever populates the scene's SpriteTable
+        // (SceneResources.hpp) with Assets-loaded textures, since the Assets
+        // facade's budget eviction can release a texture the batcher has
+        // already drawn with.
         virtual void RemoveTexture(nvrhi::ITexture* texture) = 0;
 
         // Stats for the most recently End()ed batch.

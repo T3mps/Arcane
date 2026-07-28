@@ -7,11 +7,18 @@
 // rotated by the entity's WorldTransform rotation (passed to Batcher2D::Quad/
 // Rect), so a sprite turns in lockstep with its rotating physics body.
 //
-// Sprite anchor = CENTER: a sprite is drawn centered on its entity's world
-// position (dstPos = worldPos - dstSize/2), so it lines up with that entity's
-// physics body / collider, which are also center-anchored (PhysicsDebugDraw
-// draws the collider outline centered on the body position). The Batcher2D
-// Quad/Rect primitives take a TOP-LEFT origin, hence the half-size shift here.
+// Sprite anchor = the sprite asset's PIVOT: the entity's world position is the
+// point the quad is placed and rotated about. The default pivot (0.5, 0.5) puts
+// that at the quad's center, which is the historical behavior and lines the
+// sprite up with its physics body / collider (also center-anchored --
+// PhysicsDebugDraw draws the collider outline centered on the body position).
+// The Batcher2D Quad/Rect primitives take a TOP-LEFT origin, hence the shift
+// from center to dstPos here.
+//
+// Size comes from the sprite ASSET (SpriteEntry::sizeMeters, resolved through
+// the SpriteTable resource) times the entity's world scale -- SpriteRenderer
+// carries no size of its own. Primitives (Circle/Capsule) and unresolved
+// sprites use a 1x1 m base, so their scale IS their size in meters.
 
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Scene/Components.hpp>
@@ -33,7 +40,7 @@ namespace Arcane
         {
             RenderContext2D* ctx = reg.GetResource<RenderContext2D>();
             if (!ctx || !ctx->batcher) return;
-            const TextureTable* textures = reg.GetResource<TextureTable>();
+            const SpriteTable* spriteTable = reg.GetResource<SpriteTable>();
             const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
 
             auto view = reg.CreateView<WorldTransform, SpriteRenderer, Astra::Not<Hidden>>();
@@ -63,23 +70,45 @@ namespace Arcane
                                          Lerp(prev->position.y, worldPos.y, a));
                     worldRot = AngleLerp(prev->rotation, worldRot, a);
                 }
+                // Only a Rect consults the sprite asset: Circle/Capsule exist to
+                // MATCH a collider, so they must stay on the 1x1 m base times
+                // scale -- an asset's size/pivot would drift them off their body.
+                const SpriteEntry* entry =
+                    (sprite.shape == SpriteShape::Rect && spriteTable)
+                        ? spriteTable->Resolve(sprite.sprite)
+                        : nullptr;
+                // Primitives and unresolved sprites draw a 1x1 m base; the sprite
+                // asset supplies the base for textured rects. Scale (not a
+                // component field) is the sizing mechanism -- see the 2026-07-28
+                // sprite-asset spec.
+                const glm::vec2 baseSize = entry ? entry->sizeMeters : glm::vec2(1.0f);
+                const glm::vec2 pivot    = entry ? entry->pivot      : glm::vec2(0.5f);
                 // Apply the camera (screen = world * zoom + offset; matches
                 // Sandbox::Camera::WorldToScreen and DrawPhysicsDebug exactly, so
                 // sprites + the physics-debug overlay pan/zoom together): scale the
-                // quad by zoom and center it on the ZOOM-scaled screen position.
-                const glm::vec2 dstSize = sprite.size * worldScale * ctx->zoom;
+                // quad by zoom and place it against the ZOOM-scaled screen position.
+                const glm::vec2 dstSize = baseSize * worldScale * ctx->zoom;
                 const glm::vec2 screenPos = worldPos * ctx->zoom + ctx->cameraOffset;
-                // Center the sprite on the screen position (Batcher2D quads are
-                // top-left-origin) so it aligns with the center-anchored physics
-                // body + collider overlay.
-                const glm::vec2 dstPos = screenPos - dstSize * 0.5f;
+                // The batcher rotates a quad about its CENTER (QuadCorners,
+                // Batcher2D.hpp:56-57: center = pos + half, corners rotated about
+                // center). The entity position is the PIVOT, so place the center at
+                // pivot + R(worldRot) * (pivot->center offset) -- which reduces to
+                // dstPos = screenPos - dstSize * 0.5f at the default center pivot
+                // (centerOff is then exactly zero), the historical placement.
+                const glm::vec2 centerOff = (glm::vec2(0.5f) - pivot) * dstSize;
+                const float cr = std::cos(worldRot), sr = std::sin(worldRot);
+                const glm::vec2 center(screenPos.x + cr * centerOff.x - sr * centerOff.y,
+                                       screenPos.y + sr * centerOff.x + cr * centerOff.y);
+                const glm::vec2 dstPos = center - dstSize * 0.5f;
 
                 ctx->batcher->SetLayer(static_cast<uint16_t>(sprite.sortingLayer),
                                        static_cast<uint16_t>(sprite.orderInLayer));
 
                 // Draw the sprite's PRIMITIVE shape so it can match its collider.
                 // Circle/Capsule go through the batcher's filled SDF primitives
-                // (texture ignored); Rect keeps the textured/tinted rotated quad.
+                // (no sprite asset at all -- `entry` is null by construction
+                // above, so they are centered on screenPos); Rect keeps the
+                // textured/tinted rotated quad.
                 switch (sprite.shape)
                 {
                 case SpriteShape::Circle:
@@ -109,7 +138,14 @@ namespace Arcane
                 case SpriteShape::Rect:
                 default:
                 {
-                    nvrhi::ITexture* tex = textures ? textures->Resolve(sprite.textureId) : nullptr;
+                    // Texture + UVs come from the resolved sprite asset (its
+                    // pixel sub-rect, normalized by ComputeSpriteGeom). No
+                    // asset, or an asset whose source texture is nil / not
+                    // loaded yet: null texture and the full-range UVs a
+                    // full-texture sprite would have anyway.
+                    nvrhi::ITexture* tex = entry ? entry->texture : nullptr;
+                    const glm::vec2 uvMin = entry ? entry->uvMin : glm::vec2(0.0f, 0.0f);
+                    const glm::vec2 uvMax = entry ? entry->uvMax : glm::vec2(1.0f, 1.0f);
                     // Sprite material (Slice 8): a valid Guid resolves to a
                     // registered Batcher2D material id; 0 (unresolved / nil) is
                     // the plain sprite path -- byte-identical when no sprite in
@@ -119,11 +155,11 @@ namespace Arcane
                             ? materials->Resolve(sprite.material) : 0;
                     if (materialId != 0)
                         ctx->batcher->QuadMaterial(materialId, dstPos, dstSize, tex,
-                                                   glm::vec2(0, 0), glm::vec2(1, 1),
+                                                   uvMin, uvMax,
                                                    sprite.tint, worldRot);
                     else if (tex)
                         ctx->batcher->Quad(dstPos, dstSize, tex,
-                                           glm::vec2(0, 0), glm::vec2(1, 1),
+                                           uvMin, uvMax,
                                            sprite.tint, worldRot);
                     else
                         ctx->batcher->Rect(dstPos, dstSize, sprite.tint, worldRot);

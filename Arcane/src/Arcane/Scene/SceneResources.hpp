@@ -1,8 +1,8 @@
 #pragma once
 
-// Registry resources (singletons) for the scene slice. RenderContext2D and
-// TextureTable are set by the host each frame; SceneRoot marks the subtree that
-// IS the scene.
+// Registry resources (singletons) for the scene slice. RenderContext2D,
+// SpriteTable and SpriteMaterialTable are set by the host each frame; SceneRoot
+// marks the subtree that IS the scene.
 
 #include <Arcane/Guid.hpp>
 
@@ -77,16 +77,35 @@ namespace Arcane
         float            alpha = 0.0f;              // RunLoop::Alpha() in [0,1); host-set each frame
     };
 
-    struct TextureTable
+    // One .arcsprite asset, resolved for submission: the GPU texture its source
+    // texture Guid loaded to, plus ComputeSpriteGeom's output (SpriteAsset.hpp)
+    // -- UVs for the pixel sub-rect and the world size in meters -- and the
+    // asset's normalized pivot. Precomputed host-side so RenderSubmissionSystem
+    // never touches the Assets facade or re-derives rect math per frame.
+    struct SpriteEntry
     {
-        // textureId 0 is reserved for "untextured". Full Assets integration deferred.
-        std::unordered_map<uint32_t, nvrhi::ITexture*> textures;
+        nvrhi::ITexture* texture = nullptr;      // null = untextured (tint quad)
+        glm::vec2 uvMin{0.0f, 0.0f};
+        glm::vec2 uvMax{1.0f, 1.0f};
+        glm::vec2 sizeMeters{1.0f, 1.0f};
+        glm::vec2 pivot{0.5f, 0.5f};
+    };
 
-        nvrhi::ITexture* Resolve(uint32_t id) const
+    // Sprite-asset resolution: SpriteRenderer::sprite (an .arcsprite Guid) ->
+    // the resolved record above. Same shape and lifetime rules as
+    // SpriteMaterialTable below: the map is OWNED by the host (transient
+    // pointer resource, set each frame, never serialized). Unresolved (nil /
+    // absent / texture still loading) -> null, and submission falls back to a
+    // 1x1 m tint quad, so a sprite always draws.
+    struct SpriteTable
+    {
+        const std::unordered_map<Guid, SpriteEntry>* sprites = nullptr;
+
+        const SpriteEntry* Resolve(const Guid& g) const
         {
-            if (id == 0) return nullptr;
-            auto it = textures.find(id);
-            return it != textures.end() ? it->second : nullptr;
+            if (!sprites || !g.IsValid()) return nullptr;
+            auto it = sprites->find(g);
+            return it != sprites->end() ? &it->second : nullptr;
         }
     };
 
