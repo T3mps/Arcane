@@ -609,6 +609,12 @@ project "ArcaneTests"
         -- test exe fails to link (LNK2019). Nothing in it is called headlessly;
         -- it is pure ImGui, like the skin half of EditGesture.cpp.
         "%{wks.location}/ArcaneEditor/src/EditorWidgets.cpp",
+        -- Widget layer Task 7: SpriteDocument source-compiles into the test exe
+        -- so the [editor] units drive its UNDO half directly (ApplySpriteData,
+        -- the before/after step builder, and the doc-identity anchor after the
+        -- document closes). Draw (the only ImGui method) is never called --
+        -- same precedent as ShaderEditorDocument above.
+        "%{wks.location}/ArcaneEditor/src/SpriteDocument.cpp",
     }
 
     includedirs {

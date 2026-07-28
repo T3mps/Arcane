@@ -341,6 +341,12 @@ namespace Arcane::Editor
                     return nullptr;
                 Arcane::Editor::SpriteDocument::Services spriteDocServices;
                 spriteDocServices.assets = &m_runtime->AssetsFacade();
+                // The SAME shared stack MakeDocServices hands the material
+                // documents (EditorAppProject.cpp:39) and the Inspector/gizmo
+                // push to -- one editor-wide history, so Ctrl+Z walks back
+                // through sprite field edits in the order they happened
+                // alongside everything else.
+                spriteDocServices.undo = m_undo ? &*m_undo : nullptr;
                 spriteDocServices.invalidateSprite = [this](const Arcane::Guid& g)
                 {
                     if (m_sprites)

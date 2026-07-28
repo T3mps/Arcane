@@ -38,6 +38,26 @@ namespace Arcane
         glm::vec2   pivot{0.5f, 0.5f};          // normalized
     };
 
+    // Memberwise equality. It exists for the sprite editor's undo bracket,
+    // which compares an activation-time COPY of the data against the live data
+    // to decide whether a drag actually moved anything before it pushes an
+    // undo step (SpriteDocument::PushDataEdit).
+    //
+    // Memberwise and never memcmp, for two independent reasons: `name` is a
+    // std::string, whose object bytes are a pointer/SSO buffer rather than the
+    // text; and the trailing scalars (one float plus three vec2 = 28 bytes)
+    // land after an 8-byte-aligned prefix (two Guids of two uint64s each, and
+    // a std::string), so the struct is padded up to its 8-byte alignment and a
+    // byte compare would read that uninitialized tail. Floats compare exactly
+    // on purpose -- the question is "did the widget write a different value",
+    // not "are these close".
+    [[nodiscard]] inline bool operator==(const SpriteAssetData& a, const SpriteAssetData& b) noexcept
+    {
+        return a.id == b.id && a.name == b.name && a.texture == b.texture &&
+               a.ppu == b.ppu && a.sourcePos == b.sourcePos &&
+               a.sourceSize == b.sourceSize && a.pivot == b.pivot;
+    }
+
     // Write `data` as .arcsprite JSON. Only non-default rect/pivot fields are
     // written, so a plain full-texture sprite stays a minimal file (absent
     // keys resolve to the SpriteAssetData defaults on load). False on IO
