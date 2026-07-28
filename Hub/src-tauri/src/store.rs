@@ -27,9 +27,10 @@ use std::path::{Path, PathBuf};
 ///
 /// Bump it ONLY with a breaking shape change, alongside the migration that
 /// reads the old shape -- additive fields ride serde(default) and need no
-/// bump. Version 1 is the `{version, items}` envelope introduced 2026-07-28;
-/// the files before it were bare arrays/objects, which `read_or_default`
-/// still accepts and silently upgrades on the next save.
+/// bump. Version 1 is the `{version, items}` envelope introduced 2026-07-28.
+/// (The bare pre-envelope shape was readable for a few hours that day; that
+/// fallback was removed once this machine's files -- the only machine's --
+/// were confirmed on the envelope.)
 const STATE_FORMAT_VERSION: u32 = 1;
 
 /// The envelope every state file is written inside. Store-level on purpose:
@@ -56,10 +57,9 @@ fn quarantine_path(p: &Path) -> PathBuf {
 /// through `warnings`, so the caller can tell the user instead of leaving them
 /// to discover an empty list on their own.
 ///
-/// Three shapes are accepted, in order: the current `{version, items}`
-/// envelope; a TOO-NEW envelope (left untouched on disk -- it belongs to a
-/// newer Hub -- with a warning that this build runs on defaults); and the
-/// pre-envelope bare shape, which parses as-is and upgrades on its next save.
+/// Two shapes are understood: the current `{version, items}` envelope, and a
+/// TOO-NEW envelope (left untouched on disk -- it belongs to a newer Hub --
+/// with a warning that this build runs on defaults). Anything else quarantines.
 pub fn read_or_default<T: Default + DeserializeOwned>(p: &Path, warnings: &mut Vec<String>) -> T {
     let text = match std::fs::read_to_string(p) {
         Ok(t) => t,
@@ -89,23 +89,19 @@ pub fn read_or_default<T: Default + DeserializeOwned>(p: &Path, warnings: &mut V
 
     match serde_json::from_str::<Versioned<T>>(&text) {
         Ok(v) => v.items,
-        // Not the envelope: the pre-2026-07-28 bare shape, or garbage.
-        Err(_) => match serde_json::from_str::<T>(&text) {
-            Ok(v) => v,
-            Err(e) => {
-                let kept = quarantine_path(p);
-                let note = match std::fs::rename(p, &kept) {
-                    Ok(()) => format!("kept a copy at {}", kept.display()),
-                    // Report the failure rather than claiming a copy exists.
-                    Err(re) => format!("could not set the file aside: {re}"),
-                };
-                warnings.push(format!(
-                    "{} was unreadable ({e}) and has been reset -- {note}.",
-                    p.display()
-                ));
-                T::default()
-            }
-        },
+        Err(e) => {
+            let kept = quarantine_path(p);
+            let note = match std::fs::rename(p, &kept) {
+                Ok(()) => format!("kept a copy at {}", kept.display()),
+                // Report the failure rather than claiming a copy exists.
+                Err(re) => format!("could not set the file aside: {re}"),
+            };
+            warnings.push(format!(
+                "{} was unreadable ({e}) and has been reset -- {note}.",
+                p.display()
+            ));
+            T::default()
+        }
     }
 }
 
@@ -208,27 +204,6 @@ mod tests {
         write_atomic(&p, &Sample { items: vec!["new".into()] }).unwrap();
         let mut w = Vec::new();
         assert_eq!(read_or_default::<Sample>(&p, &mut w).items, vec!["new".to_string()]);
-    }
-
-    #[test]
-    fn a_pre_envelope_bare_file_still_loads_and_upgrades_on_save() {
-        // Every state file written before 2026-07-28 is a bare array/object.
-        // It must load as-is (no warning -- nothing is wrong with it), and the
-        // next save wraps it in the envelope.
-        let dir = scratch("legacy");
-        let p = dir.join("s.json");
-        std::fs::write(&p, r#"{"items":["old"]}"#).unwrap();
-
-        let mut w = Vec::new();
-        let v: Sample = read_or_default(&p, &mut w);
-        assert_eq!(v.items, vec!["old".to_string()]);
-        assert!(w.is_empty(), "a legacy file is not a problem to report");
-
-        write_atomic(&p, &v).unwrap();
-        let text = std::fs::read_to_string(&p).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(doc["version"], 1, "the save must upgrade to the envelope");
-        assert_eq!(doc["items"]["items"][0], "old");
     }
 
     #[test]

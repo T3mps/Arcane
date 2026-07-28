@@ -576,14 +576,6 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .setup(|_app| {
-            // Copies forward both prior state generations -- the roaming
-            // %APPDATA% files (pre-2026-07-28 move) and the .json names
-            // (pre-.archub extension) -- once, before the webview's first
-            // load_state can run.
-            paths::migrate_legacy_state();
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             load_state,
             register_engine,
