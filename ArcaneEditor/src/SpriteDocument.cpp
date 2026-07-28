@@ -82,7 +82,7 @@ namespace Arcane::Editor
         // unbounded, not just keyboard entry -- is_bounded already requires
         // v_min<v_max at :2540). ClampOnInput is also the established local
         // convention for exactly this "keyboard entry must not defeat a
-        // drag's bound" concern (EditorPanels.cpp:1096-1103's RangedDragFloat).
+        // drag's bound" concern (EditorWidgets.hpp:43-49's RangedDragFloat).
         bool changed = false;
         changed |= ImGui::DragFloat("Pixels Per Meter", &m_data.ppu, 0.5f, 1.0f, 4096.0f,
                                     "%.3f", ImGuiSliderFlags_ClampOnInput);

@@ -236,7 +236,9 @@ namespace Arcane::Editor
         // ImGui tables own their column widths individually with no
         // cross-table binding -- so this float is the authority instead: each
         // grid seeds its label column from it and adopts it back when the user
-        // moves THAT grid's split (see BeginFieldGrid in EditorPanels.cpp).
+        // moves THAT grid's split (this float is what the panel hands each
+        // Arcane::Editor::FieldGrid -- see EditorWidgets.cpp's BeginFieldGrid,
+        // which FieldGrid is the only public way to reach).
         // Session-scoped by design: the grids pass
         // ImGuiTableFlags_NoSavedSettings so imgui.ini never becomes a second
         // authority that would fight this one on the next launch.
