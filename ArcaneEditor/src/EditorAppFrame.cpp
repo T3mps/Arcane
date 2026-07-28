@@ -988,27 +988,43 @@ namespace Arcane::Editor
         // become NVRHI shaders. Then tick every document (preview render on
         // its own OffscreenCanvas).
         m_editorClock += m_lastFrameDt;
-        if (m_shaderCompiler && m_shaderCompiler->IsAvailable())
-        {
-            // Sweep the scene for referenced sprite materials (Slice 8):
-            // Request no-ops once a material is known, so this is a cheap
-            // per-frame guarantee that whatever the scene references is
-            // compiling or bound.
-            if (m_spriteMaterials || m_sprites)
-            {
-                auto sprites = m_runtime->Registry().CreateView<Arcane::SpriteRenderer>();
-                sprites.ForEach([&](Astra::Entity, Arcane::SpriteRenderer& s)
-                {
-                    if (m_spriteMaterials && s.material.IsValid())
-                        m_spriteMaterials->Request(s.material, m_editorClock);
-                    // Sprite-asset arc, Task 3: same sweep, the OTHER Guid on
-                    // the component -- s.sprite names the .arcsprite asset
-                    // (texture/UVs/size/pivot), independent of s.material.
-                    if (m_sprites && s.sprite.IsValid())
-                        m_sprites->Request(s.sprite);
-                });
-            }
+        // Sprite-asset arc, Task 3 review fix (F1): compilerAvailable now
+        // gates ONLY the material path (Request + the Poll/Drain/Consume
+        // block below), not the sprite-asset sweep. It used to wrap the
+        // whole sweep, but SpriteCache::Request has no compile-pipeline
+        // dependency at all -- it is a synchronous JSON-load + Assets-facade
+        // resolve -- and ShaderCompiler::IsAvailable() (ShaderCompiler.hpp:
+        // 108-113) is literally "did dxcompiler.dll/dxil.dll load". Under
+        // the old gate, a DXC-less machine would silently never resolve ANY
+        // sprite (not even the negative-result default entry), so every
+        // sprite rendered as an indistinguishable untextured 1x1 tint quad
+        // with no diagnostic. The material path's own condition is
+        // unchanged (still exactly `m_shaderCompiler &&
+        // m_shaderCompiler->IsAvailable()`, just named instead of inlined),
+        // so material behavior is byte-identical to before this fix.
+        const bool compilerAvailable = m_shaderCompiler && m_shaderCompiler->IsAvailable();
 
+        // Sweep the scene once per frame for BOTH per-SpriteRenderer Guids --
+        // one CreateView<SpriteRenderer> walk covers s.material (Slice 8,
+        // gated on compilerAvailable) and s.sprite (sprite-asset arc Task 3,
+        // ungated) so this fix does not add a second full component-view
+        // pass per frame. Request no-ops once a Guid is known either way, so
+        // this is a cheap per-frame guarantee that whatever the scene
+        // references is compiling/bound (materials) or resolved (sprites).
+        if (m_spriteMaterials || m_sprites)
+        {
+            auto sprites = m_runtime->Registry().CreateView<Arcane::SpriteRenderer>();
+            sprites.ForEach([&](Astra::Entity, Arcane::SpriteRenderer& s)
+            {
+                if (compilerAvailable && m_spriteMaterials && s.material.IsValid())
+                    m_spriteMaterials->Request(s.material, m_editorClock);
+                if (m_sprites && s.sprite.IsValid())
+                    m_sprites->Request(s.sprite);
+            });
+        }
+
+        if (compilerAvailable)
+        {
             m_shaderCompiler->Poll(m_editorClock);
             for (const Arcane::ShaderCompileResult& r : m_shaderCompiler->Drain())
             {

@@ -10,10 +10,15 @@
 // 79-81), and compute UVs/size via ComputeSpriteGeom against the texture's
 // actual pixel dimensions. A failed resolve (unresolvable Guid, missing
 // file, bad JSON) caches a DEFAULT SpriteEntry (1x1 m untextured
-// placeholder) so a broken asset still renders and the negative result is
-// never re-parsed every frame -- same idempotent-once-known contract as
-// SpriteMaterialCache::Request's `failed` set (SpriteMaterialCache.cpp:
-// 95-101).
+// placeholder) directly in the PUBLISHED m_table -- deliberately different
+// from SpriteMaterialCache::Request, which keeps failures OUT of its
+// published table in a separate `failed` set (SpriteMaterialCache.cpp:
+// 44,95-101) so a failed material just leaves the sprite on the plain
+// pipeline. A sprite has no such implicit fallback: the whole point of the
+// component is to draw a specific asset, so a broken one must still be
+// VISIBLE as the placeholder rather than silently vanishing. Both schemes
+// share the same never-re-parsed-once-known effect (m_table.contains(id)
+// guards Request either way), just achieved with different structures.
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // Arcane::SpriteEntry (full type: Table()'s value type)
@@ -60,6 +65,15 @@ namespace Arcane::Editor
         // freed address (ABA) -- then drop the table + keep-alive entries so
         // the next Request re-resolves from disk.
         void Invalidate(const Arcane::Guid& id);
+
+        // Forget everything (project switch): a Guid resolves through the
+        // CURRENT project's registry, so a cached entry from the outgoing
+        // project may resolve to something else entirely (or nothing) once
+        // the project changes -- same rationale as
+        // SpriteMaterialCache::Clear() (SpriteMaterialCache.hpp:79-81).
+        // Evicts every live texture from the batcher first (Invalidate's
+        // order, Batcher2D.hpp:181-191) before dropping both maps.
+        void Clear();
 
         const std::unordered_map<Arcane::Guid, Arcane::SpriteEntry>& Table() const { return m_table; }
 

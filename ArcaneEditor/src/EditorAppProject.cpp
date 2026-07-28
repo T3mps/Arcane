@@ -276,6 +276,10 @@ namespace Arcane::Editor
             m_spriteMaterials->Clear();
         if (m_postChains)
             m_postChains->Clear();
+        // Sprite-asset arc, Task 3 review fix (F2): sprites resolve through
+        // the same outgoing-project registry, so they need the same Clear.
+        if (m_sprites)
+            m_sprites->Clear();
 
         // Return to Edit + clear editor state that references the outgoing scene.
         ClearSceneReferences();

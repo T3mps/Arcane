@@ -21,11 +21,16 @@ namespace Arcane::Editor
             return;
 
         // Negative-result caching: emplace a DEFAULT SpriteEntry (1x1 m,
-        // untextured -- SceneResources.hpp:85-92's field defaults) so the
-        // broken asset renders as the placeholder instead of crashing, and
-        // the m_table.contains(id) guard above means this bad file is never
-        // re-parsed on a later frame (mirrors SpriteMaterialCache::Request's
-        // `failed` set, SpriteMaterialCache.cpp:95-101).
+        // untextured -- SceneResources.hpp:85-92's field defaults) directly
+        // into the PUBLISHED m_table -- unlike SpriteMaterialCache::Request,
+        // which keeps a failed material OUT of its published table via a
+        // separate `failed` set (SpriteMaterialCache.cpp:44,95-101) so the
+        // sprite just falls back to the plain (unmaterialed) pipeline. A
+        // sprite has no such fallback -- the component's whole point is to
+        // draw a specific asset -- so a broken one renders as the VISIBLE
+        // placeholder instead of vanishing. Either structure gets the same
+        // never-re-parsed-once-known effect via the m_table.contains(id)
+        // guard above.
         auto cacheDefault = [&](const char* why)
         {
             ARC_WARN("SpriteCache: sprite {} unavailable -- {}", id.ToString(), why);
@@ -92,5 +97,19 @@ namespace Arcane::Editor
             m_table.erase(it);
         }
         m_handles.erase(id);
+    }
+
+    void SpriteCache::Clear()
+    {
+        // Same evict-before-release order as Invalidate (Batcher2D.hpp:
+        // 181-191): drop every live texture's cached binding-set entry
+        // FIRST, while m_handles still holds the keep-alive ref, then clear
+        // both maps.
+        if (m_services.batcher)
+            for (const auto& [id, entry] : m_table)
+                if (entry.texture)
+                    m_services.batcher->RemoveTexture(entry.texture);
+        m_table.clear();
+        m_handles.clear();
     }
 }
