@@ -203,6 +203,20 @@ namespace Arcane::Editor
         // plausible field name. Nothing clears it, so a typed filter persists
         // across selection changes -- the Outliner's search behaves the same way.
         char searchBuffer[128] = {};
+        // Width of the LABEL column, shared by every field grid in the panel.
+        //
+        // UE's Details panel has ONE draggable split for the whole panel, and
+        // ImGui tables own their column widths individually with no
+        // cross-table binding -- so this float is the authority instead: each
+        // grid seeds its label column from it and adopts it back when the user
+        // moves THAT grid's split (see BeginFieldGrid in EditorPanels.cpp).
+        // Session-scoped by design: the grids pass
+        // ImGuiTableFlags_NoSavedSettings so imgui.ini never becomes a second
+        // authority that would fight this one on the next launch.
+        //
+        // 0 means "no width chosen yet"; the first grid drawn seeds it from
+        // the panel's available width.
+        float labelColWidth = 0.0f;
     };
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,

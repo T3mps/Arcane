@@ -1124,6 +1124,151 @@ namespace Arcane::Editor
             return ImGui::DragInt(label, v);
         }
 
+        // ---------------------------------------------------------------------
+        // The two-column field grid (UE's Details-panel shape: label left in
+        // one column, value right, one draggable split shared by every
+        // section).
+        // ---------------------------------------------------------------------
+
+        // How much of the panel the label column takes when nothing has been
+        // dragged yet. Only ever consulted once per session -- after that
+        // InspectorState::labelColWidth is the authority.
+        constexpr float kLabelColumnFraction = 0.4f;
+
+        // Open one field region's grid. Returns false exactly when
+        // ImGui::BeginTable did (culled/clipped host window), in which case the
+        // caller must draw NO rows and must NOT call EndFieldGrid.
+        //
+        // WIDTH SYNC PROTOCOL. There is no ImGui API to bind two tables'
+        // column widths, so InspectorState::labelColWidth is the shared
+        // authority and each table is pushed to match it. The push has to
+        // happen HERE -- after TableSetupColumn, before the first row -- for
+        // two reasons, both from the vendored imgui_tables.cpp:
+        //   - ImGui::TableSetColumnWidth asserts !IsLayoutLocked (:2343), and
+        //     the first TableNextRow runs the layout (:1923-1924), which locks
+        //     it (:1285).
+        //   - TableSetupColumn's init width is applied ONLY while the table is
+        //     initializing (:1693-1699 -> TableInitColumnDefaults :1637-1643),
+        //     so it seeds a brand-new table and does nothing thereafter.
+        //
+        // Deciding whether to push or to ADOPT is what keeps a user drag from
+        // being fought. A drag is not applied when the mouse moves: EndTable
+        // records the pending width (:1531-1536) and the NEXT frame's
+        // TableBegin applies it to WidthRequest via TableBeginApplyRequests
+        // (:687-688; the double-click auto-fit lands in the same place,
+        // :695-699). So by the time this runs, WidthRequest already carries
+        // any user change while WidthGiven is still the width this table was
+        // LAID OUT at last frame (:1054, :1139-1140). WidthRequest !=
+        // WidthGiven is therefore "this table's split moved since it last laid
+        // out" -- adopt it as the new shared width; otherwise push the shared
+        // width onto this table. Nothing else writes a fixed column's
+        // WidthRequest (:986-989 needs a pending AutoFitQueue, which an
+        // explicit init width clears at :1642-1643; :1044/:1068 are
+        // stretch-only), so the test cannot misfire.
+        //
+        // That comparison is also why a narrow panel cannot erode the width:
+        // when the table cannot afford the request, WidthGiven is clamped down
+        // (:1139) while WidthRequest keeps the user's number, so the adopt
+        // branch re-reads the number the user chose and widening the panel
+        // restores it.
+        [[nodiscard]] bool BeginFieldGrid(InspectorState& state)
+        {
+            // Read BEFORE BeginTable: inside a table, "available" is a cell.
+            if (state.labelColWidth <= 0.0f)
+            {
+                const float avail = ImGui::GetContentRegionAvail().x;
+                if (avail > 0.0f)
+                    state.labelColWidth = avail * kLabelColumnFraction;
+            }
+            // NoSavedSettings is passed explicitly even though a table inside a
+            // child window inherits it anyway (:299-301): OUR float is the only
+            // width authority, and an .ini-restored width would be a second one.
+            if (!ImGui::BeginTable("##fields", 2,
+                                   ImGuiTableFlags_Resizable |
+                                   ImGuiTableFlags_NoSavedSettings |
+                                   ImGuiTableFlags_NoBordersInBodyUntilResize))
+                return false;
+            // A <= 0 width here leaves the column auto-sized (:1640 stores -1
+            // for it), which happens only on a frame where the panel had no
+            // width to sample above; the sync below takes over once one exists.
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed,
+                                    state.labelColWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            ImGuiTable* table = ImGui::GetCurrentTable();
+            ImGuiTableColumn& col = table->Columns[0];
+            // WidthGiven == 0 is a table that has never laid out (the column is
+            // memset in its constructor, imgui_internal.h:3168-3170, and the
+            // ImGui-side width fields are meaningless until TableUpdateLayout
+            // fills them). TableSetColumnWidth would clamp against a zero
+            // WidthMax there (:2352) and collapse the column to MinColumnWidth,
+            // so the init width above is left to do the seeding.
+            if (col.WidthGiven > 0.0f)
+            {
+                // The `> 0` on the request is not decoration: an auto-sized
+                // column carries WidthRequest == -1 (:1640) and still lays out
+                // to a positive WidthGiven (:1054), which is exactly the state
+                // the degenerate seeding path above leaves behind -- adopting
+                // that -1 would hand the whole panel a negative shared width.
+                if (col.WidthRequest > 0.0f && col.WidthRequest != col.WidthGiven)
+                    state.labelColWidth = col.WidthRequest;   // the user moved THIS split
+                else if (col.WidthGiven != state.labelColWidth)
+                    ImGui::TableSetColumnWidth(0, state.labelColWidth);
+            }
+            return true;
+        }
+
+        // Close a grid opened by BeginFieldGrid. Takes no state because the
+        // whole width hand-off happens in BeginFieldGrid: a drag only reaches
+        // WidthRequest at the NEXT frame's BeginTable (see above), so a
+        // write-back here would read a width the drag has not landed in yet and
+        // the following frame would push that stale number back over it.
+        void EndFieldGrid()
+        {
+            ImGui::EndTable();
+        }
+
+        // One field row's label cell. Opens the row, writes the display name
+        // into column 0, and leaves the cursor in column 1 with the next item
+        // sized to fill it.
+        //
+        // Returns whether the LABEL is hovered. The label is its own ImGui item
+        // now, so the row's tail tooltip -- which asks about the LAST item, i.e.
+        // the value widget -- would never fire over the name; the caller ORs
+        // this in. Asked here, while the label still IS the last item.
+        //
+        // `dimmed` is UE's disabled-label treatment for a field that cannot be
+        // edited. The color push is exactly what ImGui::TextDisabled does
+        // (imgui_widgets.cpp:316-322), spelled out so the text can go through
+        // TextUnformatted rather than a format string.
+        [[nodiscard]] bool FieldLabelCell(const std::string& label, bool dimmed)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            // The value cell holds a FRAMED widget on almost every row, whose
+            // text sits FramePadding.y below the row top; bare text draws at
+            // DC.CurrLineTextBaseOffset (imgui_widgets.cpp:177), which is 0 here
+            // -- so without this the name rides high against its own value. A
+            // table cannot fix it afterwards: TableEndCell only raises
+            // RowTextBaseline for cells submitted LATER in the row
+            // (imgui_tables.cpp:2273), and this is the first one.
+            ImGui::AlignTextToFramePadding();
+            if (dimmed)
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextUnformatted(label.c_str());
+            if (dimmed)
+                ImGui::PopStyleColor();
+            const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
+            ImGui::TableSetColumnIndex(1);
+            // -FLT_MIN is ImGui's "fill the remaining width" spelling
+            // (CalcItemWidth resolves a negative width against
+            // GetContentRegionAvail, imgui.cpp:12319-12323), and inside a cell
+            // that region IS the cell.
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            return hovered;
+        }
+
         // Renders one widget per reflected field and applies edits through the
         // pure InspectorFields writers (kept ImGui-free so the write-back is unit-
         // testable). Unsupported/compound types (e.g. glm::mat3, enums) render
@@ -1292,13 +1437,23 @@ namespace Arcane::Editor
             // where float can no longer represent consecutive integers. double
             // represents every int32 and every float exactly, so this row is now
             // lossless for both kinds and `integral` picks the formatting.
-            int MultiScalarRow(const std::string& label, int count, const double* vals,
+            //
+            // `idSeed` is an id scope only -- it keeps the N boxes' ids off the
+            // row's other items -- and is NOT drawn: the display name lives in
+            // the grid's label column now, so the trailing SameLine'd text this
+            // row used to end on is gone with it.
+            int MultiScalarRow(const char* idSeed, int count, const double* vals,
                                const Arcane::Editor::FieldMixedMask& mask, bool integral,
                                double& outValue)
             {
                 int committed = -1;
                 ImGui::BeginGroup();
-                ImGui::PushID(label.c_str());
+                ImGui::PushID(idSeed);
+                // Fills the value cell: the caller's SetNextItemWidth(-FLT_MIN)
+                // is still pending here (nothing between it and this call
+                // submits an item, and PushMultiItemsWidths consumes the flag
+                // itself at imgui.cpp:12292), so CalcItemWidth resolves to the
+                // cell's full width and the boxes split THAT.
                 ImGui::PushMultiItemsWidths(count, ImGui::CalcItemWidth());
                 for (int i = 0; i < count; ++i)
                 {
@@ -1338,11 +1493,6 @@ namespace Arcane::Editor
                     ImGui::PopItemWidth();
                 }
                 ImGui::PopID();
-                if (!label.empty())
-                {
-                    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-                    ImGui::TextUnformatted(label.c_str());
-                }
                 ImGui::EndGroup();
                 return committed;
             }
@@ -1451,12 +1601,29 @@ namespace Arcane::Editor
                 ImGui::PushID(static_cast<int>(f.nameHash));
                 // Astra::ReadOnly -- the field is still SHOWN, it just cannot be
                 // edited. Distinct from FieldKind::ReadOnly below, which means
-                // "this panel has no widget for that type"; a field can be either,
-                // both, or neither. When it is both, the two BeginDisabled pairs
-                // nest, which ImGui supports and does not double-dim: the inner
-                // Begin sees the flag already set and skips the alpha change
-                // (imgui.cpp:8893-8906).
+                // "this panel has no widget for that type"; a field can be
+                // either, both, or neither, and the two dim different halves of
+                // the row: this one disables the value WIDGET, that one has no
+                // widget to disable and greys its value TEXT. Both grey the
+                // label, via the flag handed to FieldLabelCell.
                 const bool readOnly = Arcane::Editor::FieldIsReadOnly(f);
+                // Classified once, above the switch: the label cell needs the
+                // answer before the switch that used to ask for it.
+                const Arcane::Editor::FieldKind kind = Arcane::Editor::ClassifyField(f);
+                // Every widget below draws with its visible label HIDDEN -- the
+                // display name is its own item in column 0 now, so a widget
+                // still drawing its own would double it. "##", not "###":
+                // "##" hides the text while leaving the id seeded by the rest of
+                // the string, "###" would reseed the hash (ImHashStr,
+                // imgui.cpp:2557). rawName, not label, so the id follows the C++
+                // identifier rather than prose that a display-name tweak moves.
+                const std::string widgetId = "##" + rawName;
+                // The label cell OPENS THE ROW, so it has to run before anything
+                // in the value cell -- and deliberately before BeginDisabled: a
+                // disabled scope also multiplies alpha (imgui.cpp:8899-8900),
+                // which on top of the grey below would dim the name twice.
+                const bool labelHovered =
+                    FieldLabelCell(label, readOnly || kind == Arcane::Editor::FieldKind::ReadOnly);
                 if (readOnly)
                     ImGui::BeginDisabled();
 
@@ -1467,7 +1634,7 @@ namespace Arcane::Editor
                 // asks about the last item, which is that row's own content.
                 std::optional<bool> hovered;
 
-                switch (Arcane::Editor::ClassifyField(f))
+                switch (kind)
                 {
                     case Arcane::Editor::FieldKind::Bool:
                     {
@@ -1480,7 +1647,7 @@ namespace Arcane::Editor
                         const bool boolMixed = Multi() && MixedFor(f).Any();
                         if (boolMixed)
                             ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
-                        bool changed = ImGui::Checkbox(label.c_str(), &v);
+                        bool changed = ImGui::Checkbox(widgetId.c_str(), &v);
                         if (boolMixed)
                             ImGui::PopItemFlag();
                         BeginGestureIfActivated(rawName, instance);
@@ -1496,7 +1663,8 @@ namespace Arcane::Editor
                         {
                             const double cur = static_cast<double>(v);
                             double out = cur;
-                            if (MultiScalarRow(label, 1, &cur, MixedFor(f), /*integral*/ true, out) >= 0)
+                            if (MultiScalarRow(widgetId.c_str(), 1, &cur, MixedFor(f),
+                                               /*integral*/ true, out) >= 0)
                             {
                                 // The field's Range binds here too. This row is a
                                 // raw text box rather than a drag, so ImGui clamps
@@ -1521,7 +1689,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = RangedDragInt(f, label.c_str(), &v);
+                        bool changed = RangedDragInt(f, widgetId.c_str(), &v);
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -1535,7 +1703,8 @@ namespace Arcane::Editor
                         {
                             const double cur = static_cast<double>(v);
                             double out = cur;
-                            if (MultiScalarRow(label, 1, &cur, MixedFor(f), /*integral*/ false, out) >= 0)
+                            if (MultiScalarRow(widgetId.c_str(), 1, &cur, MixedFor(f),
+                                               /*integral*/ false, out) >= 0)
                             {
                                 // Same rule as the Int32 row above and as the drag
                                 // one branch down: a Range bounds the typed value,
@@ -1548,7 +1717,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = RangedDragFloat(f, label.c_str(), &v, 0.1f);
+                        bool changed = RangedDragFloat(f, widgetId.c_str(), &v, 0.1f);
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -1565,7 +1734,8 @@ namespace Arcane::Editor
                             // Only the COMMITTED component is written, so typing
                             // into one blank axis leaves the others alone on every
                             // target -- the point of per-axis mixed values.
-                            const int c = MultiScalarRow(label, 2, cur, MixedFor(f), /*integral*/ false, out);
+                            const int c = MultiScalarRow(widgetId.c_str(), 2, cur, MixedFor(f),
+                                                         /*integral*/ false, out);
                             if (c >= 0)
                             {
                                 const float fv = static_cast<float>(out);
@@ -1574,7 +1744,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = ImGui::DragFloat2(label.c_str(), &v.x, 0.1f);
+                        bool changed = ImGui::DragFloat2(widgetId.c_str(), &v.x, 0.1f);
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -1588,7 +1758,8 @@ namespace Arcane::Editor
                         {
                             const double cur[3]{ v.x, v.y, v.z };
                             double out = 0.0;
-                            const int c = MultiScalarRow(label, 3, cur, MixedFor(f), /*integral*/ false, out);
+                            const int c = MultiScalarRow(widgetId.c_str(), 3, cur, MixedFor(f),
+                                                         /*integral*/ false, out);
                             if (c >= 0)
                             {
                                 const float fv = static_cast<float>(out);
@@ -1597,7 +1768,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = ImGui::DragFloat3(label.c_str(), &v.x, 0.1f);
+                        bool changed = ImGui::DragFloat3(widgetId.c_str(), &v.x, 0.1f);
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -1608,8 +1779,9 @@ namespace Arcane::Editor
                     {
                         // Asset-reference (Guid) field: button shows the resolved
                         // mount path (or raw guid), opens a pick popup, and accepts
-                        // browser drags; "x" clears. Kind filter is inferred from
-                        // the field name (AssetKindFilterForFieldName).
+                        // browser drags; an "x" clears an EDITABLE one (see below).
+                        // Kind filter is inferred from the field name
+                        // (AssetKindFilterForFieldName).
                         const Arcane::Guid v = f.Get<Arcane::Guid>(instance);
                         // rawName, NOT the display label: this heuristic reads the
                         // C++ identifier, which is what its documented contract
@@ -1644,10 +1816,10 @@ namespace Arcane::Editor
                         // ImGui mid-interaction, dropping the item's state.
                         if (ImGui::Button((display + "###assetref").c_str()))
                             ImGui::OpenPopup("##assetpick");
-                        // This row ends with a SameLine'd name, not with its own
-                        // widget, so the tail below would ask about that text and
+                        // This row may end on the clear button rather than on the
+                        // asset button, so the tail below would ask about THAT and
                         // the identifier tooltip would never appear over the
-                        // button. Asked here, while the button IS the last item.
+                        // asset. Asked here, while the button IS the last item.
                         hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
                         // `!readOnly` GUARDS THE DROP, and the BeginDisabled wrap
                         // above does NOT: drag-drop acceptance never consults
@@ -1675,20 +1847,22 @@ namespace Arcane::Editor
                         }
                         // Offered when MIXED too: "clear all of them" is a
                         // meaningful action even though the primary may be nil.
-                        if (v.IsValid() || refMixed)
+                        //
+                        // NOT offered on a read-only ref, where it used to render
+                        // as a disabled "x" -- an affordance promising an action
+                        // that is not merely unavailable right now but can never
+                        // exist. Dropping it removes no reachable write: a
+                        // disabled item is refused by ItemHoverable
+                        // (imgui.cpp:5128-5134), so ButtonBehavior could never
+                        // press it. Note this is the OPPOSITE of the drop target
+                        // above, which the disabled wrap does not gate at all --
+                        // hence its own explicit `!readOnly`.
+                        if (!readOnly && (v.IsValid() || refMixed))
                         {
                             ImGui::SameLine();
                             if (ImGui::SmallButton("x##assetclear"))
                                 ApplyGuidImmediate(rawName, f, instance, Arcane::Guid::Nil());
                         }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(label.c_str());
-                        // The name counts as part of the row: DragScalar registers
-                        // a rect that spans its own label (imgui_widgets.cpp:2734
-                        // builds total_bb from it, :2738 registers THAT), so
-                        // hovering the name already explains the field on every
-                        // numeric row.
-                        hovered = *hovered || ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
 
                         if (ImGui::BeginPopup("##assetpick"))
                         {
@@ -1737,7 +1911,7 @@ namespace Arcane::Editor
                         // per-frame seed cannot stomp what the user is typing.
                         std::string text = (strMixed || !live) ? std::string() : *live;
                         const std::string shown = text;   // what this frame rendered
-                        InputTextString(label.c_str(), &text);
+                        InputTextString(widgetId.c_str(), &text);
                         // LATCH THE CANCEL REFERENCE AT ACTIVATION. ImGui copies
                         // the buffer it was handed into TextToRevertTo when the
                         // box takes ActiveId (imgui_widgets.cpp:4865-4866) and
@@ -1793,9 +1967,25 @@ namespace Arcane::Editor
                     }
                     case Arcane::Editor::FieldKind::ReadOnly:
                     default:
-                        ImGui::BeginDisabled();
-                        ImGui::Text("%s (unsupported)", label.c_str());
-                        ImGui::EndDisabled();
+                        // A type this panel has no widget for. It keeps the grid's
+                        // rhythm rather than breaking out of it as bare mid-list
+                        // text: the name is in column 0 (greyed, like every other
+                        // uneditable label) and only the word goes here. The C++
+                        // type is deliberately absent -- the row's tooltip already
+                        // carries the raw identifier, which is what you grep for.
+                        //
+                        // TextDisabled rather than a BeginDisabled wrap: this is
+                        // the same grey the label cell pushes, so the two halves
+                        // of a dead row match instead of the value being dimmed a
+                        // second time by the disabled alpha.
+                        //
+                        // AlignTextToFramePadding for the ROW HEIGHT, not the
+                        // baseline (the label cell already handed this cell its
+                        // baseline via RowTextBaseline): it is what keeps a
+                        // widget-less row as tall as its neighbours instead of
+                        // collapsing to a line of text.
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("unsupported");
                         break;
                 }
                 EndGesture();
@@ -1806,11 +1996,18 @@ namespace Arcane::Editor
                 // asking about the LAST item is asking about the field: ImGui
                 // restores g.LastItemData when a window closes (imgui.cpp:8849), so
                 // neither the asset-pick popup nor the SetTooltip below can
-                // retarget it. The asset-ref arm ends on a trailing name instead
-                // and has already answered above. Asked after EndGesture for the
-                // same reason the gesture is bracketed at all -- nothing may sit
-                // between a widget and the item-state reads that close its
+                // retarget it. The asset-ref arm may end on its clear button
+                // instead and has already answered above. Asked after EndGesture
+                // for the same reason the gesture is bracketed at all -- nothing
+                // may sit between a widget and the item-state reads that close its
                 // transaction.
+                //
+                // ORed with the label cell's own answer: the display name is a
+                // separate item in column 0 now, and pointing at it is pointing at
+                // the field. (Before the grid, a numeric row's name was INSIDE the
+                // widget's rect -- DragScalar builds total_bb from its label,
+                // imgui_widgets.cpp:2734, and registers THAT at :2738 -- so the
+                // single query covered both.)
                 //
                 // The raw identifier is always in the tooltip, so a friendly label
                 // never costs the ability to grep for the field. ForTooltip adds a
@@ -1820,7 +2017,7 @@ namespace Arcane::Editor
                 // Astra::ReadOnly row still explains itself on hover.
                 if (!hovered.has_value())
                     hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
-                if (*hovered)
+                if (labelHovered || *hovered)
                 {
                     const std::string_view tip = Arcane::Editor::TooltipOfField(f);
                     if (tip.empty())
@@ -2199,11 +2396,22 @@ namespace Arcane::Editor
                     }
 
                     // Uncategorised pass -- `activeCategory` is empty by
-                    // default. Nothing is pushed or drawn around this call, so
-                    // while no field carries a Category attribute it is the same
-                    // drive, over the same fields, under the same ImGui ids as
-                    // before grouping existed.
-                    ci.descriptor->visitFields(ci.data, visitor);
+                    // default. While no field carries a Category attribute this
+                    // is the same drive over the same fields as before grouping
+                    // existed.
+                    //
+                    // The grid is opened HERE rather than inside the visitor so
+                    // the component header and the category sub-headers below
+                    // stay full-width, exactly as UE lays them out; the visitor
+                    // only ever emits rows. BeginFieldGrid returning false is
+                    // ImGui culling the table, and then no row may be submitted
+                    // -- the same "field stopped being drawn" shape as a
+                    // collapsed header, which GestureCloseGuard already covers.
+                    if (BeginFieldGrid(state))
+                    {
+                        ci.descriptor->visitFields(ci.data, visitor);
+                        EndFieldGrid();
+                    }
 
                     for (const std::string_view cat : categories)
                     {
@@ -2217,7 +2425,15 @@ namespace Arcane::Editor
                                               "%.*s", static_cast<int>(cat.size()), cat.data()))
                         {
                             visitor.activeCategory = cat;
-                            ci.descriptor->visitFields(ci.data, visitor);
+                            // Its own grid, sharing the panel-wide label width
+                            // (state.labelColWidth) -- so the split lines up
+                            // across sections while the sub-header above it still
+                            // spans the full row.
+                            if (BeginFieldGrid(state))
+                            {
+                                ci.descriptor->visitFields(ci.data, visitor);
+                                EndFieldGrid();
+                            }
                             ImGui::TreePop();
                         }
                         ImGui::PopID();
