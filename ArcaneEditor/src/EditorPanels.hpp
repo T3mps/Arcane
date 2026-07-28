@@ -139,11 +139,24 @@ namespace Arcane::Editor
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
                            OutlinerState& state);
 
-    // App-level effects the Inspector panel triggers but does not own (dialog
-    // launches never happen inside a panel draw -- same rule as
-    // AssetBrowserActions). Sprite-asset arc, Task 4: dropping a TEXTURE onto a
-    // sprite-typed AssetRef field mints (or reuses) the wrapping .arcsprite;
-    // EditorApp builds this ONCE (mintSpriteForTexture wraps
+    // App-level effect the Inspector panel triggers but does not own. UNLIKE
+    // AssetBrowserActions -- which only RETURNS a request and defers every
+    // effect until AFTER DrawAssetBrowserPanel returns ("Row actions the APP
+    // resolves after the draw", AssetBrowser.hpp) -- this callback runs its
+    // file IO + project-registry mutation SYNCHRONOUSLY, DURING
+    // DrawInspectorPanel's own draw; there is no deferred step here. That is
+    // safe because the Inspector draws AFTER the Asset Browser every frame
+    // (EditorApp::MainLoop: DrawEditorUi, which owns DrawAssetBrowserPanel,
+    // runs before DrawSelectionPanels, which owns DrawInspectorPanel) -- the
+    // Browser has already built and fully consumed its own per-frame entry
+    // snapshot by the time this callback can run, so mutating the project's
+    // asset registry here cannot invalidate anything the Browser is still
+    // iterating this frame. The one rule that DOES carry over unchanged: no
+    // dialogs launch from inside a panel draw, on either path.
+    //
+    // Sprite-asset arc, Task 4: dropping a TEXTURE onto a sprite-typed
+    // AssetRef field mints (or reuses) the wrapping .arcsprite; EditorApp
+    // builds this ONCE (mintSpriteForTexture wraps
     // EditorApp::MintOrReuseSpriteForTexture) and passes it in by pointer every
     // frame, so the field visitor never needs to know about EditorApp itself.
     struct InspectorServices

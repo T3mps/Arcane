@@ -215,7 +215,11 @@ namespace Arcane::Editor
 
         const auto texPath = project->ResolveAsset(Arcane::AssetId::FromGuid(textureGuid));
         if (!texPath)
+        {
+            ARC_WARN("Arcane Editor: could not mint a sprite -- texture '{}' did not "
+                     "resolve to a file", textureGuid.ToString());
             return {};
+        }
         std::filesystem::path target = texPath->parent_path() / (texPath->stem().string() + ".arcsprite");
         for (int i = 1; std::filesystem::exists(target); ++i)   // never clobber an existing file
             target = texPath->parent_path() /
@@ -232,8 +236,17 @@ namespace Arcane::Editor
         }
         // Register immediately -- same reasoning as CreateInstanceAt above: an
         // Inspector drop that mints and then assigns the Guid this same frame
-        // needs the registry to already know the new asset.
-        m_runtime->RegisterCreatedAsset(target);
+        // needs the registry to already know the new asset. Checked, unlike
+        // CreateInstanceAt's fire-and-forget call: RegisterCreatedAsset ->
+        // Project::RegisterAsset returns nullopt when the target is outside
+        // every content root (Project.cpp:222-226, which already ARC_WARNs
+        // why) -- returning the freshly-minted id anyway would hand back a
+        // Guid that can never resolve, writing a permanently broken reference
+        // into whatever field triggered the mint. The file stays on disk
+        // (never deleted) and the caller sees Nil, so the drop/menu action is
+        // a diagnosable no-op instead.
+        if (!m_runtime->RegisterCreatedAsset(target))
+            return {};
         return data.id;
     }
 

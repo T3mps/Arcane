@@ -1498,8 +1498,25 @@ namespace Arcane::Editor
             std::string                       typeName;
             const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
             // Sprite-asset arc, Task 4: texture-drop auto-mint on a Sprite-typed
-            // AssetRef field. May be null (Play mode / no callback wired) -- the
-            // AssetRef arm below checks it before touching it.
+            // AssetRef field. Wired UNCONDITIONALLY today -- EditorAppFrame.cpp
+            // passes &m_inspectorServices on every DrawInspectorPanel call, and
+            // EditorApp::Init sets mintSpriteForTexture unconditionally (not
+            // gated on Play/Edit) -- so in the shipping app this is never
+            // actually null. The null check in the AssetRef arm below is
+            // defensive, for a caller that does not wire InspectorServices at
+            // all (DrawInspectorPanel's `services` parameter defaults to
+            // nullptr).
+            //
+            // Play-mode note: `stack` above IS gated (null while Play runs,
+            // binding.editMode -> nullptr), but `services` is not, so a
+            // texture drop during Play still mints/reuses the .arcsprite and
+            // calls ApplyGuidImmediate, which applies the Guid edit via its
+            // unconditional ForEachTarget even with stack == nullptr (it only
+            // skips opening a ScopedTransaction). A Play-mode texture drop
+            // therefore mints the file and writes the Guid with NO undo step
+            // -- exactly the no-undo-in-Play behavior every other AssetRef
+            // drop already has; this branch adds a minted file as a
+            // consequence, not a new undo hole.
             const InspectorServices*          services = nullptr;
 
             // The Inspector's live search, set per component before the visit.

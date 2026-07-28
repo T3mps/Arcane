@@ -104,10 +104,18 @@ TEST_CASE("AssetKindOf classifies sprites, heuristic keeps material/texture orde
 {
     CHECK(AssetKindOf("game://sprites/hero.arcsprite") == AssetKind::Sprite);
     CHECK(AssetKindFilterForFieldName("sprite") == static_cast<int>(AssetKind::Sprite));
-    // Sprite is checked AFTER material/texture in the heuristic (a field named
-    // "spriteMaterial" must still resolve Material) -- this pins that adding
-    // the sprite branch does not disturb the existing material match.
+    // A plain "material" field name has no "sprite" substring, so it never
+    // even reaches the sprite branch -- this pins that adding that branch
+    // leaves an UNRELATED field name unaffected, but it cannot by itself
+    // detect a reordering (see the spriteMaterial case right below, which
+    // can).
     CHECK(AssetKindFilterForFieldName("material") == static_cast<int>(AssetKind::Material)); // order preserved
+    // THIS is the order-sensitive case: "spriteMaterial" contains BOTH
+    // substrings (a real field: SpriteRenderer::material, Components.hpp:88,
+    // sits beside SpriteRenderer::sprite, Components.hpp:78) and must still
+    // resolve Material -- a heuristic that checked "sprite" before
+    // "material" would return Sprite here instead and this CHECK would fail.
+    CHECK(AssetKindFilterForFieldName("spriteMaterial") == static_cast<int>(AssetKind::Material));
 }
 
 TEST_CASE("a .arcscene is a native JSON asset and gets a minted id", "[editor][project]")
