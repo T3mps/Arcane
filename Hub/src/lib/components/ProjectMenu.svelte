@@ -22,7 +22,11 @@
     onDelete: () => void;
   } = $props();
 
-  type Item = { label: string; run: () => void; danger?: boolean };
+  // `sep` draws the divider ABOVE the item; `danger` is only the red hover.
+  // Split on purpose: the divider marks where "act on the project" ends and
+  // "take it off this list" begins, and Remove belongs below that line without
+  // borrowing Delete's warning colour -- it only edits the list.
+  type Item = { label: string; run: () => void; danger?: boolean; sep?: boolean };
   // A MISSING project gets exactly the two items that still mean something:
   // repair the row or retire it. Reveal, Rename, arguments and Delete all act
   // on disk state that is not there, and a menu of disabled items would make
@@ -32,22 +36,23 @@
   const items = $derived<Item[]>(project.missing
     ? [
         { label: "Locate…", run: onLocate },
-        { label: "Remove from list", run: onForget },
+        { label: "Remove from list", run: onForget, sep: true },
       ]
     : [
         { label: "Show in Explorer", run: onReveal },
         { label: "Rename project…", run: onRename },
         { label: "Command-line arguments…", run: onArgs },
         // No ellipsis and no confirmation: this only edits the list, and the
-        // entry comes back through Add. It sits directly above Delete so the
-        // two reads -- "stop showing me this" and "erase the folder" -- are
-        // adjacent but visibly different kinds of item.
-        { label: "Remove from list", run: onForget },
-        // Last and set apart -- the only irreversible one. The ellipsis is what
-        // every other item here uses to mean "opens something first", so it is
-        // DROPPED when confirmation is off: the item then deletes on the click,
-        // and a label promising a dialog that will not appear is the worst
-        // place in this app to be inaccurate.
+        // entry comes back through Add. It opens the below-the-line group it
+        // shares with Delete -- the two reads, "stop showing me this" and
+        // "erase the folder", sit together but only Delete carries the
+        // warning colour.
+        { label: "Remove from list", run: onForget, sep: true },
+        // Last -- the only irreversible one. The ellipsis is what every other
+        // item here uses to mean "opens something first", so it is DROPPED
+        // when confirmation is off: the item then deletes on the click, and a
+        // label promising a dialog that will not appear is the worst place in
+        // this app to be inaccurate.
         {
           label: confirmDelete ? "Delete project…" : "Delete project",
           run: onDelete,
@@ -206,7 +211,8 @@
        aria-label="Actions for {project.name}" onkeydown={onMenuKeys}
        oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); }}>
     {#each items as it (it.label)}
-      <button class="item" class:danger={it.danger} type="button" role="menuitem"
+      <button class="item" class:danger={it.danger} class:sep={it.sep}
+              type="button" role="menuitem"
               tabindex="-1" onclick={() => choose(it)}>{it.label}</button>
     {/each}
   </div>
@@ -232,10 +238,14 @@
           background: none; color: var(--text); cursor: default;
           transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
   .item:hover { background: rgba(255, 255, 255, .06); }
+  /* The divider lives on the item that OPENS the group, not on `danger`: the
+     top corners square off so the hover wash does not float rounded against
+     the line it sits under. */
+  .sep { margin-top: 4px; border-top: 1px solid var(--border-soft);
+         border-radius: 0 0 5px 5px; }
   /* Coloured on hover only, so an open menu is not a wall of red for an action
      that only edits a list. Matches Button's `danger` variant. */
-  .danger { color: var(--text-muted); margin-top: 4px;
-            border-top: 1px solid var(--border-soft); border-radius: 0 0 5px 5px; }
+  .danger { color: var(--text-muted); }
   .danger:hover { background: color-mix(in srgb, var(--fail-accent) 12%, transparent);
                   color: var(--fail); }
 
