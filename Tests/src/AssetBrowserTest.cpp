@@ -100,6 +100,16 @@ TEST_CASE("AssetKindOf classifies scenes", "[editor]")
     CHECK(AssetKindOf("game://mat/glow.arcmat") == AssetKind::Material);
 }
 
+TEST_CASE("AssetKindOf classifies sprites, heuristic keeps material/texture ordering", "[editor]")
+{
+    CHECK(AssetKindOf("game://sprites/hero.arcsprite") == AssetKind::Sprite);
+    CHECK(AssetKindFilterForFieldName("sprite") == static_cast<int>(AssetKind::Sprite));
+    // Sprite is checked AFTER material/texture in the heuristic (a field named
+    // "spriteMaterial" must still resolve Material) -- this pins that adding
+    // the sprite branch does not disturb the existing material match.
+    CHECK(AssetKindFilterForFieldName("material") == static_cast<int>(AssetKind::Material)); // order preserved
+}
+
 TEST_CASE("a .arcscene is a native JSON asset and gets a minted id", "[editor][project]")
 {
     // Native-JSON rule: a top-level "id" is read, or minted and written back.

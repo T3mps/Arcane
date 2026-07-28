@@ -31,9 +31,10 @@ namespace Arcane::Editor
         Font,
         Data,
         Scene,
+        Sprite,
         Other,
     };
-    inline constexpr int kAssetKindCount = 7;
+    inline constexpr int kAssetKindCount = 8;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
     // texture slots accept it). Payload bytes = AssetDragPayload (POD).
@@ -59,6 +60,8 @@ namespace Arcane::Editor
             return AssetKind::Material;
         if (ext == ".arcscene")
             return AssetKind::Scene;
+        if (ext == ".arcsprite")
+            return AssetKind::Sprite;
         for (const char* e : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" })
             if (ext == e) return AssetKind::Texture;
         for (const char* e : { ".wav", ".ogg", ".mp3", ".flac" })
@@ -106,8 +109,12 @@ namespace Arcane::Editor
     // Inspector asset-ref (Guid) fields: infer the expected asset kind from the
     // FIELD NAME -- reflection carries no per-field attributes yet, so this
     // heuristic is the seam until it does. Case-insensitive substring match:
-    // "material" -> Material, "texture" -> Texture; anything else -> -1 (all
-    // kinds, same convention as MatchesFilter's kindFilter).
+    // "material" -> Material, "texture" -> Texture, "sprite" -> Sprite;
+    // anything else -> -1 (all kinds, same convention as MatchesFilter's
+    // kindFilter). Sprite is checked AFTER material/texture ON PURPOSE: a
+    // field named e.g. "spriteMaterial" contains both substrings and must
+    // still resolve Material (the material IS what such a field means), so
+    // the material/texture branches have to win the race.
     inline int AssetKindFilterForFieldName(std::string_view fieldName)
     {
         std::string lower(fieldName);
@@ -117,6 +124,8 @@ namespace Arcane::Editor
             return static_cast<int>(AssetKind::Material);
         if (lower.find("texture") != std::string::npos)
             return static_cast<int>(AssetKind::Texture);
+        if (lower.find("sprite") != std::string::npos)
+            return static_cast<int>(AssetKind::Sprite);
         return -1;
     }
 
@@ -159,6 +168,12 @@ namespace Arcane::Editor
     {
         Arcane::Guid createInstanceOf;   // context menu "New Instance..." on a material
 
+        // Context menu "Create Sprite" on a texture row: mint (or reuse) a
+        // .arcsprite that wraps this texture (sprite-asset spec, Section 3).
+        // The panel only hands back WHICH texture; the app resolves reuse-or-
+        // mint and opens the result (see AssetBrowserActions consumer).
+        Arcane::Guid createSpriteFrom;
+
         // A scene is NOT a DocumentHost document -- double-clicking one must load
         // it into the editor session (replacing the Edit-mode registry), not open
         // a tab. The panel hands back the resolved path; the host is the one that
@@ -175,9 +190,9 @@ namespace Arcane::Editor
     // when they are not). Every row is a kAssetDragType drag source.
     // Double-click routes into `docs` (materials open the shader editor) for
     // every kind EXCEPT Scene, which is not a document: its path comes back in
-    // AssetBrowserActions::openScene for the host to load. Material rows and
-    // scene rows each carry their own context menu ("New Instance..." /
-    // "Set as Boot Scene"); other kinds have none.
+    // AssetBrowserActions::openScene for the host to load. Material, scene,
+    // and texture rows each carry their own context menu ("New Instance..." /
+    // "Set as Boot Scene" / "Create Sprite"); other kinds have none.
     AssetBrowserActions DrawAssetBrowserPanel(AssetBrowserState& state,
                                               const Arcane::Project* project,
                                               DocumentHost& docs);

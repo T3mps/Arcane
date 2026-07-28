@@ -23,6 +23,10 @@ namespace Arcane::Editor
                 case AssetKind::Font:     return ICON_LC_TYPE;
                 case AssetKind::Data:     return ICON_LC_FILE_JSON;
                 case AssetKind::Scene:    return ICON_LC_CLAPPERBOARD;
+                // ICON_LC_STICKER exists in IconsLucide.h (grepped; ICON_LC_GHOST is
+                // also present but STICKER reads as "sprite" and is preferred by the
+                // brief's fallback order).
+                case AssetKind::Sprite:   return ICON_LC_STICKER;
                 case AssetKind::Other:    return ICON_LC_FILE;
             }
             return ICON_LC_FILE;
@@ -38,6 +42,7 @@ namespace Arcane::Editor
                 case AssetKind::Font:     return "Font";
                 case AssetKind::Data:     return "Data";
                 case AssetKind::Scene:    return "Scene";
+                case AssetKind::Sprite:   return "Sprite";
                 case AssetKind::Other:    return "Other";
             }
             return "Other";
@@ -120,6 +125,14 @@ namespace Arcane::Editor
                 {
                     if (ImGui::MenuItem("Set as Boot Scene"))
                         actions.setBootScene = e.guid;
+                    ImGui::EndPopup();
+                }
+                // Texture rows: context menu -> mint (or reuse) a .arcsprite wrapping
+                // this texture (Task 4, mirrors the Material menu above).
+                if (e.kind == AssetKind::Texture && ImGui::BeginPopupContextItem())
+                {
+                    if (ImGui::MenuItem("Create Sprite"))
+                        actions.createSpriteFrom = e.guid;
                     ImGui::EndPopup();
                 }
 

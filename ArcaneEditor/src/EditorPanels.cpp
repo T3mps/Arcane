@@ -1497,6 +1497,10 @@ namespace Arcane::Editor
             const Astra::ComponentDescriptor* descriptor = nullptr;
             std::string                       typeName;
             const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
+            // Sprite-asset arc, Task 4: texture-drop auto-mint on a Sprite-typed
+            // AssetRef field. May be null (Play mode / no callback wired) -- the
+            // AssetRef arm below checks it before touching it.
+            const InspectorServices*          services = nullptr;
 
             // The Inspector's live search, set per component before the visit.
             // `componentDisplayName` is the header's prose name, which is part of
@@ -2067,6 +2071,22 @@ namespace Arcane::Editor
                                 const auto* payload = static_cast<const Arcane::Editor::AssetDragPayload*>(p->Data);
                                 if (kindFilter < 0 || static_cast<int>(payload->kind) == kindFilter)
                                     ApplyGuidImmediate(rawName, f, instance, payload->guid);
+                                // Sprite-asset arc, Task 4: dropping a TEXTURE on a sprite-typed
+                                // field auto-mints (or reuses) the wrapping .arcsprite -- Unity's
+                                // drop-and-go on UE's explicit-asset storage (sprite-asset spec,
+                                // Section 3). The mint runs OUTSIDE ApplyGuidImmediate's
+                                // ScopedTransaction (see MintOrReuseSpriteForTexture,
+                                // EditorAppProject.cpp), so undo covers only the Guid edit --
+                                // undoing this drop does NOT delete the minted file, same as any
+                                // created asset outliving a later edit to a field referencing it.
+                                else if (kindFilter == static_cast<int>(Arcane::Editor::AssetKind::Sprite)
+                                        && payload->kind == Arcane::Editor::AssetKind::Texture
+                                        && services && services->mintSpriteForTexture)
+                                {
+                                    if (const Arcane::Guid minted = services->mintSpriteForTexture(payload->guid);
+                                        minted.IsValid())
+                                        ApplyGuidImmediate(rawName, f, instance, minted);
+                                }
                             }
                             ImGui::EndDragDropTarget();
                         }
@@ -2332,7 +2352,8 @@ namespace Arcane::Editor
 
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                            const Arcane::Project* project, InspectorState& state)
+                            const Arcane::Project* project, InspectorState& state,
+                            const InspectorServices* services)
     {
         // FIRST local, so it destructs LAST -- see GestureCloseGuard.
         const GestureCloseGuard gestureGuard{ undo, state };
@@ -2616,6 +2637,7 @@ namespace Arcane::Editor
                     visitor.descriptor = ci.descriptor;
                     visitor.typeName   = typeName;
                     visitor.project    = project;
+                    visitor.services   = services;
                     visitor.gestureTxn  = &state.gestureTxn;
                     visitor.gestureItem = &state.gestureItem;
                     // Wired even while Play runs (unlike `stack`): these carry

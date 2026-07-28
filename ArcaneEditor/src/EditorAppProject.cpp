@@ -18,6 +18,7 @@
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Sprite/SpriteAsset.hpp>   // Save/LoadSpriteAsset (MintOrReuseSpriteForTexture)
 
 #include <ProjectBoot.hpp>
 
@@ -173,6 +174,67 @@ namespace Arcane::Editor
         // registry to know BOTH this instance and its parent right now.
         m_runtime->RegisterCreatedAsset(path);
         m_documents.OpenPath(path);
+    }
+
+    // Reuse-or-mint policy (sprite-asset spec, Section 3): exactly one existing
+    // .arcsprite referencing this texture -> reuse it; zero or several -> mint a
+    // fresh sibling (never guess among duplicates).
+    //
+    // WHY the linear scan: this loads every registered .arcsprite off disk on
+    // EACH call to find matches by `texture`, same shape as PollMaterialWatch's
+    // sweep above -- registries are small today (dozens, not thousands, of
+    // sprite assets per project), so a per-call scan is the simplest correct
+    // thing. It would need a texture->sprites index (built once, invalidated on
+    // sprite save/delete like m_materialMtimes) if per-project sprite counts
+    // grow large enough for this to show up as a hitch; that index does not
+    // exist yet and is not built here.
+    Arcane::Guid EditorApp::MintOrReuseSpriteForTexture(const Arcane::Guid& textureGuid)
+    {
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project || !textureGuid.IsValid())
+            return {};
+
+        Arcane::Guid unique{};
+        int matches = 0;
+        for (const auto& [guid, mount] : project->Registry().All())
+        {
+            if (Arcane::Editor::AssetKindOf(mount) != Arcane::Editor::AssetKind::Sprite)
+                continue;
+            const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(guid));
+            if (!p)
+                continue;
+            const auto data = Arcane::LoadSpriteAsset(*p);
+            if (data && data->texture == textureGuid)
+            {
+                ++matches;
+                unique = guid;
+            }
+        }
+        if (matches == 1)
+            return unique;   // exactly one match -- reuse it, never guess among duplicates
+
+        const auto texPath = project->ResolveAsset(Arcane::AssetId::FromGuid(textureGuid));
+        if (!texPath)
+            return {};
+        std::filesystem::path target = texPath->parent_path() / (texPath->stem().string() + ".arcsprite");
+        for (int i = 1; std::filesystem::exists(target); ++i)   // never clobber an existing file
+            target = texPath->parent_path() /
+                     (texPath->stem().string() + "-" + std::to_string(i) + ".arcsprite");
+
+        Arcane::SpriteAssetData data;
+        data.id      = Arcane::Guid::Generate();
+        data.name    = target.stem().string();
+        data.texture = textureGuid;
+        if (!Arcane::SaveSpriteAsset(target, data))
+        {
+            ARC_WARN("Arcane Editor: could not mint a sprite at '{}'", target.generic_string());
+            return {};
+        }
+        // Register immediately -- same reasoning as CreateInstanceAt above: an
+        // Inspector drop that mints and then assigns the Guid this same frame
+        // needs the registry to already know the new asset.
+        m_runtime->RegisterCreatedAsset(target);
+        return data.id;
     }
 
     void EditorApp::CreateMaterialAt(std::filesystem::path path)

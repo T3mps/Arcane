@@ -375,6 +375,12 @@ namespace Arcane::Editor
                 std::make_unique<Arcane::PostChainCache>(std::move(postServices));
         }
 
+        // Sprite-asset arc, Task 4: built once here rather than per-frame in
+        // DrawSelectionPanels -- the callback itself is stable (always routes
+        // through MintOrReuseSpriteForTexture), only the argument changes.
+        m_inspectorServices.mintSpriteForTexture =
+            [this](const Arcane::Guid& textureGuid) { return MintOrReuseSpriteForTexture(textureGuid); };
+
         // Task 7: open into the project's boot scene, now that the plugin has
         // loaded (a scene naming a component the game module registers would
         // otherwise silently drop it) and m_undo exists (Adopt records the

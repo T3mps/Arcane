@@ -1136,6 +1136,21 @@ namespace Arcane::Editor
                                             "Arcane Material", "arcmat",
                                             contentDir.empty() ? nullptr : contentDir.c_str());
         }
+        if (browserActions.createSpriteFrom.IsValid())
+        {
+            // Browser-initiated mint OPENS the new sprite document (the user
+            // right-clicked a specific texture asking for exactly this); the
+            // Inspector's texture-drop auto-mint below does NOT -- that one is
+            // a means to filling a field, not a request to edit the sprite.
+            if (const Arcane::Guid minted =
+                    MintOrReuseSpriteForTexture(browserActions.createSpriteFrom);
+                minted.IsValid())
+            {
+                if (const Arcane::Project* proj = m_runtime->CurrentProject())
+                    if (const auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(minted)))
+                        m_documents.OpenPath(*p);
+            }
+        }
         if (!browserActions.openScene.empty())
         {
             // A scene double-clicked in the browser is not a document -- it
@@ -1351,7 +1366,7 @@ namespace Arcane::Editor
                                           *m_undo, m_editBinding, m_outliner);
         Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
                                            m_editBinding, m_runtime->CurrentProject(),
-                                           m_inspector);
+                                           m_inspector, &m_inspectorServices);
 
         // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
         // composited into the viewport texture above -- not the editor context.)

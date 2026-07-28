@@ -5,8 +5,10 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
+#include <Arcane/Guid.hpp>   // InspectorServices::mintSpriteForTexture
 #include <imgui.h>          // ImGuiID (InspectorState parks the gesture owner's item id)
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -137,6 +139,18 @@ namespace Arcane::Editor
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
                            OutlinerState& state);
 
+    // App-level effects the Inspector panel triggers but does not own (dialog
+    // launches never happen inside a panel draw -- same rule as
+    // AssetBrowserActions). Sprite-asset arc, Task 4: dropping a TEXTURE onto a
+    // sprite-typed AssetRef field mints (or reuses) the wrapping .arcsprite;
+    // EditorApp builds this ONCE (mintSpriteForTexture wraps
+    // EditorApp::MintOrReuseSpriteForTexture) and passes it in by pointer every
+    // frame, so the field visitor never needs to know about EditorApp itself.
+    struct InspectorServices
+    {
+        std::function<Arcane::Guid(const Arcane::Guid&)> mintSpriteForTexture;
+    };
+
     // Show the selected entity's components (via Registry::InspectEntity) and edit
     // reflected fields in place; unsupported types render read-only. Each field
     // edit gesture is bracketed into `undo` (Begin+SnapshotComponent on first
@@ -220,5 +234,6 @@ namespace Arcane::Editor
     };
     void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                            const Arcane::Project* project, InspectorState& state);
+                            const Arcane::Project* project, InspectorState& state,
+                            const InspectorServices* services = nullptr);
 }

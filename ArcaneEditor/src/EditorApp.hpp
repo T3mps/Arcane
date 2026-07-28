@@ -195,6 +195,11 @@ namespace Arcane::Editor
         // Inspector panel state: holds the field-edit gesture's CommandStack
         // ownership token across the frames the gesture spans (see InspectorState).
         Arcane::Editor::InspectorState  m_inspector;
+        // Sprite-asset arc, Task 4: built ONCE in Init (mintSpriteForTexture
+        // wraps MintOrReuseSpriteForTexture) and handed to DrawInspectorPanel
+        // every frame, so the field visitor's texture-drop auto-mint branch
+        // never needs to know about EditorApp itself.
+        Arcane::Editor::InspectorServices m_inspectorServices;
 
         // Editor undo/redo history. Deliberately NOT cleared on Play: Stop restores
         // the pre-Play registry, so the edits behind these entries are still on
@@ -390,6 +395,14 @@ namespace Arcane::Editor
         // + open its doc. Legacy text-owned files still open via OpenPath.
         void CreateMaterialAt(std::filesystem::path path);
         void CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);
+        // Reuse-or-mint policy (sprite-asset spec, Section 3): exactly one
+        // registered .arcsprite referencing `textureGuid` -> reuse its id;
+        // zero or several -> mint a fresh sibling .arcsprite next to the
+        // texture (never guess among duplicates). Nil on failure (no project,
+        // invalid input, or an unresolvable/unwritable path). Never opens a
+        // dialog; the caller (browser action consumer / Inspector drop
+        // branch) decides whether to also open a document.
+        Arcane::Guid MintOrReuseSpriteForTexture(const Arcane::Guid& textureGuid);
         Arcane::Editor::DocServices MakeDocServices();
 
         // The Arcane logo, shown at the left of the transport toolbar (Unity-style). A
