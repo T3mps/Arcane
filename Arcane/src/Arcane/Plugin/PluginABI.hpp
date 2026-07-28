@@ -52,7 +52,19 @@ namespace Arcane
     //     two more appended name-keyed component types, and the Not<Hidden>
     //     filter in the plugin-compiled RenderSubmissionSystem is behavioral
     //     (a stale plugin just doesn't honor hiding). Still NO bump.
-    inline constexpr uint32_t kGamePluginABIVersion = 7;
+    // v8 (2026-07-28): the sprite-asset arc re-shaped SpriteRenderer's LAYOUT --
+    //     textureId (uint32) + size (vec2) removed, a Guid `sprite` added first --
+    //     so tint/sortingLayer/orderInLayer/shape/material all sit at new
+    //     offsets, and TextureTable was deleted from SceneResources.hpp. Plugins
+    //     compile both headers themselves (components + the header-only
+    //     RenderSubmissionSystem), which is the same change class the v6 entry
+    //     above (:34-35) bumped for. Unlike v6 the failure is not a vtable slide
+    //     but the plugin's own copy of submission reading the component at stale
+    //     offsets -- a tint read out of the dead size field, sorting keys out of
+    //     tint -- and resolving a TextureTable resource the engine no longer
+    //     registers. Corruption rather than a guaranteed AV, and silent either
+    //     way; reject the pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 8;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
