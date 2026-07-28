@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
@@ -28,11 +29,15 @@
 #include <glm/glm.hpp>
 #include <Json.hpp>
 
+#include <spdlog/sinks/callback_sink.h>
+
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <string>
 #include <vector>
 
 using Catch::Approx;
@@ -199,6 +204,34 @@ namespace
         Arcane::RegisterSceneComponents(*reg);
         return reg;
     }
+
+    // Log-capture idiom (mirrors MosaicDiagnosticsTest.cpp's AttachCapture):
+    // attach a callback sink to the engine logger so the "scene load skipped a
+    // component" WARN can be asserted on directly instead of desk-verified only.
+    std::shared_ptr<spdlog::sinks::callback_sink_mt> AttachLogCapture(std::string& out)
+    {
+        auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
+            [&out](const spdlog::details::log_msg& m) { out.assign(m.payload.data(), m.payload.size()); });
+        Arcane::Log::Engine()->sinks().push_back(cb);
+        return cb;
+    }
+    void DetachLogCapture(const std::shared_ptr<spdlog::sinks::callback_sink_mt>& cb)
+    {
+        auto& sinks = Arcane::Log::Engine()->sinks();
+        sinks.erase(std::remove(sinks.begin(), sinks.end(), cb), sinks.end());
+    }
+
+    // Reflected, but deliberately never registered as a component on any
+    // registry in this file -- exercises AddComponentResult::
+    // SkippedUnregistered (the "reflected but not registered -- plugin not
+    // loaded?" branch), as opposed to a wholly-unknown type name.
+    struct ReflectedNotRegistered { int value = 0; };
+}
+namespace
+{
+    ASTRA_REFLECT_TYPE(ReflectedNotRegistered)
+    ASTRA_REFLECT_FIELD(ReflectedNotRegistered, value)
+    ASTRA_END_REFLECT_TYPE()
 }
 
 TEST_CASE("Scene LoadJson rejects malformed/mis-versioned documents without throwing", "[serialization][negative][scene]")
@@ -232,24 +265,79 @@ TEST_CASE("Scene LoadJson rejects malformed/mis-versioned documents without thro
         CHECK_FALSE(res);
     }
 
-    SECTION("unknown component type is skipped; the scene still loads")
+    // Regression coverage for the entity-rename incident (2026-07-27,
+    // EntityInfo->Identity): a scene JSON carrying an orphaned/bogus component
+    // key used to be dropped with NO trace anywhere -- LoadJson tolerated it
+    // (by design, forward-compat) but nothing logged it, so the loss was
+    // invisible until the scene was re-saved and the data was gone for good.
+    // These two sections prove both halves of the fix: the scene still loads
+    // (a valid sibling component on the SAME entity survives untouched), and
+    // the skip is now surfaced through the engine logger.
+    SECTION("unknown component type is skipped; the scene still loads; the skip is logged")
     {
         auto reg = FreshSceneReg(keep);
+        const std::string transformName(Astra::GetMeta<Arcane::Transform>()->typeName);
+
         nlohmann::json entry;
         entry["components"]["Totally::Unknown::Type"] = nlohmann::json::object();
+        entry["components"][transformName] = nlohmann::json::object();   // valid sibling component
         entry["parent"] = -1;
         nlohmann::json doc;
         doc["version"] = Arcane::Scene::kSceneJsonVersion;
         doc["entities"] = nlohmann::json::array({ entry });
 
+        std::string captured;
+        auto cb = AttachLogCapture(captured);
         bool res = false;
         CHECK_NOTHROW(res = Arcane::Scene::LoadJson(*reg, doc));
+        DetachLogCapture(cb);
+
         CHECK(res);   // structurally valid -> loads; the unknown component is dropped
 
+        // The valid sibling component on the same entity is intact -- the skip
+        // does not take the rest of the entity down with it.
         int locals = 0;
         reg->CreateView<Arcane::Transform>().ForEach(
             [&](Astra::Entity, Arcane::Transform&) { ++locals; });
-        CHECK(locals == 0);
+        CHECK(locals == 1);
+
+        // The skip was surfaced through the engine logger, naming the unknown
+        // type and warning about the consequence of re-saving.
+        CHECK(captured.find("Totally::Unknown::Type") != std::string::npos);
+        CHECK(captured.find("unknown component") != std::string::npos);
+        CHECK(captured.find("permanently") != std::string::npos);
+    }
+
+    SECTION("reflected-but-unregistered component is skipped, distinctly from an unknown type, and logged")
+    {
+        // Same shape as above, but the key names a type that IS reflected
+        // (has a TypeMeta) yet was never registered as a component on this
+        // registry -- the "plugin not loaded" case, which AddComponentByTypeName
+        // must distinguish from a wholly-unknown type name.
+        auto reg = FreshSceneReg(keep);
+        const std::string unregName(Astra::GetMeta<ReflectedNotRegistered>()->typeName);
+
+        nlohmann::json entry;
+        entry["components"][unregName] = nlohmann::json::object();
+        entry["parent"] = -1;
+        nlohmann::json doc;
+        doc["version"] = Arcane::Scene::kSceneJsonVersion;
+        doc["entities"] = nlohmann::json::array({ entry });
+
+        std::string captured;
+        auto cb = AttachLogCapture(captured);
+        bool res = false;
+        CHECK_NOTHROW(res = Arcane::Scene::LoadJson(*reg, doc));
+        DetachLogCapture(cb);
+
+        CHECK(res);   // structurally valid -> loads; the unregistered component is dropped
+
+        CHECK(captured.find(unregName) != std::string::npos);
+        CHECK(captured.find("not registered") != std::string::npos);
+        CHECK(captured.find("permanently") != std::string::npos);
+        // Distinct wording from the unknown-type case above -- proves the two
+        // causes are not collapsed into one indistinguishable message.
+        CHECK(captured.find("unknown component") == std::string::npos);
     }
 }
 

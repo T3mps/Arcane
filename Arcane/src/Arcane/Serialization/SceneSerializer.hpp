@@ -21,6 +21,7 @@
 // the same array. A version mismatch is detected and reported (LoadJson returns
 // false) rather than mis-parsed; the loader never throws (exception-free engine).
 
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Serialization/ReflectionJson.hpp>
@@ -138,15 +139,26 @@ namespace Arcane::Scene
 
     namespace Detail
     {
-        // Outcome of AddComponentByTypeName. Skipped: the type could not be
-        // instantiated at all (not reflected / not registered as a component) --
-        // forward-compat, the caller tolerates this and the scene still loads.
+        // Outcome of AddComponentByTypeName. The two Skipped* values are both
+        // "the type could not be instantiated at all" -- forward-compat, the
+        // caller tolerates this and the scene still loads -- but split by
+        // cause because the fix differs:
+        //   SkippedUnknownType   the name has NO reflection at all (typo, a
+        //                        renamed type whose old key is still on disk
+        //                        -- e.g. the 2026-07-27 EntityInfo->Identity
+        //                        rename, which is the incident that motivated
+        //                        LoadJson warning on skips at all).
+        //   SkippedUnregistered  the type IS reflected (TypeMeta exists) but
+        //                        was never registered on THIS registry's
+        //                        ComponentRegistry -- usually means the
+        //                        plugin/module that owns the type is not
+        //                        loaded in this process.
         // Added: instantiated and populated cleanly. Error: instantiated, but the
         // reflection reader latched an unsupported-field-type diagnostic (E02-3)
         // while populating it -- this must fail the whole load, not silently
         // install a partially-populated component with no signal anything went
         // wrong.
-        enum class AddComponentResult { Skipped, Added, Error };
+        enum class AddComponentResult { SkippedUnknownType, SkippedUnregistered, Added, Error };
 
         // Add-by-descriptor factory: instantiate a component by its reflected type
         // name and populate it from JSON via the reflection reader. Never throws.
@@ -155,9 +167,9 @@ namespace Arcane::Scene
                                            const nlohmann::json& fields)
         {
             const Astra::TypeMeta* meta = Astra::GetMetaByName(typeName);
-            if (!meta) return AddComponentResult::Skipped;
+            if (!meta) return AddComponentResult::SkippedUnknownType;
             const Astra::ComponentDescriptor* desc = creg->GetComponentDescriptorByHash(meta->typeHash);
-            if (!desc) return AddComponentResult::Skipped;   // reflected but not registered as a component
+            if (!desc) return AddComponentResult::SkippedUnregistered;   // reflected but not registered as a component
 
             const std::size_t bytes = desc->size ? desc->size : 1;
             const std::align_val_t align{ desc->alignment ? desc->alignment : 1 };
@@ -203,6 +215,19 @@ namespace Arcane::Scene
             std::vector<Astra::Entity> created;
             created.reserve(entities.size());
 
+            // File-order position of the entity currently being populated. This
+            // is the only entity identification available at skip time that is
+            // never in doubt: the entity's own components (e.g. Identity, which
+            // carries the human-readable name) may not have been added yet --
+            // walk order inside "components" follows nlohmann::json's key sort,
+            // not JSON-file order, and the skipped key can itself BE the
+            // identity component (exactly what happened in the incident that
+            // motivated this warning: a scene's "Arcane::EntityInfo" key,
+            // orphaned by the EntityInfo->Identity rename, was silently
+            // dropped). Do not attempt to read a name off `e` here -- there may
+            // not be one yet.
+            std::size_t entityIndex = 0;
+
             for (const auto& entry : entities)
             {
                 if (!entry.is_object()) return false;
@@ -231,11 +256,41 @@ namespace Arcane::Scene
                             Detail::AddComponentByTypeName(reg, creg, e, it.key(), *fields);
                         if (r == Detail::AddComponentResult::Error)
                             return false;   // E02-3: unsupported field type latched -- fail loud
-                        // Skipped: unknown/unregistered types are tolerated;
-                        // a structurally valid scene still loads.
+
+                        // Skipped (either cause): unknown/unregistered types are
+                        // tolerated -- a structurally valid scene still loads --
+                        // but this WARN is the whole point of this change: before
+                        // it, a skip left no trace anywhere, and re-saving the
+                        // scene afterward (SaveJson only ever walks the LIVE
+                        // roster) writes the file back out WITHOUT the dropped
+                        // component, permanently. The two causes get different
+                        // wording because they imply different next actions for
+                        // the user: a rename/typo to go fix in the scene file,
+                        // versus a plugin that needs to be loaded.
+                        // GetVersion() is VersionType (uint8_t by default) --
+                        // widened to unsigned so spdlog/fmt formats it as a
+                        // number, not as a raw character.
+                        if (r == Detail::AddComponentResult::SkippedUnknownType)
+                        {
+                            ARC_WARN("scene load: unknown component \"{}\" skipped on "
+                                     "entity #{} (id {}, v{}) -- re-saving this scene "
+                                     "will drop it permanently",
+                                     it.key(), entityIndex, e.GetID(),
+                                     static_cast<unsigned>(e.GetVersion()));
+                        }
+                        else if (r == Detail::AddComponentResult::SkippedUnregistered)
+                        {
+                            ARC_WARN("scene load: component \"{}\" is reflected but not "
+                                     "registered (plugin not loaded?) -- skipped on "
+                                     "entity #{} (id {}, v{}); re-saving this scene "
+                                     "will drop it permanently",
+                                     it.key(), entityIndex, e.GetID(),
+                                     static_cast<unsigned>(e.GetVersion()));
+                        }
                     }
                 }
                 created.push_back(e);
+                ++entityIndex;
             }
 
             for (size_t i = 0; i < entities.size(); ++i)
