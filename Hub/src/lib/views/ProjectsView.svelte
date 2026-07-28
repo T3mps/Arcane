@@ -3,6 +3,7 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import ProjectCard from "$lib/components/ProjectCard.svelte";
   import ProjectRow from "$lib/components/ProjectRow.svelte";
+  import type { ProjectActions } from "$lib/components/ProjectMenu.svelte";
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
   import { filterProjects, isCompatible, resolveEngine, type ProjectView } from "$lib/format";
   import type { EngineEntry, RecentProject } from "$lib/api";
@@ -11,23 +12,18 @@
   // app-level overlays that have to sit above the error banner, and +page is
   // the only stateful file by design.
   let { recents, engines, defaultEngine, busy, layout, confirmDelete,
-        onLaunch, onDelete, onOpen, onNew, onChangeEngine, onLayout,
-        onReveal, onRename, onArgs, onForget, onLocate }:
+        actions, onOpen, onNew, onLayout }:
     {
       recents: RecentProject[]; engines: EngineEntry[];
       defaultEngine: EngineEntry | null; busy: boolean;
       layout: ProjectView;
       /** Passed straight through to the action menu, which labels Delete by it. */
       confirmDelete: boolean;
-      onLaunch: (p: RecentProject) => void; onDelete: (p: RecentProject) => void;
+      /** The whole per-project vocabulary, forwarded untouched to card/row/menu. */
+      actions: ProjectActions;
+      /** View-level actions stay individual props: they are not per-project. */
       onOpen: () => void; onNew: () => void;
-      onChangeEngine: (p: RecentProject) => void;
       onLayout: (v: ProjectView) => void;
-      onReveal: (p: RecentProject) => void;
-      onRename: (p: RecentProject) => void;
-      onArgs: (p: RecentProject) => void;
-      onForget: (p: RecentProject) => void;
-      onLocate: (p: RecentProject) => void;
     } = $props();
 
   // Both layouts take the SAME props, so switching is a component swap rather
@@ -76,7 +72,8 @@
 <div class="meta">
   <p class="view-sub">
     {recents.length} {recents.length === 1 ? "project" : "projects"}
-    {#if incompatible > 0}&middot; {incompatible} need a different engine{/if}
+    {#if incompatible > 0}&middot; {incompatible}
+      {incompatible === 1 ? "needs" : "need"} a different engine{/if}
     {#if missing > 0}&middot; {missing} missing{/if}
   </p>
   <!-- aria-current, matching Sidebar and EngineRow: this is "which of a
@@ -119,14 +116,7 @@
         dangling: r.dangling,
         disabled: busy || !r.engine,
         confirmDelete,
-        onLaunch: () => onLaunch(p),
-        onDelete: () => onDelete(p),
-        onChangeEngine: () => onChangeEngine(p),
-        onReveal: () => onReveal(p),
-        onRename: () => onRename(p),
-        onArgs: () => onArgs(p),
-        onForget: () => onForget(p),
-        onLocate: () => onLocate(p),
+        actions,
       }}
       {#if layout === "grid"}
         <ProjectCard {...shared} />

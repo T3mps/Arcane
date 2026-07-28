@@ -1,5 +1,5 @@
 <script lang="ts">
-  import ProjectMenu from "$lib/components/ProjectMenu.svelte";
+  import ProjectMenu, { type ProjectActions } from "$lib/components/ProjectMenu.svelte";
   import { engineChipText, engineChipTitle, compatibilityNote, missingNote,
            projectDir } from "$lib/format";
   import { since, type RecentProject } from "$lib/api";
@@ -13,16 +13,13 @@
   // every other column right, and what makes a list scannable is the meta
   // lining up down the page, not each row being individually recognisable.
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
-        disabled = false, confirmDelete, onLaunch, onDelete, onChangeEngine,
-        onReveal, onRename, onArgs, onForget, onLocate }:
+        disabled = false, confirmDelete, actions }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       engineLabel: string; pinned: boolean; dangling: boolean;
       disabled?: boolean; confirmDelete: boolean;
-      onLaunch: () => void; onDelete: () => void;
-      onChangeEngine: () => void;
-      onReveal: () => void; onRename: () => void; onArgs: () => void;
-      onForget: () => void; onLocate: () => void;
+      /** The whole per-project vocabulary -- see ProjectActions in ProjectMenu. */
+      actions: ProjectActions;
     } = $props();
 
   // The FOLDER, not the .arcproj inside it. The file name only ever repeats the
@@ -49,7 +46,8 @@
      modal scrim and WindowChrome's double-click-to-maximize. -->
 <div class="row" class:incompat={!compatible && !gone} class:gone
      oncontextmenu={(e) => { e.preventDefault(); menu.openAt(e.clientX, e.clientY); }}>
-  <button class="hit" type="button" disabled={disabled || gone} onclick={onLaunch}
+  <button class="hit" type="button" disabled={disabled || gone}
+          onclick={() => actions.launch(project)}
           title={gone ? missingNote(project.path) : why} aria-label={project.name}>
     <span class="nm">{project.name}</span>
     <span class="path">{dir}</span>
@@ -59,7 +57,8 @@
 
   <!-- Sibling of .hit, not nested: an interactive control inside a button is
        invalid HTML and its clicks are not reliably delivered. -->
-  <button class="eng" type="button" disabled={disabled || gone} onclick={onChangeEngine}
+  <button class="eng" type="button" disabled={disabled || gone}
+          onclick={() => actions.changeEngine(project)}
           class:pin={pinned} class:missing={dangling} title={engineTitle}
           aria-label="Engine for {project.name}: {engineText}">
     <!-- A CSS dot, not a glyph: hollow = following the default, filled =
@@ -79,8 +78,7 @@
     <code class="abi badge">abi {project.engineAbi}</code>
   {/if}
 
-  <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete}
-               {onReveal} {onRename} {onArgs} {onForget} {onLocate} {onDelete} />
+  <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete} {actions} />
 </div>
 
 <style>

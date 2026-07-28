@@ -35,7 +35,9 @@
 </header>
 
 <p class="view-sub meta">
-  {engines.length} registered{#if selected} &middot; using {selected.build}{/if}
+  <!-- &nbsp; because Svelte trims the block's leading whitespace: a plain
+       space here rendered as "registered· using". -->
+  {engines.length} registered{#if selected}&nbsp;&middot; using {selected.build}{/if}
 </p>
 
 {#if engines.length === 0}

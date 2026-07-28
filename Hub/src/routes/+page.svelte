@@ -5,6 +5,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import WindowChrome from "$lib/components/WindowChrome.svelte";
   import Sidebar, { type View } from "$lib/components/Sidebar.svelte";
+  import type { ProjectActions } from "$lib/components/ProjectMenu.svelte";
   import ProjectsView from "$lib/views/ProjectsView.svelte";
   import EnginesView from "$lib/views/EnginesView.svelte";
   import PackagesView from "$lib/views/PackagesView.svelte";
@@ -253,6 +254,21 @@
     // string on save, so what is stored may differ from what was typed.
     settings = await loadSettings();
   });
+
+  // The whole per-project vocabulary as ONE object (type owned by ProjectMenu,
+  // which renders it). Declared after the handlers it references -- a const
+  // object literal evaluates immediately, so naming them earlier would hit the
+  // temporal dead zone.
+  const projectActions: ProjectActions = {
+    launch,
+    changeEngine: (p) => (choosingFor = p),
+    reveal: (p) => guard(() => revealProject(p.path)),
+    rename: (p) => (renaming = p),
+    args: (p) => (editingArgs = p),
+    forget: (p) => guard(() => forgetProject(p.path)),
+    locate,
+    delete: askDelete,
+  };
 </script>
 
 <svelte:window oncontextmenu={onContextMenu} />
@@ -281,14 +297,8 @@
                       defaultEngine={selectedEngine} {busy}
                       layout={settings.projectView}
                       confirmDelete={settings.confirmDelete}
-                      onLaunch={launch} onDelete={askDelete}
+                      actions={projectActions}
                       onOpen={addProject} onNew={() => (creating = true)}
-                      onChangeEngine={(p) => (choosingFor = p)}
-                      onReveal={(p) => guard(() => revealProject(p.path))}
-                      onRename={(p) => (renaming = p)}
-                      onArgs={(p) => (editingArgs = p)}
-                      onForget={(p) => guard(() => forgetProject(p.path))}
-                      onLocate={locate}
                       onLayout={(v) => applySettings({ ...settings, projectView: v })} />
       {:else if view === "engines"}
         <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion} {busy}

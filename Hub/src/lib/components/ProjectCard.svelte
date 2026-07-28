@@ -1,12 +1,11 @@
 <script lang="ts">
-  import ProjectMenu from "$lib/components/ProjectMenu.svelte";
+  import ProjectMenu, { type ProjectActions } from "$lib/components/ProjectMenu.svelte";
   import { coverFor, engineChipText, engineChipTitle, compatibilityNote,
            missingNote, projectDir } from "$lib/format";
   import { since, type RecentProject } from "$lib/api";
 
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
-        disabled = false, confirmDelete, onLaunch, onDelete, onChangeEngine,
-        onReveal, onRename, onArgs, onForget, onLocate }:
+        disabled = false, confirmDelete, actions }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       /** Build name of the engine that will actually launch this project. */
@@ -16,10 +15,8 @@
       /** Pinned to an engine that is no longer registered. */
       dangling: boolean;
       disabled?: boolean; confirmDelete: boolean;
-      onLaunch: () => void; onDelete: () => void;
-      onChangeEngine: () => void;
-      onReveal: () => void; onRename: () => void; onArgs: () => void;
-      onForget: () => void; onLocate: () => void;
+      /** The whole per-project vocabulary -- see ProjectActions in ProjectMenu. */
+      actions: ProjectActions;
     } = $props();
 
   const cover = $derived(coverFor(project.name, project.path));
@@ -60,7 +57,8 @@
 <div class="card" class:incompat={!compatible && !gone} class:gone
      oncontextmenu={(e) => { e.preventDefault(); menu.openAt(e.clientX, e.clientY); }}>
   <div class="top">
-    <button class="hit" type="button" disabled={disabled || gone} onclick={onLaunch}
+    <button class="hit" type="button" disabled={disabled || gone}
+            onclick={() => actions.launch(project)}
             title={gone ? missingNote(project.path) : why} aria-label={project.name}>
       <!-- The monogram, at BADGE scale. It was a 76px gradient band across the
            head of every card -- the last of the decorative-slab styling, and by
@@ -78,8 +76,7 @@
          things. In flow at the end of the header rather than floating over the
          card: absolutely positioned, it sat on top of whatever the name line
          needed, and the name is the one thing a tile must always show. -->
-    <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete}
-                 {onReveal} {onRename} {onArgs} {onForget} {onLocate} {onDelete} />
+    <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete} {actions} />
   </div>
 
   <div class="meta">
@@ -99,7 +96,8 @@
        button is invalid HTML and browsers do not deliver its clicks reliably.
        Behind a hairline because it is a different action from the rest of the
        card -- everything above launches, this changes what launches it. -->
-  <button class="eng" type="button" disabled={disabled || gone} onclick={onChangeEngine}
+  <button class="eng" type="button" disabled={disabled || gone}
+          onclick={() => actions.changeEngine(project)}
           class:pin={pinned} class:missing={dangling} title={engineTitle}
           aria-label="Engine for {project.name}: {engineText}">
     <!-- A CSS dot, not a glyph: hollow = following the default, filled =

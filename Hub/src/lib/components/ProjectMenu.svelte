@@ -1,25 +1,41 @@
+<script module lang="ts">
+  import type { RecentProject } from "$lib/api";
+
+  // The per-project action vocabulary, defined WHERE the menu is: this
+  // component owns "what can you do to a project", so the callback contract
+  // lives beside the item list it feeds. ONE object instead of eight props --
+  // the chain (+page -> ProjectsView -> Card/Row -> here) was four layers of
+  // hand-forwarded callbacks, and extending it meant touching every layer
+  // (the Locate... addition missed two destructures on its first pass, which
+  // is exactly the drift this collapses away).
+  export type ProjectActions = {
+    launch: (p: RecentProject) => void;
+    /** Open the pin-an-engine picker for this project. */
+    changeEngine: (p: RecentProject) => void;
+    reveal: (p: RecentProject) => void;
+    rename: (p: RecentProject) => void;
+    args: (p: RecentProject) => void;
+    /** Remove from the LIST only -- `delete` is the one that touches disk. */
+    forget: (p: RecentProject) => void;
+    /** Repoint a MISSING project at its moved .arcproj. */
+    locate: (p: RecentProject) => void;
+    delete: (p: RecentProject) => void;
+  };
+</script>
+
 <script lang="ts">
   import Icon from "$lib/components/Icon.svelte";
-  import type { RecentProject } from "$lib/api";
 
   // The per-project action menu, shared by the tile and the list row. It owns
   // the ITEM LIST as well as the popover, deliberately: "what can you do to a
   // project" is one vocabulary, and defining it per layout is how the two
   // layouts end up offering different things.
-  let { project, disabled = false, confirmDelete = true,
-        onReveal, onRename, onArgs, onForget, onLocate, onDelete }: {
+  let { project, disabled = false, confirmDelete = true, actions }: {
     project: RecentProject;
     disabled?: boolean;
     /** Whether Delete opens a confirmation. Only affects this item's LABEL. */
     confirmDelete?: boolean;
-    onReveal: () => void;
-    onRename: () => void;
-    onArgs: () => void;
-    /** Remove from the LIST only -- delete is the one that touches disk. */
-    onForget: () => void;
-    /** Repoint a MISSING project at its moved .arcproj. */
-    onLocate: () => void;
-    onDelete: () => void;
+    actions: ProjectActions;
   } = $props();
 
   // `sep` draws the divider ABOVE the item; `danger` is only the red hover.
@@ -35,19 +51,19 @@
   // an action, it is a mistake waiting to be offered.
   const items = $derived<Item[]>(project.missing
     ? [
-        { label: "Locate…", run: onLocate },
-        { label: "Remove from list", run: onForget, sep: true },
+        { label: "Locate…", run: () => actions.locate(project) },
+        { label: "Remove from list", run: () => actions.forget(project), sep: true },
       ]
     : [
-        { label: "Show in Explorer", run: onReveal },
-        { label: "Rename project…", run: onRename },
-        { label: "Command-line arguments…", run: onArgs },
+        { label: "Show in Explorer", run: () => actions.reveal(project) },
+        { label: "Rename project…", run: () => actions.rename(project) },
+        { label: "Command-line arguments…", run: () => actions.args(project) },
         // No ellipsis and no confirmation: this only edits the list, and the
         // entry comes back through Add. It opens the below-the-line group it
         // shares with Delete -- the two reads, "stop showing me this" and
         // "erase the folder", sit together but only Delete carries the
         // warning colour.
-        { label: "Remove from list", run: onForget, sep: true },
+        { label: "Remove from list", run: () => actions.forget(project), sep: true },
         // Last -- the only irreversible one. The ellipsis is what every other
         // item here uses to mean "opens something first", so it is DROPPED
         // when confirmation is off: the item then deletes on the click, and a
@@ -55,7 +71,7 @@
         // this app to be inaccurate.
         {
           label: confirmDelete ? "Delete project…" : "Delete project",
-          run: onDelete,
+          run: () => actions.delete(project),
           danger: true,
         },
       ]);
