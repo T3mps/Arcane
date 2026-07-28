@@ -101,7 +101,7 @@ namespace Arcane::Editor
         ImGui::SameLine();
         // v1 is read-only by design: reassigning the source texture goes
         // through "Create Sprite" on a DIFFERENT texture (mints a new sibling
-        // .arcsprite, EditorAppProject.cpp:191-249
+        // .arcsprite, EditorAppProject.cpp:191-251
         // MintOrReuseSpriteForTexture / EditorAppFrame.cpp:1139-1153), not an
         // in-place swap of this asset's `texture` field.
         ImGui::TextDisabled("%s", m_data.texture.IsValid()
@@ -154,11 +154,13 @@ namespace Arcane::Editor
                                      imgPos.y + geom.uvMax.y * drawH);
                 // Positional order is (p_min, p_max, col, rounding, thickness,
                 // flags) -- imgui.h:3467. 1.92.8 SWAPPED thickness and flags
-                // from the older signature (the now-`= delete`d overload at
-                // imgui.h:3556 spells this out); passing a bare 0 for
-                // rounding then a bare thickness value in the old order would
-                // silently bind to the wrong parameter under this vendored
-                // version.
+                // from the older signature -- the obsolete forwarding overload
+                // at imgui.h:3556 (live in this build; IMGUI_DISABLE_OBSOLETE_
+                // FUNCTIONS is unset) documents the swap and correctly
+                // re-forwards a full 6-arg old-order call; a partial-arg
+                // old-order call (e.g. a bare 0 for rounding then a bare
+                // thickness value) still silently binds to the wrong
+                // parameter under this vendored version.
                 ImGui::GetWindowDrawList()->AddRect(rectMin, rectMax,
                     IM_COL32(255, 210, 60, 255), 0.0f, 2.0f);
             }

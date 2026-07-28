@@ -13,7 +13,7 @@
 // placeholder) directly in the PUBLISHED m_table -- deliberately different
 // from SpriteMaterialCache::Request, which keeps failures OUT of its
 // published table in a separate `failed` set (SpriteMaterialCache.cpp:
-// 44,95-101) so a failed material just leaves the sprite on the plain
+// 47,95-101) so a failed material just leaves the sprite on the plain
 // pipeline. A sprite has no such implicit fallback: the whole point of the
 // component is to draw a specific asset, so a broken one must still be
 // VISIBLE as the placeholder rather than silently vanishing. Both schemes

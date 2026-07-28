@@ -1512,7 +1512,9 @@ namespace Arcane::Editor
             // texture drop during Play still mints/reuses the .arcsprite and
             // calls ApplyGuidImmediate, which applies the Guid edit via its
             // unconditional ForEachTarget even with stack == nullptr (it only
-            // skips opening a ScopedTransaction). A Play-mode texture drop
+            // skips opening the ScopedTransaction and taking the per-target
+            // Snapshot -- both live inside the same `if (stack)` block,
+            // EditorPanels.cpp:1797-1802). A Play-mode texture drop
             // therefore mints the file and writes the Guid with NO undo step
             // -- exactly the no-undo-in-Play behavior every other AssetRef
             // drop already has; this branch adds a minted file as a

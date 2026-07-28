@@ -344,7 +344,23 @@ namespace Arcane::Editor
                 spriteDocServices.invalidateSprite = [this](const Arcane::Guid& g)
                 {
                     if (m_sprites)
+                    {
+                        // Invalidate THEN Request synchronously, not Invalidate alone:
+                        // RenderSceneToViewport (EditorAppFrame.cpp:127) runs BEFORE
+                        // PumpShaderEditor's re-Request (EditorAppFrame.cpp:130), so an
+                        // Invalidate-only callback would erase the entry and let the
+                        // very next frame draw the 1x1 placeholder before anything
+                        // re-resolved it. SpriteCache::Request is synchronous (no async
+                        // compile step like SpriteMaterialCache), so calling it here
+                        // re-resolves the entry before this callback returns -- no
+                        // frame ever renders without it. Same no-gap property
+                        // SpriteMaterialCache gets from its needsRefresh/last-good
+                        // scheme (SpriteMaterialCache.hpp:67-70), just achieved
+                        // synchronously here instead of keeping the stale entry bound
+                        // until a fresh compile lands.
                         m_sprites->Invalidate(g);
+                        m_sprites->Request(g);
+                    }
                 };
                 return std::make_unique<Arcane::Editor::SpriteDocument>(
                     std::move(spriteDocServices), p, std::move(*data));

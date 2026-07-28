@@ -24,7 +24,7 @@ namespace Arcane::Editor
         // untextured -- SceneResources.hpp:85-92's field defaults) directly
         // into the PUBLISHED m_table -- unlike SpriteMaterialCache::Request,
         // which keeps a failed material OUT of its published table via a
-        // separate `failed` set (SpriteMaterialCache.cpp:44,95-101) so the
+        // separate `failed` set (SpriteMaterialCache.cpp:47,95-101) so the
         // sprite just falls back to the plain (unmaterialed) pipeline. A
         // sprite has no such fallback -- the component's whole point is to
         // draw a specific asset -- so a broken one renders as the VISIBLE
