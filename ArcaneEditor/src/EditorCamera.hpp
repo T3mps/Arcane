@@ -104,9 +104,11 @@ namespace Arcane::Editor
     // so framing and rendering cannot disagree. An entity with a WorldTransform but no
     // SpriteRenderer contributes its position as a zero-extent point, so
     // framing a bare node centres on it instead of doing nothing. Entities with
-    // no WorldTransform (and dead handles) are skipped. Rotation is NOT
-    // accounted for: the box uses the axis-aligned extent of the unrotated
-    // sprite, so a rotated sprite can overhang it by up to its half-diagonal.
+    // no WorldTransform (and dead handles) are skipped. Rotation reaches the
+    // CENTRE but not the EXTENT: a non-centre pivot orbits the box with the
+    // world rotation (matching submission), while the extent stays the
+    // axis-aligned one of the unrotated sprite, so a rotated sprite can still
+    // overhang the box by up to its half-diagonal.
     [[nodiscard]] FramingBounds SelectionFramingBounds(Astra::Registry& reg,
                                                        std::span<const Astra::Entity> entities);
 

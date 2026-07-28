@@ -60,10 +60,12 @@ namespace Arcane
     //     RenderSubmissionSystem), which is the same change class the v6 entry
     //     above (:34-35) bumped for. Unlike v6 the failure is not a vtable slide
     //     but the plugin's own copy of submission reading the component at stale
-    //     offsets -- a tint read out of the dead size field, sorting keys out of
-    //     tint -- and resolving a TextureTable resource the engine no longer
-    //     registers. Corruption rather than a guaranteed AV, and silent either
-    //     way; reject the pairing.
+    //     offsets: tint moved 12 -> 16 and sortingLayer 28 -> 32, so a stale tint
+    //     read at 12 comes out of the tail of the new `sprite` Guid plus the
+    //     first three tint floats, and a stale sortingLayer read at 28 comes out
+    //     of tint.w. It also resolves a TextureTable resource the engine no
+    //     longer registers. Corruption rather than a guaranteed AV, and silent
+    //     either way; reject the pairing.
     inline constexpr uint32_t kGamePluginABIVersion = 8;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

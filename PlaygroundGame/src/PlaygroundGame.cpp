@@ -52,8 +52,11 @@ namespace
         // The moon is a CHILD, and propagation composes the parent's matrix
         // (TransformSystems.hpp: world = parentWorld * local), so the orbiter's
         // 48x scale now multiplies both the moon's local offset and its size.
-        // Divide it back out to keep the fixture's 80-unit orbit and 20-unit
-        // moon exactly as they rendered before.
+        // Divide it back out to restore the fixture's 80-unit orbit and 20-unit
+        // moon. Exact at rotation 0 (48 * (80/48) is 80.0f on the nose in
+        // float32); at other angles the mat3 product re-associates the multiply
+        // as (cos*48) * (80/48) instead of cos * 80, which lands within an ulp
+        // rather than bit-identical. Visually the same fixture.
         Astra::Entity moon = reg.CreateEntity();
         Arcane::Transform mt;
         mt.position = glm::vec2(80.0f / 48.0f, 0.0f);

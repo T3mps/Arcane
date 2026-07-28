@@ -52,9 +52,15 @@ namespace Arcane::Editor
 
         // The drawn quad's CENTRE. The world position is the sprite's PIVOT, and
         // the quad's centre sits pivot->centre away from it, turned by the world
-        // rotation -- the same offset RenderSubmissionSystem applies
-        // (RenderSystems.hpp). Exactly zero at the default (0.5,0.5) pivot, so
+        // rotation, mirroring RenderSubmissionSystem's centerOff
+        // (RenderSystems.hpp:98). Exactly zero at the default (0.5,0.5) pivot, so
         // an entity whose pivot is untouched frames exactly as it always did.
+        // NOT bit-identical to submission's offset: `half` arrives already
+        // abs()-ed (SpriteHalfExtent above), so this uses |baseSize * worldScale|
+        // where submission uses the signed product. They diverge only for a
+        // NEGATIVE sizeMeters, where framing then brackets the mirrored quad on
+        // the wrong side -- framing is an axis-aligned estimate either way, and
+        // the abs() is what keeps min <= max for Frame.
         glm::vec2 SpriteCentre(const glm::mat3& world, glm::vec2 half, glm::vec2 pivot) noexcept
         {
             const glm::vec2 off = (glm::vec2(0.5f) - pivot) * (half * 2.0f);
