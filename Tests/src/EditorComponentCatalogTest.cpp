@@ -33,6 +33,7 @@
 using namespace Arcane;
 using Arcane::Editor::BuildComponentCatalog;
 using Arcane::Editor::ComponentCatalogEntry;
+using Arcane::Editor::InspectorSectionRank;
 using Arcane::Editor::IsHiddenInInspector;
 using Arcane::Editor::IsStructureLocked;
 
@@ -348,4 +349,27 @@ TEST_CASE("no-op add pushes no undo step", "[editor][outliner]")
     CHECK_FALSE(ApplyRegistryMutation(w.stack, "Add Component", w.Snapshot(), w.Restore(),
                                       [&] { return Edit::AddComponent(*w.reg, sel, *transform->desc) > 0; }));
     CHECK_FALSE(w.stack.CanUndo());
+}
+
+TEST_CASE("InspectorSectionRank pins EntityInfo first and Transform second", "[editor][outliner]")
+{
+    // Pin the two special ranks by value, not just by relative order: a future
+    // editor swapping the constants (0/1 -> 1/0) would still satisfy "ordered"
+    // but would put Transform above EntityInfo in the Inspector.
+    CHECK(InspectorSectionRank("Arcane::EntityInfo") == 0);
+    CHECK(InspectorSectionRank("Arcane::Transform") == 1);
+
+    // Ordinary components -- including ones that sort alphabetically before
+    // EntityInfo/Transform -- all share the catch-all rank.
+    CHECK(InspectorSectionRank("Arcane::SpriteRenderer") == 2);
+    CHECK(InspectorSectionRank("Arcane::PostProcess") == 2);
+
+    // The three ranks are strictly ordered, so DrawInspectorPanel's
+    // stable_sort places EntityInfo before Transform before everything else
+    // rather than relying on the constants happening to compare that way.
+    CHECK(InspectorSectionRank("Arcane::EntityInfo") < InspectorSectionRank("Arcane::Transform"));
+    CHECK(InspectorSectionRank("Arcane::Transform") < InspectorSectionRank("Arcane::SpriteRenderer"));
+
+    // Degenerate input must not crash or accidentally claim a special rank.
+    CHECK(InspectorSectionRank("") == 2);
 }

@@ -1979,7 +1979,28 @@ namespace Arcane::Editor
         // stable (they live in ComponentRegistry's fixed array).
         const Astra::ComponentDescriptor* pendingRemove = nullptr;
 
-        for (const Astra::Registry::ComponentInfo& ci : registry.InspectEntity(primary))
+        // Section order: Entity Info first, Transform second, everything else
+        // in registry order (matches UE's Details layout). ComponentInfo is
+        // three raw pointers -- trivially copyable, and the pointers it holds
+        // (descriptor into ComponentRegistry's fixed array, per the comment
+        // above; data into the current archetype chunk, untouched before this
+        // sort runs) stay valid across the reorder. stable_sort, not sort:
+        // ties (rank 2, the overwhelming majority of components) must keep
+        // their registry order, exactly like the loop did before this sort
+        // existed. A null ci.meta ranks with the catch-all (2) rather than
+        // being filtered here -- the loop body below already `continue`s on
+        // null descriptor/meta, so leaving it in the vector is harmless and
+        // this comparator never dereferences meta itself.
+        std::vector<Astra::Registry::ComponentInfo> components = registry.InspectEntity(primary);
+        std::stable_sort(components.begin(), components.end(),
+            [](const Astra::Registry::ComponentInfo& a, const Astra::Registry::ComponentInfo& b)
+            {
+                const std::string_view an = a.meta ? a.meta->typeName : std::string_view{};
+                const std::string_view bn = b.meta ? b.meta->typeName : std::string_view{};
+                return InspectorSectionRank(an) < InspectorSectionRank(bn);
+            });
+
+        for (const Astra::Registry::ComponentInfo& ci : components)
         {
             // An unreflected component has no name to show and no fields to
             // visit: visitFields is populated FROM TypeMeta at registration, so

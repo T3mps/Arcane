@@ -54,6 +54,15 @@ namespace Arcane::Editor
         return IsHiddenInInspector(typeName) || typeName == "Arcane::EntityInfo";
     }
 
+    int InspectorSectionRank(std::string_view typeName)
+    {
+        if (typeName == "Arcane::EntityInfo")
+            return 0;
+        if (typeName == "Arcane::Transform")
+            return 1;
+        return 2;
+    }
+
     std::vector<ComponentCatalogEntry> BuildComponentCatalog(
         Astra::Registry& reg,
         std::span<const Astra::Entity> selection,

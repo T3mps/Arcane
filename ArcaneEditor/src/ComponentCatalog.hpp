@@ -67,6 +67,12 @@ namespace Arcane::Editor
     [[nodiscard]] bool IsHiddenInInspector(std::string_view typeName);
     [[nodiscard]] bool IsStructureLocked(std::string_view typeName);
 
+    // Inspector section order: identity first, spatial anchor second, everything
+    // else in registry order. Matches UE's Details layout (name area, then
+    // Transform, then the rest). Consumed by DrawInspectorPanel's stable_sort,
+    // so equal ranks keep their relative order.
+    [[nodiscard]] int InspectorSectionRank(std::string_view typeName);
+
     struct ComponentCatalogEntry
     {
         const Astra::ComponentDescriptor* desc = nullptr;
