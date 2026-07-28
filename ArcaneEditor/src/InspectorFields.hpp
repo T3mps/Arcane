@@ -1,8 +1,8 @@
 #pragma once
 
 // Reflection-driven Inspector: pure field classification + write-backs (no
-// ImGui), so the round-trip is unit-testable headlessly. See EditorPanels.cpp
-// for the ImGui::IFieldVisitor that drives these against a live component.
+// ImGui), so the round-trip is unit-testable headlessly. See InspectorView.cpp
+// for the Astra::IFieldVisitor that drives these against a live component.
 
 #include <Arcane/Guid.hpp>
 #include <Astra/Entity/Entity.hpp>

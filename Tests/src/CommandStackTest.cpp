@@ -152,7 +152,7 @@ TEST_CASE("CommandStack: Commit is the safe close for an ABANDONED gesture", "[e
 {
     // The Inspector closes a gesture whose widget stopped being drawn -- its
     // component header collapsed mid-edit, the search filter hid the field --
-    // with Commit and never Cancel (EditorPanels.cpp, CloseAbandonedGesture).
+    // with Commit and never Cancel (InspectorView.cpp, CloseAbandonedGesture).
     // These three sections are the properties that make that the right call,
     // for both an edit that was already applied and one that never was.
     auto reg = MakeReg();

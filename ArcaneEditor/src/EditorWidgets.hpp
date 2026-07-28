@@ -45,7 +45,7 @@ namespace Arcane::Editor
     // this flag (imgui_widgets.cpp:2783 -> :2703-2706), so without it a typed
     // value passes the bounds untouched. Deliberately NOT AlwaysClamp, which
     // is ClampOnInput|ClampZeroRange (imgui.h:2034) and would change which
-    // degenerate ranges bind -- see BindingRange in EditorPanels.cpp, which
+    // degenerate ranges bind -- see BindingRange in InspectorView.cpp, which
     // encodes that same binding rule for the rows ImGui does not clamp.
     [[nodiscard]] bool RangedDragFloat(const char* label, float* v, float fallbackSpeed,
                                        const std::optional<Astra::Range>& range);
