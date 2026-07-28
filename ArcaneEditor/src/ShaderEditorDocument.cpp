@@ -222,7 +222,7 @@ namespace Arcane::Editor
         // unconnected default DIRECTLY ignore literals entirely, and a widget
         // that silently does nothing is worse than no widget. The authority is
         // the SEAM SCOPE note on GraphNode::pinLiterals
-        // (MaterialGraph.hpp:235-244); each exclusion below is the emission
+        // (MaterialGraph.hpp:243-252); each exclusion below is the emission
         // case that bypasses argOr:
         //   Output.color              MaterialGraph.cpp:643-645
         //   TextureSample/Sprite uv   MaterialGraph.cpp:670-671
