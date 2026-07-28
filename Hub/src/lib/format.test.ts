@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isCompatible, filterProjects, coverFor,
   projectKey, projectDir, projectNameError, projectPathPreview, resolveEngine,
-  engineChipText, engineChipTitle, compatibilityNote,
+  engineChipText, engineChipTitle, compatibilityNote, missingNote,
 } from "./format";
 
 describe("isCompatible", () => {
@@ -267,6 +267,15 @@ describe("project labels", () => {
     expect(note).toContain("Debug 0.1");
     expect(note).toContain("abi 7");
     expect(note).not.toContain("the selected engine");
+  });
+
+  it("a missing project names its stale path and both ways out", () => {
+    // The copy must point at Locate AND Remove: one repairs the row, the other
+    // retires it, and a user staring at a greyed project needs to know both.
+    const note = missingNote("D:/g/A.arcproj");
+    expect(note).toContain("D:/g/A.arcproj");
+    expect(note).toContain("Locate");
+    expect(note).toContain("Remove from list");
   });
 });
 

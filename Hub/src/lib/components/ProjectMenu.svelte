@@ -7,7 +7,7 @@
   // project" is one vocabulary, and defining it per layout is how the two
   // layouts end up offering different things.
   let { project, disabled = false, confirmDelete = true,
-        onReveal, onRename, onArgs, onForget, onDelete }: {
+        onReveal, onRename, onArgs, onForget, onLocate, onDelete }: {
     project: RecentProject;
     disabled?: boolean;
     /** Whether Delete opens a confirmation. Only affects this item's LABEL. */
@@ -17,30 +17,43 @@
     onArgs: () => void;
     /** Remove from the LIST only -- delete is the one that touches disk. */
     onForget: () => void;
+    /** Repoint a MISSING project at its moved .arcproj. */
+    onLocate: () => void;
     onDelete: () => void;
   } = $props();
 
   type Item = { label: string; run: () => void; danger?: boolean };
-  const items = $derived<Item[]>([
-    { label: "Show in Explorer", run: onReveal },
-    { label: "Rename project…", run: onRename },
-    { label: "Command-line arguments…", run: onArgs },
-    // No ellipsis and no confirmation: this only edits the list, and the entry
-    // comes back through Add. It sits directly above Delete so the two reads --
-    // "stop showing me this" and "erase the folder" -- are adjacent but
-    // visibly different kinds of item.
-    { label: "Remove from list", run: onForget },
-    // Last and set apart -- the only irreversible one. The ellipsis is what
-    // every other item here uses to mean "opens something first", so it is
-    // DROPPED when confirmation is off: the item then deletes on the click,
-    // and a label promising a dialog that will not appear is the worst place
-    // in this app to be inaccurate.
-    {
-      label: confirmDelete ? "Delete project…" : "Delete project",
-      run: onDelete,
-      danger: true,
-    },
-  ]);
+  // A MISSING project gets exactly the two items that still mean something:
+  // repair the row or retire it. Reveal, Rename, arguments and Delete all act
+  // on disk state that is not there, and a menu of disabled items would make
+  // the user hunt for the one that works. Locate is hidden on healthy rows for
+  // the same reason Unity hides it: repointing a project that resolves is not
+  // an action, it is a mistake waiting to be offered.
+  const items = $derived<Item[]>(project.missing
+    ? [
+        { label: "Locate…", run: onLocate },
+        { label: "Remove from list", run: onForget },
+      ]
+    : [
+        { label: "Show in Explorer", run: onReveal },
+        { label: "Rename project…", run: onRename },
+        { label: "Command-line arguments…", run: onArgs },
+        // No ellipsis and no confirmation: this only edits the list, and the
+        // entry comes back through Add. It sits directly above Delete so the
+        // two reads -- "stop showing me this" and "erase the folder" -- are
+        // adjacent but visibly different kinds of item.
+        { label: "Remove from list", run: onForget },
+        // Last and set apart -- the only irreversible one. The ellipsis is what
+        // every other item here uses to mean "opens something first", so it is
+        // DROPPED when confirmation is off: the item then deletes on the click,
+        // and a label promising a dialog that will not appear is the worst
+        // place in this app to be inaccurate.
+        {
+          label: confirmDelete ? "Delete project…" : "Delete project",
+          run: onDelete,
+          danger: true,
+        },
+      ]);
 
   let open = $state(false);
   let trigger: HTMLButtonElement;

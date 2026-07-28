@@ -19,7 +19,7 @@
     loadState, registerEngine, forgetEngine, deleteProject, forgetProject,
     clearRecents,
     openProject, createProject, suggestEngine, setProjectEngine,
-    setProjectArgs, revealProject, renameProject,
+    setProjectArgs, revealProject, renameProject, relocateProject,
     loadSettings, saveSettings, defaultDialogDir,
     hubDataDir, revealHubDataDir, hubVersion,
     type HubState, type EngineEntry, type RecentProject, type Settings,
@@ -118,6 +118,18 @@
     if (typeof file === "string" && selectedEngine) {
       await openProject(file, selectedEngine.path);
     }
+  });
+
+  // The greyed row's Locate…: pick the moved project's .arcproj and repoint the
+  // entry at it. Same file filter as Add, because it IS the same question --
+  // "which manifest is this project" -- asked about a row we already hold.
+  const locate = (p: RecentProject) => guard(async () => {
+    const file = await open({
+      title: `Locate ${p.name} (.arcproj)`,
+      defaultPath: (await defaultDialogDir()) ?? undefined,
+      filters: [{ name: "Arcane Project", extensions: ["arcproj"] }],
+    });
+    if (typeof file === "string") await relocateProject(p.path, file);
   });
 
   // Shared by the New Project dialog and the Settings default-location field.
@@ -261,6 +273,7 @@
                       onRename={(p) => (renaming = p)}
                       onArgs={(p) => (editingArgs = p)}
                       onForget={(p) => guard(() => forgetProject(p.path))}
+                      onLocate={locate}
                       onLayout={(v) => applySettings({ ...settings, projectView: v })} />
       {:else if view === "engines"}
         <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion} {busy}

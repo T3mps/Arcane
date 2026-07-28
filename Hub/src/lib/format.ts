@@ -185,6 +185,19 @@ export function engineChipTitle(engineLabel: string, pinned: boolean, dangling: 
 }
 
 /**
+ * The launch target's tooltip for a project that is not on disk any more.
+ *
+ * Shared by the tile and the list row like the chip copy above, and tested for
+ * the same reason: it states a fact ("this path does not resolve") and names
+ * the two controls that can fix it, so drifting copy here would misdirect the
+ * user at exactly the moment something already looks broken.
+ */
+export function missingNote(path: string): string {
+  return `Nothing is at ${path} any more. ` +
+    "Locate… points the Hub at where it moved; Remove from list forgets it.";
+}
+
+/**
  * What to say about a project's compatibility with the engine that will open
  * it. Names the engine, because for a pinned project the sidebar selection is
  * not the one being talked about.

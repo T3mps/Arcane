@@ -12,6 +12,12 @@ export type RecentProject = {
   engineId: string | null;
   /** Extra launch arguments, as typed. Empty = none. Split Rust-side at launch. */
   args: string;
+  /**
+   * The recorded path no longer resolves on disk. Stamped Rust-side on every
+   * load, so it is a fact about right now, not about when the file was saved.
+   * The row renders greyed with Locate/Remove instead of vanishing.
+   */
+  missing: boolean;
 };
 
 export type EngineEntry = {
@@ -74,6 +80,12 @@ export const revealProject = (path: string) => invoke<void>("reveal_project", { 
  */
 export const renameProject = (path: string, newName: string) =>
   invoke<string>("rename_project", { path, newName });
+/**
+ * Repoint a moved project at the `.arcproj` the user located. The engine pin
+ * and launch arguments survive; name and ABI refresh from the new manifest.
+ */
+export const relocateProject = (path: string, newPath: string) =>
+  invoke<void>("relocate_project", { path, newPath });
 
 export const loadSettings = () => invoke<Settings>("load_settings");
 export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });

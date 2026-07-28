@@ -1,12 +1,12 @@
 <script lang="ts">
   import ProjectMenu from "$lib/components/ProjectMenu.svelte";
   import { coverFor, engineChipText, engineChipTitle, compatibilityNote,
-           projectDir } from "$lib/format";
+           missingNote, projectDir } from "$lib/format";
   import { since, type RecentProject } from "$lib/api";
 
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
         disabled = false, confirmDelete, onLaunch, onDelete, onChangeEngine,
-        onReveal, onRename, onArgs, onForget }:
+        onReveal, onRename, onArgs, onForget, onLocate }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       /** Build name of the engine that will actually launch this project. */
@@ -19,10 +19,13 @@
       onLaunch: () => void; onDelete: () => void;
       onChangeEngine: () => void;
       onReveal: () => void; onRename: () => void; onArgs: () => void;
-      onForget: () => void;
+      onForget: () => void; onLocate: () => void;
     } = $props();
 
   const cover = $derived(coverFor(project.name, project.path));
+  // The recorded path stopped resolving. Everything that acts on the folder
+  // (launch, the engine band) disables; the menu shrinks to Locate/Remove.
+  const gone = $derived(project.missing);
   // The same folder line the list row shows. A tile that named the project and
   // nothing else was the one place in the Hub where you could not tell two
   // same-named projects apart.
@@ -45,19 +48,20 @@
      engine, abi -- stacked instead of in columns. They are two views of one
      record, so a fact that only appears in one of them is a reason to pick a
      layout for the wrong reason.
-     `incompat` / `missing` rather than `bad` on both: the card and the engine
-     row have independent failure states, and one class name meaning two things
+     Three distinct state classes, not one `bad`: `incompat` (card, wrong ABI),
+     `gone` (card, path no longer on disk) and `missing` (engine chip, dangling
+     pin) are independent failure states, and one class name meaning two things
      in one file is a trap for the next edit. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- Right-click is a redundant MOUSE affordance for a menu already sitting on
      a focusable button on this card, so a keyboard user loses nothing and there
      is no role that means "card you may right-click". Same reasoning as the
      modal scrim and WindowChrome's double-click-to-maximize. -->
-<div class="card" class:incompat={!compatible}
+<div class="card" class:incompat={!compatible && !gone} class:gone
      oncontextmenu={(e) => { e.preventDefault(); menu.openAt(e.clientX, e.clientY); }}>
   <div class="top">
-    <button class="hit" type="button" {disabled} onclick={onLaunch}
-            title={why} aria-label={project.name}>
+    <button class="hit" type="button" disabled={disabled || gone} onclick={onLaunch}
+            title={gone ? missingNote(project.path) : why} aria-label={project.name}>
       <!-- The monogram, at BADGE scale. It was a 76px gradient band across the
            head of every card -- the last of the decorative-slab styling, and by
            some distance the least like anything else left in the Hub. Shrunk
@@ -75,11 +79,15 @@
          card: absolutely positioned, it sat on top of whatever the name line
          needed, and the name is the one thing a tile must always show. -->
     <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete}
-                 {onReveal} {onRename} {onArgs} {onForget} {onDelete} />
+                 {onReveal} {onRename} {onArgs} {onForget} {onLocate} {onDelete} />
   </div>
 
   <div class="meta">
-    {#if compatible}
+    {#if gone}
+      <!-- The badge slot: being gone supersedes any ABI statement, because the
+           number came from a manifest that is not there to disagree with. -->
+      <span class="badge">missing</span>
+    {:else if compatible}
       <span>abi {project.engineAbi ? project.engineAbi : "?"}</span>
     {:else}
       <span class="badge">abi {project.engineAbi}</span>
@@ -91,7 +99,7 @@
        button is invalid HTML and browsers do not deliver its clicks reliably.
        Behind a hairline because it is a different action from the rest of the
        card -- everything above launches, this changes what launches it. -->
-  <button class="eng" type="button" {disabled} onclick={onChangeEngine}
+  <button class="eng" type="button" disabled={disabled || gone} onclick={onChangeEngine}
           class:pin={pinned} class:missing={dangling} title={engineTitle}
           aria-label="Engine for {project.name}: {engineText}">
     <!-- A CSS dot, not a glyph: hollow = following the default, filled =
@@ -143,12 +151,17 @@
      `.card.incompat` rather than a bare class on purpose: the base `.card` rule
      sets the same two properties at equal specificity, so a bare one would win
      only by declaration order. This rule is absolute in the spec, so it should
-     not depend on where it sits in the file. */
-  .card.incompat { background: var(--surface-2); border-color: var(--border); }
-  .card.incompat:hover { background: color-mix(in srgb, #ffffff 4%, var(--surface-2)); }
-  .card.incompat .mono { background: linear-gradient(var(--a), var(--border-soft), var(--bg-bottom));
-                         color: var(--text-dim); }
-  .card.incompat .nm { color: var(--text-muted); }
+     not depend on where it sits in the file.
+     `.gone` shares every dim rule: a project that is not on disk is inert for a
+     different reason but to the same degree, and two dim treatments would read
+     as a third state that does not exist. */
+  .card.incompat, .card.gone { background: var(--surface-2); border-color: var(--border); }
+  .card.incompat:hover, .card.gone:hover {
+    background: color-mix(in srgb, #ffffff 4%, var(--surface-2)); }
+  .card.incompat .mono, .card.gone .mono {
+    background: linear-gradient(var(--a), var(--border-soft), var(--bg-bottom));
+    color: var(--text-dim); }
+  .card.incompat .nm, .card.gone .nm { color: var(--text-muted); }
   /* The app-wide focus ring is the ACCENT (theme.css `:focus-visible`), which
      would paint the act colour onto an incompatible card the instant it is
      tabbed to -- a case no automated gate catches, because it only exists in
@@ -156,9 +169,9 @@
      against this surface, so the ring stays plainly visible; only its hue
      changes. Since the re-hue that shift is subtler (both are reds) but it
      still keeps the act colour off a card that cannot be acted on. */
-  .card.incompat :focus-visible { outline-color: var(--fail); }
+  .card.incompat :focus-visible, .card.gone :focus-visible { outline-color: var(--fail); }
   /* Second, non-chromatic signal: a bordered badge (coral is 8.2:1 here). */
-  .card.incompat .badge { font-weight: 600; color: var(--fail);
+  .card.incompat .badge, .card.gone .badge { font-weight: 600; color: var(--fail);
            border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent);
            border-radius: 3px; padding: 0 4px; }
 

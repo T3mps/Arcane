@@ -12,7 +12,7 @@
   // the only stateful file by design.
   let { recents, engines, defaultEngine, busy, layout, confirmDelete,
         onLaunch, onDelete, onOpen, onNew, onChangeEngine, onLayout,
-        onReveal, onRename, onArgs, onForget }:
+        onReveal, onRename, onArgs, onForget, onLocate }:
     {
       recents: RecentProject[]; engines: EngineEntry[];
       defaultEngine: EngineEntry | null; busy: boolean;
@@ -27,6 +27,7 @@
       onRename: (p: RecentProject) => void;
       onArgs: (p: RecentProject) => void;
       onForget: (p: RecentProject) => void;
+      onLocate: (p: RecentProject) => void;
     } = $props();
 
   // Both layouts take the SAME props, so switching is a component swap rather
@@ -47,9 +48,12 @@
   const incompatible = $derived(
     recents.filter((p) => {
       const r = resolveEngine(p.engineId, engines, defaultEngine);
-      return !isCompatible(p.engineAbi, r.engine?.engineAbi ?? null);
+      // A missing project is counted under `missing`, not here: its recorded
+      // ABI came from a manifest that is no longer there to disagree with.
+      return !p.missing && !isCompatible(p.engineAbi, r.engine?.engineAbi ?? null);
     }).length,
   );
+  const missing = $derived(recents.filter((p) => p.missing).length);
 </script>
 
 <!-- Title, search and actions on ONE row. The count and the layout toggle drop
@@ -73,6 +77,7 @@
   <p class="view-sub">
     {recents.length} {recents.length === 1 ? "project" : "projects"}
     {#if incompatible > 0}&middot; {incompatible} need a different engine{/if}
+    {#if missing > 0}&middot; {missing} missing{/if}
   </p>
   <!-- aria-current, matching Sidebar and EngineRow: this is "which of a
        mutually exclusive set is active", not an independently pressable
@@ -121,6 +126,7 @@
         onRename: () => onRename(p),
         onArgs: () => onArgs(p),
         onForget: () => onForget(p),
+        onLocate: () => onLocate(p),
       }}
       {#if layout === "grid"}
         <ProjectCard {...shared} />

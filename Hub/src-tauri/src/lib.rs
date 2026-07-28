@@ -400,6 +400,29 @@ fn forget_project(path: String) -> Result<(), String> {
     state::save(&s)
 }
 
+// Repoint a listed project whose folder moved -- the greyed row's Locate...
+//
+// `new_path` is a .arcproj the user just picked (the dialog only yields
+// those), validated by the engine's own exactly-one-manifest rule via
+// resolve_project. The entry keeps its engine pin and launch arguments --
+// moving a folder changes neither -- but takes its name and ABI from the
+// manifest just read, because the project may have changed while it was away.
+// Locating is not opening: the list is not reordered and nothing launches.
+#[tauri::command]
+fn relocate_project(path: String, new_path: String) -> Result<(), String> {
+    let (_root, manifest) = resolve_project(Path::new(&new_path))?;
+    // 0 = unknown, same as open_project: a manifest without a readable abi is
+    // "no conflict provable", never a guessed number.
+    let abi = manifest_abi(&manifest).unwrap_or(0);
+    let name = project::display_name(&new_path);
+
+    let mut s = state::load();
+    if !state::relocate_recent(&mut s.recents, &path, &new_path, &name, abi) {
+        return Err(format!("'{path}' is not in the project list"));
+    }
+    state::save(&s)
+}
+
 // Same contract as forget_project, for the whole list: Hub state only.
 #[tauri::command]
 fn clear_recents() -> Result<(), String> {
@@ -526,6 +549,9 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
             // Empty for the same reason: touch_recent carries the saved
             // arguments across, so launching never wipes them.
             args: String::new(),
+            // The project was just found on disk to launch; load() re-stamps
+            // this on every read regardless.
+            missing: false,
         },
     );
     state::save(&s)
@@ -586,6 +612,7 @@ pub fn run() {
             forget_engine,
             delete_project,
             forget_project,
+            relocate_project,
             clear_recents,
             set_project_engine,
             set_project_args,

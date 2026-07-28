@@ -1,6 +1,7 @@
 <script lang="ts">
   import ProjectMenu from "$lib/components/ProjectMenu.svelte";
-  import { engineChipText, engineChipTitle, compatibilityNote, projectDir } from "$lib/format";
+  import { engineChipText, engineChipTitle, compatibilityNote, missingNote,
+           projectDir } from "$lib/format";
   import { since, type RecentProject } from "$lib/api";
 
   // IDENTICAL prop contract to ProjectCard, so ProjectsView can swap the two
@@ -13,7 +14,7 @@
   // lining up down the page, not each row being individually recognisable.
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
         disabled = false, confirmDelete, onLaunch, onDelete, onChangeEngine,
-        onReveal, onRename, onArgs, onForget }:
+        onReveal, onRename, onArgs, onForget, onLocate }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       engineLabel: string; pinned: boolean; dangling: boolean;
@@ -21,13 +22,16 @@
       onLaunch: () => void; onDelete: () => void;
       onChangeEngine: () => void;
       onReveal: () => void; onRename: () => void; onArgs: () => void;
-      onForget: () => void;
+      onForget: () => void; onLocate: () => void;
     } = $props();
 
   // The FOLDER, not the .arcproj inside it. The file name only ever repeats the
   // project name already in the row above it, and where the project lives is
   // the thing this line is for.
   const dir = $derived(projectDir(project.path));
+  // The recorded path stopped resolving. Everything that acts on the folder
+  // (launch, the engine chip) disables; the menu shrinks to Locate/Remove.
+  const gone = $derived(project.missing);
   const engineText = $derived(engineChipText(engineLabel, pinned, dangling));
   const engineTitle = $derived(engineChipTitle(engineLabel, pinned, dangling));
   const why = $derived(
@@ -43,10 +47,10 @@
      a focusable button in this row, so a keyboard user loses nothing and there
      is no role that means "row you may right-click". Same reasoning as the
      modal scrim and WindowChrome's double-click-to-maximize. -->
-<div class="row" class:incompat={!compatible}
+<div class="row" class:incompat={!compatible && !gone} class:gone
      oncontextmenu={(e) => { e.preventDefault(); menu.openAt(e.clientX, e.clientY); }}>
-  <button class="hit" type="button" {disabled} onclick={onLaunch}
-          title={why} aria-label={project.name}>
+  <button class="hit" type="button" disabled={disabled || gone} onclick={onLaunch}
+          title={gone ? missingNote(project.path) : why} aria-label={project.name}>
     <span class="nm">{project.name}</span>
     <span class="path">{dir}</span>
   </button>
@@ -55,7 +59,7 @@
 
   <!-- Sibling of .hit, not nested: an interactive control inside a button is
        invalid HTML and its clicks are not reliably delivered. -->
-  <button class="eng" type="button" {disabled} onclick={onChangeEngine}
+  <button class="eng" type="button" disabled={disabled || gone} onclick={onChangeEngine}
           class:pin={pinned} class:missing={dangling} title={engineTitle}
           aria-label="Engine for {project.name}: {engineText}">
     <!-- A CSS dot, not a glyph: hollow = following the default, filled =
@@ -65,14 +69,18 @@
     <span class="lbl">{engineText}</span>
   </button>
 
-  {#if compatible}
+  {#if gone}
+    <!-- The badge slot: being gone supersedes any ABI statement, because the
+         number came from a manifest that is not there to disagree with. -->
+    <code class="abi badge">missing</code>
+  {:else if compatible}
     <code class="abi">abi {project.engineAbi ? project.engineAbi : "?"}</code>
   {:else}
     <code class="abi badge">abi {project.engineAbi}</code>
   {/if}
 
   <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete}
-               {onReveal} {onRename} {onArgs} {onForget} {onDelete} />
+               {onReveal} {onRename} {onArgs} {onForget} {onLocate} {onDelete} />
 </div>
 
 <style>
@@ -126,10 +134,12 @@
 
   /* Dimmed name plus a coral badge, the same pair the tile uses. The tile also
      dims its SURFACE; a flat row cannot, because the surface is what carries
-     hover here and a permanent tint would swallow it. */
-  .row.incompat .nm { color: var(--text-muted); }
-  .row.incompat :focus-visible { outline-color: var(--fail); }
-  .row.incompat .badge { font-weight: 600; color: var(--fail);
+     hover here and a permanent tint would swallow it. `.gone` (project not on
+     disk) shares the treatment for the same reason the tile does: equally
+     inert, and a second dim would read as a third state. */
+  .row.incompat .nm, .row.gone .nm { color: var(--text-muted); }
+  .row.incompat :focus-visible, .row.gone :focus-visible { outline-color: var(--fail); }
+  .row.incompat .badge, .row.gone .badge { font-weight: 600; color: var(--fail);
            border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent);
            border-radius: 3px; padding: 0 4px; }
 

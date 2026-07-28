@@ -43,6 +43,16 @@ pub struct RecentProject {
     /// into), not a property of the project that belongs in shared content.
     #[serde(default)]
     pub args: String,
+
+    /// True when `path` no longer resolves on disk -- the row renders greyed
+    /// with Locate/Remove instead of vanishing (a missing project is usually a
+    /// moved folder, not an abandoned one). Stamped by `load` on EVERY read,
+    /// so whatever value the file holds is overwritten before the UI sees it;
+    /// it rides the persisted struct only because save/load and the
+    /// `load_state` IPC response share one Serialize impl (same constraint as
+    /// `HubState::warnings`).
+    #[serde(default)]
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,6 +151,41 @@ pub fn set_project_args(v: &mut [RecentProject], path: &str, args: &str) -> bool
     }
 }
 
+/// Repoint a listed project at the path the user just located it at.
+///
+/// Same in-place contract as `rename_recent` below (the pin, the arguments and
+/// last-opened survive; the list is not reordered; a collision with an entry
+/// already at the new path is absorbed) -- but the name and ABI are REPLACED
+/// from the manifest the caller just read, because the project may have been
+/// renamed or rebuilt while the Hub could not see it.
+pub fn relocate_recent(
+    v: &mut Vec<RecentProject>,
+    old_path: &str,
+    new_path: &str,
+    new_name: &str,
+    new_abi: u32,
+) -> bool {
+    let old_key = normalise_path(old_path);
+    let new_key = normalise_path(new_path);
+
+    let Some(i) = v.iter().position(|e| normalise_path(&e.path) == old_key) else {
+        return false;
+    };
+    v[i].path = new_path.to_string();
+    v[i].name = new_name.to_string();
+    v[i].engine_abi = new_abi;
+    v[i].missing = false;
+
+    // Retain by index so the entry just edited survives its own key check.
+    let mut n = 0;
+    v.retain(|e| {
+        let keep = n == i || normalise_path(&e.path) != new_key;
+        n += 1;
+        keep
+    });
+    true
+}
+
 /// Repoint a listed project at its new path and name after a rename.
 ///
 /// Edits IN PLACE rather than remove-then-touch: everything else on the entry
@@ -216,7 +261,14 @@ pub fn remove_engine(v: &mut Vec<EngineEntry>, path: &str) -> bool {
 
 pub fn load() -> HubState {
     let mut warnings = Vec::new();
-    let recents = store::read_or_default(&paths::recents_file(), &mut warnings);
+    let mut recents: Vec<RecentProject> =
+        store::read_or_default(&paths::recents_file(), &mut warnings);
+    // Stamped on every load, never trusted from the file: `missing` is a fact
+    // about the disk right now, and a stale persisted value in either
+    // direction would grey a healthy row or offer Launch on a gone one.
+    for e in recents.iter_mut() {
+        e.missing = !std::path::Path::new(&e.path).exists();
+    }
     let engines = store::read_or_default(&paths::engines_file(), &mut warnings);
     HubState { recents, engines, warnings }
 }
@@ -242,6 +294,7 @@ mod tests {
             engine_abi: 7,
             engine_id: None,
             args: String::new(),
+            missing: false,
         }
     }
 
@@ -453,6 +506,64 @@ mod tests {
     fn rename_recent_reports_an_unknown_project() {
         let mut v = Vec::new();
         assert!(!rename_recent(&mut v, "C:/a", "C:/b", "b"));
+    }
+
+    #[test]
+    fn relocate_recent_keeps_the_pin_and_args_but_refreshes_name_and_abi() {
+        // The split that makes this NOT rename_recent: the manifest at the new
+        // path is the authority on name and ABI (the project may have changed
+        // while it was away), while the pin and arguments are Hub state that
+        // the move cannot have touched.
+        let mut v = Vec::new();
+        touch_recent(&mut v, rp("C:/Games/Old/Old.arcproj", "1"));
+        set_project_engine(&mut v, "C:/Games/Old/Old.arcproj", Some("eng-1".into()));
+        set_project_args(&mut v, "C:/Games/Old/Old.arcproj", "--frames 3");
+        v[0].missing = true;
+
+        assert!(relocate_recent(
+            &mut v,
+            "C:/Games/Old/Old.arcproj",
+            "D:/Elsewhere/Old/Old.arcproj",
+            "Old",
+            8,
+        ));
+        assert_eq!(v[0].path, "D:/Elsewhere/Old/Old.arcproj");
+        assert_eq!(v[0].name, "Old");
+        assert_eq!(v[0].engine_abi, 8, "the ABI must come from the manifest just read");
+        assert!(!v[0].missing, "a located project is not missing");
+        assert_eq!(v[0].engine_id.as_deref(), Some("eng-1"), "the pin must survive");
+        assert_eq!(v[0].args, "--frames 3", "the arguments must survive");
+        assert_eq!(v[0].last_opened_utc, "1", "locating is not opening");
+    }
+
+    #[test]
+    fn relocate_recent_does_not_reorder_and_absorbs_a_collision() {
+        // Locating a moved project onto a path the list ALREADY holds (the user
+        // re-added it by hand before finding the stale row) must leave one row.
+        let mut v = Vec::new();
+        touch_recent(&mut v, rp("C:/gone", "1"));
+        touch_recent(&mut v, rp("C:/found/G.arcproj", "2"));
+        assert!(relocate_recent(&mut v, "C:/gone", "c:\\found\\G.arcproj", "G", 7));
+        assert_eq!(v.len(), 1);
+        // The RELOCATED entry is the survivor, spelled as the caller passed it.
+        assert_eq!(v[0].path, "c:\\found\\G.arcproj");
+    }
+
+    #[test]
+    fn relocate_recent_reports_an_unknown_project() {
+        let mut v = Vec::new();
+        assert!(!relocate_recent(&mut v, "C:/a", "C:/b", "b", 7));
+    }
+
+    #[test]
+    fn a_recents_file_written_before_missing_existed_still_loads() {
+        // serde(default) on missing: an older file has no such key -- and load()
+        // re-stamps it from the disk anyway, so false is only the parse default.
+        let back: Vec<RecentProject> = serde_json::from_str(
+            r#"[{"path":"C:/a","name":"N","lastOpenedUtc":"1","engineAbi":7}]"#,
+        )
+        .unwrap();
+        assert!(!back[0].missing);
     }
 
     #[test]
