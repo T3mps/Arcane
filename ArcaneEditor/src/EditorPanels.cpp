@@ -1169,6 +1169,15 @@ namespace Arcane::Editor
             // persistent state for the same reason -- it is what CloseAbandonedGesture
             // below compares ActiveId against. Never null when `stack` is non-null.
             ImGuiID*                          gestureItem = nullptr;
+            // The string row's activation-time cancel reference and the id of
+            // the row that latched it, both parked in the same persistent
+            // InspectorState for the same reason -- see the String arm below
+            // and InspectorState in EditorPanels.hpp. Wired unconditionally by
+            // DrawInspectorPanel (they describe ImGui cancel semantics, not
+            // undo, so they matter while Play runs too); the arm still falls
+            // back to a per-frame seed if either is null.
+            std::string*                      stringSeed = nullptr;
+            ImGuiID*                          stringSeedItem = nullptr;
 
             // Fan-out targets. `selection` includes the primary; entities lacking
             // this component are skipped (the panel only shows components the whole
@@ -1726,22 +1735,56 @@ namespace Arcane::Editor
                         // and this local is ignored (see InputTextString), so the
                         // per-frame seed cannot stomp what the user is typing.
                         std::string text = (strMixed || !live) ? std::string() : *live;
-                        const std::string seed = text;
+                        const std::string shown = text;   // what this frame rendered
                         InputTextString(label.c_str(), &text);
-                        // Commit on deactivation, guarded by an equality test --
-                        // and that guard IS the cancel path, not a nicety. Escape
-                        // restores the activation-time text AND sets value_changed
-                        // (imgui_widgets.cpp:5300-5309), so
-                        // IsItemDeactivatedAfterEdit reports a revert as an edit;
-                        // "it deactivated and ended up different" is the honest
-                        // predicate, and it also makes a plain click-in-click-out
-                        // write nothing.
+                        // LATCH THE CANCEL REFERENCE AT ACTIVATION. ImGui copies
+                        // the buffer it was handed into TextToRevertTo when the
+                        // box takes ActiveId (imgui_widgets.cpp:4865-4866) and
+                        // writes exactly that back on Escape (:5300-5308) -- so
+                        // the reference this guard needs is the ACTIVATION-time
+                        // text, and `shown` is that text on this frame (ImGui
+                        // writes into the buffer only on a change, and the
+                        // activation frame has none yet).
+                        //
+                        // The per-frame seed this replaced was NOT that reference
+                        // whenever the value moved externally mid-edit -- an
+                        // Outliner rename committing a frame after this box was
+                        // activated on the same entity. Escape then restored the
+                        // OLD name into `text`, the guard saw text != seed, and
+                        // the documented CANCEL path pushed an undo entry.
+                        // Latched, seed == TextToRevertTo by construction, so a
+                        // revert is a guaranteed equality no-op no matter what
+                        // moved underneath; a real commit still differs and still
+                        // writes.
+                        //
+                        // For a MIXED multi-selection the latched value is the
+                        // blank the user saw at activation -- which is right:
+                        // Escape restores that same blank, so an untouched mixed
+                        // row still commits nothing.
+                        if (ImGui::IsItemActivated() && stringSeed && stringSeedItem)
+                        {
+                            *stringSeed     = shown;
+                            *stringSeedItem = ImGui::GetItemID();
+                        }
+                        // The latch is ONE slot shared by every string row, so
+                        // use it only when it names THIS row -- click into row A,
+                        // then click row B drawn above it and B re-latches in the
+                        // same frame A reports its deactivation. Same ownership
+                        // guard as EndGesture's.
+                        const bool latched = stringSeed && stringSeedItem
+                                          && *stringSeedItem == ImGui::GetItemID();
+                        const std::string& seed = latched ? *stringSeed : shown;
+                        // Commit on deactivation, guarded by that equality test --
+                        // and the guard IS the cancel path, not a nicety. Escape
+                        // also sets value_changed (imgui_widgets.cpp:5300-5309), so
+                        // IsItemDeactivatedAfterEdit would report a revert as an
+                        // edit; "it deactivated and ended up different from what it
+                        // started as" is the honest predicate, and it also makes a
+                        // plain click-in-click-out write nothing.
                         //
                         // ApplyImmediate, not a widget gesture: the commit is one
                         // discrete event, and it fans the typed text to every
-                        // selected entity as ONE undo step. A mixed row left alone
-                        // still commits nothing, because its seed is the blank it
-                        // renders.
+                        // selected entity as ONE undo step.
                         if (ImGui::IsItemDeactivated() && text != seed)
                             ApplyImmediate(rawName, instance, [&](void* d)
                                            { Arcane::Editor::ApplyStringEdit(f, d, text); });
@@ -2080,6 +2123,11 @@ namespace Arcane::Editor
                     visitor.project    = project;
                     visitor.gestureTxn  = &state.gestureTxn;
                     visitor.gestureItem = &state.gestureItem;
+                    // Wired even while Play runs (unlike `stack`): these carry
+                    // the string row's Escape-cancel semantics, which are
+                    // ImGui's, not the undo stack's.
+                    visitor.stringSeed     = &state.stringEditSeed;
+                    visitor.stringSeedItem = &state.stringEditItem;
                     visitor.registry   = &registry;
                     visitor.selection  = &sel.Entities();
                     // Both outlive the visitor: headerLabel is this iteration's

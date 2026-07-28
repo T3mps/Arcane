@@ -164,14 +164,40 @@ namespace Arcane::Editor
     struct InspectorState
     {
         Arcane::TransactionId gestureTxn = Arcane::TransactionId::None;
-        // ImGui id of the widget that OPENED gestureTxn (0 when none is open).
-        // A gesture closes on the widget's own deactivation, which can only be
-        // observed while that widget is still being SUBMITTED -- so a field
-        // that stops being drawn mid-gesture would strand the transaction
-        // open, and with it every structural edit (CanEditStructure is
-        // `!undo.InTransaction()`). Parking the owner's id lets the panel see
-        // that ImGui's ActiveId has moved on and close the gesture itself.
+        // ImGui id of the widget that OPENED gestureTxn. The ownership guards
+        // (EndGesture, CloseAbandonedGesture) compare against it, so it is
+        // meaningful only while a gesture THIS panel opened is live; it is not
+        // an "is one open" flag and must not be read as one. In particular a
+        // gesture that JOINED a gizmo drag parks a real item id here alongside
+        // gestureTxn == None, so a non-zero value does not imply an open
+        // transaction of ours. gestureTxn is the authority on that.
+        //
+        // Why it is parked at all: a gesture closes on the widget's own
+        // deactivation, which can only be observed while that widget is still
+        // being SUBMITTED -- so a field that stops being drawn mid-gesture
+        // would strand the transaction open, and with it every structural edit
+        // (CanEditStructure is `!undo.InTransaction()`). The id lets the panel
+        // see that ImGui's ActiveId has moved on and close the gesture itself.
         ImGuiID gestureItem = 0;
+        // The string row's cancel reference, LATCHED AT ACTIVATION rather than
+        // rebuilt per frame. ImGui's Escape restores the text it captured when
+        // the box was activated (TextToRevertTo, imgui_widgets.cpp:4865-4866,
+        // written back at :5300-5308), so the commit guard has to compare
+        // against that same activation-time text. A per-frame seed read from
+        // the live component diverges the moment anything changes the value
+        // externally mid-edit (an Outliner rename committing a frame after the
+        // Inspector box was activated on the same entity) -- Escape then
+        // restored the OLD text, the guard saw a difference, and the
+        // documented CANCEL path wrote an undo entry. Latched, the seed equals
+        // TextToRevertTo by construction, so an Escape revert is always an
+        // equality no-op.
+        std::string stringEditSeed;
+        // ImGui id of the row that latched stringEditSeed. Two string rows can
+        // hand ActiveId over inside ONE frame (click into A, then click B drawn
+        // ABOVE it: B activates and re-latches before A, submitted later,
+        // reports its deactivation), which would have A committing against B's
+        // seed. Same ownership-guard shape as gestureItem above.
+        ImGuiID stringEditItem = 0;
         // Live search text. A fixed buffer rather than std::string because
         // ImGui::InputText writes into it directly; 128 is far past any
         // plausible field name. Nothing clears it, so a typed filter persists
