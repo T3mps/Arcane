@@ -39,6 +39,10 @@ namespace Arcane
         constexpr GraphPinDesc kTileIn[]      = { { "uv", 2 }, { "tiling", 2 }, { "offset", 2 } };
         constexpr GraphPinDesc kNoiseIn[]     = { { "uv", 2 }, { "scale", 1 } };
         constexpr GraphPinDesc kPannerIn[]    = { { "uv", 2 }, { "speed", 2 } };
+        // bias/scale are FIXED width 1 beside a DYNAMIC x -- the SimpleNoise
+        // row's { uv, scale } shape (fixed operand next to the value pin), so
+        // an affine pair collapses into one node carrying two pin literals.
+        constexpr GraphPinDesc kBiasScaleIn[] = { { "x", 0 }, { "bias", 1 }, { "scale", 1 } };
         constexpr GraphPinDesc kVertexOutIn[] = { { "posOffset", 2 }, { "uvOffset", 2 },
                                                   { "color", 4 } };
 
@@ -105,13 +109,15 @@ namespace Arcane
             { GraphNodeType::Distance,      "distance",       "Distance",       Pins(kBinaryIn), Pins(kOut1)       },
             { GraphNodeType::Dot,           "dot",            "Dot Product",    Pins(kBinaryIn), Pins(kOut1)       },
             { GraphNodeType::Panner,        "panner",         "Panner",         Pins(kPannerIn), Pins(kOut2)       },
+            // Gap-close -- appended in the header's enum order.
+            { GraphNodeType::ScaleOffset,   "scale_offset",   "Scale & Offset", Pins(kBiasScaleIn), Pins(kOutDyn)  },
         };
     }
 
     const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept
     {
         const auto i = static_cast<std::size_t>(t);
-        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::Panner) + 1,
+        static_assert(std::size(kNodeInfos) == static_cast<std::size_t>(GraphNodeType::ScaleOffset) + 1,
                       "kNodeInfos must cover every GraphNodeType");
         return kNodeInfos[i < std::size(kNodeInfos) ? i : 0];
     }
@@ -203,7 +209,7 @@ namespace Arcane
 
         // How many lanes a pin literal stores for a pin of declared `width`:
         // fixed 2/4 keep their lanes, everything else -- including DYNAMIC
-        // (width-0) pins -- is a scalar. Width resolution (:591-594) reads
+        // (width-0) pins -- is a scalar. Width resolution (:597-600) reads
         // only CONNECTED inputs, excluding a literal regardless of lane
         // count; the scalar choice instead splats it to the resolved width.
         int PinLiteralLanes(int width)
@@ -604,9 +610,10 @@ namespace Arcane
             // a literal outranks `def`, which is why it also overrides every
             // NON-ZERO neutral -- Combine alpha, Clamp max, Smoothstep edge1,
             // Power exponent, TilingOffset tiling, SimpleNoise scale, Panner
-            // uv: the seven argOr call sites that pass something other than
-            // "0.0". Unconnected and literal-free inputs read `def` exactly as
-            // before, so a graph with no literals emits byte-identical text.
+            // uv, ScaleOffset scale: the eight argOr call sites that pass
+            // something other than "0.0". Unconnected and literal-free inputs
+            // read `def` exactly as before, so a graph with no literals emits
+            // byte-identical text.
             //
             // `defWidth` is the width of `def` ITSELF. Every constant neutral
             // is a width-1 string that splats (the default), but Panner's
@@ -961,6 +968,7 @@ namespace Arcane
                     local(1, "dot(" + arg(0, 0) + ", " + arg(1, 0) + ")");
                     break;
                 case GraphNodeType::Panner:
+                {
                     // Both pins are fixed float2 and BOTH read through the
                     // argOr seam -- unlike TilingOffset above, whose uv reads
                     // its v.uv default directly and therefore ignores
@@ -970,7 +978,36 @@ namespace Arcane
                     // stitched seams (shaders/materials/fullscreen_material.hlsl:
                     // cbuffer at :26-31, %{MATERIAL_BODY} :39, %{VERTEX_BODY}
                     // :41), so a Panner may also drive the vertex stage.
-                    local(2, argOr(0, 2, "v.uv", 2) + " + Time * " + arg(1, 2));
+                    //
+                    // pannerFractional is UE's bFractionalPart, and the frac()
+                    // goes around the PRODUCT ONLY. Read at the vendored
+                    // implementation rather than guessed -- UMaterialExpression
+                    // Panner::Compile builds Arg1/Arg2 = Frac(Mul(Time, Speed))
+                    // per component and adds the coordinate AFTERWARDS
+                    // (Arcane/.example/UnrealEngine-release/Engine/Source/
+                    // Runtime/Engine/Private/Materials/MaterialExpressions.cpp:
+                    // 5469-5489). Wrapping the whole sum instead would tile the
+                    // coordinate itself and put a seam in the middle of the uv
+                    // space; this form only bounds the offset. HLSL frac() is
+                    // per-component, so one call covers UE's two.
+                    const std::string scroll = "Time * " + arg(1, 2);
+                    local(2, argOr(0, 2, "v.uv", 2) + " + " +
+                             (n->pannerFractional ? "frac(" + scroll + ")" : scroll));
+                    break;
+                }
+                case GraphNodeType::ScaleOffset:
+                    // UE's ConstantBiasScale: Mul(Add(Bias, Input), Scale)
+                    // (Arcane/.example/UnrealEngine-release/Engine/Source/
+                    // Runtime/Engine/Private/Materials/MaterialExpressions.cpp:
+                    // 12702). Operands commute on the add, so this writes x
+                    // first for readability -- same value, same rounding.
+                    // bias/scale target width 1 (their declared pin width, the
+                    // SimpleNoise.scale precedent): HLSL splats a scalar
+                    // operand itself, which keeps the text readable when x is
+                    // a float2/float4, and a wider wire narrows through the
+                    // adaptation table exactly as a width-1 pin promises.
+                    local(w, "(" + arg(0, 0) + " + " + argOr(1, 1, "0.0") + ") * " +
+                             argOr(2, 1, "1.0"));
                     break;
             }
 
@@ -1184,6 +1221,14 @@ namespace Arcane
                 case GraphNodeType::PassInput:
                     e["slot"] = n->passInputSlot;
                     break;
+                case GraphNodeType::Panner:
+                    // Written ONLY when set, like pinDefaults below: a Panner
+                    // authored before this option gains no key, so its file
+                    // rewrites byte-identical and an older engine (which
+                    // ignores unknown keys) still loads a newer file.
+                    if (n->pannerFractional)
+                        e["frac"] = true;
+                    break;
                 case GraphNodeType::Comment:
                     e["comment"] = nlohmann::json{
                         { "text", n->paramName },
@@ -1322,6 +1367,11 @@ namespace Arcane
                 n.swizzleMask = e["mask"].get<std::string>();
             if (e.contains("slot") && e["slot"].is_number_unsigned())
                 n.passInputSlot = e["slot"].get<std::uint32_t>();
+            // Absent = false is the whole compatibility story for this key; a
+            // non-boolean "frac" is ignored rather than refused, matching how
+            // every other optional key above type-checks before reading.
+            if (e.contains("frac") && e["frac"].is_boolean())
+                n.pannerFractional = e["frac"].get<bool>();
             if (e.contains("comment") && e["comment"].is_object())
             {
                 const nlohmann::json& c = e["comment"];

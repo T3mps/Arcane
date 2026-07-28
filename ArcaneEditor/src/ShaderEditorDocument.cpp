@@ -208,7 +208,7 @@ namespace Arcane::Editor
         // Lane count a literal stores for a pin of declared `width`: fixed 2/4
         // keep their lanes, everything else -- INCLUDING dynamic (width-0)
         // pins -- is a scalar. Mirrors codegen's PinLiteralLanes
-        // (MaterialGraph.cpp:209-212), which is file-local there; the scalar
+        // (MaterialGraph.cpp:215-218), which is file-local there; the scalar
         // rule for dynamic pins is what keeps a literal out of dynamic-width
         // resolution, so the widget must match it exactly or the drag would
         // edit lanes the file never stores.
@@ -222,21 +222,23 @@ namespace Arcane::Editor
         // unconnected default DIRECTLY ignore literals entirely, and a widget
         // that silently does nothing is worse than no widget. The authority is
         // the SEAM SCOPE note on GraphNode::pinLiterals
-        // (MaterialGraph.hpp:243-252); each exclusion below is the emission
+        // (MaterialGraph.hpp:270-279); each exclusion below is the emission
         // case that bypasses argOr:
-        //   Output.color              MaterialGraph.cpp:643-645
-        //   TextureSample/Sprite uv   MaterialGraph.cpp:670-671
-        //   Split source              MaterialGraph.cpp:764-765
-        //   Remap in/outRange         MaterialGraph.cpp:806-811
-        //   TilingOffset.uv           MaterialGraph.cpp:818-820
-        //   Swizzle source            MaterialGraph.cpp:841-842
-        //   SimpleNoise.uv            MaterialGraph.cpp:883-884
-        //   VertexOutput (all three)  MaterialGraph.cpp:890-895
-        //   PassInput.uv              MaterialGraph.cpp:904-906
+        //   Output.color              MaterialGraph.cpp:650-652
+        //   TextureSample/Sprite uv   MaterialGraph.cpp:677-678
+        //   Split source              MaterialGraph.cpp:771-772
+        //   Remap in/outRange         MaterialGraph.cpp:813-818
+        //   TilingOffset.uv           MaterialGraph.cpp:825-827
+        //   Swizzle source            MaterialGraph.cpp:848-849
+        //   SimpleNoise.uv            MaterialGraph.cpp:890-891
+        //   VertexOutput (all three)  MaterialGraph.cpp:897-902
+        //   PassInput.uv              MaterialGraph.cpp:911-913
         // Panner.uv is NOT excluded even though it also defaults to v.uv:
         // batch 2 routes it through argOr with a width-2 default
-        // (MaterialGraph.cpp:973). Custom nodes fall through to `true` -- their
-        // per-node pins are ordinary argOr operands (MaterialGraph.cpp:732).
+        // (MaterialGraph.cpp:994). Scale & Offset is not excluded either --
+        // all three of its pins are plain argOr operands (:1009-1010), which is
+        // the node's whole point. Custom nodes fall through to `true`: their
+        // per-node pins are ordinary argOr operands (MaterialGraph.cpp:739).
         bool PinTakesLiteral(const Arcane::GraphNode& n, std::uint32_t pin)
         {
             switch (n.type)
@@ -262,8 +264,8 @@ namespace Arcane::Editor
         // What the widget shows on a pin that carries no literal yet: codegen's
         // NEUTRAL for that pin, so an untouched field never lies about the
         // value the shader is using and a first drag starts from it instead of
-        // snapping the material to zero. The seven argOr call sites that pass
-        // something other than "0.0" are enumerated at MaterialGraph.cpp:604-609
+        // snapping the material to zero. The eight argOr call sites that pass
+        // something other than "0.0" are enumerated at MaterialGraph.cpp:610-616
         // and each is cited below. Returns false when the neutral is not a
         // constant at all (Panner's v.uv), which the caller renders as a
         // non-numeric placeholder.
@@ -272,32 +274,36 @@ namespace Arcane::Editor
             out[0] = out[1] = out[2] = out[3] = 0.0f;
             switch (n.type)
             {
-                case Arcane::GraphNodeType::Combine:        // alpha opaque (:784)
+                case Arcane::GraphNodeType::Combine:        // alpha opaque (:791)
                     if (pin == 3)
                         out[0] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::Clamp:          // max (:788)
+                case Arcane::GraphNodeType::Clamp:          // max (:795)
                     if (pin == 2)
                         out[0] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::Smoothstep:     // edge1 (:791)
+                case Arcane::GraphNodeType::Smoothstep:     // edge1 (:798)
                     if (pin == 1)
                         out[0] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::Power:          // exponent (:798)
+                case Arcane::GraphNodeType::Power:          // exponent (:805)
                     if (pin == 1)
                         out[0] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::TilingOffset:   // tiling, splat (:821)
+                case Arcane::GraphNodeType::TilingOffset:   // tiling, splat (:828)
                     if (pin == 1)
                         out[0] = out[1] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::SimpleNoise:    // scale (:885)
+                case Arcane::GraphNodeType::SimpleNoise:    // scale (:892)
                     if (pin == 1)
                         out[0] = 10.0f;
                     return true;
-                case Arcane::GraphNodeType::Panner:         // uv -> v.uv (:973)
+                case Arcane::GraphNodeType::Panner:         // uv -> v.uv (:994)
                     return pin != 0;
+                case Arcane::GraphNodeType::ScaleOffset:    // scale = identity (:1010)
+                    if (pin == 2)
+                        out[0] = 1.0f;
+                    return true;
                 default:
                     return true;
             }
@@ -3332,7 +3338,7 @@ namespace Arcane::Editor
 
             // Inline literal on an UNWIRED input pin (SG/UE parity: a pin
             // carries a value with no Const node feeding it). Codegen's argOr
-            // checks `connected` FIRST (MaterialGraph.cpp:621-630), so a wire
+            // checks `connected` FIRST (MaterialGraph.cpp:628-637), so a wire
             // hides the literal without destroying it -- which is why this
             // widget only has to disappear, never clear anything.
             if (!pinWired(pin) && PinTakesLiteral(n, pin))
@@ -3367,8 +3373,8 @@ namespace Arcane::Editor
                     // ONE entry per pin, updated IN PLACE. A duplicate would
                     // make serialization non-deterministic: the writer sorts by
                     // pin with std::sort, which is unstable
-                    // (MaterialGraph.cpp:1220-1222), and the reader keeps the
-                    // FIRST entry for a pin (:1394-1395).
+                    // (MaterialGraph.cpp:1265-1267), and the reader keeps the
+                    // FIRST entry for a pin (:1444-1445).
                     Arcane::GraphPinLiteral* slot = nullptr;
                     for (Arcane::GraphPinLiteral& pl : n.pinLiterals)
                         if (pl.pin == pin)
@@ -3544,6 +3550,29 @@ namespace Arcane::Editor
                     n.passInputSlot = (n.passInputSlot + 1) % Arcane::kMaxPassInputs;
                     valueEdited();
                     PushGraphUndo("Input Slot", std::move(before));
+                }
+                break;
+            }
+            case Arcane::GraphNodeType::Panner:
+            {
+                // UE's bFractionalPart: wrap the Time*speed offset in frac().
+                // A checkbox is a DISCRETE edit -- one click IS the whole
+                // change -- so it takes this file's discrete-edit shape
+                // (snapshot inline, mutate, push immediately), copied from the
+                // "range" checkbox in the Param case above, which is the same
+                // widget doing the same job. The gestureBegin/gestureEnd
+                // bracket beside it exists to coalesce a MULTI-FRAME drag into
+                // one undo step; a click has nothing to coalesce, and routing
+                // it through the bracket would push the step a frame late for
+                // no benefit. Reading the flip through a local `frac` keeps the
+                // graph unmutated until after the snapshot is taken.
+                bool frac = n.pannerFractional;
+                if (ImGui::Checkbox("frac", &frac))
+                {
+                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
+                    n.pannerFractional = frac;
+                    valueEdited();
+                    PushGraphUndo("Panner Fraction", std::move(before));
                 }
                 break;
             }

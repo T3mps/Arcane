@@ -85,7 +85,7 @@ namespace
 TEST_CASE("Graph node table covers every type with round-tripping tokens", "[material]")
 {
     const auto infos = AllGraphNodeInfos();
-    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::Panner) + 1);
+    REQUIRE(infos.size() == static_cast<std::size_t>(GraphNodeType::ScaleOffset) + 1);
     for (const GraphNodeTypeInfo& info : infos)
     {
         CHECK(GraphNodeInfo(info.type).token == info.token);

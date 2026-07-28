@@ -121,6 +121,19 @@ namespace Arcane
         Distance,       // distance(a, b)
         Dot,            // dot(a, b)
         Panner,         // uv + Time * speed (float2; uv defaults v.uv)
+        // Library gap-close (2026-07-28) -- APPEND-ONLY, same contract again.
+        ScaleOffset,    // (x + bias) * scale -- UE's ConstantBiasScale, which
+                        // compiles Mul(Add(Bias, Input), Scale) (vendored:
+                        // Engine/Source/Runtime/Engine/Private/Materials/
+                        // MaterialExpressions.cpp:12702). bias and scale are
+                        // FIXED width-1 pins routed through argOr, so both take
+                        // an inline literal -- that is the whole point of the
+                        // node: an affine mul+add pair collapses to ONE node
+                        // with two numbers on it. Neutrals are 0 and 1 (the
+                        // node is the identity when both are unwired),
+                        // deliberately NOT UE's 1.0/0.5: this library's rule is
+                        // that an untouched pin changes nothing. Clamp's max =
+                        // 1 is the precedent for a non-zero neutral.
     };
 
     // One pin on a node type. `width` = component count of the value flowing
@@ -176,7 +189,7 @@ namespace Arcane
     // DECLARED width -- 1/2/4 fixed, and a SCALAR for dynamic (width-0) pins.
     // A literal never enters dynamic-width resolution regardless of lane
     // count -- that loop reads only CONNECTED inputs (MaterialGraph.cpp:
-    // 591-594). The scalar choice instead means a literal on a dynamic pin
+    // 597-600). The scalar choice instead means a literal on a dynamic pin
     // splats to whatever width the node resolves to, so it never needs
     // re-authoring when wiring changes. Unused lanes stay 0.
     struct GraphPinLiteral
@@ -227,6 +240,20 @@ namespace Arcane
         // (0 = InputTexture, k = InputTexture<k>).
         std::uint32_t passInputSlot = 0;
 
+        // Panner only: UE's bFractionalPart. The frac() wraps the PRODUCT, not
+        // the sum -- UE compiles Frac(Mul(Time, Speed)) per component and only
+        // THEN adds the coordinate (vendored: Engine/Source/Runtime/Engine/
+        // Private/Materials/MaterialExpressions.cpp:5469-5489). UE's stated
+        // reason is precision, not looks -- the comment above those lines reads
+        // "avoid (delay) divergent accuracy issues as GameTime increases":
+        // bounding the offset to [0,1) stops a large Time from eating the
+        // mantissa. It is only SEAMLESS for content that repeats with period 1
+        // in uv, which is why it is opt-in rather than the default.
+        // Serialized as the optional "frac" key, written
+        // only when true -- absent means false, so every graph authored before
+        // this field emits byte-identical text.
+        bool pannerFractional = false;
+
         // Inline pin literals, SPARSE: only pins the user actually set appear
         // here, so a graph nobody touched carries none and emits exactly the
         // pre-literal snippet. The value SURVIVES wiring -- codegen ignores it
@@ -236,7 +263,7 @@ namespace Arcane
         //
         // INVARIANT: at most one entry per pin. GraphFromJson's pinDefaults
         // loop keeps the first entry when a pin is duplicated on load
-        // (MaterialGraph.cpp:1394-1395), and FindPinLiteral below returns the
+        // (MaterialGraph.cpp:1444-1445), and FindPinLiteral below returns the
         // first match, so callers that mutate this vector must update an
         // existing entry in place rather than append a duplicate.
         //
