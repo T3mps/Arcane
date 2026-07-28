@@ -428,25 +428,12 @@ namespace Arcane::Editor
             st.renameTarget = e;
             st.renameBuf = current;
             st.renameFocusPending = true;
-        }
-
-        // The EntityInfo ComponentDescriptor on `e`, for the rename's
-        // CommandStack::SnapshotComponent. Registry exposes no
-        // descriptor-by-hash accessor, so this walks InspectEntity the way the
-        // Inspector loop below and the gizmo's FindTransformDescriptor
-        // (EditorAppFrame.cpp) already do. Matched on the descriptor hash
-        // rather than TypeMeta::typeName because that hash IS TypeID<T>::Hash()
-        // by construction (ComponentRegistry.hpp:160), so no string literal has
-        // to stay in sync with the type. Null for a dead entity or one that no
-        // longer carries EntityInfo.
-        const Astra::ComponentDescriptor* EntityInfoDescriptor(Astra::Registry& reg,
-                                                               Astra::Entity e)
-        {
-            for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
-                if (ci.descriptor
-                    && ci.descriptor->hash == Astra::TypeID<Arcane::EntityInfo>::Hash())
-                    return ci.descriptor;
-            return nullptr;
+            // Starting a NEW rename abandons any deferred one. The user has
+            // moved on; landing a parked rename afterwards would apply a name
+            // they already replaced (or applied to an entity they have since
+            // stopped editing) out of nowhere, one frame late.
+            st.pendingRename = Astra::Entity::Invalid();
+            st.pendingRenameName.clear();
         }
 
         void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
@@ -599,6 +586,41 @@ namespace Arcane::Editor
     {
         ImGui::Begin("Outliner");
 
+        // A rename the commit site below could not land because another
+        // transaction was open. Retried BEFORE any row is built, so this
+        // frame's rows already show the new name. EVERY result but Deferred
+        // consumes the slot: Renamed landed it, NoChange means someone else got
+        // there first, and Invalid means the entity is gone or lost its
+        // EntityInfo -- retrying any of those forever would be a slow leak that
+        // could also fire long after the user moved on.
+        if (state.pendingRename.IsValid())
+        {
+            bool consumed = true;
+            if (binding.editMode)
+            {
+                consumed = Arcane::Edit::RenameWithUndo(undo, registry, state.pendingRename,
+                                                        state.pendingRenameName)
+                           != Arcane::Edit::RenameResult::Deferred;
+            }
+            else
+            {
+                // Play started between the commit frame and this one. Applied
+                // WITHOUT undo bracketing and consumed either way, exactly like
+                // the commit site's own play-mode branch below: an entry
+                // recorded now would let a later Ctrl+Z write play-time bytes
+                // over the registry Stop restored. Holding the slot until Stop
+                // instead would land a rename the user typed a whole play
+                // session ago.
+                Arcane::Edit::RenameEntity(registry, state.pendingRename,
+                                           state.pendingRenameName);
+            }
+            if (consumed)
+            {
+                state.pendingRename = Astra::Entity::Invalid();
+                state.pendingRenameName.clear();
+            }
+        }
+
         // Hoisted once per frame: every structural affordance in this panel keys
         // off it, and BeginDisabled/EndDisabled pairs must agree.
         const bool canEditStructure = CanEditStructure(undo, binding);
@@ -740,27 +762,27 @@ namespace Arcane::Editor
                         {
                             if (binding.editMode)
                             {
-                                // ONE ComponentEditCommand -- the same shape as
-                                // an Inspector field edit, not the
-                                // whole-registry memento the structural edits
-                                // in this panel use. A null descriptor means
-                                // nothing could be snapshotted, so the rename is
-                                // refused rather than applied with no undo
-                                // coverage.
-                                if (const Astra::ComponentDescriptor* desc =
-                                        EntityInfoDescriptor(registry, e))
+                                // ONE ComponentEditCommand in its OWN
+                                // transaction -- the same shape as an Inspector
+                                // field edit, not the whole-registry memento the
+                                // structural edits in this panel use.
+                                //
+                                // This can fire in the same frame as a gizmo
+                                // press or an Inspector field activation, so the
+                                // stack may already be busy. RenameWithUndo then
+                                // returns Deferred and mutates NOTHING: it
+                                // refuses to join, because a joined rename rides
+                                // the owner's Commit/Cancel and Cancel discards
+                                // pending snapshots without reverting
+                                // (CommandStack.cpp:75-82) -- which would leave
+                                // the rename applied and permanently
+                                // un-undoable. Park it and retry at the top of
+                                // the next frame instead.
+                                if (Arcane::Edit::RenameWithUndo(undo, registry, e, state.renameBuf)
+                                    == Arcane::Edit::RenameResult::Deferred)
                                 {
-                                    // ScopedTransaction, not a bare Begin/Commit
-                                    // pair: this can fire in the same frame as a
-                                    // gizmo press, and its None-token dtor no-ops
-                                    // so joining a live gesture never closes
-                                    // someone else's transaction
-                                    // (CommandStack.cpp:149-156). The snapshots
-                                    // ride along and that gesture's own Commit
-                                    // records them.
-                                    Arcane::ScopedTransaction txn(undo, "Rename");
-                                    txn.Snapshot(e, desc);
-                                    Arcane::Edit::RenameEntity(registry, e, state.renameBuf);
+                                    state.pendingRename     = e;
+                                    state.pendingRenameName = state.renameBuf;
                                 }
                             }
                             else

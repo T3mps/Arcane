@@ -84,15 +84,34 @@ Rename becomes a **component edit**: one `ComponentEditCommand` on `EntityInfo`.
   `descriptor->serialize`/`deserialize` (`ComponentEditCommand.cpp:23-49`).
   Verified this session; the byte-unsafety that killed the reverted
   reset-to-default feature does not apply here.
-- The Outliner's F2 commit becomes: `ScopedTransaction` + `Snapshot(e,
-  entityInfoDescriptor)` + `Edit::RenameEntity` — the same shape as the
-  Inspector's single-shot `ApplyImmediate`. `CommandStack::Commit` already
-  drops unchanged components before pushing a step, so a no-op rename produces
-  no undo entry with no extra guard.
+- The Outliner's F2 commit becomes: `Snapshot(e, entityInfoDescriptor)` +
+  `Edit::RenameEntity` inside a transaction — the same shape as the Inspector's
+  single-shot `ApplyImmediate`. `CommandStack::Commit` already drops unchanged
+  components before pushing a step, so a no-op rename produces no undo entry
+  with no extra guard.
+- **REVISED 2026-07-27 (whole-branch review, finding I1).** This section
+  originally specified a bare `ScopedTransaction` at the commit site and
+  described it as joining an open transaction *safely*. **That claim was
+  false.** A joined scope contributes pending snapshots and then rides the
+  OWNER's close: if the owner ends in `Cancel` — which an Inspector field
+  gesture does on a plain activate-then-release with no edit — `CommandStack::Cancel`
+  discards the pending snapshots **without reverting** (`CommandStack.cpp:75-82`).
+  The rename would land and be permanently un-undoable.
+  The commit site therefore calls the engine-side
+  `Edit::RenameWithUndo(stack, reg, e, name)` (`EntityOps.hpp`), which **opens
+  its own transaction or refuses**: it returns `RenameResult::Deferred`, having
+  mutated nothing, whenever `stack.InTransaction()`. The panel parks the
+  (entity, name) pair in `OutlinerState::pendingRename` and retries at the top
+  of the next `DrawOutlinerPanel`, before rows are built; any result but
+  `Deferred` consumes the slot, and starting a new rename clears it so a stale
+  parked rename cannot land after the user has moved on. `RenameWithUndo` also
+  owns the `EntityInfo` descriptor lookup, so the undo shape lives in one
+  headless-testable place instead of per panel.
 - `ApplyStructural(undo, binding, "Rename", ...)` (`EditorPanels.cpp:644`)
-  dies. Rename is therefore no longer refused inside an open gesture and no
-  longer special-cased by `CanEditStructure`; it inherits exactly the play-mode
-  behaviour of every other component edit.
+  dies. Rename is no longer routed through the whole-registry memento and no
+  longer special-cased by `CanEditStructure`. It is still *deferred* while a
+  gesture is open (above) — but deferred-and-retried, not refused-and-lost, and
+  for a reason specific to the undo mechanism rather than to structural edits.
 - The whole-registry memento machinery (`RegistryStateCommand`) remains for the
   operations that are genuinely structural: create, delete, reparent,
   add/remove component, hide.
@@ -178,7 +197,13 @@ path for genuinely structural ops.
 - Rename undo/redo through `CommandStack` as a `ComponentEditCommand` on
   `EntityInfo`, including an SSO-defeating long name (a fixture already exists,
   `EntityIdentityTest.cpp:105`) and undo restoring the exact prior name.
-- A no-op rename inside a `ScopedTransaction` pushes no undo step.
+- A no-op rename inside a transaction pushes no undo step.
+- `Edit::RenameWithUndo` (added by the 2026-07-27 review fix): `Renamed` pushes
+  exactly one `"Rename"`-labelled entry that undo/redo round-trips; `NoChange`
+  pushes none; `Deferred` is returned — and NOTHING is mutated — while another
+  transaction is open, with the retry succeeding once it closes either way;
+  `Invalid` for a dead entity and for one carrying no `EntityInfo`, mutating
+  nothing and opening no transaction.
 - `ClassifyField` maps `std::string` to `FieldKind::String`; `ApplyStringEdit`
   round-trips; `FieldComponentCount(String) == 1`; `ComputeFieldMixed` on
   strings (same / different / entity-lacking-component).

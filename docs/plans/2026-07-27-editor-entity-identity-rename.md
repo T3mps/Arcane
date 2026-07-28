@@ -483,7 +483,8 @@ git commit -m "feat(editor): show EntityInfo -- visible identity, structure-lock
 - Modify: `Arcane/ArcaneEditor/src/EditorPanels.hpp` (`OutlinerState::renameBuf`, ~line 117), `Arcane/ArcaneEditor/src/EditorPanels.cpp` (`BeginRename` ~line 419, the inline-rename block ~lines 627-648, the F2 site ~line 562, the double-click site ~line 709, the menu site ~line 742)
 
 **Interfaces:**
-- Consumes: Task 1's `RenameEntity` contract; Task 4's `InputTextString`; `Arcane::ScopedTransaction` (joins an open transaction safely — its `None`-token dtor no-ops, `CommandStack.cpp:149-156`).
+- Consumes: Task 1's `RenameEntity` contract; Task 4's `InputTextString`; `Arcane::ScopedTransaction`.
+- **CORRECTED 2026-07-27 (whole-branch review, finding I1).** This line originally said `ScopedTransaction` "joins an open transaction safely — its `None`-token dtor no-ops". The no-op dtor is real, but "safely" was wrong: a joined scope's snapshots ride the OWNER's close, and `CommandStack::Cancel` discards pending snapshots WITHOUT reverting (`CommandStack.cpp:75-82`), so a rename that joined a gesture ending in `Cancel` applied and became permanently un-undoable. The commit site now calls `Edit::RenameWithUndo`, which opens its OWN transaction or returns `RenameResult::Deferred` having mutated nothing; the panel parks the request in `OutlinerState::pendingRename` and retries next frame. See the design doc's Section 2 for the full mechanism.
 - Produces: a file-local `const Astra::ComponentDescriptor* EntityInfoDescriptor(Astra::Registry&, Astra::Entity)` helper.
 
 - [ ] **Step 1: `renameBuf` becomes `std::string`; `BeginRename` seeds from the component**

@@ -118,6 +118,14 @@ namespace Arcane::Editor
         // a 256-byte box silently truncated longer ones on the way in.
         std::string renameBuf;
         bool renameFocusPending = false;
+        // A rename Edit::RenameWithUndo REFUSED because another transaction was
+        // open (RenameResult::Deferred -- it will not join one, see EntityOps.hpp),
+        // parked for the retry at the top of the next DrawOutlinerPanel. The
+        // refusal mutates nothing, so parking the pair loses no edit. Invalid
+        // means "no rename is parked"; the name rides along because the rename
+        // box is gone by then.
+        Astra::Entity pendingRename = Astra::Entity::Invalid();
+        std::string pendingRenameName;
         Astra::Entity lastClicked = Astra::Entity::Invalid();
         double lastClickTime = 0.0;
         // Latched by the row menu's "Add Component..." and consumed at panel
