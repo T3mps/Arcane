@@ -21,7 +21,9 @@
 
 #include <glm/glm.hpp>
 #include <imgui.h>
-#include <imgui_internal.h>   // DockBuilder* + ImGuiDockNode::LocalFlags (docking layout)
+#include <imgui_internal.h>   // DockBuilder* + ImGuiDockNode::LocalFlags (docking
+                              // layout), ImGuiTable + TableSetColumnWidth (the
+                              // Inspector grid's shared split), GetCurrentWindowRead
 
 #include <algorithm>
 #include <cfloat>
@@ -1294,6 +1296,113 @@ namespace Arcane::Editor
             return hovered;
         }
 
+        // ---------------------------------------------------------------------
+        // Axis color bars (UE's Details-panel treatment for vector components:
+        // X red, Y green, Z blue on the left edge of each component's frame).
+        // ---------------------------------------------------------------------
+
+        // Sampled off the UE reference screenshot -- deliberately muted, unlike
+        // the saturated primaries ImGui's own component markers use
+        // (GDefaultRgbaColorMarkers is 240/20/20, 20/240/20, 20/20/240 --
+        // imgui_widgets.cpp:2257-2260).
+        constexpr ImU32 kAxisBarColors[3] = {
+            IM_COL32(196,  64,  54, 255),   // X
+            IM_COL32( 96, 166,  58, 255),   // Y
+            IM_COL32( 58, 122, 196, 255),   // Z
+        };
+
+        // How wide the strip is, in pixels. Matches ImGuiStyle::ColorMarkerSize's
+        // own default (imgui.cpp:1564), which is the width the vendored marker
+        // renderer would have used.
+        constexpr float kAxisBarWidth = 3.0f;
+
+        // Paint the axis strip over the left edge of the item just submitted.
+        // `component` indexes kAxisBarColors; an index past the palette draws
+        // nothing, so a row wider than three components degrades quietly rather
+        // than reading out of bounds.
+        //
+        // An OVERLAY on purpose: it runs AFTER the widget, so it pushes no style
+        // and cannot move layout. It sits flush on the frame's corners because
+        // nothing in this editor overrides ImGuiStyle::FrameRounding, whose
+        // default is 0.0f (imgui.cpp:1532); a rounded frame would instead want
+        // the vendored RenderColorComponentMarker (imgui.cpp:4089-4096), which
+        // rounds -- but that one is reachable only from DragScalar/SliderScalar
+        // (imgui_widgets.cpp:2791, :3384) and so cannot serve the multi-select
+        // text boxes, which need the same strip.
+        void DrawAxisBar(int component)
+        {
+            if (component < 0 || component >= IM_ARRAYSIZE(kAxisBarColors))
+                return;
+            // A window that is skipping items submitted nothing: both DragScalar
+            // (imgui_widgets.cpp:2721-2723) and InputTextEx (:4708-4710) return
+            // on that flag BEFORE ItemAdd, so g.LastItemData still describes some
+            // EARLIER item and a bar taken from its rect would be painted onto
+            // that one.
+            if (ImGui::GetCurrentWindowRead()->SkipItems)
+                return;
+            const ImVec2 min = ImGui::GetItemRectMin();
+            const ImVec2 max = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                min, ImVec2(min.x + kAxisBarWidth, max.y), kAxisBarColors[component]);
+        }
+
+        // The component drags for a single-selection Vec2/Vec3 row, spelled out
+        // rather than calling ImGui::DragFloat2/3.
+        //
+        // WHY NOT DragFloat2/3: the bar needs each component's OWN frame rect,
+        // and DragScalarN submits its components internally -- by the time it
+        // returns, EndGroup has overwritten g.LastItemData.Rect with the group's
+        // bounding box (imgui.cpp:12483), which is the only rect the caller can
+        // see. Recovering the components from that would mean re-deriving
+        // PushMultiItemsWidths' split arithmetic (imgui.cpp:12283-12291) out
+        // here, against an internal layout detail no API contract holds still.
+        //
+        // This IS DragScalarN's body (imgui_widgets.cpp:2814-2849) specialised to
+        // float with no bounds, with the bar added and the trailing
+        // visible-label block (:2840-2845) dropped -- already dead for these
+        // callers, whose labels are the "##name" hidden-id form:
+        // FindRenderedTextEnd stops at the leading "##" (imgui.cpp:3918) and
+        // returns the string start, so :2841's
+        // `label != label_end` is false. Everything ids and undo depend on is
+        // therefore unchanged: the same BeginGroup/EndGroup, the same
+        // PushID(label) + PushID(i) nesting over the same "" child labels, so
+        // each component keeps the exact ImGui id DragFloat2/3 gave it, and the
+        // caller's BeginGestureIfActivated/EndGesture still read the id EndGroup
+        // forwards out of the group (imgui.cpp:12477-12482) exactly as before.
+        [[nodiscard]] bool AxisDragFloatN(const char* label, float* v, int count, float speed)
+        {
+            // DragScalarN's own guard (:2816-2818), kept in the same place and
+            // for the same reason: it returns before the group opens, so there
+            // is nothing to unwind.
+            if (ImGui::GetCurrentWindowRead()->SkipItems)
+                return false;
+            bool changed = false;
+            ImGui::BeginGroup();
+            ImGui::PushID(label);
+            ImGui::PushMultiItemsWidths(count, ImGui::CalcItemWidth());
+            for (int i = 0; i < count; ++i)
+            {
+                ImGui::PushID(i);
+                if (i > 0)
+                    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+                // `speed` is the only argument these callers ever varied; every
+                // other one is DragFloat's default, and DragFloat's defaults ARE
+                // DragFloat2/3's defaults (imgui.h:687-689), so each component
+                // behaves exactly as it did inside the combined widget.
+                // Written as an if rather than |= only to keep the assignment
+                // bool-typed; like DragScalarN's |= it does not short-circuit,
+                // so every component is always submitted.
+                if (ImGui::DragFloat("", &v[i], speed))
+                    changed = true;
+                DrawAxisBar(i);
+                ImGui::PopID();
+                ImGui::PopItemWidth();
+            }
+            ImGui::PopID();
+            ImGui::EndGroup();
+            return changed;
+        }
+
         // Renders one widget per reflected field and applies edits through the
         // pure InspectorFields writers (kept ImGui-free so the write-back is unit-
         // testable). Unsupported/compound types (e.g. glm::mat3, enums) render
@@ -1398,7 +1507,7 @@ namespace Arcane::Editor
                     // exactly when g.ActiveId == g.LastItemData.ID (imgui.cpp:6549),
                     // so this is ActiveId -- including through a ctrl+click text entry
                     // (TempInputText re-derives the id from the same window+label) and
-                    // through DragFloat2/3, where EndGroup forwards the live component
+                    // through AxisDragFloatN, where EndGroup forwards the live component
                     // id into LastItemData (imgui.cpp:12480).
                     *gestureItem = ImGui::GetItemID();
                     // One Begin + N snapshots + one Commit = one undo step for the
@@ -1467,9 +1576,15 @@ namespace Arcane::Editor
             // row's other items -- and is NOT drawn: the display name lives in
             // the grid's label column now, so the trailing SameLine'd text this
             // row used to end on is gone with it.
+            //
+            // `axisColors` asks for the X/Y/Z strip on each box. It is a
+            // parameter rather than `count > 1` because the two are not the same
+            // question: this row also serves plain scalars, and a future
+            // two-box row that is NOT a vector (a min/max pair, say) would be
+            // silently painted red/green by that shortcut.
             int MultiScalarRow(const char* idSeed, int count, const double* vals,
                                const Arcane::Editor::FieldMixedMask& mask, bool integral,
-                               double& outValue)
+                               bool axisColors, double& outValue)
             {
                 int committed = -1;
                 ImGui::BeginGroup();
@@ -1514,6 +1629,12 @@ namespace Arcane::Editor
                             committed = i;
                         }
                     }
+                    // After the commit block, not before it: everything above
+                    // reads g.LastItemData (IsItemDeactivatedAfterEdit), and
+                    // putting the decoration last means no reader has to
+                    // re-establish that a draw-list call left that state alone.
+                    if (axisColors)
+                        DrawAxisBar(i);
                     ImGui::PopID();
                     ImGui::PopItemWidth();
                 }
@@ -1545,7 +1666,7 @@ namespace Arcane::Editor
                 //   - ctrl+click temp input: the id comes from the same window+label
                 //     (imgui_widgets.cpp:2727, :4728) and the temp input skips
                 //     ItemAdd (:4791-4792), so the drag's own id stands.
-                //   - DragFloat2/3 and MultiScalarRow (groups): EndGroup re-points
+                //   - AxisDragFloatN and MultiScalarRow (groups): EndGroup re-points
                 //     LastItemData.ID at the group's live ActiveId, ELSE at the child
                 //     that deactivated inside it (imgui.cpp:12477-12482) -- so the
                 //     activation frame yields the child that took ActiveId, and the
@@ -1689,7 +1810,8 @@ namespace Arcane::Editor
                             const double cur = static_cast<double>(v);
                             double out = cur;
                             if (MultiScalarRow(widgetId.c_str(), 1, &cur, MixedFor(f),
-                                               /*integral*/ true, out) >= 0)
+                                               /*integral*/ true, /*axisColors*/ false,
+                                               out) >= 0)
                             {
                                 // The field's Range binds here too. This row is a
                                 // raw text box rather than a drag, so ImGui clamps
@@ -1729,7 +1851,8 @@ namespace Arcane::Editor
                             const double cur = static_cast<double>(v);
                             double out = cur;
                             if (MultiScalarRow(widgetId.c_str(), 1, &cur, MixedFor(f),
-                                               /*integral*/ false, out) >= 0)
+                                               /*integral*/ false, /*axisColors*/ false,
+                                               out) >= 0)
                             {
                                 // Same rule as the Int32 row above and as the drag
                                 // one branch down: a Range bounds the typed value,
@@ -1760,7 +1883,8 @@ namespace Arcane::Editor
                             // into one blank axis leaves the others alone on every
                             // target -- the point of per-axis mixed values.
                             const int c = MultiScalarRow(widgetId.c_str(), 2, cur, MixedFor(f),
-                                                         /*integral*/ false, out);
+                                                         /*integral*/ false, /*axisColors*/ true,
+                                                         out);
                             if (c >= 0)
                             {
                                 const float fv = static_cast<float>(out);
@@ -1769,7 +1893,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = ImGui::DragFloat2(widgetId.c_str(), &v.x, 0.1f);
+                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 2, 0.1f);
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -1784,7 +1908,8 @@ namespace Arcane::Editor
                             const double cur[3]{ v.x, v.y, v.z };
                             double out = 0.0;
                             const int c = MultiScalarRow(widgetId.c_str(), 3, cur, MixedFor(f),
-                                                         /*integral*/ false, out);
+                                                         /*integral*/ false, /*axisColors*/ true,
+                                                         out);
                             if (c >= 0)
                             {
                                 const float fv = static_cast<float>(out);
@@ -1793,7 +1918,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = ImGui::DragFloat3(widgetId.c_str(), &v.x, 0.1f);
+                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 3, 0.1f);
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
