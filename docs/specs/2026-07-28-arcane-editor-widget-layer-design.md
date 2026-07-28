@@ -139,6 +139,16 @@ inside one multi-scalar row closes .y's fresh gesture empty; filed, deliberately
 root = the one-shared-slot design). This arc must not make it worse; fixing it is its own
 arc and would slot into `GestureState` later.
 
+**Amendment (2026-07-28 pre-execution review):** the draw-scope guard covers only frames
+that draw -- it cannot cover document DESTRUCTION. Documents are destroyed synchronously
+on close with no on-close hook (`DocumentHost::Close`/`CloseAll`), and a transaction
+stranded open gates every `InTransaction()` consumer editor-wide: `CanEditStructure` AND
+the Ctrl+Z/Ctrl+Y keybinds (`EditorAppFrame.cpp:424-426`). Every gesture-opening document
+therefore adds `ClosePending` to its destructor (commit semantics -- the live edit already
+applied; UE's equivalent orphan sweeps exist for the same reason,
+`PlayLevel.cpp:2595-2621` in the vendored tree). Implementation detail discovered at the
+same time: the skin needs `imgui_internal.h` -- `GetActiveID` is internal-only.
+
 ### 3.3 `InspectorView.hpp/.cpp` -- reflection-driven rows (Tier C)
 
 `ImGuiFieldVisitor` moves here whole, out of the anonymous namespace, with its coupled

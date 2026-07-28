@@ -42,6 +42,22 @@ Catch2 (`[editor]` tag), premake5 -> Arcane.slnx, MSVC v18 (VS 2026).
   visuals while moving.
 - Commit per task with the messages given; do not batch tasks into one commit.
 
+## Amendments (2026-07-28 pre-execution review -- code fact-check + vendored-UE research)
+
+Three corrections are folded into the tasks below in place; this index exists so no
+task brief misses them:
+
+1. **Teardown close** (Task 6 Step 1, Task 7 Step 4): every document that opens
+   gestures adds `EditGesture::ClosePending` to its DESTRUCTOR. Documents are
+   destroyed synchronously on close with no on-close hook; a stranded open
+   transaction gates `InTransaction()` consumers editor-wide.
+2. **imgui_internal.h** (Task 2 Step 2, Task 3 Step 1): `ImGui::GetActiveID` is
+   internal-only (imgui_internal.h:3532), and so is `BeginFieldGrid`'s
+   `table->LastResizedColumn` access -- both extracted .cpp files include
+   `imgui_internal.h` alongside `imgui.h`, as EditorPanels.cpp does today (:23-24).
+3. **Second `InTransaction()` consumer** (Task 5 Step 3): the Ctrl+Z/Ctrl+Y keybind
+   gate (`EditorAppFrame.cpp:424-426`) reads it too, not just `CanEditStructure`.
+
 ## File Structure
 
 | File | Status | Responsibility |
@@ -274,7 +290,8 @@ namespace Arcane::Editor::EditGesture
 
 **Interfaces:**
 - Consumes: Task 1's pure core; `Arcane::CommandStack`; `Arcane::FunctionRef` from
-  `<Arcane/Util/FunctionRef.hpp>`; imgui (in the .cpp ONLY).
+  `<Arcane/Util/FunctionRef.hpp>`; imgui + imgui_internal (in the .cpp ONLY --
+  `GetActiveID` is internal-only, imgui_internal.h:3532).
 - Produces (later tasks rely on these EXACT names): `EditGesture::GestureState`
   (members: `Slots slots; std::function<void()> pendingCommit; std::string stringSeed;
   std::uint32_t stringSeedItem;`), `BeginOnActivate(CommandStack*, GestureState&,
@@ -343,6 +360,8 @@ namespace Arcane::Editor::EditGesture
 
 ```cpp
 #include <imgui.h>
+#include <imgui_internal.h>   // GetActiveID (internal-only, imgui_internal.h:3532);
+                              // EditorPanels.cpp already pairs both includes (:23-24)
 
 #include <type_traits>
 #include <utility>
@@ -444,7 +463,10 @@ namespace Arcane::Editor::EditGesture
   `Arcane::Editor`), keeping every comment:
   - `InputTextString` (anchor: `bool InputTextString(const char* label, std::string* s`, ~:498)
   - the field-grid block: `kLabelColumnFraction`, `BeginFieldGrid`, `EndFieldGrid`
-    (anchor comment: "The two-column field grid (UE's Details-panel shape", ~:1129-1272)
+    (anchor comment: "The two-column field grid (UE's Details-panel shape", ~:1129-1272).
+    NOTE (amendment 2): `BeginFieldGrid` dereferences `ImGuiTable*` for
+    `table->LastResizedColumn` -- an imgui_internal.h-only type; EditorWidgets.cpp
+    includes `imgui_internal.h` alongside `imgui.h`, as EditorPanels.cpp does today.
   - `FieldLabelCell` (~:1290)
   - `DrawAxisBar` (~:1351), `AxisDragFloatN` (~:1447)
   - `PushHeaderBandColors` / `PopHeaderBandColors` (~:1389-1396)
@@ -672,7 +694,11 @@ namespace Arcane::Editor::EditGesture
 - [ ] **Step 3: Update `InspectorState`** per the Interfaces block; chase compiler errors
   (references to `state.gestureTxn` etc. outside the visitor -- expect
   `CanEditStructure` / structural-edit gating in EditorPanels.cpp to read
-  `undo.InTransaction()` already; verify, do not assume).
+  `undo.InTransaction()` already; verify, do not assume). Amendment 3: a SECOND
+  `InTransaction()` consumer exists -- the Ctrl+Z/Ctrl+Y keybind gate
+  (`EditorAppFrame.cpp:424-426`, `noOpenTxn`). Both consumers must behave
+  identically after the swap; their breadth is also why the teardown close
+  (amendment 1) matters -- a stranded open transaction disables undo editor-wide.
 - [ ] **Step 4: Build; full gate; editor exe timestamp.** The five CommandStack ownership
   regression cases (from the CRITICAL-1 fix) MUST stay green -- they pin exactly the
   semantics this task re-homes.
@@ -695,8 +721,27 @@ namespace Arcane::Editor::EditGesture
   `TextCommitState m_textEdit;` replacing `m_graphGestureBefore`, `m_gestureHadBefore`,
   `m_gestureBefore`, `m_nameEditNode`, `m_passNameEditIdx`, `m_nameBuf`.
 
-- [ ] **Step 1: Document-scope guard.** At the top of the document's `Draw` (first local):
+- [ ] **Step 1: Document-scope guard + teardown close (amendment 1).** At the top of the
+  document's `Draw` (first local):
   `const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };`
+  AND in `~ShaderEditorDocument` (it exists -- today it only destroys the two
+  node-editor contexts), before those teardowns:
+
+```cpp
+    if (m_services.undo)
+        EditGesture::ClosePending(*m_services.undo, m_gesture);
+```
+
+  WHY: documents are DESTROYED synchronously on close with no on-close hook
+  (`DocumentHost::Close` erases the unique_ptr, DocumentHost.cpp:123; `CloseAll`
+  :116 on project switch). The X-button path is safe -- `requestClose` is raised
+  inside `Draw` and executed after the draw loop (`DrawAll`, :137), so ScopeGuard
+  has already run -- but any close that destroys the doc between gesture-park and
+  its next `Draw` (hotkey close, project-switch `CloseAll`) would strand the
+  transaction open, leaving `InTransaction()` true editor-wide: structural edits
+  refused AND Ctrl+Z/Ctrl+Y dead (`EditorAppFrame.cpp:424-426`). Today nothing can
+  strand because documents never `Begin()`; this task changes that, so this task
+  closes the hole.
 - [ ] **Step 2: Convert the graph-node drag lambdas** (anchor: "Gesture helpers (used by
   pin rows AND payload widgets below)", ~:3148). The label moves from `gestureEnd` to
   `gestureBegin` -- update every call site pair mechanically (they are adjacent lines;
@@ -893,7 +938,11 @@ namespace Arcane::Editor::EditGesture
 ```
 
   If `SpriteAssetData` has no `operator==`, add a memberwise one in SpriteAsset.hpp's
-  spirit (read the struct first; do NOT memcmp a struct with padding).
+  spirit (read the struct first; do NOT memcmp a struct with padding — verified: it has
+  none today, holds a `std::string`, and has tail padding, so memberwise is mandatory).
+  Also add the teardown close (amendment 1, same shape and rationale as Task 6 Step 1)
+  to `~SpriteDocument`, creating the destructor if the class has none: a parked sprite
+  gesture must not outlive the document.
 - [ ] **Step 5: Wire the stack.** At the Services construction site, pass the same
   `CommandStack` the material factory passes. Keep `m_dirty |= changed` -- dirty and
   undo are separate ledgers (Save clears dirty; undo does not).
@@ -919,13 +968,17 @@ namespace Arcane::Editor::EditGesture
   comment at EditGesture.
 - [ ] **Step 2: Confirm the spec's section-5 behavior changes are real in code review
   terms** -- re-read your own diff for: abandoned-drag commit path reachable in both
-  documents; `InTransaction()` gating unchanged for structural edits; Play-mode null
-  stack no-ops everywhere (SpriteDocument included: null `undo` in Services must be
-  tolerated by every bracket call -- it is, `BeginOnActivate` early-outs).
+  documents; `InTransaction()` gating unchanged for structural edits AND the undo
+  keybinds (`EditorAppFrame.cpp:424-426`); the amendment-1 teardown close present in
+  BOTH document destructors; Play-mode null stack no-ops everywhere (SpriteDocument
+  included: null `undo` in Services must be tolerated by every bracket call -- it is,
+  `BeginOnActivate` early-outs).
 - [ ] **Step 3: Write the desk-verify checklist** (the user runs it; the harness must
   not). Contents = spec section 6's six items VERBATIM plus: (7) shader editor rename
   sites still commit once on Enter/click-away and revert on Escape; (8) sprite-doc undo
-  of a ppu drag updates the viewport via the invalidate hook.
+  of a ppu drag updates the viewport via the invalidate hook; (9) close a document
+  mid-drag via project switch (`CloseAll`): no stranded transaction -- Ctrl+Z still
+  works everywhere afterwards (amendment 1's teardown close is what this exercises).
 - [ ] **Step 4: Final full build (Debug), full `~[gpu]` gate, editor exe timestamp,
   commit.**
   `docs(editor): widget-layer no-legacy sweep + desk-verify checklist`
