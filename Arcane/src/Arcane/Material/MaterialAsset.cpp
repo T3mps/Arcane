@@ -237,7 +237,15 @@ namespace Arcane
                     auto gen = GenerateGraphSnippet(*data.graph,
                                                     MaterialSurfaceForKind(data.kind));
                     if (gen.Ok())
+                    {
                         data.snippet = std::move(gen.snippet);
+                        // Both stages travel together: GraphCodegenResult also
+                        // carries displace() for a wired Vertex Output, and
+                        // dropping it here would silently lose the vertex
+                        // stage until the editor's next save writes both.
+                        if (data.vertexSnippet.empty())
+                            data.vertexSnippet = std::move(gen.vertexSnippet);
+                    }
                     else
                         ARC_WARN("LoadMaterialAsset: '{}' graph does not generate "
                                  "({} error(s)); snippet left empty",

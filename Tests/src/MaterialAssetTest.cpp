@@ -358,3 +358,30 @@ TEST_CASE(".arcmat round-trips base scene inputs (the post-material shape)", "[m
     REQUIRE(clamped->baseInputs.size() == 1);
     CHECK(clamped->baseInputs[0] == kSceneInput);
 }
+
+// A hand-authored graph-only file (no snippet keys) must self-heal BOTH stages:
+// the loader regenerates the pixel snippet (MaterialAsset.cpp's documented
+// self-heal) AND the vertex snippet -- GraphCodegenResult carries displace()
+// for a wired Vertex Output, and dropping it would silently lose the vertex
+// stage until the editor's next save regenerates both.
+TEST_CASE("graph-only material self-heals pixel AND vertex snippets", "[material]")
+{
+    const auto dir = TempDir("graph_selfheal");
+    {
+        std::ofstream out(dir / "g.arcmat", std::ios::binary);
+        out << R"({"id":"11112222333344445555666677778888","type":"material",)"
+               R"("name":"g","kind":"sprite","graph":{"nextId":5,"nodes":[)"
+               R"({"id":1,"type":"output","pos":[400.0,100.0]},)"
+               R"({"id":2,"type":"const_color","pos":[100.0,100.0],"value":[1.0,0.5,0.25,1.0]},)"
+               R"({"id":3,"type":"vertex_output","pos":[400.0,300.0]},)"
+               R"({"id":4,"type":"const_float2","pos":[100.0,300.0],"value":[0.01,0.0]}],)"
+               R"("links":[{"from":2,"fromPin":0,"to":1,"toPin":0},)"
+               R"({"from":4,"fromPin":0,"to":3,"toPin":0}]}})";
+    }
+    const auto back = LoadMaterialAsset(dir / "g.arcmat");
+    REQUIRE(back.has_value());
+    REQUIRE(back->graph.has_value());
+    CHECK_FALSE(back->snippet.empty());
+    CHECK_FALSE(back->vertexSnippet.empty());
+    CHECK(back->vertexSnippet.find("displace") != std::string::npos);
+}
