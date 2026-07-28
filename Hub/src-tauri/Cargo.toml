@@ -20,7 +20,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 # ONE Hub per user, enforced: a second launch focuses the existing window
-# instead of starting a rival process. Two Hubs share recents.json/engines.json
+# instead of starting a rival process. Two Hubs share the .archub state files
 # last-writer-wins -- the atomic writes prevent corruption but not lost
 # updates -- and a launcher's second launch means "show me the Hub" anyway
 # (Unity Hub and the Epic launcher both behave this way).

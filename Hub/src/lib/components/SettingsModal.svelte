@@ -36,7 +36,7 @@
   let cat = $state<Cat>("projects");
 
   // Local mirror of the text field. Committing on change (blur/Enter) rather
-  // than on every keystroke keeps a half-typed path out of settings.json.
+  // than on every keystroke keeps a half-typed path out of the settings file.
   //
   // Re-synced from the prop rather than seeded once: Rust normalises the folder
   // on save, so a typed "D:\Games\" comes back as "D:\Games" and the field must

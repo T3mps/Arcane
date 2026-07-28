@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn quarantine_sits_beside_the_original() {
-        let q = quarantine_path(Path::new("C:/x/recents.json"));
-        assert_eq!(q, PathBuf::from("C:/x/recents.json.corrupt"));
+        let q = quarantine_path(Path::new("C:/x/recents.archub"));
+        assert_eq!(q, PathBuf::from("C:/x/recents.archub.corrupt"));
     }
 }
