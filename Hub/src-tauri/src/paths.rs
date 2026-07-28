@@ -12,13 +12,47 @@
 use std::path::PathBuf;
 
 pub fn hub_dir() -> PathBuf {
-    // %APPDATA% (roaming) so the project list follows the user between
-    // machines that roam profiles; falls back to temp only if the variable is
+    // %LOCALAPPDATA% (machine-local), NOT roaming %APPDATA% -- decided
+    // 2026-07-28, reversing the original choice. Everything in these files is
+    // a machine-specific absolute path (D:\ projects, engine exes), so a
+    // roaming profile would deliver another machine a list where every row is
+    // missing and every engine is gone. Settings ride along rather than
+    // splitting the store in two. Falls back to temp only if the variable is
     // missing, which should not happen on Windows.
+    let base = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    base.join("Arcane").join("hub")
+}
+
+/// Where state lived before the 2026-07-28 move: roaming %APPDATA%. Read once
+/// per launch by `migrate_legacy_state`; never written again.
+pub fn legacy_hub_dir() -> PathBuf {
     let base = std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
     base.join("Arcane").join("hub")
+}
+
+/// One-time move-in: each state file that exists at the OLD roaming location
+/// but not the new one is copied over. Old files stay in place as a fallback
+/// copy -- disk is cheap, a lost project list is not. Runs from tauri's setup
+/// hook, before the webview can issue its first load_state.
+pub fn migrate_legacy_state() {
+    let old_dir = legacy_hub_dir();
+    let new_dir = hub_dir();
+    // Equal on a machine with unusual env; nothing to move then.
+    if old_dir == new_dir || !old_dir.is_dir() {
+        return;
+    }
+    for f in ["recents.json", "engines.json", "settings.json"] {
+        let old = old_dir.join(f);
+        let new = new_dir.join(f);
+        if old.is_file() && !new.exists() {
+            let _ = std::fs::create_dir_all(&new_dir);
+            let _ = std::fs::copy(&old, &new);
+        }
+    }
 }
 
 pub fn recents_file() -> PathBuf {

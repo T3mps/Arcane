@@ -576,6 +576,13 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .setup(|_app| {
+            // State moved from roaming %APPDATA% to %LOCALAPPDATA% on
+            // 2026-07-28 (machine-specific paths do not roam); copy old files
+            // in once, before the webview's first load_state can run.
+            paths::migrate_legacy_state();
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             load_state,
             register_engine,
