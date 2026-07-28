@@ -43,24 +43,25 @@
   });
   let hubDir = $state("");
   let version = $state("");
-  // Owned here so the dialog can render above the error banner and so a failed
-  // create keeps the dialog up with its message inside it, not behind the scrim.
-  let creating = $state(false);
-  // The project whose engine is being chosen, or null when the picker is shut.
-  let choosingFor = $state<RecentProject | null>(null);
-  let settingsOpen = $state(false);
-  // The project being renamed / having its launch arguments edited, or null.
-  let renaming = $state<RecentProject | null>(null);
-  let editingArgs = $state<RecentProject | null>(null);
-  let deleting = $state<RecentProject | null>(null);
-  // Any modal covers the main area, so the banner under it is unreadable and
-  // the dialog that is up renders `error` itself. Derived rather than checked
-  // inline, because the list has grown once already and a missed entry shows up
-  // as a message the user can see but cannot read.
-  const modalUp = $derived(
-    creating || choosingFor !== null || settingsOpen ||
-    renaming !== null || editingArgs !== null || deleting !== null,
-  );
+  // ONE modal at a time, as a discriminated union rather than six independent
+  // flags. Owned here so a dialog renders above the error banner and a failed
+  // action keeps its dialog up with the message inside it, not behind the
+  // scrim. The union replaced the per-modal booleans/nullables: their modalUp
+  // derived had to enumerate every one, and its own comment admitted "the
+  // list has grown once already and a missed entry shows up as a message the
+  // user can see but cannot read" -- with one value, a forgotten entry and
+  // two-modals-at-once are unrepresentable rather than guarded against.
+  type Modal =
+    | { kind: "none" }
+    | { kind: "new" }
+    | { kind: "settings" }
+    | { kind: "engine"; p: RecentProject }
+    | { kind: "rename"; p: RecentProject }
+    | { kind: "args"; p: RecentProject }
+    | { kind: "delete"; p: RecentProject };
+  let modal = $state<Modal>({ kind: "none" });
+  const modalUp = $derived(modal.kind !== "none");
+  const closeModal = () => (modal = { kind: "none" });
   // Load-time notices, ACCUMULATED rather than read straight off `hub`.
   // Recovery renames the bad file aside, so the very next load reports nothing
   // -- and since refresh() replaces `hub` after every action, rendering
@@ -185,9 +186,9 @@
   });
 
   const chooseEngine = (engineId: string | null) => {
-    const p = choosingFor;
-    if (!p) return;
-    choosingFor = null;
+    if (modal.kind !== "engine") return;
+    const p = modal.p;
+    closeModal();
     return guard(() => setProjectEngine(p.path, engineId));
   };
 
@@ -204,7 +205,7 @@
     });
     // Close only on SUCCESS: a failed create keeps the typed name and folder so
     // the message (rendered inside the dialog) can be acted on.
-    if (ok) creating = false;
+    if (ok) closeModal();
     return ok;
   };
 
@@ -212,20 +213,20 @@
   // SUCCESS, so a failure keeps the typed value with the message beside it
   // instead of dropping the user back to a banner they cannot read.
   const doRename = async (newName: string): Promise<boolean> => {
-    const p = renaming;
-    if (!p) return false;
+    if (modal.kind !== "rename") return false;
+    const p = modal.p;
     let ok = false;
     await guard(async () => { await renameProject(p.path, newName); ok = true; });
-    if (ok) renaming = null;
+    if (ok) closeModal();
     return ok;
   };
 
   const doArgs = async (args: string): Promise<boolean> => {
-    const p = editingArgs;
-    if (!p) return false;
+    if (modal.kind !== "args") return false;
+    const p = modal.p;
     let ok = false;
     await guard(async () => { await setProjectArgs(p.path, args); ok = true; });
-    if (ok) editingArgs = null;
+    if (ok) closeModal();
     return ok;
   };
 
@@ -233,7 +234,7 @@
   // caching it, so turning the confirmation off takes effect immediately.
   const askDelete = (p: RecentProject) => {
     if (settings.confirmDelete) {
-      deleting = p;
+      modal = { kind: "delete", p };
       return;
     }
     // Straight through, because the user asked for that. The safety net is
@@ -243,11 +244,11 @@
   };
 
   const doDelete = async (): Promise<boolean> => {
-    const p = deleting;
-    if (!p) return false;
+    if (modal.kind !== "delete") return false;
+    const p = modal.p;
     let ok = false;
     await guard(async () => { await deleteProject(p.path); ok = true; });
-    if (ok) deleting = null;
+    if (ok) closeModal();
     return ok;
   };
 
@@ -276,10 +277,10 @@
   // temporal dead zone.
   const projectActions: ProjectActions = {
     launch,
-    changeEngine: (p) => (choosingFor = p),
+    changeEngine: (p) => (modal = { kind: "engine", p }),
     reveal: (p) => guard(() => revealProject(p.path)),
-    rename: (p) => (renaming = p),
-    args: (p) => (editingArgs = p),
+    rename: (p) => (modal = { kind: "rename", p }),
+    args: (p) => (modal = { kind: "args", p }),
     forget: (p) => guard(() => forgetProject(p.path)),
     locate,
     delete: askDelete,
@@ -300,8 +301,8 @@
 <div class="app">
   <WindowChrome />
   <div class="body">
-    <Sidebar {view} engine={selectedEngine} {settingsOpen}
-             onNavigate={(v) => (view = v)} onSettings={() => (settingsOpen = true)} />
+    <Sidebar {view} engine={selectedEngine} settingsOpen={modal.kind === "settings"}
+             onNavigate={(v) => (view = v)} onSettings={() => (modal = { kind: "settings" })} />
     <main>
       <!-- Suppressed while a dialog is up: the banner sits under the scrim,
            so the dialog renders the same message itself. -->
@@ -322,7 +323,7 @@
                       layout={settings.projectView}
                       confirmDelete={settings.confirmDelete}
                       actions={projectActions}
-                      onOpen={addProject} onNew={() => (creating = true)}
+                      onOpen={addProject} onNew={() => (modal = { kind: "new" })}
                       onLayout={(v) => applySettings({ ...settings, projectView: v })} />
       {:else if view === "engines"}
         <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion} {busy}
@@ -333,42 +334,32 @@
     </main>
   </div>
 
-  {#if creating}
+  {#if modal.kind === "new"}
     <NewProjectModal {busy} {error} engine={selectedEngine}
                      defaultDir={settings.defaultProjectDir}
                      onBrowse={() => pickFolder("Where should the project live?")}
-                     onCreate={makeProject} onCancel={() => (creating = false)} />
-  {/if}
-
-  {#if choosingFor}
-    <ProjectEngineModal project={choosingFor} engines={hub.engines}
+                     onCreate={makeProject} onCancel={closeModal} />
+  {:else if modal.kind === "engine"}
+    <ProjectEngineModal project={modal.p} engines={hub.engines}
                         defaultEngine={selectedEngine} {busy}
-                        onChoose={chooseEngine} onCancel={() => (choosingFor = null)} />
-  {/if}
-
-  {#if renaming}
-    <RenameProjectModal project={renaming} {busy} {error}
-                        onRename={doRename} onCancel={() => (renaming = null)} />
-  {/if}
-
-  {#if editingArgs}
-    <ProjectArgsModal project={editingArgs} {busy} {error}
-                      onSave={doArgs} onCancel={() => (editingArgs = null)} />
-  {/if}
-
-  {#if deleting}
-    <DeleteProjectModal project={deleting} {busy} {error}
-                        onDelete={doDelete} onCancel={() => (deleting = null)} />
-  {/if}
-
-  {#if settingsOpen}
+                        onChoose={chooseEngine} onCancel={closeModal} />
+  {:else if modal.kind === "rename"}
+    <RenameProjectModal project={modal.p} {busy} {error}
+                        onRename={doRename} onCancel={closeModal} />
+  {:else if modal.kind === "args"}
+    <ProjectArgsModal project={modal.p} {busy} {error}
+                      onSave={doArgs} onCancel={closeModal} />
+  {:else if modal.kind === "delete"}
+    <DeleteProjectModal project={modal.p} {busy} {error}
+                        onDelete={doDelete} onCancel={closeModal} />
+  {:else if modal.kind === "settings"}
     <SettingsModal {settings} {busy} {hubDir} {version} {error}
                    recentCount={hub.recents.length}
                    onSave={applySettings}
                    onBrowseDir={() => pickFolder("Default location for projects")}
                    onReveal={() => guard(revealHubDataDir)}
                    onClearRecents={() => guard(clearRecents)}
-                   onClose={() => (settingsOpen = false)} />
+                   onClose={closeModal} />
   {/if}
 </div>
 
