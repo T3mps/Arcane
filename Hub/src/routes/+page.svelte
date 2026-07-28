@@ -7,6 +7,7 @@
   import WindowChrome from "$lib/components/WindowChrome.svelte";
   import Sidebar, { type View } from "$lib/components/Sidebar.svelte";
   import type { ProjectActions } from "$lib/components/ProjectMenu.svelte";
+  import type { EngineActions } from "$lib/views/EnginesView.svelte";
   import ProjectsView from "$lib/views/ProjectsView.svelte";
   import EnginesView from "$lib/views/EnginesView.svelte";
   import PackagesView from "$lib/views/PackagesView.svelte";
@@ -283,6 +284,15 @@
     locate,
     delete: askDelete,
   };
+
+  // Same shape for the Engines view -- the vocabulary object mirrors
+  // ProjectActions, typed where the controls that call it are rendered.
+  const engineActions: EngineActions = {
+    register: addEngine,
+    registerPath: (path) => guard(() => registerEngine(path)),
+    select: (e) => (selectedEngine = e),
+    forget: (e) => guard(() => forgetEngine(e.path)),
+  };
 </script>
 
 <svelte:window oncontextmenu={onContextMenu} />
@@ -316,10 +326,7 @@
                       onLayout={(v) => applySettings({ ...settings, projectView: v })} />
       {:else if view === "engines"}
         <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion} {busy}
-                     onRegister={addEngine}
-                     onRegisterPath={(path) => guard(() => registerEngine(path))}
-                     onSelect={(e) => (selectedEngine = e)}
-                     onForget={(e) => guard(() => forgetEngine(e.path))} />
+                     actions={engineActions} />
       {:else}
         <PackagesView />
       {/if}

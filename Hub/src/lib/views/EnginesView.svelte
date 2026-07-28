@@ -1,14 +1,27 @@
+<script module lang="ts">
+  import type { EngineEntry } from "$lib/api";
+
+  // The per-engine action vocabulary as one object, mirroring ProjectActions:
+  // the view that renders the controls owns the contract they call.
+  export type EngineActions = {
+    /** Folder dialog -> register whatever ArcaneEditor.exe it holds. */
+    register: () => void;
+    /** Register a known path -- the found-one-nearby suggestion button. */
+    registerPath: (path: string) => void;
+    select: (e: EngineEntry) => void;
+    forget: (e: EngineEntry) => void;
+  };
+</script>
+
 <script lang="ts">
   import Button from "$lib/components/Button.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import EngineRow from "$lib/components/EngineRow.svelte";
-  import type { EngineEntry } from "$lib/api";
 
-  let { engines, selected, suggestion, busy, onRegister, onRegisterPath, onSelect, onForget }:
+  let { engines, selected, suggestion, busy, actions }:
     {
       engines: EngineEntry[]; selected: EngineEntry | null; suggestion: EngineEntry | null;
-      busy: boolean; onRegister: () => void; onRegisterPath: (path: string) => void;
-      onSelect: (e: EngineEntry) => void; onForget: (e: EngineEntry) => void;
+      busy: boolean; actions: EngineActions;
     } = $props();
 </script>
 
@@ -23,11 +36,16 @@
          an engine already on disk), which is the distinction from the Install
          button beside it. The prop and the Rust command stay `register` -- that
          is still the effect. -->
-    <Button disabled={busy} onclick={onRegister}
+    <Button disabled={busy} onclick={actions.register}
             title="Point the Hub at a folder containing ArcaneEditor.exe">Locate</Button>
     <!-- Wrapped in a titled span because a DISABLED button receives no mouse
          events, so its own title never renders a tooltip -- and a greyed
          control with no explanation is just a dead end. -->
+    <!-- Primary-and-disabled is a CHOSEN exception to the no-dead-controls
+         rule (user decision, 2026-07-28 review): the primary slot deliberately
+         advertises where the Hub is going -- engine installs are the
+         version-management destination -- and the tooltip carries the honesty.
+         Do not re-flag it in reviews; revisit when installs exist. -->
     <span title="Downloading and installing engines is not built yet">
       <Button variant="primary" disabled>Install engine</Button>
     </span>
@@ -47,7 +65,7 @@
       <!-- {@const} binds the narrowed value so TypeScript does not have to
            re-narrow a reactive prop inside the callback closure below. -->
       {@const s = suggestion}
-      <Button variant="primary" disabled={busy} onclick={() => onRegisterPath(s.path)}>
+      <Button variant="primary" disabled={busy} onclick={() => actions.registerPath(s.path)}>
         Found one nearby &mdash; register {s.build}
       </Button>
     {/if}
@@ -55,7 +73,7 @@
 {:else}
   {#each engines as e (e.id)}
     <EngineRow engine={e} selected={selected?.id === e.id} {busy}
-               onSelect={() => onSelect(e)} onForget={() => onForget(e)} />
+               onSelect={() => actions.select(e)} onForget={() => actions.forget(e)} />
   {/each}
   <p class="hint">The selected engine is the default: it launches any project that
     has not been given its own. Change a project's engine from its card.</p>
