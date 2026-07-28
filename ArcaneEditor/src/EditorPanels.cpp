@@ -1155,30 +1155,50 @@ namespace Arcane::Editor
         // being fought. A drag is not applied when the mouse moves: EndTable
         // records the pending width (:1531-1536) and the NEXT frame's
         // TableBegin applies it to WidthRequest via TableBeginApplyRequests
-        // (:687-688; the double-click auto-fit lands in the same place,
-        // :695-699). So by the time this runs, WidthRequest already carries
-        // any user change while WidthGiven is still the width this table was
-        // LAID OUT at last frame (:1054, :1139-1140). WidthRequest !=
-        // WidthGiven is therefore "this table's split moved since it last laid
-        // out" -- adopt it as the new shared width; otherwise push the shared
-        // width onto this table. Nothing else writes a fixed column's
-        // WidthRequest (:986-989 needs a pending AutoFitQueue, which an
-        // explicit init width clears at :1642-1643; :1044/:1068 are
-        // stretch-only), so the test cannot misfire.
+        // (:687-688), which is reached from TableBeginEx (:644) before
+        // BeginTable returns. So by the time this runs, WidthRequest already
+        // carries any user change.
         //
-        // That comparison is also why a narrow panel cannot erode the width:
-        // when the table cannot afford the request, WidthGiven is clamped down
-        // (:1139) while WidthRequest keeps the user's number, so the adopt
-        // branch re-reads the number the user chose and widening the panel
-        // restores it.
+        // THE DISCRIMINATOR IS `LastResizedColumn`, NOT A WIDTH COMPARISON.
+        // Comparing WidthRequest against WidthGiven looks like it should mean
+        // "this split moved", and it is WRONG: imgui_internal.h:3126 says
+        // outright that WidthGiven "may be > WidthRequest to honor minimum
+        // width, may be < WidthRequest to honor shrinking columns down in
+        // tight space" -- a legitimate PERMANENT divergence, not an event.
+        // Two reachable ways to sit in it forever: WidthGiven is ImTrunc'd off
+        // WidthRequest (:1054), so any fractional width diverges every frame;
+        // and :1139 clamps WidthGiven by WidthMax, which a category grid's
+        // TreeNode indent alone is enough to trigger. A table stuck in the
+        // "moved" branch would adopt its own width over the shared one every
+        // frame -- its push branch dead, so it could never follow another
+        // section, and its stale number would clobber a real drag elsewhere.
+        //
+        // LastResizedColumn has exactly two writers: -1 at table init (:589)
+        // and, at :689, the column ResizedColumn named -- assigned inside
+        // TableBeginApplyRequests immediately AFTER that resize is applied
+        // (:688) and immediately BEFORE ResizedColumn is cleared (:691).
+        // Everything else in the file only reads it. So once BeginTable has
+        // returned, `LastResizedColumn == 0` means precisely "column 0 of THIS
+        // table just had a queued resize applied", which is the event we want
+        // and nothing else.
+        //
+        // DECISION -- double-click auto-fit does NOT win. It is applied
+        // through AutoFitSingleColumn (:695-699), which does not touch
+        // LastResizedColumn, so it is not adopted and the shared width is
+        // pushed back over it on the same frame. That is intended: ONE split
+        // shared by every section is the feature, and a section auto-fitting
+        // itself to a width of its own would break exactly that invariant.
         [[nodiscard]] bool BeginFieldGrid(InspectorState& state)
         {
             // Read BEFORE BeginTable: inside a table, "available" is a cell.
+            // Truncated so the seed is idempotent under :1054's ImTrunc --
+            // a fractional shared width would come back different from every
+            // table it is pushed onto, which is noise nothing here needs.
             if (state.labelColWidth <= 0.0f)
             {
                 const float avail = ImGui::GetContentRegionAvail().x;
                 if (avail > 0.0f)
-                    state.labelColWidth = avail * kLabelColumnFraction;
+                    state.labelColWidth = ImTrunc(avail * kLabelColumnFraction);
             }
             // NoSavedSettings is passed explicitly even though a table inside a
             // child window inherits it anyway (:299-301): OUR float is the only
@@ -1197,23 +1217,28 @@ namespace Arcane::Editor
 
             ImGuiTable* table = ImGui::GetCurrentTable();
             ImGuiTableColumn& col = table->Columns[0];
-            // WidthGiven == 0 is a table that has never laid out (the column is
-            // memset in its constructor, imgui_internal.h:3168-3170, and the
-            // ImGui-side width fields are meaningless until TableUpdateLayout
-            // fills them). TableSetColumnWidth would clamp against a zero
-            // WidthMax there (:2352) and collapse the column to MinColumnWidth,
-            // so the init width above is left to do the seeding.
-            if (col.WidthGiven > 0.0f)
+            // The `> 0` on the request is not decoration: an auto-sized column
+            // carries WidthRequest == -1 (:1640), which is what the degenerate
+            // seeding path above leaves behind, and adopting it would hand the
+            // whole panel a negative shared width.
+            if (table->LastResizedColumn == 0 && col.WidthRequest > 0.0f)
             {
-                // The `> 0` on the request is not decoration: an auto-sized
-                // column carries WidthRequest == -1 (:1640) and still lays out
-                // to a positive WidthGiven (:1054), which is exactly the state
-                // the degenerate seeding path above leaves behind -- adopting
-                // that -1 would hand the whole panel a negative shared width.
-                if (col.WidthRequest > 0.0f && col.WidthRequest != col.WidthGiven)
-                    state.labelColWidth = col.WidthRequest;   // the user moved THIS split
-                else if (col.WidthGiven != state.labelColWidth)
-                    ImGui::TableSetColumnWidth(0, state.labelColWidth);
+                state.labelColWidth = col.WidthRequest;   // the user moved THIS split
+            }
+            // Both guards keep TableSetColumnWidth away from a state it would
+            // turn into a collapsed column rather than a no-op: it ImClamps to
+            // at least MinColumnWidth (:2353), so pushing an unseeded 0 would
+            // pin the column there; and WidthGiven == 0 is a table that has
+            // never laid out (its column is memset in the constructor,
+            // imgui_internal.h:3168-3170), where WidthMax is still 0 and the
+            // same clamp (:2352) would collapse it -- there the init width
+            // above is the seed. Otherwise this runs unconditionally: the
+            // early-out at :2354 makes the steady-state push a no-op, and
+            // TableSaveSettings returns immediately under NoSavedSettings
+            // (:3772-3773), so a repeated push costs nothing.
+            else if (state.labelColWidth > 0.0f && col.WidthGiven > 0.0f)
+            {
+                ImGui::TableSetColumnWidth(0, state.labelColWidth);
             }
             return true;
         }
@@ -1974,10 +1999,16 @@ namespace Arcane::Editor
                         // type is deliberately absent -- the row's tooltip already
                         // carries the raw identifier, which is what you grep for.
                         //
-                        // TextDisabled rather than a BeginDisabled wrap: this is
-                        // the same grey the label cell pushes, so the two halves
-                        // of a dead row match instead of the value being dimmed a
-                        // second time by the disabled alpha.
+                        // TextDisabled rather than this arm opening a
+                        // BeginDisabled of its own: on a field that is ONLY
+                        // unsupported (the common case) it is the same grey the
+                        // label cell pushes, so the two halves of a dead row
+                        // match. A field that is ALSO Astra::ReadOnly is still
+                        // inside that wrap and so does get both treatments --
+                        // TextDisabled's colour over the disabled alpha
+                        // (imgui.cpp:8899-8900) -- which is accepted: it is the
+                        // rarest row in the panel and the extra dimming is not
+                        // wrong, merely darker than its label.
                         //
                         // AlignTextToFramePadding for the ROW HEIGHT, not the
                         // baseline (the label cell already handed this cell its
