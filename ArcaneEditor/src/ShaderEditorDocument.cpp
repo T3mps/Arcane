@@ -203,6 +203,106 @@ namespace Arcane::Editor
             return false;
         }
 
+        // ---- Inline pin literals (a value ON an unwired input pin) ----
+
+        // Lane count a literal stores for a pin of declared `width`: fixed 2/4
+        // keep their lanes, everything else -- INCLUDING dynamic (width-0)
+        // pins -- is a scalar. Mirrors codegen's PinLiteralLanes
+        // (MaterialGraph.cpp:209-212), which is file-local there; the scalar
+        // rule for dynamic pins is what keeps a literal out of dynamic-width
+        // resolution, so the widget must match it exactly or the drag would
+        // edit lanes the file never stores.
+        int PinLiteralLanes(int width)
+        {
+            return width == 2 ? 2 : width == 4 ? 4 : 1;
+        }
+
+        // Does a literal on `pin` actually reach codegen? Only pins emitted
+        // through the argOr seam read one; the pins that consume their
+        // unconnected default DIRECTLY ignore literals entirely, and a widget
+        // that silently does nothing is worse than no widget. The authority is
+        // the SEAM SCOPE note on GraphNode::pinLiterals
+        // (MaterialGraph.hpp:235-244); each exclusion below is the emission
+        // case that bypasses argOr:
+        //   Output.color              MaterialGraph.cpp:643-645
+        //   TextureSample/Sprite uv   MaterialGraph.cpp:670-671
+        //   Split source              MaterialGraph.cpp:764-765
+        //   Remap in/outRange         MaterialGraph.cpp:806-811
+        //   TilingOffset.uv           MaterialGraph.cpp:818-820
+        //   Swizzle source            MaterialGraph.cpp:841-842
+        //   SimpleNoise.uv            MaterialGraph.cpp:883-884
+        //   VertexOutput (all three)  MaterialGraph.cpp:890-895
+        //   PassInput.uv              MaterialGraph.cpp:904-906
+        // Panner.uv is NOT excluded even though it also defaults to v.uv:
+        // batch 2 routes it through argOr with a width-2 default
+        // (MaterialGraph.cpp:973). Custom nodes fall through to `true` -- their
+        // per-node pins are ordinary argOr operands (MaterialGraph.cpp:732).
+        bool PinTakesLiteral(const Arcane::GraphNode& n, std::uint32_t pin)
+        {
+            switch (n.type)
+            {
+                case Arcane::GraphNodeType::Output:
+                case Arcane::GraphNodeType::TextureSample:
+                case Arcane::GraphNodeType::SpriteTexture:
+                case Arcane::GraphNodeType::PassInput:
+                case Arcane::GraphNodeType::Split:
+                case Arcane::GraphNodeType::Swizzle:
+                case Arcane::GraphNodeType::VertexOutput:
+                    return false;      // every input pin of these bypasses argOr
+                case Arcane::GraphNodeType::TilingOffset:
+                case Arcane::GraphNodeType::SimpleNoise:
+                    return pin != 0;   // uv reads v.uv directly
+                case Arcane::GraphNodeType::Remap:
+                    return pin == 0;   // both range pins read float2(0,1) directly
+                default:
+                    return true;
+            }
+        }
+
+        // What the widget shows on a pin that carries no literal yet: codegen's
+        // NEUTRAL for that pin, so an untouched field never lies about the
+        // value the shader is using and a first drag starts from it instead of
+        // snapping the material to zero. The seven argOr call sites that pass
+        // something other than "0.0" are enumerated at MaterialGraph.cpp:604-609
+        // and each is cited below. Returns false when the neutral is not a
+        // constant at all (Panner's v.uv), which the caller renders as a
+        // non-numeric placeholder.
+        bool PinNeutralDefault(const Arcane::GraphNode& n, std::uint32_t pin, float out[4])
+        {
+            out[0] = out[1] = out[2] = out[3] = 0.0f;
+            switch (n.type)
+            {
+                case Arcane::GraphNodeType::Combine:        // alpha opaque (:784)
+                    if (pin == 3)
+                        out[0] = 1.0f;
+                    return true;
+                case Arcane::GraphNodeType::Clamp:          // max (:788)
+                    if (pin == 2)
+                        out[0] = 1.0f;
+                    return true;
+                case Arcane::GraphNodeType::Smoothstep:     // edge1 (:791)
+                    if (pin == 1)
+                        out[0] = 1.0f;
+                    return true;
+                case Arcane::GraphNodeType::Power:          // exponent (:798)
+                    if (pin == 1)
+                        out[0] = 1.0f;
+                    return true;
+                case Arcane::GraphNodeType::TilingOffset:   // tiling, splat (:821)
+                    if (pin == 1)
+                        out[0] = out[1] = 1.0f;
+                    return true;
+                case Arcane::GraphNodeType::SimpleNoise:    // scale (:885)
+                    if (pin == 1)
+                        out[0] = 10.0f;
+                    return true;
+                case Arcane::GraphNodeType::Panner:         // uv -> v.uv (:973)
+                    return pin != 0;
+                default:
+                    return true;
+            }
+        }
+
         // One graph gesture as an undo step (same doc-identity anchor pattern
         // as ParamEditCommand). Whole-graph before/after: our graphs are tens
         // of nodes -- the SG full-snapshot-undo pathology was per-edit JSON
@@ -3168,6 +3268,18 @@ namespace Arcane::Editor
                 RegenerateFromGraph();
         };
 
+        // An inline literal is hidden while a wire feeds the pin. One edge per
+        // input is a canvas invariant (HandleGraphEdits replaces silently), so
+        // a single scan answers it.
+        const Arcane::MaterialGraph& graph = *ActiveGraphOpt();
+        auto pinWired = [&](std::uint32_t pin)
+        {
+            for (const Arcane::GraphLink& l : graph.links)
+                if (l.toNode == n.id && l.toPin == pin)
+                    return true;
+            return false;
+        };
+
         for (std::uint32_t pin = 0; pin < Arcane::GraphNodeInputCount(n); ++pin)
         {
             ed::BeginPin(InPin(n.id, pin), ed::PinKind::Input);
@@ -3200,11 +3312,86 @@ namespace Arcane::Editor
                         if (l.toNode == n.id && l.toPin > pin)
                             --l.toPin;
                     n.customPins.erase(n.customPins.begin() + pin);
+                    // Pin literals index pins exactly like links do, so they
+                    // need the same re-index -- otherwise a removed pin's
+                    // value would resurface on whatever pin slid into its
+                    // index (silently, since the reader only range-checks).
+                    std::erase_if(n.pinLiterals,
+                                  [&](const Arcane::GraphPinLiteral& pl)
+                                  { return pl.pin == pin; });
+                    for (Arcane::GraphPinLiteral& pl : n.pinLiterals)
+                        if (pl.pin > pin)
+                            --pl.pin;
                     valueEdited();
                     PushGraphUndo("Remove Pin", std::move(before));
                     ImGui::PopID();
                     break;   // pin list changed under this loop -- redraw next frame
                 }
+                ImGui::PopID();
+            }
+
+            // Inline literal on an UNWIRED input pin (SG/UE parity: a pin
+            // carries a value with no Const node feeding it). Codegen's argOr
+            // checks `connected` FIRST (MaterialGraph.cpp:621-630), so a wire
+            // hides the literal without destroying it -- which is why this
+            // widget only has to disappear, never clear anything.
+            if (!pinWired(pin) && PinTakesLiteral(n, pin))
+            {
+                ImGui::SameLine();
+                ImGui::PushID(static_cast<int>(pin));
+                const int lanes = PinLiteralLanes(Arcane::GraphNodeInputPin(n, pin).width);
+                float buf[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                const Arcane::GraphPinLiteral* lit = n.FindPinLiteral(pin);
+                bool numericDefault = true;
+                if (lit)
+                    std::memcpy(buf, lit->v, sizeof(buf));
+                else
+                    numericDefault = PinNeutralDefault(n, pin, buf);
+                // A non-constant neutral (Panner's v.uv) prints as ITSELF: a
+                // format string carrying no conversion is explicitly tolerated
+                // by ImGui -- RoundScalarWithFormatT returns the value
+                // untouched when "the value is not visible in the format
+                // string" (ThirdParty/imgui/imgui_widgets.cpp:2496).
+                const char* fmt = numericDefault ? "%.3f" : "v.uv";
+                ImGui::SetNextItemWidth(lanes == 1 ? 64.0f : lanes == 2 ? 106.0f : 190.0f);
+                const bool changed =
+                    lanes == 1 ? ImGui::DragFloat("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)
+                    : lanes == 2 ? ImGui::DragFloat2("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)
+                                 : ImGui::DragFloat4("##lit", buf, 0.01f, 0.0f, 0.0f, fmt);
+                // Same bracketing as the Const payload drags below, and STRICTLY
+                // safer: the drag wrote `buf`, not the graph, so the snapshot
+                // this takes on the activation frame is always pre-edit.
+                gestureBegin();
+                if (changed)
+                {
+                    // ONE entry per pin, updated IN PLACE. A duplicate would
+                    // make serialization non-deterministic: the writer sorts by
+                    // pin with std::sort, which is unstable
+                    // (MaterialGraph.cpp:1220-1222), and the reader keeps the
+                    // FIRST entry for a pin (:1394-1395).
+                    Arcane::GraphPinLiteral* slot = nullptr;
+                    for (Arcane::GraphPinLiteral& pl : n.pinLiterals)
+                        if (pl.pin == pin)
+                        {
+                            slot = &pl;
+                            break;
+                        }
+                    if (!slot)
+                    {
+                        // Absent-until-touched: the entry is BORN here, seeded
+                        // with what the field was already showing (the neutral),
+                        // so the first nudge moves the material by one drag step
+                        // instead of jumping to zero.
+                        Arcane::GraphPinLiteral fresh;
+                        fresh.pin = pin;
+                        n.pinLiterals.push_back(fresh);
+                        slot = &n.pinLiterals.back();
+                    }
+                    for (int i = 0; i < 4; ++i)
+                        slot->v[i] = i < lanes ? buf[i] : 0.0f;
+                    valueEdited();
+                }
+                gestureEnd("Pin Value");
                 ImGui::PopID();
             }
         }
