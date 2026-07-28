@@ -25,6 +25,10 @@ not a nit.
 
 - [ ] **1.** Multi-select `position.x` type-then-gizmo-drag = one undo step (the CRITICAL repro).
 - [ ] **2.** Shader editor: drag a param, close the window mid-drag, Ctrl+Z restores (new).
+      NOTE: if the document is literally CLOSED mid-drag, the destructor-pushed step is
+      inert by design (the `weak_ptr` anchor dies with the document), so "Ctrl+Z
+      restores" is unobservable there -- the restorable case is **abandonment with the
+      document still open** (sibling caveat to item 10's redo-clears note; see item 11).
 - [ ] **3.** Sprite doc: drag ppu, Ctrl+Z restores; Save-dirty still works (new).
 - [ ] **4.** Field-grid label-width drag still syncs across grids and never fights imgui.ini.
 - [ ] **5.** Intra-group tab .x -> .y: the KNOWN loss reproduces identically (not worse).
@@ -32,7 +36,7 @@ not a nit.
 
 ---
 
-## Plan additions (7-9) + this sweep's addition (10)
+## Plan additions (7-9) + this sweep's additions (10-11)
 
 - [ ] **7.** Shader editor rename sites (pass name, comment title, param/texture name,
       swizzle mask) still commit once on Enter/click-away; Escape ALSO commits the typed
@@ -54,6 +58,14 @@ not a nit.
       transaction; Ctrl+Z works everywhere afterwards; note that **the redo stack clears**
       (the accepted cost of `ClosePending`'s commit-not-cancel rule -- a non-empty
       transaction close pushes a step, and pushing a step clears redo).
+- [ ] **11.** The in-document abandonment path `ScopeGuard` owns (EditGesture.hpp:76-85)
+      is reachable, not theoretical -- this is spec section 5.1's primary repro, and
+      it is currently UNEXERCISED by items 2/9/10 (all three close or destroy the
+      document; this one keeps it open). In the shader editor: ctrl+click a drag
+      widget into its temp text entry, then collapse the component/section (or send
+      its tab to the background) so the widget stops being submitted while the
+      document stays OPEN. The parked gesture must close with **ONE undo step**
+      containing the live-applied edit, and **Ctrl+Z must restore it**.
 
 ---
 
