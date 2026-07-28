@@ -22,6 +22,7 @@
 
 #include "EditorApp.hpp"
 #include "EditorFonts.hpp"
+#include "SpriteDocument.hpp"
 
 #include <ProjectBoot.hpp>
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
@@ -33,6 +34,7 @@
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
+#include <Arcane/Sprite/SpriteAsset.hpp>  // Save/LoadSpriteAsset (SpriteDocument factory + peek)
 
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Registry/Registry.hpp>
@@ -319,6 +321,41 @@ namespace Arcane::Editor
                 return data ? data->id : Arcane::Guid::Nil();
             };
         m_documents.RegisterFactory(".arcmat", materialFactory, materialPeek);
+
+        // Sprite-asset arc, Task 5: .arcsprite -> SpriteDocument routing,
+        // registered right beside the .arcmat route above (same
+        // factory+peek shape). `this`-captures resolve m_sprites at CALL
+        // time, not here -- m_sprites itself isn't constructed until the
+        // block below, but nothing calls Save() (the only path that reaches
+        // invalidateSprite) until well after Init() returns, by which point
+        // it exists. Without this route, a double-clicked/minted .arcsprite
+        // hit DocumentHost's "no editor registered" warn-and-no-op
+        // (DocumentHost.cpp:53) -- EditorAppFrame.cpp:1151 already calls
+        // m_documents.OpenPath on a freshly minted sprite and expected this.
+        const auto spriteFactory =
+            [this](const std::filesystem::path& p)
+                -> std::unique_ptr<Arcane::Editor::EditorDocument>
+            {
+                auto data = Arcane::LoadSpriteAsset(p);
+                if (!data)
+                    return nullptr;
+                Arcane::Editor::SpriteDocument::Services spriteDocServices;
+                spriteDocServices.assets = &m_runtime->AssetsFacade();
+                spriteDocServices.invalidateSprite = [this](const Arcane::Guid& g)
+                {
+                    if (m_sprites)
+                        m_sprites->Invalidate(g);
+                };
+                return std::make_unique<Arcane::Editor::SpriteDocument>(
+                    std::move(spriteDocServices), p, std::move(*data));
+            };
+        const auto spritePeek =
+            [](const std::filesystem::path& p) -> Arcane::Guid
+            {
+                const auto data = Arcane::LoadSpriteAsset(p);
+                return data ? data->id : Arcane::Guid::Nil();
+            };
+        m_documents.RegisterFactory(".arcsprite", spriteFactory, spritePeek);
 
         // Scene sprite materials (Slice 8): SAVED .arcmat assets referenced by
         // SpriteRenderer::material compile through the same service and
