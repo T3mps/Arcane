@@ -34,14 +34,22 @@ What exists and where -- confirmed against source, not the review doc's claims:
   (:1140/:1272, owns the label-width sync protocol), `FieldLabelCell` (:1290),
   `AxisDragFloatN` (:1447) + `DrawAxisBar` (:1351), `PushHeaderBandColors` (:1389),
   `RangedDragFloat`/`RangedDragInt` (:1108/:1118), `InputTextString` (:498).
-- **Shader editor (ShaderEditorDocument.cpp): two independent hand-rolled gesture-bracket
-  implementations plus four scattered deactivate-commit sites**, none owner-guarded, none
-  abandonment-safe: the `gestureBegin`/`gestureEnd` lambda pair (:3149-3160, whole-graph
-  before-state), the `m_gestureHadBefore`/`m_gestureBefore` member pair (:3885-3907, param
-  drags), and commit checks at :1427, :3115, :3269, :3381. An abandoned drag there is a
-  silent un-undoable edit (the pre-token gizmo bug class). `SetParamWithUndo` (:3786) is
-  NOT one of these -- it is the single-shot path ("single-step undo, no gesture bracketing
-  needed", :3727) and it stays.
+- **Shader editor (ShaderEditorDocument.cpp): two independent hand-rolled DRAG-bracket
+  implementations**, neither owner-guarded nor abandonment-safe: the
+  `gestureBegin`/`gestureEnd` lambda pair (:3152-3163, whole-graph before-state in
+  `m_graphGestureBefore`) and the `m_gestureHadBefore`/`m_gestureBefore` member pair
+  (:3885-3907, param drags). Both mutate LIVE during the drag, so an abandoned drag is a
+  silent un-undoable edit (the pre-token gizmo bug class). Both also park before-state in
+  ONE shared member slot with no owner id, so a one-frame ActiveId handoff between two
+  widgets (the exact class audit CRITICAL 1 closed in the Inspector) can overwrite A's
+  before-state with B's before A's push runs -- derived by reading, not reproduced, but
+  it is the same mechanism. Separately, **four stable-buffer rename sites** (:1416-1436
+  pass name, :3104-3124 comment title, :3258-3282 param/texture name, :3370-3390 swizzle
+  mask) share `m_nameEditNode`/`m_passNameEditIdx`/`m_nameBuf`: mutation happens ONLY at
+  commit, so they are undo-correct today -- their duplication is four copies of the same
+  ~20-line buffer state machine, a vocabulary problem, not a correctness one.
+  `SetParamWithUndo` (:3786) is neither -- it is the single-shot path ("single-step undo,
+  no gesture bracketing needed", :3727) and it stays.
 - **SpriteDocument.cpp: no undo at all.** Four `DragFloat` rows set `m_dirty` only
   (:86-97). Its `Services` struct deliberately omits undo (SpriteDocument.hpp:38-39).
 - **Outliner: already canonical on undo.** Structural edits route through
@@ -83,6 +91,10 @@ Lifted from EditorPanels.cpp's anonymous namespace, minimally reshaped:
   consumer), calling `InspectorMeta::RangeOfField` themselves. `EditorWidgets` includes
   no reflection headers.
 - `InputTextString` -- unchanged (the std::string <-> ImGui::InputText adapter).
+- `StableTextEdit` + `TextCommitState` -- NEW: the shader editor's stable-buffer inline
+  text-commit pattern (seed from current value, hold typed text while active keyed by a
+  caller id, fire a commit callback exactly once on deactivate-after-edit-with-change),
+  extracted once so its four hand-rolled copies collapse to calls.
 
 Behavioral contract: pixel-identical output to today's helpers. This tier is a lift, not a
 redesign.
@@ -151,7 +163,7 @@ Pure collaborators (`InspectorFields`, `InspectorMeta`) are untouched.
 | Surface | Converts to | Deleted |
 |---|---|---|
 | Inspector (EditorPanels.cpp) | All three modules; panel keeps chrome only | The entire anon-namespace helper + visitor block (~1,200 lines move out) |
-| ShaderEditorDocument | `EditGesture` bracket at all six sites; `InputTextString` where it applies; `GestureScopeGuard` at document draw scope. Its params-panel layout is NOT field-grid-shaped and keeps its own look | `gestureBegin`/`gestureEnd` lambdas; `m_gestureHadBefore`/`m_gestureBefore` members; the four ad-hoc commit checks |
+| ShaderEditorDocument | `EditGesture` bracket at BOTH drag implementations (fixes abandonment + the shared-slot handoff overwrite); the four stable-buffer rename sites -> `StableTextEdit`; `GestureScopeGuard` at document draw scope. Its params-panel layout is NOT field-grid-shaped and keeps its own look | `gestureBegin`/`gestureEnd` capture bodies; `m_graphGestureBefore`, `m_gestureHadBefore`/`m_gestureBefore` members; `m_nameEditNode`/`m_passNameEditIdx`/`m_nameBuf` and their four state machines |
 | SpriteDocument | `EditorWidgets` ranged drags + `EditGesture` builder-style bracket; new doc-local `SpriteDataEditCommand : ICommand` (before/after `SpriteAssetData`) | The bare `changed |= DragFloat...; m_dirty = true` block |
 | Outliner | `InputTextString` from the module; `HeaderBand`/styling where applicable | -- (there is ONE `InputTextString` in the anon namespace, shared by outliner + inspector call sites; it moves, call sites re-point) |
 | AssetBrowser | Nothing (drag source only) | -- |
