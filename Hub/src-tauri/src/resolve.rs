@@ -77,3 +77,91 @@ pub fn resolve_project(recorded: &Path) -> Result<(PathBuf, PathBuf), String> {
     })?;
     Ok((recorded.to_path_buf(), recorded.join(file)))
 }
+
+// These touch the real filesystem (that is this module's whole job), so each
+// test gets its own scratch dir -- same pattern as store.rs's tests.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("arcane-hub-resolve-test-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_manifest(dir: &Path, name: &str, abi: u32) -> PathBuf {
+        let m = dir.join(format!("{name}.arcproj"));
+        std::fs::write(&m, project::manifest_json(name, abi).unwrap()).unwrap();
+        m
+    }
+
+    #[test]
+    fn a_manifest_file_resolves_to_its_parent_and_itself() {
+        let dir = scratch("file");
+        let m = write_manifest(&dir, "G", 7);
+        let (root, manifest) = resolve_project(&m).unwrap();
+        assert_eq!(root, dir);
+        assert_eq!(manifest, m);
+    }
+
+    #[test]
+    fn a_folder_with_exactly_one_manifest_resolves() {
+        let dir = scratch("folder");
+        let m = write_manifest(&dir, "G", 7);
+        let (root, manifest) = resolve_project(&dir).unwrap();
+        assert_eq!(root, dir);
+        assert_eq!(manifest, m);
+    }
+
+    #[test]
+    fn a_folder_with_two_manifests_is_refused_as_ambiguous() {
+        // The engine's own rule (Project.cpp): acting on the wrong one of two
+        // projects is worse than making the user pick.
+        let dir = scratch("ambiguous");
+        write_manifest(&dir, "A", 7);
+        write_manifest(&dir, "B", 7);
+        let err = resolve_project(&dir).unwrap_err();
+        assert!(err.contains("exactly one"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn a_non_arcproj_file_is_refused() {
+        let dir = scratch("wrongfile");
+        let f = dir.join("readme.txt");
+        std::fs::write(&f, "hello").unwrap();
+        assert!(resolve_project(&f).unwrap_err().contains(".arcproj"));
+    }
+
+    #[test]
+    fn a_path_no_longer_on_disk_is_refused() {
+        let dir = scratch("goneness");
+        let err = resolve_project(&dir.join("nope")).unwrap_err();
+        assert!(err.contains("no longer on disk"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn manifest_abi_round_trips_what_create_project_writes() {
+        // manifest_json is the writer create_project uses; reading back the
+        // abi it stamped is the whole compatibility story in one round trip.
+        let dir = scratch("abi");
+        let m = write_manifest(&dir, "G", 9);
+        assert_eq!(manifest_abi(&m), Some(9), "by manifest file");
+        assert_eq!(manifest_abi(&dir), Some(9), "by project folder");
+    }
+
+    #[test]
+    fn manifest_abi_is_none_for_garbage_or_nothing() {
+        let dir = scratch("badabi");
+        assert_eq!(manifest_abi(&dir), None, "empty folder proves nothing");
+        std::fs::write(dir.join("X.arcproj"), "{ not json").unwrap();
+        assert_eq!(manifest_abi(&dir.join("X.arcproj")), None);
+    }
+
+    #[test]
+    fn project_dir_strips_only_a_manifest_leaf() {
+        assert_eq!(project_dir(Path::new("C:/g/G.arcproj")), PathBuf::from("C:/g"));
+        assert_eq!(project_dir(Path::new("C:/g")), PathBuf::from("C:/g"));
+    }
+}
