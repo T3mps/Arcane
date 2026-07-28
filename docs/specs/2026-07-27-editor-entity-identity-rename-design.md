@@ -107,8 +107,8 @@ Rename becomes a **component edit**: one `ComponentEditCommand` on `EntityInfo`.
   parked rename cannot land after the user has moved on. `RenameWithUndo` also
   owns the `EntityInfo` descriptor lookup, so the undo shape lives in one
   headless-testable place instead of per panel.
-- `ApplyStructural(undo, binding, "Rename", ...)` (`EditorPanels.cpp:644`)
-  dies. Rename is no longer routed through the whole-registry memento and no
+- The former `ApplyStructural(undo, binding, "Rename", ...)` call site is
+  deleted. Rename is no longer routed through the whole-registry memento and no
   longer special-cased by `CanEditStructure`. It is still *deferred* while a
   gesture is open (above) — but deferred-and-retried, not refused-and-lost, and
   for a reason specific to the undo mechanism rather than to structural edits.

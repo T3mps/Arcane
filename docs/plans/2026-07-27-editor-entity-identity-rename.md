@@ -484,8 +484,8 @@ git commit -m "feat(editor): show EntityInfo -- visible identity, structure-lock
 
 **Interfaces:**
 - Consumes: Task 1's `RenameEntity` contract; Task 4's `InputTextString`; `Arcane::ScopedTransaction`.
-- **CORRECTED 2026-07-27 (whole-branch review, finding I1).** This line originally said `ScopedTransaction` "joins an open transaction safely — its `None`-token dtor no-ops". The no-op dtor is real, but "safely" was wrong: a joined scope's snapshots ride the OWNER's close, and `CommandStack::Cancel` discards pending snapshots WITHOUT reverting (`CommandStack.cpp:75-82`), so a rename that joined a gesture ending in `Cancel` applied and became permanently un-undoable. The commit site now calls `Edit::RenameWithUndo`, which opens its OWN transaction or returns `RenameResult::Deferred` having mutated nothing; the panel parks the request in `OutlinerState::pendingRename` and retries next frame. See the design doc's Section 2 for the full mechanism.
-- Produces: a file-local `const Astra::ComponentDescriptor* EntityInfoDescriptor(Astra::Registry&, Astra::Entity)` helper.
+- **CORRECTED 2026-07-27 (whole-branch review, finding I1).** This line originally said `ScopedTransaction` "joins an open transaction safely — its `None`-token dtor no-ops". The no-op dtor is real, but "safely" was wrong: a joined scope's snapshots ride the OWNER's close, and `CommandStack::Cancel` discards pending snapshots WITHOUT reverting (`CommandStack.cpp:75-82`), so a rename that joined a gesture ending in `Cancel` applied and became permanently un-undoable. The commit site now calls `Edit::RenameWithUndo`, which opens its OWN transaction or returns `RenameResult::Deferred` having mutated nothing; the panel parks the request in `OutlinerState::pendingRename` and retries next frame. See the design doc's Section 2 for the full mechanism. Same finding, same date: the "Produces" bullet below is also stale -- no panel-local `EntityInfoDescriptor` helper shipped either. `RenameWithUndo` owns that descriptor lookup itself (`EntityOps.cpp`'s `FindEntityInfoDescriptor`), so it lives in one engine-side, headless-testable place instead of being re-derived per panel; the Step 3 code block below (which prescribes that helper) never shipped as written either.
+- ~~Produces: a file-local `const Astra::ComponentDescriptor* EntityInfoDescriptor(Astra::Registry&, Astra::Entity)` helper.~~ Retracted -- see the CORRECTED note above.
 
 - [ ] **Step 1: `renameBuf` becomes `std::string`; `BeginRename` seeds from the component**
 
@@ -515,6 +515,8 @@ if (info == nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
 (`ForTooltip` resolves to `Stationary|DelayShort|AllowWhenDisabled`, so the tooltip works on the disabled item — the same flag choice the Inspector settled on.)
 
 - [ ] **Step 3: Rewrite the inline-rename commit**
+
+**Retracted 2026-07-27** (see the CORRECTED note under this task's Interfaces, above): the panel-local helper below never shipped. Kept for history; the shipped descriptor lookup is engine-side, in `RenameWithUndo`'s `FindEntityInfoDescriptor` (`EntityOps.cpp`).
 
 Add the descriptor helper to the anonymous namespace (the `InspectEntity`-loop pattern proven in `CommandStackTest.cpp:41-48`; `Registry` exposes no public descriptor-by-hash accessor — verified):
 
@@ -559,10 +561,14 @@ Replace the inline-rename block (~lines 627-648). The old block's `EnterReturnsT
                         {
                             if (binding.editMode)
                             {
-                                // One ComponentEditCommand, same shape as an
-                                // Inspector field edit. Joins a live gesture
-                                // safely (ScopedTransaction's None-token dtor
-                                // no-ops, CommandStack.cpp:149-156).
+                                // ORIGINAL DESIGN, not what shipped -- 2026-07-27
+                                // whole-branch review (finding I1) found
+                                // joining NOT safe: a Cancel on the owning
+                                // gesture discards a joined snapshot WITHOUT
+                                // reverting it (CommandStack.cpp:75-82). The
+                                // shipped mechanism is Edit::RenameWithUndo +
+                                // deferral; see the design doc's REVISED
+                                // Section 2.
                                 if (const auto* desc = EntityInfoDescriptor(registry, e))
                                 {
                                     Arcane::ScopedTransaction txn(undo, "Rename");

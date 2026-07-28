@@ -16,7 +16,6 @@
 #include <Arcane/Scene/Components.hpp>   // Arcane::EntityInfo (the rename target)
 #include <Arcane/Sim/RunLoop.hpp>
 
-#include <Astra/Core/TypeID.hpp>
 #include <Astra/Reflection/FieldVisitor.hpp>
 #include <Astra/Registry/Registry.hpp>
 

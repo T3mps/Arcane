@@ -865,6 +865,30 @@ TEST_CASE("RenameWithUndo: defers while a transaction is open, mutating nothing"
               == Arcane::Edit::RenameResult::Renamed);
         CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "After");
     }
+
+    SECTION("Deferred pended nothing: a real edit in the owner's transaction stays invisible to it")
+    {
+        // WHY: the two sections above cannot distinguish a correct Deferred
+        // (nothing snapshotted for EntityInfo) from a regression that calls
+        // txn.Snapshot(e, desc) BEFORE checking InTransaction() and returning
+        // Deferred. Neither existing check would catch that regression: Cancel
+        // discards a pending snapshot WITHOUT reverting it (CommandStack.cpp:
+        // 75-82), so the name is still "Before" there either way; and with
+        // nothing else touching the entity, Commit's own unchanged-drop
+        // (CommandStack.cpp:50-51) would silently swallow a stray pending
+        // snapshot too, so CHECK_FALSE(CanUndo()) in the committing section
+        // above would still pass either way. Mutating EntityInfo for real
+        // here, via the bare mutator rather than RenameWithUndo, forces a
+        // regression's stale pended "Before" bytes to disagree with the live
+        // post-mutation bytes when Commit re-snapshots -- Commit would then
+        // treat that disagreement as a genuine change and push an undo step.
+        // A correct Deferred pended nothing for EntityInfo, so this direct
+        // edit is invisible to the owner's transaction and Commit still
+        // pushes nothing.
+        Arcane::Edit::RenameEntity(*reg, e, "Direct");
+        stack.Commit(owner);
+        CHECK_FALSE(stack.CanUndo());
+    }
 }
 
 TEST_CASE("RenameWithUndo: Invalid for a dead entity and for a missing EntityInfo", "[edit]")
