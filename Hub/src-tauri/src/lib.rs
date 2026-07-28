@@ -1,8 +1,10 @@
 // Arcane Hub -- Tauri entry point.
 //
 // Split, mirroring Tools/setup-wizard: all DECISION logic lives in pure modules
-// that `cargo test` covers; this file only does process spawning, file IO and
-// IPC, which are not unit-tested.
+// that `cargo test` covers; the IO skin is spawn.rs (process spawning) and
+// resolve.rs (recorded-path resolution), and THIS file is only the
+// #[tauri::command] IPC surface plus the state read-modify-write each command
+// performs. None of the skin is unit-tested; the pure halves it defers to are.
 //
 // The Hub is INSTALLED per-user (%LOCALAPPDATA%\Programs\Arcane Hub\), so it
 // must never derive a repo root from current_exe() and must never assume an
@@ -13,16 +15,15 @@
 pub mod engine;
 pub mod paths;
 pub mod project;
+pub mod resolve;
 pub mod settings;
+pub mod spawn;
 pub mod state;
 pub mod store;
 
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-
-// ArcaneEditor is a ConsoleApp, so without this every spawn flashes a console.
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+use std::process::Command;
 
 fn now_utc_iso() -> String {
     // Seconds since the epoch is enough to sort "last opened" and avoids
@@ -34,138 +35,6 @@ fn now_utc_iso() -> String {
     secs.to_string()
 }
 
-// How long the identity probe may take before we give up and kill it.
-//
-// The probe answers before booting a window, a device, or a registry
-// (ArcaneEditor main.cpp:27-34), so a healthy engine replies in milliseconds
-// even from a cold disk. The timeout exists because the Hub runs a binary the
-// USER chose: any exe that happens to be named ArcaneEditor.exe gets executed,
-// and a plain `output()` would block this command thread forever while the UI
-// sat latched in its busy state with no way to cancel.
-const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const PROBE_POLL: std::time::Duration = std::time::Duration::from_millis(25);
-
-// Run the engine's identity probe. Failure modes the UI must be able to show
-// verbatim: not an Arcane engine, exe missing, probe printed nothing, hung.
-fn probe_engine(exe: &Path) -> Result<engine::EngineInfo, String> {
-    if !exe.exists() {
-        return Err(format!("no {} at {}", engine::EDITOR_EXE, exe.display()));
-    }
-
-    let mut child = Command::new(exe)
-        .arg("--print-engine-info")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| format!("could not run {}: {e}", exe.display()))?;
-
-    let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait(); // reap, so we leave no zombie
-                    return Err(format!(
-                        "{} did not answer --print-engine-info within {}s. \
-                         Is it really an Arcane engine?",
-                        exe.display(),
-                        PROBE_TIMEOUT.as_secs()
-                    ));
-                }
-                std::thread::sleep(PROBE_POLL);
-            }
-            Err(e) => return Err(format!("could not wait for {}: {e}", exe.display())),
-        }
-    }
-
-    // Safe after try_wait reported exit: the status is cached, and the probe
-    // writes one short line, so nothing can be blocked on a full pipe.
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("could not read from {}: {e}", exe.display()))?;
-
-    if !out.status.success() {
-        return Err(format!(
-            "{} exited with {} -- not an Arcane engine?",
-            exe.display(),
-            out.status
-        ));
-    }
-    engine::parse_probe_output(&String::from_utf8_lossy(&out.stdout))
-}
-
-// The ABI a project was BUILT AGAINST, read from its manifest.
-//
-// This is the number `Runtime::OpenProject` (Runtime.cpp:387) compares against
-// the engine's own constant and refuses on mismatch, so it is the only honest
-// input to the Hub's compatibility display. None = unknown (no manifest,
-// ambiguous folder, unreadable JSON), which the UI treats as "cannot prove a
-// conflict" rather than as a fault.
-fn manifest_abi(project_path: &Path) -> Option<u32> {
-    let file = if project_path.extension().is_some_and(|e| {
-        e.eq_ignore_ascii_case(project::MANIFEST_EXT)
-    }) {
-        project_path.to_path_buf()
-    } else {
-        let names: Vec<String> = std::fs::read_dir(project_path)
-            .ok()?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        project_path.join(project::pick_manifest(&names)?)
-    };
-    project::parse_manifest_abi(&std::fs::read_to_string(file).ok()?)
-}
-
-// The FOLDER a project lives in: the parent of its .arcproj, or the recorded
-// path itself when the entry is folder-shaped (how opens were recorded before
-// the dialog asked for a manifest). Paired with `projectDir` in
-// src/lib/format.ts, which does the same job for display.
-fn project_dir(p: &Path) -> PathBuf {
-    if p.extension().is_some_and(|e| e.eq_ignore_ascii_case(project::MANIFEST_EXT)) {
-        return p.parent().map(Path::to_path_buf).unwrap_or_else(|| p.to_path_buf());
-    }
-    p.to_path_buf()
-}
-
-// A recorded path resolved to (project root, manifest file).
-//
-// Applies the engine's own rule for a folder: exactly one .arcproj, or it is
-// ambiguous and refused (Project.cpp:29-41). Renaming a project we could not
-// unambiguously identify would rename the wrong thing.
-fn resolve_project(recorded: &Path) -> Result<(PathBuf, PathBuf), String> {
-    if recorded.is_file() {
-        if !recorded.extension().is_some_and(|e| e.eq_ignore_ascii_case(project::MANIFEST_EXT)) {
-            return Err(format!("{} is not a .arcproj file", recorded.display()));
-        }
-        let root = recorded
-            .parent()
-            .ok_or_else(|| format!("{} has no parent folder", recorded.display()))?;
-        return Ok((root.to_path_buf(), recorded.to_path_buf()));
-    }
-    if !recorded.is_dir() {
-        return Err(format!("{} is no longer on disk", recorded.display()));
-    }
-    let names: Vec<String> = std::fs::read_dir(recorded)
-        .map_err(|e| format!("could not read {}: {e}", recorded.display()))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-    let file = project::pick_manifest(&names).ok_or_else(|| {
-        format!(
-            "{} does not contain exactly one .arcproj, so there is no single \
-             project to act on",
-            recorded.display()
-        )
-    })?;
-    Ok((recorded.to_path_buf(), recorded.join(file)))
-}
-
 #[tauri::command]
 fn load_state() -> state::HubState {
     state::load()
@@ -174,7 +43,7 @@ fn load_state() -> state::HubState {
 #[tauri::command]
 fn register_engine(path: String) -> Result<state::EngineEntry, String> {
     let exe = engine::resolve_editor_exe(Path::new(&path));
-    let info = probe_engine(&exe)?;
+    let info = spawn::probe_engine(&exe)?;
 
     let entry = state::EngineEntry::new(&exe.to_string_lossy(), info.engine_abi, info.build);
     let mut s = state::load();
@@ -243,7 +112,7 @@ fn delete_project(path: String) -> Result<(), String> {
     let recorded = PathBuf::from(&path);
 
     if recorded.exists() {
-        let (root, _) = resolve_project(&recorded)?;
+        let (root, _) = resolve::resolve_project(&recorded)?;
         if let Some(why) = project::delete_guard(&root) {
             return Err(format!("refusing to delete {}: {why}", root.display()));
         }
@@ -274,7 +143,7 @@ fn set_project_args(path: String, args: String) -> Result<(), String> {
 #[tauri::command]
 fn reveal_project(path: String) -> Result<(), String> {
     let recorded = PathBuf::from(&path);
-    let dir = project_dir(&recorded);
+    let dir = resolve::project_dir(&recorded);
     if !dir.is_dir() {
         return Err(format!("{} is no longer on disk", dir.display()));
     }
@@ -328,7 +197,7 @@ fn rename_project(path: String, new_name: String) -> Result<String, String> {
         return Err(format!("'{path}' is not in the project list"));
     }
 
-    let (root, manifest) = resolve_project(Path::new(&path))?;
+    let (root, manifest) = resolve::resolve_project(Path::new(&path))?;
     let parent = root
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -410,10 +279,10 @@ fn forget_project(path: String) -> Result<(), String> {
 // Locating is not opening: the list is not reordered and nothing launches.
 #[tauri::command]
 fn relocate_project(path: String, new_path: String) -> Result<(), String> {
-    let (_root, manifest) = resolve_project(Path::new(&new_path))?;
+    let (_root, manifest) = resolve::resolve_project(Path::new(&new_path))?;
     // 0 = unknown, same as open_project: a manifest without a readable abi is
     // "no conflict provable", never a guessed number.
-    let abi = manifest_abi(&manifest).unwrap_or(0);
+    let abi = resolve::manifest_abi(&manifest).unwrap_or(0);
     let name = project::display_name(&new_path);
 
     let mut s = state::load();
@@ -519,7 +388,7 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
         // directory, so it must start there (same reason scripts/launch.ps1
         // sets the working directory).
         .current_dir(exe.parent().unwrap_or(Path::new(".")))
-        .creation_flags(CREATE_NO_WINDOW)
+        .creation_flags(spawn::CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("could not launch the editor: {e}"))?;
     // display_name, not file_name(): project_path may be a .arcproj FILE (what
@@ -533,7 +402,7 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
     // (Runtime.cpp:387), so an incompatible project could never look
     // incompatible. 0 = unknown, which isCompatible treats as "no conflict
     // provable" rather than as a fault.
-    let abi = manifest_abi(&proj).unwrap_or(0);
+    let abi = resolve::manifest_abi(&proj).unwrap_or(0);
     state::touch_recent(
         &mut s.recents,
         state::RecentProject {
@@ -561,7 +430,7 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
 fn create_project(dir: String, name: String, engine_path: String) -> Result<String, String> {
     let exe = engine::resolve_editor_exe(Path::new(&engine_path));
     // Probe FIRST and abort on failure -- never fall back to a guessed ABI.
-    let info = probe_engine(&exe)?;
+    let info = spawn::probe_engine(&exe)?;
 
     let root = PathBuf::from(&dir).join(&name);
     if root.exists() && std::fs::read_dir(&root).map(|mut d| d.next().is_some()).unwrap_or(false) {
@@ -591,7 +460,7 @@ fn suggest_engine() -> Option<state::EngineEntry> {
         exe_dir.join("..").join("ArcaneEditor").join(engine::EDITOR_EXE),
     ];
     for c in candidates {
-        if let Ok(info) = probe_engine(&c) {
+        if let Ok(info) = spawn::probe_engine(&c) {
             return Some(state::EngineEntry {
                 id: state::normalise_path(&c.to_string_lossy()),
                 path: c.to_string_lossy().to_string(),
