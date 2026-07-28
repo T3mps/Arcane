@@ -9,7 +9,10 @@
     } = $props();
 </script>
 
-<div class="row" class:sel={selected}>
+<div class="row" class:sel={selected} class:gone={engine.missing}
+     title={engine.missing
+       ? "Nothing is at this path any more. A rebuild restores it in place, or Remove it."
+       : undefined}>
   <!-- aria-current, not aria-pressed: picking an engine is "this one is now
        current" in a mutually exclusive set, not a two-state toggle you can
        un-press. Same vocabulary as Sidebar's active nav item. -->
@@ -18,7 +21,13 @@
     <span class="nm">{engine.build}</span>
     <code class="path">{engine.path}</code>
   </button>
-  <code class="abi">abi {engine.engineAbi}</code>
+  {#if engine.missing}
+    <!-- The badge takes the abi slot: a number probed from an exe that is no
+         longer there is not worth repeating. Same treatment as project rows. -->
+    <code class="abi badge">missing</code>
+  {:else}
+    <code class="abi">abi {engine.engineAbi}</code>
+  {/if}
   <Button variant="danger" disabled={busy} onclick={onForget}>Remove</Button>
 </div>
 
@@ -39,4 +48,10 @@
   .path { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .abi { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); flex: none; }
+
+  /* Same dim-plus-coral-badge pair the project rows use for a gone path. */
+  .row.gone .nm { color: var(--text-muted); }
+  .row.gone .badge { font-weight: 600; color: var(--fail);
+           border: 1px solid color-mix(in srgb, var(--fail) 45%, transparent);
+           border-radius: 3px; padding: 0 4px; }
 </style>

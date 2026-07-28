@@ -25,6 +25,12 @@ export type EngineEntry = {
   path: string;
   engineAbi: number;
   build: string;
+  /**
+   * The exe no longer resolves on disk. Stamped Rust-side on every load, like
+   * RecentProject.missing. The row stays (a rebuild restores it in place);
+   * the pre-launch probe refuses it with a reason if launched anyway.
+   */
+  missing: boolean;
 };
 
 export type HubState = {

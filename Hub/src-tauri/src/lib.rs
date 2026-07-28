@@ -554,6 +554,8 @@ fn suggest_engine() -> Option<state::EngineEntry> {
                 path: c.to_string_lossy().to_string(),
                 engine_abi: info.engine_abi,
                 build: info.build,
+                // It answered the probe one line up; it is on disk.
+                missing: false,
             });
         }
     }

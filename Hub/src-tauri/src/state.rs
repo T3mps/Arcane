@@ -65,6 +65,14 @@ pub struct EngineEntry {
     pub path: String,
     pub engine_abi: u32,
     pub build: String,
+
+    /// True when `path` no longer resolves on disk. Same rule as
+    /// `RecentProject::missing`: stamped by `load` on EVERY read, never
+    /// trusted from the file. A missing engine keeps its row (registration is
+    /// user intent; a clean rebuild restores it in place) but the UI says so,
+    /// and the pre-launch probe already refuses it honestly.
+    #[serde(default)]
+    pub missing: bool,
 }
 
 impl EngineEntry {
@@ -76,6 +84,7 @@ impl EngineEntry {
             path: exe_path.to_string(),
             engine_abi,
             build,
+            missing: false,
         }
     }
 }
@@ -269,7 +278,11 @@ pub fn load() -> HubState {
     for e in recents.iter_mut() {
         e.missing = !std::path::Path::new(&e.path).exists();
     }
-    let engines = store::read_or_default(&paths::engines_file(), &mut warnings);
+    let mut engines: Vec<EngineEntry> =
+        store::read_or_default(&paths::engines_file(), &mut warnings);
+    for e in engines.iter_mut() {
+        e.missing = !std::path::Path::new(&e.path).exists();
+    }
     HubState { recents, engines, warnings }
 }
 
@@ -553,6 +566,15 @@ mod tests {
     fn relocate_recent_reports_an_unknown_project() {
         let mut v = Vec::new();
         assert!(!relocate_recent(&mut v, "C:/a", "C:/b", "b", 7));
+    }
+
+    #[test]
+    fn an_engines_file_written_before_missing_existed_still_loads() {
+        let back: Vec<EngineEntry> = serde_json::from_str(
+            r#"[{"id":"c:/e.exe","path":"C:/e.exe","engineAbi":7,"build":"b"}]"#,
+        )
+        .unwrap();
+        assert!(!back[0].missing);
     }
 
     #[test]

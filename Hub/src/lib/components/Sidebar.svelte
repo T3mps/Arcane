@@ -66,8 +66,10 @@
       {#if engine}
         <!-- title so the full build string is still reachable once the rail is
              narrow enough to clip it. -->
-        <div class="v" title={engine.build}>
-          <span class="dot" aria-hidden="true"></span>
+        <div class="v" title={engine.missing
+               ? `${engine.build} -- nothing is at its path any more`
+               : engine.build}>
+          <span class="dot" class:bad={engine.missing} aria-hidden="true"></span>
           <span class="build">{engine.build}</span>
         </div>
         <code>abi {engine.engineAbi}</code>
@@ -117,6 +119,9 @@
      nothing, and in --fail would overstate a normal first-run state. */
   .v.none { color: var(--text-dim); }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }
+  /* The default engine's exe stopped resolving: the one place coral appears in
+     the rail, because the daily path (Launch) is about to be refused. */
+  .dot.bad { background: var(--fail); }
   /* Build strings run long ("Arcane 0.1 (M6) [Debug]"). Ellipsis rather than
      wrap: a two-line engine name pushes the footer around as the window
      resizes, which is exactly what a percentage-width rail makes common. */
