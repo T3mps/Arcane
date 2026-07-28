@@ -17,6 +17,12 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# ONE Hub per user, enforced: a second launch focuses the existing window
+# instead of starting a rival process. Two Hubs share recents.json/engines.json
+# last-writer-wins -- the atomic writes prevent corruption but not lost
+# updates -- and a launcher's second launch means "show me the Hub" anyway
+# (Unity Hub and the Epic launcher both behave this way).
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 # preserve_order: rename_project rewrites a project's .arcproj in place. Without
 # it serde_json's object is a BTreeMap, so a round-trip alphabetises every key

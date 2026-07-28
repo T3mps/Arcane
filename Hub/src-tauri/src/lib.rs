@@ -509,6 +509,17 @@ fn suggest_engine() -> Option<state::EngineEntry> {
 
 pub fn run() {
     tauri::Builder::default()
+        // FIRST plugin registered, per its own docs: it has to win the race
+        // before anything else initialises. A second launch lands in this
+        // callback inside the FIRST process; the new process exits on its own.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // "Show me the Hub": surface the window the user already has.
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             load_state,
