@@ -81,7 +81,7 @@ namespace Arcane::Editor
 
         // Undo plumbing (doc-identity commands, the same shape as
         // ShaderEditorDocument::ApplyParamEdit, ShaderEditorDocument.hpp:
-        // 126-131): swap the whole authored data in and republish it exactly
+        // 127-132): swap the whole authored data in and republish it exactly
         // the way a Save does, so an undo shows up in the viewport rather than
         // living only inside this window.
         void ApplySpriteData(const Arcane::SpriteAssetData& data);
