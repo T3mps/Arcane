@@ -1175,14 +1175,33 @@ namespace Arcane::Editor
         // frame -- its push branch dead, so it could never follow another
         // section, and its stale number would clobber a real drag elsewhere.
         //
-        // LastResizedColumn has exactly two writers: -1 at table init (:589)
-        // and, at :689, the column ResizedColumn named -- assigned inside
-        // TableBeginApplyRequests immediately AFTER that resize is applied
-        // (:688) and immediately BEFORE ResizedColumn is cleared (:691).
+        // LastResizedColumn has exactly two writers, and both facts about
+        // them are load-bearing.
+        //
+        // First, the ctor memset writes 0 -- ImGuiTable's ctor is
+        // memset(this, 0, sizeof(*this)) (imgui_internal.h:3332), so 0 is
+        // literally the value == 0 tests against -- but that write is never
+        // OBSERVABLE by this code: a table whose pool slot was just
+        // constructed also has RawData == NULL, which forces IsInitializing
+        // = true (imgui_tables.cpp:577) and then :589 overwrites
+        // LastResizedColumn to -1 as part of that init, all inside
+        // BeginTableEx and before TableBeginApplyRequests runs (:644) and
+        // before BeginTable returns to this call site. So `== 0` never fires
+        // off the ctor's zero; it always means a real resize.
+        //
+        // Second, the :689 writer is UNCONDITIONAL, not resize-only: every
+        // frame's instance-0 TableBegin runs `LastResizedColumn =
+        // ResizedColumn` regardless of whether a resize happened this frame
+        // (:687-691) -- ResizedColumn itself is reset to -1 at :691 right
+        // after, so on a quiet frame this assigns the idle -1 right back.
+        // That per-frame re-arm is what makes `LastResizedColumn == 0` an
+        // EVENT rather than a latch: without it, a resize on column 0 once
+        // would read as "still resized" on every later frame too.
+        //
         // Everything else in the file only reads it. So once BeginTable has
         // returned, `LastResizedColumn == 0` means precisely "column 0 of THIS
-        // table just had a queued resize applied", which is the event we want
-        // and nothing else.
+        // table just had a queued resize applied this frame", which is the
+        // event we want and nothing else.
         //
         // DECISION -- double-click auto-fit does NOT win. It is applied
         // through AutoFitSingleColumn (:695-699), which does not touch
@@ -1384,11 +1403,16 @@ namespace Arcane::Editor
         // theme defaults).
         // ---------------------------------------------------------------------
 
-        // Desk call against the screenshot's ~4 px vertical rhythm, same
-        // sampling method as the header bands above. Only .y is chosen here;
-        // the push site keeps the live style's .x so horizontal spacing
-        // elsewhere in the panel (search box, buttons) is untouched by a
-        // change scoped to vertical rhythm.
+        // Starting values for the vertical-rhythm tuning knobs used below --
+        // NOT an applied tightening yet. Both equal ImGui's own stock style
+        // defaults (FramePadding = (4,3) at imgui.cpp:1531, ItemSpacing =
+        // (8,4) at imgui.cpp:1534) and nothing else in this editor modifies
+        // style, so the push at the loop site moves ZERO pixels as authored
+        // today. Per the spec's tune-at-desk flow, these constants are where
+        // a human pass narrows the rhythm once the layout is on screen. Only
+        // .y is a tuning target; the push site keeps the live style's .x so
+        // horizontal spacing elsewhere in the panel (search box, buttons) is
+        // untouched by a change scoped to vertical rhythm.
         constexpr float kInspectorFramePaddingY = 3.0f;
         constexpr float kInspectorItemSpacingY  = 4.0f;
 
@@ -1404,9 +1428,14 @@ namespace Arcane::Editor
         // here, against an internal layout detail no API contract holds still.
         //
         // This IS DragScalarN's body (imgui_widgets.cpp:2814-2849) specialised to
-        // float with no bounds, with the bar added and the trailing
+        // float with no bounds, with the bar added, the trailing
         // visible-label block (:2840-2845) dropped -- already dead for these
-        // callers, whose labels are the "##name" hidden-id form:
+        // callers, whose labels are the "##name" hidden-id form -- and the
+        // `flags` parameter dropped along with it, which also drops the
+        // ImGuiSliderFlags_ColorMarkers branch it gates (:2831-2832): none of
+        // these callers pass flags, so that branch was already unreachable
+        // here too. An ImGui upgrader re-diffing this against the vendored
+        // body should expect both omissions, not just the label block:
         // FindRenderedTextEnd stops at the leading "##" (imgui.cpp:3918) and
         // returns the string start, so :2841's
         // `label != label_end` is false. Everything ids and undo depend on is
@@ -2407,10 +2436,20 @@ namespace Arcane::Editor
         // framed CollapsingHeader, and is ImMin(CurrLineTextBaseOffset,
         // style.FramePadding.y) for the unframed category TreeNodeEx -- a
         // lower FramePadding.y can only shrink or hold that clamp, never grow
-        // it, so the push still reaches both. Separately, every item -- header
-        // or grid row alike -- gets ItemSpacing.y added to the cursor advance
-        // that reaches the next one (ItemSize, imgui.cpp:12130), so one push
-        // here gives header rows and field rows the same tightened rhythm.
+        // it, so the push still reaches both.
+        //
+        // ItemSpacing.y does NOT reach field-grid rows, though, despite
+        // ItemSize adding it to the cursor advance (imgui.cpp:12130): that
+        // same call subtracts it back out of CursorMaxPos.y one line later
+        // (imgui.cpp:12132), and a table row's height is read from
+        // CursorMaxPos.y + RowCellPaddingY at cell-close (TableEndCell,
+        // imgui_tables.cpp:2268) -- CellPadding.y, untouched by this arc, is
+        // what actually governs inner-row rhythm. What the ItemSpacing.y
+        // push DOES reach: the header rows themselves (drawn outside any
+        // table, where ItemSize's effect stands uncancelled) and the gaps
+        // between sections. If a future desk pass wants the grid rows
+        // themselves tighter too, CellPadding.y is the knob to add here, not
+        // this one.
         // .x is carried over from the live style; only .y is overridden.
         //
         // Balanced on every path: this is OUTSIDE the loop, so none of the
@@ -2667,10 +2706,21 @@ namespace Arcane::Editor
                         if (categoryOpen)
                         {
                             visitor.activeCategory = cat;
-                            // Its own grid, sharing the panel-wide label width
-                            // (state.labelColWidth) -- so the split lines up
-                            // across sections while the sub-header above it still
-                            // spans the full row.
+                            // Its own grid, sharing the panel-wide label WIDTH
+                            // (state.labelColWidth) with every uncategorized
+                            // grid -- but the visual split does NOT line up
+                            // across sections. This grid draws under
+                            // TreePushOverrideID's own Indent() call
+                            // (imgui_widgets.cpp:7233-7239 -- TreeNodeBehavior
+                            // pushes it when the category is open), which
+                            // advances the cursor by g.Style.IndentSpacing
+                            // (imgui.cpp:12246; stock default 21.0f,
+                            // imgui.cpp:1538) before this table opens, so a
+                            // category grid's border sits one IndentSpacing
+                            // right of the uncategorized grids' border.
+                            // Whether that offset reads fine is a desk call --
+                            // the spec locks category indent to the tree's
+                            // own indent rather than fighting it back to 0.
                             if (BeginFieldGrid(state))
                             {
                                 ci.descriptor->visitFields(ci.data, visitor);
