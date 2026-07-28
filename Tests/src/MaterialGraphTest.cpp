@@ -50,6 +50,20 @@ namespace
         return n;
     }
 
+    // An inline pin literal. Lanes beyond the pin's declared width stay 0 (a
+    // dynamic pin stores only x -- the scalar rule).
+    GraphPinLiteral Literal(std::uint32_t pin, float x, float y = 0.0f,
+                            float z = 0.0f, float w = 0.0f)
+    {
+        GraphPinLiteral l;
+        l.pin = pin;
+        l.v[0] = x;
+        l.v[1] = y;
+        l.v[2] = z;
+        l.v[3] = w;
+        return l;
+    }
+
     GraphLink Link(std::uint32_t from, std::uint32_t fromPin,
                    std::uint32_t to, std::uint32_t toPin)
     {
@@ -452,6 +466,261 @@ TEST_CASE("Codegen: unconnected defaults and unreachable params", "[material]")
         REQUIRE(r.Ok());
         CHECK(r.snippet.find("//@param float Extra = 0\n") != std::string::npos);
         CHECK(r.snippet.find("_n9") == std::string::npos);   // no statement emitted
+    }
+}
+
+TEST_CASE("pin literal feeds an unwired input and beats the neutral default",
+          "[material][graph]")
+{
+    // const_float(2) -> mul.a; mul.b UNWIRED but carrying the literal 3.
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    GraphNode two = Node(2, GraphNodeType::ConstFloat);
+    two.value[0] = 2.0f;
+    g.nodes.push_back(two);
+    GraphNode mul = Node(3, GraphNodeType::Mul);
+    mul.pinLiterals.push_back(Literal(1, 3.0f));
+    g.nodes.push_back(mul);
+    g.links.push_back(Link(2, 0, 3, 0));
+    g.links.push_back(Link(3, 0, 1, 0));
+
+    const GraphCodegenResult r = GenerateGraphSnippet(g);
+    REQUIRE(r.Ok());
+    // Inline into the consumer's statement: the literal is NOT a node, so it
+    // adds no line -- 4 scaffolding lines + one statement per node, exactly
+    // what a Const node feeding mul.b would NOT have produced.
+    CHECK(r.snippet ==
+          "float4 shade(Varyings v)\n"
+          "{\n"
+          "    float _n2 = 2;\n"
+          "    float _n3 = _n2 * 3;\n"
+          "    return (_n3).xxxx;\n"
+          "}\n");
+    CHECK(r.lineNodeIds.size() == 6);
+
+    SECTION("a literal overrides a NON-ZERO neutral default")
+    {
+        // clamp.x wired (float2), clamp.max unwired with the literal 0.5 --
+        // the neutral "1.0" that argOr would otherwise pass must lose.
+        MaterialGraph c;
+        c.nodes.push_back(Node(1, GraphNodeType::Output));
+        c.nodes.push_back(Node(2, GraphNodeType::UV));
+        GraphNode clamp = Node(3, GraphNodeType::Clamp);
+        clamp.pinLiterals.push_back(Literal(2, 0.5f));
+        c.nodes.push_back(clamp);
+        c.links.push_back(Link(2, 0, 3, 0));
+        c.links.push_back(Link(3, 0, 1, 0));
+
+        const GraphCodegenResult cr = GenerateGraphSnippet(c);
+        REQUIRE(cr.Ok());
+        CHECK(cr.snippet.find("float2 _n3 = clamp(_n2, (0.0).xx, (0.5).xx);") !=
+              std::string::npos);
+        CHECK(cr.snippet.find("(1.0).xx") == std::string::npos);   // the neutral it replaced
+        // min stayed neutral: only the pin with a literal changed.
+        CHECK(cr.snippet.find("(0.0).xx") != std::string::npos);
+    }
+
+    SECTION("a WIRE beats the literal, which survives underneath")
+    {
+        // SG behavior: wiring hides the value, it is not destroyed -- so the
+        // stored literal must still be there for an unwire to restore.
+        GraphNode four = Node(4, GraphNodeType::ConstFloat);
+        four.value[0] = 4.0f;
+        g.nodes.push_back(four);
+        g.links.push_back(Link(4, 0, 3, 1));   // -> mul.b, the pin holding the literal
+
+        const GraphCodegenResult wired = GenerateGraphSnippet(g);
+        REQUIRE(wired.Ok());
+        CHECK(wired.snippet.find("float _n3 = _n2 * _n4;") != std::string::npos);
+        CHECK(wired.snippet.find("* 3") == std::string::npos);
+        REQUIRE(g.FindNode(3)->FindPinLiteral(1) != nullptr);
+        CHECK(g.FindNode(3)->FindPinLiteral(1)->v[0] == 3.0f);
+    }
+
+    SECTION("Custom nodes get literals too -- they share the argOr seam")
+    {
+        // Custom pins are per-node data, but their emission calls the SAME
+        // arg()/argOr() helper as every other node, so literals fall out with
+        // no per-type work. FindPinLiteral indexes customPins order.
+        MaterialGraph cg;
+        cg.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode custom = Node(2, GraphNodeType::Custom);
+        custom.customPins = { { "uv", 2 }, { "t", 1 } };
+        custom.customOutWidth = 4;
+        custom.customBody = "return float4(uv, t, 1.0);";
+        custom.pinLiterals.push_back(Literal(0, 0.25f, 0.75f));   // float2 pin
+        custom.pinLiterals.push_back(Literal(1, 6.0f));           // scalar pin
+        cg.nodes.push_back(custom);
+        cg.links.push_back(Link(2, 0, 1, 0));
+
+        const GraphCodegenResult cr = GenerateGraphSnippet(cg);
+        REQUIRE(cr.Ok());
+        CHECK(cr.snippet.find("float4 _n2 = _cf2(float2(0.25, 0.75), 6);") !=
+              std::string::npos);
+    }
+}
+
+TEST_CASE("pin literal on a dynamic pin stays scalar and does not pin width",
+          "[material][graph]")
+{
+    // add.a wired to a float2 const, add.b unwired with the scalar literal
+    // 1.5: width resolution counts CONNECTED inputs only, so the node stays
+    // float2 and the literal splats through the same adaptation a wire would.
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    GraphNode c2 = Node(2, GraphNodeType::ConstFloat2);
+    c2.value[0] = 0.25f;
+    c2.value[1] = 0.75f;
+    g.nodes.push_back(c2);
+    GraphNode add = Node(3, GraphNodeType::Add);
+    add.pinLiterals.push_back(Literal(1, 1.5f));
+    g.nodes.push_back(add);
+    g.links.push_back(Link(2, 0, 3, 0));
+    g.links.push_back(Link(3, 0, 1, 0));
+
+    const GraphCodegenResult r = GenerateGraphSnippet(g);
+    REQUIRE(r.Ok());
+    CHECK(r.snippet.find("float2 _n3 = _n2 + (1.5).xx;") != std::string::npos);
+
+    SECTION("literals alone never widen a node")
+    {
+        // Nothing connected: the resolved width stays 1 even though a literal
+        // sits on a dynamic pin -- literals are not inputs to the width rule.
+        MaterialGraph l;
+        l.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode mul = Node(2, GraphNodeType::Mul);
+        mul.pinLiterals.push_back(Literal(0, 4.0f));
+        l.nodes.push_back(mul);
+        l.links.push_back(Link(2, 0, 1, 0));
+
+        const GraphCodegenResult lr = GenerateGraphSnippet(l);
+        REQUIRE(lr.Ok());
+        CHECK(lr.snippet.find("float _n2 = 4 * 0.0;") != std::string::npos);
+    }
+}
+
+TEST_CASE("graph without literals emits byte-identical snippets", "[material][graph]")
+{
+    // The tripwire for "literals cost nothing when unused". There are no
+    // golden snippet FILES in this suite, so the equivalence is proven two
+    // ways: the same graph round-tripped through JSON (which, with no
+    // literals, writes no "pinDefaults" key at all) must generate the exact
+    // same text, AND that text must still show the pre-change neutral "0.0"
+    // path on a deliberately unwired pin.
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    g.nodes.push_back(TexNode(2, "Albedo"));
+    g.nodes.push_back(Node(3, GraphNodeType::Mul));   // b left unwired
+    g.links.push_back(Link(2, 0, 3, 0));
+    g.links.push_back(Link(3, 0, 1, 0));
+
+    const GraphCodegenResult direct = GenerateGraphSnippet(g);
+    REQUIRE(direct.Ok());
+    CHECK(direct.snippet.find("float4 _n3 = _n2_rgba * (0.0).xxxx;") != std::string::npos);
+
+    const nlohmann::json j = GraphToJson(g);
+    for (const nlohmann::json& e : j["nodes"])
+        CHECK_FALSE(e.contains("pinDefaults"));   // absent, not an empty array
+
+    const auto back = GraphFromJson(j);
+    REQUIRE(back.has_value());
+    CHECK(back->FindNode(3)->pinLiterals.empty());
+    const GraphCodegenResult roundTrip = GenerateGraphSnippet(*back);
+    REQUIRE(roundTrip.Ok());
+    CHECK(roundTrip.snippet == direct.snippet);
+    CHECK(roundTrip.lineNodeIds == direct.lineNodeIds);
+}
+
+TEST_CASE("pinDefaults serialization round-trip and tolerance", "[material][graph]")
+{
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    GraphNode tile = Node(2, GraphNodeType::TilingOffset);   // fixed float2 pins
+    tile.pinLiterals.push_back(Literal(1, 2.0f, 3.0f));      // tiling
+    g.nodes.push_back(tile);
+    GraphNode mul = Node(3, GraphNodeType::Mul);             // dynamic pins
+    mul.pinLiterals.push_back(Literal(1, 0.25f));
+    g.nodes.push_back(mul);
+    g.links.push_back(Link(2, 0, 3, 0));
+    g.links.push_back(Link(3, 0, 1, 0));
+    g.nextId = 4;
+
+    const nlohmann::json j = GraphToJson(g);
+    // Value shape follows the pin's declared width: array for the fixed
+    // float2 pin, a bare number for the dynamic (scalar) one.
+    REQUIRE(j["nodes"][1].contains("pinDefaults"));
+    REQUIRE(j["nodes"][2].contains("pinDefaults"));
+    const nlohmann::json& tileDefs = j["nodes"][1]["pinDefaults"];
+    REQUIRE(tileDefs.is_array());
+    REQUIRE(tileDefs.size() == 1);
+    CHECK(tileDefs[0]["pin"] == 1);
+    REQUIRE(tileDefs[0]["value"].is_array());
+    REQUIRE(tileDefs[0]["value"].size() == 2);
+    CHECK(tileDefs[0]["value"][0] == 2.0f);
+    CHECK(tileDefs[0]["value"][1] == 3.0f);
+    const nlohmann::json& mulDefs = j["nodes"][2]["pinDefaults"];
+    REQUIRE(mulDefs.is_array());
+    REQUIRE(mulDefs.size() == 1);
+    REQUIRE(mulDefs[0]["value"].is_number());
+    CHECK(mulDefs[0]["value"] == 0.25f);
+
+    const auto back = GraphFromJson(j);
+    REQUIRE(back.has_value());
+    const GraphPinLiteral* t = back->FindNode(2)->FindPinLiteral(1);
+    REQUIRE(t != nullptr);
+    CHECK(t->v[0] == 2.0f);
+    CHECK(t->v[1] == 3.0f);
+    CHECK(back->FindNode(2)->FindPinLiteral(0) == nullptr);   // sparse: uv untouched
+    const GraphPinLiteral* m = back->FindNode(3)->FindPinLiteral(1);
+    REQUIRE(m != nullptr);
+    CHECK(m->v[0] == 0.25f);
+    CHECK(GraphToJson(*back).dump() == j.dump());   // byte-stable second pass
+
+    SECTION("both value shapes load (hand-authored files)")
+    {
+        nlohmann::json hand = j;
+        hand["nodes"][1]["pinDefaults"][0]["value"] = 0.5;   // number on a float2 pin
+        hand["nodes"][2]["pinDefaults"][0]["value"] =
+            nlohmann::json::array({ 0.75, 0.0, 0.0, 0.0 });   // array on a scalar pin
+        // ...and a hand-built entry whose "pin" is a SIGNED integer (what any
+        // JSON built in code, rather than parsed, produces).
+        hand["nodes"][1]["pinDefaults"].push_back(
+            nlohmann::json{ { "pin", 2 },
+                            { "value", nlohmann::json::array({ 4.0, 5.0 }) } });
+        const auto loaded = GraphFromJson(hand);
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->FindNode(2)->FindPinLiteral(2) != nullptr);
+        CHECK(loaded->FindNode(2)->FindPinLiteral(2)->v[0] == 4.0f);
+        CHECK(loaded->FindNode(2)->FindPinLiteral(2)->v[1] == 5.0f);
+        REQUIRE(loaded->FindNode(2)->FindPinLiteral(1) != nullptr);
+        CHECK(loaded->FindNode(2)->FindPinLiteral(1)->v[0] == 0.5f);
+        CHECK(loaded->FindNode(2)->FindPinLiteral(1)->v[1] == 0.0f);
+        REQUIRE(loaded->FindNode(3)->FindPinLiteral(1) != nullptr);
+        CHECK(loaded->FindNode(3)->FindPinLiteral(1)->v[0] == 0.75f);
+    }
+
+    SECTION("an unknown pin index is dropped; the file survives intact")
+    {
+        nlohmann::json hand = j;
+        hand["nodes"][2]["pinDefaults"].push_back(
+            nlohmann::json{ { "pin", 9 }, { "value", 1.0 } });   // Mul has 2 inputs
+        const auto loaded = GraphFromJson(hand);
+        REQUIRE(loaded.has_value());              // NOT the nullopt refusal path
+        CHECK(loaded->nodes.size() == 3);
+        CHECK(loaded->links.size() == 2);
+        REQUIRE(loaded->FindNode(3)->pinLiterals.size() == 1);
+        CHECK(loaded->FindNode(3)->FindPinLiteral(1) != nullptr);
+        CHECK(loaded->FindNode(3)->FindPinLiteral(9) == nullptr);
+    }
+
+    SECTION("an absent pinDefaults field leaves the node literal-free")
+    {
+        nlohmann::json hand = j;
+        hand["nodes"][2].erase("pinDefaults");
+        const auto loaded = GraphFromJson(hand);
+        REQUIRE(loaded.has_value());
+        CHECK(loaded->FindNode(3)->pinLiterals.empty());
+        CHECK(loaded->FindNode(3)->FindPinLiteral(1) == nullptr);
     }
 }
 

@@ -184,6 +184,30 @@ namespace Arcane
             return buf;
         }
 
+        // How many lanes a pin literal stores for a pin of declared `width`:
+        // fixed 2/4 keep their lanes, everything else -- including DYNAMIC
+        // (width-0) pins -- is a scalar. The scalar rule is what keeps a
+        // literal out of dynamic-width resolution (that loop reads only
+        // CONNECTED inputs) and lets it splat like any width-1 operand.
+        int PinLiteralLanes(int width)
+        {
+            return width == 2 ? 2 : width == 4 ? 4 : 1;
+        }
+
+        // A pin literal as an HLSL constant, formatted exactly like the Const*
+        // node cases emit theirs, so an inline literal and a Const node wired
+        // into the same pin produce identical text. `lanes` comes from
+        // PinLiteralLanes.
+        std::string PinLiteralExpr(const GraphPinLiteral& lit, int lanes)
+        {
+            if (lanes == 2)
+                return "float2(" + FormatF(lit.v[0]) + ", " + FormatF(lit.v[1]) + ")";
+            if (lanes == 4)
+                return "float4(" + FormatF(lit.v[0]) + ", " + FormatF(lit.v[1]) + ", " +
+                       FormatF(lit.v[2]) + ", " + FormatF(lit.v[3]) + ")";
+            return FormatF(lit.v[0]);
+        }
+
         const char* HlslTypeForWidth(int w)
         {
             switch (w)
@@ -557,16 +581,30 @@ namespace Arcane
             widthOf[n->id] = w;
 
             // Adapted expression for input `pin` at target width `t` (0 = the
-            // node's resolved dynamic width). Unconnected numeric inputs read 0
-            // by default; argOr overrides for the few pins whose neutral value
-            // is not zero (clamp max, lerp-style upper edges, pow exponent...).
+            // node's resolved dynamic width). Precedence is WIRE > user
+            // literal > neutral default: a wire hides the literal without
+            // destroying it (unwiring restores the value -- SG behavior), and
+            // a literal outranks `def`, which is why it also overrides every
+            // NON-ZERO neutral -- Combine alpha, Clamp max, Smoothstep edge1,
+            // Power exponent, TilingOffset tiling, SimpleNoise scale, the six
+            // argOr call sites that pass something other than "0.0".
+            // Unconnected and literal-free inputs read `def` exactly as
+            // before, so a graph with no literals emits byte-identical text.
             auto argOr = [&](std::uint32_t pin, int t, const char* def) -> std::string
             {
                 if (t == 0)
                     t = w;
-                if (!in[pin].connected)
-                    return Adapt(def, 1, t);
-                return Adapt(in[pin].expr, in[pin].width, t);
+                if (in[pin].connected)
+                    return Adapt(in[pin].expr, in[pin].width, t);
+                if (const GraphPinLiteral* lit = n->FindPinLiteral(pin))
+                {
+                    // The literal adapts FROM its own lane count the same way
+                    // the width-1 `def` string does below -- one adaptation
+                    // table, no special case.
+                    const int lanes = PinLiteralLanes(GraphNodeInputPin(*n, pin).width);
+                    return Adapt(PinLiteralExpr(*lit, lanes), lanes, t);
+                }
+                return Adapt(def, 1, t);
             };
             auto arg = [&](std::uint32_t pin, int t) { return argOr(pin, t, "0.0"); };
 
@@ -1082,6 +1120,38 @@ namespace Arcane
                 default:
                     break;
             }
+            // Inline pin literals ride OUTSIDE the per-type switch (any node
+            // with input pins can carry them) and are written only when the
+            // user set one -- an untouched graph gains no key at all, which is
+            // what keeps old files byte-identical on rewrite. Sorted by pin
+            // for the same diff-stability reason nodes and links are sorted.
+            if (!n->pinLiterals.empty())
+            {
+                std::vector<const GraphPinLiteral*> lits;
+                lits.reserve(n->pinLiterals.size());
+                for (const GraphPinLiteral& l : n->pinLiterals)
+                    lits.push_back(&l);
+                std::sort(lits.begin(), lits.end(),
+                          [](const GraphPinLiteral* a, const GraphPinLiteral* b)
+                          { return a->pin < b->pin; });
+                nlohmann::json defs = nlohmann::json::array();
+                for (const GraphPinLiteral* l : lits)
+                {
+                    const int lanes = PinLiteralLanes(GraphNodeInputPin(*n, l->pin).width);
+                    nlohmann::json v;
+                    if (lanes == 1)
+                        v = l->v[0];   // scalar pins stay bare numbers on disk
+                    else
+                    {
+                        v = nlohmann::json::array();
+                        for (int i = 0; i < lanes; ++i)
+                            v.push_back(l->v[i]);
+                    }
+                    defs.push_back(nlohmann::json{ { "pin", l->pin },
+                                                   { "value", std::move(v) } });
+                }
+                e["pinDefaults"] = std::move(defs);
+            }
             nodes.push_back(std::move(e));
         }
         j["nodes"] = std::move(nodes);
@@ -1205,6 +1275,54 @@ namespace Arcane
                         }
                         n.customPins.push_back(std::move(p));
                     }
+                }
+            }
+            // "pinDefaults" is read LAST on purpose: a Custom node's input
+            // count is its customPins list, parsed just above, so the
+            // unknown-pin check needs those pins already in place.
+            if (e.contains("pinDefaults") && e["pinDefaults"].is_array())
+            {
+                const std::uint32_t inputs = GraphNodeInputCount(n);
+                for (const nlohmann::json& jl : e["pinDefaults"])
+                {
+                    // is_number_integer() accepts nlohmann's SIGNED and
+                    // unsigned integer types both: a hand-built `{"pin": 1}`
+                    // types as signed, and dropping those as malformed would
+                    // make the tolerance promise a lie.
+                    if (!jl.is_object() || !jl.contains("pin") || !jl.contains("value") ||
+                        !jl["pin"].is_number_integer() || jl["pin"].get<std::int64_t>() < 0)
+                        continue;
+                    GraphPinLiteral lit;
+                    lit.pin = static_cast<std::uint32_t>(jl["pin"].get<std::int64_t>());
+                    if (lit.pin >= inputs)
+                    {
+                        // Content damage, not structural: warn and drop the
+                        // one entry, keep the file. GraphFromJson's nullopt
+                        // refusal stays reserved for shapes we cannot
+                        // represent at all (unknown node types, bad ids).
+                        ARC_WARN("material graph: node {} carries a pin literal on "
+                                 "unknown pin {} ({} input(s)) -- dropped",
+                                 n.id, lit.pin, inputs);
+                        continue;
+                    }
+                    if (n.FindPinLiteral(lit.pin))
+                        continue;   // one literal per pin; first wins
+                    const nlohmann::json& v = jl["value"];
+                    // Tolerant of BOTH shapes regardless of the pin's width:
+                    // hand-authored files legitimately write a bare number
+                    // where the writer would emit an array, and the unread
+                    // lanes simply stay 0.
+                    if (v.is_number())
+                        lit.v[0] = v.get<float>();
+                    else if (v.is_array())
+                    {
+                        for (std::size_t i = 0; i < std::min<std::size_t>(4, v.size()); ++i)
+                            if (v[i].is_number())
+                                lit.v[i] = v[i].get<float>();
+                    }
+                    else
+                        continue;
+                    n.pinLiterals.push_back(lit);
                 }
             }
             g.nodes.push_back(std::move(n));

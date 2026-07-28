@@ -152,6 +152,18 @@ namespace Arcane
         int         width = 1;   // 1/2/4
     };
 
+    // A user-set constant on an UNWIRED input pin (SG/UE parity: a pin can
+    // carry a value without a Const node feeding it). Lane count is the pin's
+    // DECLARED width -- 1/2/4 fixed, and a SCALAR for dynamic (width-0) pins,
+    // which is what keeps a literal out of dynamic-width resolution: that loop
+    // only counts CONNECTED inputs (MaterialGraph.cpp:574-577). Unused lanes
+    // stay 0.
+    struct GraphPinLiteral
+    {
+        std::uint32_t pin = 0;
+        float         v[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    };
+
     struct GraphNode
     {
         std::uint32_t id = 0;                        // unique within the graph, > 0, NEVER reused
@@ -193,6 +205,35 @@ namespace Arcane
         // PassInput only: which of the pass's wired input slots to sample
         // (0 = InputTexture, k = InputTexture<k>).
         std::uint32_t passInputSlot = 0;
+
+        // Inline pin literals, SPARSE: only pins the user actually set appear
+        // here, so a graph nobody touched carries none and emits exactly the
+        // pre-literal snippet. The value SURVIVES wiring -- codegen ignores it
+        // while a link exists (MaterialGraph.cpp argOr checks `connected`
+        // first), so unwiring restores it, which is SG's behavior. Serialized
+        // as the node's "pinDefaults" array.
+        //
+        // SEAM SCOPE (v1): a literal reaches codegen only on pins whose
+        // emission routes through argOr -- which is every numeric operand
+        // pin, INCLUDING Custom nodes' per-node pins. Pins whose unconnected
+        // default is not a constant read their default directly and ignore
+        // literals: Output.color, the `v.uv` pins (TextureSample /
+        // SpriteTexture / PassInput / TilingOffset.uv / SimpleNoise.uv),
+        // Split/Swizzle's native-width source, Remap's two range pins, and
+        // Vertex Output's connected-only pins. Editors must not offer a
+        // literal widget on those.
+        std::vector<GraphPinLiteral> pinLiterals;
+
+        // Null when this pin carries no user literal (the common case).
+        // (Inline like MaterialGraph::FindNode below: GraphNode is a plain
+        // data struct -- only the free functions are dll-exported.)
+        [[nodiscard]] const GraphPinLiteral* FindPinLiteral(std::uint32_t pin) const noexcept
+        {
+            for (const GraphPinLiteral& l : pinLiterals)
+                if (l.pin == pin)
+                    return &l;
+            return nullptr;
+        }
     };
 
     // Edge identity is (node, pin) on BOTH ends (SG rule -- multi-output nodes
