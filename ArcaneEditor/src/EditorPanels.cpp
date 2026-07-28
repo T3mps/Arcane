@@ -1346,6 +1346,52 @@ namespace Arcane::Editor
                 min, ImVec2(min.x + kAxisBarWidth, max.y), kAxisBarColors[component]);
         }
 
+        // ---------------------------------------------------------------------
+        // Header bands (UE's Details treatment for CollapsingHeader/TreeNodeEx:
+        // a muted dark band in place of the theme's default bright-blue
+        // ImGuiCol_Header). Beside the axis palette per Section 2's rule that
+        // inspector style constants live in one place.
+        // ---------------------------------------------------------------------
+
+        // Sampled off the UE reference screenshot, same as kAxisBarColors --
+        // desk call, not measured off UE pixels. Hover/active step up in
+        // lightness so the row still visibly responds to input.
+        constexpr ImU32 kHeaderBandColor        = IM_COL32(48, 48, 52, 255);
+        constexpr ImU32 kHeaderBandHoveredColor = IM_COL32(58, 58, 64, 255);
+        constexpr ImU32 kHeaderBandActiveColor  = IM_COL32(66, 66, 73, 255);
+
+        // Push/pop as a matched pair so every call site pushes and pops the
+        // same 3 colors, rather than trusting three inline pushes (and three
+        // inline pops) to stay in sync at each of the two header call sites.
+        // Both CollapsingHeader (Framed) and TreeNodeEx (unframed) resolve
+        // their background from this same triple, picked by hover/held state
+        // (imgui_widgets.cpp:7102 framed, :7123 unframed), so one push covers
+        // either caller.
+        void PushHeaderBandColors()
+        {
+            ImGui::PushStyleColor(ImGuiCol_Header, kHeaderBandColor);
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kHeaderBandHoveredColor);
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, kHeaderBandActiveColor);
+        }
+
+        void PopHeaderBandColors()
+        {
+            ImGui::PopStyleColor(3);
+        }
+
+        // ---------------------------------------------------------------------
+        // Row rhythm (UE's Details rows read visibly tighter than ImGui's own
+        // theme defaults).
+        // ---------------------------------------------------------------------
+
+        // Desk call against the screenshot's ~4 px vertical rhythm, same
+        // sampling method as the header bands above. Only .y is chosen here;
+        // the push site keeps the live style's .x so horizontal spacing
+        // elsewhere in the panel (search box, buttons) is untouched by a
+        // change scoped to vertical rhythm.
+        constexpr float kInspectorFramePaddingY = 3.0f;
+        constexpr float kInspectorItemSpacingY  = 4.0f;
+
         // The component drags for a single-selection Vec2/Vec3 row, spelled out
         // rather than calling ImGui::DragFloat2/3.
         //
@@ -2353,6 +2399,34 @@ namespace Arcane::Editor
                 return InspectorSectionRank(an) < InspectorSectionRank(bn);
             });
 
+        // One rhythm region for the whole per-component sweep, popped
+        // unconditionally right after the loop closes. Both header types
+        // fold FramePadding.y into their own frame height (TreeNodeBehavior,
+        // imgui_widgets.cpp:6886-6888,6898): frame_height = label_size.y +
+        // padding.y * 2, where padding.y IS style.FramePadding.y for the
+        // framed CollapsingHeader, and is ImMin(CurrLineTextBaseOffset,
+        // style.FramePadding.y) for the unframed category TreeNodeEx -- a
+        // lower FramePadding.y can only shrink or hold that clamp, never grow
+        // it, so the push still reaches both. Separately, every item -- header
+        // or grid row alike -- gets ItemSpacing.y added to the cursor advance
+        // that reaches the next one (ItemSize, imgui.cpp:12130), so one push
+        // here gives header rows and field rows the same tightened rhythm.
+        // .x is carried over from the live style; only .y is overridden.
+        //
+        // Balanced on every path: this is OUTSIDE the loop, so none of the
+        // loop's own `continue`s (component filter above, the category-field
+        // sweep inside it) can skip the pop below -- they only skip to the
+        // next `ci`, and the pop runs once the loop itself is done.
+        //
+        // Category indent is untouched: the open category's children are
+        // indented by TreePushOverrideID's call to Indent() (imgui_widgets.cpp:
+        // 7233-7239), which advances window->DC.Indent.x by g.Style.IndentSpacing
+        // (imgui.cpp:12246) -- a third style var, distinct from the two pushed
+        // here.
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+            ImVec2(ImGui::GetStyle().FramePadding.x, kInspectorFramePaddingY));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+            ImVec2(ImGui::GetStyle().ItemSpacing.x, kInspectorItemSpacingY));
         for (const Astra::Registry::ComponentInfo& ci : components)
         {
             // An unreflected component has no name to show and no fields to
@@ -2450,8 +2524,13 @@ namespace Arcane::Editor
             // below are deliberately nested rather than early-outs so the ID stack
             // stays balanced on every path.
             ImGui::PushID(static_cast<int>(ci.descriptor->hash));
+            // Scoped tight around the header call only -- the band colors
+            // must not leak into the tooltip/popup below, which read the
+            // theme's own ImGuiCol_* set like every other popup in the editor.
+            PushHeaderBandColors();
             const bool open = ImGui::CollapsingHeader(headerLabel.c_str(),
                                                       ImGuiTreeNodeFlags_DefaultOpen);
+            PopHeaderBandColors();
             // Safe to sit between the header and BeginPopupContextItem below,
             // which resolves its id from g.LastItemData: SetTooltip opens and
             // closes a window, and ImGui restores LastItemData in End()
@@ -2577,8 +2656,15 @@ namespace Arcane::Editor
                         // label rather than a c_str(). The sub-header's id comes
                         // from that push, not from the drawn text.
                         ImGui::PushID(cat.data(), cat.data() + cat.size());
-                        if (ImGui::TreeNodeEx("##category", ImGuiTreeNodeFlags_DefaultOpen,
-                                              "%.*s", static_cast<int>(cat.size()), cat.data()))
+                        // Same scoped pair as the component header above --
+                        // wraps only the call that reads Header/HeaderHovered/
+                        // HeaderActive, not the grid content the `if` guards.
+                        PushHeaderBandColors();
+                        const bool categoryOpen = ImGui::TreeNodeEx("##category",
+                            ImGuiTreeNodeFlags_DefaultOpen,
+                            "%.*s", static_cast<int>(cat.size()), cat.data());
+                        PopHeaderBandColors();
+                        if (categoryOpen)
                         {
                             visitor.activeCategory = cat;
                             // Its own grid, sharing the panel-wide label width
@@ -2598,6 +2684,7 @@ namespace Arcane::Editor
             }
             ImGui::PopID();
         }
+        ImGui::PopStyleVar(2);
 
         if (pendingRemove)
         {
