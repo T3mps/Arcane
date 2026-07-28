@@ -390,7 +390,7 @@ fn hub_version() -> String {
 // running, the editor is independent of it, and several editors may run at
 // once. Closing the Hub must not close editors.
 #[tauri::command]
-fn open_project(project_path: String, engine_path: String) -> Result<(), String> {
+fn open_project(app: tauri::AppHandle, project_path: String, engine_path: String) -> Result<(), String> {
     let proj = PathBuf::from(&project_path);
     let exe = engine::resolve_editor_exe(Path::new(&engine_path));
     if !proj.exists() {
@@ -399,6 +399,14 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
     if !exe.exists() {
         return Err(format!("engine not found: {}", exe.display()));
     }
+
+    // Probe RIGHT BEFORE spawning, not only at registration or Hub launch: a
+    // long-lived Hub spans in-place rebuilds, and this is the last moment the
+    // compatibility story can be made true. A probe failure refuses the launch
+    // with a reason -- an engine that cannot answer its own identity probe
+    // (mid-rebuild, missing DLLs) is not about to open a project, and spawning
+    // it anyway would produce a silent nothing.
+    let info = spawn::probe_engine(&exe)?;
 
     // Loaded before the spawn so this project's saved extra arguments can go on
     // the command line. Passed as an argv ARRAY, never a joined string: each
@@ -412,7 +420,15 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
         .map(|e| project::split_args(&e.args))
         .unwrap_or_default();
 
-    Command::new(&exe)
+    // Adopt what the probe just said: the entry's cached abi/build refresh so
+    // the UI's next load speaks about the binary that actually launched.
+    let exe_key = state::normalise_path(&exe.to_string_lossy());
+    if let Some(e) = s.engines.iter_mut().find(|e| e.id == exe_key) {
+        e.engine_abi = info.engine_abi;
+        e.build = info.build.clone();
+    }
+
+    let mut child = Command::new(&exe)
         .arg("--project")
         .arg(&proj)
         // AFTER --project, so a later flag wins if the editor takes the last
@@ -426,6 +442,43 @@ fn open_project(project_path: String, engine_path: String) -> Result<(), String>
         .creation_flags(spawn::CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("could not launch the editor: {e}"))?;
+
+    // Watchdog: a spawn that SUCCEEDS can still be an editor that REFUSES a
+    // moment later -- the project gate exits 2 before any window exists, so a
+    // detached launch turns that refusal into click-then-nothing. Watch the
+    // child briefly on a background thread and tell the frontend if it died at
+    // boot; the launch itself stays instant (this command returns without
+    // waiting). Two seconds covers the refuse-at-boot paths, which all exit
+    // before device init; an editor alive past that is launched, and the
+    // thread ends with the child disowned as before. stderr is deliberately
+    // NOT piped: a pipe nobody drains after this thread ends would eventually
+    // BLOCK the editor mid-log -- the exit code has to carry the story.
+    {
+        let app = app.clone();
+        let shown = project::display_name(&project_path);
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while std::time::Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        let why = match status.code() {
+                            // Exit 2 is the editor's own project gate
+                            // (ArcaneEditor main.cpp): wrong abi, unreadable
+                            // manifest, refused boot.
+                            Some(2) => "the editor refused the project (engine/abi gate)".to_string(),
+                            Some(c) => format!("the editor exited immediately with code {c}"),
+                            None => "the editor was killed before it opened".to_string(),
+                        };
+                        use tauri::Emitter;
+                        let _ = app.emit("launch-failed", format!("{shown}: {why}."));
+                        return;
+                    }
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                    Err(_) => return,
+                }
+            }
+        });
+    }
     // display_name, not file_name(): project_path may be a .arcproj FILE (what
     // the Open dialog now yields) or a folder (what older entries hold), and
     // both must record the same name.

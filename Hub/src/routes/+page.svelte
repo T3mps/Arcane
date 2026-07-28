@@ -1,6 +1,7 @@
 <script lang="ts">
   import "$lib/theme.css";
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import WindowChrome from "$lib/components/WindowChrome.svelte";
@@ -105,6 +106,19 @@
     // inverts (a project stamped by the CURRENT engine reads incompatible
     // against last week's cached abi). Re-probe and adopt whatever changed.
     adoptState(await refreshEngines());
+  });
+
+  // A SECOND, synchronous onMount, because the async one above cannot return a
+  // cleanup. The launch watchdog reports an editor that died at boot (the
+  // refuse-gate exits before any window, so a detached spawn is otherwise
+  // click-then-nothing); it arrives as an event because the launch command
+  // returns before the verdict exists. Rendered as a notice, not `error`:
+  // it is an async fact about a process, not a failed Hub action.
+  onMount(() => {
+    const un = listen<string>("launch-failed", (e) => {
+      if (!notices.includes(e.payload)) notices.push(e.payload);
+    });
+    return () => { un.then((f) => f()); };
   });
 
   async function guard(fn: () => Promise<unknown>) {
