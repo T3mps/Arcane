@@ -11,7 +11,7 @@
 // asset-type -> factory routing, and the unsaved-close confirm modal --
 // this class only ever flips m_dirty and answers Save()/Draw() truthfully
 // (same division of responsibility ShaderEditorDocument follows, see its
-// Draw() at ShaderEditorDocument.cpp:1122-1190: requestClose mirrors `open`
+// Draw() at ShaderEditorDocument.cpp:1128-1198: requestClose mirrors `open`
 // from ImGui::Begin, both on the collapsed-early-return path and the normal
 // end-of-frame path -- DocumentHost.cpp:151-157 is what actually turns that
 // into a close or a pending confirm).

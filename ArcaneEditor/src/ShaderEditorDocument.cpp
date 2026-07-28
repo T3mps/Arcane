@@ -468,6 +468,14 @@ namespace Arcane::Editor
         // transaction open, and a stranded transaction leaves InTransaction()
         // true editor-wide: structural edits refused AND Ctrl+Z/Ctrl+Y dead.
         // Closing here is what makes that unreachable.
+        //
+        // It is not free: a close that LANDS a step also clears the REDO stack
+        // (CommandStack.cpp:70 -- reached only for a non-empty transaction,
+        // since :61-62 returns first when nothing changed). So closing a
+        // document mid-gesture discards redo history. That is the accepted
+        // cost of ClosePending's commit-not-cancel rule, which exists because
+        // Cancel would discard the transaction WITHOUT reverting the edits the
+        // user already watched happen.
         if (m_services.undo)
             EditGesture::ClosePending(*m_services.undo, m_gesture);
 
@@ -2235,10 +2243,21 @@ namespace Arcane::Editor
     void ShaderEditorDocument::PushGraphUndo(const char* label,
                                              std::optional<Arcane::MaterialGraph> before)
     {
+        PushGraphUndo(label, std::move(before),
+                      static_cast<std::size_t>(std::max(0, m_activePass)));
+    }
+
+    void ShaderEditorDocument::PushGraphUndo(const char* label,
+                                             std::optional<Arcane::MaterialGraph> before,
+                                             std::size_t pass)
+    {
+        // GraphOptAt range-checks (an out-of-range pass falls back to the base,
+        // exactly as ActiveGraphOpt's own clamp does), and ApplyGraphState
+        // refuses a pass that has since been removed -- so a stale pinned index
+        // degrades to an inert step rather than a misdirected write.
         if (m_services.undo)
             m_services.undo->Push(std::make_unique<GraphEditCommand>(
-                m_anchor, label, static_cast<std::size_t>(std::max(0, m_activePass)),
-                std::move(before), ActiveGraphOpt()));
+                m_anchor, label, pass, std::move(before), GraphOptAt(pass)));
     }
 
     // --------------------------------------------- external file changes
@@ -3256,14 +3275,22 @@ namespace Arcane::Editor
                 [&] { return std::string(label); },
                 [&]
                 {
-                    // Whole-graph before, captured at activation; the command
-                    // builds at CLOSE from this plus whatever the drag did --
-                    // which is why an abandoned drag now lands on the stack
-                    // instead of vanishing.
+                    // Whole-graph before AND the pass it belongs to, both
+                    // pinned at activation. The command builds at CLOSE from
+                    // this plus whatever the drag did -- which is why an
+                    // abandoned drag now lands on the stack instead of
+                    // vanishing. Pinning the PASS is what keeps that safe: a
+                    // close can land after the active pass moved (a ctrl+click
+                    // text entry parks a gesture without deactivating it, the
+                    // pass canvas is submitted before this panel, and the
+                    // abandoned close runs later still at the ScopeGuard), and
+                    // a command pairing pass B's index with pass A's `before`
+                    // would have Undo overwrite B's graph with A's.
                     return std::function<void()>(
                         [this, label = std::string(label),
+                         pass = static_cast<std::size_t>((std::max)(0, m_activePass)),
                          before = ActiveGraphOpt()]() mutable
-                        { PushGraphUndo(label.c_str(), std::move(before)); });
+                        { PushGraphUndo(label.c_str(), std::move(before), pass); });
                 });
         };
         auto gestureEnd = [&] { EditGesture::EndOnDeactivate(m_services.undo, m_gesture); };
@@ -3461,9 +3488,13 @@ namespace Arcane::Editor
                                    // Assisted rename: local override fix + the
                                    // dependent-instance walk (arms the
                                    // propagation modal on hits). Both names are
-                                   // LOCALS: the regenerate above may rebuild
-                                   // the graph, so nothing reads back through
-                                   // `n` after it.
+                                   // independent COPIES: BeginParamRename takes
+                                   // const refs and re-scans every graph's nodes
+                                   // for the old name -- THIS node included --
+                                   // so neither argument should alias the node
+                                   // it is reasoning about. (The pre-widget-
+                                   // layer code passed m_nameBuf for the same
+                                   // reason.)
                                    BeginParamRename(oldName, newName);
                                });
 

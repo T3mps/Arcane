@@ -213,9 +213,20 @@ namespace Arcane::Editor
         [[nodiscard]] std::string BuildGraphClipJson();   // "" = nothing copyable
         void PasteGraphClipText(const char* text);              // ignores foreign clips
         // One undo step per completed graph gesture: `before` was captured at
-        // the gesture start; `after` is the current graph. The live edit
-        // already happened (ICommand contract).
+        // the gesture start; `after` is read from the graph at push time. The
+        // live edit already happened (ICommand contract).
+        //
+        // The pass-taking overload is for DEFERRED pushes -- a gesture whose
+        // command builds at CLOSE rather than at the edit. Such a push can land
+        // after the ACTIVE pass has moved (the pass canvas is submitted before
+        // the graph panel, and an abandoned gesture closes later still, at the
+        // document's ScopeGuard), so BOTH the pass index and the `after` it
+        // reads must be the ones pinned when `before` was captured. Pairing
+        // pass B's index with pass A's `before` would make Undo overwrite pass
+        // B's graph with pass A's.
         void PushGraphUndo(const char* label, std::optional<Arcane::MaterialGraph> before);
+        void PushGraphUndo(const char* label, std::optional<Arcane::MaterialGraph> before,
+                           std::size_t pass);
         // One undo step per completed pass-canvas gesture (after = current).
         void PushPassUndo(const char* label, PassListState before);
         bool NodeBadged(std::uint32_t nodeId) const;
