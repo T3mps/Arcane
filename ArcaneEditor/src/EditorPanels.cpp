@@ -1,5 +1,4 @@
 #include "EditorPanels.hpp"
-#include "AssetBrowser.hpp"
 #include "ComponentCatalog.hpp"
 #include "ConsoleBuffer.hpp"
 #include "EditorFonts.hpp"
