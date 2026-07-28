@@ -5,7 +5,7 @@
 // copies meant two chances to get durability wrong, and both had it wrong the
 // same way.
 //
-// Two rules this enforces that the hand-rolled versions did not:
+// Three rules this enforces that the hand-rolled versions did not:
 //
 // 1. A write is ATOMIC. Writing in place leaves a truncated file if the process
 //    dies mid-write, and a truncated file is indistinguishable from a corrupt
@@ -15,9 +15,32 @@
 //    turned one bad byte into "the user has no projects", and the next save
 //    then overwrote the evidence. Recovering by hand is only possible if the
 //    bytes still exist.
+// 3. Every file carries a FORMAT VERSION (the `{version, items}` envelope), so
+//    a future breaking shape change has a seam to branch on -- and a file from
+//    a NEWER Hub is recognised and left alone rather than quarantined as
+//    corrupt. serde(default) still covers additive drift without a bump.
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// The on-disk format this build writes and the newest it understands.
+///
+/// Bump it ONLY with a breaking shape change, alongside the migration that
+/// reads the old shape -- additive fields ride serde(default) and need no
+/// bump. Version 1 is the `{version, items}` envelope introduced 2026-07-28;
+/// the files before it were bare arrays/objects, which `read_or_default`
+/// still accepts and silently upgrades on the next save.
+const STATE_FORMAT_VERSION: u32 = 1;
+
+/// The envelope every state file is written inside. Store-level on purpose:
+/// the version describes the FILE format, not any one payload type, and the
+/// IPC surface never sees it -- `read_or_default` unwraps to plain `T`.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Versioned<T> {
+    version: u32,
+    items: T,
+}
 
 /// Where a corrupt file gets moved so its contents survive the recovery.
 fn quarantine_path(p: &Path) -> PathBuf {
@@ -32,6 +55,11 @@ fn quarantine_path(p: &Path) -> PathBuf {
 /// but cannot be read or parsed is moved aside to `<name>.corrupt` and reported
 /// through `warnings`, so the caller can tell the user instead of leaving them
 /// to discover an empty list on their own.
+///
+/// Three shapes are accepted, in order: the current `{version, items}`
+/// envelope; a TOO-NEW envelope (left untouched on disk -- it belongs to a
+/// newer Hub -- with a warning that this build runs on defaults); and the
+/// pre-envelope bare shape, which parses as-is and upgrades on its next save.
 pub fn read_or_default<T: Default + DeserializeOwned>(p: &Path, warnings: &mut Vec<String>) -> T {
     let text = match std::fs::read_to_string(p) {
         Ok(t) => t,
@@ -42,21 +70,42 @@ pub fn read_or_default<T: Default + DeserializeOwned>(p: &Path, warnings: &mut V
         }
     };
 
-    match serde_json::from_str::<T>(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            let kept = quarantine_path(p);
-            let note = match std::fs::rename(p, &kept) {
-                Ok(()) => format!("kept a copy at {}", kept.display()),
-                // Report the failure rather than claiming a copy exists.
-                Err(re) => format!("could not set the file aside: {re}"),
-            };
-            warnings.push(format!(
-                "{} was unreadable ({e}) and has been reset -- {note}.",
-                p.display()
-            ));
-            T::default()
+    // Version check on the raw document BEFORE typed parsing: a newer format's
+    // `items` may not parse under this build's types at all, and that must
+    // read as "newer Hub wrote this", never as corruption to quarantine.
+    if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let Some(v) = doc.get("version").and_then(serde_json::Value::as_u64) {
+            if v as u32 > STATE_FORMAT_VERSION {
+                warnings.push(format!(
+                    "{} was written by a newer Hub (format {v}, this build reads \
+                     up to {STATE_FORMAT_VERSION}). Running with defaults; the \
+                     file is untouched.",
+                    p.display()
+                ));
+                return T::default();
+            }
         }
+    }
+
+    match serde_json::from_str::<Versioned<T>>(&text) {
+        Ok(v) => v.items,
+        // Not the envelope: the pre-2026-07-28 bare shape, or garbage.
+        Err(_) => match serde_json::from_str::<T>(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                let kept = quarantine_path(p);
+                let note = match std::fs::rename(p, &kept) {
+                    Ok(()) => format!("kept a copy at {}", kept.display()),
+                    // Report the failure rather than claiming a copy exists.
+                    Err(re) => format!("could not set the file aside: {re}"),
+                };
+                warnings.push(format!(
+                    "{} was unreadable ({e}) and has been reset -- {note}.",
+                    p.display()
+                ));
+                T::default()
+            }
+        },
     }
 }
 
@@ -67,7 +116,11 @@ pub fn write_atomic<T: Serialize>(p: &Path, value: &T) -> Result<(), String> {
     let dir = p.parent().ok_or_else(|| format!("no parent directory for {}", p.display()))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
 
-    let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&Versioned {
+        version: STATE_FORMAT_VERSION,
+        items: value,
+    })
+    .map_err(|e| e.to_string())?;
 
     // PID in the temp name so two Hub instances cannot write the same scratch
     // file. Sharing it would let one process rename away the other's
@@ -155,6 +208,46 @@ mod tests {
         write_atomic(&p, &Sample { items: vec!["new".into()] }).unwrap();
         let mut w = Vec::new();
         assert_eq!(read_or_default::<Sample>(&p, &mut w).items, vec!["new".to_string()]);
+    }
+
+    #[test]
+    fn a_pre_envelope_bare_file_still_loads_and_upgrades_on_save() {
+        // Every state file written before 2026-07-28 is a bare array/object.
+        // It must load as-is (no warning -- nothing is wrong with it), and the
+        // next save wraps it in the envelope.
+        let dir = scratch("legacy");
+        let p = dir.join("s.json");
+        std::fs::write(&p, r#"{"items":["old"]}"#).unwrap();
+
+        let mut w = Vec::new();
+        let v: Sample = read_or_default(&p, &mut w);
+        assert_eq!(v.items, vec!["old".to_string()]);
+        assert!(w.is_empty(), "a legacy file is not a problem to report");
+
+        write_atomic(&p, &v).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(doc["version"], 1, "the save must upgrade to the envelope");
+        assert_eq!(doc["items"]["items"][0], "old");
+    }
+
+    #[test]
+    fn a_file_from_a_newer_hub_is_left_alone_and_reported() {
+        // A downgrade scenario: the file belongs to the newer build, so it is
+        // neither quarantined nor parsed -- defaults plus a warning, and the
+        // bytes stay exactly where the newer Hub put them.
+        let dir = scratch("toonew");
+        let p = dir.join("s.json");
+        let future = r#"{"version":99,"items":{"shape":"unknowable"}}"#;
+        std::fs::write(&p, future).unwrap();
+
+        let mut w = Vec::new();
+        let v: Sample = read_or_default(&p, &mut w);
+        assert_eq!(v, Sample::default());
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("newer Hub"), "unexpected warning: {}", w[0]);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), future, "file untouched");
+        assert!(!quarantine_path(&p).exists(), "and never quarantined");
     }
 
     #[test]
