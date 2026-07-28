@@ -47,9 +47,9 @@ absolute path and compiles it with `rc.exe`, but it does not emit a
 script and links the previously compiled `resource.lib`, silently keeping the
 old icon in a build that otherwise looks completely fresh.
 
-`cargo clean -p arcane-hub` does **not** fix this. It was tried: it removed
+`cargo clean -p arcane_hub` does **not** fix this. It was tried: it removed
 3.4 GB and the very next build still produced the old icon, because it leaves
-`bin-int/hub-cargo/release/build/arcane-hub-*/out/` in place. Check that
+`bin-int/hub-cargo/release/build/arcane_hub-*/out/` in place. Check that
 directory's `resource.lib` timestamp if an icon change seems not to take.
 
 The in-app titlebar mark is separate — that is `Hub/static/logo.png`, a copy of

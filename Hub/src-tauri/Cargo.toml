@@ -1,5 +1,7 @@
 [package]
-name = "arcane-hub"
+# Underscore, not hyphen: the crate name IS the shipped binary's name
+# (arcane_hub.exe), and the user wants the underscore form on disk.
+name = "arcane_hub"
 version = "0.1.0"
 description = "Arcane Hub -- engine and project launcher"
 authors = ["Starworks"]
