@@ -45,12 +45,13 @@ namespace Arcane::Editor
     //                         generic add stamped the SAME NIL Guid on every
     //                         selected entity and a generic remove wiped the
     //                         name AND that identity for the whole selection.
-    //                         The Outliner owns this component's lifecycle
-    //                         through create + rename (Edit::CreateEntity /
-    //                         Edit::RenameEntity); a descriptor-driven add
-    //                         cannot mint a per-entity Guid without a
-    //                         post-construct hook, which nothing else needs
-    //                         yet. Structurally this is the ECS equivalent of
+    //                         Its lifecycle is CREATION-ONLY
+    //                         (Edit::CreateEntity, and scene load); rename is
+    //                         an edit of an existing one and never mints it
+    //                         (Edit::RenameEntity refuses when it is absent).
+    //                         A descriptor-driven add cannot mint a per-entity
+    //                         Guid without a post-construct hook, which nothing
+    //                         else needs yet. Structurally this is the ECS equivalent of
     //                         Unreal's intrinsic AActor identity: ActorLabel
     //                         and ActorGuid are plain AActor FIELDS
     //                         (Actor.h:1188/:1055 in the vendored UE tree),

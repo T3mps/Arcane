@@ -119,8 +119,9 @@ TEST_CASE("IsStructureLocked covers the derived types plus EntityInfo", "[editor
     CHECK(IsStructureLocked("Arcane::PhysicsBodyRef"));
     // EntityInfo joined the list in the 2026-07-26 review fix: Edit::AddComponent
     // default-constructs, so a generic add stamped a NIL Guid on every selected
-    // entity and a generic remove wiped the durable cross-save identity. The
-    // Outliner owns this component via create + rename. Task 5 made it VISIBLE
+    // entity and a generic remove wiped the durable cross-save identity. Its
+    // lifecycle is creation-only (Edit::CreateEntity, and scene load) -- rename
+    // is an edit of an existing one, never an add. Task 5 made it VISIBLE
     // (IsHiddenInInspector is false for it) while keeping it structure-locked
     // here, so Add Component and Remove Component still refuse it.
     CHECK(IsStructureLocked("Arcane::EntityInfo"));

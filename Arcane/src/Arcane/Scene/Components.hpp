@@ -99,10 +99,13 @@ namespace Arcane
     };
 
     // The editor-facing identity (Outliner arc): a STABLE Guid + display name.
-    // Policy: the EDITOR adds this (entity create + first rename); runtime
-    // spawns are never forced to carry strings. An entity without one displays
-    // as "Entity <id>". The Guid is generated when the component is added and
-    // is the durable cross-save identity -- entity ids are not.
+    // Policy: the EDITOR adds this AT ENTITY CREATION ONLY (Edit::CreateEntity,
+    // and scene load); runtime spawns are never forced to carry strings. A
+    // rename is an EDIT of an existing one and never mints it -- an entity
+    // without one has no durable identity to rename, so Edit::RenameEntity
+    // refuses instead of adding. An entity without one displays as
+    // "Entity <id>". The Guid is generated when the component is added and is
+    // the durable cross-save identity -- entity ids are not.
     struct EntityInfo
     {
         Guid        id{};

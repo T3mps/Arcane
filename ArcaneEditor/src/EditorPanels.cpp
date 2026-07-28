@@ -1376,9 +1376,11 @@ namespace Arcane::Editor
                 //     that deactivated inside it (imgui.cpp:12477-12482) -- so the
                 //     activation frame yields the child that took ActiveId, and the
                 //     deactivation frame that same child.
-                //     Tabbing .x -> .y inside ONE group is the single frame where
+                //     One such frame is tabbing .x -> .y inside ONE group, where
                 //     those two branches disagree (the live-ActiveId one wins and
-                //     forwards .y while .x deactivates), but that frame is also an
+                //     forwards .y while .x deactivates); any ActiveId handoff
+                //     between siblings of one group does the same. But such a
+                //     frame is also an
                 //     activation: BeginGestureIfActivated has already committed .x's
                 //     gesture and parked .y here, so this compares .y against .y.
                 //     Unchanged by this guard -- it is what that path already did.
@@ -1962,7 +1964,9 @@ namespace Arcane::Editor
         // ActiveId (Escape, clear-on-selection-change) would skip that close;
         // GestureCloseGuard closes it on the way out of this panel instead, so
         // the leak is contained rather than permanent -- see the Outliner's
-        // renameTarget guard (~line 537) for the same hazard class.
+        // hasRow sweep in DrawOutlinerPanel, which drops a renameTarget that
+        // stopped being drawn, for the same hazard class. (Cited by NAME on
+        // purpose: the line number this used to carry had already rotted.)
         const std::string_view query(state.searchBuffer);
 
         // Hoisted once per frame; see the Outliner's copy. Add/Remove Component
