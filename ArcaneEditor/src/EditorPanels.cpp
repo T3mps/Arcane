@@ -1617,7 +1617,21 @@ namespace Arcane::Editor
                         // the identifier tooltip would never appear over the
                         // button. Asked here, while the button IS the last item.
                         hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
-                        if (ImGui::BeginDragDropTarget())
+                        // `!readOnly` GUARDS THE DROP, and the BeginDisabled wrap
+                        // above does NOT: drag-drop acceptance never consults
+                        // ImGuiItemFlags_Disabled. BeginDragDropTarget tests only
+                        // DragDropActive, the item's ImGuiItemStatusFlags_HoveredRect,
+                        // and the hovered window (imgui.cpp:15823-15834), and ItemAdd
+                        // stamps HoveredRect from a plain IsMouseHoveringRect
+                        // regardless of the disabled flag (imgui.cpp:12070-12071);
+                        // AcceptDragDropPayload checks the payload type and the target
+                        // rect, nothing about being disabled (imgui.cpp:15860-15905).
+                        // So a drag from the Asset Browser onto the disabled
+                        // EntityInfo::id row landed here and fanned that asset's Guid
+                        // into the durable identity of every selected entity --
+                        // AssetKindFilterForFieldName("id") returns -1, which accepts
+                        // ANY kind. Read-only means read-only on every path in.
+                        if (!readOnly && ImGui::BeginDragDropTarget())
                         {
                             if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(Arcane::Editor::kAssetDragType))
                             {
