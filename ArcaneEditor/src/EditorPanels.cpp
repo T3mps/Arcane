@@ -1017,8 +1017,8 @@ namespace Arcane::Editor
                             const Arcane::Project* project, InspectorState& state,
                             const InspectorServices* services)
     {
-        // FIRST local, so it destructs LAST -- see GestureCloseGuard.
-        const GestureCloseGuard gestureGuard{ undo, state };
+        // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
+        const EditGesture::ScopeGuard gestureGuard{ &undo, state.gesture };
 
         ImGui::Begin("Inspector");
         if (!sel.HasSelection())
@@ -1069,10 +1069,10 @@ namespace Arcane::Editor
         // frame) or a click on the clear button above (takes it fresh, same
         // as clicking into the box). Either way, whatever field widget was
         // previously active deactivates THIS frame, so EndGesture() closes
-        // state.gestureTxn before the next frame can redraw under the new
-        // query and make that field vanish. A clear path that does NOT move
-        // ActiveId (Escape, clear-on-selection-change) would skip that close;
-        // GestureCloseGuard closes it on the way out of this panel instead, so
+        // state.gesture's open transaction before the next frame can redraw
+        // under the new query and make that field vanish. A clear path that does
+        // NOT move ActiveId (Escape, clear-on-selection-change) would skip that
+        // close; the ScopeGuard closes it on the way out of this panel instead, so
         // the leak is contained rather than permanent -- see the Outliner's
         // hasRow sweep in DrawOutlinerPanel, which drops a renameTarget that
         // stopped being drawn, for the same hazard class. (Cited by NAME on
@@ -1369,7 +1369,7 @@ namespace Arcane::Editor
                     // only ever emits rows. A FieldGrid that converts to false
                     // is ImGui culling the table, and then no row may be
                     // submitted -- the same "field stopped being drawn" shape
-                    // as a collapsed header, which GestureCloseGuard already
+                    // as a collapsed header, which the ScopeGuard above already
                     // covers. The block scopes the grid closed before the
                     // category headers below, which must draw full-width.
                     {

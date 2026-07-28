@@ -1,8 +1,10 @@
 #pragma once
 
 // InspectorView: the reflected half of the Inspector -- the Astra field
-// visitor that turns ONE component's reflected fields into rows, and the
-// close machinery for a field-edit gesture whose widget stopped being drawn.
+// visitor that turns ONE component's reflected fields into rows. The gesture
+// bracket those rows use, and the close machinery for a gesture whose widget
+// stopped being drawn, are EditGesture's (EditGesture.hpp); the visitor keeps
+// only the two thin wrappers its arms call.
 //
 // The panel (EditorPanels.cpp, DrawInspectorPanel) keeps the shell around it:
 // the component loop, the component/category headers, the category
@@ -58,56 +60,4 @@ namespace Arcane::Editor
     // everything": it is compared against each field's own category, and
     // CategoryOfField returns empty for an unannotated field.
     void DrawReflectedComponent(const ReflectedComponentArgs& args);
-
-    // Close a field-edit gesture whose widget stopped being drawn.
-    //
-    // BeginGestureIfActivated opens the transaction and EndGesture closes it,
-    // but EndGesture reads item state -- so it can only run while that widget
-    // is still being SUBMITTED. Anything that stops it being submitted while
-    // it owns the gesture strands the transaction open: its component header
-    // (or a category sub-header) collapsing, the search query hiding the
-    // field, the selection turning multi (which swaps the drag for text
-    // boxes), the Inspector window collapsing or its tab going to the
-    // background. That is not cosmetic -- CanEditStructure is
-    // `!undo.InTransaction()`, so Add/Remove Component stay dead until some
-    // LATER gesture force-closes the orphan and silently absorbs its stale
-    // snapshots into an unrelated undo step.
-    //
-    // The collapse case is reachable, not theoretical: a ctrl+click text
-    // entry on a DragFloat leaves g.ActiveIdAllowOverlap = !io.MouseDown[0]
-    // (imgui_widgets.cpp:5004) and nothing resets it, so with the mouse up
-    // the header above is still hoverable -- that flag is exactly what the
-    // hover gate tests (imgui.cpp:5091) -- and a click over its arrow presses
-    // on MouseDown (imgui_widgets.cpp:7012) and flips is_open in the SAME
-    // frame (:7045/:7075), before the field would have been drawn. A
-    // mouse-HELD drag is NOT reachable this way: it never sets
-    // ActiveIdAllowOverlap, so the same gate rejects every other item.
-    //
-    // COMMIT, not Cancel, for both kinds of orphan:
-    //   - mid-drag: the edits are already applied and the user watched them
-    //     happen. Cancel drops the transaction WITHOUT reverting
-    //     (CommandStack.cpp:75-82), which would leave them applied and
-    //     permanently un-undoable -- the same hazard ApplyRegistryMutation
-    //     refuses a structural memento over.
-    //   - ctrl+click text entry: nothing was applied at all (a temp input
-    //     writes only on submit). Commit re-snapshots, drops every component
-    //     whose bytes match, and returns before pushing a step or clearing
-    //     redo when none differ (CommandStack.cpp:61-62) -- so here Commit
-    //     lands exactly where Cancel would.
-    void CloseAbandonedGesture(Arcane::CommandStack& undo, InspectorState& state);
-
-    // Runs CloseAbandonedGesture on EVERY exit from DrawInspectorPanel. RAII
-    // rather than a call before each ImGui::End(): the defect being fixed IS
-    // a missed close path, and the panel already has an early return (no
-    // selection) that is one of them. Declared as the panel's FIRST local so
-    // it destructs LAST -- after ImGui::End(), on both paths, and on frames
-    // where ImGui::Begin returned false (collapsed or background tab), where
-    // every widget inside bails before ItemAdd on window->SkipItems (e.g.
-    // imgui_widgets.cpp:2722) and so cannot report its own deactivation.
-    struct GestureCloseGuard
-    {
-        Arcane::CommandStack& undo;
-        InspectorState&       state;
-        ~GestureCloseGuard() { CloseAbandonedGesture(undo, state); }
-    };
 }

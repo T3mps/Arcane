@@ -1,6 +1,7 @@
 #include "InspectorView.hpp"
 
 #include "AssetBrowser.hpp"
+#include "EditGesture.hpp"
 #include "EditorWidgets.hpp"
 #include "InspectorFields.hpp"
 #include "InspectorMeta.hpp"
@@ -15,9 +16,9 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiItemFlags_MixedValue (:984 -- the tri-state
                               // checkbox's flag; PushItemFlag itself is public,
-                              // imgui.h:546) and GetActiveID (:3532 -- who owns
-                              // ActiveId, which the abandoned-gesture check asks
-                              // and imgui.h does not expose)
+                              // imgui.h:546). The abandoned-gesture check that
+                              // also needed GetActiveID from here moved to
+                              // EditGesture (ScopeGuard), which pairs its own.
 
 #include <algorithm>
 #include <cstdint>
@@ -106,7 +107,7 @@ namespace Arcane::Editor
             // unconditional ForEachTarget even with stack == nullptr (it only
             // skips opening the ScopedTransaction and taking the per-target
             // Snapshot -- both live inside the same `if (stack)` block,
-            // InspectorView.cpp:397-402). A Play-mode texture drop
+            // InspectorView.cpp:340-345). A Play-mode texture drop
             // therefore mints the file and writes the Guid with NO undo step
             // -- exactly the no-undo-in-Play behavior every other AssetRef
             // drop already has; this branch adds a minted file as a
@@ -128,24 +129,16 @@ namespace Arcane::Editor
             // CategoryOfField returns empty for an unannotated field, so the two
             // compare equal and only those fields draw.
             std::string_view                  activeCategory{};
-            // The in-flight gesture's CommandStack ownership token, owned by the
-            // panel's persistent InspectorState -- the visitor is rebuilt every
-            // frame but the gesture it brackets is not. Never null when `stack` is
-            // non-null.
-            Arcane::TransactionId*            gestureTxn = nullptr;
-            // ImGui id of the widget that opened that gesture, parked in the same
-            // persistent state for the same reason -- it is what CloseAbandonedGesture
-            // below compares ActiveId against. Never null when `stack` is non-null.
-            ImGuiID*                          gestureItem = nullptr;
-            // The string row's activation-time cancel reference and the id of
-            // the row that latched it, both parked in the same persistent
-            // InspectorState for the same reason -- see the String arm below
-            // and InspectorState in EditorPanels.hpp. Wired unconditionally by
-            // DrawReflectedComponent (they describe ImGui cancel semantics, not
-            // undo, so they matter while Play runs too); the arm still falls
-            // back to a per-frame seed if either is null.
-            std::string*                      stringSeed = nullptr;
-            ImGuiID*                          stringSeedItem = nullptr;
+            // The in-flight gesture's cross-frame state -- the ownership slots
+            // (transaction token + owning item id) and the string row's
+            // activation-time cancel seed -- owned by the panel's persistent
+            // InspectorState. The visitor is rebuilt every frame; the gesture it
+            // brackets is not. NEVER NULL: DrawReflectedComponent wires it
+            // unconditionally, and unlike `stack` it is not gated on edit mode --
+            // the string seed carries ImGui's Escape-cancel semantics, not the
+            // undo stack's, so it matters while Play runs too. The bracket itself
+            // still no-ops during Play, on `stack` being null.
+            EditGesture::GestureState*        gesture = nullptr;
 
             // Fan-out targets. `selection` includes the primary; entities lacking
             // this component are skipped (the panel only shows components the whole
@@ -177,40 +170,27 @@ namespace Arcane::Editor
                         fn(e, data);
             }
 
+            // Open this row's gesture if its widget activated this frame. A thin
+            // adapter over EditGesture, which owns the stale-close, the owner
+            // parking, and the Play-mode no-op; the NAME stays because every arm
+            // of Visit below calls it right after submitting its widget.
             void BeginGestureIfActivated(const std::string& field, void* primaryInstance)
             {
-                if (stack && ImGui::IsItemActivated())
-                {
-                    // Clicking field B while field A is mid-gesture moves ActiveId in
-                    // ONE frame, and if B is drawn ABOVE A then B activates before A's
-                    // EndGesture runs. Without this, B's Begin would see A's
-                    // transaction still open, return None (CommandStack.cpp:16-17),
-                    // and A's later Commit(None) would no-op -- leaving A's
-                    // transaction open forever holding stale `before` bytes. Close
-                    // A's here so its edit lands, then open ours. A's own EndGesture
-                    // still runs later this frame, but the slot below now names B as
-                    // the owner, so EndGesture's ownership guard makes it return --
-                    // it does NOT hand B's LIVE token to Commit/Cancel.
-                    if (*gestureTxn != Arcane::TransactionId::None)
-                        stack->Commit(*gestureTxn);
-                    // Park the token for the deactivation frame (EndGesture). None
-                    // means a gizmo drag already owns the stack -- this gesture then
-                    // JOINS it: the snapshots below still land, and the drag's own
-                    // Commit records them, so the edit is never lost.
-                    *gestureTxn = stack->Begin("Edit " + typeName + "." + field);
-                    // Remember WHICH widget owns the gesture, so the panel can tell a
-                    // live one from an abandoned one. IsItemActivated() above is true
-                    // exactly when g.ActiveId == g.LastItemData.ID (imgui.cpp:6549),
-                    // so this is ActiveId -- including through a ctrl+click text entry
-                    // (TempInputText re-derives the id from the same window+label) and
-                    // through AxisDragFloatN, where EndGroup forwards the live component
-                    // id into LastItemData (imgui.cpp:12480).
-                    *gestureItem = ImGui::GetItemID();
-                    // One Begin + N snapshots + one Commit = one undo step for the
-                    // whole fan-out (CommandStack dedupes per (entity, descriptor)).
-                    ForEachTarget(primaryInstance,
-                                  [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
-                }
+                EditGesture::BeginOnActivate(stack, *gesture,
+                    [&] { return "Edit " + typeName + "." + field; },
+                    [&]
+                    {
+                        // Snapshot-style: one Begin + N snapshots + one Commit = one
+                        // undo step for the whole fan-out (CommandStack dedupes per
+                        // (entity, descriptor)). Runs AFTER Begin, inside the
+                        // transaction, so a gesture that JOINED a live gizmo drag
+                        // still lands its snapshots in that drag's transaction.
+                        // Nothing to build for later, so the pending-commit slot
+                        // stays empty -- the before-state rides the transaction.
+                        ForEachTarget(primaryInstance,
+                                      [&](Astra::Entity e, void*) { stack->SnapshotComponent(e, descriptor); });
+                        return std::function<void()>{};
+                    });
             }
 
             // UE parity: a multi-selection gets NO drag widget and ignores every
@@ -339,52 +319,15 @@ namespace Arcane::Editor
                 return committed;
             }
 
+            // Close this row's gesture if THIS row is the one that opened it and
+            // its widget deactivated. Safe to call for every row every frame --
+            // the ownership guard and the Commit-vs-Cancel verdict are
+            // EditGesture's (EvaluateEnd), including the "AxisDragFloatN /
+            // MultiScalarRow are ImGui GROUPS" reasoning its comment spells out.
+            // Name kept for the same reason BeginGestureIfActivated's is.
             void EndGesture()
             {
-                if (!stack) return;
-                // ONLY THE WIDGET THAT OPENED THE GESTURE MAY CLOSE IT. This runs for
-                // every row, and a row that never opened a gesture still reports its
-                // own deactivation: click into a string box, then press on a drag
-                // drawn ABOVE it, and in ONE frame the drag activates (parking its
-                // LIVE token in *gestureTxn) while the string box, submitted after
-                // it, reports IsItemDeactivated -- imgui.cpp:6559 answers from
-                // DeactivatedItemData.ID, which is the string box's own id. Without
-                // this guard that click-without-typing would Cancel the drag's
-                // transaction, and Cancel discards WITHOUT reverting
-                // (CommandStack.cpp:75-82), so the whole drag stays applied and
-                // permanently un-undoable.
-                //
-                // GetItemID() is g.LastItemData.ID (imgui.cpp:6676-6680), the same
-                // value BeginGestureIfActivated recorded at activation, for every
-                // shape this panel draws:
-                //   - bare DragFloat/DragInt/Checkbox: ItemAdd stamps it on both
-                //     frames (imgui.cpp:11979).
-                //   - ctrl+click temp input: the id comes from the same window+label
-                //     (imgui_widgets.cpp:2727, :4728) and the temp input skips
-                //     ItemAdd (:4791-4792), so the drag's own id stands.
-                //   - AxisDragFloatN and MultiScalarRow (groups): EndGroup re-points
-                //     LastItemData.ID at the group's live ActiveId, ELSE at the child
-                //     that deactivated inside it (imgui.cpp:12477-12482) -- so the
-                //     activation frame yields the child that took ActiveId, and the
-                //     deactivation frame that same child.
-                //     One such frame is tabbing .x -> .y inside ONE group, where
-                //     those two branches disagree (the live-ActiveId one wins and
-                //     forwards .y while .x deactivates); any ActiveId handoff
-                //     between siblings of one group does the same. But such a
-                //     frame is also an
-                //     activation: BeginGestureIfActivated has already committed .x's
-                //     gesture and parked .y here, so this compares .y against .y.
-                //     Unchanged by this guard -- it is what that path already did.
-                if (ImGui::GetItemID() != *gestureItem)
-                    return;
-                // Both no-op on TransactionId::None, so a field that never opened a
-                // gesture -- and a gesture that JOINED a gizmo drag -- leaves the
-                // stack strictly alone here.
-                if (ImGui::IsItemDeactivatedAfterEdit()) stack->Commit(*gestureTxn);
-                else if (ImGui::IsItemDeactivated())     stack->Cancel(*gestureTxn);
-                else return;
-                *gestureTxn  = Arcane::TransactionId::None;   // spent
-                *gestureItem = 0;                             // ...and unowned
+                EditGesture::EndOnDeactivate(stack, *gesture);
             }
 
             // Single-shot edit (asset drop / popup pick / clear): no widget gesture
@@ -798,19 +741,18 @@ namespace Arcane::Editor
                         // blank the user saw at activation -- which is right:
                         // Escape restores that same blank, so an untouched mixed
                         // row still commits nothing.
-                        if (ImGui::IsItemActivated() && stringSeed && stringSeedItem)
+                        if (ImGui::IsItemActivated())
                         {
-                            *stringSeed     = shown;
-                            *stringSeedItem = ImGui::GetItemID();
+                            gesture->stringSeed     = shown;
+                            gesture->stringSeedItem = ImGui::GetItemID();
                         }
                         // The latch is ONE slot shared by every string row, so
                         // use it only when it names THIS row -- click into row A,
                         // then click row B drawn above it and B re-latches in the
                         // same frame A reports its deactivation. Same ownership
                         // guard as EndGesture's.
-                        const bool latched = stringSeed && stringSeedItem
-                                          && *stringSeedItem == ImGui::GetItemID();
-                        const std::string& seed = latched ? *stringSeed : shown;
+                        const bool latched = gesture->stringSeedItem == ImGui::GetItemID();
+                        const std::string& seed = latched ? gesture->stringSeed : shown;
                         // Commit on deactivation, guarded by that equality test --
                         // and the guard IS the cancel path, not a nicety. Escape
                         // also sets value_changed (imgui_widgets.cpp:5300-5309), so
@@ -899,24 +841,6 @@ namespace Arcane::Editor
         };
     }
 
-    void CloseAbandonedGesture(Arcane::CommandStack& undo, InspectorState& state)
-    {
-        // None also covers the gesture that JOINED a gizmo drag: that drag
-        // owns the transaction and closes it on mouse-up.
-        if (state.gestureTxn == Arcane::TransactionId::None)
-            return;
-        // Healthy for exactly as long as the owning widget still holds
-        // ActiveId. ImGui hands ActiveId over within ONE frame on a
-        // click-through between two fields or into the search box, but the
-        // field losing it is still submitted that frame, so its own
-        // EndGesture has already run and cleared the token above.
-        if (ImGui::GetActiveID() == state.gestureItem)
-            return;
-        undo.Commit(state.gestureTxn);
-        state.gestureTxn  = Arcane::TransactionId::None;
-        state.gestureItem = 0;
-    }
-
     void DrawReflectedComponent(const ReflectedComponentArgs& args)
     {
         ImGuiFieldVisitor visitor;
@@ -929,13 +853,11 @@ namespace Arcane::Editor
         visitor.typeName   = args.component.meta->typeName;
         visitor.project    = args.project;
         visitor.services   = args.services;
-        visitor.gestureTxn  = &args.state.gestureTxn;
-        visitor.gestureItem = &args.state.gestureItem;
-        // Wired even while Play runs (unlike `stack`): these carry
-        // the string row's Escape-cancel semantics, which are
-        // ImGui's, not the undo stack's.
-        visitor.stringSeed     = &args.state.stringEditSeed;
-        visitor.stringSeedItem = &args.state.stringEditItem;
+        // Wired UNCONDITIONALLY -- also while Play runs, unlike `stack`: the
+        // slots must outlive the per-frame visitor, and the string seed carries
+        // the Escape-cancel semantics, which are ImGui's and not the undo
+        // stack's.
+        visitor.gesture    = &args.state.gesture;
         visitor.registry   = &args.registry;
         visitor.selection  = args.selection;
         visitor.componentDisplayName = args.componentDisplayName;
