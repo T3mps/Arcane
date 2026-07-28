@@ -55,6 +55,12 @@ export type Settings = {
 
 export const loadState = () => invoke<HubState>("load_state");
 export const registerEngine = (path: string) => invoke<EngineEntry>("register_engine", { path });
+/**
+ * Re-probe every registered engine and return state with refreshed abi/build.
+ * Once per launch, after the first paint: registration caches the probe, and a
+ * dev-loop engine rebuilt in place makes that cache lie about compatibility.
+ */
+export const refreshEngines = () => invoke<HubState>("refresh_engines");
 export const forgetEngine = (path: string) => invoke<void>("forget_engine", { path });
 /**
  * Delete the project's folder to the RECYCLE BIN, then drop it from the list.

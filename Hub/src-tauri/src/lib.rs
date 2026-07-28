@@ -52,6 +52,41 @@ fn register_engine(path: String) -> Result<state::EngineEntry, String> {
     Ok(entry)
 }
 
+// Re-probe every registered engine and refresh its cached identity (abi/build).
+//
+// Registration caches the probe's answer, and in the dev loop the SAME exe
+// path is rebuilt in place daily -- so a cached abi goes stale the moment the
+// engine bumps, and the compatibility display then inverts: a project stamped
+// by the CURRENT engine reads as incompatible against last week's number
+// (caught live in the 2026-07-28 review: entry said abi 7, the exe answered 8).
+// Called once per launch from the frontend, AFTER the first paint -- each probe
+// is milliseconds, but it is still a process spawn per engine and does not
+// belong on every refresh().
+//
+// An engine that fails its probe keeps its cached data: failure proves nothing
+// new (the exe may be mid-rebuild), and open_project still reports the truth
+// at launch time.
+#[tauri::command]
+fn refresh_engines() -> state::HubState {
+    let mut s = state::load();
+    let mut changed = false;
+    for e in s.engines.iter_mut() {
+        if let Ok(info) = spawn::probe_engine(Path::new(&e.path)) {
+            if e.engine_abi != info.engine_abi || e.build != info.build {
+                e.engine_abi = info.engine_abi;
+                e.build = info.build;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        if let Err(err) = state::save(&s) {
+            s.warnings.push(format!("Could not save refreshed engine info: {err}"));
+        }
+    }
+    s
+}
+
 // Resolves a folder to the exe the same way register_engine does, so the two
 // are symmetric: without it, forget_engine("C:/eng") matched nothing and
 // reported success. Absence stays a silent no-op on purpose -- removing an
@@ -478,6 +513,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_state,
             register_engine,
+            refresh_engines,
             forget_engine,
             delete_project,
             forget_project,

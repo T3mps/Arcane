@@ -16,8 +16,8 @@
   import ProjectArgsModal from "$lib/components/ProjectArgsModal.svelte";
   import { resolveEngine } from "$lib/format";
   import {
-    loadState, registerEngine, forgetEngine, deleteProject, forgetProject,
-    clearRecents,
+    loadState, refreshEngines, registerEngine, forgetEngine, deleteProject,
+    forgetProject, clearRecents,
     openProject, createProject, suggestEngine, setProjectEngine,
     setProjectArgs, revealProject, renameProject, relocateProject,
     loadSettings, saveSettings, defaultDialogDir,
@@ -64,19 +64,28 @@
   // hub.warnings directly made the notice vanish on the user's next click.
   let notices = $state<string[]>([]);
 
-  async function refresh() {
-    hub = await loadState();
+  // One adoption path for every HubState that arrives, whatever produced it.
+  function adoptState(next: HubState) {
+    hub = next;
     // `?? []` because this is an IPC boundary: the TS type is a promise about
     // what Rust sends, not something the compiler checks. It was briefly wrong
     // (a serde skip_serializing dropped the field), and a bare `for...of` over
     // undefined threw inside refresh -- taking the whole reload down with it,
     // including the engine selection, on every action that calls guard().
-    for (const w of hub.warnings ?? []) {
+    for (const w of next.warnings ?? []) {
       if (!notices.includes(w)) notices.push(w);
     }
-    if (!selectedEngine || !hub.engines.some((e) => e.id === selectedEngine!.id)) {
-      selectedEngine = hub.engines[0] ?? null;
-    }
+    // Re-resolve the selection FROM the new list rather than keeping the old
+    // object when its id still exists: entries are fresh copies, and a
+    // re-probe or re-register may have changed abi/build -- holding the stale
+    // copy would keep last week's facts alive in the sidebar and every
+    // compatibility row derived from it.
+    selectedEngine = hub.engines.find((e) => e.id === selectedEngine?.id)
+      ?? hub.engines[0] ?? null;
+  }
+
+  async function refresh() {
+    adoptState(await loadState());
     // Adjacency is a suggestion for the dev loop, never an assumption.
     suggestion = hub.engines.length === 0 ? await suggestEngine() : null;
   }
@@ -89,6 +98,12 @@
     // Land on Engines when there is nothing to launch with -- the one thing the
     // user must do first. Replaces the old force-showing engines section.
     if (hub.engines.length === 0) view = "engines";
+    // AFTER the first paint, not before it: each probe is a process spawn, and
+    // the cached data is right far more often than not -- but a dev-loop
+    // engine rebuilt in place goes stale silently, and the compat display then
+    // inverts (a project stamped by the CURRENT engine reads incompatible
+    // against last week's cached abi). Re-probe and adopt whatever changed.
+    adoptState(await refreshEngines());
   });
 
   async function guard(fn: () => Promise<unknown>) {
