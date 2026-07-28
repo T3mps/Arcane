@@ -1514,7 +1514,7 @@ namespace Arcane::Editor
             // unconditional ForEachTarget even with stack == nullptr (it only
             // skips opening the ScopedTransaction and taking the per-target
             // Snapshot -- both live inside the same `if (stack)` block,
-            // EditorPanels.cpp:1797-1802). A Play-mode texture drop
+            // EditorPanels.cpp:1799-1804). A Play-mode texture drop
             // therefore mints the file and writes the Guid with NO undo step
             // -- exactly the no-undo-in-Play behavior every other AssetRef
             // drop already has; this branch adds a minted file as a
