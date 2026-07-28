@@ -767,8 +767,131 @@ TEST_CASE("a rename is one ComponentEditCommand undo step", "[edit]")
         stack.SnapshotComponent(e, desc);
         CHECK_FALSE(Arcane::Edit::RenameEntity(*reg, e, longName));   // unchanged
         stack.Commit(id);
-        // Commit re-snapshots and drops unchanged components
-        // (CommandStack.cpp:47-50), then pushes nothing (:61-62).
+        // Commit re-snapshots and drops unchanged components -- the drop's own
+        // `continue` is line 51 (CommandStack.cpp:47-51) -- then pushes nothing
+        // (:61-62).
         CHECK_FALSE(stack.CanUndo());
+    }
+}
+
+// ---- Edit::RenameWithUndo ----------------------------------------------------
+// The engine-side rename bracket the Outliner's commit site drives. Its whole
+// reason to exist is the Deferred arm: joining an open transaction would let
+// that transaction's Cancel discard the rename's undo coverage WITHOUT
+// reverting the rename (CommandStack.cpp:75-82). These live here rather than in
+// EntityOpsTest.cpp because they need a CommandStack, an EntityInfo descriptor,
+// and undo/redo assertions -- exactly this file's fixtures (MakeReg +
+// DescriptorFor), none of which EntityOpsTest's raw-mutator World has.
+
+TEST_CASE("RenameWithUndo: Renamed pushes exactly one undoable Rename step", "[edit]")
+{
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::EntityInfo>(e, Arcane::EntityInfo{ Arcane::Guid::Generate(), "Before" });
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    CHECK(Arcane::Edit::RenameWithUndo(stack, *reg, e, "After")
+          == Arcane::Edit::RenameResult::Renamed);
+    CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "After");
+
+    REQUIRE(stack.CanUndo());
+    CHECK(std::string(stack.UndoLabel()) == "Rename");
+    // The scope closed its own transaction: nothing is left open, so the next
+    // rename is not deferred.
+    CHECK_FALSE(stack.InTransaction());
+
+    stack.Undo();
+    CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "Before");
+    CHECK_FALSE(stack.CanUndo());   // EXACTLY one entry, not two
+
+    stack.Redo();
+    CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "After");
+}
+
+TEST_CASE("RenameWithUndo: an unchanged name is NoChange with no history entry", "[edit]")
+{
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::EntityInfo>(e, Arcane::EntityInfo{ Arcane::Guid::Generate(), "Same" });
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    CHECK(Arcane::Edit::RenameWithUndo(stack, *reg, e, "Same")
+          == Arcane::Edit::RenameResult::NoChange);
+    CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "Same");
+    CHECK_FALSE(stack.CanUndo());        // the empty commit dropped
+    CHECK_FALSE(stack.InTransaction());  // ...and still closed the transaction
+}
+
+TEST_CASE("RenameWithUndo: defers while a transaction is open, mutating nothing", "[edit]")
+{
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::EntityInfo>(e, Arcane::EntityInfo{ Arcane::Guid::Generate(), "Before" });
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::EntityInfo");
+    REQUIRE(desc != nullptr);
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    // Somebody else's gesture owns the stack (an Inspector field activation, a
+    // gizmo press) -- exactly the state the Outliner's commit can land in.
+    const Arcane::TransactionId owner = stack.Begin("Someone else's gesture");
+    REQUIRE(owner != Arcane::TransactionId::None);
+
+    CHECK(Arcane::Edit::RenameWithUndo(stack, *reg, e, "After")
+          == Arcane::Edit::RenameResult::Deferred);
+    // THE POINT: refused, not half-applied. The name is untouched, so the
+    // caller's retry next frame loses nothing.
+    CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "Before");
+    CHECK(stack.InTransaction());   // the owner's transaction is undisturbed
+
+    SECTION("the owner cancelling cannot strand an applied rename")
+    {
+        stack.Cancel(owner);
+        CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "Before");
+        CHECK_FALSE(stack.CanUndo());
+        // The retry now succeeds on its own transaction.
+        CHECK(Arcane::Edit::RenameWithUndo(stack, *reg, e, "After")
+              == Arcane::Edit::RenameResult::Renamed);
+        REQUIRE(stack.CanUndo());
+        CHECK(std::string(stack.UndoLabel()) == "Rename");
+        stack.Undo();
+        CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "Before");
+    }
+
+    SECTION("the owner committing also frees the stack for the retry")
+    {
+        stack.Commit(owner);   // no snapshots taken -> no history entry
+        CHECK_FALSE(stack.CanUndo());
+        CHECK(Arcane::Edit::RenameWithUndo(stack, *reg, e, "After")
+              == Arcane::Edit::RenameResult::Renamed);
+        CHECK(reg->GetComponent<Arcane::EntityInfo>(e)->name == "After");
+    }
+}
+
+TEST_CASE("RenameWithUndo: Invalid for a dead entity and for a missing EntityInfo", "[edit]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+
+    SECTION("dead entity")
+    {
+        const Astra::Entity e = reg->CreateEntity();
+        reg->AddComponent<Arcane::EntityInfo>(e, Arcane::EntityInfo{ Arcane::Guid::Generate(), "Doomed" });
+        reg->DestroyEntity(e);
+        CHECK(Arcane::Edit::RenameWithUndo(stack, *reg, e, "After")
+              == Arcane::Edit::RenameResult::Invalid);
+        CHECK_FALSE(stack.CanUndo());
+        CHECK_FALSE(stack.InTransaction());   // no transaction was ever opened
+    }
+
+    SECTION("live entity with no EntityInfo -- a runtime spawn with no durable identity")
+    {
+        const Astra::Entity e = reg->CreateEntity();
+        reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+        CHECK(Arcane::Edit::RenameWithUndo(stack, *reg, e, "After")
+              == Arcane::Edit::RenameResult::Invalid);
+        // Never mints identity: the entity still has none afterwards.
+        CHECK(reg->GetComponent<Arcane::EntityInfo>(e) == nullptr);
+        CHECK_FALSE(stack.CanUndo());
+        CHECK_FALSE(stack.InTransaction());
     }
 }

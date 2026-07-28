@@ -20,6 +20,8 @@
 
 namespace Astra { class Registry; struct ComponentDescriptor; }
 
+namespace Arcane { class CommandStack; }
+
 namespace Arcane::Edit
 {
     // First of "Entity", "Entity_2", "Entity_3", ... not already used by an
@@ -81,11 +83,40 @@ namespace Arcane::Edit
     // component: identity is minted at creation only.
     //
     // Names are deliberately NOT unique. Uniqueness is a creation-time policy
-    // (AutoEntityName); duplicates are legal on rename -- UE's split exactly
-    // (SetActorLabelUnique on spawn/paste/duplicate, EditorEngine.cpp:6154;
-    // plain SetActorLabel on rename, EditorEngine.cpp:6193-6205).
+    // (AutoEntityName); duplicates are legal on rename -- UE's split exactly.
+    // Spawn/paste/duplicate go through SetActorLabelUnique
+    // (EditorEngine.cpp:6154), while the outliner's rename commit calls
+    // FActorLabelUtilities::RenameExistingActor with TWO arguments
+    // (ActorTreeItem.cpp:269) and its third parameter `bMakeUnique` defaults to
+    // FALSE (EditorEngine.h:3365) -- so an interactive rename in UE takes the
+    // exact label typed, duplicates included.
     ARCANE_API bool RenameEntity(Astra::Registry& reg, Astra::Entity e,
                                  std::string name);
+
+    // What RenameWithUndo did. Only `Renamed` produced a history entry.
+    enum class RenameResult
+    {
+        Renamed,    // name changed; exactly one "Rename" transaction pushed
+        NoChange,   // name already equal -- nothing mutated, nothing pushed
+        Invalid,    // dead entity, no EntityInfo, or no findable descriptor
+        Deferred,   // a transaction was already open; NOTHING was mutated
+    };
+
+    // Rename bracketed in its OWN undo transaction. Refuses (returns Deferred)
+    // while another transaction is open rather than joining it: a joined rename
+    // rides the owner's Commit/Cancel, and Cancel discards pending snapshots
+    // WITHOUT reverting (CommandStack.cpp:75-82) -- the rename would apply but
+    // be permanently un-undoable. The caller re-tries next frame.
+    //
+    // Deferred is checked FIRST and mutates nothing, so a caller that parks the
+    // request and retries loses no edit. The descriptor for EntityInfo is found
+    // here (Registry exposes no descriptor-by-hash accessor, so this walks
+    // InspectEntity and matches on ci.descriptor->hash, which IS
+    // Astra::TypeID<EntityInfo>::Hash() by construction) -- keeping that lookup
+    // engine-side is what lets every host share one implementation instead of
+    // re-deriving the undo shape per panel.
+    ARCANE_API RenameResult RenameWithUndo(CommandStack& stack, Astra::Registry& reg,
+                                           Astra::Entity e, const std::string& name);
 
     // Default-construct `desc`'s component on every entity in `set` that
     // lacks it / remove it from every entity that carries it. Return =

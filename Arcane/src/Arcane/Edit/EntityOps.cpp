@@ -1,8 +1,10 @@
 #include <Arcane/Edit/EntityOps.hpp>
 
+#include <Arcane/Edit/CommandStack.hpp>   // RenameWithUndo brackets its own transaction
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
+#include <Astra/Core/TypeID.hpp>
 #include <Astra/Registry/Registry.hpp>
 
 #include <new>
@@ -28,6 +30,26 @@ namespace Arcane::Edit
             out.push_back(root);
             for (Astra::Entity c : reg.GetChildren(root))
                 CollectSubtree(reg, c, out);
+        }
+
+        // The EntityInfo ComponentDescriptor on `e`, for
+        // CommandStack::SnapshotComponent. Registry exposes no
+        // descriptor-by-hash accessor, so this walks InspectEntity the way the
+        // editor's Inspector loop already does. Matched on the descriptor hash
+        // rather than TypeMeta::typeName because that hash IS
+        // Astra::TypeID<T>::Hash() by construction, and that hash is a
+        // constexpr XXHash64 of the type name (Astra/Core/TypeID.hpp:199-203,
+        // :243-246) -- identical in every module, so no string literal has to
+        // stay in sync with the type and no cross-DLL id mapping is involved.
+        // Null for a dead entity or one that no longer carries EntityInfo.
+        const Astra::ComponentDescriptor* FindEntityInfoDescriptor(Astra::Registry& reg,
+                                                                   Astra::Entity e)
+        {
+            for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
+                if (ci.descriptor
+                    && ci.descriptor->hash == Astra::TypeID<EntityInfo>::Hash())
+                    return ci.descriptor;
+            return nullptr;
         }
     }
 
@@ -188,6 +210,38 @@ namespace Arcane::Edit
             return false;   // no-op rename: no change, no undo step
         info->name = std::move(name);
         return true;
+    }
+
+    RenameResult RenameWithUndo(CommandStack& stack, Astra::Registry& reg,
+                                Astra::Entity e, const std::string& name)
+    {
+        // FIRST, and before anything is touched: a rename that JOINED the open
+        // transaction would ride its Commit/Cancel, and Cancel discards pending
+        // snapshots without reverting (CommandStack.cpp:75-82) -- an applied,
+        // permanently un-undoable rename. Refusing costs the caller one retry.
+        if (stack.InTransaction())
+            return RenameResult::Deferred;
+
+        // These three are what separate "nothing to do" from "cannot be done":
+        // RenameEntity itself returns a bare false for all of them plus the
+        // unchanged-name case, which a caller cannot act on.
+        if (!reg.IsValid(e))
+            return RenameResult::Invalid;
+        if (!reg.GetComponent<EntityInfo>(e))
+            return RenameResult::Invalid;
+        const Astra::ComponentDescriptor* desc = FindEntityInfoDescriptor(reg, e);
+        if (!desc)
+            return RenameResult::Invalid;   // nothing to snapshot -> no undo coverage
+
+        // The stack is free (checked above), so this scope OWNS its transaction
+        // and its dtor commits it. RenameEntity stays the single authority on
+        // "did the name actually change": on false, Commit re-snapshots, sees
+        // the component unchanged, drops it, and pushes no history entry
+        // (CommandStack.cpp:47-51, :61-62).
+        ScopedTransaction txn(stack, "Rename");
+        txn.Snapshot(e, desc);
+        return RenameEntity(reg, e, name) ? RenameResult::Renamed
+                                          : RenameResult::NoChange;
     }
 
     std::size_t AddComponent(Astra::Registry& reg,
