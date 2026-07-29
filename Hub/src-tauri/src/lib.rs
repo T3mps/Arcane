@@ -635,6 +635,21 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             watch::spawn_disk_watch(app.app_handle().clone());
+            // One-time guid backfill: entries recorded before the manifest
+            // guid existed (or never read since) have no identity on file,
+            // and moved-project healing is blind to them until something
+            // reads their manifest. This makes healing cover the whole list
+            // from this session on. Its own thread: one small file read per
+            // listed project, but disk does not belong in setup.
+            std::thread::spawn(|| {
+                let mut s = state::load();
+                let n = state::backfill_guids(&mut s.recents, |p| {
+                    resolve::manifest_guid(Path::new(p))
+                });
+                if n > 0 {
+                    let _ = state::save(&s);
+                }
+            });
             // The window is created HIDDEN (tauri.conf.json): a cold start
             // via the file association used to flash the Hub for a moment
             // before the launch decision hid it again (user report,

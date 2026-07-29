@@ -386,6 +386,29 @@ pub fn remove_engine(v: &mut Vec<EngineEntry>, path: &str) -> bool {
     v.len() != before
 }
 
+/// Record identities for entries that have none: `lookup` resolves a recorded
+/// path to its manifest's guid. Run once at startup -- without it,
+/// heal_by_guid is blind to a project until the user happens to launch or
+/// scan it, so a move made BEFORE that first read could never heal. Only
+/// live entries are consulted (a missing path has no manifest to read), and
+/// a recorded guid is never overwritten here -- refreshing is the job of the
+/// commands that read the manifest anyway. Returns how many changed.
+pub fn backfill_guids(
+    v: &mut [RecentProject],
+    lookup: impl Fn(&str) -> Option<String>,
+) -> u32 {
+    let mut changed = 0;
+    for e in v.iter_mut() {
+        if e.guid.is_none() && !e.missing {
+            if let Some(g) = lookup(&e.path) {
+                e.guid = Some(g);
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
 pub fn load() -> HubState {
     let mut warnings = Vec::new();
     let mut recents: Vec<RecentProject> =
@@ -910,6 +933,34 @@ mod tests {
         let other = "b6f1d2ef-2222-4333-9444-555566667777";
         assert!(relocate_recent(&mut v, "C:/new", "C:/newer", "N", 8, Some(other.into())));
         assert_eq!(v[0].guid.as_deref(), Some(other));
+    }
+
+    #[test]
+    fn backfill_guids_fills_only_live_entries_that_lack_one() {
+        let mut v = vec![
+            rp("C:/live/NoGuid.arcproj", "1"),                       // live, none -> filled
+            rp_guided("C:/live/Has.arcproj", "2", GUID, false),      // live, has -> kept
+            rp("C:/gone/Missing.arcproj", "3"),                      // missing -> untouched
+        ];
+        v[2].missing = true;
+
+        let filled = "b6f1d2ef-2222-4333-9444-555566667777";
+        let changed = backfill_guids(&mut v, |p| {
+            assert!(!p.contains("gone"), "a missing path must never be looked up");
+            if p.contains("NoGuid") { Some(filled.into()) } else { Some("WRONG".into()) }
+        });
+        assert_eq!(changed, 1);
+        assert_eq!(v[0].guid.as_deref(), Some(filled));
+        assert_eq!(v[1].guid.as_deref(), Some(GUID), "a recorded guid is never overwritten");
+        assert_eq!(v[2].guid, None);
+    }
+
+    #[test]
+    fn backfill_guids_reports_zero_when_manifests_have_no_guid_yet() {
+        // Pre-guid manifests answer None; nothing changes, nothing saves.
+        let mut v = vec![rp("C:/live/Old.arcproj", "1")];
+        assert_eq!(backfill_guids(&mut v, |_| None), 0);
+        assert_eq!(v[0].guid, None);
     }
 
     #[test]
