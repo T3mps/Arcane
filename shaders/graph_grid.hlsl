@@ -43,6 +43,17 @@
 // of a welded grid. It also sets how often the octave LOD steps: an octave is
 // 2^(1/0.4) = 5.7x of zoom, so a normal working range crosses at most one
 // boundary, and that boundary is faded (below), never snapped.
+//
+// RE-CHECKED against the zoom domain narrowing from the vendored editor's
+// default 0.1-8.0 to Unreal's 0.1-2.0 table (ShaderEditorDocument.cpp,
+// kZoomLevels): UNCHANGED, and the check is not a judgement call. The octave
+// snap below normalizes the period at EVERY zoom -- pm always lands in
+// (kMinorTargetPx/2, kMinorTargetPx] -- so the domain cannot make the grid
+// too dense or too sparse, only change how many boundaries a full sweep
+// crosses. That count went 2.5 -> 1.7 (log(80)/log(5.7) vs log(20)/log(5.7)),
+// i.e. the same one-boundary working range with less churn at the extremes.
+// Worked endpoints: pm = 15.9 px at zoom 0.100, 20.0 px at 1.000, 13.2 px at
+// 2.000 -- the whole new domain sits inside the design band.
 static const float kZoomExponent = 0.4;
 
 // Grid spacing in canvas units at zoom = 1, before the octave LOD snaps it.

@@ -191,6 +191,62 @@ namespace Arcane::Editor
         constexpr int   kPinDotSegments = 12;
         constexpr float kWireThickness  = 2.0f;
 
+        // -------------------------------------------------------------------
+        // ZOOM STOPS -- Unreal's graph-editor table, ported exactly.
+        //
+        // These are FFixedZoomLevelsContainer's 20 entries, verbatim and in
+        // order (vendored UE at Arcane/.example/UnrealEngine-release/Engine/
+        // Source/Editor/GraphEditor/Private/SNodePanel.cpp:53-75). UE calls the
+        // number ZoomAmount and it is a VIEW SCALE: 1.000 is 1:1, 2.000 draws
+        // everything twice as large. The vendored node editor's
+        // ed::Config::CustomZoomLevels is the same quantity -- the table feeds
+        // NavigateAction::m_ZoomLevels (imgui_node_editor.cpp:3333) and m_Zoom
+        // is assigned view.Scale (:3639) -- so the numbers transfer with no
+        // conversion. (ed::GetCurrentZoom, by contrast, hands back the
+        // RECIPROCAL; see ViewScale() below.)
+        //
+        // Replacing the vendored default table (0.1 .. 8.0,
+        // imgui_node_editor.cpp:3309-3312) is the point of doing this: 8x
+        // magnification has no use on a node graph, and UE's stops are much
+        // finer in the readable band. UE also tags each stop with a rendering
+        // LOD tier; that half lands next.
+        constexpr float kZoomLevels[] = {
+            0.100f, 0.125f, 0.150f, 0.175f, 0.200f,
+            0.225f, 0.250f, 0.375f, 0.500f, 0.675f,
+            0.750f, 0.875f, 1.000f, 1.250f, 1.375f,
+            1.500f, 1.675f, 1.750f, 1.875f, 2.000f,
+        };
+
+        // CustomZoomLevels is an ImVector, so the table is pushed in rather
+        // than aggregate-initialized. The caller's `cfg` may die immediately
+        // after CreateEditor: the editor holds a Config BY VALUE
+        // (imgui_node_editor_internal.h:1486) and its ctor deep-copies through
+        // ImVector::operator= (imgui_node_editor.cpp:5785-5789), so the pointer
+        // NavigateAction caches at :3333 is into the editor's own copy.
+        void ApplyZoomLevels(ed::Config& cfg)
+        {
+            cfg.CustomZoomLevels.reserve(static_cast<int>(std::size(kZoomLevels)));
+            for (float z : kZoomLevels)
+                cfg.CustomZoomLevels.push_back(z);
+        }
+
+        // The canvas's view scale, in the same units as kZoomLevels. THE TRAP:
+        // ed::GetCurrentZoom returns InvScale -- canvas units per screen pixel
+        // (imgui_node_editor_api.cpp:665-668) -- which is the reciprocal of the
+        // scale everything else in this file means by "zoom". One helper, so
+        // the flip is written once.
+        //
+        // Valid on either side of ed::Begin within a frame: Begin installs the
+        // view the previous End computed (imgui_node_editor.cpp:1258) and the
+        // navigate action only re-derives it during End, so both reads return
+        // the scale this frame's nodes are actually drawn at.
+        float ViewScale() noexcept
+        {
+            const float invScale = ed::GetCurrentZoom();
+            return invScale > 0.0001f ? 1.0f / invScale : 1.0f;
+        }
+
+
         // ImVec4 -> the plain float[4] the grid CB mirrors.
         void FillRgba(float (&dst)[4], const ImVec4& c) noexcept
         {
@@ -1599,6 +1655,9 @@ namespace Arcane::Editor
         {
             ed::Config cfg;
             cfg.SettingsFile = nullptr;
+            // Same stops as the graph canvas: the zoom TABLE is a navigation
+            // feel and belongs on every canvas in the editor.
+            ApplyZoomLevels(cfg);
             m_passCanvasCtx = ed::CreateEditor(&cfg);
             m_passCanvasSeeded = false;
         }
@@ -2894,6 +2953,7 @@ namespace Arcane::Editor
         {
             ed::Config cfg;
             cfg.SettingsFile = nullptr;   // layout persists in the .arcmat, not an ini
+            ApplyZoomLevels(cfg);         // UE's 20 stops (see kZoomLevels)
             m_graphCtx = ed::CreateEditor(&cfg);
             // The style is per-context state, so a rebuilt context re-applies
             // it -- including the switch that kills the vendored grid.
@@ -2953,13 +3013,11 @@ namespace Arcane::Editor
             // sublinearly-scaled lattice has no canvas-space anchor to be read
             // off any single frame.
             //
-            // ed::GetCurrentZoom returns InvScale -- canvas units per screen
-            // pixel (imgui_node_editor_api.cpp:665-668) -- so the visual scale
-            // is its reciprocal. ScreenToCanvas is safe HERE and only here:
+            // ViewScale() owns the GetCurrentZoom-returns-the-reciprocal flip
+            // (see its comment). ScreenToCanvas is safe HERE and only here:
             // inside ed::Begin/End the editor moves ImGui itself into canvas
             // space (imgui_canvas.cpp:476-487), so this must stay ahead of it.
-            const float invScale = ed::GetCurrentZoom();
-            view.scale = invScale > 0.0001f ? 1.0f / invScale : 1.0f;
+            view.scale = ViewScale();
             const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
             view.originX = originCanvas.x;
             view.originY = originCanvas.y;
