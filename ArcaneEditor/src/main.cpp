@@ -16,10 +16,16 @@
 #include <shobjidl.h>
 #pragma comment(lib, "shell32.lib")
 
-// The Arcane taskbar family id. MIRRORED constant: the Hub claims the same id
+// The Arcane taskbar GROUP id -- deliberately the family root, not this
+// app's own identity. The naming scheme (2026-07-29): dev.starworks.arcane
+// is the shared group every Arcane process claims for taskbar stacking;
+// per-APP identities hang beneath it (the Hub's installer identity is
+// dev.starworks.arcanehub; dev.starworks.arcaneeditor is reserved for this
+// editor the day it gains an installer or file-association identity).
+// MIRRORED constant: the Hub claims the same group id
 // (spawn::APP_USER_MODEL_ID, Arcane/Hub/src-tauri/src/spawn.rs) -- change
 // BOTH or the Hub's and the editors' taskbar buttons stop stacking.
-static constexpr const wchar_t* kAppUserModelId = L"dev.starworks.arcanehub";
+static constexpr const wchar_t* kAppUserModelId = L"dev.starworks.arcane";
 #endif
 
 int main(int argc, char** argv)
