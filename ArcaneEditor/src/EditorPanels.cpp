@@ -272,18 +272,34 @@ namespace Arcane::Editor
             leftX += sz.x;
         }
 
-        // -- CENTER: transport (Play / Pause / Step / play-mode chevron), Unity-style
-        // toggles. Center the group within the full toolbar width, placed on the
-        // button row -- but never behind the left cluster (clamp on narrow windows).
-        // Undo/Redo moved to the Edit menu; the transform-gizmo tools moved to the
-        // Viewport overlay.
+        // -- CENTER: transport, Unity-style toggles: [Play|mode] Pause Step. Center the
+        // group within the full toolbar width, placed on the button row -- but never
+        // behind the left cluster (clamp on narrow windows). Undo/Redo moved to the Edit
+        // menu; the transform-gizmo tools moved to the Viewport overlay.
+        //
+        // The play-mode chevron is FUSED onto Play as one split control rather than
+        // standing alone: it configures Play, but sitting after Step it read as Step's.
+        // Same shape Unreal uses for its play-mode dropdown.
+        //
+        // kTransportGap overrides ImGui's default ItemSpacing.x (8) for this group only.
+        // At 8 the buttons read as four separate objects instead of one instrument; the
+        // group is an instrument. Everything else on the row keeps the global spacing,
+        // which is why this is a scoped PushStyleVar and not a style change.
+        constexpr float kTransportGap = 2.0f;
+        constexpr float kCaretPadX    = 2.0f;   // the caret half is slimmer than a full icon button
         auto btnW = [&](const char* icon)
         { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
-        const float transportW = btnW(ICON_LC_PLAY) + btnW(ICON_LC_PAUSE)
-                               + btnW(ICON_LC_STEP_FORWARD) + btnW(ICON_LC_CHEVRON_DOWN)
-                               + st.ItemSpacing.x * 3.0f;
+        // The split's two halves overlap by one border so the shared edge is a single
+        // 1px line, not two stacked -- hence the -FrameBorderSize, mirrored in the draw
+        // below. Miss it here and the group centers a pixel off.
+        const float caretW  = ImGui::CalcTextSize(ICON_LC_CHEVRON_DOWN).x + kCaretPadX * 2.0f;
+        const float splitW  = btnW(ICON_LC_PLAY) + caretW - st.FrameBorderSize;
+        const float transportW = splitW + btnW(ICON_LC_PAUSE) + btnW(ICON_LC_STEP_FORWARD)
+                               + kTransportGap * 2.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
         ImGui::SetCursorPos(ImVec2(std::max(centerStart, leftX + 12.0f), rowY));
+
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(kTransportGap, st.ItemSpacing.y));
 
         // Play/Stop toggle (Unity-style): ALWAYS the play glyph, tinted while playing;
         // clicking the lit (playing) button stops. No icon swap. The tint/toggle is
@@ -301,37 +317,28 @@ namespace Arcane::Editor
             else
                 play.Play(runtime, plugin);
         }
-        // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
-        // replaces m_impl->loop on Stop, so a reference taken before this dangles.
-        // (Nothing above touches `loop`, so fetching here is safe.)
-        Arcane::RunLoop& loop = runtime.Loop();
-        ImGui::SameLine();
-        // Pause/Resume toggle (Unity-style): ALWAYS the pause glyph, tinted while paused.
-        // Disabled OUTSIDE Play: the loop's pause IS the Edit-mode sim freeze
-        // (PlaySession::Stop pauses it, Play unpauses it), so toggling it in Edit would
-        // run the sim with no active Play session and no way to Stop. Pause only within
-        // Play; tint only while actually playing so it never looks "armed" in Edit.
-        ImGui::BeginDisabled(!play.IsPlaying());
-        if (iconToggle(ICON_LC_PAUSE, "##sim_pause", play.IsPlaying() && loop.IsPaused(),
-                       loop.IsPaused() ? "Resume" : "Pause"))
-            loop.SetPaused(!loop.IsPaused());
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        // Step: momentary; disabled outside Play (single-step is meaningless in Edit),
-        // matching Unity's greyed-out Step.
-        ImGui::BeginDisabled(!play.IsPlaying());
-        if (iconBtn(ICON_LC_STEP_FORWARD, "##sim_step", "Step")) loop.RequestSingleStep();
-        ImGui::EndDisabled();
-        ImGui::SameLine();
+
+        // The split's second half. Zero spacing, then back up one border width so the
+        // two frames share an edge instead of showing a 2px seam. It carries Play's lit
+        // state so the pair reads as ONE control while playing -- an untinted caret
+        // welded to a tinted Play would look like a separate button again, which is the
+        // whole thing this layout is fixing.
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() - st.FrameBorderSize);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kCaretPadX, st.FramePadding.y));
+        if (playing) ImGui::PushStyleColor(ImGuiCol_Button,
+                                           ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (iconBtn(ICON_LC_CHEVRON_DOWN, "##sim_playmode", "Play mode"))
+            ImGui::OpenPopup("##play_mode");
+        if (playing) ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
 
         // Play-mode dropdown (Task 6, runtime-host-fold arc): choose whether the Play
-        // button above enters PIE ("In viewport", today's behavior) or spawns a
+        // button this hangs off enters PIE ("In viewport", today's behavior) or spawns a
         // standalone ArcaneRuntime window on the active scene ("Separate window",
         // fire-and-forget). These two rows are also the future SERVER-SET seam: a
         // server-driven "how should this build play" directive lands here as a new
         // row, never as a separate UI-only concept bolted on elsewhere.
-        if (iconBtn(ICON_LC_CHEVRON_DOWN, "##sim_playmode", "Play mode"))
-            ImGui::OpenPopup("##play_mode");
         if (ImGui::BeginPopup("##play_mode"))
         {
             // MarkIniSettingsDirty on change, as the shader editor's layout
@@ -350,6 +357,30 @@ namespace Arcane::Editor
             }
             ImGui::EndPopup();
         }
+
+        // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
+        // replaces m_impl->loop on Stop, so a reference taken before this dangles.
+        // (Nothing between that Stop and here touches `loop`, so fetching here is safe.)
+        Arcane::RunLoop& loop = runtime.Loop();
+        ImGui::SameLine();
+        // Pause/Resume toggle (Unity-style): ALWAYS the pause glyph, tinted while paused.
+        // Disabled OUTSIDE Play: the loop's pause IS the Edit-mode sim freeze
+        // (PlaySession::Stop pauses it, Play unpauses it), so toggling it in Edit would
+        // run the sim with no active Play session and no way to Stop. Pause only within
+        // Play; tint only while actually playing so it never looks "armed" in Edit.
+        ImGui::BeginDisabled(!play.IsPlaying());
+        if (iconToggle(ICON_LC_PAUSE, "##sim_pause", play.IsPlaying() && loop.IsPaused(),
+                       loop.IsPaused() ? "Resume" : "Pause"))
+            loop.SetPaused(!loop.IsPaused());
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        // Step: momentary; disabled outside Play (single-step is meaningless in Edit),
+        // matching Unity's greyed-out Step.
+        ImGui::BeginDisabled(!play.IsPlaying());
+        if (iconBtn(ICON_LC_STEP_FORWARD, "##sim_step", "Step")) loop.RequestSingleStep();
+        ImGui::EndDisabled();
+
+        ImGui::PopStyleVar();   // kTransportGap: the rest of the row keeps the global spacing
 
         ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));   // clear the logo's lower overhang too
         ImGui::Separator();
