@@ -239,12 +239,25 @@
   .col.on { color: var(--text); }
   .dir { font-size: 8px; }
 
+  /* ONE explicit height, shared with .layouts below: the sorter only exists
+     in the grid view, and when its natural height exceeded the toggle's the
+     whole meta row grew, so switching views nudged the page (user report
+     2026-07-29). Pinning both pills to the same box means the row's tallest
+     child never changes. */
+  .sorter, .layouts { height: 30px; box-sizing: border-box; }
+
   .sorter { display: flex; align-items: center; gap: 2px; padding: 2px;
             background: var(--well); border: 1px solid var(--border);
             border-radius: var(--r-btn); }
+  /* color-scheme: the POPUP list is native webview chrome that CSS cannot
+     reach; declaring the control dark is the sanctioned way to get the
+     matching dark dropdown instead of a white flash-bang. The option rule
+     covers engines that tint options from the page side. */
   .sorter select { background: none; border: 0; color: var(--text-muted);
-                   font: inherit; font-size: 12px; padding: 2px 4px; }
+                   font: inherit; font-size: 12px; padding: 0 4px; height: 24px;
+                   color-scheme: dark; }
   .sorter select:focus { outline: none; color: var(--text); }
+  .sorter option { background: var(--surface-2); color: var(--text); }
   .dirbtn { display: grid; place-items: center; width: 26px; height: 24px;
             background: none; border: 0; border-radius: 5px; font-size: 9px;
             color: var(--text-dim); cursor: default;

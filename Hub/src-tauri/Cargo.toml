@@ -27,6 +27,13 @@ tauri-plugin-dialog = "2"
 # updates -- and a launcher's second launch means "show me the Hub" anyway
 # (Unity Hub and the Epic launcher both behave this way).
 tauri-plugin-single-instance = "2"
+# Remember window size/position/maximized across sessions (every comparable
+# launcher does). NOT hand-rolled: multi-monitor + DPI + monitor-unplugged
+# restore is exactly the edge-case swamp a maintained plugin exists for.
+# Note: it persists one JSON in the app-config dir (%APPDATA%\dev.starworks.
+# arcanehub), not our .archub tree -- window geometry is chrome, not user
+# data, and losing it costs one resize.
+tauri-plugin-window-state = "2"
 # Raw Win32 for two launcher jobs no plugin covers: claiming the taskbar
 # AppUserModelID the editor shares (grouping is by AUMID, NOT by process
 # parentage), and focusing a running editor's window when its project is

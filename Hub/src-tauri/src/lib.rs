@@ -1036,6 +1036,19 @@ pub fn run() {
             tray::show_hub(app);
         }))
         .plugin(tauri_plugin_dialog::init())
+        // SIZE | POSITION | MAXIMIZED only. Deliberately NOT the default
+        // all-flags: VISIBLE would fight the hidden-start contract (the
+        // window is created invisible so a shell-routed launch never
+        // flashes), and DECORATIONS/FULLSCREEN are fixed by config.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .manage(RunningEditors(Mutex::new(HashMap::new())))
         .setup(|app| {
             use tauri::Manager;
