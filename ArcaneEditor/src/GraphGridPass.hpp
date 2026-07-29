@@ -70,6 +70,7 @@ namespace Arcane::Editor
         float canvas[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
         float minor[4]  = { 0.0f, 0.0f, 0.0f, 1.0f };
         float major[4]  = { 0.0f, 0.0f, 0.0f, 1.0f };
+        float axis[4]   = { 0.0f, 0.0f, 0.0f, 1.0f };   // the canvas origin lines
 
         bool operator==(const GraphGridColors& o) const noexcept
         {
@@ -106,8 +107,18 @@ namespace Arcane::Editor
             // it is a function of the view HISTORY, not of `view` alone.
             UpdatePhase(view);
 
+            // Screen pixel of canvas (0,0) under the editor's REAL transform,
+            // p = (c - O) * Z, which for c = 0 is just -O * Z. The origin axes
+            // ride this and never the sublinear lattice scale -- see the "TWO
+            // TRANSFORMS" note at the top of graph_grid.hlsl.
+            const float axisX = -view.originX * view.scale;
+            const float axisY = -view.originY * view.scale;
+            const float viewW = static_cast<float>(view.width);
+            const float viewH = static_cast<float>(view.height);
+
             const std::uint64_t generation = m_shaders->Generation();
-            const RenderKey key{ m_phaseX, m_phaseY, view.scale };
+            const RenderKey key{ m_phaseX, m_phaseY, view.scale,
+                                 axisX, axisY, viewW, viewH };
             if (m_rendered && m_lastKey == key && m_lastColors == colors &&
                 m_lastGeneration == generation)
                 return m_tex.Get();   // idle: nothing recorded
@@ -122,9 +133,14 @@ namespace Arcane::Editor
             cb.phaseY = m_phaseY;
             cb.zoom   = view.scale;
             cb.pad0   = 0.0f;
+            cb.axisX  = axisX;
+            cb.axisY  = axisY;
+            cb.viewW  = viewW;
+            cb.viewH  = viewH;
             std::memcpy(cb.canvasColor, colors.canvas, sizeof(cb.canvasColor));
             std::memcpy(cb.minorColor,  colors.minor,  sizeof(cb.minorColor));
             std::memcpy(cb.majorColor,  colors.major,  sizeof(cb.majorColor));
+            std::memcpy(cb.axisColor,   colors.axis,   sizeof(cb.axisColor));
 
             m_cl->open();
             m_cl->writeBuffer(m_cb, &cb, sizeof(cb));
@@ -161,11 +177,14 @@ namespace Arcane::Editor
         struct GridCB
         {
             float phaseX, phaseY, zoom, pad0;
+            float axisX, axisY;         // screen pixel of canvas (0,0)
+            float viewW, viewH;         // visible region size (RT is over-allocated)
             float canvasColor[4];
             float minorColor[4];
             float majorColor[4];
+            float axisColor[4];
         };
-        static_assert(sizeof(GridCB) == 64, "GridCB must match graph_grid.hlsl");
+        static_assert(sizeof(GridCB) == 96, "GridCB must match graph_grid.hlsl");
 
         // What the shader's output actually depends on. Deliberately NOT the
         // raw view: two different views that evolve to the same phase render
@@ -173,6 +192,11 @@ namespace Arcane::Editor
         struct RenderKey
         {
             float phaseX = 0.0f, phaseY = 0.0f, scale = 0.0f;
+            // The axes and the vignette do NOT follow from the phase -- the axes
+            // ride the real transform and the vignette the region size -- so
+            // both belong in the key or an axis-only move would render stale.
+            float axisX = 0.0f, axisY = 0.0f;
+            float viewW = 0.0f, viewH = 0.0f;
             bool operator==(const RenderKey&) const = default;
         };
 

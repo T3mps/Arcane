@@ -25,6 +25,23 @@
 //   the RT's top-left, which is the canvas region's top-left) of the lattice's
 //   origin. So the grid coordinate at pixel p is simply q = p - gPhasePx.
 //
+// TWO TRANSFORMS LIVE IN THIS SHADER, AND THEY MUST NOT BE CONFUSED:
+//   * The LATTICE is virtual. It uses gPhasePx and a period built from
+//     pow(gZoom, kZoomExponent). It is a rendering convenience with no meaning
+//     in the document.
+//   * The ORIGIN AXES are real canvas geometry -- the lines c.x == 0 and
+//     c.y == 0 -- so they must use the editor's ACTUAL transform,
+//     p = (c - O) * Z, and nothing else. Their screen position is handed in
+//     whole as gAxisPx (= -O * Z, the screen pixel of canvas (0,0)); the
+//     sublinear exponent must never touch them, or they would drift off the
+//     nodes that share their coordinate system.
+//   Putting the axes on gPhasePx would look right at 100% zoom and silently
+//   wrong everywhere else, which is exactly the kind of bug that hides. They
+//   need no special handling under the focal-point zoom re-anchor either: a
+//   real canvas feature is invariant under the editor's own transform by
+//   definition, so the axes stay pinned to the graph for free while the
+//   virtual lattice has to be re-anchored by hand.
+//
 // The cbuffer uses plain register(b0): the SPIR-V build applies
 // -fvk-b-shift 256 0 (matching nvrhi::VulkanBindingOffsets), so no #if SPIRV
 // guard is needed. Colors are DISPLAY-REFERRED: ImGui draws post-tonemap into
@@ -81,14 +98,90 @@ static const float kMajorEvery = 8.0;
 static const float kHalfWidthPx = 0.5;
 static const float kFeatherPx   = 1.0;
 
+// ---- Minor tier: dots or lines --------------------------------------------
+// Compile-time only, because it is a look decision rather than a setting: the
+// two readings are different enough that shipping both as runtime state would
+// mean maintaining two designs. 1 = minor tier draws DOTS at the lattice
+// INTERSECTIONS (the Blender/Figma reading, quieter than a full ruling);
+// 0 = minor tier draws lines like the majors. The major tier is always lines
+// either way -- the contrast between the two tiers is the point.
+//
+// The octave crossfade survives the switch untouched, and for the same reason
+// it works for lines: the intersections of the 2*pm lattice are a strict
+// SUBSET of the intersections of pm (every other row AND every other column),
+// so fading pm out at a boundary removes only dots that the 2*pm pass is
+// already drawing. Dots crossfade exactly as the lines did.
+#define GRID_MINOR_DOTS 1
+
+// Dot geometry (screen px), used only when GRID_MINOR_DOTS is 1. Kept small:
+// a dot has to read as a tick, not a bullet.
+static const float kDotRadiusPx = 1.1;
+static const float kDotSoftPx   = 1.0;
+
+// ---- Origin axes ----------------------------------------------------------
+// The real canvas axes (see TWO TRANSFORMS above). Slightly wider than a grid
+// line so they read as structure rather than as a brighter major.
+static const float kAxisHalfWidthPx = 0.75;
+
+// ---- Far-zoom fade --------------------------------------------------------
+// Below roughly a quarter of actual size the canvas stops being a workspace
+// and becomes a map of the graph; the grid stops helping there and starts
+// competing with the nodes for contrast, so the whole lattice fades out.
+// smoothstep(kFarFadeStart, kFarFadeFull, zoom): gone at/below Start, full at/
+// above Full.
+//
+// This is INDEPENDENT of the octave LOD and composes with it multiplicatively.
+// Worth being explicit, because the two look similar and are not: the LOD
+// crossfade answers "which tier should be visible at this period" and keeps
+// density constant at EVERY zoom -- so the grid never becomes illegible on its
+// own and the LOD would happily draw it forever. This fade answers a different
+// question, "should the grid be present at all at this zoom", and is a
+// deliberate editorial choice on top. Because it multiplies the tier
+// coverages after the crossfade has already resolved them, it cannot disturb
+// the subset argument.
+//
+// The AXES are deliberately exempt: at far zoom they are the one piece of the
+// backdrop that still carries information (where the graph's origin is).
+static const float kFarFadeStart = 0.12;
+static const float kFarFadeFull  = 0.25;
+
+// ---- Vignette -------------------------------------------------------------
+// Restrained radial darkening toward the region's edges -- a finish, not a
+// spotlight. kVignetteStrength is the fraction of brightness removed at the
+// far end of the ramp; the ramp itself runs over a radius normalized SEPARATELY
+// per axis, which is what makes the falloff an ellipse matching the panel
+// instead of a circle that crops badly in a wide dock.
+static const float kVignetteStrength = 0.12;
+static const float kVignetteInner    = 0.55;   // radius where darkening starts
+static const float kVignetteOuter    = 1.25;   // radius of full strength (corner ~1.41)
+
+// ---- Dither ---------------------------------------------------------------
+// One LSB of ordered noise, applied last. The backdrop is RGBA8_UNORM and its
+// tones are dark and very close together (canvas 0.118 vs minor 0.180), so both
+// the vignette ramp AND the flat background quantize into visible bands without
+// this.
+//
+// Interleaved Gradient Noise (Jimenez, "Next Generation Post Processing in Call
+// of Duty: Advanced Warfare") rather than a value hash: it is the same single
+// line, its spectrum is far closer to blue than a hash's white, and -- the
+// reason that matters here -- it is a pure function of the pixel. The backdrop
+// RT is CACHED and only re-rendered when the view actually changes
+// (GraphGridPass::Update), so a frame-varying dither would make an idle canvas
+// and a re-rendered one disagree; a deterministic one makes re-renders
+// idempotent.
+static const float kDitherAmount = 1.0 / 255.0;
+
 cbuffer GraphGridCB : register(b0)
 {
     float2 gPhasePx;      // lattice origin, in RT pixels -- the STATE, see above
     float  gZoom;         // node-editor view scale (1 = 100%)
     float  gPad0;
+    float2 gAxisPx;       // screen pixel of canvas (0,0) -- the REAL transform
+    float2 gViewSizePx;   // the visible REGION size (the RT is over-allocated)
     float4 gCanvasColor;  // backdrop tone (a = unused, written opaque)
     float4 gMinorColor;   // a = peak strength of the minor octave
     float4 gMajorColor;   // a = peak strength of the major octave
+    float4 gAxisColor;    // a = strength of the origin axes
 };
 
 struct VSOutput
@@ -114,6 +207,35 @@ float LineCoverage(float2 q, float period)
     return 1.0 - smoothstep(kHalfWidthPx, kHalfWidthPx + kFeatherPx, f);
 }
 
+// The MINOR tier's mark. Same lattice and the same `q` as LineCoverage -- only
+// the distance metric changes, which is what keeps the crossfade valid: min()
+// of the two axis distances is a cross of lines, length() of the same pair is
+// a dot at their intersection.
+float MinorCoverage(float2 q, float period)
+{
+#if GRID_MINOR_DOTS
+    float2 d = abs(frac(q / period + 0.5) - 0.5) * period;   // px to nearest line
+    float  f = length(d);                                    // px to nearest intersection
+    return 1.0 - smoothstep(kDotRadiusPx, kDotRadiusPx + kDotSoftPx, f);
+#else
+    return LineCoverage(q, period);
+#endif
+}
+
+// Anti-aliased coverage of one straight line, given the pixel's perpendicular
+// distance to it. Used by the origin axes, which are single lines rather than
+// a lattice and so have no period to fold against.
+float AxisCoverage(float distPx)
+{
+    return 1.0 - smoothstep(kAxisHalfWidthPx, kAxisHalfWidthPx + kFeatherPx, distPx);
+}
+
+// Interleaved Gradient Noise -- see kDitherAmount for why this one.
+float InterleavedGradientNoise(float2 p)
+{
+    return frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
+}
+
 float4 ps_main(VSOutput i) : SV_Target0
 {
     // Grid coordinate: the pixel measured from the lattice origin. gPhasePx
@@ -129,22 +251,46 @@ float4 ps_main(VSOutput i) : SV_Target0
     float t          = level - step0;          // 0 -> just stepped, 1 -> about to
     float pm         = basePeriod * exp2(step0);
 
-    // The classic pop-free pair. Lines at 2*pm are a strict SUBSET of the lines
-    // at pm, so drawing pm at (1-t) and 2*pm at full strength fades exactly the
-    // "odd" lines out as the octave boundary approaches. At the boundary the
-    // survivors are the 2*pm lines at full strength -- which is precisely the
-    // next octave's pm at t = 0. Nothing appears, nothing jumps.
-    float minor = max(LineCoverage(q, pm) * (1.0 - t),
-                      LineCoverage(q, pm * 2.0));
+    // The classic pop-free pair. The 2*pm marks are a strict SUBSET of the pm
+    // marks, so drawing pm at (1-t) and 2*pm at full strength fades exactly the
+    // "odd" ones out as the octave boundary approaches. At the boundary the
+    // survivors are the 2*pm marks at full strength -- which is precisely the
+    // next octave's pm at t = 0. Nothing appears, nothing jumps. Holds for dots
+    // and lines alike (see GRID_MINOR_DOTS).
+    float minor = max(MinorCoverage(q, pm) * (1.0 - t),
+                      MinorCoverage(q, pm * 2.0));
 
     // Majors ride the same fade one power of two apart, so the 8:1 look holds
     // across the boundary for free (an 8x target differs by exactly 3 octaves,
-    // which leaves `t` identical).
+    // which leaves `t` identical). Always lines, whatever the minors are.
     float major = max(LineCoverage(q, pm * kMajorEvery) * (1.0 - t),
                       LineCoverage(q, pm * kMajorEvery * 2.0));
+
+    // Whole-lattice presence. Multiplies the tiers AFTER their crossfade has
+    // resolved, so it cannot perturb the subset argument above.
+    float farFade = smoothstep(kFarFadeStart, kFarFadeFull, gZoom);
+    minor *= farFade;
+    major *= farFade;
+
+    // Origin axes, on the REAL canvas transform (see the header). No octave, no
+    // far fade -- at far zoom these are the only part of the backdrop still
+    // saying anything.
+    float axis = max(AxisCoverage(abs(i.pos.y - gAxisPx.y)),    // canvas y == 0
+                     AxisCoverage(abs(i.pos.x - gAxisPx.x)));   // canvas x == 0
 
     float3 col = gCanvasColor.rgb;
     col = lerp(col, gMinorColor.rgb, minor * gMinorColor.a);
     col = lerp(col, gMajorColor.rgb, major * gMajorColor.a);
+    col = lerp(col, gAxisColor.rgb,  axis  * gAxisColor.a);
+
+    // Vignette over the VISIBLE region (not the over-allocated RT), normalized
+    // per axis so the falloff is an ellipse fitted to the panel.
+    float2 halfSize = max(gViewSizePx, 1.0) * 0.5;   // NB: `half` is an HLSL type
+    float  r        = length((i.pos.xy - halfSize) / halfSize);
+    col *= 1.0 - kVignetteStrength * smoothstep(kVignetteInner, kVignetteOuter, r);
+
+    // Dither last: it exists to break up the quantization of everything above.
+    col += (InterleavedGradientNoise(i.pos.xy) - 0.5) * kDitherAmount;
+
     return float4(col, 1.0);
 }
