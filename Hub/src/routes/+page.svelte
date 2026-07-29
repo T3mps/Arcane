@@ -454,13 +454,13 @@
 </div>
 
 <style>
-  /* The window's own gradient lives here rather than on body so the rounded
-     corners from --r-win clip it. */
   /* Flat neutral. The two radial washes that used to sit here -- a gold glow
      top-right and an explicitly blue one bottom-left -- were the largest
-     coloured surface in the app and the main reason it read as tinted. */
+     coloured surface in the app and the main reason it read as tinted.
+     NO border-radius: the OS window is a plain rectangle, and rounding the
+     canvas inside it just faked curved corners over square ones (user call
+     2026-07-29 killing --r-win). */
   .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden;
-         border-radius: var(--r-win);
          background: linear-gradient(var(--bg-top), var(--bg-bottom)); }
   .body { flex: 1; display: flex; min-height: 0; }
   main { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 28px 26px; }

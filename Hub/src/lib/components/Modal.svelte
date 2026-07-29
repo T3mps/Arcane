@@ -127,10 +127,8 @@
      (decorations:false), so none of them can be clicked while a dialog is up.
      That is deliberate and it is why every dialog carries its own dismissal --
      Escape plus a Cancel button or the sheet's X -- and why Tab is trapped in
-     the panel rather than allowed to wander into unreachable chrome.
-     The radius matches .app so the scrim cannot square off the window corners
-     if rounding is ever actually visible (it needs transparent:true). */
-  .scrim { position: fixed; inset: 0; z-index: 20; border-radius: var(--r-win);
+     the panel rather than allowed to wander into unreachable chrome. */
+  .scrim { position: fixed; inset: 0; z-index: 20;
            background: rgba(0, 0, 0, .6); backdrop-filter: blur(2px);
            animation: fade var(--dur) var(--ease); }
   .wrap { position: fixed; inset: 0; z-index: 21; display: grid;
