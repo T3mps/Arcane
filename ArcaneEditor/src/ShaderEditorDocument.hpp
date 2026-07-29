@@ -316,6 +316,10 @@ namespace Arcane::Editor
         // call on text-only docs (the loop no-ops); any codegen error keeps
         // last-good bound and fills that pass's badge list instead.
         void RegenerateFromGraph();
+        // Blit one canvas's shader grid backdrop. MUST be called before that
+        // canvas's ed::Begin (layering + ScreenToCanvas both require it); the
+        // instance is a parameter because the grid's phase is per-canvas state.
+        void DrawCanvasBackdrop(std::unique_ptr<GraphGridPass>& grid);
         void DrawGraphPanel();
         // `lod` is the canvas tier for THIS frame, computed once by
         // DrawGraphPanel before the node loop and branched on at the draw sites

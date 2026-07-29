@@ -441,6 +441,38 @@ namespace Arcane::Editor
             ImGui::SameLine(0.0f, 0.0f);
         }
 
+        // The node's title band, drawn AFTER ed::EndNode because it spans the
+        // node's final measured width and that only exists once the node has
+        // been laid out. GetNodeBackgroundDrawList paints into the node's own
+        // user-background channel -- above its body fill, below its content and
+        // pin chrome (imgui_node_editor.cpp:135-140) -- which is exactly where a
+        // header band belongs. Coordinates are canvas space, the space both
+        // GetNodePosition and plain ImGui use inside ed::Begin/End.
+        //
+        // `headerMaxY` must be the TITLE row's rect bottom, captured before any
+        // body content is submitted: pinning the band's lower edge to that
+        // rather than to the node's content extent is what keeps a header gap
+        // readable as body space instead of being swallowed by a taller band.
+        //
+        // Returns the node's measured size (zero before its first layout), so a
+        // caller that caches a width reads it off this same query instead of
+        // asking the library twice.
+        ImVec2 DrawNodeTitleBand(std::uint32_t nodeId, float headerMaxY)
+        {
+            const ImVec2 nodePos  = ed::GetNodePosition(ed::NodeId(nodeId));
+            const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(nodeId));
+            if (nodeSize.x <= 0.0f)
+                return nodeSize;
+            if (ImDrawList* bg = ed::GetNodeBackgroundDrawList(ed::NodeId(nodeId)))
+                bg->AddRectFilled(
+                    ImVec2(nodePos.x + kNodeBorderWidth, nodePos.y + kNodeBorderWidth),
+                    ImVec2(nodePos.x + nodeSize.x - kNodeBorderWidth,
+                           headerMaxY + kNodePadY),
+                    ImGui::GetColorU32(kNodeTitleColor),
+                    kNodeRounding, ImDrawFlags_RoundCornersTop);
+            return nodeSize;
+        }
+
         // One-time style for a node-editor context. Written to the PERSISTENT
         // style (ed::GetStyle returns a mutable reference, imgui_node_editor.h:295)
         // instead of pushed per frame, because every value here is latched into
@@ -3408,74 +3440,7 @@ namespace Arcane::Editor
         Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
         ed::SetCurrentEditor(m_graphCtx);
-        // ---- Shader-rendered backdrop, UNDER the canvas content ----
-        // The node editor offers no public way to draw beneath its own
-        // background/grid layer: everything it emits lands in channels the API
-        // does not expose, and the two it does expose (the per-node background
-        // draw list, the group-hint lists) sit ABOVE links. So the backdrop is
-        // blitted before ed::Begin, which puts it in the window draw list ahead
-        // of every channel the editor merges in afterwards.
-        //
-        // DISCLOSED CONSEQUENCE: the transform read here is the one ed::Begin
-        // installed LAST frame. The editor computes the new view in End()
-        // (imgui_node_editor.cpp:1357) and installs it in the next Begin()
-        // (:1257), so a frame that is actively panning or zooming draws the
-        // backdrop one frame behind the nodes.
-        //
-        // What that costs is CONTINUITY, not correctness -- and continuity is
-        // the property that matters now that the grid's phase is STATE
-        // (GraphGridPass::UpdatePhase). The pass is fed the same sequence of
-        // views, just one frame late, so it accumulates the same phase; no
-        // error builds up over a gesture, and the final view of a gesture does
-        // arrive on the following frame, so the grid settles onto its exact
-        // position without a jump. Only the moving frames are offset.
-        //
-        // Reading it after ed::Begin would remove even that, but there is no
-        // channel under the content to put the blit in; the fix, if the lag
-        // ever reads badly, is to host the canvas in a child window and blit
-        // into the PARENT's draw list after ed::End (parent draw lists render
-        // first).
-        const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
-        const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
-        if (!m_grid && m_services.device && m_services.shaders)
-            m_grid = GraphGridPass::Create(m_services.device, m_services.shaders);
-        if (m_grid && canvasSize.x > 0.0f && canvasSize.y > 0.0f)
-        {
-            GraphGridView view;
-            view.width  = static_cast<std::uint32_t>(canvasSize.x);
-            view.height = static_cast<std::uint32_t>(canvasSize.y);
-            // RAW view state only -- the grid derives its own phase from the
-            // history of these (GraphGridPass::UpdatePhase), because a
-            // sublinearly-scaled lattice has no canvas-space anchor to be read
-            // off any single frame.
-            //
-            // ViewScale() owns the GetCurrentZoom-returns-the-reciprocal flip
-            // (see its comment). ScreenToCanvas is safe HERE and only here:
-            // inside ed::Begin/End the editor moves ImGui itself into canvas
-            // space (imgui_canvas.cpp:476-487), so this must stay ahead of it.
-            view.scale = ViewScale();
-            const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
-            view.originX = originCanvas.x;
-            view.originY = originCanvas.y;
-
-            GraphGridColors colors;
-            FillRgba(colors.canvas, kCanvasColor);
-            FillRgba(colors.minor,  kGridMinorColor);
-            FillRgba(colors.major,  kGridMajorColor);
-
-            if (nvrhi::ITexture* tex = m_grid->Update(view, colors))
-            {
-                // The target is over-allocated to a quantum, so only its
-                // top-left corner belongs to this region -- hence the UVs.
-                const float u = canvasSize.x / static_cast<float>(m_grid->AllocatedWidth());
-                const float v = canvasSize.y / static_cast<float>(m_grid->AllocatedHeight());
-                ImGui::GetWindowDrawList()->AddImage(
-                    static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(tex)),
-                    canvasMin, ImVec2(canvasMin.x + canvasSize.x,
-                                      canvasMin.y + canvasSize.y),
-                    ImVec2(0.0f, 0.0f), ImVec2(u, v));
-            }
-        }
+        DrawCanvasBackdrop(m_grid);
         // Nothing is drawn above the canvas inside this function, so the
         // remaining region IS the canvas's height.
         ed::Begin("##graphcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
@@ -4768,25 +4733,89 @@ namespace Arcane::Editor
         // there is no earlier width to remember, so the block sizes to its
         // title and re-measures on the way back in.)
         //
-        // The band's bottom edge is pinned to the TITLE's rect (headerMaxY,
-        // captured before anything else is submitted) and NOT to the node's
-        // content extent. That is what keeps kNodeHeaderGap readable as body
-        // space: the gap dummy is laid out after headerMaxY is taken, so it
-        // pushes the first row down without dragging the band with it. Deriving
-        // this edge from the laid-out content instead would silently swallow the
-        // gap and put the whole fix back where it started.
-        const ImVec2 nodePos  = ed::GetNodePosition(ed::NodeId(n.id));
-        const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(n.id));
+        // The band/gap relationship, and why headerMaxY is what it is, lives on
+        // DrawNodeTitleBand -- shared with the pass canvas.
+        const ImVec2 nodeSize = DrawNodeTitleBand(n.id, headerMaxY);
         if (nodeSize.x > 0.0f)
-        {
             m_nodeWidths[n.id] = nodeSize.x;
-            if (ImDrawList* bg = ed::GetNodeBackgroundDrawList(ed::NodeId(n.id)))
-                bg->AddRectFilled(
-                    ImVec2(nodePos.x + kNodeBorderWidth, nodePos.y + kNodeBorderWidth),
-                    ImVec2(nodePos.x + nodeSize.x - kNodeBorderWidth,
-                           headerMaxY + kNodePadY),
-                    ImGui::GetColorU32(kNodeTitleColor),
-                    kNodeRounding, ImDrawFlags_RoundCornersTop);
+    }
+
+    void ShaderEditorDocument::DrawCanvasBackdrop(std::unique_ptr<GraphGridPass>& grid)
+    {
+        // ---- Shader-rendered backdrop, UNDER the canvas content ----
+        // The node editor offers no public way to draw beneath its own
+        // background/grid layer: everything it emits lands in channels the API
+        // does not expose, and the two it does expose (the per-node background
+        // draw list, the group-hint lists) sit ABOVE links. So the backdrop is
+        // blitted before ed::Begin, which puts it in the window draw list ahead
+        // of every channel the editor merges in afterwards. CALL THIS BEFORE
+        // ed::Begin -- both the layering and the ScreenToCanvas below depend on
+        // it.
+        //
+        // The grid instance is a PARAMETER because its phase is per-canvas
+        // STATE (GraphGridPass::UpdatePhase carries a pan/zoom history). Two
+        // canvases sharing one instance would hand each other the other's
+        // accumulated phase every time the view switched, so each canvas owns
+        // its own.
+        //
+        // DISCLOSED CONSEQUENCE: the transform read here is the one ed::Begin
+        // installed LAST frame. The editor computes the new view in End()
+        // (imgui_node_editor.cpp:1357) and installs it in the next Begin()
+        // (:1257), so a frame that is actively panning or zooming draws the
+        // backdrop one frame behind the nodes.
+        //
+        // What that costs is CONTINUITY, not correctness -- and continuity is
+        // the property that matters now that the grid's phase is STATE. The
+        // pass is fed the same sequence of views, just one frame late, so it
+        // accumulates the same phase; no error builds up over a gesture, and
+        // the final view of a gesture does arrive on the following frame, so
+        // the grid settles onto its exact position without a jump. Only the
+        // moving frames are offset.
+        //
+        // Reading it after ed::Begin would remove even that, but there is no
+        // channel under the content to put the blit in; the fix, if the lag
+        // ever reads badly, is to host the canvas in a child window and blit
+        // into the PARENT's draw list after ed::End (parent draw lists render
+        // first).
+        const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
+        const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+        if (!grid && m_services.device && m_services.shaders)
+            grid = GraphGridPass::Create(m_services.device, m_services.shaders);
+        if (!grid || canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)
+            return;
+
+        GraphGridView view;
+        view.width  = static_cast<std::uint32_t>(canvasSize.x);
+        view.height = static_cast<std::uint32_t>(canvasSize.y);
+        // RAW view state only -- the grid derives its own phase from the
+        // history of these, because a sublinearly-scaled lattice has no
+        // canvas-space anchor to be read off any single frame.
+        //
+        // ViewScale() owns the GetCurrentZoom-returns-the-reciprocal flip (see
+        // its comment). ScreenToCanvas is safe HERE and only here: inside
+        // ed::Begin/End the editor moves ImGui itself into canvas space
+        // (imgui_canvas.cpp:476-487), so this must stay ahead of it.
+        view.scale = ViewScale();
+        const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
+        view.originX = originCanvas.x;
+        view.originY = originCanvas.y;
+
+        GraphGridColors colors;
+        FillRgba(colors.canvas, kCanvasColor);
+        FillRgba(colors.minor,  kGridMinorColor);
+        FillRgba(colors.major,  kGridMajorColor);
+
+        if (nvrhi::ITexture* tex = grid->Update(view, colors))
+        {
+            // The target is over-allocated to a quantum, so only its top-left
+            // corner belongs to this region -- hence the UVs.
+            const float u = canvasSize.x / static_cast<float>(grid->AllocatedWidth());
+            const float v = canvasSize.y / static_cast<float>(grid->AllocatedHeight());
+            ImGui::GetWindowDrawList()->AddImage(
+                static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(tex)),
+                canvasMin, ImVec2(canvasMin.x + canvasSize.x,
+                                  canvasMin.y + canvasSize.y),
+                ImVec2(0.0f, 0.0f), ImVec2(u, v));
         }
     }
 
