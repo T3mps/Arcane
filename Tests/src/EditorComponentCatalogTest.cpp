@@ -95,11 +95,17 @@ namespace
     }
 }
 
-TEST_CASE("IsHiddenInInspector covers only the derived per-frame caches", "[editor][outliner]")
+TEST_CASE("IsHiddenInInspector covers the derived caches and the eye's marker", "[editor][outliner]")
 {
     CHECK(IsHiddenInInspector("Arcane::WorldTransform"));
     CHECK(IsHiddenInInspector("Arcane::PreviousTransform"));
     CHECK(IsHiddenInInspector("Arcane::PhysicsBodyRef"));
+    // 2026-07-29 (user call): Hidden is a MECHANISM marker -- the Outliner
+    // eye is its entire interface, so it surfaces nowhere else. Riding the
+    // display gate also structure-locks it (next TEST_CASE), which is
+    // correctness, not tidiness: a catalogue-added Hidden would bypass the
+    // eye's descendant recursion, a menu-remove would desync it.
+    CHECK(IsHiddenInInspector("Arcane::Hidden"));
 
     // 2026-07-27 entity-identity-rename task 5: Identity is now VISIBLE in
     // the Inspector (name editable, id view-only) -- it moved out of the
@@ -109,7 +115,6 @@ TEST_CASE("IsHiddenInInspector covers only the derived per-frame caches", "[edit
     // Transform is deliberately REMOVABLE (spec section 5).
     CHECK_FALSE(IsHiddenInInspector("Arcane::Transform"));
     CHECK_FALSE(IsHiddenInInspector("Arcane::SpriteRenderer"));
-    CHECK_FALSE(IsHiddenInInspector("Arcane::Hidden"));
     CHECK_FALSE(IsHiddenInInspector(""));
 }
 
@@ -130,7 +135,9 @@ TEST_CASE("IsStructureLocked covers the derived types plus Identity", "[editor][
     // Transform is deliberately REMOVABLE (spec section 5).
     CHECK_FALSE(IsStructureLocked("Arcane::Transform"));
     CHECK_FALSE(IsStructureLocked("Arcane::SpriteRenderer"));
-    CHECK_FALSE(IsStructureLocked("Arcane::Hidden"));
+    // Hidden rides the display gate into the lock (2026-07-29): the eye owns
+    // its lifecycle, so no catalogue add and no menu remove.
+    CHECK(IsStructureLocked("Arcane::Hidden"));
     CHECK_FALSE(IsStructureLocked(""));
 }
 
@@ -189,24 +196,24 @@ TEST_CASE("BuildComponentCatalog missingCount is the set Edit::AddComponent woul
 TEST_CASE("BuildComponentCatalog counts TAG components via HasComponentByHash",
           "[editor][outliner]")
 {
-    // Regression guard: Hidden is an empty component, so GetComponentByHash
-    // returns null even when the entity carries it. Counting with the getter
-    // would report it missing forever.
+    // Repurposed 2026-07-29 (Hidden left the catalogue): this used to be the
+    // empty-component missingCount regression guard, with Hidden as the only
+    // tag component the catalogue offered. That counting fix stays in the
+    // code, but its path is unreachable through the catalogue until another
+    // tag component exists. What this pins now is the EXCLUSION: Hidden never
+    // appears, whether or not the selection carries it -- the eye is its
+    // whole interface.
     World w;
     const Astra::Entity a = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
     const std::array<Astra::Entity, 1> sel{ a };
 
     const std::vector<ComponentCatalogEntry> beforeCat = BuildComponentCatalog(*w.reg, sel, "");
-    const ComponentCatalogEntry* before = Find(beforeCat, "Arcane::Hidden");
-    REQUIRE(before != nullptr);
-    CHECK(before->missingCount == 1);
+    CHECK(Find(beforeCat, "Arcane::Hidden") == nullptr);
 
     REQUIRE(Edit::SetHiddenRecursive(*w.reg, a, true) == 1);
 
     const std::vector<ComponentCatalogEntry> after = BuildComponentCatalog(*w.reg, sel, "");
-    const ComponentCatalogEntry* hidden = Find(after, "Arcane::Hidden");
-    REQUIRE(hidden != nullptr);
-    CHECK(hidden->missingCount == 0);
+    CHECK(Find(after, "Arcane::Hidden") == nullptr);
 }
 
 TEST_CASE("BuildComponentCatalog filter is a case-insensitive substring", "[editor][outliner]")
@@ -304,7 +311,8 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
     CHECK(Find(cat, "Arcane::Transform") != nullptr);
     CHECK(Find(cat, "Arcane::SpriteRenderer") != nullptr);
     CHECK(Find(cat, "Arcane::PostProcess") != nullptr);
-    CHECK(Find(cat, "Arcane::Hidden") != nullptr);
+    // Structure-locked since 2026-07-29: the eye owns Hidden's lifecycle.
+    CHECK(Find(cat, "Arcane::Hidden") == nullptr);
     CHECK(Find(cat, "Arcane::RigidBody2D") != nullptr);
     CHECK(Find(cat, "Arcane::Collider2D") != nullptr);
 

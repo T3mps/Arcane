@@ -24,14 +24,18 @@ namespace Arcane::Editor
     // could not express both statements about the same type at once.
     //
     // IsHiddenInInspector -- gates the Inspector's per-component DISPLAY only
-    // (EditorPanels.cpp, DrawInspectorPanel's component loop). Derived
-    // per-frame caches, nothing else:
+    // (EditorPanels.cpp, DrawInspectorPanel's component loop). The derived
+    // per-frame caches, plus the eye's marker:
     //   Arcane::WorldTransform    -- recomputed by TransformPropagationSystem
     //                                every frame; an edit would be stomped.
     //   Arcane::PreviousTransform -- the physics-capture interpolation pose.
     //   Arcane::PhysicsBodyRef    -- a live BodyHandle PhysicsSystem owns and
     //                                re-establishes; hand-adding one installs
     //                                a dangling handle.
+    //   Arcane::Hidden            -- the Outliner eye's mechanism marker
+    //                                (user call 2026-07-29): the eye is its
+    //                                entire interface, so it surfaces in no
+    //                                catalogue and no Inspector section.
     //
     // IsStructureLocked -- gates everything that ADDS or REMOVES a component:
     // the Add Component catalog (BuildComponentCatalog, this TU) and the

@@ -40,17 +40,28 @@ namespace Arcane::Editor
     {
         // Derived per-frame caches: showing them is noise and editing them is
         // overwritten by the next propagation pass.
+        //
+        // Arcane::Hidden is a MECHANISM marker, not content (user call
+        // 2026-07-29): the Outliner eye is its entire interface, and it must
+        // not surface anywhere else -- an empty "Hidden" section on a hidden
+        // entity is implementation leakage. Unity keeps its scene-visibility
+        // state in the Hierarchy for the same reason.
         return typeName == "Arcane::WorldTransform"
             || typeName == "Arcane::PreviousTransform"
-            || typeName == "Arcane::PhysicsBodyRef";
+            || typeName == "Arcane::PhysicsBodyRef"
+            || typeName == "Arcane::Hidden";
     }
 
     bool IsStructureLocked(std::string_view typeName)
     {
-        // The hidden caches, plus identity. Identity is VISIBLE (name edits,
+        // The invisible set, plus identity. Identity is VISIBLE (name edits,
         // id view-only) but never user-added or user-removed -- the ECS
         // equivalent of AActor's intrinsic ActorLabel/ActorGuid
-        // (Actor.h:1055/:1188), which are not components at all.
+        // (Actor.h:1055/:1188), which are not components at all. Hidden rides
+        // in via IsHiddenInInspector, and locking it matters beyond tidiness:
+        // a catalogue-added Hidden would bypass the eye's descendant
+        // recursion (half-hiding a subtree), and a menu-remove would desync
+        // the state the eye believes it owns.
         return IsHiddenInInspector(typeName) || typeName == "Arcane::Identity";
     }
 
