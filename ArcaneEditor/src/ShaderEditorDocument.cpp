@@ -165,9 +165,6 @@ namespace Arcane::Editor
         constexpr ImVec4 kCanvasColor      = Theme::kPanel;                        // #1e1e1e
         constexpr ImVec4 kGridMinorColor   = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
         constexpr ImVec4 kGridMajorColor   = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
-        // The canvas origin axes: one step brighter than a major line, because
-        // they mark real geometry (canvas x/y == 0) rather than the ruling.
-        constexpr ImVec4 kGridAxisColor    = ImVec4(0.341f, 0.341f, 0.373f, 1.0f);
         constexpr ImVec4 kNodeBodyColor    = ImVec4(0.176f, 0.176f, 0.188f, 1.0f); // #2d2d30
         constexpr ImVec4 kNodeTitleColor   = ImVec4(0.137f, 0.137f, 0.149f, 1.0f); // #232326
         constexpr ImVec4 kNodeBorderColor  = ImVec4(0.243f, 0.243f, 0.267f, 1.0f);
@@ -3418,7 +3415,6 @@ namespace Arcane::Editor
             FillRgba(colors.canvas, kCanvasColor);
             FillRgba(colors.minor,  kGridMinorColor);
             FillRgba(colors.major,  kGridMajorColor);
-            FillRgba(colors.axis,   kGridAxisColor);
 
             if (nvrhi::ITexture* tex = m_grid->Update(view, colors))
             {
