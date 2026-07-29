@@ -165,6 +165,20 @@
          font: inherit; color: inherit; cursor: default; }
   .hit:disabled { opacity: .5; }
 
+  /* The WHOLE tile launches. The launch button itself is just the name line,
+     and once the cover band arrived most of the card's surface -- the 118px
+     image, the meta row, the padding -- was a dead zone, which read as
+     "clicking tiles sometimes does nothing" (user report 2026-07-29). The
+     stretched-button pattern: the card is already the positioning context,
+     the button projects a full-card hit surface, and the genuinely separate
+     controls (star, menu, engine band) sit a layer above it. Scoped to
+     :not(:disabled) because a disabled button swallows ALL pointer events:
+     a stretched disabled overlay would eat the right-click menu, which on a
+     missing card is the only affordance left. */
+  .hit:not(:disabled)::after { content: ""; position: absolute; inset: 0; }
+  .star, .eng { position: relative; z-index: 1; }
+  .top :global(.dots) { position: relative; z-index: 1; }
+
   .mono { flex: none; width: 40px; height: 40px; display: grid; place-items: center;
           border-radius: 6px; font-family: var(--font-display); font-size: 17px;
           color: var(--cover-ink);
