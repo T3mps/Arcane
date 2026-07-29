@@ -26,7 +26,7 @@ namespace Arcane::Editor
         //
         // Doc-identity: the step holds the DOCUMENT weakly through an anchor
         // and forwards to whatever it currently points at -- exactly
-        // ParamEditCommand's mechanism (ShaderEditorDocument.cpp:53-86, resolve
+        // ParamEditCommand's mechanism (ShaderEditorDocument.cpp:54-87, resolve
         // at :66-72), because a raw SpriteDocument* dangles the moment the
         // document closes with steps still on the shared stack, and the stack
         // outlives every document (EditorApp owns it; DocumentHost::Close
@@ -66,20 +66,20 @@ namespace Arcane::Editor
                                    Arcane::SpriteAssetData data)
         : m_services(std::move(services)), m_path(std::move(path)), m_data(std::move(data))
     {
-        // Same name-fallback rule as ShaderEditorDocument (ShaderEditorDocument.cpp:896):
+        // Same name-fallback rule as ShaderEditorDocument (ShaderEditorDocument.cpp:941):
         // an empty asset name (hand-authored file, or a pre-name-field asset)
         // falls back to the file stem rather than showing a blank title.
         m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name;
         m_windowLabel = m_title + " (Sprite)###spritedoc_" + m_data.id.ToString();
         // The anchor every undo step routes through; it dies with the document
-        // (ShaderEditorDocument.cpp:901 mints its own the same way).
+        // (ShaderEditorDocument.cpp:946 mints its own the same way).
         m_anchor = std::make_shared<SpriteDocument*>(this);
     }
 
     SpriteDocument::~SpriteDocument()
     {
         // Teardown close, same shape and rationale as ShaderEditorDocument's
-        // (ShaderEditorDocument.cpp:930-951). Documents are destroyed
+        // (ShaderEditorDocument.cpp:981-1002). Documents are destroyed
         // synchronously on close and there is no on-close hook: the X-button
         // path is already safe (requestClose is raised INSIDE Draw and acted on
         // after the loop, so Draw's ScopeGuard has run), but a close that
@@ -165,7 +165,7 @@ namespace Arcane::Editor
         if (!ImGui::Begin(m_windowLabel.c_str(), &open, flags))
         {
             // Collapsed (not closed): ShaderEditorDocument's same early-return
-            // shape (ShaderEditorDocument.cpp:1661-1670) -- `open` only goes
+            // shape (ShaderEditorDocument.cpp:1712-1721) -- `open` only goes
             // false when the titlebar X was clicked, so a merely-collapsed
             // window still reports requestClose=false here.
             m_windowFocused = false;   // see the member: a stale true misroutes Ctrl+S
@@ -302,7 +302,7 @@ namespace Arcane::Editor
                                               static_cast<float>(desc.width));
                 const ImVec2 imgPos = ImGui::GetCursorScreenPos();
                 // ImTextureID convention: the raw ITexture* cast to uintptr_t
-                // (ShaderEditorDocument.cpp:2208,2228; the backend keys its
+                // (ShaderEditorDocument.cpp:2389,2436; the backend keys its
                 // per-frame SRV binding-set cache on that same pointer,
                 // ImGuiNvrhi.cpp:246-252) -- any live ITexture* works, no
                 // per-document binding setup needed.

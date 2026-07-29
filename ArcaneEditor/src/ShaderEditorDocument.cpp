@@ -181,14 +181,26 @@ namespace Arcane::Editor
         // Pin/wire colors by PIN WIDTH. Unity's convention mapped onto Arcane's
         // pin domain, which is 1 / 2 / 4 / 0-means-dynamic
         // (GraphPinDesc::width, MaterialGraph.hpp:150-154). Unity's vec3-yellow
-        // and texture-red-orange entries have no counterpart here: Arcane has
-        // no 3-lane pin and textures are params, not pins -- so those two rows
-        // of the reference table are deliberately absent rather than mapped
-        // onto something they do not mean.
+        // has no counterpart here -- Arcane has no 3-lane pin -- so that row of
+        // the reference table is deliberately absent rather than mapped onto
+        // something it does not mean.
+        //
+        // Its texture-red-orange row DOES have one, just not on this canvas: a
+        // material graph samples textures through params, but every pin on the
+        // PASS canvas is a full-frame RGBA render target. So kPinTextureColor
+        // below is that reserved row, finally spent where a texture pin
+        // actually exists.
         constexpr ImVec4 kPinScalarColor  = ImVec4(0.502f, 0.808f, 1.0f,   1.0f); // pale azure
         constexpr ImVec4 kPinVec2Color    = ImVec4(0.549f, 0.863f, 0.549f, 1.0f); // green
         constexpr ImVec4 kPinVec4Color    = ImVec4(0.941f, 0.549f, 0.863f, 1.0f); // magenta
         constexpr ImVec4 kPinDynamicColor = ImVec4(0.745f, 0.745f, 0.765f, 1.0f); // gray
+        // Every pass-canvas pin carries the same thing -- an RGBA render target
+        // -- so the pass canvas uses ONE colour throughout rather than a type
+        // scale it has no types to fill. Distinct from the 4-lane magenta on
+        // purpose: a pass wire moves a whole image between stages, which is a
+        // different kind of edge from a float4 moving between expressions, and
+        // the two canvases sit one breadcrumb click apart.
+        constexpr ImVec4 kPinTextureColor = ImVec4(0.949f, 0.549f, 0.251f, 1.0f); // red-orange
 
         // Node geometry (canvas units at zoom 1).
         constexpr float kNodeRounding    = 4.0f;
@@ -2182,15 +2194,22 @@ namespace Arcane::Editor
         // structural gesture (wire/unwire/add/remove/reorder/rename) is ONE
         // undo step (whole pass-list before/after through PassListCommand).
         //
-        // NO RENDERING LOD HERE, deliberately. The graph canvas degrades with
-        // zoom (NodeLOD) because its nodes carry pin labels, inline literals,
-        // payload widgets and a live thumbnail; a pass node carries a name, a
-        // few pins and nothing else, so every tier below DefaultDetail would
-        // degrade to what it already draws. UE's own tiers bottom out the same
-        // way -- MediumDetail and up degrade NOTHING even in the Blueprint
-        // graph (SNodePanel.h:70-90 calls MediumDetail "still drawn", and no
-        // consumer in the engine tests for FullyZoomedIn at all). The zoom
-        // TABLE is shared because navigation feel should not differ per canvas.
+        // NO RENDERING LOD HERE, deliberately, and the facelift did not change
+        // that. The graph canvas degrades with zoom (NodeLOD) because its nodes
+        // carry pin labels, inline literals, payload widgets and a per-node
+        // compiled thumbnail -- a stack deep enough to be worth shedding. A
+        // pass node is a title, at most five pins and one thumbnail, and the
+        // thumbnail is an ALREADY-RENDERED chain intermediate rather than
+        // something compiled for the node, so hiding it reclaims no GPU work.
+        // Every tier below DefaultDetail would degrade to roughly what this
+        // already draws. UE's own tiers bottom out the same way -- MediumDetail
+        // and up degrade NOTHING even in the Blueprint graph (SNodePanel.h:
+        // 70-90 calls MediumDetail "still drawn", and no consumer in the engine
+        // tests for FullyZoomedIn at all).
+        //
+        // Shared with the graph canvas: the zoom TABLE (navigation feel should
+        // not differ per canvas), the node/canvas STYLE, the shader backdrop,
+        // title bands, port dots and wire rendering. Only the LOD tiers are not.
         if (!m_passCanvasCtx)
         {
             ed::Config cfg;
@@ -2200,14 +2219,29 @@ namespace Arcane::Editor
             // built on top of it are not -- see DrawPassCanvas's note below.)
             ApplyZoomLevels(cfg);
             m_passCanvasCtx = ed::CreateEditor(&cfg);
+            // Same node/canvas styling as the material graph, including the
+            // switch that kills the vendored grid so the shader backdrop below
+            // is the only one. Per-context state, so a rebuilt context
+            // re-applies it.
+            ed::SetCurrentEditor(m_passCanvasCtx);
+            ApplyGraphCanvasStyle();
+            ed::SetCurrentEditor(nullptr);
             m_passCanvasSeeded = false;
         }
         const std::size_t total = 1 + m_data.passes.size();
         auto nodeOf = [](std::size_t chain) { return static_cast<std::uint32_t>(chain) + 1; };
 
         ed::SetCurrentEditor(m_passCanvasCtx);
+        // Its OWN grid instance -- the phase is per-canvas state, so sharing
+        // one with the graph canvas would hand each the other's accumulated
+        // pan/zoom on every breadcrumb trip (see DrawCanvasBackdrop).
+        DrawCanvasBackdrop(m_passGrid);
         // Fills the region: this canvas IS the view now, not a strip over one.
         ed::Begin("##passcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
+
+        // Wire anchors are per-frame and per-canvas; the link loop below reads
+        // what this frame's pin rows write.
+        m_pinPivots.clear();
 
         const bool seededThisFrame = !m_passCanvasSeeded;
         if (seededThisFrame)
@@ -2275,6 +2309,23 @@ namespace Arcane::Editor
                 ImGui::TextColored(kNodeBadgeText, "(!) %s", title.c_str());
             else
                 ImGui::TextColored(kNodeTitleText, "%s", title.c_str());
+            // Band bottom + the body gap under it, same treatment and same
+            // reasoning as a graph node (DrawNodeTitleBand).
+            const float headerMaxY = ImGui::GetItemRectMax().y;
+            {
+                const float fill = (kNodePadY + kNodeHeaderGap) -
+                                   2.0f * ImGui::GetStyle().ItemSpacing.y;
+                if (fill > 0.0f)
+                    ImGui::Dummy(ImVec2(0.0f, fill));
+            }
+            // Last frame's measured width; output rows right-align to it. Its
+            // own map: pass-canvas node ids (chain index + 1) and graph node
+            // ids are unrelated counters that would collide in one.
+            const auto passWidthIt = m_passNodeWidths.find(nodeId);
+            const float passContentW =
+                passWidthIt == m_passNodeWidths.end()
+                    ? 0.0f
+                    : passWidthIt->second - 2.0f * kNodePadX;
 
             // Extra passes rename in-node (StableTextEdit's stable-buffer
             // commit; one undo step on deactivate-after-edit -- renames are not
@@ -2304,15 +2355,28 @@ namespace Arcane::Editor
             {
                 ed::BeginPin(InPin(nodeId, static_cast<std::uint32_t>(s)),
                              ed::PinKind::Input);
-                ImGui::Text("-> in%zu", s);
+                // A wired slot is always connected by construction -- the slot
+                // list IS the wire list -- so the dot is always filled here.
+                const ImVec2 dot = DrawPinDot(kPinTextureColor, true);
+                SetPinPivot(InPin(nodeId, static_cast<std::uint32_t>(s)).Get(),
+                            ImVec2(dot.x - kPinDotRadius, dot.y));
+                ImGui::SameLine();
+                ImGui::Text("in%zu", s);
                 ed::EndPin();
             }
             if (nodeInputs.size() < Arcane::kMaxPassInputs)
             {
-                ed::BeginPin(InPin(nodeId,
-                                   static_cast<std::uint32_t>(nodeInputs.size())),
-                             ed::PinKind::Input);
-                ImGui::TextDisabled("-> +");
+                const std::uint32_t sparePin =
+                    static_cast<std::uint32_t>(nodeInputs.size());
+                ed::BeginPin(InPin(nodeId, sparePin), ed::PinKind::Input);
+                // The spare accepts the NEXT wire and has none yet, so it draws
+                // hollow -- the same "nothing attached" reading the graph
+                // canvas gives an unwired input.
+                const ImVec2 dot = DrawPinDot(kPinTextureColor, false);
+                SetPinPivot(InPin(nodeId, sparePin).Get(),
+                            ImVec2(dot.x - kPinDotRadius, dot.y));
+                ImGui::SameLine();
+                ImGui::TextDisabled("+");
                 ed::EndPin();
             }
 
@@ -2328,38 +2392,94 @@ namespace Arcane::Editor
             if (thumbId)
                 ImGui::Image(thumbId, ImVec2(72.0f, 72.0f));
 
-            ed::BeginPin(OutPin(nodeId, 0), ed::PinKind::Output);
-            ImGui::TextUnformatted("out ->");
-            ed::EndPin();
+            {
+                const float rowW = ImGui::CalcTextSize("out").x +
+                                   ImGui::GetStyle().ItemSpacing.x +
+                                   kPinDotRadius * 2.0f;
+                RightAlignRow(passContentW, rowW);
+                ed::BeginPin(OutPin(nodeId, 0), ed::PinKind::Output);
+                ImGui::TextUnformatted("out");
+                ImGui::SameLine();
+                // An output fans out, so "connected" is whether anything
+                // downstream lists this chain index (the Output node's implicit
+                // read of the tail counts -- that is what the final wire is).
+                bool fanout = (c == total - 1);
+                for (const Arcane::MaterialPass& p : m_data.passes)
+                    for (std::uint32_t in : p.inputs)
+                        fanout = fanout || in == static_cast<std::uint32_t>(c);
+                const ImVec2 dot = DrawPinDot(kPinTextureColor, fanout);
+                SetPinPivot(OutPin(nodeId, 0).Get(),
+                            ImVec2(dot.x + kPinDotRadius, dot.y));
+                ed::EndPin();
+            }
 
             ImGui::PopID();
             ed::EndNode();
+            const ImVec2 passSize = DrawNodeTitleBand(nodeId, headerMaxY);
+            if (passSize.x > 0.0f)
+                m_passNodeWidths[nodeId] = passSize.x;
         }
 
         // The Scene source: the EXTERNAL scene color (bound by the runtime
         // post hook; the checkerboard stand-in in the preview). Output pin
         // only; wiring it writes the kSceneInput sentinel.
         ed::BeginNode(ed::NodeId(kPassSceneNodeId));
-        ImGui::TextUnformatted("Scene");
+        ImGui::TextColored(kNodeTitleText, "Scene");
+        const float sceneHeaderY = ImGui::GetItemRectMax().y;
+        {
+            const float fill = (kNodePadY + kNodeHeaderGap) -
+                               2.0f * ImGui::GetStyle().ItemSpacing.y;
+            if (fill > 0.0f)
+                ImGui::Dummy(ImVec2(0.0f, fill));
+        }
         if (nvrhi::ITexture* standIn = SceneStandIn())
             ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(standIn)),
                          ImVec2(72.0f, 72.0f));
         ed::BeginPin(OutPin(kPassSceneNodeId, 0), ed::PinKind::Output);
-        ImGui::TextUnformatted("scene ->");
+        ImGui::TextUnformatted("scene");
+        ImGui::SameLine();
+        {
+            // Connected when any consumer wired the sentinel.
+            bool used = false;
+            for (std::uint32_t in : m_data.baseInputs)
+                used = used || in == Arcane::kSceneInput;
+            for (const Arcane::MaterialPass& p : m_data.passes)
+                for (std::uint32_t in : p.inputs)
+                    used = used || in == Arcane::kSceneInput;
+            const ImVec2 dot = DrawPinDot(kPinTextureColor, used);
+            SetPinPivot(OutPin(kPassSceneNodeId, 0).Get(),
+                        ImVec2(dot.x + kPinDotRadius, dot.y));
+        }
         ed::EndPin();
         ed::EndNode();
+        DrawNodeTitleBand(kPassSceneNodeId, sceneHeaderY);
 
         // The Output node: shows the final image; its wire marks the LAST pass
         // (execution order's tail = what single-material consumers see).
         ed::BeginNode(ed::NodeId(kPassOutputNodeId));
-        ImGui::TextUnformatted("Output");
+        ImGui::TextColored(kNodeTitleText, "Output");
+        const float outHeaderY = ImGui::GetItemRectMax().y;
+        {
+            const float fill = (kNodePadY + kNodeHeaderGap) -
+                               2.0f * ImGui::GetStyle().ItemSpacing.y;
+            if (fill > 0.0f)
+                ImGui::Dummy(ImVec2(0.0f, fill));
+        }
         ed::BeginPin(InPin(kPassOutputNodeId, 0), ed::PinKind::Input);
-        ImGui::TextUnformatted("-> final");
+        {
+            // Always fed: the final wire is the chain's tail by construction.
+            const ImVec2 dot = DrawPinDot(kPinTextureColor, true);
+            SetPinPivot(InPin(kPassOutputNodeId, 0).Get(),
+                        ImVec2(dot.x - kPinDotRadius, dot.y));
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted("final");
         ed::EndPin();
         if (nvrhi::ITexture* finalTex = chain ? chain->PassOutput(total - 1) : nullptr)
             ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(finalTex)),
                          ImVec2(72.0f, 72.0f));
         ed::EndNode();
+        DrawNodeTitleBand(kPassOutputNodeId, outHeaderY);
 
         // ---- links (derived from the data each frame; ids = list index + 1).
         // Sentinel entries draw from the Scene source; the base (c == 0) only
@@ -2374,14 +2494,16 @@ namespace Arcane::Editor
                 const std::uint32_t src = ins[s];
                 linkSlots.emplace_back(static_cast<std::uint32_t>(c),
                                        static_cast<std::uint32_t>(s));
-                ed::Link(ed::LinkId(linkSlots.size()),
-                         src == Arcane::kSceneInput ? OutPin(kPassSceneNodeId, 0)
-                                                    : OutPin(nodeOf(src), 0),
-                         InPin(nodeOf(c), static_cast<std::uint32_t>(s)));
+                const ed::PinId fromPin = src == Arcane::kSceneInput
+                                              ? OutPin(kPassSceneNodeId, 0)
+                                              : OutPin(nodeOf(src), 0);
+                const ed::PinId toPin =
+                    InPin(nodeOf(c), static_cast<std::uint32_t>(s));
+                DrawPassWire(linkSlots.size(), fromPin.Get(), toPin.Get());
             }
         }
-        ed::Link(ed::LinkId(kPassOutputLinkId), OutPin(nodeOf(total - 1), 0),
-                 InPin(kPassOutputNodeId, 0));
+        DrawPassWire(kPassOutputLinkId, OutPin(nodeOf(total - 1), 0).Get(),
+                     InPin(kPassOutputNodeId, 0).Get());
 
         // ---- wire edits
         // Structural gestures land on the undo stack as whole pass-list
@@ -4112,7 +4234,7 @@ namespace Arcane::Editor
         // while a name field has focus is exactly that gesture.
         //
         // The KIND is checked, not just the id: m_textEdit is one buffer shared
-        // with the pass canvas (ShaderEditorDocument.hpp:549-559), and
+        // with the pass canvas (ShaderEditorDocument.hpp:592-602), and
         // a PassName key carries a chain INDEX that can collide with a node id.
         //
         // Value drags need no guard -- an abandoned gesture is closed by
@@ -4832,6 +4954,27 @@ namespace Arcane::Editor
         const ImVec2 nodeSize = DrawNodeTitleBand(n.id, headerMaxY);
         if (nodeSize.x > 0.0f)
             m_nodeWidths[n.id] = nodeSize.x;
+    }
+
+    void ShaderEditorDocument::DrawPassWire(std::uint64_t linkId,
+                                            std::uint64_t fromPinId,
+                                            std::uint64_t toPinId)
+    {
+        const ed::LinkId id(linkId);
+        const ed::PinId  fromPin(fromPinId);
+        const ed::PinId  toPin(toPinId);
+        // Same two-layer treatment the material graph uses: a TRANSPARENT
+        // ed::Link purely for interaction (it still hit-tests at the real
+        // thickness, but tessellates nothing), then our own curve on top.
+        // Every pass wire carries the same thing, so both ends are the one
+        // texture colour -- the gradient path is reused for the emphasis and
+        // the exact curve match, not for a colour transition it has no types
+        // to make.
+        ed::Link(id, fromPin, toPin, ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+                 kWireThickness);
+        const bool emphasize = ed::IsLinkSelected(id) || ed::GetHoveredLink() == id;
+        DrawGradientWire(fromPin.Get(), toPin.Get(), kPinTextureColor,
+                         kPinTextureColor, emphasize);
     }
 
     void ShaderEditorDocument::DrawCanvasBackdrop(std::unique_ptr<GraphGridPass>& grid)

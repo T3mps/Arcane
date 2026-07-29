@@ -329,6 +329,13 @@ namespace Arcane::Editor
         // call on text-only docs (the loop no-ops); any codegen error keeps
         // last-good bound and fills that pass's badge list instead.
         void RegenerateFromGraph();
+        // One pass-canvas wire: transparent ed::Link for interaction + our own
+        // curve on top, same two-layer shape the material graph's links use.
+        // Raw ids rather than ed:: handles, for the same reason
+        // DrawGradientWire takes them: only EditorContext is forward-declared
+        // here, so the node-editor types are not nameable in this header.
+        void DrawPassWire(std::uint64_t linkId, std::uint64_t fromPinId,
+                          std::uint64_t toPinId);
         // Blit one canvas's shader grid backdrop. MUST be called before that
         // canvas's ed::Begin (layering + ScreenToCanvas both require it); the
         // instance is a parameter because the grid's phase is per-canvas state.
@@ -537,6 +544,13 @@ namespace Arcane::Editor
         // Lazy and optional: device-less services (the headless tests) and a
         // missing shader artifact both leave it null and simply draw no grid.
         std::unique_ptr<GraphGridPass> m_grid;
+        // The pass canvas's own backdrop instance. Separate because the grid's
+        // phase is per-canvas state (DrawCanvasBackdrop says why), and the two
+        // views alternate.
+        std::unique_ptr<GraphGridPass> m_passGrid;
+        // Pass-canvas node widths, keyed by pass-canvas node id. Its own map:
+        // chain-index-derived ids and graph node ids are unrelated counters.
+        std::unordered_map<std::uint32_t, float> m_passNodeWidths;
         // Each node's measured width from the LAST frame it drew, keyed by node
         // id. Right-aligned output rows and full-width previews both need a
         // width that only exists after the node has been laid out, so they use
