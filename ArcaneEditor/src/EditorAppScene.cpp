@@ -9,6 +9,7 @@
 
 #include "EditorApp.hpp"
 #include "EditorCamera.hpp"
+#include "RuntimeLaunch.hpp"
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -22,6 +23,18 @@
 
 #include <filesystem>
 #include <string>
+#include <system_error>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace Arcane::Editor
 {
@@ -43,6 +56,21 @@ namespace Arcane::Editor
             const std::filesystem::path cb = std::filesystem::weakly_canonical(b, eb);
             if (ea || eb) return a == b;
             return ca == cb;
+        }
+
+        // The editor exe's OWN directory -- RuntimeLaunch::ExeCandidates wants
+        // this to find ArcaneRuntime.exe beside or as a sibling of it. Same
+        // GetModuleFileNameW pattern as EditorFonts.cpp's private ExeDir()
+        // (not shared: each TU that needs it keeps its own small copy, same
+        // as that file's own comment on the precedent).
+        std::filesystem::path CurrentExeDir()
+        {
+#ifdef _WIN32
+            wchar_t buf[MAX_PATH]{};
+            if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) != 0)
+                return std::filesystem::path(buf).parent_path();
+#endif
+            return std::filesystem::current_path();
         }
     }
 
@@ -268,6 +296,83 @@ namespace Arcane::Editor
         // which is exactly what the capture's waitForIdle needs.
         WriteAutoScreenshot();
         return true;
+    }
+
+    // Play button's SeparateWindow branch (Task 6, runtime-host-fold arc):
+    // fire-and-forget spawn of ArcaneRuntime.exe on the ACTIVE scene, as
+    // SAVED (spec option b) -- never a snapshot of unsaved edits. The editor
+    // takes no lock on the child and does not track it; m_play/the toolbar's
+    // Play toggle are untouched either way (see DrawSimTimeToolbar).
+    //
+    // MANDATORY guard, not optional (Task 5 review finding): a never-saved
+    // scene has a NIL guid (SceneSession.hpp -- "nil until saved"; the
+    // id-reuse branch a few lines above DoSaveScene's SaveSceneFile call is
+    // the other place this matters), and RuntimeLaunch::BuildArgs silently
+    // OMITS --scene for a nil guid -- the spawned runtime would then boot the
+    // project manifest's bootScene instead of what is on screen, with no
+    // signal anything was skipped. So the gate below treats "no valid id yet"
+    // exactly like "dirty": both park behind the SAME "Save and Play?" modal
+    // (DrawModals, EditorAppFrame.cpp), and only a successful save (which
+    // assigns the id, same as any other Save Scene) may proceed past it.
+    //
+    // Re-entrant: the modal's Save button (already-saved branch, synchronously)
+    // and ConsumeSceneDialogResults' deferred branch (never-saved branch, once
+    // its async Save-As dialog actually lands) both call this function again
+    // once the guard is satisfied, and it falls straight through to the spawn.
+    void EditorApp::LaunchStandalone()
+    {
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        if (!proj)
+        {
+            m_launchError = "Open a project before playing in a separate window.";
+            return;
+        }
+
+        if (!m_scene.Id().IsValid() || m_scene.IsDirty(*m_undo))
+        {
+            m_launchModalPending = true;
+            return;
+        }
+
+        // Packaged layout first (ArcaneRuntime.exe beside ArcaneEditor.exe),
+        // dev bin layout second (premake's per-project sibling directories) --
+        // see RuntimeLaunch::ExeCandidates. Existence is this caller's job by
+        // that function's own contract; SpawnDetached would also refuse a
+        // missing exe, but resolving here is what lets the failure message
+        // name BOTH candidate paths instead of just the one SpawnDetached tried.
+        const std::vector<std::filesystem::path> candidates =
+            Arcane::Editor::RuntimeLaunch::ExeCandidates(CurrentExeDir());
+
+        std::filesystem::path resolved;
+        std::error_code ec;
+        for (const std::filesystem::path& candidate : candidates)
+        {
+            if (std::filesystem::is_regular_file(candidate, ec))
+            {
+                resolved = candidate;
+                break;
+            }
+        }
+
+        if (resolved.empty())
+        {
+            std::string looked;
+            for (const std::filesystem::path& candidate : candidates)
+            {
+                if (!looked.empty()) looked += "\nand\n";
+                looked += "'" + candidate.string() + "'";
+            }
+            ARC_ERROR("LaunchStandalone: ArcaneRuntime.exe not found ({})", looked);
+            m_launchError = "ArcaneRuntime.exe was not found. Looked in:\n" + looked;
+            return;
+        }
+
+        const std::vector<std::wstring> args = Arcane::Editor::RuntimeLaunch::BuildArgs(
+            proj->Root(), m_scene.Id(), m_config.backend);
+
+        if (!Arcane::Editor::RuntimeLaunch::SpawnDetached(resolved, args))
+            m_launchError = "Failed to launch '" + resolved.string() +
+                             "'. See the Console for details.";
     }
 
     void EditorApp::FrameCamera(bool selectionOnly)

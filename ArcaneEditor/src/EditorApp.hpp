@@ -48,6 +48,15 @@
 
 namespace Astra { class TypeContext; }
 namespace Arcane { struct InputSnapshot; }   // by-reference phase parameters only
+// Opaque here on purpose: the play-mode settings handler (Task 6) is the only
+// thing in this header that needs these names, and ImGui's ini extension
+// point (ImGuiSettingsHandler) is internal-only -- imgui_internal.h stays
+// confined to EditorApp.cpp, never leaking into this header. ImGuiContext is
+// forward-declared in the public imgui.h too; ImGuiTextBuffer is a complete
+// type there, but only a pointer to it appears below, so this is enough.
+struct ImGuiContext;
+struct ImGuiSettingsHandler;
+struct ImGuiTextBuffer;
 
 namespace Arcane::Editor
 {
@@ -182,6 +191,53 @@ namespace Arcane::Editor
         // Arcane Editor boots in Edit (see Init: the RunLoop is paused right after the
         // plugin loads).
         Arcane::Editor::PlaySession m_play;
+
+        // Play-mode dropdown (Task 6, runtime-host-fold arc): which action the
+        // transport's Play button performs (see DrawSimTimeToolbar). Viewport =
+        // m_play above, unchanged. SeparateWindow = LaunchStandalone (below) --
+        // m_play/its toggle are never touched by that path. Persisted across
+        // restarts via an ImGuiSettingsHandler ("[EditorPlayMode][State]"),
+        // registered in Init beside ShaderEditorDocument::RegisterLayoutSettings;
+        // a malformed or absent ini line leaves this at its Viewport default.
+        Arcane::Editor::PlayLaunchMode m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
+
+        // ImGuiSettingsHandler callbacks for m_playMode, mirroring
+        // ShaderEditorDocument's layout handler (same registration site, same
+        // read/write shape) -- static member functions rather than free
+        // functions (like the scene/project dialog Thunks below) so they can
+        // reach the private m_playMode of the instance handed through
+        // handler->UserData; there is exactly one EditorApp per process.
+        static void* PlayModeSettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                              const char* name);
+        static void  PlayModeSettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                              void* entry, const char* line);
+        static void  PlayModeSettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                              ImGuiTextBuffer* buf);
+        void RegisterPlayModeSettings();   // called from Init, beside RegisterLayoutSettings
+
+        // SeparateWindow's launch flow (LaunchStandalone, EditorAppScene.cpp).
+        // m_launchModalPending is the edge LaunchStandalone raises when the active
+        // scene is not ready to hand to ArcaneRuntime (dirty, OR never saved --
+        // see LaunchStandalone's own header comment for why a nil scene guid gets
+        // the same treatment as dirty); DrawModals opens the "Save and Play?"
+        // popup while it is true, same re-arm shape as the Unsaved Scene modal.
+        // m_launchAfterSceneSave covers the never-saved sub-case: the modal's
+        // Save button cannot save synchronously (no filename yet), so it falls
+        // back to the async Save-As dialog and sets this; ConsumeSceneDialogResults
+        // resumes the launch once that dialog's save actually lands.
+        bool m_launchModalPending   = false;
+        bool m_launchAfterSceneSave = false;
+        // Last standalone-launch failure (no project open, ArcaneRuntime.exe not
+        // found, or CreateProcessW itself failed), shown as its own blocking
+        // modal until dismissed. Kept separate from m_sceneError/m_projectOpenError
+        // so the message and the modal title stay honest about which action failed.
+        std::string m_launchError;
+        // Entry point for the Play button's SeparateWindow branch (see
+        // DrawSimTimeToolbar's return value and its call site in DrawEditorUi).
+        // Re-entrant: DrawModals' Save button and ConsumeSceneDialogResults'
+        // deferred-save branch both call this again once the scene is clean and
+        // has a valid guid, and it falls straight through to the spawn.
+        void LaunchStandalone();
 
         // Ordered multi-select source of truth (set + primary); slice-2 consumers
         // operate on Primary(), shared by the Hierarchy panel (and, later, the

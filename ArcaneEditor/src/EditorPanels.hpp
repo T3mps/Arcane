@@ -20,6 +20,7 @@ namespace Arcane::Editor
 {
     class ConsoleBuffer;
     class PlaySession;
+    enum class PlayLaunchMode;   // full definition in PlayMode.hpp
     struct SelectionContext;
 
     // Menu-bar requests the app resolves AFTER the frame's dockspace is drawn
@@ -62,8 +63,18 @@ namespace Arcane::Editor
     // fresh from `runtime` AFTER Play/Stop handling. `logoTex` is the Arcane logo as an
     // ImGui texture id (the raw nvrhi::ITexture* as a uint64_t, matching DrawViewportPanel's
     // convention); drawn as a small mark at the far LEFT of the strip (Unity-style). 0 skips it.
-    void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin, uint64_t logoTex = 0);
+    //
+    // `mode` is the play-mode dropdown's persisted state (Task 6, runtime-host-fold
+    // arc), read AND written here: the chevron button after Step opens a popup whose
+    // rows set it directly. In Viewport mode the Play button behaves exactly as
+    // before (play.Play/Stop). In SeparateWindow mode, clicking Play does NOT touch
+    // `play` at all (fire-and-forget: nothing to Stop) -- instead this returns true
+    // for that one frame, and the caller (EditorApp::LaunchStandalone) owns the
+    // project/dirty-scene checks and the actual ArcaneRuntime spawn, the same
+    // "panel reports, app performs" split ViewportPanelResult's clicks already use.
+    [[nodiscard]] bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
+                                          const Arcane::PluginVTable* plugin,
+                                          PlayLaunchMode& mode, uint64_t logoTex = 0);
 
     // (The Assets panel is the REAL browser now -- AssetBrowser.hpp's
     // DrawAssetBrowserPanel; the placeholder stub retired in Slice 6.)

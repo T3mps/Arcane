@@ -234,6 +234,19 @@ namespace Arcane::Editor
                 if (saved) RunSceneAction(m_scene.TakePending(), ls);
                 else       m_scene.ClearPending();
             }
+
+            // Same shape, for LaunchStandalone's "Save and Play?" modal: its
+            // Save button falls back to this same dialog for a never-saved
+            // scene (see EditorAppScene.cpp), and the actual spawn was parked
+            // until the save the user just answered actually landed. Clear
+            // the gate either way -- a failed save must not go on to launch
+            // against whatever the registry happens to hold.
+            if (m_launchAfterSceneSave)
+            {
+                m_launchAfterSceneSave = false;
+                m_launchModalPending   = false;
+                if (saved) LaunchStandalone();   // re-entrant: now clean + a valid guid -> spawns
+            }
         }
     }
 
@@ -1066,8 +1079,13 @@ namespace Arcane::Editor
         Arcane::Editor::MenuRequests menuReq;
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
                                        m_play.IsPlaying());
-        Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime, m_plugin ? m_plugin->Vtable() : nullptr,
-                                           (uint64_t)(intptr_t)m_toolbarLogo.Get());
+        // Play button's SeparateWindow branch: the toolbar only REPORTS the
+        // click (same "panel reports, app performs" split as ViewportPanelResult);
+        // LaunchStandalone owns the project/dirty-scene checks and the spawn.
+        if (Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime,
+                                               m_plugin ? m_plugin->Vtable() : nullptr, m_playMode,
+                                               (uint64_t)(intptr_t)m_toolbarLogo.Get()))
+            LaunchStandalone();
         Arcane::Editor::EndDockSpace();
         // Bare interactive launch: raise the picker as if the user had clicked
         // File -> Open Project, once. Routed through menuReq (rather than
@@ -1338,6 +1356,89 @@ namespace Arcane::Editor
                 ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
             {
                 m_sceneError.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // "Save and Play?" gate (Task 6, runtime-host-fold arc): LaunchStandalone
+        // parks m_launchModalPending when the active scene is dirty OR was never
+        // saved -- a nil scene guid gets the SAME treatment as dirty, because
+        // RuntimeLaunch::BuildArgs would otherwise silently omit --scene and the
+        // spawned runtime would boot the manifest's bootScene instead of what is
+        // on screen (see LaunchStandalone's header comment, EditorAppScene.cpp).
+        // Same re-arm shape as the Unsaved Scene modal above.
+        if (m_launchModalPending && !ImGui::IsPopupOpen("Save and Play?"))
+            ImGui::OpenPopup("Save and Play?");
+        if (ImGui::BeginPopupModal("Save and Play?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            if (!m_launchModalPending)
+            {
+                // Resolved elsewhere: the never-saved branch below sets
+                // m_launchAfterSceneSave and leaves this open across frames
+                // (like the Unsaved Scene modal's own never-saved branch) until
+                // ConsumeSceneDialogResults' save actually lands and clears the
+                // gate. Nothing left to ask once that happens.
+                ImGui::CloseCurrentPopup();
+            }
+            else
+            {
+                ImGui::TextUnformatted(("'" + m_scene.DisplayName() +
+                                        "' must be saved before playing in a "
+                                        "separate window.").c_str());
+                ImGui::Separator();
+                if (ImGui::Button("Save and Play", ImVec2(140, 0)))
+                {
+                    if (m_scene.Path().empty())
+                    {
+                        // Never saved: no filename to save synchronously over.
+                        // Fall back to the async Save-As dialog and stay parked
+                        // -- ConsumeSceneDialogResults resumes the launch once
+                        // that dialog's save actually lands.
+                        m_launchAfterSceneSave = true;
+                        ShowSceneSaveDialog();
+                    }
+                    else if (DoSaveScene(m_scene.Path()))
+                    {
+                        m_launchModalPending = false;
+                        ImGui::CloseCurrentPopup();
+                        LaunchStandalone();   // re-entrant: now clean -> falls through to spawn
+                    }
+                    else
+                    {
+                        // Save failed; m_sceneError carries why (its own modal).
+                        m_launchModalPending = false;
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(90, 0)) ||
+                    ImGui::IsKeyPressed(ImGuiKey_Escape))
+                {
+                    m_launchModalPending = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::EndPopup();
+        }
+
+        // Standalone-launch failure modal (no project open, ArcaneRuntime.exe
+        // not found, or CreateProcessW itself failed). Same re-arm shape; kept
+        // separate from m_sceneError so the message and title stay honest
+        // about which action failed.
+        if (!m_launchError.empty() && !ImGui::IsPopupOpen("Play in Separate Window Failed"))
+            ImGui::OpenPopup("Play in Separate Window Failed");
+        if (ImGui::BeginPopupModal("Play in Separate Window Failed", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+            ImGui::TextUnformatted(m_launchError.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::Separator();
+            if (ImGui::Button("OK", ImVec2(120, 0)) ||
+                ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
+            {
+                m_launchError.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();

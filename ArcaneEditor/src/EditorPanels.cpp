@@ -200,8 +200,9 @@ namespace Arcane::Editor
         ImGui::End();
     }
 
-    void DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin, uint64_t logoTex)
+    bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
+                            const Arcane::PluginVTable* plugin,
+                            PlayLaunchMode& mode, uint64_t logoTex)
     {
         // Icon button with a hover tooltip (icons need discoverable labels).
         // `id` is an ImGui ID-only suffix (e.g. "##sim_playstop") appended to the
@@ -271,24 +272,34 @@ namespace Arcane::Editor
             leftX += sz.x;
         }
 
-        // -- CENTER: transport (Play / Pause / Step), Unity-style toggles. --
-        // Center the trio within the full toolbar width, placed on the button row -- but
-        // never behind the left cluster (clamp on narrow windows). Undo/Redo moved to the
-        // Edit menu; the transform-gizmo tools moved to the Viewport overlay.
+        // -- CENTER: transport (Play / Pause / Step / play-mode chevron), Unity-style
+        // toggles. Center the group within the full toolbar width, placed on the
+        // button row -- but never behind the left cluster (clamp on narrow windows).
+        // Undo/Redo moved to the Edit menu; the transform-gizmo tools moved to the
+        // Viewport overlay.
         auto btnW = [&](const char* icon)
         { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
         const float transportW = btnW(ICON_LC_PLAY) + btnW(ICON_LC_PAUSE)
-                               + btnW(ICON_LC_STEP_FORWARD) + st.ItemSpacing.x * 2.0f;
+                               + btnW(ICON_LC_STEP_FORWARD) + btnW(ICON_LC_CHEVRON_DOWN)
+                               + st.ItemSpacing.x * 3.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
         ImGui::SetCursorPos(ImVec2(std::max(centerStart, leftX + 12.0f), rowY));
 
         // Play/Stop toggle (Unity-style): ALWAYS the play glyph, tinted while playing;
-        // clicking the lit (playing) button stops. No icon swap.
+        // clicking the lit (playing) button stops. No icon swap. The tint/toggle is
+        // PIE-ONLY: a SeparateWindow launch is fire-and-forget (the editor takes no
+        // lock on the child and does not track it), so it never lights this button --
+        // Stop would have nothing of its own to restore for a launch it never tracked.
+        bool launchStandaloneRequested = false;
         const bool playing = play.IsPlaying();
         if (iconToggle(ICON_LC_PLAY, "##sim_play", playing, playing ? "Stop" : "Play"))
         {
-            if (playing) play.Stop(runtime, plugin);
-            else         play.Play(runtime, plugin);
+            if (playing)
+                play.Stop(runtime, plugin);
+            else if (mode == PlayLaunchMode::SeparateWindow)
+                launchStandaloneRequested = true;   // caller resolves + spawns; play/plugin untouched
+            else
+                play.Play(runtime, plugin);
         }
         // Re-fetch AFTER a possible Stop -- Runtime::RestoreRegistry destroys and
         // replaces m_impl->loop on Stop, so a reference taken before this dangles.
@@ -311,9 +322,28 @@ namespace Arcane::Editor
         ImGui::BeginDisabled(!play.IsPlaying());
         if (iconBtn(ICON_LC_STEP_FORWARD, "##sim_step", "Step")) loop.RequestSingleStep();
         ImGui::EndDisabled();
+        ImGui::SameLine();
+
+        // Play-mode dropdown (Task 6, runtime-host-fold arc): choose whether the Play
+        // button above enters PIE ("In viewport", today's behavior) or spawns a
+        // standalone ArcaneRuntime window on the active scene ("Separate window",
+        // fire-and-forget). These two rows are also the future SERVER-SET seam: a
+        // server-driven "how should this build play" directive lands here as a new
+        // row, never as a separate UI-only concept bolted on elsewhere.
+        if (iconBtn(ICON_LC_CHEVRON_DOWN, "##sim_playmode", "Play mode"))
+            ImGui::OpenPopup("##play_mode");
+        if (ImGui::BeginPopup("##play_mode"))
+        {
+            if (ImGui::MenuItem("In viewport", nullptr, mode == PlayLaunchMode::Viewport))
+                mode = PlayLaunchMode::Viewport;
+            if (ImGui::MenuItem("Separate window", nullptr, mode == PlayLaunchMode::SeparateWindow))
+                mode = PlayLaunchMode::SeparateWindow;
+            ImGui::EndPopup();
+        }
 
         ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));   // clear the logo's lower overhang too
         ImGui::Separator();
+        return launchStandaloneRequested;
     }
 
     void DrawConsolePanel(const ConsoleBuffer& console)

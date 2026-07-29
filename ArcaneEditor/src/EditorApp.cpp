@@ -45,11 +45,18 @@
 
 #include <nvrhi/nvrhi.h>
 #include <imgui.h>
+// AddSettingsHandler / FindSettingsHandler, ImGuiSettingsHandler and
+// ImHashStr are internal-only -- ImGui's ini extension point has never been
+// in the public header (same cite as ShaderEditorDocument.cpp, which
+// registers its own handler the same way).
+#include <imgui_internal.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/callback_sink.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -77,10 +84,73 @@ namespace Arcane::Editor
                 title += "*";
             return title;
         }
+
+        // Persistence for EditorApp::m_playMode: an ImGuiSettingsHandler section
+        // "[EditorPlayMode][State]", one "Mode=%d" line -- same shape as
+        // ShaderEditorDocument's "[ArcaneEditorLayout][MaterialPanel]" handler
+        // (ShaderEditorDocument.cpp:757-815), registered at the same site
+        // (Init, right after ImGui's context exists and before the first
+        // NewFrame reads the ini).
+        constexpr const char* kPlayModeIniType = "EditorPlayMode";
+        constexpr const char* kPlayModeIniName = "State";
     }
 
     EditorApp::EditorApp(HostConfig cfg)
         : m_config(std::move(cfg)), m_perf(m_config.perf) {}
+
+    void* EditorApp::PlayModeSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
+                                              const char* name)
+    {
+        // handler->UserData is `this` (set in RegisterPlayModeSettings) -- there
+        // is exactly one EditorApp per process, so this doubles as the "entry"
+        // ReadLine receives, same as LayoutSettingsReadOpen returning
+        // &ShaderEditorDocument::Layout().
+        return std::strcmp(name, kPlayModeIniName) == 0 ? handler->UserData : nullptr;
+    }
+
+    void EditorApp::PlayModeSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
+                                             void* entry, const char* line)
+    {
+        auto* self = static_cast<EditorApp*>(entry);
+        int mode = -1;
+        // Malformed or out-of-range: m_playMode keeps its Viewport default --
+        // never trust an ini line a hand edit (or a future enumerator's
+        // rollback) could have left in a bogus state. Viewport is also the
+        // safe fallback: it is today's behavior, unchanged.
+        if (std::sscanf(line, "Mode=%d", &mode) == 1 && mode >= 0 &&
+            mode <= static_cast<int>(Arcane::Editor::PlayLaunchMode::SeparateWindow))
+        {
+            self->m_playMode = static_cast<Arcane::Editor::PlayLaunchMode>(mode);
+        }
+    }
+
+    void EditorApp::PlayModeSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
+                                             ImGuiTextBuffer* buf)
+    {
+        auto* self = static_cast<EditorApp*>(handler->UserData);
+        buf->reserve(buf->size() + 48);
+        buf->appendf("[%s][%s]\n", handler->TypeName, kPlayModeIniName);
+        buf->appendf("Mode=%d\n", static_cast<int>(self->m_playMode));
+        buf->append("\n");
+    }
+
+    void EditorApp::RegisterPlayModeSettings()
+    {
+        // No context (headless) or already registered: nothing to do -- same
+        // idempotency guard as ShaderEditorDocument::RegisterLayoutSettings.
+        if (ImGui::GetCurrentContext() == nullptr ||
+            ImGui::FindSettingsHandler(kPlayModeIniType) != nullptr)
+            return;
+
+        ImGuiSettingsHandler handler;
+        handler.TypeName   = kPlayModeIniType;
+        handler.TypeHash   = ImHashStr(kPlayModeIniType);
+        handler.UserData   = this;   // one EditorApp per process (see m_playMode's decl)
+        handler.ReadOpenFn = &EditorApp::PlayModeSettingsReadOpen;
+        handler.ReadLineFn = &EditorApp::PlayModeSettingsReadLine;
+        handler.WriteAllFn = &EditorApp::PlayModeSettingsWriteAll;
+        ImGui::AddSettingsHandler(&handler);
+    }
 
     bool EditorApp::Init()
     {
@@ -132,6 +202,7 @@ namespace Arcane::Editor
         // which is where ImGui reads the ini; a handler added later would never
         // see the saved entry.
         ShaderEditorDocument::RegisterLayoutSettings();
+        RegisterPlayModeSettings();
         InstallConsoleSink();
 
         // Editor fonts: Roboto base + merged lucide icons, on the editor context
