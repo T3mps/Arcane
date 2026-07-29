@@ -53,10 +53,10 @@ export type Settings = {
   /**
    * What the Hub window does after a successful launch. Read RUST-side
    * (open_project parks/hides, the wait thread restores); the frontend only
-   * edits it. `tray` (default) parks in the system tray and STAYS there when
-   * the last editor exits; `hide` vanishes and restores on last exit; `stay`
-   * keeps the window open. Rust normalises through `clean_behavior`.
-   * Replaced hideWhileRunning 2026-07-29 when the tray arrived.
+   * edits it. `tray` (default) parks in the system tray while editors run;
+   * `hide` vanishes with no icon. BOTH come back when the last editor
+   * exits; `stay` keeps the window open throughout. Rust normalises through
+   * `clean_behavior`. Replaced hideWhileRunning 2026-07-29.
    */
   launchBehavior: "tray" | "hide" | "stay";
   /**

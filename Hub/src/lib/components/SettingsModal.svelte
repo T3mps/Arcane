@@ -87,9 +87,9 @@
   // require trying all three.
   const BEHAVIORS: { id: Settings["launchBehavior"]; label: string; d: string }[] = [
     { id: "tray", label: "Minimize to the tray",
-      d: "The Hub waits in the system tray. Click the icon to bring it back; right-click it to launch a recent project or quit." },
+      d: "The Hub waits in the system tray while editors run — click the icon to bring it back, right-click it to launch a recent project or quit — and comes back when the last editor closes." },
     { id: "hide", label: "Hide until the editors close",
-      d: "The Hub vanishes and comes back when the last editor closes. Launching the Hub again brings it back sooner." },
+      d: "The Hub vanishes entirely and comes back when the last editor closes. Launching the Hub again brings it back sooner." },
     { id: "stay", label: "Keep the Hub open",
       d: "The window stays where it is, beside the editor." },
   ];

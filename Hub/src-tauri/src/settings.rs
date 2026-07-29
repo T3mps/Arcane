@@ -76,13 +76,12 @@ pub struct Settings {
     pub default_project_dir: String,
 
     /// What the Hub window does after a successful launch. Three values:
-    /// `tray` (default) -- hide into the system tray: click brings it back,
-    /// right-click offers quick launch/quit, and the Hub STAYS in the tray
-    /// when the last editor exits (a launcher window popping itself back up
-    /// when the work closes is the Epic launcher's most-complained-about
-    /// habit; the icon is the handle, so nothing needs to pop).
-    /// `hide` -- vanish entirely, restore when the LAST editor exits;
-    /// relaunching the Hub un-hides it early via the single-instance
+    /// `tray` (default) -- hide into the system tray WHILE editors run:
+    /// click brings it back early, right-click offers quick launch/quit,
+    /// and when the last editor exits the Hub comes back on its own (user
+    /// call 2026-07-29 -- the icon is for during the run, not after it).
+    /// `hide` -- vanish entirely with no icon, restore when the LAST editor
+    /// exits; relaunching the Hub un-hides it early via the single-instance
     /// callback. `stay` -- keep the window open beside the editor.
     /// Replaced the hide_while_running bool 2026-07-29 when the tray
     /// arrived; no legacy read of the old key, per the no-migration rule.

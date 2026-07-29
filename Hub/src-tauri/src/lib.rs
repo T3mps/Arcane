@@ -700,19 +700,20 @@ fn do_open_project(
                 let _ = app.emit("launch-failed", format!("{shown}: {why}."));
             }
 
-            // How the window comes back is decided by the setting NOW, not
-            // the one at launch time, so toggling mid-run behaves. Tray mode
-            // deliberately does NOT restore: the icon is the handle, and a
-            // launcher window popping itself up when the work closes is the
-            // Epic habit the tray exists to avoid. Every other mode restores
-            // -- but only a window that is actually hidden, so `stay` never
-            // steals focus from whatever the user moved on to.
+            // A hidden window ALWAYS restores when the last editor exits,
+            // whatever hid it -- hide has no other handle, and tray hands
+            // the Hub back too (user call 2026-07-29: the icon is for
+            // DURING the run; when the work ends the user should be looking
+            // at the Hub to close it or launch the next thing). show_hub
+            // clears the tray icon along the way. `stay` windows are never
+            // hidden, so the guard alone keeps them from stealing focus
+            // from whatever the user moved on to.
             if none_left {
                 let hidden = app
                     .get_webview_window("main")
                     .map(|w| !w.is_visible().unwrap_or(true))
                     .unwrap_or(false);
-                if hidden && settings::load().launch_behavior != settings::BEHAVIOR_TRAY {
+                if hidden {
                     tray::show_hub(&app);
                 }
                 // Regardless of the window: the list's opened-times and
