@@ -402,3 +402,26 @@ TEST_CASE("EditorLock: a live lock names this process; a dead one is ignored", "
     CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
     CHECK_FALSE(std::filesystem::exists(Arcane::EditorLock::FileFor(dir)));
 }
+
+TEST_CASE("EditorLock::RivalPid exempts this process and ignores stale locks", "[project]")
+{
+    const auto dir = TempDir("editor_lock_rival");
+
+    // No lock -> no rival.
+    CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+
+    // OUR OWN live lock is not a rival: SwitchProject back to the project we
+    // already hold must sail past our own claim, not refuse over it.
+    Arcane::EditorLock::Write(dir);
+    REQUIRE(Arcane::EditorLock::ReadLive(dir).has_value());
+    CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+
+    // A stale lock (same pid, wrong birth = a dead session) is no rival
+    // either -- same defeat ReadLive is pinned on. The live-rival positive
+    // path shares ReadLive's tested machinery; forging one would need a
+    // second live process, which is desk territory.
+    auto stale = Arcane::EditorLock::Self();
+    stale.start ^= 1;
+    WriteFile(Arcane::EditorLock::FileFor(dir), Arcane::EditorLock::ToJson(stale));
+    CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+}

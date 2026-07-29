@@ -272,6 +272,11 @@ pub fn do_open_project(
                     // Exit 2 is the editor's own project gate (ArcaneEditor
                     // main.cpp): wrong abi, unreadable manifest, refused boot.
                     Some(2) => "the editor refused the project (engine/abi gate)".to_string(),
+                    // Exit 3 is the editor's OWN double-open refusal (it
+                    // focused the rival before exiting). Rare from here --
+                    // this Hub's guard focuses first -- but reachable when a
+                    // rival appeared between the guard and the editor's boot.
+                    Some(3) => "that project is already open in another editor".to_string(),
                     Some(c) => format!("the editor exited immediately with code {c}"),
                     None => "the editor was killed before it opened".to_string(),
                 };

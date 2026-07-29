@@ -483,5 +483,59 @@ namespace Arcane
             return std::nullopt;
 #endif
         }
+
+        std::optional<uint32_t> RivalPid(const std::filesystem::path& projectRoot)
+        {
+#ifdef _WIN32
+            const auto pid = ReadLive(projectRoot);
+            if (pid && *pid != ::GetCurrentProcessId())
+                return pid;
+            return std::nullopt;
+#else
+            (void)projectRoot;   // ReadLive answers nullopt here anyway
+            return std::nullopt;
+#endif
+        }
+
+#ifdef _WIN32
+        namespace
+        {
+            struct FocusTarget
+            {
+                DWORD pid;
+                HWND  hwnd;
+            };
+
+            BOOL CALLBACK FindProcessWindow(HWND hwnd, LPARAM lparam)
+            {
+                auto* t = reinterpret_cast<FocusTarget*>(lparam);
+                DWORD owner = 0;
+                ::GetWindowThreadProcessId(hwnd, &owner);
+                if (owner == t->pid && ::IsWindowVisible(hwnd))
+                {
+                    t->hwnd = hwnd;
+                    return FALSE;   // found -- stop enumerating
+                }
+                return TRUE;
+            }
+        }
+
+        bool FocusWindowOfProcess(uint32_t pid)
+        {
+            FocusTarget target{ pid, nullptr };
+            ::EnumWindows(FindProcessWindow, reinterpret_cast<LPARAM>(&target));
+            if (!target.hwnd)
+                return false;
+            // Restore first: SetForegroundWindow on a minimized window succeeds
+            // without actually surfacing it (same order as the Hub's mirror).
+            ::ShowWindow(target.hwnd, SW_RESTORE);
+            return ::SetForegroundWindow(target.hwnd) != 0;
+        }
+#else
+        bool FocusWindowOfProcess(uint32_t)
+        {
+            return false;
+        }
+#endif
     }
 }

@@ -308,6 +308,29 @@ namespace Arcane::Editor
 
     void EditorApp::SwitchProject(const std::filesystem::path& path)
     {
+        // Another live editor already holds it -> refuse and surface THAT
+        // editor; the current session stays untouched. The same guard as the
+        // boot gate (main.cpp) -- SwitchProject is just the second door into
+        // the same room. RivalPid is self-exempt, so re-opening the project
+        // we already hold sails past our own lock. Checked BEFORE the probe:
+        // Project::Open scans the project's content tree, and a refusal
+        // should not pay for (or side-effect) any of that.
+        {
+            std::filesystem::path lockRoot = path;
+            if (lockRoot.extension() == ".arcproj")
+                lockRoot = lockRoot.parent_path();
+            if (const auto rival = Arcane::EditorLock::RivalPid(lockRoot))
+            {
+                ARC_ERROR("Open Project: '{}' is already open in another editor (pid {})",
+                          path.generic_string(), *rival);
+                m_projectOpenError = "'" + path.generic_string() +
+                                     "' is already open in another Arcane Editor.\n"
+                                     "That editor has been brought to the front.";
+                Arcane::EditorLock::FocusWindowOfProcess(*rival);
+                return;
+            }
+        }
+
         // Validate FIRST -- never tear down a live session for a project we cannot
         // fully open. This mirrors BOTH checks Runtime::OpenProject will do (open +
         // ABI gate) so the post-teardown OpenProject below cannot fail for those

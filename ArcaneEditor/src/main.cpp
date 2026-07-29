@@ -6,11 +6,13 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Project/Project.hpp>   // EditorLock: the direct-launch double-open guard
 #include <LoomConfig.hpp>
 #include <ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 #include "EditorApp.hpp"
 
 #include <cstdio>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <shobjidl.h>
@@ -85,6 +87,30 @@ int main(int argc, char** argv)
             "  Pass --project <folder-or-.arcproj> to open one,\n"
             "  or --plugin <dll> to host a plugin without a project.\n");
         return 2;
+    }
+
+    // The direct-launch guard: refuse to double-open a project another LIVE
+    // editor already holds, and bring that editor forward instead. This is
+    // the one multi-open path the Hub cannot see -- its own launches take
+    // the same lock through editorlock.rs, but nothing stops two direct
+    // `ArcaneEditor --project X` invocations except this. Root derivation
+    // mirrors Project::Open (a .arcproj names its parent; anything else IS
+    // the folder), RivalPid is self-exempt and defeats stale locks by
+    // pid+creation-time, and exit code 3 is distinct from 2 (the no-project
+    // refusal above) so the Hub's boot watchdog can name the reason.
+    if (!parsed.config->projectPath.empty())
+    {
+        std::filesystem::path lockRoot(parsed.config->projectPath);
+        if (lockRoot.extension() == ".arcproj")
+            lockRoot = lockRoot.parent_path();
+        if (const auto rival = Arcane::EditorLock::RivalPid(lockRoot))
+        {
+            std::fprintf(stderr,
+                "Arcane Editor: '%s' is already open in another editor (pid %u) -- focusing it.\n",
+                parsed.config->projectPath.c_str(), *rival);
+            Arcane::EditorLock::FocusWindowOfProcess(*rival);
+            return 3;
+        }
     }
 
     Arcane::Editor::EditorApp app(*parsed.config);

@@ -118,5 +118,19 @@ namespace Arcane
         // Read + validate: Some(pid) only when the named process is STILL the
         // process the lock described (pid alive AND creation time matches).
         ARCANE_API std::optional<uint32_t> ReadLive(const std::filesystem::path& projectRoot);
+
+        // ReadLive minus ourselves: the pid of ANOTHER live editor holding this
+        // project, or nullopt. The direct-launch guard rides this -- the editor
+        // refuses to double-open a rival's project (main.cpp boot gate, exit 3;
+        // SwitchProject refusal) -- and the self-exemption is what lets a
+        // same-project re-open proceed over our own lock.
+        ARCANE_API std::optional<uint32_t> RivalPid(const std::filesystem::path& projectRoot);
+
+        // Bring the first visible top-level window of `pid` to the foreground.
+        // MIRROR of the Hub's spawn.rs focus_process_window: the honest answer
+        // to "already open" is to surface the editor that has it. False when
+        // the process has no visible window yet (mid-boot) -- callers still
+        // refuse; the user gets the message instead of the window.
+        ARCANE_API bool FocusWindowOfProcess(uint32_t pid);
     }
 }
