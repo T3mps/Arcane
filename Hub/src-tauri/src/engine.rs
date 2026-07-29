@@ -43,7 +43,7 @@ pub fn resolve_editor_exe(p: &Path) -> PathBuf {
 pub fn parse_probe_output(s: &str) -> Result<EngineInfo, String> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
-        return Err("engine printed nothing -- is this an Arcane engine?".to_string());
+        return Err("engine printed nothing — is this an Arcane engine?".to_string());
     }
     serde_json::from_str::<EngineInfo>(trimmed)
         .map_err(|e| format!("could not read the engine's identity: {e}"))

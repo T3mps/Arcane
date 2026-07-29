@@ -97,7 +97,7 @@ pub fn read_or_default<T: Default + DeserializeOwned>(p: &Path, warnings: &mut V
                 Err(re) => format!("could not set the file aside: {re}"),
             };
             warnings.push(format!(
-                "{} was unreadable ({e}) and has been reset -- {note}.",
+                "{} was unreadable ({e}) and has been reset — {note}.",
                 p.display()
             ));
             T::default()

@@ -157,7 +157,7 @@ pub fn probe_engine(exe: &Path) -> Result<engine::EngineInfo, String> {
 
     if !out.status.success() {
         return Err(format!(
-            "{} exited with {} -- not an Arcane engine?",
+            "{} exited with {} — not an Arcane engine?",
             exe.display(),
             out.status
         ));

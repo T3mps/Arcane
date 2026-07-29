@@ -11,7 +11,7 @@
   // Path data only, no <rect>/<circle>, so one loop renders every icon.
   export type IconName =
     "folder" | "box" | "layers" | "gear" | "grid" | "list" | "x" | "ellipsis" | "star"
-    | "plus" | "chevron-down" | "check";
+    | "plus" | "chevron-down" | "check" | "arrow-up" | "arrow-down";
 
   const PATHS: Record<IconName, string[]> = {
     folder: [
@@ -63,6 +63,12 @@
     "chevron-down": ["m6 9 6 6 6-6"],
     // The current choice in a pick-one Dropdown menu.
     check: ["M20 6 9 17l-5-5"],
+    // Sort DIRECTION. Full arrows, not chevrons or triangles: the sorter's
+    // trigger already wears a chevron-down for "opens a menu", and a second
+    // downward mark beside it meaning "descending" read as a stutter (visual
+    // review 2026-07-29) -- an arrow is a different word.
+    "arrow-up": ["m5 12 7-7 7 7", "M12 19V5"],
+    "arrow-down": ["M12 5v14", "m19 12-7 7-7-7"],
   };
 </script>
 

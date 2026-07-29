@@ -150,10 +150,10 @@
         {/snippet}
       </Dropdown>
       <button type="button" class="dirbtn" onclick={() => onSort(sort)}
-              title={sortDesc ? "Sorted descending -- click for ascending"
-                             : "Sorted ascending -- click for descending"}
+              title={sortDesc ? "Sorted descending — click for ascending"
+                             : "Sorted ascending — click for descending"}
               aria-label={sortDesc ? "Sort ascending" : "Sort descending"}>
-        {sortDesc ? "▼" : "▲"}
+        <Icon name={sortDesc ? "arrow-down" : "arrow-up"} size={12} />
       </button>
     </div>
   {/if}
@@ -188,7 +188,8 @@
                 onclick={() => onSort(c.key)}
                 title="Sort by {c.label}" aria-label="Sort by {c.label}">
           {c.label}{#if sort === c.key}<span class="dir"
-            aria-hidden="true">{sortDesc ? "▼" : "▲"}</span>{/if}
+            aria-hidden="true"><Icon name={sortDesc ? "arrow-down" : "arrow-up"}
+                                     size={10} /></span>{/if}
         </button>
       {/each}
       <span></span>
@@ -277,7 +278,7 @@
          transition: color var(--dur) var(--ease); }
   .col:hover { color: var(--text-muted); }
   .col.on { color: var(--text); }
-  .dir { font-size: 8px; }
+  .dir { display: inline-flex; }
 
   /* ONE explicit height, shared with .layouts below: the sorter only exists
      in the grid view, and when its natural height exceeded the toggle's the

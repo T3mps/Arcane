@@ -33,7 +33,7 @@
   <EmptyState
     title="Not built yet"
     body="Packages will add optional capability to a project and check that this
-          machine has what it needs -- a doctor that reports what is missing and
+          machine has what it needs — a doctor that reports what is missing and
           installs it, rather than leaving you to follow a setup document." />
 
   <section>

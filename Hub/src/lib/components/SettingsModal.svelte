@@ -121,7 +121,7 @@
           <h3>Default location</h3>
           <p class="d">Where the New project and Add dialogs start. Leave it empty
             to let Windows pick the folder you used last. Nothing is moved or
-            imported -- this only changes where the dialogs open.</p>
+            imported — this only changes where the dialogs open.</p>
           <div class="ctl">
             <input bind:value={dirDraft} spellcheck="false" placeholder="Not set"
                    onchange={commitDir}

@@ -237,7 +237,7 @@
     }
     pushNotice(`Scan ${bits.join(", ")}.`);
     if (r.truncated) {
-      pushNotice("The scan stopped early -- that folder holds too many directories. Scan somewhere narrower.");
+      pushNotice("The scan stopped early — that folder holds too many directories. Scan somewhere narrower.");
     }
   });
 

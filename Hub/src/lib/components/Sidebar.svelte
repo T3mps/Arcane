@@ -67,7 +67,7 @@
         <!-- title so the full build string is still reachable once the rail is
              narrow enough to clip it. -->
         <div class="v" title={engine.missing
-               ? `${engine.build} -- nothing is at its path any more`
+               ? `${engine.build} — nothing is at its path any more`
                : engine.build}>
           <span class="dot" class:bad={engine.missing} aria-hidden="true"></span>
           <span class="build">{engine.build}</span>
