@@ -173,6 +173,50 @@ namespace Arcane::HostBoot
         Arcane::Guid          id;     // its asset id, straight from the parsed document
     };
 
+    namespace Detail
+    {
+        // Shared body of both BootScene overloads below: read + apply an
+        // already-resolved scene file into `runtime`. `file` empty means the
+        // caller's resolution step (either BootSceneFile overload) already
+        // failed and already logged its own ARC_WARN reason -- this returns
+        // nullopt silently here rather than logging again.
+        //
+        // Read before reset, same ordering rule as the editor's Open Scene: a
+        // boot scene that fails to parse must not leave the host holding a
+        // half-built registry. There is less to protect at boot than Open
+        // Scene protects (no prior authored scene, only whatever the plugin's
+        // Init happened to spawn), but the order is the same regardless.
+        inline std::optional<BootSceneResult> ApplySceneFile(Arcane::Runtime& runtime,
+                                                              const std::filesystem::path& file)
+        {
+            if (file.empty()) return std::nullopt;
+
+            std::string err;
+            const auto doc = Arcane::Scene::ReadSceneFile(file, &err);
+            if (!doc)
+            {
+                ARC_ERROR("bootScene: {}", err);
+                return std::nullopt;
+            }
+
+            runtime.ResetRegistry();
+            if (!Arcane::Scene::ApplySceneDocument(*doc, runtime.Registry()))
+            {
+                // Validated but unloadable -- the failure mode ReadSceneFile's
+                // structural gate cannot see (a component whose reflected field
+                // type is unsupported; SceneAsset.hpp's E02-3 note). The registry
+                // is already reset by contract, so leave a well-formed empty scene
+                // rather than an empty-but-rootless one.
+                ARC_ERROR("bootScene: {} parsed but could not be loaded", file.generic_string());
+                Arcane::Scene::CreateEmpty(runtime.Registry());
+                return std::nullopt;
+            }
+
+            ARC_INFO("Loaded boot scene {}", file.generic_string());
+            return BootSceneResult{file, doc->id};
+        }
+    }
+
     // Load the project's boot scene into `runtime`, replacing whatever the
     // registry holds. nullopt when there is no boot scene or it could not be
     // loaded -- the reason is logged HERE, and callers simply continue with
@@ -186,69 +230,20 @@ namespace Arcane::HostBoot
     // registers would otherwise silently drop it.
     inline std::optional<BootSceneResult> BootScene(Arcane::Runtime& runtime, const Arcane::Project& project)
     {
-        const std::filesystem::path file = BootSceneFile(project);
-        if (file.empty()) return std::nullopt;
-
-        // Read before reset, same ordering rule as the editor's Open Scene: a
-        // boot scene that fails to parse must not leave the host holding a
-        // half-built registry. There is less to protect at boot than Open
-        // Scene protects (no prior authored scene, only whatever the plugin's
-        // Init happened to spawn), but the order is the same regardless.
-        std::string err;
-        const auto doc = Arcane::Scene::ReadSceneFile(file, &err);
-        if (!doc)
-        {
-            ARC_ERROR("bootScene: {}", err);
-            return std::nullopt;
-        }
-
-        runtime.ResetRegistry();
-        if (!Arcane::Scene::ApplySceneDocument(*doc, runtime.Registry()))
-        {
-            // Validated but unloadable -- the failure mode ReadSceneFile's
-            // structural gate cannot see (a component whose reflected field
-            // type is unsupported; SceneAsset.hpp's E02-3 note). The registry
-            // is already reset by contract, so leave a well-formed empty scene
-            // rather than an empty-but-rootless one.
-            ARC_ERROR("bootScene: {} parsed but could not be loaded", file.generic_string());
-            Arcane::Scene::CreateEmpty(runtime.Registry());
-            return std::nullopt;
-        }
-
-        ARC_INFO("Loaded boot scene {}", file.generic_string());
-        return BootSceneResult{file, doc->id};
+        return Detail::ApplySceneFile(runtime, BootSceneFile(project));
     }
 
     // Load `id`'s scene file into `runtime` -- the Guid-known counterpart to
     // BootScene(runtime, project) above, for a runtime host's `--scene` override
     // (HostConfig::sceneOverride) once the override text has already parsed as a
-    // Guid. Same body/failure modes as the manifest path; only the resolution
-    // step differs (BootSceneFile(project, id) instead of the manifest's
-    // bootScene text), so an override Guid that resolves to no asset in this
-    // project hits the exact same "does not resolve to a file" path.
+    // Guid. Shares Detail::ApplySceneFile with the manifest-path overload above
+    // for the read/reset/apply/log body; only the resolution step differs
+    // (BootSceneFile(project, id) instead of the manifest's bootScene text), so
+    // an override Guid that resolves to no asset in this project hits the exact
+    // same "does not resolve to a file" path.
     inline std::optional<BootSceneResult> BootScene(Arcane::Runtime& runtime, const Arcane::Project& project,
                                                      const Arcane::Guid& id)
     {
-        const std::filesystem::path file = BootSceneFile(project, id);
-        if (file.empty()) return std::nullopt;
-
-        std::string err;
-        const auto doc = Arcane::Scene::ReadSceneFile(file, &err);
-        if (!doc)
-        {
-            ARC_ERROR("bootScene: {}", err);
-            return std::nullopt;
-        }
-
-        runtime.ResetRegistry();
-        if (!Arcane::Scene::ApplySceneDocument(*doc, runtime.Registry()))
-        {
-            ARC_ERROR("bootScene: {} parsed but could not be loaded", file.generic_string());
-            Arcane::Scene::CreateEmpty(runtime.Registry());
-            return std::nullopt;
-        }
-
-        ARC_INFO("Loaded boot scene {}", file.generic_string());
-        return BootSceneResult{file, doc->id};
+        return Detail::ApplySceneFile(runtime, BootSceneFile(project, id));
     }
 }

@@ -463,6 +463,132 @@ TEST_CASE("BootScene leaves the registry untouched when the resolved file fails 
     fs::remove_all(dir, ec);
 }
 
+// --- Guid-taking BootSceneFile/BootScene overloads (runtime host --scene) ---
+// The runtime host's `--scene` override (HostConfig::sceneOverride) already
+// has a parsed Guid in hand and should not have to round-trip it back through
+// the manifest's bootScene text -- these overloads take the Guid directly.
+// Same resolution/failure modes as the manifest-path overloads above (shared
+// via ProjectBoot.hpp's Detail::ApplySceneFile), just fed an explicit id
+// instead of project.Manifest().bootScene.
+
+TEST_CASE("BootSceneFile(project, id) resolves an explicit Guid to a file", "[host][project]")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_guid_resolve";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content" / "scenes", ec);
+
+    const Arcane::Guid id = Arcane::Guid::Generate();
+    std::ofstream(dir / "Content" / "scenes" / "main.arcscene")
+        << R"({"id":")" << id.ToString() << R"(","version":2,"entities":[]})";
+
+    // bootScene left EMPTY on purpose -- this exercises the Guid overload, not
+    // the manifest path (BootSceneFile(project) would return empty here).
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion)
+        << R"(},"gameModule":"","plugins":[],"bootScene":""})";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    REQUIRE(Arcane::HostBoot::BootSceneFile(*proj).empty());   // manifest path has nothing
+
+    const fs::path file = Arcane::HostBoot::BootSceneFile(*proj, id);
+    REQUIRE_FALSE(file.empty());
+    CHECK(file.filename() == "main.arcscene");
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("BootScene(runtime, project, id) boots an explicit Guid override into the runtime",
+          "[host][project]")
+{
+    // The happy path a runtime host's --scene override drives: a Guid that
+    // resolves to a scene file boots it exactly like the manifest path does,
+    // reporting the file + id back the same way.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_guid_load";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content" / "scenes", ec);
+
+    const Arcane::Guid id = Arcane::Guid::Generate();
+    const std::string ltName(Astra::GetMeta<Arcane::Transform>()->typeName);
+
+    nlohmann::json e0;
+    e0["components"][ltName]["position"] = { 5.0, 6.0 };
+    nlohmann::json doc;
+    doc["id"] = id.ToString();
+    doc["version"] = Arcane::Scene::kSceneJsonVersion;
+    doc["entities"] = nlohmann::json::array({ e0 });
+    std::ofstream(dir / "Content" / "scenes" / "main.arcscene") << doc.dump();
+
+    // bootScene left EMPTY -- proves the override, not the manifest, drove this.
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion)
+        << R"(},"gameModule":"","plugins":[],"bootScene":""})";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Registry().CreateEntity();
+    REQUIRE(rt.Registry().Size() == 1);
+
+    const auto result = Arcane::HostBoot::BootScene(rt, *proj, id);
+    REQUIRE(result.has_value());
+    CHECK(result->file.filename() == "main.arcscene");
+    CHECK(result->id == id);
+
+    // The sentinel is gone, replaced by the one boot-scene entity -- same
+    // ResetRegistry-before-ApplySceneDocument ordering as the manifest path.
+    REQUIRE(rt.Registry().Size() == 1);
+    const Arcane::Transform* loaded = nullptr;
+    rt.Registry().CreateView<Arcane::Transform>().ForEach(
+        [&](Astra::Entity, Arcane::Transform& t) { loaded = &t; });
+    REQUIRE(loaded != nullptr);
+    CHECK(loaded->position.x == 5.0f);
+    CHECK(loaded->position.y == 6.0f);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("BootSceneFile/BootScene(project, id) fall into the manifest path's empty failure mode "
+          "for an unresolvable Guid", "[host][project]")
+{
+    // An override Guid that parses but names nothing this project contains --
+    // must hit the SAME "does not resolve to a file" ARC_WARN/empty path as the
+    // manifest's unknown-id case ("BootSceneFile is empty for no boot scene and
+    // for an unknown id" above), not a distinct failure mode of its own.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_guid_unresolvable";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content", ec);
+
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion)
+        << R"(},"gameModule":"","plugins":[],"bootScene":""})";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    const Arcane::Guid unknown = Arcane::Guid::Generate();
+    CHECK(Arcane::HostBoot::BootSceneFile(*proj, unknown).empty());
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Registry().CreateEntity();
+    REQUIRE(rt.Registry().Size() == 1);
+
+    CHECK_FALSE(Arcane::HostBoot::BootScene(rt, *proj, unknown).has_value());
+    CHECK(rt.Registry().Size() == 1);   // untouched -- nothing resolved, nothing reset
+
+    fs::remove_all(dir, ec);
+}
+
 // --- Task 9: SampleProject ships an authored scene and opens into it --------
 // The end-to-end proof: the shipped Content/scenes/main.arcscene resolves
 // through the real .arcproj's bootScene Guid and loads into a real Runtime.
