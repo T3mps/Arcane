@@ -152,6 +152,20 @@ export const openProject = (projectPath: string, enginePath: string) =>
  */
 export const runningProjects = () => invoke<string[]>("running_projects");
 
+/** What a Scan did. Every refusal is counted -- no silent drops. */
+export type ScanReport = {
+  added: number;
+  alreadyListed: number;
+  /** Folders holding MORE than one .arcproj; the engine refuses those. */
+  ambiguous: number;
+  /** The visit budget ran out before the tree did. */
+  truncated: boolean;
+};
+
+/** Walk a folder tree and list every project under it (Godot's Scan). */
+export const scanForProjects = (dir: string) =>
+  invoke<ScanReport>("scan_for_projects", { dir });
+
 /** Returns the path of the `.arcproj` it wrote, ready to hand to openProject. */
 export const createProject = (dir: string, name: string, enginePath: string) =>
   invoke<string>("create_project", { dir, name, enginePath });

@@ -20,7 +20,7 @@
   import {
     loadState, refreshEngines, registerEngine, forgetEngine, deleteProject,
     duplicateProject, forgetProject, clearRecents, runningProjects,
-    openProject, createProject, suggestEngine, setProjectEngine,
+    openProject, createProject, scanForProjects, suggestEngine, setProjectEngine,
     setProjectFavorite, setProjectArgs, revealProject, renameProject, relocateProject,
     loadSettings, saveSettings, defaultDialogDir,
     hubDataDir, revealHubDataDir, hubVersion,
@@ -211,6 +211,24 @@
     if (typeof file === "string") await relocateProject(p.path, file);
   });
 
+  // Godot's Scan: pick a folder, list every project found under it. The
+  // report is a notice, not a toast that vanishes -- counts of what was
+  // refused (ambiguous folders, a truncated walk) are the part worth reading.
+  const scanFolder = () => guard(async () => {
+    const dir = await pickFolder("Scan a folder for Arcane projects");
+    if (!dir) return;
+    const r = await scanForProjects(dir);
+    const bits = [`added ${r.added} ${r.added === 1 ? "project" : "projects"}`];
+    if (r.alreadyListed > 0) bits.push(`${r.alreadyListed} already listed`);
+    if (r.ambiguous > 0) {
+      bits.push(`skipped ${r.ambiguous} ${r.ambiguous === 1 ? "folder" : "folders"} holding more than one .arcproj`);
+    }
+    pushNotice(`Scan ${bits.join(", ")}.`);
+    if (r.truncated) {
+      pushNotice("The scan stopped early -- that folder holds too many directories. Scan somewhere narrower.");
+    }
+  });
+
   // Shared by the New Project dialog and the Settings default-location field.
   const pickFolder = async (title: string): Promise<string | null> => {
     const dir = await open({
@@ -378,7 +396,8 @@
                       confirmDelete={settings.confirmDelete}
                       sort={settings.projectSort} sortDesc={settings.projectSortDesc}
                       actions={projectActions}
-                      onOpen={addProject} onNew={() => (modal = { kind: "new" })}
+                      onOpen={addProject} onScan={scanFolder}
+                      onNew={() => (modal = { kind: "new" })}
                       onLayout={(v) => applySettings({ ...settings, projectView: v })}
                       onSort={(k) => {
                         const n = nextSort(settings.projectSort, settings.projectSortDesc, k);

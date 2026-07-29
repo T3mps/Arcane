@@ -747,6 +747,55 @@ fn open_project(
     Ok(OpenOutcome::Launched)
 }
 
+/// What a Scan did, for the frontend's one-line report. Every count is
+/// surfaced -- a scan that silently dropped ambiguous folders or gave up on
+/// a budget would read as "found everything" when it did not.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanReport {
+    pub added: u32,
+    pub already_listed: u32,
+    pub ambiguous: u32,
+    pub truncated: bool,
+}
+
+// Godot's Scan: walk a folder tree and list every project found under it.
+//
+// `async` like duplicate_project: the walk's duration scales with the tree
+// the user picks. Found projects APPEND with a never-opened stamp -- a bulk
+// import must not bury the real recents, and "never" is the truth about a
+// project the Hub has not launched. Engine pins are not invented; each entry
+// follows the default until the user says otherwise.
+#[tauri::command]
+async fn scan_for_projects(dir: String) -> Result<ScanReport, String> {
+    let outcome = resolve::scan_tree(Path::new(&dir))?;
+
+    let found: Vec<state::RecentProject> = outcome
+        .manifests
+        .iter()
+        .map(|m| {
+            let path = m.to_string_lossy().to_string();
+            state::RecentProject {
+                name: project::display_name(&path),
+                engine_abi: resolve::manifest_abi(m).unwrap_or(0),
+                path,
+                last_opened_utc: "0".to_string(),
+                engine_id: None,
+                args: String::new(),
+                favorite: false,
+                missing: false,
+            }
+        })
+        .collect();
+
+    let mut s = state::load();
+    let (added, already_listed) = state::add_scanned(&mut s.recents, found);
+    if added > 0 {
+        state::save(&s)?;
+    }
+    Ok(ScanReport { added, already_listed, ambiguous: outcome.ambiguous, truncated: outcome.truncated })
+}
+
 #[tauri::command]
 fn create_project(dir: String, name: String, engine_path: String) -> Result<String, String> {
     let exe = engine::resolve_editor_exe(Path::new(&engine_path));
@@ -859,6 +908,7 @@ pub fn run() {
             rename_project,
             open_project,
             running_projects,
+            scan_for_projects,
             create_project,
             suggest_engine,
             load_settings,

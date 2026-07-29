@@ -13,7 +13,7 @@
   // app-level overlays that have to sit above the error banner, and +page is
   // the only stateful file by design.
   let { recents, engines, defaultEngine, busy, running, layout, confirmDelete,
-        sort, sortDesc, actions, onOpen, onNew, onLayout, onSort }:
+        sort, sortDesc, actions, onOpen, onScan, onNew, onLayout, onSort }:
     {
       recents: RecentProject[]; engines: EngineEntry[];
       defaultEngine: EngineEntry | null; busy: boolean;
@@ -27,7 +27,7 @@
       /** The whole per-project vocabulary, forwarded untouched to card/row/menu. */
       actions: ProjectActions;
       /** View-level actions stay individual props: they are not per-project. */
-      onOpen: () => void; onNew: () => void;
+      onOpen: () => void; onScan: () => void; onNew: () => void;
       onLayout: (v: ProjectView) => void;
       /** A column was clicked/picked; +page owns the flip-or-switch rule. */
       onSort: (k: SortKey) => void;
@@ -82,6 +82,10 @@
   <h2 class="display view-title">Projects</h2>
   <input class="search" bind:value={query} placeholder="Search projects" spellcheck="false" />
   <div class="acts">
+    <!-- Scan needs no engine: it only fills the LIST, unlike Add, which also
+         launches what it picks. -->
+    <Button disabled={busy} onclick={onScan}
+            title="Find every project under a folder and add them all">Scan&hellip;</Button>
     <!-- "Add", not "Open...": this puts an EXISTING project into the list,
          which is what the word means in this kind of launcher. It also happens
          to launch it, but the list is the lasting effect. -->

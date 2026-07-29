@@ -129,6 +129,36 @@ pub fn normalise_path(p: &str) -> String {
         .to_lowercase()
 }
 
+/// The identity a project is keyed on for DEDUPLICATION, independent of how
+/// it was recorded: recents holds folder-shaped entries (pre-dialog era) and
+/// manifest-file entries, and both must collapse to the folder. Mirror of
+/// `projectKey` in src/lib/format.ts -- change BOTH.
+pub fn project_dir_key(path: &str) -> String {
+    let norm = normalise_path(path);
+    match norm.rsplit_once('/') {
+        Some((dir, file)) if file.ends_with(".arcproj") && !dir.is_empty() => dir.to_string(),
+        _ => norm,
+    }
+}
+
+/// Append every scanned entry whose project is not already listed, at the
+/// END: a bulk import must not bury the real recents under a wall of
+/// never-opened rows. Returns how many were added vs already present.
+pub fn add_scanned(v: &mut Vec<RecentProject>, found: Vec<RecentProject>) -> (u32, u32) {
+    let mut have: std::collections::HashSet<String> =
+        v.iter().map(|e| project_dir_key(&e.path)).collect();
+    let (mut added, mut existing) = (0, 0);
+    for entry in found {
+        if have.insert(project_dir_key(&entry.path)) {
+            v.push(entry);
+            added += 1;
+        } else {
+            existing += 1;
+        }
+    }
+    (added, existing)
+}
+
 // Insert-or-move-to-front. Re-opening a project must refresh it, not duplicate
 // it, so the list stays newest-first without growing.
 pub fn touch_recent(v: &mut Vec<RecentProject>, mut entry: RecentProject) {
@@ -586,6 +616,43 @@ mod tests {
         assert_eq!(v[0].engine_id.as_deref(), Some("eng-1"), "the pin must survive");
         assert_eq!(v[0].args, "--frames 3", "the arguments must survive");
         assert_eq!(v[0].last_opened_utc, "1", "locating is not opening");
+    }
+
+    #[test]
+    fn project_dir_key_folds_a_manifest_to_its_folder() {
+        // Mirror of format.ts projectKey -- the parity the scan dedupe rides.
+        assert_eq!(project_dir_key("D:\\Games\\MyGame\\MyGame.arcproj"), "d:/games/mygame");
+        assert_eq!(project_dir_key("D:/Games/MyGame"), "d:/games/mygame");
+        assert_eq!(project_dir_key("D:/Games/MyGame/"), "d:/games/mygame");
+        // A bare manifest name has no folder to fold to; keep it whole.
+        assert_eq!(project_dir_key("MyGame.arcproj"), "mygame.arcproj");
+    }
+
+    #[test]
+    fn add_scanned_appends_only_unlisted_projects_at_the_end() {
+        let mut v = vec![rp("C:/Games/Listed/Listed.arcproj", "9")];
+        let (added, existing) = add_scanned(
+            &mut v,
+            vec![
+                // Same project, recorded folder-shaped: must count as existing.
+                rp("C:/Games/Listed", "0"),
+                rp("C:/Games/New/New.arcproj", "0"),
+            ],
+        );
+        assert_eq!((added, existing), (1, 1));
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].path, "C:/Games/Listed/Listed.arcproj", "recents stay on top");
+        assert_eq!(v[1].path, "C:/Games/New/New.arcproj", "imports append at the end");
+    }
+
+    #[test]
+    fn add_scanned_dedupes_within_one_scan_too() {
+        let mut v = Vec::new();
+        let (added, existing) = add_scanned(
+            &mut v,
+            vec![rp("C:/G/A/A.arcproj", "0"), rp("C:/G/A", "0")],
+        );
+        assert_eq!((added, existing), (1, 1), "one folder, one entry, however recorded");
     }
 
     #[test]

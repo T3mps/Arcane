@@ -78,6 +78,74 @@ pub fn resolve_project(recorded: &Path) -> Result<(PathBuf, PathBuf), String> {
     Ok((recorded.to_path_buf(), recorded.join(file)))
 }
 
+/// What a recursive scan found. `ambiguous` counts folders holding MORE than
+/// one .arcproj (the engine refuses those, so the Hub must not guess);
+/// `truncated` is the no-silent-caps flag -- true when the visit budget ran
+/// out, so "scan finished" can never quietly mean "scan gave up".
+pub struct ScanOutcome {
+    pub manifests: Vec<PathBuf>,
+    pub ambiguous: u32,
+    pub truncated: bool,
+}
+
+/// How many directories one scan may visit. A mistaken "scan C:\" should end
+/// in a truthful truncation report, not a minutes-long hang.
+const SCAN_VISIT_BUDGET: usize = 100_000;
+
+/// Walk `dir` recursively collecting every folder that holds exactly one
+/// .arcproj (Godot's Scan, with the engine's own one-manifest rule). Skips
+/// dot-directories and the DUPLICATE_SKIP names -- build output can contain
+/// staged copies of a project that would import as duplicates. Keeps
+/// descending past a found project: nothing forbids a project tree holding
+/// sample projects deeper in.
+pub fn scan_tree(dir: &Path) -> Result<ScanOutcome, String> {
+    if !dir.is_dir() {
+        return Err(format!("{} is not a folder", dir.display()));
+    }
+    let mut out = ScanOutcome { manifests: Vec::new(), ambiguous: 0, truncated: false };
+    let mut queue = vec![dir.to_path_buf()];
+    let mut visited = 0usize;
+
+    while let Some(d) = queue.pop() {
+        visited += 1;
+        if visited > SCAN_VISIT_BUDGET {
+            out.truncated = true;
+            break;
+        }
+        // Unreadable directories are skipped, not fatal: a scan of a big tree
+        // WILL meet something access-denied, and one locked folder must not
+        // void the whole import.
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+
+        let mut files = Vec::new();
+        let mut manifest_count = 0u32;
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(ty) = entry.file_type() else { continue };
+            if ty.is_dir() {
+                if name.starts_with('.') || project::skip_in_duplicate(&name) {
+                    continue;
+                }
+                queue.push(entry.path());
+            } else if ty.is_file() {
+                if name.to_ascii_lowercase().ends_with(".arcproj") {
+                    manifest_count += 1;
+                }
+                files.push(name);
+            }
+        }
+        if manifest_count > 1 {
+            out.ambiguous += 1;
+        } else if let Some(m) = project::pick_manifest(&files) {
+            out.manifests.push(d.join(m));
+        }
+    }
+    // Stable order for the list and the tests: the queue is depth-first in
+    // whatever order read_dir served, which is not a contract.
+    out.manifests.sort();
+    Ok(out)
+}
+
 /// Recursively copy `from` into `to`, skipping `project::DUPLICATE_SKIP`
 /// directory names at every depth. Fails on the first IO error and leaves
 /// whatever was copied -- the CALLER removes the partial tree, because the
@@ -128,6 +196,47 @@ mod tests {
         let m = dir.join(format!("{name}.arcproj"));
         std::fs::write(&m, project::manifest_json(name, abi).unwrap()).unwrap();
         m
+    }
+
+    fn mk(dir: &Path, rel: &str) -> PathBuf {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn scan_tree_finds_nested_projects_and_reports_what_it_refused() {
+        let dir = scratch("scan");
+        // Two real projects at different depths...
+        write_manifest(&mk(&dir, "A"), "A", 7);
+        write_manifest(&mk(&dir, "deep/nested/B"), "B", 7);
+        // ...an ambiguous folder (two manifests -- the engine would refuse it)...
+        let amb = mk(&dir, "Amb");
+        std::fs::write(amb.join("X.arcproj"), b"{}").unwrap();
+        std::fs::write(amb.join("Y.arcproj"), b"{}").unwrap();
+        // ...and projects a scan must NOT surface: inside a dot-dir and inside
+        // build output (a staged copy would import as a duplicate).
+        write_manifest(&mk(&dir, ".hidden/C"), "C", 7);
+        write_manifest(&mk(&dir, "Binaries/Staged"), "S", 7);
+
+        let out = scan_tree(&dir).unwrap();
+        let names: Vec<String> = out
+            .manifests
+            .iter()
+            .map(|m| m.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, ["A.arcproj", "B.arcproj"], "sorted, and only the real ones");
+        assert_eq!(out.ambiguous, 1);
+        assert!(!out.truncated);
+    }
+
+    #[test]
+    fn scan_tree_refuses_a_path_that_is_not_a_folder() {
+        let dir = scratch("scan-notdir");
+        let f = dir.join("file.txt");
+        std::fs::write(&f, b"x").unwrap();
+        assert!(scan_tree(&f).is_err());
+        assert!(scan_tree(&dir.join("missing")).is_err());
     }
 
     #[test]
