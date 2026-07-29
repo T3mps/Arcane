@@ -112,21 +112,58 @@ namespace Arcane::Editor::RuntimeLaunch
         // relative to the PROCESS's own directory, not the caller's cwd.
         const std::wstring workDir = exe.parent_path().wstring();
 
+        // The child is a CONSOLE-subsystem exe, and the editor is typically
+        // launched from the Hub with no console of its own -- so Windows would
+        // hand the child a brand new console WINDOW, which flashes up black
+        // beside the game window and vanishes with it. CREATE_NO_WINDOW
+        // suppresses it, and its output goes to a log file instead: a
+        // fire-and-forget child that dies during Init would otherwise take the
+        // only record of WHY with it (the console closes with the process, far
+        // too fast to read). The log is truncated per launch -- it answers
+        // "why did the run I just started fail", not "what happened all week".
+        //
+        // (dwCreationFlags is also where CREATE_NEW_CONSOLE would go if the
+        // future server-set play modes want a visible per-server console.)
+        HANDLE logHandle = INVALID_HANDLE_VALUE;
+        const std::filesystem::path logPath = exe.parent_path() / "ArcaneRuntime.log";
+        {
+            SECURITY_ATTRIBUTES sa{};
+            sa.nLength        = sizeof(sa);
+            sa.bInheritHandle = TRUE;   // the child can only receive an INHERITABLE handle
+            logHandle = ::CreateFileW(logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+        const bool haveLog = (logHandle != INVALID_HANDLE_VALUE);
+
         STARTUPINFOW si{};
         si.cb = sizeof(si);
+        if (haveLog)
+        {
+            si.dwFlags   |= STARTF_USESTDHANDLES;
+            si.hStdOutput = logHandle;
+            si.hStdError  = logHandle;
+            si.hStdInput  = nullptr;   // the child never reads stdin
+        }
         PROCESS_INFORMATION pi{};
 
         // lpCommandLine must be a MUTABLE buffer (CreateProcessW may rewrite
         // it in place); cmdLine is a local std::wstring, so .data() is safe.
+        // bInheritHandles must be TRUE for the redirect above to reach the
+        // child at all -- it is FALSE when there is no log to hand over.
         const BOOL ok = ::CreateProcessW(
             exe.c_str(),
             cmdLine.data(),
             nullptr, nullptr,
-            FALSE,
-            0,
+            haveLog ? TRUE : FALSE,
+            CREATE_NO_WINDOW,
             nullptr,
             workDir.c_str(),
             &si, &pi);
+
+        // Ours to close either way: the child holds its own duplicate, and
+        // leaving this open would keep the file locked for the editor's life.
+        if (haveLog)
+            ::CloseHandle(logHandle);
 
         if (!ok)
         {

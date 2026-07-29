@@ -61,6 +61,13 @@ namespace Arcane::Editor::RuntimeLaunch
     // the process's own directory), and the same rule the Hub's own launch of
     // ArcaneEditor.exe follows. Returns false and logs ARC_ERROR naming `exe`
     // on failure (missing file, or CreateProcessW itself failing).
+    //
+    // The child runs with CREATE_NO_WINDOW and its stdout/stderr redirected to
+    // "ArcaneRuntime.log" beside the exe, truncated per launch. Both matter for
+    // a fire-and-forget console-subsystem child: without the first it gets its
+    // own console window that flashes black next to the game window, and
+    // without the second a child that dies during Init takes the reason with it
+    // when that console closes. Read that file to find out why a launch failed.
     [[nodiscard]] bool SpawnDetached(
         const std::filesystem::path& exe,
         const std::vector<std::wstring>& args);
