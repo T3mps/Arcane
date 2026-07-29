@@ -196,6 +196,18 @@ namespace Arcane::Editor
         constexpr float kNodeSelBorderWidth = 2.0f;
         constexpr float kNodePadX = 10.0f;
         constexpr float kNodePadY = 6.0f;
+        // Breathing room between the BOTTOM EDGE OF THE TITLE BAND and the first
+        // body row. Not the same thing as kNodePadY: that one is the band's own
+        // internal padding (how far the band extends past the title text), this
+        // one is body space below the band. Without it the first pin row does
+        // not merely sit flush -- it renders INSIDE the band, because ImGui
+        // places the next item one ItemSpacing.y (4 px) under the title text
+        // while the band reaches kNodePadY (6 px) under it.
+        //
+        // Canvas units, like every other constant here: everything inside
+        // ed::Begin/End is authored in canvas space, so this scales with zoom on
+        // its own and must not be pre-multiplied by anything.
+        constexpr float kNodeHeaderGap = 5.0f;
         constexpr float kPinDotRadius   = 4.0f;
         constexpr float kPinRingWidth   = 1.6f;
         constexpr int   kPinDotSegments = 12;
@@ -4100,6 +4112,28 @@ namespace Arcane::Editor
             ImGui::TextColored(kNodeTitleText, "%s", info.display);
         const float headerMaxY = ImGui::GetItemRectMax().y;
 
+        // Reserve the gap under the band (kNodeHeaderGap). Solved rather than
+        // guessed, because ImGui's automatic spacing is already in play at both
+        // ends of the dummy: the next real item lands at
+        // headerMaxY + 2*ItemSpacing.y + fill, and it needs to land at the
+        // band's bottom edge (headerMaxY + kNodePadY) plus the gap.
+        //
+        // Clamped at zero: a theme with generous ItemSpacing may already place
+        // the row far enough down, and a negative dummy would be nonsense.
+        //
+        // GATED ON showPinRows, i.e. skipped at LowestDetail. There the band IS
+        // the node -- the pin rows are gone and the node's whole height is the
+        // header -- so reserving body space below it would open an empty strip
+        // under the bar with nothing to put in it, and would inflate the block's
+        // height for no reading. The band-only tier wants no gap at all.
+        if (showPinRows)
+        {
+            const float fill = (kNodePadY + kNodeHeaderGap) -
+                               2.0f * ImGui::GetStyle().ItemSpacing.y;
+            if (fill > 0.0f)
+                ImGui::Dummy(ImVec2(0.0f, fill));
+        }
+
         // Gesture helpers (used by pin rows AND payload widgets below). Value
         // drags bracket a whole-graph gesture through EditGesture (before on
         // activation, one undo step at close); popup-widgets (combos, color
@@ -4698,6 +4732,14 @@ namespace Arcane::Editor
         // trip. (The one case it does move is a node born while zoomed out --
         // there is no earlier width to remember, so the block sizes to its
         // title and re-measures on the way back in.)
+        //
+        // The band's bottom edge is pinned to the TITLE's rect (headerMaxY,
+        // captured before anything else is submitted) and NOT to the node's
+        // content extent. That is what keeps kNodeHeaderGap readable as body
+        // space: the gap dummy is laid out after headerMaxY is taken, so it
+        // pushes the first row down without dragging the band with it. Deriving
+        // this edge from the laid-out content instead would silently swallow the
+        // gap and put the whole fix back where it started.
         const ImVec2 nodePos  = ed::GetNodePosition(ed::NodeId(n.id));
         const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(n.id));
         if (nodeSize.x > 0.0f)
