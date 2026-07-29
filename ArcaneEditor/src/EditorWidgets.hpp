@@ -86,7 +86,12 @@ namespace Arcane::Editor
     // Bool-convertible: ImGui::BeginTable can refuse (culled/clipped host
     // window) -- draw NO rows then, and the dtor must not End what never
     // began.
-    struct FieldGrid
+    //
+    // [[nodiscard]] on the TYPE, so an unnamed temporary -- `FieldGrid(id, w);`
+    // as a statement, which Begins and immediately Ends and draws nothing --
+    // is a warning rather than a silently empty panel. Both live call sites
+    // are named locals and are unaffected.
+    struct [[nodiscard]] FieldGrid
     {
         FieldGrid(const char* id, float& labelColWidth);
         ~FieldGrid();
@@ -101,7 +106,10 @@ namespace Arcane::Editor
     // band in place of the theme's default bright-blue ImGuiCol_Header.
     // Scope it TIGHT around the header call only -- the band colors must not
     // leak into tooltips/popups, which read the theme's own ImGuiCol_* set.
-    struct HeaderBand
+    //
+    // [[nodiscard]] for the same reason as FieldGrid above: a temporary pushes
+    // and pops the colors in one statement, styling nothing.
+    struct [[nodiscard]] HeaderBand
     {
         HeaderBand();
         ~HeaderBand();
@@ -116,6 +124,11 @@ namespace Arcane::Editor
     // abandoned edit (window closed mid-typing) mutates nothing and needs no
     // undo coverage -- this is the single-shot cousin of EditGesture, not a
     // replacement for it.
+    //
+    // Escape REVERTS (Enter and click-away commit). ImGui restores the
+    // pre-focus text into the buffer as it deactivates, and the commit test
+    // reads that post-widget buffer, so an escaped edit compares equal to
+    // `current` and commits nothing -- see the citation chain in the .cpp.
     struct TextCommitState
     {
         std::uint64_t activeKey = 0;   // 0 = no edit in flight

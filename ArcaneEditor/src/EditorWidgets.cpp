@@ -485,9 +485,20 @@ namespace Arcane::Editor
             return false;
         const bool committed = ImGui::IsItemDeactivatedAfterEdit();
         st.activeKey = 0;
-        if (committed && current != st.buf)
+        // Compare the POST-InputText local, NOT st.buf (last frame's typed
+        // snapshot): on the deactivation frame ImGui has already written its
+        // final text back into `buf`, and for Escape that text is what the
+        // field held when it gained focus. InputTextEx sets revert_edit
+        // (imgui_widgets.cpp:5212), copies TextToRevertTo over the edited text
+        // (:5300-5308), and ImStrncpy's the result into the caller's buffer
+        // (:5447) -- so an escaped edit arrives here with buf == current and
+        // commits nothing. It arrives here at all because that same revert
+        // sets value_changed, which calls MarkItemEdited (:5700-5701): the
+        // item IS deactivated-after-edit even on Escape, which is precisely
+        // why comparing st.buf used to commit the abandoned text.
+        if (committed && current != buf)
         {
-            commit(st.buf);
+            commit(buf);
             return true;
         }
         return false;

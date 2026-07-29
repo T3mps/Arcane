@@ -205,67 +205,20 @@ namespace Arcane::Editor
 
         // ---- Inline pin literals (a value ON an unwired input pin) ----
 
-        // Lane count a literal stores for a pin of declared `width`: fixed 2/4
-        // keep their lanes, everything else -- INCLUDING dynamic (width-0)
-        // pins -- is a scalar. Mirrors codegen's PinLiteralLanes
-        // (MaterialGraph.cpp:215-218), which is file-local there; the scalar
-        // rule for dynamic pins is what keeps a literal out of dynamic-width
-        // resolution, so the widget must match it exactly or the drag would
-        // edit lanes the file never stores.
-        int PinLiteralLanes(int width)
-        {
-            return width == 2 ? 2 : width == 4 ? 4 : 1;
-        }
-
-        // Does a literal on `pin` actually reach codegen? Only pins emitted
-        // through the argOr seam read one; the pins that consume their
-        // unconnected default DIRECTLY ignore literals entirely, and a widget
-        // that silently does nothing is worse than no widget. The authority is
-        // the SEAM SCOPE note on GraphNode::pinLiterals
-        // (MaterialGraph.hpp:270-279); each exclusion below is the emission
-        // case that bypasses argOr:
-        //   Output.color              MaterialGraph.cpp:650-652
-        //   TextureSample/Sprite uv   MaterialGraph.cpp:677-678
-        //   Split source              MaterialGraph.cpp:771-772
-        //   Remap in/outRange         MaterialGraph.cpp:813-818
-        //   TilingOffset.uv           MaterialGraph.cpp:825-827
-        //   Swizzle source            MaterialGraph.cpp:848-849
-        //   SimpleNoise.uv            MaterialGraph.cpp:890-891
-        //   VertexOutput (all three)  MaterialGraph.cpp:897-902
-        //   PassInput.uv              MaterialGraph.cpp:911-913
-        // Panner.uv is NOT excluded even though it also defaults to v.uv:
-        // batch 2 routes it through argOr with a width-2 default
-        // (MaterialGraph.cpp:994). Scale & Offset is not excluded either --
-        // all three of its pins are plain argOr operands (:1009-1010), which is
-        // the node's whole point. Custom nodes fall through to `true`: their
-        // per-node pins are ordinary argOr operands (MaterialGraph.cpp:739).
-        bool PinTakesLiteral(const Arcane::GraphNode& n, std::uint32_t pin)
-        {
-            switch (n.type)
-            {
-                case Arcane::GraphNodeType::Output:
-                case Arcane::GraphNodeType::TextureSample:
-                case Arcane::GraphNodeType::SpriteTexture:
-                case Arcane::GraphNodeType::PassInput:
-                case Arcane::GraphNodeType::Split:
-                case Arcane::GraphNodeType::Swizzle:
-                case Arcane::GraphNodeType::VertexOutput:
-                    return false;      // every input pin of these bypasses argOr
-                case Arcane::GraphNodeType::TilingOffset:
-                case Arcane::GraphNodeType::SimpleNoise:
-                    return pin != 0;   // uv reads v.uv directly
-                case Arcane::GraphNodeType::Remap:
-                    return pin == 0;   // both range pins read float2(0,1) directly
-                default:
-                    return true;
-            }
-        }
+        // Whether a pin takes a literal at all (the SEAM SCOPE exclusion list)
+        // and how many lanes it stores are ENGINE predicates:
+        // Arcane::PinAcceptsLiteral / Arcane::PinLiteralLanes, declared beside
+        // GraphNodeInputPin and defined beside the emission switch they mirror
+        // (MaterialGraph.hpp:378-396, MaterialGraph.cpp:1232-1283). They used
+        // to be duplicated here, which made a future argOr-bypassing node type
+        // a silent dead widget with nothing to fail; the engine copy has a
+        // truth-table test over every node type instead.
 
         // What the widget shows on a pin that carries no literal yet: codegen's
         // NEUTRAL for that pin, so an untouched field never lies about the
         // value the shader is using and a first drag starts from it instead of
         // snapping the material to zero. The eight argOr call sites that pass
-        // something other than "0.0" are enumerated at MaterialGraph.cpp:610-616
+        // something other than "0.0" are enumerated at MaterialGraph.cpp:672-678
         // and each is cited below. Returns false when the neutral is not a
         // constant at all (Panner's v.uv), which the caller renders as a
         // non-numeric placeholder.
@@ -274,33 +227,33 @@ namespace Arcane::Editor
             out[0] = out[1] = out[2] = out[3] = 0.0f;
             switch (n.type)
             {
-                case Arcane::GraphNodeType::Combine:        // alpha opaque (:791)
+                case Arcane::GraphNodeType::Combine:        // alpha opaque (:853)
                     if (pin == 3)
                         out[0] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::Clamp:          // max (:795)
+                case Arcane::GraphNodeType::Clamp:          // max (:857)
                     if (pin == 2)
                         out[0] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::Smoothstep:     // edge1 (:798)
+                case Arcane::GraphNodeType::Smoothstep:     // edge1 (:860)
                     if (pin == 1)
                         out[0] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::Power:          // exponent (:805)
+                case Arcane::GraphNodeType::Power:          // exponent (:867)
                     if (pin == 1)
                         out[0] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::TilingOffset:   // tiling, splat (:828)
+                case Arcane::GraphNodeType::TilingOffset:   // tiling, splat (:890)
                     if (pin == 1)
                         out[0] = out[1] = 1.0f;
                     return true;
-                case Arcane::GraphNodeType::SimpleNoise:    // scale (:892)
+                case Arcane::GraphNodeType::SimpleNoise:    // scale (:954)
                     if (pin == 1)
                         out[0] = 10.0f;
                     return true;
-                case Arcane::GraphNodeType::Panner:         // uv -> v.uv (:994)
+                case Arcane::GraphNodeType::Panner:         // uv -> v.uv (:1056)
                     return pin != 0;
-                case Arcane::GraphNodeType::ScaleOffset:    // scale = identity (:1010)
+                case Arcane::GraphNodeType::ScaleOffset:    // scale = identity (:1072)
                     if (pin == 2)
                         out[0] = 1.0f;
                     return true;
@@ -311,10 +264,10 @@ namespace Arcane::Editor
 
         // Value equality for a pass's optional graph, for the gesture builders'
         // no-op guard ONLY. MaterialGraph is a plain aggregate with no
-        // operator== (MaterialGraph.hpp:305-343; neither GraphNode nor
+        // operator== (MaterialGraph.hpp:327-365; neither GraphNode nor
         // GraphLink has one either), so this rides the existing public
         // serialization: GraphToJson's text is byte-stable for equal graphs,
-        // which MaterialGraphTest.cpp:695 and :1149 already assert. Doc-local
+        // which MaterialGraphTest.cpp:749 and :1310 already assert. Doc-local
         // on purpose -- an engine-header operator== is a wider commitment than
         // this guard needs.
         //
@@ -3091,19 +3044,23 @@ namespace Arcane::Editor
 
             const Arcane::GraphNodeTypeInfo* chosen = nullptr;
             const Arcane::GraphNodeTypeInfo* first = nullptr;
-            for (const Arcane::GraphNodeTypeInfo& info : Arcane::AllGraphNodeInfos())
+            // CONTEXT eligibility (surface, pass context, wire side) -- asked
+            // in one place so the flat and the categorised pass below cannot
+            // drift apart. The search filter is deliberately NOT in here: the
+            // two passes differ precisely in whether they apply it.
+            auto eligible = [&](const Arcane::GraphNodeTypeInfo& info)
             {
                 if (info.type == Arcane::GraphNodeType::Output)
-                    continue;   // exactly one, seeded at creation, undeletable
+                    return false;   // exactly one, seeded at creation, undeletable
                 const bool spriteOnly = info.type == Arcane::GraphNodeType::VertexColor ||
                                         info.type == Arcane::GraphNodeType::SpriteTexture;
                 if (spriteOnly && m_surface != 1)
-                    continue;
+                    return false;
                 // Pass Input samples wired input slots -- available wherever
                 // the active pass has any (the base's are its scene wires).
                 if (info.type == Arcane::GraphNodeType::PassInput &&
                     m_activePass == 0 && m_data.baseInputs.empty())
-                    continue;
+                    return false;
                 // The vertex context lives on the BASE graph, at most once.
                 if (info.type == Arcane::GraphNodeType::VertexOutput &&
                     (m_activePass != 0 ||
@@ -3113,7 +3070,7 @@ namespace Arcane::Editor
                                  return true;
                          return false;
                      }()))
-                    continue;
+                    return false;
                 // Wire-invoked: only types with a pin on the wire's far side.
                 // Every pin is numeric (adaptation absorbs widths), so
                 // compatibility is purely structural. A fresh Custom node has
@@ -3123,14 +3080,54 @@ namespace Arcane::Editor
                     const bool hasFarPin = m_wireIsInput ? !info.outputs.empty()
                                                          : !info.inputs.empty();
                     if (!hasFarPin)
-                        continue;
+                        return false;
                 }
-                if (!ContainsInsensitive(info.display, m_createSearch))
-                    continue;
+                return true;
+            };
+            auto emit = [&](const Arcane::GraphNodeTypeInfo& info)
+            {
                 if (!first)
-                    first = &info;
+                    first = &info;   // Enter creates this one
                 if (ImGui::MenuItem(info.display))
                     chosen = &info;
+            };
+            // A SEARCH FLATTENS the list: with a filter typed, headings would
+            // strand one or two items under each and push the first match --
+            // what Enter creates -- further down. Unfiltered, ~49 types need
+            // the structure, so they group by GraphNodeCategory in ENUM order
+            // (Input, Math, Vector, Procedural, Output, Utility). Empty
+            // categories draw no heading, so a sprite-only or wire-invoked
+            // popup never shows a bare title.
+            if (m_createSearch[0] != '\0')
+            {
+                for (const Arcane::GraphNodeTypeInfo& info : Arcane::AllGraphNodeInfos())
+                    if (eligible(info) && ContainsInsensitive(info.display, m_createSearch))
+                        emit(info);
+            }
+            else
+            {
+                // The bound comes from the TABLE, not from the last
+                // enumerator: a category appended after Utility then gets its
+                // own heading here instead of silently hiding its nodes.
+                int maxCat = 0;
+                for (const Arcane::GraphNodeTypeInfo& info : Arcane::AllGraphNodeInfos())
+                    maxCat = std::max(maxCat, static_cast<int>(info.category));
+                for (int c = 0; c <= maxCat; ++c)
+                {
+                    const auto cat = static_cast<Arcane::GraphNodeCategory>(c);
+                    bool headed = false;
+                    for (const Arcane::GraphNodeTypeInfo& info : Arcane::AllGraphNodeInfos())
+                    {
+                        if (info.category != cat || !eligible(info))
+                            continue;
+                        if (!headed)
+                        {
+                            ImGui::SeparatorText(Arcane::GraphNodeCategoryName(cat));
+                            headed = true;
+                        }
+                        emit(info);
+                    }
+                }
             }
             if (enter && first)
             {
@@ -3409,14 +3406,15 @@ namespace Arcane::Editor
 
             // Inline literal on an UNWIRED input pin (SG/UE parity: a pin
             // carries a value with no Const node feeding it). Codegen's argOr
-            // checks `connected` FIRST (MaterialGraph.cpp:628-637), so a wire
+            // checks `connected` FIRST (MaterialGraph.cpp:692-699), so a wire
             // hides the literal without destroying it -- which is why this
             // widget only has to disappear, never clear anything.
-            if (!pinWired(pin) && PinTakesLiteral(n, pin))
+            if (!pinWired(pin) && Arcane::PinAcceptsLiteral(n, pin))
             {
                 ImGui::SameLine();
                 ImGui::PushID(static_cast<int>(pin));
-                const int lanes = PinLiteralLanes(Arcane::GraphNodeInputPin(n, pin).width);
+                const int lanes =
+                    Arcane::PinLiteralLanes(Arcane::GraphNodeInputPin(n, pin).width);
                 float buf[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
                 const Arcane::GraphPinLiteral* lit = n.FindPinLiteral(pin);
                 bool numericDefault = true;
@@ -3444,8 +3442,8 @@ namespace Arcane::Editor
                     // ONE entry per pin, updated IN PLACE. A duplicate would
                     // make serialization non-deterministic: the writer sorts by
                     // pin with std::sort, which is unstable
-                    // (MaterialGraph.cpp:1265-1267), and the reader keeps the
-                    // FIRST entry for a pin (:1444-1445).
+                    // (MaterialGraph.cpp:1380-1382), and the reader keeps the
+                    // FIRST entry for a pin (:1559-1560).
                     Arcane::GraphPinLiteral* slot = nullptr;
                     for (Arcane::GraphPinLiteral& pl : n.pinLiterals)
                         if (pl.pin == pin)

@@ -39,12 +39,18 @@ not a nit.
 ## Plan additions (7-9) + this sweep's additions (10-11)
 
 - [ ] **7.** Shader editor rename sites (pass name, comment title, param/texture name,
-      swizzle mask) still commit once on Enter/click-away; Escape ALSO commits the typed
-      text rather than reverting it -- this is **pre-existing behavior**, verified twice
-      this arc by direct source reading (`StableTextEdit`, `EditorWidgets.cpp`, has no
-      Escape-specific branch; ImGui's own Escape-revert semantics are not consulted by
-      this commit-on-deactivate pattern). Confirm it still holds; if a later review
-      changes this, this item updates to match.
+      swizzle mask) commit once on Enter/click-away, and **Escape REVERTS** -- type into
+      one, press Escape, the old text comes back and nothing is committed (no undo step,
+      no dirty flag).
+      CHANGED, post-merge and user-sanctioned (rider R1, 2026-07-29). It previously
+      committed the typed text on Escape too: `StableTextEdit` compared against the
+      PREVIOUS frame's typed snapshot, and ImGui writes its revert text into the caller's
+      buffer only on the deactivation frame. The commit test now reads that post-widget
+      buffer, so an escaped edit compares equal to the live value and commits nothing
+      (`EditorWidgets.cpp`, `StableTextEdit`; the imgui citation chain is in the comment
+      there). All four rename sites inherit this from the one widget -- there is no
+      per-site Escape handling. Earlier task-6/8 reports describing Escape-commits are
+      historical and were true when written.
 - [ ] **8.** Sprite doc: undo of a ppu drag updates the viewport via the invalidate hook
       (drag ppu, Ctrl+Z, the sprite's on-screen size/geometry updates immediately --
       not just the Inspector-style field value).
