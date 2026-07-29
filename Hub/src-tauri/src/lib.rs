@@ -13,6 +13,7 @@
 // engine's own --print-engine-info probe.
 
 pub mod assoc;
+pub mod editorlock;
 pub mod engine;
 pub mod paths;
 pub mod project;
@@ -53,14 +54,15 @@ pub enum OpenOutcome {
     EngineMissing,
 }
 
-/// Tell the frontend which projects have a live editor right now. Emitted on
-/// every spawn and every exit; the payload is the full key set rather than a
-/// delta, so a missed event costs one stale badge until the next, not a
-/// permanently wrong count. Keys are `state::normalise_path` of the recorded
+/// Which projects have a live editor: the in-memory map (editors THIS Hub
+/// spawned, including mid-boot ones with no lock yet) merged with each
+/// listed project's editor lock (editors that outlived a Hub restart, or
+/// were launched by hand). Sorted so set-comparison and the emitted payload
+/// are deterministic. Keys are `state::normalise_path` of the recorded
 /// project path -- format.ts `normalisePath` mirrors that fold exactly.
-fn emit_running(app: &tauri::AppHandle) {
-    use tauri::{Emitter, Manager};
-    let keys: Vec<String> = app
+fn running_keys(app: &tauri::AppHandle) -> Vec<String> {
+    use tauri::Manager;
+    let mut keys: std::collections::HashSet<String> = app
         .state::<RunningEditors>()
         .0
         .lock()
@@ -68,14 +70,31 @@ fn emit_running(app: &tauri::AppHandle) {
         .keys()
         .cloned()
         .collect();
-    let _ = app.emit("running-changed", keys);
+    for e in state::load().recents {
+        if editorlock::read_live(&resolve::project_dir(Path::new(&e.path))).is_some() {
+            keys.insert(state::normalise_path(&e.path));
+        }
+    }
+    let mut keys: Vec<String> = keys.into_iter().collect();
+    keys.sort();
+    keys
+}
+
+/// Tell the frontend which projects have a live editor right now. Emitted on
+/// every spawn and every exit (the disk watcher covers lock transitions the
+/// map cannot see); the payload is the full key set rather than a delta, so
+/// a missed event costs one stale badge until the next, not a permanently
+/// wrong count.
+fn emit_running(app: &tauri::AppHandle) {
+    use tauri::Emitter;
+    let _ = app.emit("running-changed", running_keys(app));
 }
 
 /// The same key set, pulled: the frontend's initial paint cannot wait for an
 /// event that only fires on the next transition.
 #[tauri::command]
-fn running_projects(editors: tauri::State<RunningEditors>) -> Vec<String> {
-    editors.0.lock().unwrap().keys().cloned().collect()
+fn running_projects(app: tauri::AppHandle) -> Vec<String> {
+    running_keys(&app)
 }
 
 /// How long a spawned editor gets to prove it can boot. The wait thread
@@ -593,18 +612,20 @@ fn do_open_project(
         return Ok(OpenOutcome::EngineMissing);
     }
 
-    // Probe RIGHT BEFORE spawning, not only at registration or Hub launch: a
-    // long-lived Hub spans in-place rebuilds, and this is the last moment the
-    // compatibility story can be made true. A probe failure refuses the launch
-    // with a reason -- an engine that cannot answer its own identity probe
-    // (mid-rebuild, missing DLLs) is not about to open a project, and spawning
-    // it anyway would produce a silent nothing.
-    let info = spawn::probe_engine(&exe)?;
-
-    // One editor per project: a second launch means "take me there", so the
-    // running editor's window is focused instead of spawning a rival that
-    // would race it on every save. A pid whose window cannot be found is a
-    // stale entry (the wait thread races this check) and launches fresh.
+    // One editor per project, checked BEFORE the probe: focusing a running
+    // editor must not depend on the engine binary being able to answer for
+    // itself (it may be mid-rebuild while its editor runs on). Two sources
+    // of truth, in order:
+    //  1. The in-memory map -- editors THIS Hub spawned, including one still
+    //     mid-boot whose lock is not on disk yet. A pid whose window cannot
+    //     be found is a stale entry (the wait thread races this) and falls
+    //     through.
+    //  2. The editor's own lock in the project (pid + start-time validated,
+    //     editorlock.rs) -- which survives Hub restarts, so close-mode still
+    //     guards. A live lock refuses the rival spawn even when its window
+    //     cannot be focused yet: an editor mid-boot has no window, and
+    //     spawning a second editor against it is exactly the
+    //     two-editors-one-project case this exists to prevent.
     let project_key = state::normalise_path(&project_path);
     {
         let editors = app.state::<RunningEditors>();
@@ -616,6 +637,18 @@ fn do_open_project(
             live.remove(&project_key);
         }
     }
+    if let Some(pid) = editorlock::read_live(&resolve::project_dir(&proj)) {
+        let _ = spawn::focus_process_window(pid);
+        return Ok(OpenOutcome::Focused);
+    }
+
+    // Probe RIGHT BEFORE spawning, not only at registration or Hub launch: a
+    // long-lived Hub spans in-place rebuilds, and this is the last moment the
+    // compatibility story can be made true. A probe failure refuses the launch
+    // with a reason -- an engine that cannot answer its own identity probe
+    // (mid-rebuild, missing DLLs) is not about to open a project, and spawning
+    // it anyway would produce a silent nothing.
+    let info = spawn::probe_engine(&exe)?;
 
     // Loaded before the spawn so this project's saved extra arguments can go on
     // the command line. Passed as an argv ARRAY, never a joined string: each
@@ -911,6 +944,10 @@ fn spawn_disk_watch(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         use tauri::Emitter;
         let mut last = state::disk_fingerprint(&state::load());
+        // The lock-derived half of the running set changes without any map
+        // event -- an editor from a previous Hub session exits, or one is
+        // launched by hand -- so the watcher owns those transitions too.
+        let mut last_running = running_keys(&app);
         loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
             let s = state::load();
@@ -918,6 +955,11 @@ fn spawn_disk_watch(app: tauri::AppHandle) {
             if now != last {
                 last = now;
                 let _ = app.emit("state-changed", &s);
+            }
+            let now_running = running_keys(&app);
+            if now_running != last_running {
+                last_running = now_running.clone();
+                let _ = app.emit("running-changed", now_running);
             }
         }
     });
