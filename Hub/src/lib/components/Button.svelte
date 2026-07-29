@@ -32,7 +32,10 @@
 <style>
   .btn {
     font: inherit; font-size: 13px; font-weight: 600; cursor: default;
-    border-radius: var(--r-btn); padding: 10px 16px; border: 1px solid transparent;
+    /* 7px vertical, not the 10px this shipped with: with 13px type that made
+       a ~40px control, tall against the text beside it (user call
+       2026-07-29). ~32px now sits flush with the toolbar's 30px pills. */
+    border-radius: var(--r-btn); padding: 7px 16px; border: 1px solid transparent;
     transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
                 color var(--dur) var(--ease);
   }

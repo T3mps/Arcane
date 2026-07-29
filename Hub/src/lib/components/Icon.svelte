@@ -11,7 +11,7 @@
   // Path data only, no <rect>/<circle>, so one loop renders every icon.
   export type IconName =
     "folder" | "box" | "layers" | "gear" | "grid" | "list" | "x" | "ellipsis" | "star"
-    | "plus" | "chevron-down";
+    | "plus" | "chevron-down" | "check";
 
   const PATHS: Record<IconName, string[]> = {
     folder: [
@@ -61,6 +61,8 @@
     // chevron-down marks a button that opens a menu instead of acting.
     plus: ["M5 12h14", "M12 5v14"],
     "chevron-down": ["m6 9 6 6 6-6"],
+    // The current choice in a pick-one Dropdown menu.
+    check: ["M20 6 9 17l-5-5"],
   };
 </script>
 
