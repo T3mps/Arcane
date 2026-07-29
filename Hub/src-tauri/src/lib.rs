@@ -34,6 +34,23 @@ use std::sync::Mutex;
 /// wait thread owns the Child for its whole lifetime.
 pub struct RunningEditors(pub Mutex<HashMap<String, u32>>);
 
+/// What open_project actually did. A launch refused because a recorded path
+/// vanished is an OUTCOME, not an error: the frontend answers it by refreshing
+/// the list -- the row flips to its missing treatment, which already carries
+/// the explanation -- instead of raising the error banner over a page that is
+/// about to change under it. (Caught live 2026-07-29: a stale "project not
+/// found" banner sat over a row still offering Launch, and clicking it read
+/// as a jarring page reload.) Probe failures stay hard errors: they are facts
+/// about a binary that IS there but cannot answer for itself.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum OpenOutcome {
+    Launched,
+    Focused,
+    ProjectMissing,
+    EngineMissing,
+}
+
 fn now_utc_iso() -> String {
     // Seconds since the epoch is enough to sort "last opened" and avoids
     // pulling a date crate in for a display string.
@@ -408,14 +425,14 @@ fn open_project(
     editors: tauri::State<RunningEditors>,
     project_path: String,
     engine_path: String,
-) -> Result<(), String> {
+) -> Result<OpenOutcome, String> {
     let proj = PathBuf::from(&project_path);
     let exe = engine::resolve_editor_exe(Path::new(&engine_path));
     if !proj.exists() {
-        return Err(format!("project not found: {}", proj.display()));
+        return Ok(OpenOutcome::ProjectMissing);
     }
     if !exe.exists() {
-        return Err(format!("engine not found: {}", exe.display()));
+        return Ok(OpenOutcome::EngineMissing);
     }
 
     // Probe RIGHT BEFORE spawning, not only at registration or Hub launch: a
@@ -435,7 +452,7 @@ fn open_project(
         let mut live = editors.0.lock().unwrap();
         if let Some(&pid) = live.get(&project_key) {
             if spawn::focus_process_window(pid) {
-                return Ok(());
+                return Ok(OpenOutcome::Focused);
             }
             live.remove(&project_key);
         }
@@ -569,7 +586,8 @@ fn open_project(
             missing: false,
         },
     );
-    state::save(&s)
+    state::save(&s)?;
+    Ok(OpenOutcome::Launched)
 }
 
 #[tauri::command]
@@ -620,6 +638,31 @@ fn suggest_engine() -> Option<state::EngineEntry> {
     None
 }
 
+// The disk watcher: a 2s poll that keeps `missing` honest while the Hub sits
+// open. Without it, a project moved mid-session looked healthy until some
+// OTHER action happened to reload the list (caught live 2026-07-29). A poll,
+// not a filesystem watcher, on purpose: noticing a folder's DISAPPEARANCE
+// with notify means watching every parent chain on every involved drive and
+// re-arming on each move, while the truth here is a handful of stat calls
+// (`load` re-stamps `missing` from the disk on every read). Emits only on a
+// transition, so an idle Hub sends nothing and the frontend never repaints
+// for no reason.
+fn spawn_disk_watch(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        use tauri::Emitter;
+        let mut last = state::disk_fingerprint(&state::load());
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let s = state::load();
+            let now = state::disk_fingerprint(&s);
+            if now != last {
+                last = now;
+                let _ = app.emit("state-changed", &s);
+            }
+        }
+    });
+}
+
 pub fn run() {
     // Before ANY window exists: claim the taskbar family id ArcaneEditor also
     // sets, so the Hub's and every editor's buttons stack as one group.
@@ -642,6 +685,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(RunningEditors(Mutex::new(HashMap::new())))
+        .setup(|app| {
+            use tauri::Manager;
+            spawn_disk_watch(app.app_handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             load_state,
             register_engine,

@@ -286,6 +286,20 @@ pub fn load() -> HubState {
     HubState { recents, engines, warnings }
 }
 
+/// The disk-truth fingerprint the background watcher compares between polls:
+/// every listed path paired with whether it is missing right now. Membership
+/// changes flip it too, which is fine -- a redundant refresh after a command
+/// is idempotent, while a MISSED transition is exactly the stale-row bug the
+/// watcher exists to prevent (a project moved mid-session looked healthy
+/// until some other action reloaded the list).
+pub fn disk_fingerprint(s: &HubState) -> Vec<(String, bool)> {
+    s.recents
+        .iter()
+        .map(|e| (e.path.clone(), e.missing))
+        .chain(s.engines.iter().map(|e| (e.path.clone(), e.missing)))
+        .collect()
+}
+
 pub fn save(s: &HubState) -> Result<(), String> {
     // Engines FIRST. The two files are written separately, so a failure between
     // them leaves a mismatch; ordering it this way means the surviving mismatch
@@ -547,6 +561,30 @@ mod tests {
         assert_eq!(v[0].engine_id.as_deref(), Some("eng-1"), "the pin must survive");
         assert_eq!(v[0].args, "--frames 3", "the arguments must survive");
         assert_eq!(v[0].last_opened_utc, "1", "locating is not opening");
+    }
+
+    #[test]
+    fn disk_fingerprint_flips_when_a_project_goes_missing() {
+        let mut s = HubState {
+            recents: vec![rp("C:/Games/A/A.arcproj", "1")],
+            ..Default::default()
+        };
+        let before = disk_fingerprint(&s);
+        s.recents[0].missing = true;
+        assert_ne!(disk_fingerprint(&s), before, "a move must change the fingerprint");
+        s.recents[0].missing = false;
+        assert_eq!(disk_fingerprint(&s), before, "and moving it back must restore it");
+    }
+
+    #[test]
+    fn disk_fingerprint_sees_engines_as_well_as_projects() {
+        let mut s = HubState {
+            engines: vec![EngineEntry::new("C:/eng/ArcaneEditor.exe", 8, "Arcane 0.1".into())],
+            ..Default::default()
+        };
+        let before = disk_fingerprint(&s);
+        s.engines[0].missing = true;
+        assert_ne!(disk_fingerprint(&s), before, "an engine's disappearance counts too");
     }
 
     #[test]

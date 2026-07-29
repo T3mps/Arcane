@@ -111,9 +111,19 @@ export const hubDataDir = () => invoke<string>("hub_data_dir");
 export const revealHubDataDir = () => invoke<void>("reveal_hub_data_dir");
 export const hubVersion = () => invoke<string>("hub_version");
 
+/**
+ * What open_project actually did. `projectMissing`/`engineMissing` are
+ * outcomes, not errors: the caller refreshes and lets the row's missing
+ * treatment explain, instead of raising the error banner. Probe failures and
+ * spawn failures still reject.
+ */
+export type OpenOutcome = {
+  kind: "launched" | "focused" | "projectMissing" | "engineMissing";
+};
+
 /** `projectPath` is a `.arcproj` file or a project folder; the engine takes both. */
 export const openProject = (projectPath: string, enginePath: string) =>
-  invoke<void>("open_project", { projectPath, enginePath });
+  invoke<OpenOutcome>("open_project", { projectPath, enginePath });
 
 /** Returns the path of the `.arcproj` it wrote, ready to hand to openProject. */
 export const createProject = (dir: string, name: string, enginePath: string) =>

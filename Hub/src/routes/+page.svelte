@@ -74,6 +74,11 @@
   // -- and since refresh() replaces `hub` after every action, rendering
   // hub.warnings directly made the notice vanish on the user's next click.
   let notices = $state<string[]>([]);
+  // Deduplicated: the same fact arriving twice (a watchdog re-fire, a repeated
+  // click) must not stack identical banners.
+  const pushNotice = (m: string) => {
+    if (!notices.includes(m)) notices.push(m);
+  };
 
   // One adoption path for every HubState that arrives, whatever produced it.
   function adoptState(next: HubState) {
@@ -83,9 +88,7 @@
     // (a serde skip_serializing dropped the field), and a bare `for...of` over
     // undefined threw inside refresh -- taking the whole reload down with it,
     // including the engine selection, on every action that calls guard().
-    for (const w of next.warnings ?? []) {
-      if (!notices.includes(w)) notices.push(w);
-    }
+    for (const w of next.warnings ?? []) pushNotice(w);
     // Re-resolve the selection FROM the new list rather than keeping the old
     // object when its id still exists: entries are fresh copies, and a
     // re-probe or re-register may have changed abi/build -- holding the stale
@@ -124,15 +127,18 @@
   // returns before the verdict exists. Rendered as a notice, not `error`:
   // it is an async fact about a process, not a failed Hub action.
   onMount(() => {
-    const unFailed = listen<string>("launch-failed", (e) => {
-      if (!notices.includes(e.payload)) notices.push(e.payload);
-    });
+    const unFailed = listen<string>("launch-failed", (e) => pushNotice(e.payload));
     // The last tracked editor exited (the Hub may just have restored itself):
     // opened-times and missing flags deserve fresh eyes.
     const unIdle = listen("editors-idle", () => { refresh(); });
+    // The Rust disk watcher noticed a listed path appear or vanish while the
+    // Hub sat open. Adopt in place -- the rows are keyed by path, so the only
+    // visible change is the row that actually changed.
+    const unDisk = listen<HubState>("state-changed", (e) => adoptState(e.payload));
     return () => {
       unFailed.then((f) => f());
       unIdle.then((f) => f());
+      unDisk.then((f) => f());
     };
   });
 
@@ -202,7 +208,14 @@
     if (!engine) return;
     // Hiding-while-running happens RUST-side (open_project), which also owns
     // the restore -- the frontend no longer touches the window on launch.
-    await openProject(p.path, engine.path);
+    const out = await openProject(p.path, engine.path);
+    // A vanished PROJECT needs no words here: guard()'s refresh flips the row
+    // to its missing treatment, which already carries the explanation. The
+    // engine case gets a notice because the Projects view has no row for the
+    // engine to grey out -- the story lives on another screen.
+    if (out.kind === "engineMissing") {
+      pushNotice(`${engine.build} is no longer at ${engine.path}. See Engines.`);
+    }
   });
 
   const chooseEngine = (engineId: string | null) => {
