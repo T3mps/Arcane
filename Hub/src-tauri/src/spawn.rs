@@ -17,11 +17,11 @@ use crate::engine;
 // ArcaneEditor is a ConsoleApp, so without this every spawn flashes a console.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// The taskbar family id. ArcaneEditor's main.cpp claims the SAME id
-/// unconditionally at boot, which is what makes the Hub's and every editor's
-/// taskbar buttons stack as one group -- Windows groups by AppUserModelID,
-/// not by who spawned whom.
-pub const APP_USER_MODEL_ID: &str = "com.starworks.arcanehub";
+/// The taskbar family id. MIRRORED constant: ArcaneEditor's main.cpp claims
+/// the same id (`kAppUserModelId`) unconditionally at boot -- change BOTH or
+/// the Hub's and the editors' taskbar buttons stop stacking. Windows groups
+/// by AppUserModelID, not by who spawned whom.
+pub const APP_USER_MODEL_ID: &str = "dev.starworks.arcanehub";
 
 /// Claim the family AUMID for THIS process. Must run before the first window
 /// exists, so lib.rs calls it at the top of run().

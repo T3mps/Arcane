@@ -15,6 +15,11 @@
 #ifdef _WIN32
 #include <shobjidl.h>
 #pragma comment(lib, "shell32.lib")
+
+// The Arcane taskbar family id. MIRRORED constant: the Hub claims the same id
+// (spawn::APP_USER_MODEL_ID, Arcane/Hub/src-tauri/src/spawn.rs) -- change
+// BOTH or the Hub's and the editors' taskbar buttons stop stacking.
+static constexpr const wchar_t* kAppUserModelId = L"dev.starworks.arcanehub";
 #endif
 
 int main(int argc, char** argv)
@@ -47,7 +52,7 @@ int main(int argc, char** argv)
     // Deliberately unconditional rather than an --appid flag: a flag would
     // make an older editor build reject the unknown argument at launch.
     // AFTER the probe on purpose -- the probe pays for nothing it can skip.
-    SetCurrentProcessExplicitAppUserModelID(L"com.starworks.arcanehub");
+    SetCurrentProcessExplicitAppUserModelID(kAppUserModelId);
 #endif
 
     // No project and no explicit plugin. A SCRIPTED run (--frames N) still
