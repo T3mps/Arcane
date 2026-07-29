@@ -7,9 +7,12 @@
 // accessor lives in Core/TypeID.hpp and is transitively visible via
 // FieldInfo.hpp, but it is included explicitly here for clarity.
 #include <Astra/Core/TypeID.hpp>
+#include <Astra/Reflection/MetaRegistry.hpp>   // GetMeta(hash) -> TypeMeta -> EnumInfo
 #include <Astra/Registry/Registry.hpp>
 
+#include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <glm/glm.hpp>
 #include <span>
 #include <string>
@@ -31,20 +34,84 @@ namespace Arcane::Editor
         static const uint64_t kBool = Astra::TypeID<bool>::Hash();
         static const uint64_t kF32  = Astra::TypeID<float>::Hash();
         static const uint64_t kI32  = Astra::TypeID<int32_t>::Hash();
+        static const uint64_t kU32  = Astra::TypeID<uint32_t>::Hash();
         static const uint64_t kVec2 = Astra::TypeID<glm::vec2>::Hash();
         static const uint64_t kVec3 = Astra::TypeID<glm::vec3>::Hash();
+        static const uint64_t kVec4 = Astra::TypeID<glm::vec4>::Hash();
         static const uint64_t kGuid = Astra::TypeID<Arcane::Guid>::Hash();
         static const uint64_t kStr  = Astra::TypeID<std::string>::Hash();
+
+        // Before the hash table: an enum's hash is its OWN type's, never one of
+        // the scalars below. Registered (ASTRA_REFLECT_ENUM ran somewhere in
+        // this process) -> a combo has names to offer; unregistered -> nothing
+        // to name the values with, so it stays ReadOnly like any unknown type.
+        if (f.isEnum)
+            return EnumInfoOf(f) ? FieldKind::Enum : FieldKind::ReadOnly;
 
         if (f.typeHash == kBool) return FieldKind::Bool;
         if (f.typeHash == kF32)  return FieldKind::Float;
         if (f.typeHash == kI32)  return FieldKind::Int32;
+        if (f.typeHash == kU32)  return FieldKind::UInt32;
         if (f.typeHash == kVec2) return FieldKind::Vec2;
         if (f.typeHash == kVec3) return FieldKind::Vec3;
+        if (f.typeHash == kVec4) return FieldKind::Vec4;
         if (f.typeHash == kGuid) return FieldKind::AssetRef;
         if (f.typeHash == kStr)  return FieldKind::String;
 
         return FieldKind::ReadOnly;
+    }
+
+    const Astra::EnumInfo* EnumInfoOf(const Astra::FieldInfo& f) noexcept
+    {
+        const Astra::TypeMeta* meta = Astra::GetMeta(f.typeHash);
+        return meta ? meta->GetEnumInfo() : nullptr;
+    }
+
+    std::int64_t ReadEnumValue(const Astra::FieldInfo& f, const void* instance) noexcept
+    {
+        const Astra::EnumInfo* info = EnumInfoOf(f);
+        if (!info || !instance)
+            return 0;
+        const auto* p = static_cast<const std::byte*>(instance) + f.offset;
+        const bool sign = info->isSigned;
+        // f.size is the field's true byte width; memcpy at that width, then
+        // widen. Sign-extension comes from going through the signed narrow
+        // type; unsigned widens zero-filled.
+        switch (f.size)
+        {
+            case 1: { if (sign) { std::int8_t  v; std::memcpy(&v, p, 1); return v; }
+                      std::uint8_t  v; std::memcpy(&v, p, 1); return v; }
+            case 2: { if (sign) { std::int16_t v; std::memcpy(&v, p, 2); return v; }
+                      std::uint16_t v; std::memcpy(&v, p, 2); return v; }
+            case 4: { if (sign) { std::int32_t v; std::memcpy(&v, p, 4); return v; }
+                      std::uint32_t v; std::memcpy(&v, p, 4); return v; }
+            // A uint64 enum value with the top bit set round-trips through the
+            // same 8 bytes; int64 is a bit-container here, not a value claim.
+            case 8: { std::int64_t v; std::memcpy(&v, p, 8); return v; }
+            default: return 0;
+        }
+    }
+
+    bool IsColorFieldName(std::string_view rawFieldName) noexcept
+    {
+        // Case-insensitive substring, no allocation.
+        const auto contains = [&](std::string_view needle)
+        {
+            if (rawFieldName.size() < needle.size())
+                return false;
+            for (size_t i = 0; i + needle.size() <= rawFieldName.size(); ++i)
+            {
+                size_t j = 0;
+                while (j < needle.size()
+                       && std::tolower(static_cast<unsigned char>(rawFieldName[i + j]))
+                              == needle[j])
+                    ++j;
+                if (j == needle.size())
+                    return true;
+            }
+            return false;
+        };
+        return contains("color") || contains("tint");
     }
 
     void ApplyBoolEdit(const Astra::FieldInfo& f, void* instance, bool v) noexcept
@@ -52,6 +119,21 @@ namespace Arcane::Editor
 
     void ApplyIntEdit(const Astra::FieldInfo& f, void* instance, int v) noexcept
     { if (int32_t* p = f.GetPtr<int32_t>(instance)) *p = static_cast<int32_t>(v); }
+
+    void ApplyUIntEdit(const Astra::FieldInfo& f, void* instance, std::uint32_t v) noexcept
+    { if (uint32_t* p = f.GetPtr<uint32_t>(instance)) *p = v; }
+
+    void ApplyEnumEdit(const Astra::FieldInfo& f, void* instance, std::int64_t v) noexcept
+    {
+        if (!instance || f.size == 0 || f.size > 8)
+            return;
+        // Low f.size bytes of the value, and ONLY those bytes: SpriteShape is
+        // uint8-backed, and a wider write would stomp the neighbouring members.
+        // Little-endian assumption (x64/ARM64 -- every platform this ships on):
+        // the value's low bytes sit first in memory.
+        auto* p = static_cast<std::byte*>(instance) + f.offset;
+        std::memcpy(p, &v, f.size);
+    }
 
     void ApplyFloatEdit(const Astra::FieldInfo& f, void* instance, float v) noexcept
     { if (float* p = f.GetPtr<float>(instance)) *p = v; }
@@ -66,6 +148,7 @@ namespace Arcane::Editor
     {
         switch (kind)
         {
+            case FieldKind::Vec4: return 4;
             case FieldKind::Vec3: return 3;
             case FieldKind::Vec2: return 2;
             default:              return 1;
@@ -88,8 +171,10 @@ namespace Arcane::Editor
         // branch, which is not simply index 0 here because a selection entry can
         // be dead or lack the component.
         bool seeded = false;
-        float        seedF[3] = {};
-        std::int32_t seedI = 0;
+        float        seedF[4] = {};
+        // One integer seed serves Int32, UInt32 AND Enum: int64 holds every
+        // value all three can carry, and the comparison below is bit-equality.
+        std::int64_t seedI = 0;
         bool         seedB = false;
         Arcane::Guid seedG{};
         std::string  seedS;
@@ -100,8 +185,8 @@ namespace Arcane::Editor
             if (!data)
                 continue;   // dead entity or missing component: not a voter
 
-            float        curF[3] = {};
-            std::int32_t curI = 0;
+            float        curF[4] = {};
+            std::int64_t curI = 0;
             bool         curB = false;
             Arcane::Guid curG{};
             std::string  curS;
@@ -114,6 +199,12 @@ namespace Arcane::Editor
                 case FieldKind::Int32:
                     if (const std::int32_t* p = f.GetPtr<std::int32_t>(data)) curI = *p;
                     break;
+                case FieldKind::UInt32:
+                    if (const std::uint32_t* p = f.GetPtr<std::uint32_t>(data)) curI = *p;
+                    break;
+                case FieldKind::Enum:
+                    curI = ReadEnumValue(f, data);
+                    break;
                 case FieldKind::Float:
                     if (const float* p = f.GetPtr<float>(data)) curF[0] = *p;
                     break;
@@ -124,6 +215,10 @@ namespace Arcane::Editor
                 case FieldKind::Vec3:
                     if (const glm::vec3* p = f.GetPtr<glm::vec3>(data))
                     { curF[0] = p->x; curF[1] = p->y; curF[2] = p->z; }
+                    break;
+                case FieldKind::Vec4:
+                    if (const glm::vec4* p = f.GetPtr<glm::vec4>(data))
+                    { curF[0] = p->x; curF[1] = p->y; curF[2] = p->z; curF[3] = p->w; }
                     break;
                 case FieldKind::AssetRef:
                     if (const Arcane::Guid* p = f.GetPtr<Arcane::Guid>(data)) curG = *p;
@@ -152,6 +247,8 @@ namespace Arcane::Editor
                     if (curB != seedB) mask.bits |= 1u;
                     break;
                 case FieldKind::Int32:
+                case FieldKind::UInt32:
+                case FieldKind::Enum:
                     if (curI != seedI) mask.bits |= 1u;
                     break;
                 case FieldKind::AssetRef:

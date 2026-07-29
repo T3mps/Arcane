@@ -489,6 +489,56 @@ namespace Arcane::Editor
                                           { Arcane::Editor::ApplyIntEdit(f, d, v); });
                         break;
                     }
+                    case Arcane::Editor::FieldKind::UInt32:
+                    {
+                        std::uint32_t v = f.Get<std::uint32_t>(instance);
+                        if (Multi())
+                        {
+                            const double cur = static_cast<double>(v);
+                            double out = cur;
+                            if (MultiScalarRow(widgetId.c_str(), 1, &cur, MixedFor(f),
+                                               /*integral*/ true, /*axisColors*/ false,
+                                               out) >= 0)
+                            {
+                                // Same two-clamp rule as the Int32 row: the
+                                // authored Range first, then the cast's own
+                                // domain, kept separate so a Range lying
+                                // outside u32 cannot invert std::clamp's
+                                // precondition.
+                                if (const auto bound = BindingRange(f))
+                                    out = std::clamp(out, bound->first, bound->second);
+                                const double hi =
+                                    static_cast<double>(std::numeric_limits<std::uint32_t>::max());
+                                const std::uint32_t uv =
+                                    static_cast<std::uint32_t>(std::clamp(out, 0.0, hi));
+                                ApplyImmediate(rawName, instance, [&](void* d)
+                                               { Arcane::Editor::ApplyUIntEdit(f, d, uv); });
+                            }
+                            break;
+                        }
+                        // DragScalar directly rather than RangedDragInt: that
+                        // helper is int-typed, and a u32 above INT_MAX would
+                        // wrap through it. Range bounds clamp into the unsigned
+                        // domain before use.
+                        const auto bound = BindingRange(f);
+                        const double uMax =
+                            static_cast<double>(std::numeric_limits<std::uint32_t>::max());
+                        std::uint32_t lo = 0;
+                        std::uint32_t hi = std::numeric_limits<std::uint32_t>::max();
+                        if (bound)
+                        {
+                            lo = static_cast<std::uint32_t>(std::clamp(bound->first, 0.0, uMax));
+                            hi = static_cast<std::uint32_t>(std::clamp(bound->second, 0.0, uMax));
+                        }
+                        bool changed = ImGui::DragScalar(widgetId.c_str(), ImGuiDataType_U32, &v,
+                                                         1.0f, bound ? &lo : nullptr,
+                                                         bound ? &hi : nullptr);
+                        BeginGestureIfActivated(rawName, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { Arcane::Editor::ApplyUIntEdit(f, d, v); });
+                        break;
+                    }
                     case Arcane::Editor::FieldKind::Float:
                     {
                         float v = f.Get<float>(instance);
@@ -569,6 +619,55 @@ namespace Arcane::Editor
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
                                           { if (glm::vec3* p = f.GetPtr<glm::vec3>(d)) *p = v; });
+                        break;
+                    }
+                    case Arcane::Editor::FieldKind::Vec4:
+                    {
+                        glm::vec4 v = f.Get<glm::vec4>(instance);
+                        // The name heuristic (IsColorFieldName): "tint"/"color"
+                        // fields edit as a colour, everything else as 4 floats.
+                        const bool isColor = Arcane::Editor::IsColorFieldName(rawName);
+                        if (Multi())
+                        {
+                            const double cur[4]{ v.x, v.y, v.z, v.w };
+                            double out = 0.0;
+                            // Axis strips only on the NON-colour flavour: XYZW
+                            // colours under RGBA channels would label the
+                            // values as something they are not.
+                            const int c = MultiScalarRow(widgetId.c_str(), 4, cur, MixedFor(f),
+                                                         /*integral*/ false,
+                                                         /*axisColors*/ !isColor, out);
+                            if (c >= 0)
+                            {
+                                const float fv = static_cast<float>(out);
+                                ApplyImmediate(rawName, instance, [&](void* d)
+                                               { if (glm::vec4* p = f.GetPtr<glm::vec4>(d)) (*p)[c] = fv; });
+                            }
+                            break;
+                        }
+                        if (isColor)
+                        {
+                            // NoPicker ON PURPOSE (for now): picker-popup edits
+                            // happen on the POPUP's own widgets, so the
+                            // activation-bracketed gesture below would never
+                            // open and those writes would land outside undo.
+                            // The inline channel drags + swatch preview gesture
+                            // correctly; a popup-aware gesture is later polish.
+                            bool changed = ImGui::ColorEdit4(widgetId.c_str(), &v.x,
+                                                             ImGuiColorEditFlags_NoPicker
+                                                             | ImGuiColorEditFlags_Float
+                                                             | ImGuiColorEditFlags_AlphaBar);
+                            BeginGestureIfActivated(rawName, instance);
+                            if (changed)
+                                ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                              { if (glm::vec4* p = f.GetPtr<glm::vec4>(d)) *p = v; });
+                            break;
+                        }
+                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 4, 0.1f);
+                        BeginGestureIfActivated(rawName, instance);
+                        if (changed)
+                            ForEachTarget(instance, [&](Astra::Entity, void* d)
+                                          { if (glm::vec4* p = f.GetPtr<glm::vec4>(d)) *p = v; });
                         break;
                     }
                     case Arcane::Editor::FieldKind::AssetRef:
@@ -774,6 +873,54 @@ namespace Arcane::Editor
                         if (ImGui::IsItemDeactivated() && text != seed)
                             ApplyImmediate(rawName, instance, [&](void* d)
                                            { Arcane::Editor::ApplyStringEdit(f, d, text); });
+                        break;
+                    }
+                    case Arcane::Editor::FieldKind::Enum:
+                    {
+                        // Classify guarantees registered metadata; the guard is
+                        // a belt against a meta table torn down mid-frame.
+                        const Astra::EnumInfo* info = Arcane::Editor::EnumInfoOf(f);
+                        if (!info)
+                        {
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::TextDisabled("unsupported");
+                            break;
+                        }
+                        const std::int64_t cur = Arcane::Editor::ReadEnumValue(f, instance);
+                        const bool enumMixed = Multi() && MixedFor(f).Any();
+                        // Mixed renders the same blank-meaning "--" the numeric
+                        // rows use; an out-of-roster value shows its NUMBER
+                        // rather than pretending to be a named one.
+                        std::string preview = "--";
+                        if (!enumMixed)
+                        {
+                            if (const auto n = info->GetDisplayName(cur))
+                                preview = std::string(*n);
+                            else
+                                preview = std::to_string(cur);
+                        }
+                        if (ImGui::BeginCombo(widgetId.c_str(), preview.c_str()))
+                        {
+                            for (const Astra::EnumValue& ev : info->values)
+                            {
+                                const bool selected = !enumMixed && ev.value == cur;
+                                // Id by VALUE: two entries may share a display
+                                // name, and the value is the identity.
+                                const std::string item =
+                                    std::string(ev.displayName.empty() ? ev.name : ev.displayName)
+                                    + "##" + std::to_string(ev.value);
+                                // ApplyImmediate: a pick is one discrete event
+                                // fanned to the selection as ONE undo step --
+                                // the AssetRef popup's exact semantics.
+                                if (ImGui::Selectable(item.c_str(), selected))
+                                    ApplyImmediate(rawName, instance, [&](void* d)
+                                                   { Arcane::Editor::ApplyEnumEdit(f, d, ev.value); });
+                                if (!ev.description.empty()
+                                    && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                                    ImGui::SetTooltip("%s", std::string(ev.description).c_str());
+                            }
+                            ImGui::EndCombo();
+                        }
                         break;
                     }
                     case Arcane::Editor::FieldKind::ReadOnly:

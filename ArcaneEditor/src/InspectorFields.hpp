@@ -6,11 +6,13 @@
 
 #include <Arcane/Guid.hpp>
 #include <Astra/Entity/Entity.hpp>
+#include <Astra/Reflection/EnumInfo.hpp>
 #include <Astra/Reflection/FieldInfo.hpp>
 
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace Astra { class Registry; }
 
@@ -18,18 +20,46 @@ namespace Arcane::Editor
 {
     // AssetRef = an Arcane::Guid field: rendered as an asset-reference widget
     // (resolved name + pick popup + browser drag-target) instead of raw ints.
-    enum class FieldKind { Bool, Int32, Float, Vec2, Vec3, AssetRef, String, ReadOnly };
+    enum class FieldKind
+    { Bool, Int32, UInt32, Float, Vec2, Vec3, Vec4, AssetRef, String, Enum, ReadOnly };
 
     // Classify a reflected field into an editor kind. Unknown/compound types ->
-    // ReadOnly (shown disabled, never crashing).
+    // ReadOnly (shown disabled, never crashing). Enum requires the enum type to
+    // be ASTRA_REFLECT_ENUM-registered -- an unregistered enum has no names to
+    // offer and stays ReadOnly.
     FieldKind ClassifyField(const Astra::FieldInfo& f) noexcept;
+
+    // The registered enum metadata for an enum-typed field, or nullptr. The
+    // lookup key is the FIELD's typeHash -- ASTRA_REFLECT_ENUM registers a
+    // TypeMeta under the same TypeID hash FieldInfo records.
+    [[nodiscard]] const Astra::EnumInfo* EnumInfoOf(const Astra::FieldInfo& f) noexcept;
+
+    // Read an enum field's numeric value at its TRUE width. SpriteShape is
+    // uint8-backed: Get<int32_t> would assert (hash mismatch) and a raw 4-byte
+    // read would pull neighbouring bytes into the value. Sign-extends when the
+    // registered metadata says the underlying type is signed. 0 for a field
+    // with no registered enum (callers gate on EnumInfoOf first).
+    [[nodiscard]] std::int64_t ReadEnumValue(const Astra::FieldInfo& f,
+                                             const void* instance) noexcept;
+
+    // Whether a vec4 field is a COLOR (swatch + 0..1 alpha editing) rather
+    // than a plain 4-float. Decided from the C++ identifier -- "tint",
+    // "color", "baseColor" -- the same documented-name-heuristic pattern as
+    // AssetKindFilterForFieldName (AssetBrowser.hpp): the engine has no
+    // dedicated color type, and until one exists the field NAME is the only
+    // author intent on record.
+    [[nodiscard]] bool IsColorFieldName(std::string_view rawFieldName) noexcept;
 
     // Pure write-backs (no ImGui) so the round-trip is unit-testable.
     void ApplyBoolEdit (const Astra::FieldInfo& f, void* instance, bool  v) noexcept;
     void ApplyIntEdit  (const Astra::FieldInfo& f, void* instance, int   v) noexcept;
+    void ApplyUIntEdit (const Astra::FieldInfo& f, void* instance, std::uint32_t v) noexcept;
     void ApplyFloatEdit(const Astra::FieldInfo& f, void* instance, float v) noexcept;
     void ApplyGuidEdit (const Astra::FieldInfo& f, void* instance, const Arcane::Guid& v) noexcept;
     void ApplyStringEdit(const Astra::FieldInfo& f, void* instance, const std::string& v) noexcept;
+    // Width-correct enum write (see ReadEnumValue): stores the low `f.size`
+    // bytes of `v`, leaving neighbouring struct bytes untouched.
+    void ApplyEnumEdit (const Astra::FieldInfo& f, void* instance, std::int64_t v) noexcept;
 
     // Per-scalar-component "these differ across the selection" mask.
     //

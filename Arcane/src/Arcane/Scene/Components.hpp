@@ -147,17 +147,24 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(Transform, scale)
     ASTRA_END_REFLECT_TYPE()
 
+    // Hidden as well as Serializable(false): these are runtime-derived caches
+    // (recomputed every frame / every fixed step), and the Inspector used to
+    // advertise them as "unsupported" rows -- noise about state nobody authors.
+    // Unity and UE both hide derived caches outright.
     ASTRA_REFLECT_TYPE(WorldTransform)
         ASTRA_REFLECT_FIELD(WorldTransform, matrix)
             ASTRA_REFLECT_ATTR(Serializable, false)
+            ASTRA_REFLECT_ATTR(Hidden)
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(PreviousTransform)
         ASTRA_REFLECT_FIELD(PreviousTransform, position)
             ASTRA_REFLECT_ATTR(Serializable, false)
+            ASTRA_REFLECT_ATTR(Hidden)
         ASTRA_REFLECT_FIELD(PreviousTransform, rotation)
             ASTRA_REFLECT_ATTR(Serializable, false)
             ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
+            ASTRA_REFLECT_ATTR(Hidden)
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_ENUM(SpriteShape)

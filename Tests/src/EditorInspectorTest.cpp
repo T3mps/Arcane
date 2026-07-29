@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Astra/Registry/Registry.hpp>
+#include <Astra/Reflection/Attribute.hpp>   // Astra::Hidden (the derived-state stamps)
 #include <Astra/Reflection/Macros.hpp>
 #include <Astra/Reflection/TypeMeta.hpp>
 
@@ -31,25 +32,57 @@
 // TypeMeta, which the registrar installs on its own.
 namespace ArcaneEditorTest
 {
+    // uint8-backed on purpose: the width-safety test below proves enum
+    // reads/writes touch exactly one byte.
+    enum class ProbeMode : std::uint8_t { Alpha = 0, Beta = 1, Gamma = 7 };
+
+    ASTRA_REFLECT_ENUM(ProbeMode)
+        ASTRA_REFLECT_ENUM_VALUE(ProbeMode, Alpha)
+        ASTRA_REFLECT_ENUM_VALUE(ProbeMode, Beta)
+        ASTRA_REFLECT_ENUM_VALUE(ProbeMode, Gamma)
+    ASTRA_END_REFLECT_ENUM()
+
+    // An enum whose type is deliberately NOT ASTRA_REFLECT_ENUM-registered:
+    // nothing can name its values, so it must classify ReadOnly, not Enum.
+    enum class UnregisteredMode : std::uint8_t { X };
+
     struct ClassifyProbe
     {
-        bool         flag   = false;
-        std::int32_t count  = 0;
-        float        scalar = 0.0f;
-        glm::vec2    two{};
-        glm::vec3    three{};   // the arm nothing in the engine roster witnesses
-        glm::vec4    four{};    // no Vec4 editor -> must classify ReadOnly
-        Arcane::Guid ref{};
+        bool             flag   = false;
+        std::int32_t     count  = 0;
+        std::uint32_t    bits   = 0;
+        float            scalar = 0.0f;
+        glm::vec2        two{};
+        glm::vec3        three{};   // the arm nothing in the engine roster witnesses
+        glm::vec4        four{};    // Vec4 editor: 4-float drags (colour by name)
+        Arcane::Guid     ref{};
+        ProbeMode        mode   = ProbeMode::Alpha;
+        UnregisteredMode dark   = UnregisteredMode::X;
     };
 
     ASTRA_REFLECT_TYPE(ClassifyProbe)
         ASTRA_REFLECT_FIELD(ClassifyProbe, flag)
         ASTRA_REFLECT_FIELD(ClassifyProbe, count)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, bits)
         ASTRA_REFLECT_FIELD(ClassifyProbe, scalar)
         ASTRA_REFLECT_FIELD(ClassifyProbe, two)
         ASTRA_REFLECT_FIELD(ClassifyProbe, three)
         ASTRA_REFLECT_FIELD(ClassifyProbe, four)
         ASTRA_REFLECT_FIELD(ClassifyProbe, ref)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, mode)
+        ASTRA_REFLECT_FIELD(ClassifyProbe, dark)
+    ASTRA_END_REFLECT_TYPE()
+
+    // Byte sentinels AROUND a one-byte enum: the width-safety witness.
+    struct EnumWidthProbe
+    {
+        std::uint8_t before = 0xAB;
+        ProbeMode    mode   = ProbeMode::Beta;
+        std::uint8_t after  = 0xCD;
+    };
+
+    ASTRA_REFLECT_TYPE(EnumWidthProbe)
+        ASTRA_REFLECT_FIELD(EnumWidthProbe, mode)
     ASTRA_END_REFLECT_TYPE()
 }
 
@@ -152,11 +185,46 @@ TEST_CASE("ClassifyField maps arithmetic/bool fields, ReadOnly otherwise", "[edi
     CHECK(Arcane::Editor::ClassifyField(*layerField) == Arcane::Editor::FieldKind::Int32);
     CHECK(Arcane::Editor::ClassifyField(*orderField) == Arcane::Editor::FieldKind::Int32);
 
-    // tint is a glm::vec4 -- no Vec4 editor exists, so it must classify ReadOnly
-    // rather than being silently misclassified (regression coverage for the
-    // now-removed size==1-arithmetic bool fallback).
+    // tint is a glm::vec4 AND a colour by name: the Vec4 arm classifies it,
+    // and the name heuristic is what upgrades its row to a colour editor.
     REQUIRE(tintField != nullptr);
-    CHECK(Arcane::Editor::ClassifyField(*tintField) == Arcane::Editor::FieldKind::ReadOnly);
+    CHECK(Arcane::Editor::ClassifyField(*tintField) == Arcane::Editor::FieldKind::Vec4);
+    CHECK(Arcane::Editor::IsColorFieldName(tintField->name));
+}
+
+TEST_CASE("IsColorFieldName: colours by identifier, nothing else", "[editor]")
+{
+    using Arcane::Editor::IsColorFieldName;
+    CHECK(IsColorFieldName("tint"));
+    CHECK(IsColorFieldName("color"));
+    CHECK(IsColorFieldName("baseColor"));
+    CHECK(IsColorFieldName("TintColor"));
+    CHECK_FALSE(IsColorFieldName("position"));
+    CHECK_FALSE(IsColorFieldName("material"));
+    CHECK_FALSE(IsColorFieldName("four"));
+    CHECK_FALSE(IsColorFieldName(""));
+}
+
+TEST_CASE("Enum fields read and write at their true width", "[editor]")
+{
+    const Astra::TypeMeta* meta = Astra::GetMeta<ArcaneEditorTest::EnumWidthProbe>();
+    REQUIRE(meta != nullptr);
+    REQUIRE(meta->fields.size() == 1);
+    const Astra::FieldInfo& f = meta->fields[0];
+
+    CHECK(Arcane::Editor::ClassifyField(f) == Arcane::Editor::FieldKind::Enum);
+    REQUIRE(Arcane::Editor::EnumInfoOf(f) != nullptr);
+
+    ArcaneEditorTest::EnumWidthProbe probe;
+    CHECK(Arcane::Editor::ReadEnumValue(f, &probe) == 1);   // Beta
+
+    // The write lands the value AND ONLY the value: the uint8 sentinels on
+    // either side must survive -- a 4-byte write would stomp one of them.
+    Arcane::Editor::ApplyEnumEdit(f, &probe, 7);            // Gamma
+    CHECK(probe.mode == ArcaneEditorTest::ProbeMode::Gamma);
+    CHECK(probe.before == 0xAB);
+    CHECK(probe.after == 0xCD);
+    CHECK(Arcane::Editor::ReadEnumValue(f, &probe) == 7);
 }
 
 TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
@@ -202,10 +270,33 @@ TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
     CHECK(kindOf(probe, "three") == K::Vec3);
     CHECK(kindOf(probe, "two")   == K::Vec2);
     CHECK(kindOf(probe, "flag")  == K::Bool);
+    CHECK(kindOf(probe, "bits")  == K::UInt32);
+    CHECK(kindOf(probe, "four")  == K::Vec4);
+    CHECK(kindOf(probe, "mode")  == K::Enum);
+    // Registered-or-ReadOnly: an enum nothing ASTRA_REFLECT_ENUM'd has no
+    // names to offer, so it must NOT classify Enum.
+    CHECK(kindOf(probe, "dark")  == K::ReadOnly);
+
+    // Enum witnesses from the REAL roster: both physics enums are registered,
+    // so both dropdowns light up the moment the arm exists.
+    CHECK(kindOf(body, "type") == K::Enum);
+    const Astra::TypeMeta* fixture = Astra::GetMeta<Arcane::Fixture>();
+    REQUIRE(fixture != nullptr);
+    CHECK(kindOf(fixture, "kind") == K::Enum);
+
+    // The derived-state stamps: runtime caches hide rather than advertising
+    // themselves as unsupported rows (Astra::Hidden, honored by the visitor).
+    const Astra::TypeMeta* world = Astra::GetMeta<Arcane::WorldTransform>();
+    REQUIRE(world != nullptr);
+    REQUIRE_FALSE(world->fields.empty());
+    CHECK(world->fields[0].HasAttribute<Astra::Hidden>());
+    const Astra::TypeMeta* bodyRef = Astra::GetMeta<Arcane::PhysicsBodyRef>();
+    REQUIRE(bodyRef != nullptr);
+    for (const Astra::FieldInfo& bf : bodyRef->fields)
+        CHECK(bf.HasAttribute<Astra::Hidden>());
     CHECK(kindOf(probe, "count") == K::Int32);
     CHECK(kindOf(probe, "scalar")== K::Float);
     CHECK(kindOf(probe, "ref")   == K::AssetRef);
-    CHECK(kindOf(probe, "four")  == K::ReadOnly);   // no Vec4 editor
 }
 
 TEST_CASE("ApplyIntEdit writes through reflection to the live component", "[editor]")

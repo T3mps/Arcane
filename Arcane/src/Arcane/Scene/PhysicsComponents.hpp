@@ -224,11 +224,16 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(Collider2D, fixtures)
     ASTRA_END_REFLECT_TYPE()
 
+    // Hidden as well as Serializable(false): runtime plumbing nobody authors
+    // (the handle is re-established by PhysicsSystem on load), which used to
+    // render as "unsupported" rows in the Inspector.
     ASTRA_REFLECT_TYPE(PhysicsBodyRef)
         ASTRA_REFLECT_FIELD(PhysicsBodyRef, handle)
             ASTRA_REFLECT_ATTR(Serializable, false)
+            ASTRA_REFLECT_ATTR(Hidden)
         ASTRA_REFLECT_FIELD(PhysicsBodyRef, appliedScale)
             ASTRA_REFLECT_ATTR(Serializable, false)
+            ASTRA_REFLECT_ATTR(Hidden)
     ASTRA_END_REFLECT_TYPE()
 } // namespace Arcane
 
