@@ -257,6 +257,16 @@ pub fn skip_in_duplicate(dir_name: &str) -> bool {
     DUPLICATE_SKIP.iter().any(|s| dir_name.eq_ignore_ascii_case(s))
 }
 
+/// FILES Duplicate never copies. `Saved/` itself travels (the cover thumbnail
+/// lives there), but `editor.lock` is POSITIONAL identity -- {pid, birth} of
+/// whichever editor holds the ORIGINAL open. Copied into a duplicate made
+/// while that editor runs, the copy passes lock liveness validation wholesale:
+/// it wears a running badge it did not earn, and double-clicking it focuses
+/// the original's editor instead of opening the copy.
+pub fn skip_file_in_duplicate(file_name: &str) -> bool {
+    file_name.eq_ignore_ascii_case("editor.lock")
+}
+
 /// The nth candidate name for a duplicate: "X Copy", then "X Copy 2", ...
 /// Pure so the format is pinned by a test rather than by whatever the loop
 /// in duplicate_project happens to do.
@@ -576,6 +586,14 @@ mod tests {
         assert!(!skip_in_duplicate("Content"), "content is the point of the copy");
         assert!(!skip_in_duplicate("Source"), "source rebuilds the skipped outputs");
         assert!(!skip_in_duplicate("Config"));
+    }
+
+    #[test]
+    fn skip_file_in_duplicate_names_only_the_editor_lock() {
+        assert!(skip_file_in_duplicate("editor.lock"));
+        assert!(skip_file_in_duplicate("EDITOR.LOCK"), "Windows paths are case-insensitive");
+        assert!(!skip_file_in_duplicate("AutoScreenshot.png"), "the cover travels");
+        assert!(!skip_file_in_duplicate("editor.lock.bak"), "exact name, not a prefix");
     }
 
     #[test]

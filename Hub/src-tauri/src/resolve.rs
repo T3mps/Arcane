@@ -229,6 +229,9 @@ pub fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
             }
             copy_tree(&src, &to.join(&name))?;
         } else if ty.is_file() {
+            if project::skip_file_in_duplicate(&name.to_string_lossy()) {
+                continue;
+            }
             std::fs::copy(&src, to.join(&name))
                 .map_err(|e| format!("could not copy {}: {e}", src.display()))?;
         }
@@ -427,6 +430,13 @@ mod tests {
         std::fs::write(src.join("Plugins/P/P.dll"), b"p").unwrap();
         std::fs::create_dir_all(src.join(".git")).unwrap();
         std::fs::write(src.join(".git/HEAD"), b"ref").unwrap();
+        // Saved/ travels (the cover lives there) -- but the editor lock is the
+        // ORIGINAL's positional identity and must not: a copy made while the
+        // original's editor runs would pass lock liveness validation, wear a
+        // running badge, and "focus" the wrong editor on double-click.
+        std::fs::create_dir_all(src.join("Saved")).unwrap();
+        std::fs::write(src.join("Saved/editor.lock"), b"{\"pid\":1,\"start\":2}").unwrap();
+        std::fs::write(src.join("Saved/AutoScreenshot.png"), b"png").unwrap();
 
         let dst = dir.join("Dst");
         copy_tree(&src, &dst).unwrap();
@@ -437,6 +447,8 @@ mod tests {
         assert!(!dst.join("Binaries").exists(), "root build output is skipped");
         assert!(!dst.join("Plugins/P/Intermediate").exists(), "nested build output too");
         assert!(!dst.join(".git").exists(), "a duplicate is not a second checkout");
+        assert!(dst.join("Saved/AutoScreenshot.png").is_file(), "the cover travels");
+        assert!(!dst.join("Saved/editor.lock").exists(), "the lock must not");
     }
 
     #[test]
