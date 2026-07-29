@@ -1359,13 +1359,16 @@ namespace Arcane::Editor
     // material document is active raises no edge, so the click STICKS until the
     // center tab actually changes again.
     //
-    // The action is ImGui::SetWindowFocus(name) (imgui.cpp:13549-13555 ->
-    // FindWindowByName + FocusWindow), which is the sanctioned way to select a
-    // docked tab: FocusWindow sets g.NavWindow (imgui.cpp:13731) and the dock
-    // node's tab bar applies that back as its selection each frame
-    // (imgui.cpp:19611-19613, "Apply NavWindow focus back to the tab bar").
-    // A name that names no window yet is a silent no-op, which is the correct
-    // behaviour on the first frames.
+    // The action is TAB SELECTION, NOT focus -- SelectDockTab, which parks
+    // NextSelectedTabId on the side node's tab bar. This split is a bug fix,
+    // not a preference: SetWindowFocus on a SIDE panel moves g.NavWindow, and
+    // because a dock node applies g.NavWindow back as its own selection every
+    // frame (imgui.cpp:19611-19613), one such call late in the frame silently
+    // undid the CENTER node's adoption of a freshly-opened document -- the
+    // document window focuses itself in Begin (imgui.cpp:8320-8326 sets
+    // want_focus for an appearing window, :8617 calls FocusWindow), and this
+    // phase, running afterwards, was overwriting it. Center = real focus
+    // (DocumentHost::DrawAll's SetNextWindowFocus); side = tab selection.
     void EditorApp::SyncCenterTabFocus(const FrameState& fs)
     {
         Arcane::Editor::ShaderEditorDocument* becameActive = nullptr;
@@ -1382,22 +1385,28 @@ namespace Arcane::Editor
 
         if (becameActive)
         {
-            // A material document opened, or its tab was selected.
+            // A material document opened, or its tab was selected. TAB
+            // SELECTION only -- the center document owns keyboard focus (it is
+            // what you type into), and SetWindowFocus here would take it back.
             m_activeMaterialGuid = becameActive->AssetGuid();
-            ImGui::SetWindowFocus("Material");
+            Arcane::Editor::SelectDockTab("Material");
         }
         else if (fs.vp.appearing)
         {
-            // The scene became the active center tab.
-            ImGui::SetWindowFocus("Inspector");
+            // The scene became the active center tab. The Viewport keeps focus;
+            // only the side node's visible tab changes.
+            Arcane::Editor::SelectDockTab("Inspector");
         }
         else if (materialDocs == 0 && m_materialDocCount > 0)
         {
-            // The last material document closed. Usually the Viewport branch
-            // above already fired (it was the tab underneath), but a FLOATING
-            // document leaves the center tab untouched, so nothing would have.
+            // The last material document closed, so the Material window stops
+            // being submitted next frame and its tab disappears. Hand the side
+            // node's selection to the Inspector explicitly rather than leaving
+            // it on a tab that is about to vanish. Also the only branch that
+            // fires for a FLOATING document, which leaves the center tab (and
+            // so the Viewport's appearing edge) untouched.
             m_activeMaterialGuid = Arcane::Guid::Nil();
-            ImGui::SetWindowFocus("Inspector");
+            Arcane::Editor::SelectDockTab("Inspector");
         }
         m_materialDocCount = materialDocs;
     }

@@ -95,6 +95,13 @@ namespace Arcane::Editor
         std::vector<std::unique_ptr<EditorDocument>> m_docs;
         std::vector<Route> m_factories;
         EditorDocument* m_pendingClose = nullptr;
+        // The document OpenPath last resolved, owed a window focus on its next
+        // draw. Covers BOTH open paths: a brand-new document (which ImGui would
+        // focus itself anyway, imgui.cpp:8320-8326/:8617) and the
+        // focus-not-reopen hit, where an ALREADY-OPEN document is returned and
+        // nothing would otherwise bring its tab forward. Cleared when consumed,
+        // and in Close so it can never name a destroyed document.
+        EditorDocument* m_focusRequest = nullptr;
         // Documents that already received their initial dock placement (see
         // DrawAll). Erased on close so a reopen docks fresh again.
         std::unordered_set<const EditorDocument*> m_dockPlaced;

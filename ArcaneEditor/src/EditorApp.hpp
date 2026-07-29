@@ -498,7 +498,7 @@ namespace Arcane::Editor
         // destroys documents synchronously on close (DocumentHost::Close erases
         // the unique_ptr), so a cached raw pointer would dangle for the rest of
         // the frame; the guid is re-resolved through FindByGuid every frame.
-        // Nil = show the empty state.
+        // Nil = no material open, so the panel is not submitted at all.
         Arcane::Guid m_activeMaterialGuid;
         // Open material-document count LAST frame, so "the last one closed" is
         // a detectable edge even when the Viewport does not report Appearing

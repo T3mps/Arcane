@@ -37,18 +37,21 @@ namespace Arcane::Editor
             // Focus-not-reopen, cheap form first (review m4): resolve the asset
             // identity WITHOUT constructing a document -- a discarded construct
             // is not free (compile submits on the live doc's coalesce keys).
+            // Every path below arms m_focusRequest: "open this asset" means the
+            // user wants to be LOOKING AT it, whether that opens a window or
+            // re-surfaces one already open behind another tab.
             if (route.peek)
                 if (const Arcane::Guid peeked = route.peek(path); peeked.IsValid())
                     if (EditorDocument* open = FindByGuid(peeked))
-                        return open;
+                        return m_focusRequest = open;
             std::unique_ptr<EditorDocument> doc = route.factory(path);
             if (!doc)
                 return nullptr;   // factory already logged the cause
             // Fallback dedup for peek-less routes.
             if (doc->AssetGuid().IsValid())
                 if (EditorDocument* open = FindByGuid(doc->AssetGuid()))
-                    return open;
-            return Add(std::move(doc));
+                    return m_focusRequest = open;
+            return m_focusRequest = Add(std::move(doc));
         }
         ARC_WARN("DocumentHost: no editor registered for '{}'", ext);
         return nullptr;
@@ -148,6 +151,17 @@ namespace Arcane::Editor
             if (dockId != 0 && m_dockPlaced.insert(d.get()).second)
                 ImGui::SetNextWindowDockID(static_cast<ImGuiID>(dockId),
                                            ImGuiCond_Always);
+            // The CENTER document is the thing the user types into, so it gets
+            // real window focus -- which is also what makes its dock node
+            // select its tab (imgui.cpp:19611-19613 applies g.NavWindow back as
+            // the node's selection). Side panels must NOT use this; they switch
+            // by tab selection alone (EditorPanels' SelectDockTab), or the last
+            // focus call in the frame steals the center selection from here.
+            if (d.get() == m_focusRequest)
+            {
+                ImGui::SetNextWindowFocus();
+                m_focusRequest = nullptr;
+            }
             bool requestClose = false;
             d->Draw(requestClose);
             if (requestClose)

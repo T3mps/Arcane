@@ -93,6 +93,19 @@ namespace Arcane::Editor
         unsigned int dockId = 0;
     };
 
+    // Make `windowName` the VISIBLE TAB of whatever dock node it lives in,
+    // WITHOUT moving keyboard/input focus. This is the side-panel switch:
+    // ImGui::SetWindowFocus would also move g.NavWindow, and because the dock
+    // tab bar applies NavWindow back as its node's selection every frame
+    // (imgui.cpp:19611-19613), one stray focus call on a SIDE panel is what
+    // stops a freshly-opened CENTER document from keeping the center tab.
+    // Focus is for the thing you type into; tab selection is for the thing you
+    // look at, and they are not the same request.
+    //
+    // No-op when the window does not exist yet, is not docked, or is alone in
+    // its node (no tab bar) -- in every one of those there is no tab to select.
+    void SelectDockTab(const char* windowName);
+
     // Draw the scene texture into a dockable Viewport window; report its rect,
     // hover/focus, and the content-region size the offscreen canvas should match.
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,

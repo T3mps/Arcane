@@ -128,7 +128,7 @@ namespace Arcane::Editor
         // The panel is a SEPARATE dock window from the document's center tab:
         // it lives beside the Inspector, so a material's parameters sit where
         // an entity's components do. The free DrawMaterialPanel below routes
-        // the active document here (and draws the empty state when none).
+        // the active document here (and submits nothing when there is none).
         void DrawMaterialWindow();
 
         // True on the ONE frame this document's window became the visible tab
@@ -635,8 +635,8 @@ namespace Arcane::Editor
     //
     // `active` is the material document whose content to show -- the one whose
     // center tab is active, or the last one that was (EditorApp resolves it).
-    // Null draws the empty state: the panel window ALWAYS exists so its dock
-    // tab never pops in and out as documents open and close.
+    // Null submits NOTHING: with no material open the tab is ABSENT, not empty.
+    // Hiding it does not cost its dock slot -- cites at the definition.
     //
     // SEAM: this panel is the intended home of selected-NODE properties too
     // (Unity Shader Graph's Graph Inspector shape -- click a node in the

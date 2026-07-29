@@ -1733,17 +1733,23 @@ namespace Arcane::Editor
 
     void DrawMaterialPanel(ShaderEditorDocument* active)
     {
-        if (active)
-        {
-            active->DrawMaterialWindow();
+        // No material document open: submit NOTHING. The panel is absent, not
+        // empty -- a tab that only ever says "nothing here" is a permanent
+        // reminder of a feature you are not using.
+        //
+        // Hiding a docked window this way does NOT lose its slot, which is the
+        // whole reason it is safe. When a docked window stops being submitted,
+        // ImGui removes it from the node with the node's OWN id as the
+        // save-dock-id (imgui.cpp:18936-18949, on `window->WasActive == false`),
+        // and DockNodeRemoveWindow writes that back as `window->DockId`
+        // (imgui.cpp:18730). Begin then re-binds on the next submission
+        // (imgui.cpp:7888 tests `window->DockId != 0 || window->DockNode`), so
+        // the window returns to the same node -- including a node the user
+        // re-docked it into. Across restarts the same id rides imgui.ini and is
+        // restored at imgui.cpp:6938 (`window->DockId = settings->DockId`).
+        if (!active)
             return;
-        }
-        // No material document open. The window is still submitted every frame
-        // so its dock tab stays put beside the Inspector rather than popping in
-        // and out of the node (which would churn the saved layout).
-        if (ImGui::Begin("Material"))
-            ImGui::TextDisabled("open a material to edit its parameters");
-        ImGui::End();
+        active->DrawMaterialWindow();
     }
 
     void ShaderEditorDocument::DrawToolbar()

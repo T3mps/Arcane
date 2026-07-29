@@ -146,6 +146,31 @@ namespace Arcane::Editor
         ImGui::DockBuilderFinish(dockspaceId);
     }
 
+    void SelectDockTab(const char* windowName)
+    {
+        // FindWindowByName rather than a stored handle: the panel windows are
+        // created by their own Begin, and this may run before the first one.
+        ImGuiWindow* w = ImGui::FindWindowByName(windowName);
+        if (!w || !w->DockNode || !w->DockNode->TabBar)
+            return;
+        // A docked window's tab id IS window->TabId -- imgui.cpp:19614 and
+        // :19620 both select a tab by exactly that value.
+        //
+        // TabBarQueueFocus's ImGuiTabItem* overload (imgui_widgets.cpp:
+        // 10379-10382) is the one that works here: the const char* overload
+        // ASSERTS `(tab_bar->Flags & ImGuiTabBarFlags_DockNode) == 0`
+        // (imgui_widgets.cpp:10386, "Only supported for manual/explicit tab
+        // bars"), so naming the tab would fire an assert on every call.
+        //
+        // It parks NextSelectedTabId, which TabBarLayout applies on the next
+        // frame -- deliberately a REQUEST, not a write: it loses to the node's
+        // own newly-added-tab rule (imgui.cpp:19617-19620) rather than fighting
+        // it, and it never touches g.NavWindow, so the center document keeps
+        // both focus and its tab.
+        if (ImGuiTabItem* tab = ImGui::TabBarFindTabByID(w->DockNode->TabBar, w->TabId))
+            ImGui::TabBarQueueFocus(w->DockNode->TabBar, tab);
+    }
+
     void EndDockSpace()
     {
         const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
