@@ -22,6 +22,18 @@ namespace Arcane::Editor
         virtual bool Dirty() const = 0;
         virtual bool Save() = 0;                          // false = save failed/refused
 
+        // True when this document's window, or a child of it, held keyboard
+        // focus at its last Draw. The document owns its own Begin/End, so it is
+        // the only thing that can answer.
+        //
+        // Documents bind their own Ctrl+S with ImGui::Shortcut, which routes to
+        // the focused window on its own and needs none of this. What needs it is
+        // the APP: its scene-level Ctrl+S is a raw-scancode keybind that knows
+        // nothing about ImGui's routing, so without a way to ask "is the user
+        // inside a document?" one keypress would save the document AND the
+        // scene. DocumentHost::FocusedDoc is that question.
+        virtual bool WindowFocused() const { return false; }
+
         // Per-frame: advance async work (compiles, previews). dt in seconds.
         virtual void Tick(double dt) {}
 

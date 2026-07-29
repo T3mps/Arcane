@@ -117,6 +117,7 @@ namespace Arcane::Editor
         // param edit flips the verdict correctly (review m1).
         bool Dirty() const override { return m_dirty || ParamsDirty(); }
         bool Save() override;
+        bool WindowFocused() const override { return m_windowFocused; }
         void Tick(double dt) override;
         void Draw(bool& requestClose) override;
 
@@ -282,6 +283,12 @@ namespace Arcane::Editor
         const std::string& SnippetSource() const;
 
         void DrawToolbar();
+        // What Ctrl+S runs. Carries the error guard the toolbar's Save button
+        // used to own: writing a material that does not compile is allowed, but
+        // only through an explicit confirm (UE's pre-apply guard shape). Save()
+        // itself stays unguarded -- the close flow's save-then-close needs it,
+        // and the confirm modal's "Save Anyway" is the deliberate way past.
+        void RequestSave();
         void DrawSnippetEditor();
         // ---- Diagnostics -> editor Console (no in-document panel) ----
         // THE formatting seam. One traversal turns every diagnostic this
@@ -388,6 +395,8 @@ namespace Arcane::Editor
         bool                            m_dirty = false;  // TEXT dirtiness (params: ParamsDirty)
         bool                            m_live = true;    // auto-compile on edit
         bool                            m_confirmSaveWithErrors = false;
+        // Latched each Draw; read by DocumentHost::FocusedDoc to route Ctrl+S.
+        bool                            m_windowFocused = false;
 
         // Param-dirtiness baseline: the instance serial at the last Save (or
         // rebind carrying no unsaved edits). m_paramsBaseDirty carries unsaved

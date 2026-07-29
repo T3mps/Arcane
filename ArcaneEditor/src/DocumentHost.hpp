@@ -46,6 +46,13 @@ namespace Arcane::Editor
         EditorDocument* FindByGuid(const Arcane::Guid& guid);
         std::size_t Count() const { return m_docs.size(); }
         bool AnyDirty() const;
+        // The document whose window held focus at the last DrawAll, or null when
+        // the user is not in one. This is what Ctrl+S means by "this document";
+        // the app routes the shortcut through it so a focused asset editor owns
+        // the key and the scene save stands down. Reads one frame behind (the
+        // keybind phase runs before DrawAll), which focus tolerates -- a click
+        // that focuses a document lands a frame before any keypress can.
+        EditorDocument* FocusedDoc() const;
 
         // ---- close flow (pure, testable) ----------------------------------
         // Ask to close `doc`: clean documents close immediately; dirty ones

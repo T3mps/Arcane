@@ -79,6 +79,15 @@ namespace Arcane::Editor
         return false;
     }
 
+    EditorDocument* DocumentHost::FocusedDoc() const
+    {
+        // At most one window holds focus, so the first hit is the answer.
+        for (const auto& d : m_docs)
+            if (d->WindowFocused())
+                return d.get();
+        return nullptr;
+    }
+
     void DocumentHost::RequestClose(EditorDocument* doc)
     {
         if (!doc || m_pendingClose)

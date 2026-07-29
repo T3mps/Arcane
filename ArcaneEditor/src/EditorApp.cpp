@@ -353,7 +353,7 @@ namespace Arcane::Editor
         // invalidateSprite) until well after Init() returns, by which point
         // it exists. Without this route, a double-clicked/minted .arcsprite
         // hit DocumentHost's "no editor registered" warn-and-no-op
-        // (DocumentHost.cpp:53) -- EditorAppFrame.cpp:1151 already calls
+        // (DocumentHost.cpp:56) -- EditorAppFrame.cpp:1165 already calls
         // m_documents.OpenPath on a freshly minted sprite and expected this.
         const auto spriteFactory =
             [this](const std::filesystem::path& p)

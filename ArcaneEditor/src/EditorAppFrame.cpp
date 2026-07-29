@@ -1101,7 +1101,20 @@ namespace Arcane::Editor
         // phase above). Folded together here so both routes hit the same guard.
         menuReq.newScene  |= fs.scNewScene;
         menuReq.openScene |= fs.scOpenScene;
-        menuReq.saveScene |= fs.scSaveScene;
+        // Ctrl+S means "save what I am looking at". An open asset document binds
+        // its own Ctrl+S with ImGui::Shortcut, which routes to the focused
+        // window by itself -- but THIS keybind is raw scancodes off the input
+        // snapshot and knows nothing about that routing, so without the check
+        // one keypress inside a material or sprite document would save the
+        // document AND the scene. Asking the host who is focused is what keeps
+        // exactly one of them firing.
+        //
+        // Only the SHORTCUT routes. The File menu's Save Scene item folds in
+        // below unconditionally: an item that names the scene saves the scene,
+        // whatever happens to hold focus.
+        const bool docOwnsSave =
+            fs.scSaveScene && m_documents.FocusedDoc() != nullptr;
+        menuReq.saveScene |= (fs.scSaveScene && !docOwnsSave);
 
         if (menuReq.newScene &&
             m_scene.Request(Arcane::Editor::SceneIntent::NewScene, {}, *m_undo))

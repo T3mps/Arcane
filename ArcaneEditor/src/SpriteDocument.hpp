@@ -10,13 +10,13 @@
 // Task 7): one EditGesture bracket, one whole-data step per gesture, held
 // through the same doc-identity anchor ShaderEditorDocument's commands use.
 // Implements EditorDocument's five pure virtuals
-// (EditorDocument.hpp:15-32); DocumentHost owns the open-document list, the
+// (EditorDocument.hpp:15-44); DocumentHost owns the open-document list, the
 // asset-type -> factory routing, and the unsaved-close confirm modal --
 // this class only ever flips m_dirty and answers Save()/Draw() truthfully
 // (same division of responsibility ShaderEditorDocument follows, see its
-// Draw() at ShaderEditorDocument.cpp:1607-1699: requestClose mirrors `open`
+// Draw() at ShaderEditorDocument.cpp:1645-1735: requestClose mirrors `open`
 // from ImGui::Begin, both on the collapsed-early-return path and the normal
-// end-of-frame path -- DocumentHost.cpp:151-157 is what actually turns that
+// end-of-frame path -- DocumentHost.cpp:174-180 is what actually turns that
 // into a close or a pending confirm).
 
 #include "EditGesture.hpp"
@@ -77,11 +77,12 @@ namespace Arcane::Editor
         Arcane::Guid AssetGuid() const override { return m_data.id; }
         bool Dirty() const override { return m_dirty; }
         bool Save() override;
+        bool WindowFocused() const override { return m_windowFocused; }
         void Draw(bool& requestClose) override;
 
         // Undo plumbing (doc-identity commands, the same shape as
         // ShaderEditorDocument::ApplyParamEdit, ShaderEditorDocument.hpp:
-        // 127-132): swap the whole authored data in and republish it exactly
+        // 218-223): swap the whole authored data in and republish it exactly
         // the way a Save does, so an undo shows up in the viewport rather than
         // living only inside this window.
         void ApplySpriteData(const Arcane::SpriteAssetData& data);
@@ -105,6 +106,9 @@ namespace Arcane::Editor
         std::string              m_title;         // display name (Title())
         std::string              m_windowLabel;    // "name###spritedoc_<guid>" (stable across rename)
         bool                     m_dirty = false;  // set by any field edit; cleared only by a SUCCESSFUL Save
+        // Latched each Draw; read by DocumentHost::FocusedDoc so the app's
+        // scene-level Ctrl+S stands down while this document is focused.
+        bool                     m_windowFocused = false;
 
         // The document's ONE edit-gesture bracket (the ScopeGuard at the top
         // of Draw is its guaranteed close). All four field drags share it:
@@ -113,8 +117,8 @@ namespace Arcane::Editor
         EditGesture::GestureState m_gesture;
 
         // Doc-identity handle for undo steps, mirroring ShaderEditorDocument's
-        // m_anchor (ShaderEditorDocument.hpp:381-384, minted
-        // ShaderEditorDocument.cpp:876): commands hold this WEAKLY and forward
+        // m_anchor (ShaderEditorDocument.hpp:407-410, minted
+        // ShaderEditorDocument.cpp:901): commands hold this WEAKLY and forward
         // through the pointee, so steps left on the shared stack after this
         // document closes go inert instead of dereferencing a dead `this`.
         std::shared_ptr<SpriteDocument*> m_anchor;

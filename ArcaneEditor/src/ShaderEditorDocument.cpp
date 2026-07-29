@@ -1427,6 +1427,19 @@ namespace Arcane::Editor
         return false;
     }
 
+    void ShaderEditorDocument::RequestSave()
+    {
+        // Error-guarded save (UE's pre-apply guard shape): saving broken WIP is
+        // allowed, but only through an explicit confirm. This guard used to sit
+        // inside the toolbar's Save button; it lives here now so the Ctrl+S
+        // route cannot walk past it. The modal itself is still drawn by Draw
+        // and still calls the unguarded Save on "Save Anyway".
+        if (HasErrors())
+            m_confirmSaveWithErrors = true;
+        else
+            Save();
+    }
+
     bool ShaderEditorDocument::Save()
     {
         m_data.snippet = m_snippet;
@@ -1647,10 +1660,28 @@ namespace Arcane::Editor
         ImGuiWindowFlags flags = Dirty() ? ImGuiWindowFlags_UnsavedDocument : 0;
         if (!ImGui::Begin(m_windowLabel.c_str(), &open, flags))
         {
+            // Collapsed or a background tab: not focused, and it must be said
+            // out loud -- a stale true here would hand Ctrl+S to a document the
+            // user cannot even see.
+            m_windowFocused = false;
             ImGui::End();
             requestClose = !open;
             return;
         }
+        // What Ctrl+S resolves against (DocumentHost::FocusedDoc).
+        // RootAndChildWindows so the canvas, the text editor and every child
+        // region inside the document still count as "in this document".
+        m_windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+
+        // Ctrl+S saves -- the toolbar button this replaced is gone. Shortcut()
+        // (not IsKeyChordPressed) so it ROUTES to whichever document owns focus
+        // (imgui.h:1106-1114, default ImGuiInputFlags_RouteFocused): with
+        // several material/sprite documents open, each one's Ctrl+S only fires
+        // for the one on top. Same binding SpriteDocument uses
+        // (SpriteDocument.cpp:181-187), deliberately -- one shape for "the
+        // focused document saves itself".
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
+            RequestSave();
 
         // Latch "this tab just became visible" for the host's focus follow.
         // Read AFTER Begin returned true: a background tab is skipped by the
@@ -1694,7 +1725,8 @@ namespace Arcane::Editor
             // an instance IS its values, and the large preview is the one thing
             // this window can still say about them that the side panel cannot
             // (the panel's preview is Inspector-column narrow). The toolbar
-            // above keeps Save and the parent-chain affordances reachable.
+            // above keeps the parent-chain affordances reachable; saving is
+            // Ctrl+S, which needs no toolbar room at all.
             DrawPreviewPanel(ImGui::GetContentRegionAvail().y);
         }
 
@@ -1766,20 +1798,21 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::DrawToolbar()
     {
-        // Error-guarded save (UE's pre-apply guard shape): saving broken WIP is
-        // allowed, but only through an explicit confirm.
-        if (ImGui::Button("Save"))
-        {
-            if (HasErrors())
-                m_confirmSaveWithErrors = true;
-            else
-                Save();
-        }
+        // NO Save button: saving is Ctrl+S (routed to the focused document by
+        // EditorAppFrame). The error guard that button carried did not go with
+        // it -- it moved to RequestSave, which is what the shortcut runs.
+        //
+        // Losing the button cost the toolbar its guaranteed first item, which
+        // the SameLine chain below was leaning on: an INSTANCE whose parent
+        // chain has not resolved now draws nothing before the surface selector,
+        // and a SameLine as a window's first call pulls the cursor up onto the
+        // line above. Hence the explicit flag rather than an unconditional
+        // SameLine.
+        bool anyBefore = false;
         if (!IsInstance())
         {
             // Structural (snippet) controls are base-material-only; an instance
             // recompiles nothing -- it only re-values the parent's shader.
-            ImGui::SameLine();
             ImGui::Checkbox("Live", &m_live);
             ImGui::SameLine();
             if (ImGui::Button("Compile"))
@@ -1806,13 +1839,15 @@ namespace Arcane::Editor
             }
             else
                 m_editVertex = false;
+            anyBefore = true;   // the Live checkbox always draws
         }
         else if (!m_parentChain.empty())
         {
-            ImGui::SameLine();
             ImGui::TextDisabled("instance of '%s'", m_parentChain.back().name.c_str());
+            anyBefore = true;
         }
-        ImGui::SameLine();
+        if (anyBefore)
+            ImGui::SameLine();
         ImGui::SetNextItemWidth(120.0f);
         // Preview-surface selector (Slice 8). On a base material this is a
         // STRUCTURAL edit: it re-kinds the asset (the surface is what the
@@ -4018,7 +4053,7 @@ namespace Arcane::Editor
         // while a name field has focus is exactly that gesture.
         //
         // The KIND is checked, not just the id: m_textEdit is one buffer shared
-        // with the pass canvas (ShaderEditorDocument.hpp:514-524), and
+        // with the pass canvas (ShaderEditorDocument.hpp:549-559), and
         // a PassName key carries a chain INDEX that can collide with a node id.
         //
         // Value drags need no guard -- an abandoned gesture is closed by
