@@ -12,6 +12,7 @@
 // and it is wrong here. Engines are REGISTERED BY PATH and validated with the
 // engine's own --print-engine-info probe.
 
+pub mod assoc;
 pub mod engine;
 pub mod paths;
 pub mod project;
@@ -976,6 +977,10 @@ pub fn run() {
     // Before ANY window exists: claim the taskbar family id ArcaneEditor also
     // sets, so the Hub's and every editor's buttons stack as one group.
     spawn::claim_app_user_model_id();
+    // And claim (or repair) the .arcproj association for this exe -- the
+    // installer's own write shipped unquoted once, and a self-heal at every
+    // start outlives any installer fix. See assoc.rs for the incident.
+    assoc::claim_arcproj_association();
     tauri::Builder::default()
         // FIRST plugin registered, per its own docs: it has to win the race
         // before anything else initialises. A second launch lands in this

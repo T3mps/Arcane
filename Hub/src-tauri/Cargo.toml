@@ -46,6 +46,11 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # closed to file protocols, and a couple of hundred KB of PNG per card does
 # not justify opening it.
 base64 = "0.22"
+# HKCU registry writes for the .arcproj association self-heal (assoc.rs).
+# Exists because the NSIS-written command was UNQUOTED, and an unquoted
+# path through "...\AppData\Local\Arcane" -- our own data dir -- makes the
+# shell try to execute a directory ("This app can't run on your PC").
+winreg = "0.55"
 # Deleting a project goes to the RECYCLE BIN, not to remove_dir_all. A launcher
 # that can erase months of work on a mis-click should hand the user the same
 # undo Explorer would; this wraps the Windows shell's IFileOperation, which is
