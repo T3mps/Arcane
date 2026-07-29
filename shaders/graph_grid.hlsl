@@ -37,24 +37,31 @@
 
 // How strongly the grid answers zoom. 1.0 = welded to canvas space (Unity's
 // and UE's default feel), 0.0 = a fixed screen-space lattice that only pans.
-// 0.4 sits in the requested 0.35-0.5 band and is the value that reads best on
-// paper: halving the zoom shrinks the spacing to 0.5^0.4 = 0.76x and doubling
-// it grows to 1.32x -- unmistakably alive, but nowhere near the 2x/0.5x lurch
-// of a welded grid. It also sets how often the octave LOD steps: an octave is
-// 2^(1/0.4) = 5.7x of zoom, so a normal working range crosses at most one
-// boundary, and that boundary is faded (below), never snapped.
+// 0.7 (desk call, RAISED from an initial 0.4 that tracked the view too
+// loosely): halving the zoom shrinks the spacing to 0.5^0.7 = 0.62x and
+// doubling grows it to 1.62x, so the grid visibly follows the view instead of
+// merely nodding at it -- while still staying well clear of the 2x/0.5x lurch
+// a welded grid would give.
 //
-// RE-CHECKED against the zoom domain narrowing from the vendored editor's
-// default 0.1-8.0 to Unreal's 0.1-2.0 table (ShaderEditorDocument.cpp,
-// kZoomLevels): UNCHANGED, and the check is not a judgement call. The octave
-// snap below normalizes the period at EVERY zoom -- pm always lands in
-// (kMinorTargetPx/2, kMinorTargetPx] -- so the domain cannot make the grid
-// too dense or too sparse, only change how many boundaries a full sweep
-// crosses. That count went 2.5 -> 1.7 (log(80)/log(5.7) vs log(20)/log(5.7)),
-// i.e. the same one-boundary working range with less churn at the extremes.
-// Worked endpoints: pm = 15.9 px at zoom 0.100, 20.0 px at 1.000, 13.2 px at
-// 2.000 -- the whole new domain sits inside the design band.
-static const float kZoomExponent = 0.4;
+// k also sets how often the octave LOD steps: an octave is 2^(1/k) of zoom, so
+// a sweep of the whole domain crosses k*log2(domain ratio) boundaries. Over
+// Unreal's 0.1-2.0 zoom table (ShaderEditorDocument.cpp, kZoomLevels) that is
+// 0.7*log2(20) = 3.0 crossings, up from the 1.7 that 0.4 gave.
+//
+// MORE CROSSINGS IS NOT A RISK, and this is the load-bearing part of raising
+// k: the crossfade below is a SUBSET argument, not a tuned blend. Lines at
+// 2*pm are exactly every other line of pm, for any k, so a crossing can only
+// ever fade out lines that are already redundant. More crossings therefore
+// means more fully-faded transitions, never a pop. All k changes is how fast
+// `t` walks [0,1): one 1.1x wheel notch now moves it 0.7*log2(1.1) = 0.10
+// (was 0.06) -- still a gentle ramp, not a blink.
+//
+// Nor does the domain change density: the octave snap normalizes the period at
+// EVERY zoom -- pm always lands in (kMinorTargetPx/2, kMinorTargetPx] -- which
+// is why kBaseSpacingPx needed no compensating adjustment for this change.
+// Worked endpoints at k = 0.7: pm = 16.0 px at zoom 0.100, 20.0 px at 1.000,
+// 16.2 px at 2.000 -- the whole domain sits inside the design band.
+static const float kZoomExponent = 0.7;
 
 // Grid spacing in canvas units at zoom = 1, before the octave LOD snaps it.
 static const float kBaseSpacingPx = 20.0;

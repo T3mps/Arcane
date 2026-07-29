@@ -188,7 +188,7 @@ namespace Arcane::Editor
         // both are the shader's arithmetic; same mirrored-constant arrangement
         // msdf.hlsl and TextSystem.cpp use for kPxRange/kAtlasSize.
         // ---------------------------------------------------------------
-        static constexpr float kZoomExponent  = 0.4f;
+        static constexpr float kZoomExponent  = 0.7f;   // see the shader's rationale block
         static constexpr float kBaseSpacingPx = 20.0f;
         static constexpr float kMinorTargetPx = 22.0f;
         static constexpr float kMajorEvery    = 8.0f;
