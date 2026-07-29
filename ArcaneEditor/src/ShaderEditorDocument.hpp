@@ -53,6 +53,26 @@ namespace ax::NodeEditor
 
 namespace Arcane::Editor
 {
+    // Graph-canvas rendering level of detail -- Unreal's EGraphRenderingLOD,
+    // ported including its ORDERING, which every gate depends on: the enum runs
+    // from "zoomed all the way out" to "zoomed in past 1:1", so GREATER MEANS
+    // MORE DETAIL and a degradation is always written as `lod <= Tier` (or
+    // `lod < Tier`), exactly as UE writes them. Vendored source:
+    // Arcane/.example/UnrealEngine-release/Engine/Source/Editor/GraphEditor/
+    // Public/SNodePanel.h:70-90; the per-tier comments below are UE's own.
+    //
+    // The zoom boundaries and the per-tier degradation both live in
+    // ShaderEditorDocument.cpp (kLod* constants, NodeLODForScale, and the
+    // branches in DrawGraphNode).
+    enum class NodeLOD
+    {
+        LowestDetail = 0,   // zoomed all the way out (all optimizations on)
+        LowDetail,          // text is unreadable, so it starts being dropped
+        MediumDetail,       // text is hard to read but is still drawn
+        DefaultDetail,      // zoomed in at 1:1
+        FullyZoomedIn,      // zoomed in past 1:1
+    };
+
     // The graph canvas's shader-rendered backdrop (GraphGridPass.hpp). Held by
     // unique_ptr behind a forward declaration so the nvrhi pass machinery stays
     // out of every translation unit that merely opens a document; the
@@ -230,7 +250,11 @@ namespace Arcane::Editor
         // last-good bound and fills that pass's badge list instead.
         void RegenerateFromGraph();
         void DrawGraphPanel();
-        void DrawGraphNode(Arcane::GraphNode& node);
+        // `lod` is the canvas tier for THIS frame, computed once by
+        // DrawGraphPanel before the node loop and branched on at the draw sites
+        // inside. Passed rather than stored so there is exactly one read of the
+        // zoom per frame and no way for two nodes to disagree.
+        void DrawGraphNode(Arcane::GraphNode& node, NodeLOD lod);
         void HandleGraphEdits();             // link create/delete queries (inside Begin/End)
         // Copy/paste: the clip is GraphToJson of the selected subgraph on the
         // SYSTEM clipboard -- cross-document paste falls out for free, and
@@ -490,6 +514,18 @@ namespace Arcane::Editor
         std::unordered_map<std::uint32_t, NodePreview> m_nodePreviews;   // ACTIVE graph
         int  m_nodePreviewsPass = -1;   // which pass the map belongs to
         bool m_showNodePreviews = true; // toolbar toggle
+        // Zoom-tier gate on the same thumbnails: DrawGraphPanel clears this
+        // when the canvas LOD has stopped DRAWING them, so RenderNodePreviews
+        // stops PAYING for them (one offscreen material pass per node per
+        // frame -- the graph canvas's dominant GPU cost, and the only one that
+        // scales with how many nodes are on screen).
+        //
+        // Reads one frame late by construction: Tick renders before the panel
+        // draws, so a tier transition costs one extra frame of rendering (or
+        // one frame of a stale thumbnail on the way back in). Invisible, and
+        // the alternative -- driving the render off the panel -- would put a
+        // command-list submit inside the ImGui pass.
+        bool m_nodePreviewsInLod = true;
         std::uint64_t       m_nodePreviewVsJob = 0;
         nvrhi::ShaderHandle m_nodePreviewVs;    // shared passthrough VS
         nvrhi::CommandListHandle m_nodePreviewCl;

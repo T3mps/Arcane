@@ -207,9 +207,9 @@ namespace Arcane::Editor
         //
         // Replacing the vendored default table (0.1 .. 8.0,
         // imgui_node_editor.cpp:3309-3312) is the point of doing this: 8x
-        // magnification has no use on a node graph, and UE's stops are much
-        // finer in the readable band. UE also tags each stop with a rendering
-        // LOD tier; that half lands next.
+        // magnification has no use on a node graph, UE's stops are much finer
+        // in the readable band, and the LOD tiers are defined against exactly
+        // these numbers.
         constexpr float kZoomLevels[] = {
             0.100f, 0.125f, 0.150f, 0.175f, 0.200f,
             0.225f, 0.250f, 0.375f, 0.500f, 0.675f,
@@ -246,6 +246,40 @@ namespace Arcane::Editor
             return invScale > 0.0001f ? 1.0f / invScale : 1.0f;
         }
 
+        // -------------------------------------------------------------------
+        // RENDERING LOD BOUNDARIES -- the third column of UE's zoom table.
+        //
+        // Each constant is the LAST kZoomLevels entry belonging to that tier,
+        // read straight off FFixedZoomLevelsContainer (SNodePanel.cpp:56-75):
+        //   0.100 .. 0.200          LowestDetail
+        //   0.225 .. 0.250          LowDetail
+        //   0.375 .. 0.675          MediumDetail
+        //   0.750 .. 1.375          DefaultDetail
+        //   1.500 .. 2.000          FullyZoomedIn
+        // UE indexes its table and looks the tier up by INDEX
+        // (SNodePanel.cpp:1921); we compare the scale instead, because the
+        // canvas can also sit BETWEEN stops -- ed::NavigateToContent /
+        // NavigateToSelection fit a rectangle and land on an arbitrary scale
+        // (imgui_node_editor.cpp:3516-3548), which an index lookup has no
+        // answer for. Comparing covers both.
+        constexpr float kLodLowestMax  = 0.200f;
+        constexpr float kLodLowMax     = 0.250f;
+        constexpr float kLodMediumMax  = 0.675f;
+        constexpr float kLodDefaultMax = 1.375f;
+
+        // The canvas's tier at a given view scale. A boundary value belongs to
+        // the LOWER tier (0.200 is LowestDetail, not LowDetail), matching the
+        // table; the epsilon only protects that from float round-trips through
+        // the editor's zoom state.
+        NodeLOD NodeLODForScale(float scale) noexcept
+        {
+            constexpr float kEps = 1e-4f;
+            if (scale <= kLodLowestMax  + kEps) return NodeLOD::LowestDetail;
+            if (scale <= kLodLowMax     + kEps) return NodeLOD::LowDetail;
+            if (scale <= kLodMediumMax  + kEps) return NodeLOD::MediumDetail;
+            if (scale <= kLodDefaultMax + kEps) return NodeLOD::DefaultDetail;
+            return NodeLOD::FullyZoomedIn;
+        }
 
         // ImVec4 -> the plain float[4] the grid CB mirrors.
         void FillRgba(float (&dst)[4], const ImVec4& c) noexcept
@@ -1651,12 +1685,23 @@ namespace Arcane::Editor
         // THE DATA -- a link into input pin s of a pass IS inputs[s]. Every
         // structural gesture (wire/unwire/add/remove/reorder/rename) is ONE
         // undo step (whole pass-list before/after through PassListCommand).
+        //
+        // NO RENDERING LOD HERE, deliberately. The graph canvas degrades with
+        // zoom (NodeLOD) because its nodes carry pin labels, inline literals,
+        // payload widgets and a live thumbnail; a pass node carries a name, a
+        // few pins and nothing else, so every tier below DefaultDetail would
+        // degrade to what it already draws. UE's own tiers bottom out the same
+        // way -- MediumDetail and up degrade NOTHING even in the Blueprint
+        // graph (SNodePanel.h:70-90 calls MediumDetail "still drawn", and no
+        // consumer in the engine tests for FullyZoomedIn at all). The zoom
+        // TABLE is shared because navigation feel should not differ per canvas.
         if (!m_passCanvasCtx)
         {
             ed::Config cfg;
             cfg.SettingsFile = nullptr;
             // Same stops as the graph canvas: the zoom TABLE is a navigation
-            // feel and belongs on every canvas in the editor.
+            // feel and belongs on every canvas in the editor. (The LOD tiers
+            // built on top of it are not -- see DrawPassCanvas's note below.)
             ApplyZoomLevels(cfg);
             m_passCanvasCtx = ed::CreateEditor(&cfg);
             m_passCanvasSeeded = false;
@@ -2813,8 +2858,11 @@ namespace Arcane::Editor
         // Thumbnails record only while the canvas is the visible editing
         // surface; params sync from the doc instance first (redundant Sets
         // don't bump serials, so the steady state is hash lookups).
-        if (!m_showNodePreviews || !m_services.device || IsInstance() ||
-            !ActiveGraphOwned() || m_showGeneratedText || m_editVertex)
+        // m_nodePreviewsInLod adds the zoom tier to that list: below
+        // DefaultDetail the thumbnails are not drawn, so they are not rendered
+        // either (see the member's comment for the one-frame lag).
+        if (!m_showNodePreviews || !m_nodePreviewsInLod || !m_services.device ||
+            IsInstance() || !ActiveGraphOwned() || m_showGeneratedText || m_editVertex)
             return;
         bool any = false;
         for (auto& [id, np] : m_nodePreviews)
@@ -3059,8 +3107,20 @@ namespace Arcane::Editor
             m_graphPositionsApplied = true;
         }
 
+        // ---- Rendering LOD: ONE read of the zoom, ONE tier, per frame ----
+        // Read inside Begin/End on purpose: this is the view the editor
+        // installed for THIS frame's submission (imgui_node_editor.cpp:1258),
+        // so the tier and the geometry it degrades agree exactly. The grid's
+        // read above is the same number -- the navigate action only re-derives
+        // the view during End -- but it is taken before Begin because
+        // ScreenToCanvas has to be, so the two calls stay separate.
+        const NodeLOD lod = NodeLODForScale(ViewScale());
+        // Thumbnails are the one degradation with a GPU cost behind it, so the
+        // tier also reaches back into Tick's render loop (see m_nodePreviewsInLod).
+        m_nodePreviewsInLod = lod >= NodeLOD::DefaultDetail;
+
         for (Arcane::GraphNode& n : g.nodes)
-            DrawGraphNode(n);
+            DrawGraphNode(n, lod);
 
         // Links: ids are the vector index + 1, stable within this frame (the
         // deletion pass collects indices and erases after the queries).
@@ -3516,7 +3576,7 @@ namespace Arcane::Editor
         ed::SetCurrentEditor(nullptr);
     }
 
-    void ShaderEditorDocument::DrawGraphNode(Arcane::GraphNode& n)
+    void ShaderEditorDocument::DrawGraphNode(Arcane::GraphNode& n, NodeLOD canvasLod)
     {
         if (n.type == Arcane::GraphNodeType::Comment)
         {
@@ -3525,6 +3585,14 @@ namespace Arcane::Editor
             // size persists exactly: ed::Group records its bounds from the
             // Dummy it draws, so GetItemRectSize right after IS the live
             // (possibly user-resized) box.
+            //
+            // EXEMPT FROM THE LOD, and that is UE's rule, not a shortcut: a
+            // comment's own bubble uses InvertLODCulling
+            // (SGraphNodeComment.cpp:238), so SCommentBubble::IsBubbleVisible
+            // shows it exactly when `CurrLOD <= MediumDetail`
+            // (SCommentBubble.cpp:387-396) -- comment text is the thing UE
+            // turns ON as you zoom out, because it is what you are navigating
+            // BY. Degrading it here would delete the map.
             ed::BeginNode(ed::NodeId(n.id));
             ImGui::PushID(static_cast<int>(n.id));
             StableTextEdit("##ctitle", m_textEdit, TextKey(TextEditKind::Comment, n.id),
@@ -3552,6 +3620,80 @@ namespace Arcane::Editor
 
         const Arcane::GraphNodeTypeInfo& info = Arcane::GraphNodeInfo(n.type);
 
+        // ---- Effective tier for THIS node ----
+        // UE's rename guard, ported onto the same risk it guards: a node whose
+        // title is in edit mode refuses the low-detail swap
+        // (SGraphNode.cpp:1596-1607 -- the `&& !InlineEditableText->IsInEditMode()`
+        // term). It matters MORE here than it does in UE. StableTextEdit parks
+        // the typed text in m_textEdit and only commits on a
+        // deactivate-after-edit it can SEE (EditorWidgets.cpp:477-486); a field
+        // that stops being submitted mid-edit never reports one, so the typed
+        // text would be silently dropped when the node came back. Wheel-zoom
+        // while a name field has focus is exactly that gesture.
+        //
+        // The KIND is checked, not just the id: m_textEdit is one buffer shared
+        // with the pass canvas (ShaderEditorDocument.hpp:454-464), and
+        // a PassName key carries a chain INDEX that can collide with a node id.
+        //
+        // Value drags need no guard -- an abandoned gesture is closed by
+        // EditGesture's ScopeGuard, which pushes whatever the drag did
+        // (EditGesture.cpp:90-97, armed at :1347 above).
+        NodeLOD lod = canvasLod;
+        if (lod < NodeLOD::DefaultDetail)
+        {
+            const std::uint64_t kindBits = m_textEdit.activeKey >> 56;
+            const std::uint64_t idBits   = m_textEdit.activeKey & ((1ull << 56) - 1);
+            if ((kindBits == static_cast<std::uint64_t>(TextEditKind::NodeName) ||
+                 kindBits == static_cast<std::uint64_t>(TextEditKind::Swizzle)) &&
+                idBits == n.id)
+                lod = NodeLOD::DefaultDetail;
+        }
+
+        // The three degradation switches, in UE's own comparison form (the enum
+        // ascends with detail, so a degradation is `lod <= Tier`). UE has only
+        // two real thresholds across its whole graph editor -- `<= LowestDetail`
+        // for structural widget swaps and `<= LowDetail` for text and small
+        // controls -- and these are those two, plus one for the thumbnail:
+        //
+        //   showPinRows  (> LowestDetail)  pin rows exist at all. UE's harshest
+        //       swap replaces a node's ENTIRE content area with a spacer at
+        //       `<= LowestDetail` (SAnimationGraphNode.cpp:244-272); this is
+        //       that, and the node reads as a labelled colored block.
+        //   showPinText  (> LowDetail)     pin labels, inline pin literals and
+        //       the per-type payload widgets. UE drops exactly this class at
+        //       `<= LowDetail`: pin label + default-value widget, keeping the
+        //       pin ICON (SGraphPin.cpp:354-364, :1463-1479); the "+ Add pin"
+        //       button (SGraphNode.cpp:1681-1692); description text and badges
+        //       (SGraphNodeAI.cpp:103-108).
+        //   showPreview  (>= DefaultDetail) the live thumbnail.
+        //
+        // DISCLOSED DIVERGENCE on that last one. UE's material node does NOT
+        // LOD out its 96x96 live preview -- SGraphNodeMaterialBase.cpp:695-700
+        // gates it on user preference only and the file contains no LOD
+        // reference at all, so Epic renders a realtime material RT per node at
+        // 0.10x zoom. Every OTHER live preview in the engine is gated: the
+        // closest analog, SBlendSpacePreview, is swapped for a fixed-size
+        // spacer at `<= LowestDetail` (SGraphNodeBlendSpacePlayer.cpp:61-72).
+        // We take the gate one tier further out, to `<= MediumDetail`, because
+        // the cost is ours in a way it is not Epic's: each thumbnail is an
+        // offscreen material pass per node per FRAME (RenderNodePreviews), the
+        // only per-node cost on this canvas that scales with how many nodes are
+        // on screen -- and at 0.675x a 96 px thumbnail is already under 65 px.
+        // MediumDetail's own charter allows it: SNodePanel.h:70-90 calls it the
+        // tier where content "starts to get hard to read".
+        //
+        // The thumbnail is also the one thing here that gets NO same-size
+        // placeholder, where UE always substitutes one. UE needs it because a
+        // Slate graph LAYS OUT its nodes and a size change reflows neighbours;
+        // ours are absolutely positioned from posX/posY, so a shorter node
+        // moves nothing but itself -- and reclaiming the 96 px is the entire
+        // point of hiding it. The block at LowestDetail is the case where size
+        // preservation still buys something (see there), and it keeps its
+        // width.
+        const bool showPinRows = lod > NodeLOD::LowestDetail;
+        const bool showPinText = lod > NodeLOD::LowDetail;
+        const bool showPreview = lod >= NodeLOD::DefaultDetail;
+
         // The node's measured width from the LAST frame (see m_nodeWidths):
         // output rows right-align to it and the preview spans it. Zero on a
         // node's first frame, which both consumers treat as "no alignment".
@@ -3566,6 +3708,18 @@ namespace Arcane::Editor
         // Title row. The BAND behind it is a rectangle drawn after ed::EndNode
         // (it spans the node's final width, which does not exist yet); this is
         // only the text, and headerMaxY is the band's bottom edge.
+        //
+        // NOT LOD-GATED, at either end. The title is the last thing a block
+        // has left to be identified by, and the "(!)" prefix is the ERROR
+        // BADGE -- the thing you zoom out to FIND. UE never LODs its error
+        // reporting out either: SetupErrorReporting's widgets go into the node
+        // unconditionally (SGraphNode.cpp:1001-1013), with no
+        // SLevelOfDetailBranchNode around them and no LOD term in their
+        // visibility, and the same holds for the panel's overlay badges
+        // (SGraphPanel.cpp:414-466). (UE does swap the title itself for a flat
+        // colored border at <= LowestDetail, SGraphNode.cpp:941-953 -- but its
+        // low-detail node still has a body and pin icons to be read by. Ours
+        // collapses to the band, so the band has to carry the identity.)
         if (NodeBadged(n.id))
             ImGui::TextColored(kNodeBadgeText, "(!) %s", info.display);
         else
@@ -3646,7 +3800,62 @@ namespace Arcane::Editor
             return false;
         };
 
-        for (std::uint32_t pin = 0; pin < Arcane::GraphNodeInputCount(n); ++pin)
+        // ================= LowestDetail: the node as a block =================
+        // THE CONSTRAINT THAT SHAPES THIS: every pin must still be SUBMITTED,
+        // or the wires touching it disappear. ed::Link is refused outright
+        // unless BOTH endpoints are live this frame -- DoLink returns false at
+        // imgui_node_editor.cpp:1639-1640 -- and m_IsLive is set only by
+        // BeginPin (:5366). So dropping the pin rows cannot mean dropping the
+        // pins. UE has the same rule for free (its wires are drawn by the panel
+        // from the graph's own connectivity, with no LOD gate anywhere in
+        // SGraphPanel's connection block or ConnectionDrawingPolicy) and its
+        // nodes keep drawing pin ICONS even at LowestDetail; we get there by
+        // submitting each pin as a zero-size anchor instead.
+        //
+        // Geometry: all inputs collapse to one point at the content's left
+        // edge, all outputs to one point at its right edge, on a single
+        // zero-height row under the title. The row is spaced out to the node's
+        // LAST MEASURED width, so the block keeps the footprint the node had at
+        // full detail instead of shrink-snapping to its title -- UE preserves
+        // size across every one of its swaps, three different ways, and says so
+        // (SGraphNode.cpp:947 "Saving enough space for a 'typical' title so the
+        // transition isn't quite so abrupt"; SAnimationGraphNode's cached
+        // GetLowDetailDesiredSize is the same idea done properly). That is also
+        // what makes the width a fixed point: the row reproduces contentW, so
+        // the block re-measures to the same number every frame.
+        //
+        // INTERACTION: a zero-size pin has a zero-size hot zone, so the pins
+        // stop being grabbable -- which is the intent behind UE turning pins
+        // HitTestInvisible at low LOD ("The pin becomes too small to use at low
+        // LOD, so disable the hit test", SGraphPin.cpp:1481-1489). Selecting,
+        // hovering, dragging and the node context menu all come off the NODE's
+        // bounds and keep working. Nothing invisible is left behind: hidden
+        // widgets are not submitted at all, so there are no dead hit zones.
+        if (!showPinRows)
+        {
+            for (std::uint32_t pin = 0; pin < Arcane::GraphNodeInputCount(n); ++pin)
+            {
+                ed::BeginPin(InPin(n.id, pin), ed::PinKind::Input);
+                ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
+                ed::PinPivotSize(ImVec2(0.0f, 0.0f));
+                ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                ed::EndPin();
+                ImGui::SameLine(0.0f, 0.0f);
+            }
+            RightAlignRow(contentW, 0.0f);
+            for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(n); ++pin)
+            {
+                ed::BeginPin(OutPin(n.id, pin), ed::PinKind::Output);
+                ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
+                ed::PinPivotSize(ImVec2(0.0f, 0.0f));
+                ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                ed::EndPin();
+                ImGui::SameLine(0.0f, 0.0f);
+            }
+            ImGui::Dummy(ImVec2(0.0f, 0.0f));   // terminate the SameLine chain
+        }
+
+        for (std::uint32_t pin = 0; showPinRows && pin < Arcane::GraphNodeInputCount(n); ++pin)
         {
             // Read the descriptor BEFORE any of the widgets below can mutate
             // the node: for a Custom pin, GraphPinDesc::name points into
@@ -3659,12 +3868,24 @@ namespace Arcane::Editor
             // so the anchor is that single point.
             ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
             ed::PinPivotSize(ImVec2(0.0f, 0.0f));
+            // LowDetail keeps the DOT and drops the label -- UE's split
+            // exactly: the low-detail slot of a pin holds PinWidgetRef, the pin
+            // icon, and drops PinContent, the label and value editor
+            // (SGraphPin.cpp:354-364). The dot advances the cursor by a full
+            // text line either way (DrawPinDot), so the row keeps its height
+            // and the node keeps its shape across the transition.
             DrawPinDot(PinColorForWidth(inDesc.width), pinWired(pin));
-            ImGui::SameLine();
-            ImGui::TextUnformatted(inDesc.name);
+            if (showPinText)
+            {
+                ImGui::SameLine();
+                ImGui::TextUnformatted(inDesc.name);
+            }
             ed::EndPin();
             // Custom pins are user-authored: width cycle + remove beside each.
-            if (n.type == Arcane::GraphNodeType::Custom)
+            // Small per-pin controls, so they go with the labels -- UE collapses
+            // its "+ Add pin" button at the same threshold
+            // (SGraphNode.cpp:1681-1692).
+            if (showPinText && n.type == Arcane::GraphNodeType::Custom)
             {
                 ImGui::SameLine();
                 ImGui::PushID(static_cast<int>(pin));
@@ -3713,7 +3934,10 @@ namespace Arcane::Editor
             // checks `connected` FIRST (MaterialGraph.cpp:694-701), so a wire
             // hides the literal without destroying it -- which is why this
             // widget only has to disappear, never clear anything.
-            if (!pinWired(pin) && Arcane::GraphPinAcceptsLiteral(n, pin))
+            // It is also the pin's default-VALUE widget, which is the other
+            // half of what UE's low-detail pin slot drops (SGraphPin.cpp:304-341
+            // builds LabelAndValue; :354-364 swaps the whole thing out).
+            if (showPinText && !pinWired(pin) && Arcane::GraphPinAcceptsLiteral(n, pin))
             {
                 ImGui::SameLine();
                 ImGui::PushID(static_cast<int>(pin));
@@ -3775,7 +3999,21 @@ namespace Arcane::Editor
             }
         }
 
-        switch (n.type)
+        // Per-type payload: value drags, cycle buttons, name fields, the Custom
+        // node's HLSL preview. All of it is text and small controls, so it goes
+        // at the same threshold as the pin labels -- UE drops its whole
+        // equivalent band there (sequence-player scrub slider ->  16x16 spacer,
+        // SGraphNodeSequencePlayer.cpp:159-180; anim function/tag chips,
+        // SAnimationGraphNode.cpp:209-212; AI node description text,
+        // SGraphNodeAI.cpp:103-108). A node being renamed has already been
+        // pulled back to DefaultDetail above, so nothing is yanked mid-edit.
+        //
+        // Skipped by dispatching to a value with no enumerator rather than by
+        // wrapping 250 lines in an `if` -- GraphNodeType has a fixed uint8_t
+        // base (MaterialGraph.hpp:43), so 0xFF is a valid VALUE that no case
+        // labels and every case list that grows will keep not labelling. It can
+        // only reach `default:`.
+        switch (showPinText ? n.type : static_cast<Arcane::GraphNodeType>(0xFF))
         {
             case Arcane::GraphNodeType::ConstFloat:
             {
@@ -4029,22 +4267,31 @@ namespace Arcane::Editor
                 break;
         }
 
-        for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(n); ++pin)
+        for (std::uint32_t pin = 0; showPinRows && pin < Arcane::GraphNodeOutputCount(n); ++pin)
         {
             const Arcane::GraphPinDesc outDesc = Arcane::GraphNodeOutputPin(n, pin);
-            const float rowW = ImGui::CalcTextSize(outDesc.name).x +
-                               ImGui::GetStyle().ItemSpacing.x + kPinDotRadius * 2.0f;
+            // Label dropped with the input labels; the row still measures to the
+            // dot, so the dot stays welded to the node's right edge either way.
+            const float rowW = showPinText
+                                   ? ImGui::CalcTextSize(outDesc.name).x +
+                                         ImGui::GetStyle().ItemSpacing.x +
+                                         kPinDotRadius * 2.0f
+                                   : kPinDotRadius * 2.0f;
             RightAlignRow(contentW, rowW);
             ed::BeginPin(OutPin(n.id, pin), ed::PinKind::Output);
             ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));   // anchor on the dot
             ed::PinPivotSize(ImVec2(0.0f, 0.0f));
-            ImGui::TextUnformatted(outDesc.name);
-            ImGui::SameLine();
+            if (showPinText)
+            {
+                ImGui::TextUnformatted(outDesc.name);
+                ImGui::SameLine();
+            }
             DrawPinDot(PinColorForWidth(outDesc.width), pinFanout(pin));
             ed::EndPin();
         }
 
-        DrawNodePreviewImage(n, contentW);
+        if (showPreview)
+            DrawNodePreviewImage(n, contentW);
 
         ImGui::PopID();
         ed::EndNode();
@@ -4056,6 +4303,17 @@ namespace Arcane::Editor
         // (imgui_node_editor.cpp:135-140) -- which is exactly where a header
         // band belongs. Coordinates are canvas space, the space both
         // GetNodePosition and plain ImGui use inside ed::Begin/End.
+        //
+        // Runs at EVERY tier, unguarded, and both halves want it to. The band
+        // is what a LowestDetail node IS -- with the pin rows gone the node's
+        // whole height is the header, so the band fills it and the block reads
+        // as one colored bar with a title. And the measurement is what makes
+        // the block keep its full-detail WIDTH: the anchor row above reproduces
+        // contentW, so nodeSize.x comes back the same number it went in as, and
+        // the cache neither drifts nor forgets across a zoom-out/zoom-in round
+        // trip. (The one case it does move is a node born while zoomed out --
+        // there is no earlier width to remember, so the block sizes to its
+        // title and re-measures on the way back in.)
         const ImVec2 nodePos  = ed::GetNodePosition(ed::NodeId(n.id));
         const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(n.id));
         if (nodeSize.x > 0.0f)
