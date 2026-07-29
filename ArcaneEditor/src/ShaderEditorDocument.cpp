@@ -917,7 +917,8 @@ namespace Arcane::Editor
             for (const Arcane::ShaderDiag& d : pj.diags)
                 if (d.severity == Arcane::ShaderDiagSeverity::Error)
                     return true;
-        // Vertex-stage errors, filtered to the vertex body (see the panel).
+        // Vertex-stage errors, filtered to the vertex body (same filter as
+        // ForEachDiagnosticRow's vertex block).
         if (!m_data.vertexSnippet.empty())
         {
             const int vsLines = 1 + static_cast<int>(std::count(
@@ -1028,6 +1029,10 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::Tick(double dt)
     {
+        // Before any early return below: diagnostics are published even for a
+        // document whose preview is not ready (a material that fails to compile
+        // is exactly the case that has something to say).
+        PublishDiagnostics();
         m_animTime += dt;
         // Thumbnails displaced LAST frame are safe to release now (their
         // ImGui draws have been recorded); this frame's displacements queue up.
@@ -1129,16 +1134,14 @@ namespace Arcane::Editor
         if (IsInstance())
         {
             // Instance mode: params-only -- the source belongs to the base.
-            const float errorsH = 110.0f;
-            ImGui::BeginChild("##instparams",
-                              ImVec2(0, ImGui::GetContentRegionAvail().y - errorsH));
+            // The list takes the whole column now that the errors panel is gone
+            // (diagnostics go to the Console).
+            ImGui::BeginChild("##instparams", ImVec2(0, 0));
             DrawParamsPanel();
             ImGui::EndChild();
-            DrawErrorsPanel();
         }
         else
         {
-            const float errorsH = 140.0f;
             // Pass canvas: fullscreen base materials only (sprite chains are
             // refused; instances re-value the base's chain). Even a single-pass
             // material shows base -> Output -- the pipeline affordance and the
@@ -1149,11 +1152,13 @@ namespace Arcane::Editor
                 m_activePass = 0;   // stale selection after an outside reload
             // The canvas serves whichever pass is active and graph-owned;
             // text-owned passes -- and the vertex stage -- get the text editor.
+            // Both fill the rest of the column themselves (each measures the
+            // region at the point it opens): the space the errors panel used to
+            // reserve just falls to the canvas / text.
             if (ActiveGraphOwned() && !m_showGeneratedText && !m_editVertex)
-                DrawGraphPanel(ImGui::GetContentRegionAvail().y - errorsH);
+                DrawGraphPanel();
             else
-                DrawSnippetEditor(ImGui::GetContentRegionAvail().y - errorsH);
-            DrawErrorsPanel();
+                DrawSnippetEditor();
         }
         ImGui::EndChild();
         ImGui::SameLine();
@@ -1278,7 +1283,10 @@ namespace Arcane::Editor
         if (ImGui::BeginPopupModal("Save With Errors?##matdoc", nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize))
         {
-            ImGui::TextUnformatted("This material has compile errors. Save anyway?");
+            // "see the Console" because the rows no longer live in this window
+            // (PublishDiagnostics), matching the shell's other deferrals.
+            ImGui::TextUnformatted("This material has compile errors (see the "
+                                   "Console). Save anyway?");
             ImGui::Separator();
             if (ImGui::Button("Save Anyway"))
             {
@@ -1293,7 +1301,7 @@ namespace Arcane::Editor
 
     }
 
-    void ShaderEditorDocument::DrawSnippetEditor(float height)
+    void ShaderEditorDocument::DrawSnippetEditor()
     {
         // Graph-owned + HLSL toggle = UE's code viewer: ONE read-only window
         // with everything this pass generates -- the pixel body, plus the
@@ -1350,8 +1358,11 @@ namespace Arcane::Editor
             buf = &m_generatedView;
         }
         // +1 capacity: ImGui writes the terminator into the buffer it is given.
+        // Height measured HERE, after the optional mode banner above -- the
+        // input takes exactly what is left of the column.
         if (ImGui::InputTextMultiline("##snippet", buf->data(), buf->capacity() + 1,
-                                      ImVec2(-1.0f, height), flags,
+                                      ImVec2(-1.0f, ImGui::GetContentRegionAvail().y),
+                                      flags,
                                       &SnippetCallbackForwarder::Callback, this))
         {
             m_dirty = true;
@@ -1801,8 +1812,9 @@ namespace Arcane::Editor
         }
 
         // ---- selection -> edited pass; double-click -> viewed pass. Only on
-        // selection CHANGES -- re-asserting every frame would stomp the
-        // errors-panel's own pass switching.
+        // selection CHANGES -- re-asserting every frame would stomp any other
+        // writer of m_activePass (the pass canvas, and whatever navigation the
+        // Problems panel eventually adds).
         {
             if (ed::HasSelectionChanged())
             {
@@ -1965,172 +1977,131 @@ namespace Arcane::Editor
         }
     }
 
-    void ShaderEditorDocument::DrawErrorsPanel()
+    void ShaderEditorDocument::ForEachDiagnosticRow(
+        Arcane::FunctionRef<void(bool, const std::string&)> fn)
     {
-        ImGui::BeginChild("##errors", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        // Graph-level codegen errors first (badged on the canvas too), for
-        // EVERY pass's graph; clicking a row switches to that pass and selects
-        // + navigates to the offending node.
-        int gi = 0;
-        bool anyGraphError = false;
+        // Graph-level codegen errors first, for EVERY pass's graph -- these are
+        // the ones the canvas also badges (NodeBadged/RebuildDiagBadges).
         for (std::size_t c = 0; c < m_passGraphErrors.size(); ++c)
         {
             for (const Arcane::GraphError& e : m_passGraphErrors[c])
             {
-                anyGraphError = true;
-                std::string head =
-                    m_data.passes.empty() ? std::string("graph: ")
-                                          : PassLabel(c) + " graph: ";
+                std::string row = m_data.passes.empty() ? std::string("graph: ")
+                                                        : PassLabel(c) + " graph: ";
                 if (e.nodeId != 0)
                 {
                     std::optional<Arcane::MaterialGraph>& g = GraphOptAt(c);
                     const Arcane::GraphNode* n = g ? g->FindNode(e.nodeId) : nullptr;
-                    head += (n ? std::string(Arcane::GraphNodeInfo(n->type).display)
-                               : std::string("node")) +
-                            " #" + std::to_string(e.nodeId) + ": ";
+                    row += (n ? std::string(Arcane::GraphNodeInfo(n->type).display)
+                              : std::string("node")) +
+                           " #" + std::to_string(e.nodeId) + ": ";
                 }
-                const std::string label =
-                    head + e.message + "##gdiag" + std::to_string(gi++);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.35f, 1.0f));
-                if (ImGui::Selectable(label.c_str(), false))
-                {
-                    m_activePass = static_cast<int>(c);
-                    if (e.nodeId != 0)
-                        m_focusNode = e.nodeId;
-                }
-                ImGui::PopStyleColor();
+                fn(true, row + e.message);
             }
         }
+        // Stitch/parse failures (instance parent-chain resolution included).
         for (const std::string& e : m_parseErrors)
-            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", e.c_str());
+            fn(true, "parse: " + e);
         // Vertex-stage rows: ONLY diags whose line falls inside the vertex
         // body -- both stages compile the same TU, so pixel-body errors appear
-        // in the vs result too and are already shown by the loops below.
-        bool anyVertexRow = false;
+        // in the vs result too and are already carried by the compile rows
+        // below. Same filter as HasErrors.
         if (!m_data.vertexSnippet.empty())
         {
             const int vsLines = 1 + static_cast<int>(std::count(
                 m_data.vertexSnippet.begin(), m_data.vertexSnippet.end(), '\n'));
-            int vi = 0;
             for (const Arcane::ShaderDiag& d : m_vsDiags)
             {
                 const int rel = d.line - m_vsLineOffset;
                 if (rel < 1 || rel > vsLines)
                     continue;
-                anyVertexRow = true;
                 const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
-                const ImVec4 color = isError ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
-                                             : ImVec4(0.9f, 0.8f, 0.4f, 1.0f);
-                char head[48];
-                std::snprintf(head, sizeof(head), "vertex: %s(%d): ",
-                              isError ? "error" : "warning", rel);
-                const std::string label =
-                    head + d.message + "##vdiag" + std::to_string(vi++);
-                ImGui::PushStyleColor(ImGuiCol_Text, color);
-                if (ImGui::Selectable(label.c_str(), false))
-                {
-                    if (IsGraphOwned())
-                    {
-                        // The vertex body lives inside the combined HLSL view
-                        // (under the base) -- jump past the pixel body + the
-                        // two separator lines.
-                        m_activePass = 0;
-                        m_showGeneratedText = true;
-                        m_jumpToLine = static_cast<int>(std::count(
-                                           m_snippet.begin(), m_snippet.end(), '\n')) +
-                                       2 + rel;
-                    }
-                    else
-                    {
-                        m_editVertex = true;   // repair mode: the vertex buffer
-                        m_jumpToLine = rel;
-                    }
-                }
-                ImGui::PopStyleColor();
+                fn(isError, "vertex: " + std::string(isError ? "error" : "warning") +
+                                "(" + std::to_string(rel) + "): " + d.message);
             }
         }
-        // Chain mode: per-pass compile diags (labeled rows; clicking switches
-        // the editor to that pass and jumps). m_diags mirrors pass 0 for the
-        // graph badges, so the single-path loop below is skipped.
+        // Compile diags. Diag lines arrive in STITCHED-source space; the pass's
+        // line offset maps them back into the buffer the designer sees.
+        auto compileRow = [&](const Arcane::ShaderDiag& d, int offset,
+                              const std::string& prefix)
+        {
+            const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
+            const int line = d.line > offset ? d.line - offset : 1;
+            fn(isError, prefix + (isError ? "error" : "warning") +
+                            "(" + std::to_string(line) + "): " + d.message);
+        };
         if (ChainMode())
         {
-            int ci = 0;
+            // Chain mode owns them per pass; m_diags only MIRRORS pass 0 there
+            // (for the badges), so the single-path loop must not also run.
             for (std::size_t p = 0; p < m_passJobs.size(); ++p)
             {
                 const int offset = p < m_passLineOffsets.size() ? m_passLineOffsets[p] : 0;
                 for (const Arcane::ShaderDiag& d : m_passJobs[p].diags)
-                {
-                    const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
-                    const ImVec4 color = isError ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
-                                                 : ImVec4(0.9f, 0.8f, 0.4f, 1.0f);
-                    const int snippetLine = d.line > offset ? d.line - offset : 1;
-                    char head[80];
-                    std::snprintf(head, sizeof(head), "%s: %s(%d): ",
-                                  PassLabel(p).c_str(),
-                                  isError ? "error" : "warning", snippetLine);
-                    const std::string label =
-                        head + d.message + "##cdiag" + std::to_string(ci++);
-                    ImGui::PushStyleColor(ImGuiCol_Text, color);
-                    if (ImGui::Selectable(label.c_str(), false))
-                    {
-                        m_activePass = static_cast<int>(p);
-                        m_jumpToLine = snippetLine;
-                        if (p < m_passLineNodeIds.size() && !m_showGeneratedText)
-                        {
-                            const std::size_t idx =
-                                static_cast<std::size_t>(snippetLine) - 1;
-                            const auto& lineMap = m_passLineNodeIds[p];
-                            if (idx < lineMap.size() && lineMap[idx] != 0)
-                                m_focusNode = lineMap[idx];
-                        }
-                    }
-                    ImGui::PopStyleColor();
-                }
+                    compileRow(d, offset, PassLabel(p) + ": ");
             }
-            bool anyChainDiag = false;
-            for (const PassJobs& pj : m_passJobs)
-                anyChainDiag = anyChainDiag || !pj.diags.empty();
-            if (!anyGraphError && m_parseErrors.empty() && !anyChainDiag && !anyVertexRow)
-                ImGui::TextDisabled("no diagnostics");
-            ImGui::EndChild();
             return;
         }
-        int i = 0;
         for (const Arcane::ShaderDiag& d : m_diags)
+            compileRow(d, m_snippetLineOffset, std::string());
+    }
+
+    void ShaderEditorDocument::PublishDiagnostics()
+    {
+        // ANTI-SPAM POLICY (the reason this is not a plain "log on compile").
+        // The editor regenerates and recompiles on EVERY edit -- one drag of a
+        // param is dozens of Rebuilds, each landing the SAME diagnostics -- so
+        // emission is gated on the CONTENT of the row set, never on the
+        // compile/regenerate events that produce it. An FNV-1a signature over
+        // (severity, row text) in traversal order is compared against the last
+        // EMITTED one; an identical set is silence. By design:
+        //   - dragging on a broken material emits nothing after the first frame;
+        //   - clean -> broken emits every row, once;
+        //   - broken -> clean emits ONE "diagnostics cleared" line: the console
+        //     is append-only, so the rows above it need retracting;
+        //   - broken -> DIFFERENTLY broken emits the new set once;
+        //   - a set that flaps back to an earlier shape DOES re-emit -- the
+        //     comparison is against the last emission, not a history.
+        // The empty set signs as 0, which is also the initial value, so opening
+        // an already-clean material says nothing.
+        //
+        // Running this from Tick (rather than from the mutation sites) is what
+        // makes the gate total: every path that can change a diagnostic --
+        // ConsumeResult, Rebuild, RegenerateFromGraph, ReloadFromDisk, the
+        // parent-chain resolver -- is covered without enumerating them. Idle
+        // cost is one traversal of a set that is normally empty.
+        std::uint64_t sig = 0xcbf29ce484222325ull;
+        std::size_t rows = 0;
+        ForEachDiagnosticRow([&](bool isError, const std::string& row)
         {
-            const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
-            const ImVec4 color = isError ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
-                                         : ImVec4(0.9f, 0.8f, 0.4f, 1.0f);
-            // Diag lines live in STITCHED-source space; the snippet offset maps
-            // them back into the buffer the designer sees.
-            const int snippetLine = d.line > m_snippetLineOffset
-                                        ? d.line - m_snippetLineOffset : 1;
-            // Review M2: the message must sit BEFORE the "##" -- ImGui renders
-            // nothing past it (everything after is only the widget ID).
-            char head[48];
-            std::snprintf(head, sizeof(head), "%s(%d): ",
-                          isError ? "error" : "warning", snippetLine);
-            const std::string label = head + d.message + "##diag" + std::to_string(i++);
-            // Selectable row -> jump the text cursor (graph docs: select the
-            // statement's node when the line map knows it).
-            ImGui::PushStyleColor(ImGuiCol_Text, color);
-            if (ImGui::Selectable(label.c_str(), false))
-            {
-                m_jumpToLine = snippetLine;
-                if (IsGraphOwned() && !m_showGeneratedText &&
-                    !m_passLineNodeIds.empty())
-                {
-                    const std::size_t idx = static_cast<std::size_t>(snippetLine) - 1;
-                    const auto& lineMap = m_passLineNodeIds[0];
-                    if (idx < lineMap.size() && lineMap[idx] != 0)
-                        m_focusNode = lineMap[idx];
-                }
-            }
-            ImGui::PopStyleColor();
+            ++rows;
+            sig = (sig ^ (isError ? 1ull : 0ull)) * 0x100000001b3ull;
+            for (const char ch : row)
+                sig = (sig ^ static_cast<std::uint8_t>(ch)) * 0x100000001b3ull;
+        });
+        if (rows == 0)
+            sig = 0;
+        else if (sig == 0)
+            sig = 1;   // 0 is reserved for "clean"; a real set hashing to 0 is a lottery win
+        if (sig == m_emittedDiagSig)
+            return;
+        m_emittedDiagSig = sig;
+        if (rows == 0)
+        {
+            // Reached only from a non-zero signature (equal signatures returned
+            // above), so this really is a broken -> clean transition.
+            ARC_INFO("'{}': shader diagnostics cleared", m_title);
+            return;
         }
-        if (!anyGraphError && m_parseErrors.empty() && m_diags.empty() && !anyVertexRow)
-            ImGui::TextDisabled("no diagnostics");
-        ImGui::EndChild();
+        // Severity rides BOTH the log level and the row text: the Console panel
+        // renders the sink's payload only (EditorApp.cpp:478-482, and the panel
+        // at EditorPanels.cpp:288-297 prints it verbatim), so a level
+        // alone would be invisible there. The material name is the source tag.
+        ForEachDiagnosticRow([&](bool isError, const std::string& row)
+        {
+            if (isError) ARC_ERROR("'{}': {}", m_title, row);
+            else         ARC_WARN("'{}': {}", m_title, row);
+        });
     }
 
     void ShaderEditorDocument::DrawPreviewPanel(float height)
@@ -2759,7 +2730,7 @@ namespace Arcane::Editor
                      ImVec2(kThumbDraw, kThumbDraw));
     }
 
-    void ShaderEditorDocument::DrawGraphPanel(float height)
+    void ShaderEditorDocument::DrawGraphPanel()
     {
         if (!ActiveGraphOwned())
             return;
@@ -2789,7 +2760,9 @@ namespace Arcane::Editor
         Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
         ed::SetCurrentEditor(m_graphCtx);
-        ed::Begin("##graphcanvas", ImVec2(0.0f, height));
+        // Nothing is drawn above the canvas inside this function, so the
+        // remaining region IS the canvas's height.
+        ed::Begin("##graphcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
         if (switchedPass)
             ed::ClearSelection();
 
@@ -2820,7 +2793,9 @@ namespace Arcane::Editor
 
         HandleGraphEdits();
 
-        // Errors-panel click: select + frame the offending node.
+        // Requested focus: select + frame the offending node. Nothing writes
+        // m_focusNode today -- the errors panel's rows did, and console lines
+        // are not clickable; the consumer stays for the Problems panel.
         if (m_focusNode != 0)
         {
             ed::SelectNode(ed::NodeId(m_focusNode));

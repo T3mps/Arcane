@@ -1,12 +1,15 @@
 #pragma once
 
 // ShaderEditorDocument: the shader editor MVP (Slice 5) -- the first real
-// EditorDocument. One window, four panels over one .arcmat asset:
-//   snippet text (InputTextMultiline + click-to-jump via the input callback)
+// EditorDocument. One window, three panels over one .arcmat asset:
+//   snippet text (InputTextMultiline; the line-jump seam is dormant -- the
+//                 errors panel was its only driver, see m_jumpToLine)
 //   live preview (own OffscreenCanvas + FullscreenMaterialPass, animating Time)
 //   params (auto-widgets from the //@param decls; edits write the CB LIVE, no
 //           recompile, and land on the shared CommandStack as undo steps)
-//   errors (structured ShaderDiag list; click jumps the text cursor)
+// Diagnostics have NO panel of their own: canvas node badges still mark the
+// offending nodes, and the row text is published to the editor Console by
+// PublishDiagnostics -- once per CHANGE of the set, not once per compile.
 // Live loop: a text edit resubmits both stages through the app-shared
 // ShaderCompiler (the service's per-key debounce coalesces keystrokes); the
 // LAST-GOOD pipeline keeps rendering while a compile is in flight or failing.
@@ -26,6 +29,7 @@
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
+#include <Arcane/Util/FunctionRef.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -120,7 +124,7 @@ namespace Arcane::Editor
         [[nodiscard]] PassListState CapturePassListState() const;
         void ApplyPassListState(PassListState state);
 
-        // Parse/chain-resolution errors (what the errors panel shows above the
+        // Parse/chain-resolution errors (published to the Console ahead of the
         // compile diags). Exposed for the headless tests.
         const std::vector<std::string>& ParseErrors() const { return m_parseErrors; }
 
@@ -192,8 +196,24 @@ namespace Arcane::Editor
         const std::string& SnippetSource() const;
 
         void DrawToolbar();
-        void DrawSnippetEditor(float height);
-        void DrawErrorsPanel();
+        void DrawSnippetEditor();
+        // ---- Diagnostics -> editor Console (no in-document panel) ----
+        // THE formatting seam. One traversal turns every diagnostic this
+        // document holds -- graph codegen errors (per pass), parse/stitch
+        // errors, vertex-body rows, and compile diags (per pass in chain mode,
+        // m_diags otherwise) -- into presentable rows, in that order. It is the
+        // ONLY place that ordering and that wording exist.
+        //
+        // PROBLEMS-PANEL SEAM: a future Problems panel plugs in HERE. It will
+        // want structured source info (origin, chain index, node id, snippet
+        // line) rather than a flattened string, so widen the callback's payload
+        // in this one function instead of re-deriving the traversal beside it --
+        // the flattening is deliberately the last step. Non-const only because
+        // GraphOptAt (the node lookup for graph-error rows) is non-const.
+        void ForEachDiagnosticRow(Arcane::FunctionRef<void(bool isError,
+                                                           const std::string& row)> fn);
+        // Per-frame (from Tick), gated on the CONTENT of the diagnostic set.
+        void PublishDiagnostics();
         // Graph mode (Slice 9, imgui-node-editor canvas). The canvas edits the
         // ACTIVE pass's graph; these resolve which optional that is.
         std::optional<Arcane::MaterialGraph>& GraphOptAt(std::size_t pass);
@@ -203,7 +223,7 @@ namespace Arcane::Editor
         // call on text-only docs (the loop no-ops); any codegen error keeps
         // last-good bound and fills that pass's badge list instead.
         void RegenerateFromGraph();
-        void DrawGraphPanel(float height);
+        void DrawGraphPanel();
         void DrawGraphNode(Arcane::GraphNode& node);
         void HandleGraphEdits();             // link create/delete queries (inside Begin/End)
         // Copy/paste: the clip is GraphToJson of the selected subgraph on the
@@ -285,6 +305,10 @@ namespace Arcane::Editor
         std::vector<Arcane::ParamMeta>             m_boundMetas; // parallel to bound->Params()
         std::vector<std::string>                   m_parseErrors;
         std::vector<Arcane::ShaderDiag>            m_diags;      // last compile (active backend)
+        // Content signature of the diagnostic set at the LAST console emission.
+        // 0 means "nothing outstanding" -- both the initial state and the state
+        // after a clean build, so opening a clean material says nothing.
+        std::uint64_t                              m_emittedDiagSig = 0;
 
         std::unique_ptr<Arcane::OffscreenCanvas>         m_preview;
         std::unique_ptr<Arcane::FullscreenMaterialPass>  m_pass;
@@ -337,7 +361,9 @@ namespace Arcane::Editor
         std::uint64_t m_vsJob = 0, m_psJob = 0;      // in-flight ids (0 = none)
         std::vector<std::uint8_t> m_vsBytes, m_psBytes;
         double m_animTime = 0.0;                     // preview Time uniform
-        int    m_jumpToLine = 0;                     // 1-based; 0 = no pending jump
+        // 1-based; 0 = no pending jump. DORMANT for the same reason as
+        // m_focusNode -- the errors-panel rows were the only writer.
+        int    m_jumpToLine = 0;
         bool   m_focusSnippet = false;               // focus the input so the jump lands
         // Armed jump consumed by the input callback. Per-document (review m2): a
         // shared static could deliver one doc's jump to another on a same-frame
@@ -367,7 +393,10 @@ namespace Arcane::Editor
         int  m_snippetLineOffset = 0;
         bool m_graphPositionsApplied = false;   // canvas seeded from stored node positions
         bool m_showGeneratedText = false;       // toolbar toggle: canvas <-> read-only HLSL
-        std::uint32_t m_focusNode = 0;          // errors-panel click -> select + navigate
+        // Select + navigate the canvas to one node. DORMANT: the errors panel's
+        // rows were the only writer, and console lines are not clickable -- the
+        // Problems panel is what re-drives it (DrawGraphPanel still consumes it).
+        std::uint32_t m_focusNode = 0;
         float m_graphPopupX = 0.0f, m_graphPopupY = 0.0f;   // create-menu screen pos
         // Drag-wire searcher (SG's signature interaction): releasing a new wire
         // over empty canvas opens the create menu filtered to types with a pin
