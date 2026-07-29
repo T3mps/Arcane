@@ -659,9 +659,15 @@ namespace Arcane::Editor
                             // open and those writes would land outside undo.
                             // The inline channel drags + swatch preview gesture
                             // correctly; a popup-aware gesture is later polish.
+                            //
+                            // NOT ImGuiColorEditFlags_Float: that mode prints a
+                            // fixed three decimals per channel and crowded the
+                            // row (user call 2026-07-29). Default 0-255 display
+                            // is Unity's RGBA mode; the STORED value stays the
+                            // 0..1 float vec4, edits quantize to 255ths, which
+                            // is what colour authoring means everywhere.
                             bool changed = ImGui::ColorEdit4(widgetId.c_str(), &v.x,
                                                              ImGuiColorEditFlags_NoPicker
-                                                             | ImGuiColorEditFlags_Float
                                                              | ImGuiColorEditFlags_AlphaBar);
                             BeginGestureIfActivated(rawName, instance);
                             if (changed)
