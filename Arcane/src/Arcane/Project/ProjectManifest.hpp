@@ -31,6 +31,14 @@ namespace Arcane
         std::vector<PluginRef> plugins;
         std::string            bootScene;           // asset Guid text (see Project::SetBootScene); empty = none
 
+        // The project's durable identity, as canonical Guid text; empty when the
+        // manifest predates the field (Project::Open self-heals by stamping one).
+        // The Arcane Hub keys its per-project metadata on this so a MOVED project
+        // heals in place instead of becoming a stranger -- but only when the old
+        // entry's path is gone, so a hand-copied folder (which copies the guid)
+        // stays a separate project. The Hub's Duplicate regenerates it outright.
+        std::string            guid;
+
         // Parse + validate a JSON document. nullopt on schema violation.
         static ARCANE_API std::optional<ProjectManifest> FromJson(const nlohmann::json& doc);
 

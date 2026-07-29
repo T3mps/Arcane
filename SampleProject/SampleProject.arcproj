@@ -2,8 +2,11 @@
   "formatVersion": 1,
   "name": "SampleProject",
   "description": "Slice 1b demo: proves Project::Open host wiring (gameModule = Sandbox.dll).",
-  "engine": { "abi": 8 },
+  "engine": {
+    "abi": 8
+  },
   "gameModule": "Sandbox.dll",
   "plugins": [],
-  "bootScene": "10d8ff06-45c2-47f2-90cb-ab7ac29cb51d"
+  "bootScene": "10d8ff06-45c2-47f2-90cb-ab7ac29cb51d",
+  "guid": "cfafaf09-86bb-4b4b-a99f-9ecb0771bc15"
 }

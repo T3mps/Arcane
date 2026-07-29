@@ -239,7 +239,7 @@ namespace Arcane::Editor
         // needs the registry to already know the new asset. Checked, unlike
         // CreateInstanceAt's fire-and-forget call: RegisterCreatedAsset ->
         // Project::RegisterAsset returns nullopt when the target is outside
-        // every content root (Project.cpp:222-226, which already ARC_WARNs
+        // every content root (Project.cpp:334-338, which already ARC_WARNs
         // why) -- returning the freshly-minted id anyway would hand back a
         // Guid that can never resolve, writing a permanently broken reference
         // into whatever field triggered the mint. The file stays on disk

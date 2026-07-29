@@ -20,6 +20,118 @@
 
 namespace Arcane
 {
+    namespace
+    {
+        // Read a .arcproj, set ONE field, write it back atomically. Shared by
+        // SetBootScene and the Open-time guid self-heal.
+        //
+        // ordered_json, NOT json: the default type is key-sorted, so a
+        // read-modify-write would hand back a manifest alphabetised top to
+        // bottom for a one-field edit -- a diff nobody asked for in a file that
+        // is very likely in git. `who` prefixes the logs so a failure names the
+        // operation the user attempted, not this helper.
+        bool RewriteManifestField(const std::filesystem::path& file, const char* key,
+                                  const std::string& value, const char* who)
+        {
+            nlohmann::ordered_json doc;
+            try
+            {
+                std::ifstream in(file, std::ios::binary);
+                if (!in)
+                {
+                    ARC_ERROR("{}: could not read {}", who, file.generic_string());
+                    return false;
+                }
+                doc = nlohmann::ordered_json::parse(in);
+                if (!doc.is_object())
+                {
+                    ARC_ERROR("{}: {} is not a JSON object", who, file.generic_string());
+                    return false;
+                }
+            }
+            catch (const nlohmann::json::exception& e)
+            {
+                ARC_ERROR("{}: could not parse {}: {}", who, file.generic_string(), e.what());
+                return false;
+            }
+
+            doc[key] = value;
+
+            // Temp + rename: a half-written .arcproj is a project that will not open.
+            const std::filesystem::path tmp = file.string() + ".tmp";
+            try
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                if (!out)
+                {
+                    ARC_ERROR("{}: could not open {} for writing", who, tmp.generic_string());
+                    return false;
+                }
+                out << doc.dump(2);
+                if (!out)
+                {
+                    // The file exists on disk (open succeeded) but is truncated/partial --
+                    // remove it so a failed write does not leave a stray .tmp behind.
+                    std::error_code ec;
+                    std::filesystem::remove(tmp, ec);
+                    ARC_ERROR("{}: could not write {}", who, tmp.generic_string());
+                    return false;
+                }
+            }
+            catch (const nlohmann::json::exception& e)
+            {
+                // dump(2) can throw after `out` already created/truncated tmp -- same
+                // cleanup as the write-failure case above.
+                std::error_code ec;
+                std::filesystem::remove(tmp, ec);
+                ARC_ERROR("{}: could not serialize {}: {}", who, file.generic_string(), e.what());
+                return false;
+            }
+
+#ifdef _WIN32
+            // ReplaceFileW, not a plain delete+rename: it preserves the destination's NTFS
+            // attributes/ACLs and never leaves a window where `file` does not exist (a bare
+            // MoveFileEx-style replace has to delete the original first). Note this is not a
+            // cure for a held-open destination: like any Windows replace, it still needs
+            // DELETE access to `file`, so another handle without FILE_SHARE_DELETE (e.g. a
+            // plain ifstream someone forgot to close) will still fail the swap -- that is an
+            // NTFS sharing rule, not something this function can paper over.
+            if (!ReplaceFileW(file.c_str(), tmp.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr))
+            {
+                const DWORD err = GetLastError();   // capture before any other call clobbers it
+                std::error_code ec;
+                std::filesystem::remove(tmp, ec);
+                // ERROR_SHARING_VIOLATION / ERROR_ACCESS_DENIED mean some other handle on
+                // `file` lacks FILE_SHARE_DELETE (AV scanner, git, a backup tool, or a second
+                // editor window all do this) -- distinguish that from a generic replace
+                // failure so the caller can tell "close the other program and retry" apart
+                // from a genuinely broken manifest.
+                if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED)
+                {
+                    ARC_ERROR("{}: could not replace {} -- another program may have "
+                              "the .arcproj open (err {}); close it and try again",
+                              who, file.generic_string(), err);
+                }
+                else
+                {
+                    ARC_ERROR("{}: could not replace {} (err {})", who, file.generic_string(), err);
+                }
+                return false;
+            }
+#else
+            std::error_code ec;
+            std::filesystem::rename(tmp, file, ec);
+            if (ec)
+            {
+                std::filesystem::remove(tmp, ec);
+                ARC_ERROR("{}: could not replace {}", who, file.generic_string());
+                return false;
+            }
+#endif
+            return true;
+        }
+    }
+
     std::optional<Project> Project::Open(const std::filesystem::path& pathOrFile)
     {
         std::error_code ec;
@@ -60,6 +172,19 @@ namespace Arcane
         auto manifest = ProjectManifest::LoadFile(manifestFile);
         if (!manifest)
             return std::nullopt;   // LoadFile already logged
+
+        // Self-heal the project's durable identity: a manifest that predates
+        // the guid field (or carries a mangled one) gets a fresh Guid stamped
+        // in place, once. Best-effort -- an unwritable manifest (read-only
+        // media, VCS lock) must not fail the open, and the in-memory guid
+        // stays empty on failure so each open cannot invent a DIFFERENT
+        // identity than the disk records.
+        if (!Guid::FromString(manifest->guid))
+        {
+            const std::string fresh = Guid::Generate().ToString();
+            if (RewriteManifestField(manifestFile, "guid", fresh, "Project::Open"))
+                manifest->guid = fresh;
+        }
 
         Project proj;
         proj.m_root         = root;
@@ -152,6 +277,8 @@ namespace Arcane
         manifestJson["gameModule"]    = "";
         manifestJson["plugins"]       = nlohmann::json::array();
         manifestJson["bootScene"]     = "";
+        // Stamped at birth so the Open() below never needs its self-heal write.
+        manifestJson["guid"]          = Guid::Generate().ToString();
 
         const std::filesystem::path manifestPath = dir / (name + ".arcproj");
         {
@@ -246,106 +373,9 @@ namespace Arcane
             return false;
         }
 
-        // ordered_json, NOT json: the default type is key-sorted, so a
-        // read-modify-write would hand back a manifest alphabetised top to
-        // bottom for a one-field edit -- a diff nobody asked for in a file that
-        // is very likely in git.
-        nlohmann::ordered_json doc;
-        try
-        {
-            std::ifstream in(file, std::ios::binary);
-            if (!in)
-            {
-                ARC_ERROR("SetBootScene: could not read {}", file.generic_string());
-                return false;
-            }
-            doc = nlohmann::ordered_json::parse(in);
-            if (!doc.is_object())
-            {
-                ARC_ERROR("SetBootScene: {} is not a JSON object", file.generic_string());
-                return false;
-            }
-        }
-        catch (const nlohmann::json::exception& e)
-        {
-            ARC_ERROR("SetBootScene: could not parse {}: {}", file.generic_string(), e.what());
-            return false;
-        }
-
         const std::string value = id.IsValid() ? id.ToString() : std::string{};
-        doc["bootScene"] = value;
-
-        // Temp + rename: a half-written .arcproj is a project that will not open.
-        const std::filesystem::path tmp = file.string() + ".tmp";
-        try
-        {
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            if (!out)
-            {
-                ARC_ERROR("SetBootScene: could not open {} for writing", tmp.generic_string());
-                return false;
-            }
-            out << doc.dump(2);
-            if (!out)
-            {
-                // The file exists on disk (open succeeded) but is truncated/partial --
-                // remove it so a failed write does not leave a stray .tmp behind.
-                std::error_code ec;
-                std::filesystem::remove(tmp, ec);
-                ARC_ERROR("SetBootScene: could not write {}", tmp.generic_string());
-                return false;
-            }
-        }
-        catch (const nlohmann::json::exception& e)
-        {
-            // dump(2) can throw after `out` already created/truncated tmp -- same
-            // cleanup as the write-failure case above.
-            std::error_code ec;
-            std::filesystem::remove(tmp, ec);
-            ARC_ERROR("SetBootScene: could not serialize {}: {}", file.generic_string(), e.what());
+        if (!RewriteManifestField(file, "bootScene", value, "SetBootScene"))
             return false;
-        }
-
-#ifdef _WIN32
-        // ReplaceFileW, not a plain delete+rename: it preserves the destination's NTFS
-        // attributes/ACLs and never leaves a window where `file` does not exist (a bare
-        // MoveFileEx-style replace has to delete the original first). Note this is not a
-        // cure for a held-open destination: like any Windows replace, it still needs
-        // DELETE access to `file`, so another handle without FILE_SHARE_DELETE (e.g. a
-        // plain ifstream someone forgot to close) will still fail the swap -- that is an
-        // NTFS sharing rule, not something this function can paper over.
-        if (!ReplaceFileW(file.c_str(), tmp.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr))
-        {
-            const DWORD err = GetLastError();   // capture before any other call clobbers it
-            std::error_code ec;
-            std::filesystem::remove(tmp, ec);
-            // ERROR_SHARING_VIOLATION / ERROR_ACCESS_DENIED mean some other handle on
-            // `file` lacks FILE_SHARE_DELETE (AV scanner, git, a backup tool, or a second
-            // editor window all do this) -- distinguish that from a generic replace
-            // failure so the caller can tell "close the other program and retry" apart
-            // from a genuinely broken manifest.
-            if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED)
-            {
-                ARC_ERROR("SetBootScene: could not replace {} -- another program may have "
-                          "the .arcproj open (err {}); close it and try again",
-                          file.generic_string(), err);
-            }
-            else
-            {
-                ARC_ERROR("SetBootScene: could not replace {} (err {})", file.generic_string(), err);
-            }
-            return false;
-        }
-#else
-        std::error_code ec;
-        std::filesystem::rename(tmp, file, ec);
-        if (ec)
-        {
-            std::filesystem::remove(tmp, ec);
-            ARC_ERROR("SetBootScene: could not replace {}", file.generic_string());
-            return false;
-        }
-#endif
 
         m_manifest.bootScene = value;
         return true;

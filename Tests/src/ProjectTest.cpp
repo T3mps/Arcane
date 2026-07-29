@@ -294,6 +294,49 @@ TEST_CASE("Project::Create scaffolds the skeleton, manifest, and .gitignore", "[
     CHECK(proj->Manifest().name == "Aphelyon");
     CHECK(proj->Manifest().engineAbi == static_cast<int>(Arcane::kGamePluginABIVersion));
     CHECK(Arcane::Project::Open(dir).has_value());
+
+    // Born with its durable identity: a valid guid, stamped at create time so
+    // the Open() self-heal never has cause to rewrite a fresh project.
+    CHECK(Arcane::Guid::FromString(proj->Manifest().guid).has_value());
+}
+
+TEST_CASE("Project::Open self-heals a manifest without a guid", "[project]")
+{
+    const auto dir = TempDir("guid_heal");
+    const auto file = dir / "Legacy.arcproj";
+    WriteFile(file, R"({ "formatVersion": 1, "name": "Legacy", "engine": { "abi": 4 } })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    // The in-memory manifest and the FILE both carry the stamped guid -- the
+    // Hub reads the file, so an in-memory-only guid would be invisible to it.
+    REQUIRE(Arcane::Guid::FromString(proj->Manifest().guid).has_value());
+    std::ifstream in(file, std::ios::binary);
+    const auto doc = nlohmann::json::parse(in);
+    CHECK(doc["guid"].get<std::string>() == proj->Manifest().guid);
+    // The rewrite touched ONE field; the rest of the manifest is intact.
+    CHECK(doc["name"] == "Legacy");
+    CHECK(doc["formatVersion"] == 1);
+    CHECK(doc["engine"]["abi"] == 4);
+}
+
+TEST_CASE("Project::Open keeps an existing guid and is stable across opens", "[project]")
+{
+    const auto dir = TempDir("guid_stable");
+    const char* kGuid = "a5e0c1de-1111-4222-8333-444455556666";
+    WriteFile(dir / "G.arcproj",
+              R"({ "formatVersion": 1, "name": "G", "engine": { "abi": 4 }, "guid": ")"
+                  + std::string(kGuid) + R"(" })");
+
+    auto first = Arcane::Project::Open(dir);
+    REQUIRE(first.has_value());
+    CHECK(first->Manifest().guid == kGuid);
+
+    // A second open must see the SAME identity -- re-stamping per open would
+    // make the guid useless as a durable key.
+    auto second = Arcane::Project::Open(dir);
+    REQUIRE(second.has_value());
+    CHECK(second->Manifest().guid == kGuid);
 }
 
 TEST_CASE("Project::Create refuses a non-empty target directory", "[project]")

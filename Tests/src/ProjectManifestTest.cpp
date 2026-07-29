@@ -112,7 +112,10 @@ TEST_CASE("SetBootScene rewrites only that field, preserving key order", "[proje
     CHECK(again->Manifest().bootScene == id.ToString());
 
     // Unknown keys and their ORDER survive -- a project may carry fields a newer
-    // engine added, and pointing at a scene must not reorder or drop them.
+    // engine added, and pointing at a scene must not reorder or drop them. The
+    // trailing "guid" is the ONE addition the engine itself makes: the manifest
+    // above predates the field, so the first Open() self-heal stamped it (at the
+    // end -- ordered_json appends new keys), and it must hold a valid Guid.
     // Braced so `in` closes before the next SetBootScene call: Windows will not let
     // an atomic replace (ReplaceFileW/rename) swap over a path some other handle
     // still has open, even just for reading.
@@ -120,10 +123,12 @@ TEST_CASE("SetBootScene rewrites only that field, preserving key order", "[proje
         std::ifstream in(dir / "P.arcproj");
         const nlohmann::ordered_json doc = nlohmann::ordered_json::parse(in);
         CHECK(doc["zzzFuture"] == 42);
+        CHECK(Arcane::Guid::FromString(doc["guid"].get<std::string>()).has_value());
         std::vector<std::string> keys;
         for (auto it = doc.begin(); it != doc.end(); ++it) keys.push_back(it.key());
         CHECK(keys == std::vector<std::string>{"formatVersion", "name", "description", "engine",
-                                               "gameModule", "plugins", "bootScene", "zzzFuture"});
+                                               "gameModule", "plugins", "bootScene", "zzzFuture",
+                                               "guid"});
     }
 
     // A nil Guid clears the field rather than writing "00000000-...".

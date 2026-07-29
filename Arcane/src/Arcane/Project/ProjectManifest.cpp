@@ -42,6 +42,7 @@ namespace Arcane
         m.description = doc.value("description", std::string{});
         m.gameModule  = doc.value("gameModule", std::string{});
         m.bootScene   = doc.value("bootScene", std::string{});
+        m.guid        = doc.value("guid", std::string{});
 
         if (doc.contains("plugins") && doc["plugins"].is_array())
         {
