@@ -329,6 +329,28 @@ namespace Arcane::Editor
         bool                            m_live = true;    // auto-compile on edit
         bool                            m_confirmSaveWithErrors = false;
 
+        // ---- Pane layout (draggable splits) ----
+        // Fraction of the shared extent the FIRST pane takes: m_splitMain is
+        // the left column (graph/snippet, or an instance's params) against the
+        // preview column; m_splitRight is the preview against the params panel
+        // inside the right column (base materials only -- an instance's params
+        // live in the left column, so its right column has nothing to split).
+        // Both are dragged by the dividers Draw submits between the panes, and
+        // double-clicking a divider restores kSplitDefault.
+        //
+        // The default is the ratio both splits were HARD-CODED to before they
+        // became draggable, so a freshly opened document looks exactly as it
+        // did (they were 55/45, never 50/50).
+        //
+        // RUNTIME-ONLY, deliberately: the editor has no user-preference store
+        // to put them in -- imgui.ini carries ImGui's own window/dock state and
+        // nothing in the editor registers an ImGuiSettingsHandler -- so a
+        // reopened document starts at the default again. Persisting these is
+        // work for a settings store once one exists.
+        static constexpr float          kSplitDefault = 0.55f;
+        float                           m_splitMain  = kSplitDefault;
+        float                           m_splitRight = kSplitDefault;
+
         // Param-dirtiness baseline: the instance serial at the last Save (or
         // rebind carrying no unsaved edits). m_paramsBaseDirty carries unsaved
         // param edits ACROSS an instance swap, whose fresh serial is unrelated.

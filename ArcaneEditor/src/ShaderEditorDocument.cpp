@@ -674,6 +674,87 @@ namespace Arcane::Editor
             std::string m_label;
             ShaderEditorDocument::PassListState m_before, m_after;
         };
+
+        // ---- Pane splitters ------------------------------------------------
+        // Divider geometry and limits, shared by both of Draw's splits.
+        constexpr float kSplitBarPx  = 6.0f;     // the divider's hit width
+        constexpr float kSplitLinePx = 1.0f;     // hairline drawn at rest
+        constexpr float kSplitHotPx  = 2.0f;     // ... and while hovered/held
+        constexpr float kPaneMinPx   = 120.0f;   // neither pane goes under this
+        constexpr float kSplitMinF   = 0.15f;    // ... unless the span is too
+        constexpr float kSplitMaxF   = 0.85f;    //     small for two floors
+
+        // The fraction a split may actually use, given `span` pixels of shared
+        // extent. The PIXEL floor is what keeps a pane usable in a large
+        // window; the FRACTION floor is what keeps both panes alive in a small
+        // one -- under 2 * kPaneMinPx the two pixel floors would cross, so each
+        // is folded against 0.5 first, which leaves lo <= 0.5 <= hi always (an
+        // inverted range would make the clamp order-dependent).
+        float ClampSplit(float ratio, float span)
+        {
+            float lo = kSplitMinF, hi = kSplitMaxF;
+            if (span > 0.0f)
+            {
+                lo = (std::max)(lo, (std::min)(kPaneMinPx / span, 0.5f));
+                hi = (std::min)(hi, (std::max)(1.0f - kPaneMinPx / span, 0.5f));
+            }
+            return (std::min)((std::max)(ratio, lo), hi);
+        }
+
+        // A draggable divider between two sibling panes -- ImGui's standard
+        // splitter recipe: an InvisibleButton owns the gap, and because ImGui
+        // holds ActiveId for as long as the button is held, MouseDelta keeps
+        // arriving every frame even after the cursor leaves the rect. `span`
+        // is the extent the two panes SHARE (their region minus this divider),
+        // so pixels convert into the same fraction the caller laid out with.
+        // Double-click restores `defaultRatio` -- the only way back to a round
+        // split once dragged.
+        //
+        // Submit it OUTSIDE ed::Begin/End (Draw does; the canvas's Begin/End
+        // is down inside DrawGraphPanel): within the canvas the node editor
+        // takes ImGui's input for itself and moves ImGui into canvas space
+        // (imgui_canvas.cpp), so a divider there would both compete with the
+        // pan/zoom gestures and drag at the zoom's rate rather than the
+        // cursor's.
+        void PaneSplitter(const char* id, bool dragX, float crossSize, float span,
+                          float& ratio, float defaultRatio)
+        {
+            const ImVec2 size = dragX ? ImVec2(kSplitBarPx, crossSize)
+                                      : ImVec2(crossSize, kSplitBarPx);
+            if (size.x <= 0.0f || size.y <= 0.0f)
+                return;   // degenerate region (InvisibleButton asserts on zero)
+
+            const ImVec2 p0 = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton(id, size);
+            const bool held    = ImGui::IsItemActive();
+            const bool hovered = ImGui::IsItemHovered();
+            if (held || hovered)
+                ImGui::SetMouseCursor(dragX ? ImGuiMouseCursor_ResizeEW
+                                            : ImGuiMouseCursor_ResizeNS);
+            if (held && span > 0.0f)
+            {
+                const ImVec2 d = ImGui::GetIO().MouseDelta;
+                ratio = ClampSplit(ratio + (dragX ? d.x : d.y) / span, span);
+            }
+            // After the drag, so the reset wins on the frame it fires (that
+            // frame's own drag delta is ~0 anyway -- the click did not move).
+            if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                ratio = defaultRatio;
+
+            // Style-relative and three-tone, the same ramp ImGui's own docking
+            // splitter uses: a hairline in Separator at rest, one step brighter
+            // and one pixel wider on hover, brightest while held. The editor
+            // theme fills all three entries (EditorTheme.hpp:175-177).
+            const ImU32 col = ImGui::GetColorU32(held    ? ImGuiCol_SeparatorActive
+                                               : hovered ? ImGuiCol_SeparatorHovered
+                                                         : ImGuiCol_Separator);
+            const float line = (held || hovered) ? kSplitHotPx : kSplitLinePx;
+            const ImVec2 a = dragX ? ImVec2(p0.x + (size.x - line) * 0.5f, p0.y)
+                                   : ImVec2(p0.x, p0.y + (size.y - line) * 0.5f);
+            const ImVec2 b = dragX ? ImVec2(a.x + line, p0.y + size.y)
+                                   : ImVec2(p0.x + size.x, a.y + line);
+            ImGui::GetWindowDrawList()->AddRectFilled(a, b, col);
+        }
     }
 
     // InputTextMultiline over std::string (the imgui_stdlib resize pattern) +
@@ -1447,8 +1528,16 @@ namespace Arcane::Editor
 
         DrawToolbar();
 
-        const float contentH = ImGui::GetContentRegionAvail().y;
-        const float leftW = ImGui::GetContentRegionAvail().x * 0.55f;
+        // Two draggable splits (PaneSplitter; both ratios are runtime-only --
+        // see m_splitMain). The MAIN one divides the left column (graph or
+        // snippet, or an instance's params) from the preview column; the right
+        // column carries its own, preview against params, further down.
+        // The divider sits BETWEEN the two children, so the width it occupies
+        // comes off the span the fractions divide.
+        const ImVec2 content  = ImGui::GetContentRegionAvail();
+        const float contentH  = content.y;
+        const float mainSpan  = (std::max)(content.x - kSplitBarPx, 1.0f);
+        const float leftW     = mainSpan * ClampSplit(m_splitMain, mainSpan);
 
         ImGui::BeginChild("##left", ImVec2(leftW, contentH));
         if (IsInstance())
@@ -1481,17 +1570,28 @@ namespace Arcane::Editor
                 DrawSnippetEditor();
         }
         ImGui::EndChild();
-        ImGui::SameLine();
+        // Zero spacing on either side: the divider IS the gap between the
+        // columns, and the layout above already reserved its width.
+        ImGui::SameLine(0.0f, 0.0f);
+        PaneSplitter("##splitmain", /*dragX=*/true, contentH, mainSpan,
+                     m_splitMain, kSplitDefault);
+        ImGui::SameLine(0.0f, 0.0f);
         ImGui::BeginChild("##right", ImVec2(0, contentH));
         {
             if (IsInstance())
             {
+                // Instance mode: the params own the LEFT column, so the preview
+                // takes this one outright -- nothing to split here.
                 DrawPreviewPanel(ImGui::GetContentRegionAvail().y);
             }
             else
             {
-                DrawPreviewPanel(ImGui::GetContentRegionAvail().y * 0.55f);
-                DrawParamsPanel();
+                const ImVec2 col = ImGui::GetContentRegionAvail();
+                const float span = (std::max)(col.y - kSplitBarPx, 1.0f);
+                DrawPreviewPanel(span * ClampSplit(m_splitRight, span));
+                PaneSplitter("##splitright", /*dragX=*/false, col.x, span,
+                             m_splitRight, kSplitDefault);
+                DrawParamsPanel();   // fills whatever the preview left
             }
         }
         ImGui::EndChild();
@@ -3754,7 +3854,7 @@ namespace Arcane::Editor
         // while a name field has focus is exactly that gesture.
         //
         // The KIND is checked, not just the id: m_textEdit is one buffer shared
-        // with the pass canvas (ShaderEditorDocument.hpp:471-481), and
+        // with the pass canvas (ShaderEditorDocument.hpp:493-503), and
         // a PassName key carries a chain INDEX that can collide with a node id.
         //
         // Value drags need no guard -- an abandoned gesture is closed by

@@ -66,20 +66,20 @@ namespace Arcane::Editor
                                    Arcane::SpriteAssetData data)
         : m_services(std::move(services)), m_path(std::move(path)), m_data(std::move(data))
     {
-        // Same name-fallback rule as ShaderEditorDocument (ShaderEditorDocument.cpp:723):
+        // Same name-fallback rule as ShaderEditorDocument (ShaderEditorDocument.cpp:804):
         // an empty asset name (hand-authored file, or a pre-name-field asset)
         // falls back to the file stem rather than showing a blank title.
         m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name;
         m_windowLabel = m_title + " (Sprite)###spritedoc_" + m_data.id.ToString();
         // The anchor every undo step routes through; it dies with the document
-        // (ShaderEditorDocument.cpp:728 mints its own the same way).
+        // (ShaderEditorDocument.cpp:809 mints its own the same way).
         m_anchor = std::make_shared<SpriteDocument*>(this);
     }
 
     SpriteDocument::~SpriteDocument()
     {
         // Teardown close, same shape and rationale as ShaderEditorDocument's
-        // (ShaderEditorDocument.cpp:757-778). Documents are destroyed
+        // (ShaderEditorDocument.cpp:838-859). Documents are destroyed
         // synchronously on close and there is no on-close hook: the X-button
         // path is already safe (requestClose is raised INSIDE Draw and acted on
         // after the loop, so Draw's ScopeGuard has run), but a close that
@@ -165,7 +165,7 @@ namespace Arcane::Editor
         if (!ImGui::Begin(m_windowLabel.c_str(), &open, flags))
         {
             // Collapsed (not closed): ShaderEditorDocument's same early-return
-            // shape (ShaderEditorDocument.cpp:1441-1446) -- `open` only goes
+            // shape (ShaderEditorDocument.cpp:1522-1527) -- `open` only goes
             // false when the titlebar X was clicked, so a merely-collapsed
             // window still reports requestClose=false here.
             ImGui::End();
@@ -297,7 +297,7 @@ namespace Arcane::Editor
                                               static_cast<float>(desc.width));
                 const ImVec2 imgPos = ImGui::GetCursorScreenPos();
                 // ImTextureID convention: the raw ITexture* cast to uintptr_t
-                // (ShaderEditorDocument.cpp:1909,1929; the backend keys its
+                // (ShaderEditorDocument.cpp:2009,2029; the backend keys its
                 // per-frame SRV binding-set cache on that same pointer,
                 // ImGuiNvrhi.cpp:246-252) -- any live ITexture* works, no
                 // per-document binding setup needed.
