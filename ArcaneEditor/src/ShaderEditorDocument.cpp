@@ -197,6 +197,87 @@ namespace Arcane::Editor
         constexpr int   kPinDotSegments = 12;
         constexpr float kWireThickness  = 2.0f;
 
+        // ---- Gradient wires -------------------------------------------------
+        // ed::Link paints one flat colour, so a wire cannot say "this end is a
+        // float, that end is a float2" the way its two dots do. We therefore
+        // submit the link with a FULLY TRANSPARENT colour and draw the curve
+        // ourselves in the library's own link layer.
+        //
+        // Alpha 0 costs nothing and breaks nothing. The draw helper returns
+        // immediately on `if ((color >> 24) == 0)`
+        // (imgui_node_editor.cpp:494-495), so the flat wire is never
+        // tessellated. Registration ignores the colour entirely -- DoLink
+        // stores it and calls UpdateEndpoints unconditionally
+        // (imgui_node_editor.cpp:1648-1653) -- and every hit path
+        // (Link::TestHit :984-1032, FindLinkAt :2240-2247) reads only the
+        // geometry and m_Thickness. So hover, selection, rect-select and the
+        // delete flow are untouched, and the thickness we pass still has to be
+        // the REAL one or the wire would be hard to grab.
+        //
+        // Hover/selection feedback also survives on its own: those passes use
+        // StyleColor_HovLinkBorder / StyleColor_SelLinkBorder, not the link's
+        // colour (imgui_node_editor.cpp:899-929), and land in
+        // c_LinkChannel_Selection, one channel BELOW the links -- so they stay
+        // a halo behind our gradient exactly as they were behind the flat wire.
+        //
+        // c_LinkChannel_Links is a file-static in the vendored translation unit
+        // (imgui_node_editor.cpp:130-131), so it cannot be named from here; it
+        // is reproduced from the constants it is built out of
+        // (imgui_node_editor.cpp:113-121). Reproduced rather than guessed:
+        // c_UserLayerChannelStart(0) + c_UserLayersCount(5) =
+        // c_BackgroundChannelStart(5), + c_BackgroundChannelCount(1) =
+        // c_LinkStartChannel(6), + 1 = 7.
+        //
+        // Retargeting the channel is not optional. Between ed::Begin and
+        // ed::End but outside a node, the current channel is m_ExternalChannel
+        // (imgui_node_editor.cpp:1191-1194), which is 0 -- the BOTTOM of the
+        // merge, under the grid's own opaque background fill
+        // (imgui_node_editor.cpp:1512). Wires drawn there would simply be
+        // painted over. The other reachable layer, GetNodeBackgroundDrawList,
+        // is a per-node channel and sits ABOVE the links, so wires would cross
+        // in front of node bodies. Channel 7 is the only one that puts them
+        // where the flat wires were: above group nodes, below regular nodes
+        // (the End reshuffle keeps the four link channels contiguous and in
+        // order, imgui_node_editor.cpp:1488-1492).
+        //
+        // The index is only meaningful DURING submission -- End swaps the
+        // channels into their final z-order -- so this must run inside
+        // ed::Begin/End, which it does (the link loop is in DrawGraphPanel).
+        constexpr int kLinkChannelLinks = 7;
+
+        // Cubic bezier at t. Same evaluation the library tessellates
+        // (ImCubicBezier* in imgui_bezier_math.inl); we need per-segment points
+        // because the colour changes along the curve.
+        ImVec2 CubicBezierAt(const ImVec2& p0, const ImVec2& p1,
+                             const ImVec2& p2, const ImVec2& p3, float t) noexcept
+        {
+            const float u = 1.0f - t;
+            const float w0 = u * u * u;
+            const float w1 = 3.0f * u * u * t;
+            const float w2 = 3.0f * u * t * t;
+            const float w3 = t * t * t;
+            return ImVec2(p0.x * w0 + p1.x * w1 + p2.x * w2 + p3.x * w3,
+                          p0.y * w0 + p1.y * w1 + p2.y * w2 + p3.y * w3);
+        }
+
+        // Straight sRGB lerp. The pin palette is four light, low-saturation
+        // tones, so the midpoints stay clean without an OkLab detour; the one
+        // pairing that could band (azure -> magenta) crosses through a plausible
+        // lavender rather than through grey.
+        ImVec4 LerpColor(const ImVec4& a, const ImVec4& b, float t) noexcept
+        {
+            return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+                          a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+        }
+
+        // Hover/selection already reads through the library's halo (see
+        // DrawGradientWire); this lifts the wire itself the same way a
+        // highlighted dot lifts, so the emphasis lands on the whole run.
+        ImVec4 BrightenColor(const ImVec4& c) noexcept
+        {
+            return LerpColor(c, ImVec4(1.0f, 1.0f, 1.0f, c.w), 0.25f);
+        }
+
         // -------------------------------------------------------------------
         // ZOOM STOPS -- Unreal's graph-editor table, ported exactly.
         //
@@ -310,8 +391,9 @@ namespace Arcane::Editor
         // One port dot: FILLED when a wire is attached, a hollow ring when not
         // (the Shader Graph reading -- "this port carries something" is visible
         // without tracing the wire). Advances the cursor by exactly the dot, so
-        // the caller follows with SameLine + the label.
-        void DrawPinDot(const ImVec4& color, bool connected)
+        // the caller follows with SameLine + the label. Returns the dot's CENTRE
+        // in canvas space -- the pin rows anchor their wire pivot off it.
+        ImVec2 DrawPinDot(const ImVec4& color, bool connected)
         {
             const float lineH = ImGui::GetTextLineHeight();
             const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -327,6 +409,7 @@ namespace Arcane::Editor
                                     ImGui::GetColorU32(kNodeBodyColor), kPinDotSegments);
                 dl->AddCircle(c, kPinDotRadius, col, kPinDotSegments, kPinRingWidth);
             }
+            return c;
         }
 
         // Horizontal spacer that right-aligns a row of `rowWidth` inside a
@@ -3125,6 +3208,12 @@ namespace Arcane::Editor
         // tier also reaches back into Tick's render loop (see m_nodePreviewsInLod).
         m_nodePreviewsInLod = lod >= NodeLOD::DefaultDetail;
 
+        // Wire anchors are per-frame: nodes move, the view moves, and a pin
+        // that stops being submitted must stop having an anchor (see
+        // DrawGradientWire's miss path). Cleared here, refilled by the pin
+        // rows below, consumed by the link loop after them.
+        m_pinPivots.clear();
+
         for (Arcane::GraphNode& n : g.nodes)
             DrawGraphNode(n, lod);
 
@@ -3133,19 +3222,46 @@ namespace Arcane::Editor
         for (std::size_t i = 0; i < g.links.size(); ++i)
         {
             const Arcane::GraphLink& l = g.links[i];
-            // Wire tint = the SOURCE pin's type color, so a wire reads as the
-            // same thing its originating dot does. A dangling source (should
-            // not survive an edit, but the draw must not depend on that) falls
-            // back to the neutral dynamic color.
+            // A wire now carries BOTH its endpoints' types: source colour at
+            // the tail, destination colour at the head. That makes an adapting
+            // connection (float -> float4, or anything into a dynamic pin)
+            // legible as a transition rather than as a wire that lies about one
+            // of its ends. A dangling endpoint (should not survive an edit, but
+            // the draw must not depend on that) falls back to the neutral
+            // dynamic colour.
             const Arcane::GraphNode* src = g.FindNode(l.fromNode);
             const bool srcPinValid =
                 src && l.fromPin < Arcane::GraphNodeOutputCount(*src);
-            const ImVec4 tint =
+            const ImVec4 srcTint =
                 srcPinValid ? PinColorForWidth(
                                   Arcane::GraphNodeOutputPin(*src, l.fromPin).width)
                             : kPinDynamicColor;
-            ed::Link(ed::LinkId(i + 1), OutPin(l.fromNode, l.fromPin),
-                     InPin(l.toNode, l.toPin), tint, kWireThickness);
+
+            const Arcane::GraphNode* dst = g.FindNode(l.toNode);
+            const bool dstPinValid =
+                dst && l.toPin < Arcane::GraphNodeInputCount(*dst);
+            const ImVec4 dstTint =
+                dstPinValid ? PinColorForWidth(
+                                  Arcane::GraphNodeInputPin(*dst, l.toPin).width)
+                            : kPinDynamicColor;
+
+            const ed::LinkId linkId(i + 1);
+            const ed::PinId fromPin = OutPin(l.fromNode, l.fromPin);
+            const ed::PinId toPin   = InPin(l.toNode, l.toPin);
+
+            // Interaction only -- transparent, so the library tessellates
+            // nothing (see kLinkChannelLinks). The thickness is the real one:
+            // it is still the hit radius.
+            ed::Link(linkId, fromPin, toPin, ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+                     kWireThickness);
+
+            // GetHoveredLink reports 0 while any action is running (the
+            // m_CurrentAction guard, imgui_node_editor.cpp:1280), so a wire
+            // does not flicker bright while it is being dragged past.
+            const bool emphasize = ed::IsLinkSelected(linkId) ||
+                                   ed::GetHoveredLink() == linkId;
+            DrawGradientWire(fromPin.Get(), toPin.Get(), srcTint, dstTint,
+                             emphasize);
         }
 
         HandleGraphEdits();
@@ -3638,7 +3754,7 @@ namespace Arcane::Editor
         // while a name field has focus is exactly that gesture.
         //
         // The KIND is checked, not just the id: m_textEdit is one buffer shared
-        // with the pass canvas (ShaderEditorDocument.hpp:454-464), and
+        // with the pass canvas (ShaderEditorDocument.hpp:471-481), and
         // a PassName key carries a chain INDEX that can collide with a node id.
         //
         // Value drags need no guard -- an abandoned gesture is closed by
@@ -3842,8 +3958,11 @@ namespace Arcane::Editor
             for (std::uint32_t pin = 0; pin < Arcane::GraphNodeInputCount(n); ++pin)
             {
                 ed::BeginPin(InPin(n.id, pin), ed::PinKind::Input);
-                ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
-                ed::PinPivotSize(ImVec2(0.0f, 0.0f));
+                // Zero-size anchor: the pivot the alignment path would have
+                // produced from a zero-size rect IS the cursor, so naming it
+                // outright changes no geometry and gives the gradient wires an
+                // anchor at the one tier that has no dot to hang off.
+                SetPinPivot(InPin(n.id, pin).Get(), ImGui::GetCursorScreenPos());
                 ImGui::Dummy(ImVec2(0.0f, 0.0f));
                 ed::EndPin();
                 ImGui::SameLine(0.0f, 0.0f);
@@ -3852,8 +3971,7 @@ namespace Arcane::Editor
             for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(n); ++pin)
             {
                 ed::BeginPin(OutPin(n.id, pin), ed::PinKind::Output);
-                ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
-                ed::PinPivotSize(ImVec2(0.0f, 0.0f));
+                SetPinPivot(OutPin(n.id, pin).Get(), ImGui::GetCursorScreenPos());
                 ImGui::Dummy(ImVec2(0.0f, 0.0f));
                 ed::EndPin();
                 ImGui::SameLine(0.0f, 0.0f);
@@ -3872,15 +3990,21 @@ namespace Arcane::Editor
             // Wires land on the dot, not on the row's bounding corner: pivot at
             // the row's left edge, vertically centred, with a zero-size pivot
             // so the anchor is that single point.
-            ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
-            ed::PinPivotSize(ImVec2(0.0f, 0.0f));
             // LowDetail keeps the DOT and drops the label -- UE's split
             // exactly: the low-detail slot of a pin holds PinWidgetRef, the pin
             // icon, and drops PinContent, the label and value editor
             // (SGraphPin.cpp:354-364). The dot advances the cursor by a full
             // text line either way (DrawPinDot), so the row keeps its height
             // and the node keeps its shape across the transition.
-            DrawPinDot(PinColorForWidth(inDesc.width), pinWired(pin));
+            const ImVec2 inDot = DrawPinDot(PinColorForWidth(inDesc.width), pinWired(pin));
+            // One radius OUTBOARD of the dot's centre -- the row's left edge,
+            // which is exactly where the (0, 0.5) alignment used to put the
+            // pivot: the dot is the row's first item, so pinRect.Min.x is its
+            // left edge and the row's vertical centre is the dot's centre
+            // (the dot's dummy is the full text line height). Same point as
+            // before, now stated instead of inferred.
+            SetPinPivot(InPin(n.id, pin).Get(),
+                        ImVec2(inDot.x - kPinDotRadius, inDot.y));
             if (showPinText)
             {
                 ImGui::SameLine();
@@ -4285,14 +4409,16 @@ namespace Arcane::Editor
                                    : kPinDotRadius * 2.0f;
             RightAlignRow(contentW, rowW);
             ed::BeginPin(OutPin(n.id, pin), ed::PinKind::Output);
-            ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));   // anchor on the dot
-            ed::PinPivotSize(ImVec2(0.0f, 0.0f));
             if (showPinText)
             {
                 ImGui::TextUnformatted(outDesc.name);
                 ImGui::SameLine();
             }
-            DrawPinDot(PinColorForWidth(outDesc.width), pinFanout(pin));
+            const ImVec2 outDot = DrawPinDot(PinColorForWidth(outDesc.width), pinFanout(pin));
+            // Mirror of the input row: the dot is the row's LAST item, so the
+            // (1, 0.5) alignment's pinRect.Max.x was the dot's right edge.
+            SetPinPivot(OutPin(n.id, pin).Get(),
+                        ImVec2(outDot.x + kPinDotRadius, outDot.y));
             ed::EndPin();
         }
 
@@ -4333,6 +4459,121 @@ namespace Arcane::Editor
                     ImGui::GetColorU32(kNodeTitleColor),
                     kNodeRounding, ImDrawFlags_RoundCornersTop);
         }
+    }
+
+    void ShaderEditorDocument::SetPinPivot(std::uint64_t pinId, ImVec2 p)
+    {
+        // PinPivotRect writes Pin::m_Pivot directly and clears m_ResolvePivot
+        // (imgui_node_editor.cpp:5443-5448), so EndPin's alignment/size path
+        // (:5412-5423) is skipped and the pivot IS this point. That is the
+        // whole trick: the endpoint stops being something we infer from the
+        // row's item rect and becomes something we hand over, so the curve we
+        // draw and the curve the library hit-tests cannot drift apart.
+        //
+        // The pivot is a degenerate rect. With PinRadius and PinArrowSize both
+        // 0 and SnapLinkToPinDir off (all defaults, imgui_node_editor.h:253-259
+        // -- this document never overrides them), GetClosestLine's extents are
+        // 0 and ImRect_ClosestLine of two points returns those two points
+        // (imgui_node_editor.cpp:612-636), so Link::m_Start / m_End land
+        // exactly here.
+        ed::PinPivotRect(p, p);
+        m_pinPivots[pinId] = p;
+    }
+
+    void ShaderEditorDocument::DrawGradientWire(std::uint64_t fromPinId,
+                                                std::uint64_t toPinId,
+                                                const ImVec4& fromColor,
+                                                const ImVec4& toColor,
+                                                bool emphasize) const
+    {
+        const auto itA = m_pinPivots.find(fromPinId);
+        const auto itB = m_pinPivots.find(toPinId);
+        // A pin that did not draw this frame has no anchor. ed::Link refuses
+        // the same link for the same reason (DoLink bails on a non-live pin,
+        // imgui_node_editor.cpp:1639-1640), so drawing nothing matches what the
+        // interaction layer already decided.
+        if (itA == m_pinPivots.end() || itB == m_pinPivots.end())
+            return;
+
+        const ImVec2 p0 = itA->second;
+        const ImVec2 p3 = itB->second;
+
+        // Reproduce Link::GetCurve (imgui_node_editor.cpp:955-982) exactly.
+        // Style is READ rather than assumed, so a later LinkStrength or
+        // direction change moves our curve and the library's together.
+        const ed::Style& st = ed::GetStyle();
+        const float dx = p3.x - p0.x;
+        const float dy = p3.y - p0.y;
+        const float halfDistance = std::sqrt(dx * dx + dy * dy) * 0.5f;
+        auto ease = [halfDistance](float strength)
+        {
+            // Guarded against a zero strength the library never divides by
+            // (its own branch is only entered when halfDistance < strength,
+            // which a zero strength cannot satisfy).
+            constexpr float kPi = 3.14159265358979323846f;
+            if (strength > 0.0f && halfDistance < strength)
+                return strength * std::sin(kPi * 0.5f * halfDistance / strength);
+            return strength;
+        };
+        const float startStrength = ease(st.LinkStrength);
+        const float endStrength   = ease(st.LinkStrength);
+        const ImVec2 p1(p0.x + st.SourceDirection.x * startStrength,
+                        p0.y + st.SourceDirection.y * startStrength);
+        const ImVec2 p2(p3.x + st.TargetDirection.x * endStrength,
+                        p3.y + st.TargetDirection.y * endStrength);
+
+        const ImVec4 a = emphasize ? BrightenColor(fromColor) : fromColor;
+        const ImVec4 b = emphasize ? BrightenColor(toColor)   : toColor;
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        // Defensive: the link channels exist from Begin, but never index past
+        // a splitter that has not been grown.
+        if (dl->_Splitter._Count <= kLinkChannelLinks)
+            return;
+        const int prevChannel = dl->_Splitter._Current;
+        dl->ChannelsSetCurrent(kLinkChannelLinks);
+
+        const ImU32 colA = ImGui::GetColorU32(a);
+        if (colA == ImGui::GetColorU32(b))
+        {
+            // Same type both ends -- the overwhelmingly common case. One call,
+            // and ImGui's own adaptive tessellation, which is what the flat
+            // wire used to get (imgui_node_editor.cpp:501).
+            dl->AddBezierCubic(p0, p1, p2, p3, colA, kWireThickness);
+        }
+        else
+        {
+            // Segment count tracks the curve's length ON SCREEN, so a wire
+            // stays smooth zoomed in without spending verts zoomed out. The
+            // control polygon is a cheap upper bound on arc length.
+            auto len = [](float ax, float ay) { return std::sqrt(ax * ax + ay * ay); };
+            const float polyLen = len(p1.x - p0.x, p1.y - p0.y) +
+                                  len(p2.x - p1.x, p2.y - p1.y) +
+                                  len(p3.x - p2.x, p3.y - p2.y);
+            const float screenLen = polyLen * ViewScale();
+            const int segments = static_cast<int>(
+                (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
+
+            // Per-segment colour means per-segment stroke. Consecutive segments
+            // are near-collinear on a curve this smooth, so butt caps meet
+            // without visible notches; a shared PathStroke cannot be used
+            // because it takes ONE colour for the whole path.
+            ImVec2 prev = p0;
+            for (int i = 1; i <= segments; ++i)
+            {
+                const float t = static_cast<float>(i) / static_cast<float>(segments);
+                const ImVec2 cur = CubicBezierAt(p0, p1, p2, p3, t);
+                // Colour sampled at the segment's MIDPOINT so the two ends of
+                // the run land on the pure endpoint colours.
+                const float mid = (t + static_cast<float>(i - 1) /
+                                       static_cast<float>(segments)) * 0.5f;
+                dl->AddLine(prev, cur, ImGui::GetColorU32(LerpColor(a, b, mid)),
+                            kWireThickness);
+                prev = cur;
+            }
+        }
+
+        dl->ChannelsSetCurrent(prevChannel);
     }
 
     void ShaderEditorDocument::HandleGraphEdits()

@@ -255,6 +255,17 @@ namespace Arcane::Editor
         // inside. Passed rather than stored so there is exactly one read of the
         // zoom per frame and no way for two nodes to disagree.
         void DrawGraphNode(Arcane::GraphNode& node, NodeLOD lod);
+        // Anchor the CURRENT pin's wire endpoint at `p` (canvas space) and
+        // remember it for the frame's gradient wires. Must be called between
+        // ed::BeginPin and ed::EndPin. Takes ImVec2 by value; the id is the
+        // raw ed::PinId payload, so the header does not need the editor's types.
+        void SetPinPivot(std::uint64_t pinId, ImVec2 p);
+        // One link wire, source-pin colour at the tail blending to
+        // destination-pin colour at the head. Draws into the library's own link
+        // layer; the ed::Link submission that owns interaction is separate.
+        void DrawGradientWire(std::uint64_t fromPinId, std::uint64_t toPinId,
+                              const ImVec4& fromColor, const ImVec4& toColor,
+                              bool emphasize) const;
         void HandleGraphEdits();             // link create/delete queries (inside Begin/End)
         // Copy/paste: the clip is GraphToJson of the selected subgraph on the
         // SYSTEM clipboard -- cross-document paste falls out for free, and
@@ -425,6 +436,12 @@ namespace Arcane::Editor
         // the previous frame's -- which is stable, because aligning to width W
         // produces rows of exactly W. Cleared with the canvas on a pass switch.
         std::unordered_map<std::uint32_t, float> m_nodeWidths;
+        // THIS FRAME's wire anchor for every pin submitted, keyed by ed::PinId.
+        // Written at BeginPin/EndPin time by SetPinPivot, which hands the SAME
+        // point to ed::PinPivotRect -- so the gradient wires drawn afterwards
+        // start from the library's own endpoints instead of re-deriving them.
+        // Rebuilt every frame (positions move with the node and the view).
+        std::unordered_map<std::uint64_t, ImVec2> m_pinPivots;
         // Per-pass codegen state, indexed by CHAIN index (0 = base). Sized by
         // RegenerateFromGraph; empty entries = text-owned or clean.
         std::vector<std::vector<Arcane::GraphError>> m_passGraphErrors;
