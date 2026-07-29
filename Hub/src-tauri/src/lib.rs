@@ -561,10 +561,22 @@ fn hub_version() -> String {
 #[tauri::command]
 fn open_project(
     app: tauri::AppHandle,
-    editors: tauri::State<RunningEditors>,
     project_path: String,
     engine_path: String,
 ) -> Result<OpenOutcome, String> {
+    do_open_project(&app, project_path, engine_path)
+}
+
+// The launch core, callable from BOTH entry points: the IPC command above and
+// shell_open (a double-clicked .arcproj). One brain -- the probe, the
+// one-editor-per-project focus, the args, the wait thread -- whatever door
+// the launch came through.
+fn do_open_project(
+    app: &tauri::AppHandle,
+    project_path: String,
+    engine_path: String,
+) -> Result<OpenOutcome, String> {
+    use tauri::Manager;
     let proj = PathBuf::from(&project_path);
     let exe = engine::resolve_editor_exe(Path::new(&engine_path));
     if !proj.exists() {
@@ -588,6 +600,7 @@ fn open_project(
     // stale entry (the wait thread races this check) and launches fresh.
     let project_key = state::normalise_path(&project_path);
     {
+        let editors = app.state::<RunningEditors>();
         let mut live = editors.0.lock().unwrap();
         if let Some(&pid) = live.get(&project_key) {
             if spawn::focus_process_window(pid) {
@@ -632,18 +645,17 @@ fn open_project(
         .spawn()
         .map_err(|e| format!("could not launch the editor: {e}"))?;
 
-    editors.0.lock().unwrap().insert(project_key.clone(), child.id());
-    emit_running(&app);
+    app.state::<RunningEditors>().0.lock().unwrap().insert(project_key.clone(), child.id());
+    emit_running(app);
 
     // Hand the screen to the editor, per the configured behaviour. Checked
     // AFTER a successful spawn so a refused launch never hides the window the
     // error banner lives in. `stay` does nothing by definition.
     match settings::load().launch_behavior.as_str() {
         settings::BEHAVIOR_TRAY => {
-            let _ = tray::park(&app);
+            let _ = tray::park(app);
         }
         settings::BEHAVIOR_HIDE => {
-            use tauri::Manager;
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.hide();
             }
@@ -869,6 +881,86 @@ fn spawn_disk_watch(app: tauri::AppHandle) {
     });
 }
 
+// Route a shell-opened .arcproj (double-click, Open With, drag onto the exe)
+// through the SAME launch core a card click takes -- probe, focus-existing,
+// auto-listing via touch_recent, the lifecycle. Runs on its own thread at
+// both call sites: the probe may block up to its 10s timeout, and neither
+// setup() nor the single-instance callback may stall that long.
+//
+// Engine choice mirrors what a fresh Hub session would do: the project's pin
+// when it is listed and the pin resolves, else the first registered engine
+// (the sidebar's default selection is SESSION state, not persisted, so the
+// first engine is exactly what a new session's launch would use). No engines
+// at all -> surface the window and say so; a launcher with nothing to launch
+// with must not eat a double-click silently.
+fn shell_open(app: &tauri::AppHandle, path: &str) {
+    use tauri::Emitter;
+    let s = state::load();
+    let key = state::project_dir_key(path);
+    let pinned = s
+        .recents
+        .iter()
+        .find(|e| state::project_dir_key(&e.path) == key)
+        .and_then(|e| e.engine_id.as_ref())
+        .and_then(|id| s.engines.iter().find(|en| &en.id == id));
+    let Some(engine) = pinned.or_else(|| s.engines.first()) else {
+        tray::show_hub(app);
+        let _ = app.emit(
+            "launch-failed",
+            format!(
+                "{}: register an engine in the Hub before opening projects.",
+                project::display_name(path)
+            ),
+        );
+        return;
+    };
+    let (engine_path, engine_shown) = (engine.path.clone(), engine.build.clone());
+
+    match do_open_project(app, path.to_string(), engine_path.clone()) {
+        Ok(OpenOutcome::Launched) | Ok(OpenOutcome::Focused) => {
+            // The list may have just gained this project. The disk watcher
+            // would notice within a tick; telling the (possibly hidden but
+            // alive) frontend now keeps the list honest the moment the
+            // window comes back.
+            let _ = app.emit("state-changed", &state::load());
+        }
+        Ok(OpenOutcome::ProjectMissing) => {
+            tray::show_hub(app);
+            let _ = app.emit(
+                "launch-failed",
+                format!("{path}: the file vanished before it could open."),
+            );
+        }
+        Ok(OpenOutcome::EngineMissing) => {
+            tray::show_hub(app);
+            let _ = app.emit(
+                "launch-failed",
+                format!(
+                    "{}: {engine_shown} is no longer at {engine_path}. See Engines.",
+                    project::display_name(path)
+                ),
+            );
+        }
+        Err(e) => {
+            tray::show_hub(app);
+            let _ = app.emit("launch-failed", e);
+        }
+    }
+}
+
+/// Spawn shell_open on its own thread for an argv that carries a .arcproj.
+/// Returns whether it did, so the single-instance callback knows a plain
+/// "show me the Hub" relaunch from one that was really a file open.
+fn route_shell_args<'a>(app: &tauri::AppHandle, args: impl IntoIterator<Item = &'a str>) -> bool {
+    let Some(p) = project::arcproj_in_args(args) else {
+        return false;
+    };
+    let app = app.clone();
+    let path = p.to_string();
+    std::thread::spawn(move || shell_open(&app, &path));
+    true
+}
+
 pub fn run() {
     // Before ANY window exists: claim the taskbar family id ArcaneEditor also
     // sets, so the Hub's and every editor's buttons stack as one group.
@@ -877,11 +969,17 @@ pub fn run() {
         // FIRST plugin registered, per its own docs: it has to win the race
         // before anything else initialises. A second launch lands in this
         // callback inside the FIRST process; the new process exits on its own.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // "Show me the Hub": surface the window the user already has.
-            // While editors run the window may be hidden or parked in the
-            // tray, and relaunching the Hub is the designed way to get it
-            // back before they exit; show_hub also clears the tray icon.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // A second launch carrying a .arcproj is a FILE OPEN (the shell
+            // association route), not "show me the Hub" -- route it and leave
+            // the window wherever the launch lifecycle puts it.
+            if route_shell_args(app, args.iter().map(|s| s.as_str())) {
+                return;
+            }
+            // Otherwise: surface the window the user already has. While
+            // editors run it may be hidden or parked in the tray, and
+            // relaunching the Hub is the designed way to get it back before
+            // they exit; show_hub also clears the tray icon.
             tray::show_hub(app);
         }))
         .plugin(tauri_plugin_dialog::init())
@@ -889,6 +987,10 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             spawn_disk_watch(app.app_handle().clone());
+            // Cold start via the file association: the Hub was not running
+            // and Windows launched it with the .arcproj in argv.
+            let args: Vec<String> = std::env::args().collect();
+            route_shell_args(app.app_handle(), args.iter().map(|s| s.as_str()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

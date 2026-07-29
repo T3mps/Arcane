@@ -167,6 +167,17 @@ pub fn name_error(name: &str) -> Option<String> {
     None
 }
 
+/// The .arcproj a shell invocation carried, if any: double-clicking an
+/// associated file starts (or signals) the Hub with the file somewhere in
+/// argv. First match wins; matching on the extension alone is safe because
+/// argv[0] -- the exe path, included by both the cold-start args and the
+/// single-instance forward -- can never end in .arcproj, so no skip(1)
+/// guesswork about which shape arrived.
+pub fn arcproj_in_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    args.into_iter()
+        .find(|a| a.to_ascii_lowercase().ends_with(".arcproj"))
+}
+
 /// Directory names Duplicate never copies, at ANY depth: Binaries and
 /// Intermediate are build outputs the duplicate rebuilds from source (and
 /// they appear under Plugins/* as well as at the root, hence any-depth), and
@@ -463,6 +474,18 @@ mod tests {
         // relaxed without this failing.
         assert!(name_error("..").is_some());
         assert!(name_error(".").is_some());
+    }
+
+    #[test]
+    fn arcproj_in_args_finds_the_file_wherever_it_sits() {
+        assert_eq!(
+            arcproj_in_args(["C:\\hub\\arcane_hub.exe", "D:\\G\\My.arcproj"]),
+            Some("D:\\G\\My.arcproj"),
+            "the exe in argv[0] must never shadow the file"
+        );
+        assert_eq!(arcproj_in_args(["D:/G/My.ARCPROJ"]), Some("D:/G/My.ARCPROJ"));
+        assert_eq!(arcproj_in_args(["C:\\hub\\arcane_hub.exe"]), None);
+        assert_eq!(arcproj_in_args([]), None);
     }
 
     #[test]

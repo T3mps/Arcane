@@ -27,6 +27,13 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "fileAssociations": [
+      {
+        "ext": ["arcproj"],
+        "name": "Arcane Project",
+        "description": "Arcane Engine project"
+      }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
