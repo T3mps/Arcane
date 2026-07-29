@@ -12,6 +12,11 @@
 
 #include <cstdio>
 
+#ifdef _WIN32
+#include <shobjidl.h>
+#pragma comment(lib, "shell32.lib")
+#endif
+
 int main(int argc, char** argv)
 {
     Arcane::Log::Init();
@@ -32,6 +37,18 @@ int main(int argc, char** argv)
         std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
         return 0;
     }
+
+#ifdef _WIN32
+    // One taskbar family. Windows groups taskbar buttons by AppUserModelID,
+    // NOT by process parentage, so the editor claims the same id the Arcane
+    // Hub sets and their buttons stack under one group -- whether this
+    // process was spawned by the Hub or double-clicked directly. Must run
+    // before the first window exists, hence here and not in EditorApp.
+    // Deliberately unconditional rather than an --appid flag: a flag would
+    // make an older editor build reject the unknown argument at launch.
+    // AFTER the probe on purpose -- the probe pays for nothing it can skip.
+    SetCurrentProcessExplicitAppUserModelID(L"com.starworks.arcanehub");
+#endif
 
     // No project and no explicit plugin. A SCRIPTED run (--frames N) still
     // refuses: it cannot answer a dialog, and booting project-less used to mean a
