@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
-  isCompatible, filterProjects, coverFor,
+  isCompatible, filterProjects, coverFor, sortProjects, nextSort,
   projectKey, projectDir, projectNameError, projectPathPreview, resolveEngine,
   engineChipText, engineChipTitle, compatibilityNote, missingNote, menuItemsFor,
+  type SortKey,
 } from "./format";
 
 describe("isCompatible", () => {
@@ -54,6 +55,76 @@ describe("filterProjects", () => {
     const copy = [...items];
     filterProjects(items, "aphel");
     expect(items).toEqual(copy);
+  });
+});
+
+describe("sortProjects", () => {
+  // Recency-ordered input, the shape the Rust recents Vec arrives in.
+  const p = (name: string, opened: string, abi: number, favorite = false, engine = "E") => ({
+    name, lastOpenedUtc: opened, engineAbi: abi, favorite, engine,
+  });
+  const byEngine = (x: { engine: string }) => x.engine;
+
+  it("favorites sit above the rest whatever the sort", () => {
+    const items = [p("B", "300", 2), p("A", "200", 1), p("Z", "100", 3, true)];
+    for (const key of ["opened", "name", "abi", "engine"] as SortKey[]) {
+      expect(sortProjects(items, key, false, byEngine)[0].name).toBe("Z");
+    }
+  });
+  it("opened compares numerically, not lexicographically", () => {
+    // "999" > "1000" as strings -- the trap this test pins.
+    const items = [p("Old", "999", 1), p("New", "1000", 1)];
+    expect(sortProjects(items, "opened", true, byEngine).map((i) => i.name))
+      .toEqual(["New", "Old"]);
+  });
+  it("a never-opened stamp sorts as oldest", () => {
+    const items = [p("Never", "never", 1), p("Once", "50", 1)];
+    expect(sortProjects(items, "opened", true, byEngine)[0].name).toBe("Once");
+  });
+  it("name sorts case-insensitively both directions", () => {
+    const items = [p("banana", "1", 1), p("Apple", "2", 1)];
+    expect(sortProjects(items, "name", false, byEngine).map((i) => i.name))
+      .toEqual(["Apple", "banana"]);
+    expect(sortProjects(items, "name", true, byEngine).map((i) => i.name))
+      .toEqual(["banana", "Apple"]);
+  });
+  it("abi sorts numerically", () => {
+    const items = [p("Ten", "1", 10), p("Two", "2", 2)];
+    expect(sortProjects(items, "abi", false, byEngine).map((i) => i.name))
+      .toEqual(["Two", "Ten"]);
+  });
+  it("engine sorts by the injected label", () => {
+    const items = [
+      p("A", "1", 1, false, "Zeta build"),
+      p("B", "2", 1, false, "Alpha build"),
+    ];
+    expect(sortProjects(items, "engine", false, byEngine).map((i) => i.name))
+      .toEqual(["B", "A"]);
+  });
+  it("ties keep their incoming recency order", () => {
+    const items = [p("First", "9", 5), p("Second", "8", 5)];
+    expect(sortProjects(items, "abi", false, byEngine).map((i) => i.name))
+      .toEqual(["First", "Second"]);
+  });
+  it("does not mutate the input array", () => {
+    const items = [p("B", "1", 1), p("A", "2", 2)];
+    const copy = [...items];
+    sortProjects(items, "name", false, byEngine);
+    expect(items).toEqual(copy);
+  });
+});
+
+describe("nextSort", () => {
+  it("clicking the active column flips direction", () => {
+    expect(nextSort("name", false, "name")).toEqual({ key: "name", desc: true });
+    expect(nextSort("name", true, "name")).toEqual({ key: "name", desc: false });
+  });
+  it("a new column starts at its natural direction", () => {
+    // Opened: newest first. Everything else: ascending.
+    expect(nextSort("name", true, "opened")).toEqual({ key: "opened", desc: true });
+    expect(nextSort("opened", true, "name")).toEqual({ key: "name", desc: false });
+    expect(nextSort("opened", true, "abi")).toEqual({ key: "abi", desc: false });
+    expect(nextSort("opened", true, "engine")).toEqual({ key: "engine", desc: false });
   });
 });
 

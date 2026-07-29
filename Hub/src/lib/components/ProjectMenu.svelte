@@ -10,6 +10,9 @@
   // is exactly the drift this collapses away).
   export type ProjectActions = {
     launch: (p: RecentProject) => void;
+    /** Star/unstar. Not a menu item -- the star control on card and row IS
+     * the affordance; this rides the vocabulary so both layouts share it. */
+    toggleFavorite: (p: RecentProject) => void;
     /** Open the pin-an-engine picker for this project. */
     changeEngine: (p: RecentProject) => void;
     reveal: (p: RecentProject) => void;

@@ -44,6 +44,14 @@ pub struct RecentProject {
     #[serde(default)]
     pub args: String,
 
+    /// Starred: the frontend pins favourites above the rest of the list,
+    /// whatever the active sort (the Godot model -- starring visibly
+    /// promotes). Persisted, unlike `missing`: a favourite is a user choice,
+    /// not a disk fact. `#[serde(default)]` so every pre-favourites file
+    /// loads unstarred.
+    #[serde(default)]
+    pub favorite: bool,
+
     /// True when `path` no longer resolves on disk -- the row renders greyed
     /// with Locate/Remove instead of vanishing (a missing project is usually a
     /// moved folder, not an abandoned one). Stamped by `load` on EVERY read,
@@ -133,15 +141,17 @@ pub fn touch_recent(v: &mut Vec<RecentProject>, mut entry: RecentProject) {
     // set_project_args, which edits the entry in place, so an empty string
     // arriving HERE always means "the caller had nothing to say", never
     // "the user emptied the field".
-    if entry.engine_id.is_none() || entry.args.is_empty() {
-        if let Some(prev) = v.iter().find(|e| normalise_path(&e.path) == key) {
-            if entry.engine_id.is_none() {
-                entry.engine_id.clone_from(&prev.engine_id);
-            }
-            if entry.args.is_empty() {
-                entry.args.clone_from(&prev.args);
-            }
+    if let Some(prev) = v.iter().find(|e| normalise_path(&e.path) == key) {
+        if entry.engine_id.is_none() {
+            entry.engine_id.clone_from(&prev.engine_id);
         }
+        if entry.args.is_empty() {
+            entry.args.clone_from(&prev.args);
+        }
+        // A launch is never an unfavourite: the fresh entry knows nothing
+        // about the star, so the previous value always wins. |= rather than
+        // an if: unstarring is set_favorite's job, which edits in place.
+        entry.favorite |= prev.favorite;
     }
 
     v.retain(|e| normalise_path(&e.path) != key);
@@ -154,6 +164,20 @@ pub fn set_project_args(v: &mut [RecentProject], path: &str, args: &str) -> bool
     match v.iter_mut().find(|e| normalise_path(&e.path) == key) {
         Some(e) => {
             e.args = args.to_string();
+            true
+        }
+        None => false,
+    }
+}
+
+/// Star or unstar one project IN PLACE -- no reorder: favouriting pins the
+/// entry above the rest visually (the frontend partitions), it does not
+/// pretend the project was just opened. False if it is not listed.
+pub fn set_favorite(v: &mut [RecentProject], path: &str, favorite: bool) -> bool {
+    let key = normalise_path(path);
+    match v.iter_mut().find(|e| normalise_path(&e.path) == key) {
+        Some(e) => {
+            e.favorite = favorite;
             true
         }
         None => false,
@@ -321,6 +345,7 @@ mod tests {
             engine_abi: 7,
             engine_id: None,
             args: String::new(),
+            favorite: false,
             missing: false,
         }
     }
@@ -561,6 +586,51 @@ mod tests {
         assert_eq!(v[0].engine_id.as_deref(), Some("eng-1"), "the pin must survive");
         assert_eq!(v[0].args, "--frames 3", "the arguments must survive");
         assert_eq!(v[0].last_opened_utc, "1", "locating is not opening");
+    }
+
+    #[test]
+    fn touch_recent_preserves_a_favorite() {
+        // Same carry class as the pin and the arguments: open_project builds a
+        // fresh entry that knows nothing about the star, and a LAUNCH must
+        // never read as an unfavourite.
+        let mut v = vec![rp("C:/Games/A/A.arcproj", "1")];
+        v[0].favorite = true;
+        touch_recent(&mut v, rp("C:/Games/A/A.arcproj", "2"));
+        assert!(v[0].favorite, "launching must not unstar");
+    }
+
+    #[test]
+    fn set_favorite_stars_and_unstars_in_place() {
+        let mut v = vec![rp("C:/Games/A/A.arcproj", "2"), rp("C:/Games/B/B.arcproj", "1")];
+        assert!(set_favorite(&mut v, "C:/Games/B/B.arcproj", true));
+        assert!(v[1].favorite);
+        assert_eq!(v[0].path, "C:/Games/A/A.arcproj", "starring must not reorder");
+        assert!(set_favorite(&mut v, "C:/Games/B/B.arcproj", false));
+        assert!(!v[1].favorite);
+        assert!(!set_favorite(&mut v, "C:/Games/None.arcproj", true), "unknown path is a miss");
+    }
+
+    #[test]
+    fn a_recents_file_written_before_favorites_existed_loads_unstarred() {
+        let back: Vec<RecentProject> = serde_json::from_str(
+            r#"[{"path":"C:/Games/A/A.arcproj","name":"A","lastOpenedUtc":"1","engineAbi":7}]"#,
+        )
+        .unwrap();
+        assert!(!back[0].favorite);
+    }
+
+    #[test]
+    fn relocate_recent_keeps_the_favorite() {
+        let mut v = vec![rp("C:/Games/Old/Old.arcproj", "1")];
+        v[0].favorite = true;
+        assert!(relocate_recent(
+            &mut v,
+            "C:/Games/Old/Old.arcproj",
+            "D:/Elsewhere/Old/Old.arcproj",
+            "Old",
+            8,
+        ));
+        assert!(v[0].favorite, "moving a folder does not change what the user starred");
     }
 
     #[test]

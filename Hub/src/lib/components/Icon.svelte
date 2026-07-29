@@ -10,7 +10,7 @@
   //
   // Path data only, no <rect>/<circle>, so one loop renders every icon.
   export type IconName =
-    "folder" | "box" | "layers" | "gear" | "grid" | "list" | "x" | "ellipsis";
+    "folder" | "box" | "layers" | "gear" | "grid" | "list" | "x" | "ellipsis" | "star";
 
   const PATHS: Record<IconName, string[]> = {
     folder: [
@@ -47,6 +47,11 @@
     // window control has to match Windows, an in-app control has to match the
     // other in-app icons.
     x: ["M18 6 6 18", "m6 6 12 12"],
+    // Favorite. The filled state is CSS (`fill: currentColor` on the button's
+    // `.on` class), so one path serves both.
+    star: [
+      "M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z",
+    ],
     // Lucide draws MoreHorizontal as three circles; these are zero-length
     // strokes with the round linecap this file already sets, which renders the
     // same three dots through the one path loop.

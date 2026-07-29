@@ -1,7 +1,7 @@
 // Typed wrappers over the Rust commands. Keeping the invoke strings in one
 // place means a renamed command breaks here, not in a component.
 import { invoke } from "@tauri-apps/api/core";
-import type { ProjectView } from "$lib/format";
+import type { ProjectView, SortKey } from "$lib/format";
 
 export type RecentProject = {
   path: string;
@@ -12,6 +12,8 @@ export type RecentProject = {
   engineId: string | null;
   /** Extra launch arguments, as typed. Empty = none. Split Rust-side at launch. */
   args: string;
+  /** Starred: sortProjects pins favourites above the rest, whatever the sort. */
+  favorite: boolean;
   /**
    * The recorded path no longer resolves on disk. Stamped Rust-side on every
    * load, so it is a fact about right now, not about when the file was saved.
@@ -62,6 +64,13 @@ export type Settings = {
    * load and save, so it is always one of the two -- never a stray string.
    */
   projectView: ProjectView;
+  /**
+   * Sort column for the project list, normalised Rust-side like projectView.
+   * Favourites sit above the rest whatever this says (sortProjects).
+   */
+  projectSort: SortKey;
+  /** Direction, kept separate so flipping never loses the column. */
+  projectSortDesc: boolean;
   /** Show the confirmation dialog before deleting. Read in the delete handler. */
   confirmDelete: boolean;
 };
@@ -87,6 +96,9 @@ export const clearRecents = () => invoke<void>("clear_recents");
 /** Pin a project to an engine, or pass null to send it back to the default. */
 export const setProjectEngine = (path: string, engineId: string | null) =>
   invoke<void>("set_project_engine", { path, engineId });
+/** Star or unstar a project. Favourites render above the rest of the list. */
+export const setProjectFavorite = (path: string, favorite: boolean) =>
+  invoke<void>("set_project_favorite", { path, favorite });
 export const suggestEngine = () => invoke<EngineEntry | null>("suggest_engine");
 /** Extra arguments appended after `--project <path>` for this project only. */
 export const setProjectArgs = (path: string, args: string) =>

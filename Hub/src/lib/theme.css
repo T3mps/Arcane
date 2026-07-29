@@ -85,13 +85,13 @@
      included, rather than starting below it. */
   --h-titlebar: 44px;
 
-  /* Project list columns: Name | Opened | Engine | ABI | remove.
+  /* Project list columns: star | Name | Opened | Engine | ABI | menu.
      Shared by the header strip in ProjectsView and by every ProjectRow --
      two components drawing one table, so the track list and the gap have to be
      one value each or the labels drift off the data the first time either
      side changes. minmax(0, 1fr) on the name lets a long path shrink the
      cell instead of widening the whole grid. */
-  --cols-project: minmax(0, 1fr) 78px 170px 62px 26px;
+  --cols-project: 20px minmax(0, 1fr) 78px 170px 62px 26px;
   --gap-project: 12px;
 
   --dur: 200ms; --ease: cubic-bezier(.22, .61, .36, 1);

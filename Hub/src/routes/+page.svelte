@@ -16,12 +16,12 @@
   import RenameProjectModal from "$lib/components/RenameProjectModal.svelte";
   import DeleteProjectModal from "$lib/components/DeleteProjectModal.svelte";
   import ProjectArgsModal from "$lib/components/ProjectArgsModal.svelte";
-  import { resolveEngine } from "$lib/format";
+  import { nextSort, resolveEngine } from "$lib/format";
   import {
     loadState, refreshEngines, registerEngine, forgetEngine, deleteProject,
     forgetProject, clearRecents,
     openProject, createProject, suggestEngine, setProjectEngine,
-    setProjectArgs, revealProject, renameProject, relocateProject,
+    setProjectFavorite, setProjectArgs, revealProject, renameProject, relocateProject,
     loadSettings, saveSettings, defaultDialogDir,
     hubDataDir, revealHubDataDir, hubVersion,
     type HubState, type EngineEntry, type RecentProject, type Settings,
@@ -46,7 +46,7 @@
   let view = $state<View>("projects");
   let settings = $state<Settings>({
     defaultProjectDir: "", launchBehavior: "tray", projectView: "grid",
-    confirmDelete: true,
+    projectSort: "opened", projectSortDesc: true, confirmDelete: true,
   });
   let hubDir = $state("");
   let version = $state("");
@@ -318,6 +318,7 @@
   // temporal dead zone.
   const projectActions: ProjectActions = {
     launch,
+    toggleFavorite: (p) => guard(() => setProjectFavorite(p.path, !p.favorite)),
     changeEngine: (p) => (modal = { kind: "engine", p }),
     reveal: (p) => guard(() => revealProject(p.path)),
     rename: (p) => (modal = { kind: "rename", p }),
@@ -363,9 +364,14 @@
                       defaultEngine={selectedEngine} busy={busyUi}
                       layout={settings.projectView}
                       confirmDelete={settings.confirmDelete}
+                      sort={settings.projectSort} sortDesc={settings.projectSortDesc}
                       actions={projectActions}
                       onOpen={addProject} onNew={() => (modal = { kind: "new" })}
-                      onLayout={(v) => applySettings({ ...settings, projectView: v })} />
+                      onLayout={(v) => applySettings({ ...settings, projectView: v })}
+                      onSort={(k) => {
+                        const n = nextSort(settings.projectSort, settings.projectSortDesc, k);
+                        applySettings({ ...settings, projectSort: n.key, projectSortDesc: n.desc });
+                      }} />
       {:else if view === "engines"}
         <EnginesView engines={hub.engines} selected={selectedEngine} {suggestion}
                      busy={busyUi} actions={engineActions} />

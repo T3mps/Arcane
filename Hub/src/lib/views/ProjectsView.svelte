@@ -5,25 +5,30 @@
   import ProjectRow from "$lib/components/ProjectRow.svelte";
   import type { ProjectActions } from "$lib/components/ProjectMenu.svelte";
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
-  import { filterProjects, isCompatible, resolveEngine, type ProjectView } from "$lib/format";
+  import { filterProjects, isCompatible, resolveEngine, sortProjects,
+           type ProjectView, type SortKey } from "$lib/format";
   import type { EngineEntry, RecentProject } from "$lib/api";
 
   // Both dialogs are owned by +page.svelte, not by this view: they are
   // app-level overlays that have to sit above the error banner, and +page is
   // the only stateful file by design.
   let { recents, engines, defaultEngine, busy, layout, confirmDelete,
-        actions, onOpen, onNew, onLayout }:
+        sort, sortDesc, actions, onOpen, onNew, onLayout, onSort }:
     {
       recents: RecentProject[]; engines: EngineEntry[];
       defaultEngine: EngineEntry | null; busy: boolean;
       layout: ProjectView;
       /** Passed straight through to the action menu, which labels Delete by it. */
       confirmDelete: boolean;
+      /** Active sort column + direction, persisted in settings like `layout`. */
+      sort: SortKey; sortDesc: boolean;
       /** The whole per-project vocabulary, forwarded untouched to card/row/menu. */
       actions: ProjectActions;
       /** View-level actions stay individual props: they are not per-project. */
       onOpen: () => void; onNew: () => void;
       onLayout: (v: ProjectView) => void;
+      /** A column was clicked/picked; +page owns the flip-or-switch rule. */
+      onSort: (k: SortKey) => void;
     } = $props();
 
   // Both layouts take the SAME props, so switching is a component swap rather
@@ -40,7 +45,22 @@
   const resolvedFor = (p: RecentProject) =>
     resolveEngine(p.engineId, engines, defaultEngine);
 
-  const shown = $derived(filterProjects(recents, query));
+  // The four sortable columns. The list layout renders them as clickable
+  // headers; the grid, which has no columns, gets the same choices as a
+  // compact picker in the meta row -- one sort, two controls.
+  const COLS: { key: SortKey; label: string }[] = [
+    { key: "name", label: "Name" },
+    { key: "opened", label: "Opened" },
+    { key: "engine", label: "Engine" },
+    { key: "abi", label: "ABI" },
+  ];
+
+  // Sorting by engine orders by what the card actually SAYS -- the resolved
+  // build label -- not by some internal id the user never sees.
+  const engineLabelOf = (p: RecentProject) => resolvedFor(p).engine?.build ?? "";
+  const shown = $derived(
+    sortProjects(filterProjects(recents, query), sort, sortDesc, engineLabelOf),
+  );
   const incompatible = $derived(
     recents.filter((p) => {
       const r = resolveEngine(p.engineId, engines, defaultEngine);
@@ -76,6 +96,25 @@
       {incompatible === 1 ? "needs" : "need"} a different engine{/if}
     {#if missing > 0}&middot; {missing} missing{/if}
   </p>
+  <!-- The grid's sort control: the same four choices the list's headers
+       offer, because the grid has no columns to click. The select switches
+       column (a new column starts at its natural direction); the button
+       beside it states the current direction and flips it -- onSort with the
+       ACTIVE key is the flip, per nextSort's header-click semantics. -->
+  {#if layout === "grid"}
+    <div class="sorter">
+      <select value={sort} aria-label="Sort projects by"
+              onchange={(e) => onSort(e.currentTarget.value as SortKey)}>
+        {#each COLS as c (c.key)}<option value={c.key}>{c.label}</option>{/each}
+      </select>
+      <button type="button" class="dirbtn" onclick={() => onSort(sort)}
+              title={sortDesc ? "Sorted descending -- click for ascending"
+                             : "Sorted ascending -- click for descending"}
+              aria-label={sortDesc ? "Sort ascending" : "Sort descending"}>
+        {sortDesc ? "▼" : "▲"}
+      </button>
+    </div>
+  {/if}
   <!-- aria-current, matching Sidebar and EngineRow: this is "which of a
        mutually exclusive set is active", not an independently pressable
        toggle. One vocabulary for one meaning across the app. -->
@@ -94,13 +133,23 @@
 {:else if shown.length === 0}
   <EmptyState title="No matches" body={`Nothing matches "${query}".`} />
 {:else}
-  <!-- Column labels for the list layout, on the same track list as the rows.
-       aria-hidden because this is not a real table: each row's controls already
-       carry a full accessible name ("Engine for X: Default: ..."), so announcing
-       these words as well would read the header of every column twice over. -->
+  <!-- Column headers for the list layout, on the same track list as the rows.
+       Real buttons now that they sort -- each carries its own "Sort by" label,
+       so the old aria-hidden (added when these were decorative text) is gone
+       with the decoration. The leading and trailing spans hold the star and
+       menu tracks. -->
   {#if layout === "list"}
-    <div class="cols" aria-hidden="true">
-      <span>Name</span><span>Opened</span><span>Engine</span><span>ABI</span><span></span>
+    <div class="cols">
+      <span></span>
+      {#each COLS as c (c.key)}
+        <button type="button" class="col" class:on={sort === c.key}
+                onclick={() => onSort(c.key)}
+                title="Sort by {c.label}" aria-label="Sort by {c.label}">
+          {c.label}{#if sort === c.key}<span class="dir"
+            aria-hidden="true">{sortDesc ? "▼" : "▲"}</span>{/if}
+        </button>
+      {/each}
+      <span></span>
     </div>
   {/if}
 
@@ -166,9 +215,32 @@
   .cols { display: grid; grid-template-columns: var(--cols-project);
           gap: var(--gap-project); align-items: center; padding: 0 12px 8px;
           border-bottom: 1px solid var(--border-soft); }
-  .cols span { font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase;
-               color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
-               white-space: nowrap; }
+  /* The header buttons keep the micro-caps the labels always had; being
+     buttons adds only the hover brightening and the direction mark. Negative
+     margin lets the hit area overhang the track without indenting the text,
+     the same trick the row's engine chip uses. */
+  .col { display: flex; align-items: center; gap: 5px; min-width: 0;
+         margin: 0 -6px; padding: 2px 6px; background: none; border: 0;
+         border-radius: 4px; font: inherit; font-size: 10.5px;
+         letter-spacing: .13em; text-transform: uppercase;
+         color: var(--text-dim); cursor: default; text-align: left;
+         overflow: hidden; white-space: nowrap;
+         transition: color var(--dur) var(--ease); }
+  .col:hover { color: var(--text-muted); }
+  .col.on { color: var(--text); }
+  .dir { font-size: 8px; }
+
+  .sorter { display: flex; align-items: center; gap: 2px; padding: 2px;
+            background: var(--well); border: 1px solid var(--border);
+            border-radius: var(--r-btn); }
+  .sorter select { background: none; border: 0; color: var(--text-muted);
+                   font: inherit; font-size: 12px; padding: 2px 4px; }
+  .sorter select:focus { outline: none; color: var(--text); }
+  .dirbtn { display: grid; place-items: center; width: 26px; height: 24px;
+            background: none; border: 0; border-radius: 5px; font-size: 9px;
+            color: var(--text-dim); cursor: default;
+            transition: color var(--dur) var(--ease), background var(--dur) var(--ease); }
+  .dirbtn:hover { color: var(--text); background: rgba(255, 255, 255, .05); }
 
   /* Separating adjacent rows is the list's job, not a row's: a row cannot see
      whether it has a neighbour, and `+` between two neighbours leaves the last

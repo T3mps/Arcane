@@ -191,6 +191,16 @@ fn delete_project(path: String) -> Result<(), String> {
     state::save(&s)
 }
 
+// Star or unstar a project. The frontend pins favourites above the rest.
+#[tauri::command]
+fn set_project_favorite(path: String, favorite: bool) -> Result<(), String> {
+    let mut s = state::load();
+    if !state::set_favorite(&mut s.recents, &path, favorite) {
+        return Err(format!("'{path}' is not in the project list"));
+    }
+    state::save(&s)
+}
+
 // Extra arguments appended after `--project <path>` when this project launches.
 #[tauri::command]
 fn set_project_args(path: String, args: String) -> Result<(), String> {
@@ -372,6 +382,8 @@ fn save_settings(settings: settings::Settings) -> Result<(), String> {
     settings::save(&settings::Settings {
         default_project_dir: settings::clean_dir(&settings.default_project_dir),
         project_view: settings::clean_view(&settings.project_view),
+        launch_behavior: settings::clean_behavior(&settings.launch_behavior),
+        project_sort: settings::clean_sort(&settings.project_sort),
         ..settings
     })
 }
@@ -595,6 +607,9 @@ fn open_project(
             // Empty for the same reason: touch_recent carries the saved
             // arguments across, so launching never wipes them.
             args: String::new(),
+            // False for the same reason: touch_recent ORs the previous star
+            // in, so launching never unstars.
+            favorite: false,
             // The project was just found on disk to launch; load() re-stamps
             // this on every read regardless.
             missing: false,
@@ -709,6 +724,7 @@ pub fn run() {
             relocate_project,
             clear_recents,
             set_project_engine,
+            set_project_favorite,
             set_project_args,
             reveal_project,
             rename_project,

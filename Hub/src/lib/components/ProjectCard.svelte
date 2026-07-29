@@ -1,5 +1,6 @@
 <script lang="ts">
   import ProjectMenu, { type ProjectActions } from "$lib/components/ProjectMenu.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { coverFor, engineChipText, engineChipTitle, compatibilityNote,
            missingNote, projectDir } from "$lib/format";
   import { since, type RecentProject } from "$lib/api";
@@ -72,6 +73,19 @@
       </span>
     </button>
 
+    <!-- Same reveal contract as the tile's menu: hidden until the card is
+         hovered, except a STARRED star stays visible -- it is information
+         then, not just a control. Not gated on `disabled`/`gone`: starred is
+         Hub state, not a fact about the project's disk, and guard() already
+         drops mid-action clicks. -->
+    <button class="star" type="button" class:on={project.favorite}
+            onclick={() => actions.toggleFavorite(project)}
+            aria-pressed={project.favorite}
+            title={project.favorite ? "Unfavorite" : "Favorite"}
+            aria-label="{project.favorite ? 'Unfavorite' : 'Favorite'} {project.name}">
+      <Icon name="star" size={13} />
+    </button>
+
     <!-- The SAME action menu the list row uses, so both layouts offer the same
          things. In flow at the end of the header rather than floating over the
          card: absolutely positioned, it sat on top of whatever the name line
@@ -142,6 +156,17 @@
   .meta { display: flex; justify-content: space-between; align-items: center;
           gap: 8px; padding: 9px 13px 10px; font-family: var(--font-mono);
           font-size: 11px; color: var(--text-dim); }
+
+  /* Same reveal-and-fill treatment as the list row's star (see ProjectRow):
+     invisible until the card is hovered, always on once starred. */
+  .star { flex: none; display: grid; place-items: center; width: 22px; height: 22px;
+          padding: 0; background: none; border: 0; border-radius: 4px;
+          color: var(--text-dim); opacity: 0; cursor: default;
+          transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease); }
+  .card:hover .star, .star:focus-visible { opacity: 1; }
+  .star:hover { color: var(--text); }
+  .star.on { opacity: 1; color: var(--text-bright); }
+  .star.on :global(svg) { fill: currentColor; }
 
   /* INERT: surfaces drop back, name recedes to muted (5.9:1). The tile CAN dim
      its surface where the flat list row cannot -- there the surface carries

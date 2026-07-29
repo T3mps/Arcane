@@ -1,5 +1,6 @@
 <script lang="ts">
   import ProjectMenu, { type ProjectActions } from "$lib/components/ProjectMenu.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { engineChipText, engineChipTitle, compatibilityNote, missingNote,
            projectDir } from "$lib/format";
   import { since, type RecentProject } from "$lib/api";
@@ -46,6 +47,20 @@
      modal scrim and WindowChrome's double-click-to-maximize. -->
 <div class="row" class:incompat={!compatible && !gone} class:gone
      oncontextmenu={(e) => { e.preventDefault(); menu.openAt(e.clientX, e.clientY); }}>
+  <!-- First column so the stars line up down the page, the way a favorites
+       column reads in every list that has one. Enabled even on a gone row
+       (starred is Hub state, not a disk fact) and not gated on `disabled`
+       either -- guard()'s re-entry gate already drops a mid-action click,
+       and a star that dims with the launch controls would look related to
+       launchability, which it is not. -->
+  <button class="star" type="button" class:on={project.favorite}
+          onclick={() => actions.toggleFavorite(project)}
+          aria-pressed={project.favorite}
+          title={project.favorite ? "Unfavorite" : "Favorite"}
+          aria-label="{project.favorite ? 'Unfavorite' : 'Favorite'} {project.name}">
+    <Icon name="star" size={13} />
+  </button>
+
   <button class="hit" type="button" disabled={disabled || gone}
           onclick={() => actions.launch(project)}
           title={gone ? missingNote(project.path) : why} aria-label={project.name}>
@@ -144,4 +159,17 @@
   /* The action menu occupies the last column. It is always visible here, unlike
      the tile's hover-reveal: a row has room, and a control that appears only on
      hover is undiscoverable in a dense list. */
+
+  /* Unstarred is BARELY there until the row is hovered -- a column of dim
+     outlines would be noise on a list where most rows are not favourites --
+     but starred stays on at full presence, because the star then carries
+     meaning. Filled via CSS so one icon path serves both states. */
+  .star { display: grid; place-items: center; width: 20px; height: 20px;
+          margin: 0 -2px; padding: 0; background: none; border: 0;
+          border-radius: 4px; color: var(--text-dim); opacity: 0; cursor: default;
+          transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease); }
+  .row:hover .star, .star:focus-visible { opacity: 1; }
+  .star:hover { color: var(--text); }
+  .star.on { opacity: 1; color: var(--text-bright); }
+  .star.on :global(svg) { fill: currentColor; }
 </style>

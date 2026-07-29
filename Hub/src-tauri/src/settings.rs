@@ -20,6 +20,23 @@ pub const BEHAVIOR_TRAY: &str = "tray";
 pub const BEHAVIOR_HIDE: &str = "hide";
 pub const BEHAVIOR_STAY: &str = "stay";
 
+pub const SORT_OPENED: &str = "opened";
+pub const SORT_NAME: &str = "name";
+pub const SORT_ENGINE: &str = "engine";
+pub const SORT_ABI: &str = "abi";
+
+/// Normalise the project-list sort column, defaulting anything unrecognised
+/// to last-opened. Same String-with-normaliser reasoning as `clean_view`.
+pub fn clean_sort(v: &str) -> String {
+    let t = v.trim();
+    for k in [SORT_NAME, SORT_ENGINE, SORT_ABI] {
+        if t.eq_ignore_ascii_case(k) {
+            return k.to_string();
+        }
+    }
+    SORT_OPENED.to_string()
+}
+
 /// Normalise the after-launch behaviour, defaulting anything unrecognised to
 /// the tray. Same String-with-normaliser reasoning as `clean_view`: a serde
 /// enum fails the whole document on an unknown variant, and a settings file
@@ -87,6 +104,20 @@ pub struct Settings {
     #[serde(default = "default_view")]
     pub project_view: String,
 
+    /// Which column orders the project list: `opened` (default) | `name` |
+    /// `engine` | `abi`. Set by clicking a column header (list layout) or the
+    /// sort control (grid); favourites always sit above the rest whatever
+    /// this says -- the partition is the frontend's job (format.ts
+    /// sortProjects). Always normalised through `clean_sort`.
+    #[serde(default = "default_sort")]
+    pub project_sort: String,
+
+    /// Sort direction, persisted separately so flipping never loses the
+    /// column. `default = "yes"` because the default column is `opened` and
+    /// newest-first is the only order a launcher's recents make sense in.
+    #[serde(default = "yes")]
+    pub project_sort_desc: bool,
+
     /// Ask before deleting a project. Read in `+page.svelte`'s delete handler,
     /// which skips straight to `delete_project` when this is off.
     ///
@@ -108,6 +139,10 @@ fn default_behavior() -> String {
     BEHAVIOR_TRAY.to_string()
 }
 
+fn default_sort() -> String {
+    SORT_OPENED.to_string()
+}
+
 fn yes() -> bool {
     true
 }
@@ -118,6 +153,8 @@ impl Default for Settings {
             default_project_dir: String::new(),
             launch_behavior: default_behavior(),
             project_view: default_view(),
+            project_sort: default_sort(),
+            project_sort_desc: yes(),
             confirm_delete: yes(),
         }
     }
@@ -151,6 +188,7 @@ pub fn load() -> Settings {
     Settings {
         project_view: clean_view(&s.project_view),
         launch_behavior: clean_behavior(&s.launch_behavior),
+        project_sort: clean_sort(&s.project_sort),
         ..s
     }
 }
@@ -169,7 +207,20 @@ mod tests {
         assert_eq!(s.default_project_dir, "");
         assert_eq!(s.launch_behavior, BEHAVIOR_TRAY, "the tray is the designed default");
         assert_eq!(s.project_view, VIEW_GRID, "the grid is what shipped first");
+        assert_eq!(s.project_sort, SORT_OPENED, "recents order by recency until asked otherwise");
+        assert!(s.project_sort_desc, "newest first is the only sensible recents default");
         assert!(s.confirm_delete, "deleting has always asked first");
+    }
+
+    #[test]
+    fn clean_sort_accepts_the_four_columns_and_defaults_the_rest() {
+        assert_eq!(clean_sort(SORT_OPENED), SORT_OPENED);
+        assert_eq!(clean_sort(SORT_NAME), SORT_NAME);
+        assert_eq!(clean_sort(SORT_ENGINE), SORT_ENGINE);
+        assert_eq!(clean_sort(SORT_ABI), SORT_ABI);
+        assert_eq!(clean_sort("  Name "), SORT_NAME, "trimmed and case-folded");
+        assert_eq!(clean_sort("stars"), SORT_OPENED, "unknown falls back");
+        assert_eq!(clean_sort(""), SORT_OPENED, "so does a pre-field file");
     }
 
     #[test]
@@ -236,6 +287,8 @@ mod tests {
             default_project_dir: "D:/Games".to_string(),
             launch_behavior: BEHAVIOR_STAY.to_string(),
             project_view: VIEW_LIST.to_string(),
+            project_sort: SORT_NAME.to_string(),
+            project_sort_desc: false,
             confirm_delete: false,
         };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -247,6 +300,8 @@ mod tests {
         let text = serde_json::to_string(&Settings::default()).unwrap();
         assert!(text.contains("defaultProjectDir"), "got {text}");
         assert!(text.contains("launchBehavior"), "got {text}");
+        assert!(text.contains("projectSort"), "got {text}");
+        assert!(text.contains("projectSortDesc"), "got {text}");
         assert!(text.contains("confirmDelete"), "got {text}");
     }
 

@@ -27,6 +27,63 @@ export function filterProjects<T extends { name: string; path: string }>(
   );
 }
 
+/** The sortable columns, matching Rust's settings::SORT_* vocabulary. */
+export type SortKey = "opened" | "name" | "engine" | "abi";
+
+/**
+ * Column-header click semantics: clicking the active column flips its
+ * direction; clicking a new column starts at that column's natural direction
+ * -- newest first for Opened (a launcher's recents), A-to-Z / low-to-high
+ * for everything else.
+ */
+export function nextSort(
+  key: SortKey,
+  desc: boolean,
+  clicked: SortKey,
+): { key: SortKey; desc: boolean } {
+  if (clicked === key) return { key, desc: !desc };
+  return { key: clicked, desc: clicked === "opened" };
+}
+
+// "never opened" (unparseable stamp) sorts as older than everything real.
+function openedNum(s: string): number {
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Display order: favourites always above the rest, whatever the sort (the
+ * Godot model -- starring visibly promotes, where a sortable star column
+ * only matters once you sort by it), with the chosen column applied within
+ * each half. Non-mutating; ties keep their incoming (recency) order because
+ * Array.prototype.sort is stable.
+ *
+ * `engineLabelOf` is injected because which engine a project resolves to --
+ * pin, dangling pin, default -- is the caller's per-view knowledge, and
+ * duplicating resolveEngine here would be a second brain.
+ */
+export function sortProjects<
+  T extends { name: string; lastOpenedUtc: string; engineAbi: number; favorite: boolean },
+>(items: T[], key: SortKey, desc: boolean, engineLabelOf: (p: T) => string): T[] {
+  const cmp = (a: T, b: T): number => {
+    switch (key) {
+      case "name":
+        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      case "engine":
+        return engineLabelOf(a).localeCompare(engineLabelOf(b), undefined, { sensitivity: "base" });
+      case "abi":
+        return a.engineAbi - b.engineAbi;
+      case "opened":
+        return openedNum(a.lastOpenedUtc) - openedNum(b.lastOpenedUtc);
+    }
+  };
+  return [...items].sort((a, b) => {
+    if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+    const d = cmp(a, b);
+    return desc ? -d : d;
+  });
+}
+
 /**
  * The identity a project is keyed on, independent of how it was recorded.
  *
