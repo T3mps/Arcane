@@ -37,6 +37,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Arcane
@@ -338,6 +339,11 @@ namespace Arcane::Editor
         // call on text-only docs (the loop no-ops); any codegen error keeps
         // last-good bound and fills that pass's badge list instead.
         void RegenerateFromGraph();
+        // Is this node entirely outside the guard-banded visible canvas rect?
+        // The port of SNodePanel::IsNodeCulled -- OUR side of the public API,
+        // because the vendored editor has no culling of its own and must not be
+        // modified. A node with no measured size yet is never culled.
+        [[nodiscard]] bool NodeCulled(std::uint32_t nodeId) const;
         // One pass-canvas wire: transparent ed::Link for interaction + our own
         // curve on top, same two-layer shape the material graph's links use.
         // Raw ids rather than ed:: handles, for the same reason
@@ -585,6 +591,18 @@ namespace Arcane::Editor
         // Pass-canvas node widths, keyed by pass-canvas node id. Its own map:
         // chain-index-derived ids and graph node ids are unrelated counters.
         std::unordered_map<std::uint32_t, float> m_passNodeWidths;
+        // The visible canvas rect, guard-banded, in CANVAS units. Recorded once
+        // per canvas per frame by DrawCanvasBackdrop (the one point that holds
+        // the screen rect before ed::Begin) and consumed by NodeCulled during
+        // node submission. Invalid = cull nothing.
+        ImVec2 m_cullMin{}, m_cullMax{};
+        bool   m_cullRectValid = false;
+        // Nodes culled on the LAST graph-canvas submission. RenderNodePreviews
+        // runs from Tick, before Draw, so it reads this one frame late -- the
+        // same lag the tier gate it replaces already carried, and equally
+        // invisible: a node scrolling into view costs one extra frame before
+        // its thumbnail resumes.
+        std::unordered_set<std::uint32_t> m_culledGraphNodes;
         // Each node's measured width from the LAST frame it drew, keyed by node
         // id. Right-aligned output rows and full-width previews both need a
         // width that only exists after the node has been laid out, so they use
@@ -686,18 +704,6 @@ namespace Arcane::Editor
         std::unordered_map<std::uint32_t, NodePreview> m_nodePreviews;   // ACTIVE graph
         int  m_nodePreviewsPass = -1;   // which pass the map belongs to
         bool m_showNodePreviews = true; // toolbar toggle
-        // Zoom-tier gate on the same thumbnails: DrawGraphPanel clears this
-        // when the canvas LOD has stopped DRAWING them, so RenderNodePreviews
-        // stops PAYING for them (one offscreen material pass per node per
-        // frame -- the graph canvas's dominant GPU cost, and the only one that
-        // scales with how many nodes are on screen).
-        //
-        // Reads one frame late by construction: Tick renders before the panel
-        // draws, so a tier transition costs one extra frame of rendering (or
-        // one frame of a stale thumbnail on the way back in). Invisible, and
-        // the alternative -- driving the render off the panel -- would put a
-        // command-list submit inside the ImGui pass.
-        bool m_nodePreviewsInLod = true;
         std::uint64_t       m_nodePreviewVsJob = 0;
         nvrhi::ShaderHandle m_nodePreviewVs;    // shared passthrough VS
         nvrhi::CommandListHandle m_nodePreviewCl;

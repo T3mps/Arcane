@@ -221,6 +221,15 @@ namespace Arcane::Editor
         // ed::Begin/End is authored in canvas space, so this scales with zoom on
         // its own and must not be pre-multiplied by anything.
         constexpr float kNodeHeaderGap = 5.0f;
+
+        // Off-screen culling guard band, as a fraction of the visible canvas
+        // extent added to EVERY side. UE's value verbatim:
+        // NodePanelDefs::GuardBandArea = 0.25f (SNodePanel.cpp:224), used as
+        // drawSize * -0.25 .. drawSize * 1.25 (:1588-1589). Generous on
+        // purpose -- the band is what stops a node at the edge oscillating
+        // between full content and stand-in as the view drifts, and it means a
+        // node is already fully built by the time it scrolls in.
+        constexpr float kCullGuardBand = 0.25f;
         constexpr float kPinDotRadius   = 4.0f;
         constexpr float kPinRingWidth   = 1.6f;
         constexpr int   kPinDotSegments = 12;
@@ -2377,6 +2386,41 @@ namespace Arcane::Editor
         for (std::size_t c = 0; c < total; ++c)
         {
             const std::uint32_t nodeId = nodeOf(c);
+
+            // Same off-screen cull as the graph canvas: submit the node and its
+            // pins so links and framing still see it, skip the content -- which
+            // here includes the 72x72 chain-intermediate Image, the per-node
+            // ImGui draw this canvas pays most for.
+            if (NodeCulled(nodeId))
+            {
+                const ImVec2 size = ed::GetNodeSize(ed::NodeId(nodeId));
+                ed::BeginNode(ed::NodeId(nodeId));
+                ImGui::PushID(static_cast<int>(nodeId));
+                const std::vector<std::uint32_t>& culledInputs =
+                    c >= 1 ? m_data.passes[c - 1].inputs : m_data.baseInputs;
+                const std::size_t pinCount =
+                    (std::min)(culledInputs.size() + 1,
+                               static_cast<std::size_t>(Arcane::kMaxPassInputs));
+                for (std::size_t s = 0; s < pinCount; ++s)
+                {
+                    const ed::PinId id = InPin(nodeId, static_cast<std::uint32_t>(s));
+                    ed::BeginPin(id, ed::PinKind::Input);
+                    SetPinPivot(id.Get(), ImGui::GetCursorScreenPos());
+                    ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                    ed::EndPin();
+                    ImGui::SameLine(0.0f, 0.0f);
+                }
+                ed::BeginPin(OutPin(nodeId, 0), ed::PinKind::Output);
+                SetPinPivot(OutPin(nodeId, 0).Get(), ImGui::GetCursorScreenPos());
+                ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                ed::EndPin();
+                ImGui::Dummy(ImVec2((std::max)(0.0f, size.x - 2.0f * kNodePadX),
+                                    (std::max)(0.0f, size.y - 2.0f * kNodePadY)));
+                ImGui::PopID();
+                ed::EndNode();
+                continue;
+            }
+
             ed::BeginNode(ed::NodeId(nodeId));
             ImGui::PushID(static_cast<int>(nodeId));
 
@@ -3581,13 +3625,14 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::RenderNodePreviews(double dt)
     {
-        // Thumbnails record only while the canvas is the visible editing
+        // Thumbnails record only while the graph canvas is the visible editing
         // surface; params sync from the doc instance first (redundant Sets
         // don't bump serials, so the steady state is hash lookups).
-        // m_nodePreviewsInLod adds the zoom tier to that list: below
-        // DefaultDetail the thumbnails are not drawn, so they are not rendered
-        // either (see the member's comment for the one-frame lag).
-        if (!m_showNodePreviews || !m_nodePreviewsInLod || !m_services.device ||
+        //
+        // m_inChainView is in the list because the chain overview does not draw
+        // graph nodes at all -- rendering their thumbnails while the user is
+        // looking at the pass map would be pure waste.
+        if (!m_showNodePreviews || m_inChainView || !m_services.device ||
             IsInstance() || !ActiveGraphOwned() || m_showGeneratedText || m_editVertex)
             return;
         bool any = false;
@@ -3633,6 +3678,14 @@ namespace Arcane::Editor
         for (auto& [id, np] : m_nodePreviews)
         {
             if (!np.ready || !np.inst)
+                continue;
+            // THE GPU BOUND, now that zoom no longer gates previews: a node
+            // that was culled off-screen last frame pays nothing, which is
+            // exactly what UE gets from an unpainted widget submitting no draw
+            // element (SGraphNodeMaterialBase.cpp:186-191). One frame late by
+            // construction -- Tick runs before Draw -- so a node scrolling into
+            // view resumes on the following frame.
+            if (m_culledGraphNodes.contains(id))
                 continue;
             // Pass-graph thumbnails read the chain's LIVE intermediates (one
             // frame stale -- invisible at thumbnail scale); missing entries
@@ -3774,9 +3827,11 @@ namespace Arcane::Editor
         // the view during End -- but it is taken before Begin because
         // ScreenToCanvas has to be, so the two calls stay separate.
         const NodeLOD lod = NodeLODForScale(ViewScale());
-        // Thumbnails are the one degradation with a GPU cost behind it, so the
-        // tier also reaches back into Tick's render loop (see m_nodePreviewsInLod).
-        m_nodePreviewsInLod = lod >= NodeLOD::DefaultDetail;
+        // Culled-node set for THIS submission: refilled below, read one frame
+        // later by RenderNodePreviews so a culled node costs no preview GPU.
+        // This is what bounds thumbnail cost now that the zoom gate is gone --
+        // UE's arrangement exactly (no paint, no draw element).
+        m_culledGraphNodes.clear();
 
         // Wire anchors are per-frame: nodes move, the view moves, and a pin
         // that stops being submitted must stop having an anchor (see
@@ -4324,7 +4379,7 @@ namespace Arcane::Editor
         // while a name field has focus is exactly that gesture.
         //
         // The KIND is checked, not just the id: m_textEdit is one buffer shared
-        // with the pass canvas (ShaderEditorDocument.hpp:626-636), and
+        // with the pass canvas (ShaderEditorDocument.hpp:644-654), and
         // a PassName key carries a chain INDEX that can collide with a node id.
         //
         // Value drags need no guard -- an abandoned gesture is closed by
@@ -4357,34 +4412,29 @@ namespace Arcane::Editor
         //       pin ICON (SGraphPin.cpp:354-364, :1463-1479); the "+ Add pin"
         //       button (SGraphNode.cpp:1681-1692); description text and badges
         //       (SGraphNodeAI.cpp:103-108).
-        //   showPreview  (>= DefaultDetail) the live thumbnail.
         //
-        // DISCLOSED DIVERGENCE on that last one. UE's material node does NOT
-        // LOD out its 96x96 live preview -- SGraphNodeMaterialBase.cpp:695-700
-        // gates it on user preference only and the file contains no LOD
-        // reference at all, so Epic renders a realtime material RT per node at
-        // 0.10x zoom. Every OTHER live preview in the engine is gated: the
-        // closest analog, SBlendSpacePreview, is swapped for a fixed-size
-        // spacer at `<= LowestDetail` (SGraphNodeBlendSpacePlayer.cpp:61-72).
-        // We take the gate one tier further out, to `<= MediumDetail`, because
-        // the cost is ours in a way it is not Epic's: each thumbnail is an
-        // offscreen material pass per node per FRAME (RenderNodePreviews), the
-        // only per-node cost on this canvas that scales with how many nodes are
-        // on screen -- and at 0.675x a 96 px thumbnail is already under 65 px.
-        // MediumDetail's own charter allows it: SNodePanel.h:70-90 calls it the
-        // tier where content "starts to get hard to read".
-        //
-        // The thumbnail is also the one thing here that gets NO same-size
-        // placeholder, where UE always substitutes one. UE needs it because a
-        // Slate graph LAYS OUT its nodes and a size change reflows neighbours;
-        // ours are absolutely positioned from posX/posY, so a shorter node
-        // moves nothing but itself -- and reclaiming the 96 px is the entire
-        // point of hiding it. The block at LowestDetail is the case where size
-        // preservation still buys something (see there), and it keeps its
-        // width.
+        // THE THUMBNAIL IS NO LONGER ONE OF THEM. It used to be gated at
+        // `>= DefaultDetail`; that gate is gone, and what replaced it is the
+        // off-screen cull above. See the note beside showPinText for why, and
+        // NodeCulled for the mechanism -- both are now UE's arrangement rather
+        // than an invention of ours.
         const bool showPinRows = lod > NodeLOD::LowestDetail;
         const bool showPinText = lod > NodeLOD::LowDetail;
-        const bool showPreview = lod >= NodeLOD::DefaultDetail;
+        // NO ZOOM GATE ON THE PREVIEW, deliberately, and this is the one place
+        // the port now MATCHES UE rather than merely citing it. UE's material
+        // expression preview has no LOD term at all: its visibility is
+        // bHidePreviewWindow/bCollapsed and nothing else
+        // (SGraphNodeMaterialBase.cpp:695-700), and what bounds its cost is
+        // off-screen CULLING -- the preview's GPU work is issued from
+        // OnDrawViewport (:167-191), so an unpainted node submits no draw
+        // element. We had invented a `lod >= DefaultDetail` gate with no UE
+        // counterpart, and it was strictly more aggressive than anything UE
+        // does: previews died at 0.675 while UE still renders them at 0.10.
+        // Now culling is the bound, exactly as upstream, and a visible node
+        // shows its thumbnail at every zoom.
+        //
+        // The tiers stay for what UE actually spends them on -- titles, pin
+        // text and chrome (see the consumer list on NodeLOD).
 
         // The node's measured width from the LAST frame (see m_nodeWidths):
         // output rows right-align to it and the preview spans it. Zero on a
@@ -4393,6 +4443,58 @@ namespace Arcane::Editor
         const float contentW = widthIt == m_nodeWidths.end()
                                    ? 0.0f
                                    : widthIt->second - 2.0f * kNodePadX;
+
+        // ---- OFF-SCREEN CULL (UE's mechanism, ported) ----
+        // The node is still SUBMITTED -- BeginNode/EndNode, and every pin --
+        // because ed::Link refuses a link whose endpoint pin was not live this
+        // frame (DoLink bails at imgui_node_editor.cpp:1639-1640, m_IsLive set
+        // only by BeginPin at :5366), and because the editor's selection,
+        // hit-testing and framing all read the node's rect. What is skipped is
+        // the CONTENT: no title, no band, no pin rows, no widgets, no preview.
+        //
+        // The stand-in reproduces the node's LAST MEASURED SIZE rather than
+        // collapsing to nothing. That is not cosmetic: F/frame-all computes
+        // content bounds from live node rects (NavigateToContent ->
+        // GetContentBounds), so a zero-size stand-in would shrink the framing
+        // rect and pull the view onto whatever happens to be on screen. Marquee
+        // select reads the same rects, so preserving them also keeps
+        // box-selecting across off-screen nodes working. Reproducing the size
+        // makes it a fixed point too -- the stand-in measures back to the number
+        // it was built from, so a culled node's footprint never drifts.
+        if (NodeCulled(n.id))
+        {
+            const ImVec2 size = ed::GetNodeSize(ed::NodeId(n.id));
+            ed::BeginNode(ed::NodeId(n.id));
+            ImGui::PushID(static_cast<int>(n.id));
+            const float startY = ImGui::GetCursorPosY();
+            for (std::uint32_t pin = 0; pin < Arcane::GraphNodeInputCount(n); ++pin)
+            {
+                ed::BeginPin(InPin(n.id, pin), ed::PinKind::Input);
+                SetPinPivot(InPin(n.id, pin).Get(), ImGui::GetCursorScreenPos());
+                ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                ed::EndPin();
+                ImGui::SameLine(0.0f, 0.0f);
+            }
+            for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(n); ++pin)
+            {
+                ed::BeginPin(OutPin(n.id, pin), ed::PinKind::Output);
+                SetPinPivot(OutPin(n.id, pin).Get(), ImGui::GetCursorScreenPos());
+                ImGui::Dummy(ImVec2(0.0f, 0.0f));
+                ed::EndPin();
+                ImGui::SameLine(0.0f, 0.0f);
+            }
+            ImGui::Dummy(ImVec2(0.0f, 0.0f));   // terminate the SameLine chain
+            // Pad out to the remembered footprint (node size minus the padding
+            // the editor adds back around the content).
+            const float usedY = ImGui::GetCursorPosY() - startY;
+            const float wantY = size.y - 2.0f * kNodePadY;
+            ImGui::Dummy(ImVec2((std::max)(0.0f, size.x - 2.0f * kNodePadX),
+                                (std::max)(0.0f, wantY - usedY)));
+            ImGui::PopID();
+            ed::EndNode();
+            m_culledGraphNodes.insert(n.id);
+            return;
+        }
 
         ed::BeginNode(ed::NodeId(n.id));
         ImGui::PushID(static_cast<int>(n.id));
@@ -5014,8 +5116,9 @@ namespace Arcane::Editor
             ed::EndPin();
         }
 
-        if (showPreview)
-            DrawNodePreviewImage(n, contentW);
+        // Unconditional: a node that got here is on screen, and on-screen
+        // nodes show their thumbnail at every zoom (see the no-zoom-gate note).
+        DrawNodePreviewImage(n, contentW);
 
         ImGui::PopID();
         ed::EndNode();
@@ -5044,6 +5147,27 @@ namespace Arcane::Editor
         const ImVec2 nodeSize = DrawNodeTitleBand(n.id, headerMaxY);
         if (nodeSize.x > 0.0f)
             m_nodeWidths[n.id] = nodeSize.x;
+    }
+
+    bool ShaderEditorDocument::NodeCulled(std::uint32_t nodeId) const
+    {
+        if (!m_cullRectValid)
+            return false;
+        // A node that has never been laid out has no size to test, and guessing
+        // one would be worse than drawing it: draw it once, measure it, cull it
+        // from the next frame on. UE has the same first-frame exemption by
+        // construction -- GetDesiredSize is zero until Slate has arranged the
+        // widget once.
+        const ImVec2 size = ed::GetNodeSize(ed::NodeId(nodeId));
+        if (size.x <= 0.0f || size.y <= 0.0f)
+            return false;
+        const ImVec2 pos = ed::GetNodePosition(ed::NodeId(nodeId));
+        // Rectangle overlap, exactly SNodePanel::IsNodeCulled's four tests
+        // (SNodePanel.cpp:1591-1597).
+        return pos.x + size.x < m_cullMin.x ||
+               pos.y + size.y < m_cullMin.y ||
+               pos.x > m_cullMax.x ||
+               pos.y > m_cullMax.y;
     }
 
     void ShaderEditorDocument::DrawPassWire(std::uint64_t linkId,
@@ -5106,6 +5230,38 @@ namespace Arcane::Editor
         // first).
         const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+
+        // ---- Off-screen cull rect, in CANVAS units ----
+        // Recorded here because this is the one place per canvas that already
+        // holds the screen rect BEFORE ed::Begin, which is where ScreenToCanvas
+        // still means what it says (inside Begin/End the editor moves ImGui
+        // itself into canvas space, imgui_canvas.cpp:476-487). Computed
+        // unconditionally -- a device-less document still submits nodes, so the
+        // cull test must be live even when the grid is not.
+        //
+        // UE's rule, ported: cull against the viewport expanded by a guard band
+        // of a quarter of its size on every side (NodePanelDefs::GuardBandArea
+        // = 0.25f, SNodePanel.cpp:224, applied as drawSize * -0.25 ..
+        // drawSize * 1.25 at :1588-1589). The band is what keeps a node that is
+        // one pixel off-screen from flickering between full and stand-in as the
+        // view drifts, and it is why panning does not pop.
+        if (canvasSize.x > 0.0f && canvasSize.y > 0.0f)
+        {
+            const ImVec2 tl = ed::ScreenToCanvas(canvasMin);
+            const ImVec2 br = ed::ScreenToCanvas(ImVec2(canvasMin.x + canvasSize.x,
+                                                        canvasMin.y + canvasSize.y));
+            const float bandX = (br.x - tl.x) * kCullGuardBand;
+            const float bandY = (br.y - tl.y) * kCullGuardBand;
+            m_cullMin = ImVec2(tl.x - bandX, tl.y - bandY);
+            m_cullMax = ImVec2(br.x + bandX, br.y + bandY);
+            m_cullRectValid = true;
+        }
+        else
+        {
+            // No region to measure: cull nothing rather than everything.
+            m_cullRectValid = false;
+        }
+
         if (!grid && m_services.device && m_services.shaders)
             grid = GraphGridPass::Create(m_services.device, m_services.shaders);
         if (!grid || canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)

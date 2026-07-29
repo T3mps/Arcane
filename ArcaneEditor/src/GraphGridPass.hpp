@@ -28,7 +28,7 @@
 // NVRHI boundary: no ICommandList wrapper, no manual barriers. The target is
 // created with setKeepInitialState(true) so NVRHI auto-transitions
 // RenderTarget <-> ShaderResource, exactly as the node-preview thumbnails do
-// (ShaderEditorDocument.cpp:3567-3577).
+// (ShaderEditorDocument.cpp:3611-3621).
 
 #include <Arcane/Render/ShaderLibrary.hpp>
 

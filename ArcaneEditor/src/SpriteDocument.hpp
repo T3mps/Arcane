@@ -14,7 +14,7 @@
 // asset-type -> factory routing, and the unsaved-close confirm modal --
 // this class only ever flips m_dirty and answers Save()/Draw() truthfully
 // (same division of responsibility ShaderEditorDocument follows, see its
-// Draw() at ShaderEditorDocument.cpp:1706-1838: requestClose mirrors `open`
+// Draw() at ShaderEditorDocument.cpp:1715-1847: requestClose mirrors `open`
 // from ImGui::Begin, both on the collapsed-early-return path and the normal
 // end-of-frame path -- DocumentHost.cpp:174-180 is what actually turns that
 // into a close or a pending confirm).
@@ -41,7 +41,7 @@ namespace Arcane::Editor
     public:
         // Everything the document borrows from the app (outlives the host's
         // document list -- same "services struct" shape as
-        // ShaderEditorDocument's DocServices, ShaderEditorDocument.hpp:84-103,
+        // ShaderEditorDocument's DocServices, ShaderEditorDocument.hpp:85-104,
         // just with far less in it: a sprite has no compiler and no clock,
         // because it has nothing async to drive. `undo` IS the same one shared
         // editor CommandStack every other surface pushes to (the app hands the
@@ -68,7 +68,7 @@ namespace Arcane::Editor
         // `data` is already loaded (LoadSpriteAsset happens in the factory,
         // which returns null on failure -- same split as
         // ShaderEditorDocument(DocServices, path, MaterialAssetData),
-        // ShaderEditorDocument.hpp:108-109 / EditorApp.cpp's materialFactory).
+        // ShaderEditorDocument.hpp:109-110 / EditorApp.cpp's materialFactory).
         SpriteDocument(Services services, std::filesystem::path path,
                        Arcane::SpriteAssetData data);
         ~SpriteDocument() override;   // closes a parked edit gesture
@@ -117,8 +117,8 @@ namespace Arcane::Editor
         EditGesture::GestureState m_gesture;
 
         // Doc-identity handle for undo steps, mirroring ShaderEditorDocument's
-        // m_anchor (ShaderEditorDocument.hpp:440-443, minted
-        // ShaderEditorDocument.cpp:946): commands hold this WEAKLY and forward
+        // m_anchor (ShaderEditorDocument.hpp:446-449, minted
+        // ShaderEditorDocument.cpp:955): commands hold this WEAKLY and forward
         // through the pointee, so steps left on the shared stack after this
         // document closes go inert instead of dereferencing a dead `this`.
         std::shared_ptr<SpriteDocument*> m_anchor;
