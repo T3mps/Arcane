@@ -365,6 +365,14 @@ namespace Arcane::Editor
         // leave a stale path with a spurious dirty marker.
         if (m_undo) m_scene.Reset(*m_undo);
 
+        // The OUTGOING project's root, captured before teardown replaces it:
+        // its editor lock must be released whichever way the switch ends --
+        // success hands the lock to the new project, and the failure path
+        // below leaves the editor project-less, which is not "open".
+        const std::filesystem::path outgoingRoot =
+            m_runtime->CurrentProject() ? m_runtime->CurrentProject()->Root()
+                                        : std::filesystem::path{};
+
         // Idle the GPU before freeing plugin-owned GPU resources, then unload the plugin
         // (dtor: Unload -> ClearSystems + ResetRegistry, DLL still mapped).
         m_gpu->Device().Nvrhi()->waitForIdle();
@@ -377,8 +385,16 @@ namespace Arcane::Editor
             m_projectOpenError = "Opening '" + path.generic_string() +
                                  "' failed after validation.\nThe previous session was torn "
                                  "down -- open another project to continue (see Console).";
+            if (!outgoingRoot.empty())
+                Arcane::EditorLock::Clear(outgoingRoot);
             return;   // editor left with no plugin; user can Open another project
         }
+        // Hand the lock over: the old project is closed, the new one is ours.
+        // (A same-project re-open just rewrites its own lock -- harmless.)
+        if (!outgoingRoot.empty())
+            Arcane::EditorLock::Clear(outgoingRoot);
+        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            Arcane::EditorLock::Write(proj->Root());
         if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
             ARC_WARN("Open Project: input actions failed to load");
 

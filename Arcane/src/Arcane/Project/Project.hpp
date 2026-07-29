@@ -79,4 +79,44 @@ namespace Arcane
         AssetRegistry         m_registry;
         std::vector<std::filesystem::path> m_activePluginRoots;   // valid + enabled plugins, in manifest order
     };
+
+    // EditorLock: "which process has this project open", answered from the
+    // project itself so it survives launcher restarts. The editor writes
+    // <root>/Saved/editor.lock while it holds a project (boot, project
+    // switch) and clears it on clean exit; the Arcane Hub reads it to focus
+    // the running editor instead of spawning a rival, and to show running
+    // badges after ITS process restarted.
+    //
+    // Unity's lockfile model, minus the flaw its users hate: the lock names
+    // {pid, process CREATION time}, and IsAlive() only believes it when that
+    // exact pid with that exact start time still runs -- so a crash's stale
+    // lock fails validation and is simply ignored, never a false "already
+    // open". MIRRORED FORMAT: the Hub parses the same JSON in its
+    // editorlock.rs; change BOTH or hub-side detection goes blind.
+    namespace EditorLock
+    {
+        struct Info
+        {
+            uint32_t pid = 0;
+            uint64_t start = 0;   // process creation FILETIME as u64 (0 on non-Windows)
+        };
+
+        ARCANE_API std::filesystem::path FileFor(const std::filesystem::path& projectRoot);
+
+        // Pure halves, exported so the format is pinned by tests.
+        ARCANE_API std::string ToJson(const Info& info);
+        ARCANE_API std::optional<Info> Parse(const std::string& text);
+
+        // THIS process's identity. start is 0 where the platform query fails.
+        ARCANE_API Info Self();
+
+        // Write/clear the lock for a project root. Best-effort: a lock that
+        // cannot be written must not fail a project open (WARN only).
+        ARCANE_API void Write(const std::filesystem::path& projectRoot);
+        ARCANE_API void Clear(const std::filesystem::path& projectRoot);
+
+        // Read + validate: Some(pid) only when the named process is STILL the
+        // process the lock described (pid alive AND creation time matches).
+        ARCANE_API std::optional<uint32_t> ReadLive(const std::filesystem::path& projectRoot);
+    }
 }

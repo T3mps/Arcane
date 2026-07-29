@@ -350,4 +350,105 @@ namespace Arcane
         m_manifest.bootScene = value;
         return true;
     }
+
+    namespace EditorLock
+    {
+        std::filesystem::path FileFor(const std::filesystem::path& projectRoot)
+        {
+            return projectRoot / "Saved" / "editor.lock";
+        }
+
+        std::string ToJson(const Info& info)
+        {
+            nlohmann::json doc;
+            doc["pid"] = info.pid;
+            doc["start"] = info.start;
+            return doc.dump();
+        }
+
+        std::optional<Info> Parse(const std::string& text)
+        {
+            const auto doc = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
+            if (!doc.is_object() || !doc.contains("pid") || !doc["pid"].is_number_unsigned())
+                return std::nullopt;
+            Info info;
+            info.pid = doc["pid"].get<uint32_t>();
+            // `start` missing or malformed reads as 0 = "no time recorded";
+            // IsAlive-side validation then degrades to pid-exists, which is
+            // still better than trusting the file outright.
+            if (doc.contains("start") && doc["start"].is_number_unsigned())
+                info.start = doc["start"].get<uint64_t>();
+            if (info.pid == 0)
+                return std::nullopt;
+            return info;
+        }
+
+        Info Self()
+        {
+            Info info;
+#ifdef _WIN32
+            info.pid = static_cast<uint32_t>(::GetCurrentProcessId());
+            FILETIME created{}, exited{}, kernel{}, user{};
+            if (::GetProcessTimes(::GetCurrentProcess(), &created, &exited, &kernel, &user))
+                info.start = (static_cast<uint64_t>(created.dwHighDateTime) << 32) |
+                             created.dwLowDateTime;
+#endif
+            return info;
+        }
+
+        void Write(const std::filesystem::path& projectRoot)
+        {
+            const std::filesystem::path file = FileFor(projectRoot);
+            std::error_code ec;
+            std::filesystem::create_directories(file.parent_path(), ec);
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            if (!out.is_open())
+            {
+                ARC_WARN("EditorLock: could not write {}", file.generic_string());
+                return;
+            }
+            out << ToJson(Self());
+        }
+
+        void Clear(const std::filesystem::path& projectRoot)
+        {
+            std::error_code ec;
+            std::filesystem::remove(FileFor(projectRoot), ec);
+        }
+
+        std::optional<uint32_t> ReadLive(const std::filesystem::path& projectRoot)
+        {
+            const std::filesystem::path file = FileFor(projectRoot);
+            std::ifstream in(file, std::ios::binary);
+            if (!in.is_open())
+                return std::nullopt;
+            std::string text((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+            const auto info = Parse(text);
+            if (!info)
+                return std::nullopt;
+#ifdef _WIN32
+            // The validation that defeats staleness: the pid must be a LIVE
+            // process whose creation time matches what the lock recorded. A
+            // recycled pid has a different birth; a crashed editor has none.
+            HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, info->pid);
+            if (!h)
+                return std::nullopt;
+            FILETIME created{}, exited{}, kernel{}, user{};
+            const bool ok = ::GetProcessTimes(h, &created, &exited, &kernel, &user);
+            ::CloseHandle(h);
+            if (!ok)
+                return std::nullopt;
+            const uint64_t start = (static_cast<uint64_t>(created.dwHighDateTime) << 32) |
+                                   created.dwLowDateTime;
+            if (info->start != 0 && info->start != start)
+                return std::nullopt;
+            return info->pid;
+#else
+            // Non-Windows: no liveness oracle wired yet; a lock alone is not
+            // proof, so say "not running" rather than inventing certainty.
+            return std::nullopt;
+#endif
+        }
+    }
 }

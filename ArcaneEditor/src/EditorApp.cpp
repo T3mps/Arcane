@@ -171,6 +171,15 @@ namespace Arcane::Editor
                                      "fallback instead (see Console).";
             }
         }
+        // Claim the editor lock the moment a project is OURS: pid + process
+        // start time into <root>/Saved/editor.lock. The Hub reads it to
+        // focus this editor instead of spawning a rival -- across ITS
+        // restarts, which the in-memory pid map cannot survive. Cleared in
+        // Shutdown and on project switches; a crash's stale lock is defeated
+        // by ReadLive's start-time validation, never trusted.
+        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            Arcane::EditorLock::Write(proj->Root());
+
         if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
             ARC_WARN("Arcane Editor: input actions failed to load");
         UpdateWindowTitle();
@@ -533,6 +542,11 @@ namespace Arcane::Editor
         // While the device and viewport are still alive (m_gpu destructs after
         // Run returns): leave the Hub a fresh cover of the last thing seen.
         WriteAutoScreenshot();
+
+        // Release the editor lock: this project is no longer open anywhere.
+        if (m_runtime)
+            if (const Arcane::Project* proj = m_runtime->CurrentProject())
+                Arcane::EditorLock::Clear(proj->Root());
 
         // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
         // the guard covers a future partial-init/destructor path.

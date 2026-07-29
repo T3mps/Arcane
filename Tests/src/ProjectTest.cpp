@@ -311,3 +311,51 @@ TEST_CASE("Project::Create refuses a name containing a path separator", "[projec
     // The bad name must be rejected before any skeleton is created on disk.
     CHECK(std::filesystem::is_empty(dir));
 }
+
+TEST_CASE("EditorLock JSON round-trips and rejects malformed shapes", "[project]")
+{
+    // MIRRORED FORMAT with the Hub's editorlock.rs -- these cases pin it.
+    const Arcane::EditorLock::Info info{4242, 0x1234'5678'9ABC'DEF0ull};
+    const auto back = Arcane::EditorLock::Parse(Arcane::EditorLock::ToJson(info));
+    REQUIRE(back.has_value());
+    CHECK(back->pid == 4242);
+    CHECK(back->start == 0x1234'5678'9ABC'DEF0ull);
+
+    CHECK_FALSE(Arcane::EditorLock::Parse("not json").has_value());
+    CHECK_FALSE(Arcane::EditorLock::Parse("{}").has_value());
+    CHECK_FALSE(Arcane::EditorLock::Parse(R"({"pid":0})").has_value());
+    CHECK_FALSE(Arcane::EditorLock::Parse(R"({"pid":-3})").has_value());
+    // A missing start degrades to 0 ("no time recorded"), not a refusal.
+    const auto noStart = Arcane::EditorLock::Parse(R"({"pid":7})");
+    REQUIRE(noStart.has_value());
+    CHECK(noStart->start == 0);
+}
+
+TEST_CASE("EditorLock: a live lock names this process; a dead one is ignored", "[project]")
+{
+    const auto dir = TempDir("editor_lock");
+
+    // No lock file -> not running.
+    CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
+
+    // Written by THIS process -> live, with our own pid.
+    Arcane::EditorLock::Write(dir);
+    const auto live = Arcane::EditorLock::ReadLive(dir);
+    REQUIRE(live.has_value());
+    CHECK(*live == Arcane::EditorLock::Self().pid);
+
+    // The staleness defeat: same pid, WRONG creation time -- the process the
+    // lock described no longer exists, so it must read as not running. This
+    // is the exact false-"already open" failure Unity's lockfile is hated
+    // for, pinned here so it can never ship.
+    auto stale = Arcane::EditorLock::Self();
+    stale.start ^= 1;
+    WriteFile(Arcane::EditorLock::FileFor(dir), Arcane::EditorLock::ToJson(stale));
+    CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
+
+    // Clear removes the file; a cleared project is not running.
+    Arcane::EditorLock::Write(dir);
+    Arcane::EditorLock::Clear(dir);
+    CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
+    CHECK_FALSE(std::filesystem::exists(Arcane::EditorLock::FileFor(dir)));
+}
