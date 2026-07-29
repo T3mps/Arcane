@@ -146,6 +146,23 @@ namespace Arcane::HostBoot
         return *file;
     }
 
+    // Resolve `id` directly to a physical file in `project`'s AssetRegistry -- the
+    // Guid-known counterpart to BootSceneFile(project) above, for a caller that
+    // already HAS a Guid instead of the manifest's bootScene text (a runtime
+    // host's `--scene` override, HostConfig::sceneOverride). Same failure mode/
+    // message as the manifest path's "does not resolve to a file" case.
+    inline std::filesystem::path BootSceneFile(const Arcane::Project& project, const Arcane::Guid& id)
+    {
+        const std::optional<std::filesystem::path> file =
+            project.ResolveAsset(Arcane::AssetId::FromGuid(id));
+        if (!file)
+        {
+            ARC_WARN("bootScene {} does not resolve to a file in this project", id.ToString());
+            return {};
+        }
+        return *file;
+    }
+
     // What BootScene loaded, handed back so the caller (the editor's
     // SceneSession::Adopt) can record the session's file + id WITHOUT a second
     // ReadSceneFile of the same path just to recover the Guid, which is what
@@ -193,6 +210,39 @@ namespace Arcane::HostBoot
             // type is unsupported; SceneAsset.hpp's E02-3 note). The registry
             // is already reset by contract, so leave a well-formed empty scene
             // rather than an empty-but-rootless one.
+            ARC_ERROR("bootScene: {} parsed but could not be loaded", file.generic_string());
+            Arcane::Scene::CreateEmpty(runtime.Registry());
+            return std::nullopt;
+        }
+
+        ARC_INFO("Loaded boot scene {}", file.generic_string());
+        return BootSceneResult{file, doc->id};
+    }
+
+    // Load `id`'s scene file into `runtime` -- the Guid-known counterpart to
+    // BootScene(runtime, project) above, for a runtime host's `--scene` override
+    // (HostConfig::sceneOverride) once the override text has already parsed as a
+    // Guid. Same body/failure modes as the manifest path; only the resolution
+    // step differs (BootSceneFile(project, id) instead of the manifest's
+    // bootScene text), so an override Guid that resolves to no asset in this
+    // project hits the exact same "does not resolve to a file" path.
+    inline std::optional<BootSceneResult> BootScene(Arcane::Runtime& runtime, const Arcane::Project& project,
+                                                     const Arcane::Guid& id)
+    {
+        const std::filesystem::path file = BootSceneFile(project, id);
+        if (file.empty()) return std::nullopt;
+
+        std::string err;
+        const auto doc = Arcane::Scene::ReadSceneFile(file, &err);
+        if (!doc)
+        {
+            ARC_ERROR("bootScene: {}", err);
+            return std::nullopt;
+        }
+
+        runtime.ResetRegistry();
+        if (!Arcane::Scene::ApplySceneDocument(*doc, runtime.Registry()))
+        {
             ARC_ERROR("bootScene: {} parsed but could not be loaded", file.generic_string());
             Arcane::Scene::CreateEmpty(runtime.Registry());
             return std::nullopt;

@@ -19,6 +19,9 @@ namespace Arcane
         // Sandbox.dll, the editor -> no game loaded). A project's gameModule overrides both.
         std::string     pluginPath = "";
         std::string     projectPath = "";   // .arcproj or project folder; "" = data/-next-to-exe
+        // Boot this scene (asset Guid text) instead of the manifest's bootScene. Empty = follow
+        // the manifest. Editor separate-window play passes the ACTIVE scene here.
+        std::string     sceneOverride = "";
 
         // Print one line of engine-identity JSON to stdout and exit, without creating
         // a window or device. The Arcane Hub probes this to learn the plugin ABI it

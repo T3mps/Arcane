@@ -124,7 +124,30 @@ bool Loom::Init()
     // the plugin built rather than failing the host. No --project means no
     // project, hence no call: the scripted Sandbox.dll GPU-verify is untouched.
     if (const Arcane::Project* proj = m_runtime->CurrentProject())
-        (void)Arcane::HostBoot::BootScene(*m_runtime, *proj);
+    {
+        // --scene overrides the project's manifest bootScene with an explicit
+        // asset Guid (HostConfig::sceneOverride) -- the editor's separate-window
+        // Play passes the currently-open scene here so Loom boots the SAME scene
+        // instead of whatever the manifest names. Invalid override TEXT fails
+        // Init outright (a typo'd --scene is a launch mistake, not the normal
+        // "no boot scene" case); a well-formed Guid that resolves to no asset in
+        // this project falls through to BootScene's existing missing-bootScene
+        // path unchanged (logged there; the host keeps whatever the plugin built).
+        if (!m_config.sceneOverride.empty())
+        {
+            const std::optional<Arcane::Guid> ov = Arcane::Guid::FromString(m_config.sceneOverride);
+            if (!ov || !ov->IsValid())
+            {
+                ARC_ERROR("Loom: --scene '{}' is not a valid asset id", m_config.sceneOverride);
+                return false;
+            }
+            (void)Arcane::HostBoot::BootScene(*m_runtime, *proj, *ov);
+        }
+        else
+        {
+            (void)Arcane::HostBoot::BootScene(*m_runtime, *proj);
+        }
+    }
 
     return true;
 }

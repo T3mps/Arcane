@@ -40,3 +40,12 @@ TEST_CASE("HostConfig: bad arg exits 2, no config", "[host]") {
     const auto o = Run({"--backend", "metal"});
     REQUIRE_FALSE(o.config.has_value()); REQUIRE(o.exitCode == 2);
 }
+TEST_CASE("HostConfig parses --scene as a guid override", "[host]") {
+    const auto o = Run({"--scene", "a5e0c1de-1111-4222-8333-444455556666"});
+    REQUIRE(o.config.has_value());
+    CHECK(o.config->sceneOverride == "a5e0c1de-1111-4222-8333-444455556666");
+    // Absent flag = empty = manifest bootScene wins (today's behavior).
+    const auto def = Run({});
+    REQUIRE(def.config.has_value());
+    CHECK(def.config->sceneOverride.empty());
+}
