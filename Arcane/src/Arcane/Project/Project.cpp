@@ -67,7 +67,10 @@ namespace Arcane
                     ARC_ERROR("{}: could not open {} for writing", who, tmp.generic_string());
                     return false;
                 }
-                out << doc.dump(2);
+                // dump() emits no trailing newline; add one so a rewritten
+                // manifest stays a conventionally-terminated text file (these
+                // files live in git, where the missing byte shows up as noise).
+                out << doc.dump(2) << '\n';
                 if (!out)
                 {
                     // The file exists on disk (open succeeded) but is truncated/partial --
@@ -283,7 +286,7 @@ namespace Arcane
         const std::filesystem::path manifestPath = dir / (name + ".arcproj");
         {
             std::ofstream out(manifestPath, std::ios::binary);
-            out << manifestJson.dump(2);
+            out << manifestJson.dump(2) << '\n';
             if (!out.good())
             {
                 ARC_WARN("Project::Create: failed writing manifest '{}'", manifestPath.generic_string());
