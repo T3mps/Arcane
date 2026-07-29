@@ -16,6 +16,25 @@ use crate::{paths, store};
 pub const VIEW_GRID: &str = "grid";
 pub const VIEW_LIST: &str = "list";
 
+pub const BEHAVIOR_TRAY: &str = "tray";
+pub const BEHAVIOR_HIDE: &str = "hide";
+pub const BEHAVIOR_STAY: &str = "stay";
+
+/// Normalise the after-launch behaviour, defaulting anything unrecognised to
+/// the tray. Same String-with-normaliser reasoning as `clean_view`: a serde
+/// enum fails the whole document on an unknown variant, and a settings file
+/// that will not parse is treated as corrupt and reset.
+pub fn clean_behavior(v: &str) -> String {
+    let t = v.trim();
+    if t.eq_ignore_ascii_case(BEHAVIOR_HIDE) {
+        BEHAVIOR_HIDE.to_string()
+    } else if t.eq_ignore_ascii_case(BEHAVIOR_STAY) {
+        BEHAVIOR_STAY.to_string()
+    } else {
+        BEHAVIOR_TRAY.to_string()
+    }
+}
+
 /// Normalise the project-list layout, defaulting anything unrecognised to the
 /// grid.
 ///
@@ -39,16 +58,22 @@ pub struct Settings {
     #[serde(default)]
     pub default_project_dir: String,
 
-    /// Hide the Hub window while a launched editor runs, restoring it when
-    /// the LAST editor exits -- launching hands the screen to the editor
-    /// without giving up the Hub (relaunching the Hub un-hides it early via
-    /// the single-instance callback). OFF keeps the Hub visible side by side.
-    /// Replaced close_after_launch 2026-07-29: hiding strictly dominates
-    /// closing now that restore exists. Read Rust-side in open_project (the
-    /// hide) and the editor wait thread (the restore).
-    /// `default = "yes"`: hide-until-done is the designed behavior.
-    #[serde(default = "yes")]
-    pub hide_while_running: bool,
+    /// What the Hub window does after a successful launch. Three values:
+    /// `tray` (default) -- hide into the system tray: click brings it back,
+    /// right-click offers quick launch/quit, and the Hub STAYS in the tray
+    /// when the last editor exits (a launcher window popping itself back up
+    /// when the work closes is the Epic launcher's most-complained-about
+    /// habit; the icon is the handle, so nothing needs to pop).
+    /// `hide` -- vanish entirely, restore when the LAST editor exits;
+    /// relaunching the Hub un-hides it early via the single-instance
+    /// callback. `stay` -- keep the window open beside the editor.
+    /// Replaced the hide_while_running bool 2026-07-29 when the tray
+    /// arrived; no legacy read of the old key, per the no-migration rule.
+    /// Read Rust-side in open_project (how the window goes away) and the
+    /// editor wait thread (how it comes back). Always normalised through
+    /// `clean_behavior`, so consumers can trust the value.
+    #[serde(default = "default_behavior")]
+    pub launch_behavior: String,
 
     /// Project list layout: `grid` or `list`. Set from the toggle above the
     /// list rather than from the Settings tab -- it is a view control, and
@@ -79,6 +104,10 @@ fn default_view() -> String {
     VIEW_GRID.to_string()
 }
 
+fn default_behavior() -> String {
+    BEHAVIOR_TRAY.to_string()
+}
+
 fn yes() -> bool {
     true
 }
@@ -87,7 +116,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_project_dir: String::new(),
-            hide_while_running: yes(),
+            launch_behavior: default_behavior(),
             project_view: default_view(),
             confirm_delete: yes(),
         }
@@ -116,10 +145,14 @@ pub fn clean_dir(dir: &str) -> String {
 pub fn load() -> Settings {
     let mut ignored = Vec::new();
     let s: Settings = store::read_or_default(&paths::settings_file(), &mut ignored);
-    // Normalise on the way OUT as well as in: a file written before this field
-    // existed carries "" for it, and a hand-edited one may carry anything.
-    // Consumers must never have to defend against a bad layout string.
-    Settings { project_view: clean_view(&s.project_view), ..s }
+    // Normalise on the way OUT as well as in: a file written before these
+    // fields existed carries "" for them, and a hand-edited one may carry
+    // anything. Consumers must never have to defend against a bad string.
+    Settings {
+        project_view: clean_view(&s.project_view),
+        launch_behavior: clean_behavior(&s.launch_behavior),
+        ..s
+    }
 }
 
 pub fn save(s: &Settings) -> Result<(), String> {
@@ -134,7 +167,7 @@ mod tests {
     fn defaults_are_the_designed_behaviour() {
         let s = Settings::default();
         assert_eq!(s.default_project_dir, "");
-        assert!(s.hide_while_running, "hide-until-done is the designed default");
+        assert_eq!(s.launch_behavior, BEHAVIOR_TRAY, "the tray is the designed default");
         assert_eq!(s.project_view, VIEW_GRID, "the grid is what shipped first");
         assert!(s.confirm_delete, "deleting has always asked first");
     }
@@ -145,16 +178,26 @@ mod tests {
         // bare #[serde(default)] this loads as false, and every user who had
         // ever saved a setting would get a one-click project delete on the next
         // launch without touching anything.
-        let back: Settings = serde_json::from_str(r#"{"hideWhileRunning":true}"#).unwrap();
+        let back: Settings = serde_json::from_str(r#"{"launchBehavior":"stay"}"#).unwrap();
         assert!(back.confirm_delete);
     }
 
     #[test]
-    fn a_file_written_before_hide_existed_still_hides() {
-        // Same default = "yes" reasoning as confirm_delete: a bare default
-        // would silently opt existing files OUT of the designed behavior.
+    fn a_file_written_before_launch_behavior_existed_gets_the_tray() {
+        // Same defaulted-field reasoning as confirm_delete: an older file must
+        // land on the designed behaviour, not on an accidental empty string.
         let back: Settings = serde_json::from_str(r#"{"confirmDelete":true}"#).unwrap();
-        assert!(back.hide_while_running);
+        assert_eq!(back.launch_behavior, BEHAVIOR_TRAY);
+    }
+
+    #[test]
+    fn clean_behavior_accepts_the_three_modes_and_defaults_the_rest() {
+        assert_eq!(clean_behavior(BEHAVIOR_TRAY), BEHAVIOR_TRAY);
+        assert_eq!(clean_behavior(BEHAVIOR_HIDE), BEHAVIOR_HIDE);
+        assert_eq!(clean_behavior(BEHAVIOR_STAY), BEHAVIOR_STAY);
+        assert_eq!(clean_behavior("  Hide  "), BEHAVIOR_HIDE, "trimmed and case-folded");
+        assert_eq!(clean_behavior("closeAfterLaunch"), BEHAVIOR_TRAY, "unknown falls back");
+        assert_eq!(clean_behavior(""), BEHAVIOR_TRAY, "so does a pre-field file");
     }
 
     #[test]
@@ -175,14 +218,15 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_layout_does_not_discard_the_other_settings() {
-        // THE reason this is a String and not a serde enum: an unknown variant
+    fn an_unknown_behavior_does_not_discard_the_other_settings() {
+        // THE reason these are Strings and not serde enums: an unknown variant
         // would fail the whole document, and a settings file that will not
         // parse is treated as corrupt and reset.
         let back: Settings =
-            serde_json::from_str(r#"{"hideWhileRunning":false,"projectView":"nonsense"}"#)
+            serde_json::from_str(r#"{"confirmDelete":false,"launchBehavior":"nonsense","projectView":"nonsense"}"#)
                 .expect("must still parse");
-        assert!(!back.hide_while_running, "the other settings survive");
+        assert!(!back.confirm_delete, "the other settings survive");
+        assert_eq!(clean_behavior(&back.launch_behavior), BEHAVIOR_TRAY);
         assert_eq!(clean_view(&back.project_view), VIEW_GRID);
     }
 
@@ -190,7 +234,7 @@ mod tests {
     fn settings_round_trip_through_json() {
         let s = Settings {
             default_project_dir: "D:/Games".to_string(),
-            hide_while_running: false,
+            launch_behavior: BEHAVIOR_STAY.to_string(),
             project_view: VIEW_LIST.to_string(),
             confirm_delete: false,
         };
@@ -202,15 +246,15 @@ mod tests {
     fn serialises_with_camel_case_keys_for_the_frontend() {
         let text = serde_json::to_string(&Settings::default()).unwrap();
         assert!(text.contains("defaultProjectDir"), "got {text}");
-        assert!(text.contains("hideWhileRunning"), "got {text}");
+        assert!(text.contains("launchBehavior"), "got {text}");
         assert!(text.contains("confirmDelete"), "got {text}");
     }
 
     #[test]
     fn a_settings_file_missing_a_field_still_loads() {
         // Forward compat: an older file must not reset the fields it does have.
-        let back: Settings = serde_json::from_str(r#"{"hideWhileRunning":false}"#).unwrap();
-        assert!(!back.hide_while_running);
+        let back: Settings = serde_json::from_str(r#"{"launchBehavior":"hide"}"#).unwrap();
+        assert_eq!(back.launch_behavior, BEHAVIOR_HIDE);
         assert_eq!(back.default_project_dir, "");
     }
 

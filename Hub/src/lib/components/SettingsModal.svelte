@@ -81,6 +81,18 @@
     confirmClear = false;
     onClearRecents();
   }
+
+  // One entry per launch behaviour, in the order they appear. The label names
+  // the effect; the detail names what it costs or buys, so choosing does not
+  // require trying all three.
+  const BEHAVIORS: { id: Settings["launchBehavior"]; label: string; d: string }[] = [
+    { id: "tray", label: "Minimize to the tray",
+      d: "The Hub waits in the system tray. Click the icon to bring it back; right-click it to launch a recent project or quit." },
+    { id: "hide", label: "Hide until the editors close",
+      d: "The Hub vanishes and comes back when the last editor closes. Launching the Hub again brings it back sooner." },
+    { id: "stay", label: "Keep the Hub open",
+      d: "The window stays where it is, beside the editor." },
+  ];
 </script>
 
 <Modal title="Settings" size="full" {onClose}>
@@ -132,16 +144,21 @@
         </section>
       {:else if cat === "launching"}
         <section class="grp">
-          <h3>After launching</h3>
-          <p class="d">The Hub comes back on its own when the last editor
-            closes, and launching the Hub again brings it back sooner. Either
-            way the editor runs independently -- closing the Hub never closes
-            an editor that is already open.</p>
-          <label class="check">
-            <input type="checkbox" checked={settings.hideWhileRunning} disabled={busy}
-                   onchange={(e) => onSave({ ...settings, hideWhileRunning: e.currentTarget.checked })} />
-            <span>Hide the Hub while an editor is running</span>
-          </label>
+          <h3>After launching a project</h3>
+          <p class="d">Whichever you choose, the editor runs independently
+            &mdash; closing or quitting the Hub never closes an editor that is
+            already open.</p>
+          <div class="radios" role="radiogroup" aria-label="After launching a project">
+            {#each BEHAVIORS as b (b.id)}
+              <label class="check radio">
+                <input type="radio" name="launch-behavior" value={b.id}
+                       checked={settings.launchBehavior === b.id} disabled={busy}
+                       onchange={() => onSave({ ...settings, launchBehavior: b.id })} />
+                <span class="rtext"><strong>{b.label}</strong>
+                  <span class="rd">{b.d}</span></span>
+              </label>
+            {/each}
+          </div>
         </section>
       {:else if cat === "data"}
         <section class="grp">
@@ -234,10 +251,20 @@
 
   .check { display: flex; align-items: center; gap: 10px; font-size: 13.5px;
            cursor: default; }
-  /* A real checkbox, restyled: accent-color keeps the native control (and its
+  /* Real native controls, restyled: accent-color keeps the control (and its
      keyboard and screen-reader behaviour) instead of faking one with a div. */
-  input[type="checkbox"] { flex: none; width: 17px; height: 17px; margin: 0;
-                           accent-color: var(--accent); cursor: default; }
+  input[type="checkbox"], input[type="radio"] {
+    flex: none; width: 17px; height: 17px; margin: 0;
+    accent-color: var(--accent); cursor: default; }
+
+  .radios { display: flex; flex-direction: column; gap: 12px; max-width: 68ch; }
+  /* Top-align the dot with the label line, not the centre of the two-line
+     block -- centred, the dot appears to belong to neither line. */
+  .check.radio { align-items: flex-start; }
+  .check.radio input[type="radio"] { margin-top: 1px; }
+  .rtext { display: flex; flex-direction: column; gap: 2px; }
+  .rtext strong { font-weight: 600; color: var(--text-bright); }
+  .rd { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
 
   /* Matches the main-area banner in +page.svelte -- same failure, same look. */
   .banner { background: color-mix(in srgb, var(--fail-accent) 12%, transparent);

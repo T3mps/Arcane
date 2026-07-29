@@ -17,7 +17,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon: the default launch behaviour parks the Hub in the system tray
+# while editors run -- click to bring it back, right-click for quick actions.
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 # ONE Hub per user, enforced: a second launch focuses the existing window
 # instead of starting a rival process. Two Hubs share the .archub state files

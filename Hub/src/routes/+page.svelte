@@ -45,7 +45,7 @@
   let busyUi = $state(false);
   let view = $state<View>("projects");
   let settings = $state<Settings>({
-    defaultProjectDir: "", hideWhileRunning: true, projectView: "grid",
+    defaultProjectDir: "", launchBehavior: "tray", projectView: "grid",
     confirmDelete: true,
   });
   let hubDir = $state("");
@@ -135,10 +135,19 @@
     // Hub sat open. Adopt in place -- the rows are keyed by path, so the only
     // visible change is the row that actually changed.
     const unDisk = listen<HubState>("state-changed", (e) => adoptState(e.payload));
+    // A quick-launch pick from the tray menu. Routed through launch() so the
+    // tray goes through the SAME path a card click takes -- engine
+    // resolution, probe, focus-existing, outcomes -- rather than a second
+    // launch brain living Rust-side.
+    const unTray = listen<string>("tray-launch", (e) => {
+      const p = hub.recents.find((r) => r.path === e.payload);
+      if (p) launch(p);
+    });
     return () => {
       unFailed.then((f) => f());
       unIdle.then((f) => f());
       unDisk.then((f) => f());
+      unTray.then((f) => f());
     };
   });
 

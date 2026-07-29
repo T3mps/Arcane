@@ -49,11 +49,14 @@ export type Settings = {
   /** Starting directory for the New Project and Open dialogs; "" = OS default. */
   defaultProjectDir: string;
   /**
-   * Hide the Hub while a launched editor runs, restored when the last one
-   * exits. Read RUST-side (open_project hides, the wait thread restores);
-   * the frontend only edits it. Replaced closeAfterLaunch 2026-07-29.
+   * What the Hub window does after a successful launch. Read RUST-side
+   * (open_project parks/hides, the wait thread restores); the frontend only
+   * edits it. `tray` (default) parks in the system tray and STAYS there when
+   * the last editor exits; `hide` vanishes and restores on last exit; `stay`
+   * keeps the window open. Rust normalises through `clean_behavior`.
+   * Replaced hideWhileRunning 2026-07-29 when the tray arrived.
    */
-  hideWhileRunning: boolean;
+  launchBehavior: "tray" | "hide" | "stay";
   /**
    * Project list layout. Rust normalises this through `clean_view` on both
    * load and save, so it is always one of the two -- never a stray string.

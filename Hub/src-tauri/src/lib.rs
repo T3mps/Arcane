@@ -20,6 +20,7 @@ pub mod settings;
 pub mod spawn;
 pub mod state;
 pub mod store;
+pub mod tray;
 
 use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
@@ -495,14 +496,20 @@ fn open_project(
 
     editors.0.lock().unwrap().insert(project_key.clone(), child.id());
 
-    // Hand the screen to the editor: hide, restore when the last one exits.
-    // Checked AFTER a successful spawn so a refused launch never hides the
-    // window the error banner lives in.
-    if settings::load().hide_while_running {
-        use tauri::Manager;
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.hide();
+    // Hand the screen to the editor, per the configured behaviour. Checked
+    // AFTER a successful spawn so a refused launch never hides the window the
+    // error banner lives in. `stay` does nothing by definition.
+    match settings::load().launch_behavior.as_str() {
+        settings::BEHAVIOR_TRAY => {
+            let _ = tray::park(&app);
         }
+        settings::BEHAVIOR_HIDE => {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.hide();
+            }
+        }
+        _ => {}
     }
 
     // The wait thread owns the child for its WHOLE lifetime (this is what
@@ -540,16 +547,23 @@ fn open_project(
                 let _ = app.emit("launch-failed", format!("{shown}: {why}."));
             }
 
-            if none_left && settings::load().hide_while_running {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.unminimize();
-                    let _ = w.set_focus();
-                }
-            }
-            // Regardless of hiding: the list's opened-times and missing flags
-            // deserve a refresh when an editor ends.
+            // How the window comes back is decided by the setting NOW, not
+            // the one at launch time, so toggling mid-run behaves. Tray mode
+            // deliberately does NOT restore: the icon is the handle, and a
+            // launcher window popping itself up when the work closes is the
+            // Epic habit the tray exists to avoid. Every other mode restores
+            // -- but only a window that is actually hidden, so `stay` never
+            // steals focus from whatever the user moved on to.
             if none_left {
+                let hidden = app
+                    .get_webview_window("main")
+                    .map(|w| !w.is_visible().unwrap_or(true))
+                    .unwrap_or(false);
+                if hidden && settings::load().launch_behavior != settings::BEHAVIOR_TRAY {
+                    tray::show_hub(&app);
+                }
+                // Regardless of the window: the list's opened-times and
+                // missing flags deserve a refresh when an editor ends.
                 let _ = app.emit("editors-idle", ());
             }
         });
@@ -673,15 +687,10 @@ pub fn run() {
         // callback inside the FIRST process; the new process exits on its own.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // "Show me the Hub": surface the window the user already has.
-            // show() as well as unminimize: while editors run the window may
-            // be HIDDEN (hide_while_running), and relaunching the Hub is the
-            // designed way to get it back before they exit.
-            use tauri::Manager;
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
+            // While editors run the window may be hidden or parked in the
+            // tray, and relaunching the Hub is the designed way to get it
+            // back before they exit; show_hub also clears the tray icon.
+            tray::show_hub(app);
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(RunningEditors(Mutex::new(HashMap::new())))
