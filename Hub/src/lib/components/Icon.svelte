@@ -10,7 +10,8 @@
   //
   // Path data only, no <rect>/<circle>, so one loop renders every icon.
   export type IconName =
-    "folder" | "box" | "layers" | "gear" | "grid" | "list" | "x" | "ellipsis" | "star";
+    "folder" | "box" | "layers" | "gear" | "grid" | "list" | "x" | "ellipsis" | "star"
+    | "plus" | "chevron-down";
 
   const PATHS: Record<IconName, string[]> = {
     folder: [
@@ -56,6 +57,10 @@
     // strokes with the round linecap this file already sets, which renders the
     // same three dots through the one path loop.
     ellipsis: ["M5 12h.01", "M12 12h.01", "M19 12h.01"],
+    // The toolbar pair (Unity Hub's grammar): plus marks the primary create,
+    // chevron-down marks a button that opens a menu instead of acting.
+    plus: ["M5 12h14", "M12 5v14"],
+    "chevron-down": ["m6 9 6 6 6-6"],
   };
 </script>
 

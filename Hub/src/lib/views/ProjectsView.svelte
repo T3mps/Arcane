@@ -44,6 +44,69 @@
 
   let query = $state("");
 
+  // The Add dropdown (Unity Hub's grammar: "Add v" opens a menu, "+ New
+  // project" acts). Same popover conventions as ProjectMenu -- outside
+  // pointerdown closes, Escape closes and refocuses the trigger, arrows rove
+  // -- but positioned absolutely inside its wrapper: the header never clips
+  // or scrolls, so ProjectMenu's fixed-position machinery buys nothing here.
+  let addOpen = $state(false);
+  let addWrap = $state<HTMLElement | null>(null);
+
+  const addButtons = () =>
+    addWrap ? [...addWrap.querySelectorAll<HTMLButtonElement>(".addmenu button")] : [];
+
+  // First ENABLED item, not first item: "Add project..." disables when no
+  // engine is registered, and focusing a disabled button silently no-ops.
+  $effect(() => {
+    if (addOpen) addButtons().find((b) => !b.disabled)?.focus();
+  });
+
+  function closeAdd(restoreFocus = true) {
+    if (!addOpen) return;
+    addOpen = false;
+    if (restoreFocus) addWrap?.querySelector("button")?.focus();
+  }
+
+  function chooseAdd(action: () => void) {
+    // Close FIRST, same rule as ProjectMenu: both actions open a dialog, and
+    // a popover left behind the scrim catches clicks the user cannot see.
+    addOpen = false;
+    action();
+  }
+
+  function onAddMenuKeys(e: KeyboardEvent) {
+    const f = addButtons();
+    if (f.length === 0) return;
+    const i = f.indexOf(document.activeElement as HTMLButtonElement);
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        f[(i + 1) % f.length].focus();
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        f[(i - 1 + f.length) % f.length].focus();
+        break;
+      // Menu, not dialog: Tab dismisses. Focus returns to the trigger because
+      // the items unmount on this keystroke (ProjectMenu's rule).
+      case "Tab":
+        e.preventDefault();
+        closeAdd();
+        break;
+    }
+  }
+
+  function onWindowKey(e: KeyboardEvent) {
+    if (addOpen && e.key === "Escape") {
+      e.preventDefault();
+      closeAdd();
+    }
+  }
+
+  function onWindowPointerDown(e: PointerEvent) {
+    if (addOpen && !addWrap?.contains(e.target as Node)) closeAdd(false);
+  }
+
   // Compatibility is now per card: each project is judged against the engine
   // that will actually open IT, not against one global selection.
   const resolvedFor = (p: RecentProject) =>
@@ -80,20 +143,40 @@
      to a slim second row: the count line runs long once projects are
      incompatible ("3 projects - 1 needs a different engine"), and at the 800px
      window minimum there is not room for it beside the search. -->
+<svelte:window onkeydown={onWindowKey} onpointerdown={onWindowPointerDown} />
+
 <header class="top">
   <h2 class="display view-title">Projects</h2>
   <input class="search" bind:value={query} placeholder="Search projects" spellcheck="false" />
   <div class="acts">
-    <!-- Scan needs no engine: it only fills the LIST, unlike Add, which also
-         launches what it picks. -->
-    <Button disabled={busy} onclick={onScan}
-            title="Find every project under a folder and add them all">Scan&hellip;</Button>
-    <!-- "Add", not "Open...": this puts an EXISTING project into the list,
-         which is what the word means in this kind of launcher. It also happens
-         to launch it, but the list is the lasting effect. -->
-    <Button disabled={busy || !defaultEngine} onclick={onOpen}
-            title="Add an existing project to the list">Add</Button>
-    <Button variant="primary" disabled={busy || !defaultEngine} onclick={onNew}>New project</Button>
+    <!-- "Add", not "Open...": both routes put an EXISTING project into the
+         list, which is what the word means in this kind of launcher. The
+         dropdown folds Scan under it (one Add, two grains) -- disabled only
+         while busy, because Scan needs no engine; the engine requirement
+         gates the one ITEM that launches. -->
+    <div class="addwrap" bind:this={addWrap}>
+      <Button disabled={busy} onclick={() => (addOpen ? closeAdd() : (addOpen = true))}
+              aria-haspopup="menu" aria-expanded={addOpen}
+              title="Add existing projects to the list">
+        <span class="lbl">Add<Icon name="chevron-down" size={14} /></span>
+      </Button>
+      {#if addOpen}
+        <div class="addmenu" role="menu" tabindex="-1" aria-label="Add projects"
+             onkeydown={onAddMenuKeys}>
+          <button class="aitem" type="button" role="menuitem" tabindex="-1"
+                  disabled={!defaultEngine}
+                  title={defaultEngine ? "Pick a project's .arcproj file"
+                                       : "Register an engine first"}
+                  onclick={() => chooseAdd(onOpen)}>Add project&hellip;</button>
+          <button class="aitem" type="button" role="menuitem" tabindex="-1"
+                  title="Find every project under a folder and add them all"
+                  onclick={() => chooseAdd(onScan)}>Scan folder&hellip;</button>
+        </div>
+      {/if}
+    </div>
+    <Button variant="primary" disabled={busy || !defaultEngine} onclick={onNew}>
+      <span class="lbl"><Icon name="plus" size={15} />New project</span>
+    </Button>
   </div>
 </header>
 
@@ -188,6 +271,32 @@
 <style>
   .top { display: flex; align-items: center; gap: 12px; }
   .acts { display: flex; gap: 8px; flex: none; }
+
+  /* Icon + label inside a Button: the icon is display:block, so without a
+     flex wrapper it would break the button's inline flow. */
+  .lbl { display: flex; align-items: center; gap: 6px; }
+
+  .addwrap { position: relative; }
+  /* Absolute under the trigger, not ProjectMenu's fixed layer: the header
+     neither clips nor scrolls, so the anchor cannot go stale. Right-aligned
+     to the trigger, matching where the ellipsis menus hang. Surface tokens
+     match ProjectMenu's .menu so the two popovers read as one species. */
+  .addmenu { position: absolute; z-index: 30; top: calc(100% + 4px); right: 0;
+             width: 200px; padding: 5px;
+             background: var(--surface); border: 1px solid var(--border);
+             border-radius: var(--r-panel);
+             box-shadow: 0 16px 40px rgba(0, 0, 0, .55);
+             animation: rise var(--dur) var(--ease); }
+  .aitem { display: block; width: 100%; text-align: left; font: inherit;
+           font-size: 13px; padding: 8px 10px; border: 0; border-radius: 5px;
+           background: none; color: var(--text); cursor: default;
+           transition: background var(--dur) var(--ease); }
+  .aitem:hover:not(:disabled) { background: rgba(255, 255, 255, .06); }
+  /* The no-engine state: present but honest, like the disabled trigger it
+     replaced -- the title says what to do about it. */
+  .aitem:disabled { color: var(--text-dim); opacity: .6; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(-4px) } }
 
   /* margin-left:auto pushes the search and the buttons to the right as one
      group, leaving the title hard left. flex:1 with a cap lets the field take

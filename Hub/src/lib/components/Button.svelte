@@ -1,27 +1,33 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import type { HTMLButtonAttributes } from "svelte/elements";
   // `primary` is the single primary action per view; `ghost` is everything
   // secondary; `danger` is a destructive action sitting among ordinary ones and
   // is only coloured on hover, so a list of rows is not a wall of red;
   // `destructive` is the FILLED form, for the confirm button of a dialog whose
   // whole purpose is the destruction -- there the colour is the point, and a
   // quiet control would understate what pressing it does.
+  //
+  // `rest` passes ARIA through (aria-haspopup/aria-expanded for a menu-opening
+  // button) -- added for the Add dropdown, whose trigger must speak the menu
+  // pattern without rebuilding this component's styling by hand.
   let {
     variant = "ghost",
     disabled = false,
     title = "",
     onclick,
     children,
+    ...rest
   }: {
     variant?: "primary" | "ghost" | "danger" | "destructive";
     disabled?: boolean;
     title?: string;
     onclick?: () => void;
     children: Snippet;
-  } = $props();
+  } & Omit<HTMLButtonAttributes, "disabled" | "title" | "onclick"> = $props();
 </script>
 
-<button class="btn {variant}" type="button" {disabled} {title} {onclick}>{@render children()}</button>
+<button {...rest} class="btn {variant}" type="button" {disabled} {title} {onclick}>{@render children()}</button>
 
 <style>
   .btn {
