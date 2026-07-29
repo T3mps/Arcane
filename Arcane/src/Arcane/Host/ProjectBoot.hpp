@@ -1,9 +1,11 @@
 #pragma once
 
-// Host-boot helpers shared by Loom and the Arcane Editor (source-shared, like
-// GpuContext/LoomConfig). They turn the engine's layered config + an open project
-// into the two boot decisions a host makes: which input map to load, and which game
-// module to host.
+// Host-boot helpers used by any runtime host (Loom, the Arcane Editor) that
+// boots the engine via GpuContext/HostConfig -- all three now live in the
+// engine DLL as Arcane/Host, so a host consumes them rather than source-
+// compiling its own copy. They turn the engine's layered config + an open
+// project into the two boot decisions a host makes: which input map to
+// load, and which game module to host.
 
 #include <Arcane/Base/Engine.hpp>        // BuildInfo (engine identity probe)
 #include <Arcane/Base/Log.hpp>           // ARC_WARN/ARC_ERROR/ARC_INFO (not pulled in transitively by any of the below)

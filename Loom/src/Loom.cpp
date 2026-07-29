@@ -6,7 +6,7 @@
 
 #include "Loom.hpp"
 
-#include <ProjectBoot.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
@@ -27,7 +27,7 @@
 #include <filesystem>
 #include <thread>
 
-Loom::Loom(LoomConfig cfg)
+Loom::Loom(Arcane::HostConfig cfg)
     : m_config(std::move(cfg)), m_perf(m_config.perf) {}
 
 bool Loom::Init()
@@ -36,7 +36,7 @@ bool Loom::Init()
     // declared BEFORE m_runtime/m_plugin in Loom -- so it destructs AFTER them:
     // the render resources it owns (window/device/swapchain/shaders/canvas/batcher/
     // tonemap/imgui/input + commandList/framebuffers) must outlive runtime + plugin.
-    m_gpu = GpuContext::Create(m_config);
+    m_gpu = Arcane::GpuContext::Create(m_config);
     if (!m_gpu)
     {
         ARC_ERROR("Loom: GPU context create failed");
@@ -176,7 +176,7 @@ void Loom::MainLoop()
             double simDt = std::chrono::duration<double>(now - simPrev).count();
             simPrev = now;
             if (simDt > 0.25) simDt = 0.25;
-            const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
+            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_runtime->Loop().Advance(simDt,
                 [&](double dt)          { m_plugin->FixedUpdateAll(dt); },
                 [&](double dt, double a){ m_plugin->UpdateAll(dt, a); });
@@ -231,21 +231,21 @@ void Loom::MainLoop()
         // Loom stays camera-agnostic: SetRenderContext writes the STORED camera the
         // plugin drives via Runtime::SetCamera (default identity if it never does).
         {
-            const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
+            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_runtime->SetRenderContext(&m_gpu->Batch());
             m_runtime->Loop().SubmitRender();
             m_perf.Add(m_perf.accRec, t0, m_perf.Now());
         }
 
         {
-            const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
+            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_gpu->Batch().End();
             m_perf.Add(m_perf.accEnd, t0, m_perf.Now());
         }
 
         nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);
         {
-            const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
+            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             // Scene post hook (post arc): with a bound chain the linear canvas
             // feeds it as the external Scene input and the tonemap samples the
             // chain's output -- without one this is exactly the old line
@@ -269,14 +269,14 @@ void Loom::MainLoop()
             m_perf.Add(m_perf.accTone, t0, m_perf.Now());
         }
         {
-            const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
+            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_gpu->Imgui().Render(m_gpu->Cmd(), fb);
             m_perf.Add(m_perf.accImgui, t0, m_perf.Now());
         }
 
         m_gpu->Cmd()->close();
         {
-            const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
+            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_gpu->Device().Nvrhi()->executeCommandList(m_gpu->Cmd());
             m_gpu->Swap().Present();
             m_perf.Add(m_perf.accPresent, t0, m_perf.Now());
@@ -284,7 +284,7 @@ void Loom::MainLoop()
 
         // Debounced watcher: rebuild PlaygroundGame -> auto hot reload.
         {
-            const auto t0 = m_perf.On() ? m_perf.Now() : FramePerf::Clock::time_point{};
+            const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_plugin->Poll();
             m_perf.Add(m_perf.accPoll, t0, m_perf.Now());
         }

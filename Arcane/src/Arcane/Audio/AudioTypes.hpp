@@ -71,7 +71,7 @@ namespace Arcane::Audio
 		// Defaults to FALSE: opening a real OS audio device is opt-in. There is no
 		// headless signal reachable when the Runtime constructs the AudioDevice (the
 		// host-owned render device is wired in AFTER construction, so it is always
-		// null at audio-init time, and neither the Runtime ctor nor LoomConfig carries
+		// null at audio-init time, and neither the Runtime ctor nor HostConfig carries
 		// a headless flag). Defaulting off means every Runtime that links Arcane.dll
 		// (tests, servers, tools, the scripted "Loom --frames N" GPU-verify) cleanly
 		// uses the miniaudio noDevice null backend; an interactive host opts in by

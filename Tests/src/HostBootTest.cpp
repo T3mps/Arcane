@@ -1,5 +1,5 @@
-#include <LoomConfig.hpp>
-#include <ProjectBoot.hpp>
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>
 
 #include <Arcane/Base/Engine.hpp>        // ExecutablePathUtf8 (the argv[0] replacement)
 #include <Arcane/Base/Runtime.hpp>
@@ -61,23 +61,23 @@ namespace
     }
 }
 
-TEST_CASE("LoomConfig parses --project", "[loom]")
+TEST_CASE("HostConfig parses --project", "[host]")
 {
     const char* argv[] = { "loom", "--project", "MyGame" };
-    auto out = LoomConfig::Parse(3, const_cast<char**>(argv));
+    auto out = Arcane::HostConfig::Parse(3, const_cast<char**>(argv));
     REQUIRE(out.config.has_value());
     REQUIRE(out.config->projectPath == "MyGame");
 }
 
-TEST_CASE("LoomConfig defaults --project to empty", "[loom]")
+TEST_CASE("HostConfig defaults --project to empty", "[host]")
 {
     const char* argv[] = { "loom" };
-    auto out = LoomConfig::Parse(1, const_cast<char**>(argv));
+    auto out = Arcane::HostConfig::Parse(1, const_cast<char**>(argv));
     REQUIRE(out.config.has_value());
     REQUIRE(out.config->projectPath.empty());
 }
 
-TEST_CASE("HostBoot::GameModule falls back with no/empty gameModule", "[loom]")
+TEST_CASE("HostBoot::GameModule falls back with no/empty gameModule", "[host]")
 {
     const fs::path dir = fs::temp_directory_path() / "arcane_hostboot_gm";
     std::error_code ec; fs::remove_all(dir, ec);
@@ -93,7 +93,7 @@ TEST_CASE("HostBoot::GameModule falls back with no/empty gameModule", "[loom]")
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("HostBoot::GameModule returns the manifest gameModule when set", "[loom]")
+TEST_CASE("HostBoot::GameModule returns the manifest gameModule when set", "[host]")
 {
     const fs::path dir = fs::temp_directory_path() / "arcane_hostboot_gm2";
     std::error_code ec; fs::remove_all(dir, ec);
@@ -107,7 +107,7 @@ TEST_CASE("HostBoot::GameModule returns the manifest gameModule when set", "[loo
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("HostBoot::GameModule resolves the project's Binaries/ copy when built", "[loom]")
+TEST_CASE("HostBoot::GameModule resolves the project's Binaries/ copy when built", "[host]")
 {
     const fs::path dir = fs::temp_directory_path() / "arcane_hostboot_gm3";
     std::error_code ec; fs::remove_all(dir, ec);
@@ -131,7 +131,7 @@ TEST_CASE("HostBoot::GameModule resolves the project's Binaries/ copy when built
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("HostBoot::LoadInputConfig loads the input category", "[loom]")
+TEST_CASE("HostBoot::LoadInputConfig loads the input category", "[host]")
 {
     const fs::path dir = fs::temp_directory_path() / "arcane_hostboot_input";
     std::error_code ec; fs::remove_all(dir, ec); fs::create_directories(dir, ec);
@@ -168,7 +168,7 @@ TEST_CASE("HostBoot::LoadInputConfig loads the input category", "[loom]")
 // the built exe and parsing its stdout catches that, which is what the Hub does
 // at registration time.
 
-TEST_CASE("EngineInfoJson sources the ABI from the engine constant", "[loom]")
+TEST_CASE("EngineInfoJson sources the ABI from the engine constant", "[host]")
 {
     const std::string s = Arcane::HostBoot::EngineInfoJson("C:/some/ArcaneEditor.exe");
     const nlohmann::json j = nlohmann::json::parse(s);
@@ -180,7 +180,7 @@ TEST_CASE("EngineInfoJson sources the ABI from the engine constant", "[loom]")
     CHECK(j["engineAbi"].get<std::uint32_t>() == Arcane::kGamePluginABIVersion);
 }
 
-TEST_CASE("EngineInfoJson carries build + exe path and parses cleanly", "[loom]")
+TEST_CASE("EngineInfoJson carries build + exe path and parses cleanly", "[host]")
 {
     // Fed BACKSLASHES on purpose: the previous fixture passed an
     // already-forward-slashed path, so the normalisation assertion below held
@@ -198,7 +198,7 @@ TEST_CASE("EngineInfoJson carries build + exe path and parses cleanly", "[loom]"
     CHECK(j["exePath"].get<std::string>() == "C:/some dir/ArcaneEditor.exe");
 }
 
-TEST_CASE("EngineInfoJson survives a non-ASCII install path", "[loom]")
+TEST_CASE("EngineInfoJson survives a non-ASCII install path", "[host]")
 {
     // Regression for MAJOR 5 of the 2026-07-26 review. The probe used to be fed
     // argv[0], which MSVC hands to main() in the ACTIVE ANSI CODEPAGE. Under an
@@ -234,7 +234,7 @@ TEST_CASE("EngineInfoJson survives a non-ASCII install path", "[loom]")
     }
 }
 
-TEST_CASE("ExecutablePathUtf8 reports this test exe, absolute and forward-slashed", "[loom]")
+TEST_CASE("ExecutablePathUtf8 reports this test exe, absolute and forward-slashed", "[host]")
 {
     // The replacement for argv[0]. Asserted against the real running process, so
     // it also proves the export crosses the Arcane.dll boundary.
@@ -249,7 +249,7 @@ TEST_CASE("ExecutablePathUtf8 reports this test exe, absolute and forward-slashe
     CHECK(lower.find("arcanetests.exe") != std::string::npos);
 }
 
-TEST_CASE("EngineInfoJson is a single line", "[loom]")
+TEST_CASE("EngineInfoJson is a single line", "[host]")
 {
     // The Hub reads one line from stdout. A pretty-printed payload would make it
     // guess where the object ends.
@@ -257,17 +257,17 @@ TEST_CASE("EngineInfoJson is a single line", "[loom]")
     CHECK(s.find('\n') == std::string::npos);
 }
 
-TEST_CASE("LoomConfig parses --print-engine-info and defaults it off", "[loom]")
+TEST_CASE("HostConfig parses --print-engine-info and defaults it off", "[host]")
 {
     {
         const char* argv[] = { "ArcaneEditor.exe" };
-        auto out = LoomConfig::Parse(1, const_cast<char**>(argv));
+        auto out = Arcane::HostConfig::Parse(1, const_cast<char**>(argv));
         REQUIRE(out.config.has_value());
         CHECK_FALSE(out.config->printEngineInfo);
     }
     {
         const char* argv[] = { "ArcaneEditor.exe", "--print-engine-info" };
-        auto out = LoomConfig::Parse(2, const_cast<char**>(argv));
+        auto out = Arcane::HostConfig::Parse(2, const_cast<char**>(argv));
         REQUIRE(out.config.has_value());
         CHECK(out.config->printEngineInfo);
     }
@@ -281,7 +281,7 @@ TEST_CASE("LoomConfig parses --print-engine-info and defaults it off", "[loom]")
 // resolved file + the scene's asset id BACK to the caller so SceneSession::Adopt
 // does not have to re-open and re-parse the same file just to recover the Guid.
 
-TEST_CASE("BootSceneFile resolves the manifest's bootScene Guid to a file", "[loom][project]")
+TEST_CASE("BootSceneFile resolves the manifest's bootScene Guid to a file", "[host][project]")
 {
     // The pure half: Guid -> physical file, through the AssetRegistry the
     // project rebuilt at open. Empty when there is no boot scene, or when the
@@ -311,7 +311,7 @@ TEST_CASE("BootSceneFile resolves the manifest's bootScene Guid to a file", "[lo
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("BootSceneFile is empty for no boot scene and for an unknown id", "[loom][project]")
+TEST_CASE("BootSceneFile is empty for no boot scene and for an unknown id", "[host][project]")
 {
     namespace fs = std::filesystem;
     const fs::path dir = fs::temp_directory_path() / "arcane_bootscene_absent";
@@ -345,7 +345,7 @@ TEST_CASE("BootSceneFile is empty for no boot scene and for an unknown id", "[lo
 }
 
 TEST_CASE("BootScene loads the resolved scene into the runtime and reports the file + id back",
-          "[loom][project]")
+          "[host][project]")
 {
     // The integration the brief's editor snippet got wrong: BootScene must hand
     // the caller enough to Adopt() the scene WITHOUT a second ReadSceneFile of
@@ -400,7 +400,7 @@ TEST_CASE("BootScene loads the resolved scene into the runtime and reports the f
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("BootScene leaves the registry untouched when there is no boot scene", "[loom][project]")
+TEST_CASE("BootScene leaves the registry untouched when there is no boot scene", "[host][project]")
 {
     // No boot scene configured: a project with none keeps whatever the plugin's
     // Init already built (EditorApp::Init's own comment) -- BootScene must not
@@ -428,7 +428,7 @@ TEST_CASE("BootScene leaves the registry untouched when there is no boot scene",
 }
 
 TEST_CASE("BootScene leaves the registry untouched when the resolved file fails to parse",
-          "[loom][project]")
+          "[host][project]")
 {
     // A boot scene IS configured and DOES resolve to a file, but the file
     // itself is bad (wrong schema version here). Distinct from the "unknown
@@ -473,7 +473,7 @@ TEST_CASE("BootScene leaves the registry untouched when the resolved file fails 
 // generated), so this is a read-only pass over the real repo tree -- no
 // mutation risk to source-controlled fixtures from running the test suite.
 
-TEST_CASE("SampleProject opens into its authored boot scene end to end", "[loom][project]")
+TEST_CASE("SampleProject opens into its authored boot scene end to end", "[host][project]")
 {
     const fs::path dir = FindSampleProjectDir();
     REQUIRE_FALSE(dir.empty());   // if this fails, FindSampleProjectDir's search bound needs raising

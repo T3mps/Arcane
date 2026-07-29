@@ -20,7 +20,7 @@
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>   // Save/LoadSpriteAsset (MintOrReuseSpriteForTexture)
 
-#include <ProjectBoot.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>
 
 #include <filesystem>
 #include <memory>

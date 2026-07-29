@@ -1,17 +1,18 @@
-// LoomConfig::Parse round-trip. PRESENTATION-FREE. Compiled WITH Loom/src/LoomConfig.cpp
-// (see premake ArcaneTests files{}) so it links without the Loom exe.
+// HostConfig::Parse round-trip. PRESENTATION-FREE. HostConfig now lives in the
+// engine DLL (Arcane/Host/HostConfig.hpp, ARCANE_API) so this test exe links
+// it via the "Arcane" link, not a source-compile.
 #include <vector>
 #include <string>
 #include <catch2/catch_test_macros.hpp>
-#include <LoomConfig.hpp>
+#include <Arcane/Host/HostConfig.hpp>
 namespace {
-    LoomConfig::ParseOutcome Run(std::vector<std::string> args) {
+    Arcane::HostConfig::ParseOutcome Run(std::vector<std::string> args) {
         std::vector<char*> argv; argv.push_back(const_cast<char*>("Loom"));
         for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
-        return LoomConfig::Parse(static_cast<int>(argv.size()), argv.data());
+        return Arcane::HostConfig::Parse(static_cast<int>(argv.size()), argv.data());
     }
 }
-TEST_CASE("LoomConfig: defaults", "[loom]") {
+TEST_CASE("HostConfig: defaults", "[host]") {
     const auto o = Run({});
     REQUIRE(o.config.has_value());
     REQUIRE(o.config->backend == Arcane::GraphicsBackend::D3D12);
@@ -22,7 +23,7 @@ TEST_CASE("LoomConfig: defaults", "[loom]") {
     // fallback -- Loom -> Sandbox.dll, the editor -> no game loaded.
     REQUIRE(o.config->pluginPath.empty());
 }
-TEST_CASE("LoomConfig: every flag maps", "[loom]") {
+TEST_CASE("HostConfig: every flag maps", "[host]") {
     const auto o = Run({"--backend", "vulkan", "--frames", "180", "--no-vsync", "--perf", "--plugin", "Game.dll"});
     REQUIRE(o.config.has_value());
     REQUIRE(o.config->backend == Arcane::GraphicsBackend::Vulkan);
@@ -31,11 +32,11 @@ TEST_CASE("LoomConfig: every flag maps", "[loom]") {
     REQUIRE(o.config->perf);
     REQUIRE(o.config->pluginPath == "Game.dll");
 }
-TEST_CASE("LoomConfig: --help exits 0, no config", "[loom]") {
+TEST_CASE("HostConfig: --help exits 0, no config", "[host]") {
     const auto o = Run({"--help"});
     REQUIRE_FALSE(o.config.has_value()); REQUIRE(o.exitCode == 0);
 }
-TEST_CASE("LoomConfig: bad arg exits 2, no config", "[loom]") {
+TEST_CASE("HostConfig: bad arg exits 2, no config", "[host]") {
     const auto o = Run({"--backend", "metal"});
     REQUIRE_FALSE(o.config.has_value()); REQUIRE(o.exitCode == 2);
 }

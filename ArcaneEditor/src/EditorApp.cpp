@@ -1,7 +1,8 @@
-// EditorApp: Init -> MainLoop -> Shutdown. Reuses Loom's host-boot helpers
-// (GpuContext/FramePerf/LoomConfig) by source-compile and hosts Sandbox.dll via
-// the lifted Arcane::PluginHost. The frame loop advances the sim through the
-// RunLoop, renders the scene into an OffscreenCanvas (the same canvas->batcher->
+// EditorApp: Init -> MainLoop -> Shutdown. Consumes the engine's host-boot
+// helpers (Arcane::GpuContext/FramePerf/HostConfig, exported from Arcane.dll)
+// and hosts Sandbox.dll via the lifted Arcane::PluginHost. The frame loop
+// advances the sim through the RunLoop, renders the scene into an
+// OffscreenCanvas (the same canvas->batcher->
 // tonemap path Loom drives, into a panel texture instead of the backbuffer), and
 // draws an editor shell -- a full-viewport dockspace (Arcane::Editor::BeginDockSpace)
 // hosting a Sim toolbar (play/pause/step + time-scale), a Console panel fed by a
@@ -25,7 +26,7 @@
 #include "EditorTheme.hpp"
 #include "SpriteDocument.hpp"
 
-#include <ProjectBoot.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputActions.hpp>
@@ -78,7 +79,7 @@ namespace Arcane::Editor
         }
     }
 
-    EditorApp::EditorApp(LoomConfig cfg)
+    EditorApp::EditorApp(HostConfig cfg)
         : m_config(std::move(cfg)), m_perf(m_config.perf) {}
 
     bool EditorApp::Init()
@@ -233,7 +234,7 @@ namespace Arcane::Editor
         // The editor loads a game module only when one is specified -- a project's
         // gameModule, or an explicit --plugin. Bare `ArcaneEditor` (no --project, no
         // --plugin) starts with NO game loaded (an empty editor) rather than the physics
-        // Sandbox: pluginPath defaults empty (LoomConfig), so GameModule returns empty
+        // Sandbox: pluginPath defaults empty (HostConfig), so GameModule returns empty
         // here and the plugin host is left disengaged. Every m_plugin-> use in MainLoop
         // is optional-guarded, so a disengaged plugin is safe. Sandbox stays available on
         // demand via --plugin Sandbox.dll or --project SampleProject.

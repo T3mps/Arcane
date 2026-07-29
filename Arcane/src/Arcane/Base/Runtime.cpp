@@ -171,7 +171,7 @@ namespace Arcane
 
             // Headless gating for the real OS audio device. There is no headless signal
             // reachable here: the host-owned render device is wired via SetRenderResources
-            // AFTER construction (always null now), and neither this ctor nor LoomConfig
+            // AFTER construction (always null now), and neither this ctor nor HostConfig
             // carried a headless flag. So the host states its intent through a ctor flag --
             // enableAudioDevice (default false). Tests, servers, tools, and the scripted
             // "Loom --frames N" GPU-verify leave it false and get the noDevice null backend;

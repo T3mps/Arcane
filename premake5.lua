@@ -383,7 +383,7 @@ project "Loom"
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
-        "%{prj.location}/src",           -- LoomConfig.hpp (<LoomConfig.hpp> from main/LoomConfig.cpp)
+        "%{prj.location}/src",           -- Loom.hpp (self-resolving quoted include; kept for any future local header)
         "%{wks.location}/Arcane/src",
         "%{IncludeDir.Core}",
         "%{IncludeDir.nlohmann}",
@@ -395,12 +395,13 @@ project "Loom"
         "%{IncludeDir.enkiTS}",
         "%{IncludeDir.Mosaic}",
     }
-    -- Core is linked directly (alongside the Arcane DLL) so Loom's own TUs can call
-    -- un-exported Core APIs -- LoomConfig.cpp uses Arcane::Cli, which is header-only
-    -- declared without ARCANE_API, so it is NOT exported from Arcane.dll. Two static
-    -- Core copies in different modules is the established workspace pattern (see the
-    -- ArcaneTests links comment). Core links into exactly ONE module per PROCESS
-    -- holds because Loom.exe and Arcane.dll are distinct modules.
+    -- Core is linked directly (alongside the Arcane DLL) even though the host-boot
+    -- layer (HostConfig/GpuContext/FramePerf/ProjectBoot) moved INTO Arcane.dll as
+    -- Arcane/Host -- Loom.exe no longer source-compiles any of it. Core stays: it's
+    -- a cheap, established two-static-copies pattern (see the ArcaneTests links
+    -- comment), and other exe TUs may still want un-exported Core APIs directly.
+    -- Core links into exactly ONE module per PROCESS holds because Loom.exe and
+    -- Arcane.dll are distinct modules.
     links { "Core", "Arcane" }
     dependson { "PlaygroundGame", "Sandbox" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
@@ -430,9 +431,10 @@ project "Loom"
 
 -- ============================================================================
 -- Arcane Editor: the editor shell (ArcaneEditor.exe). Engine boot + RunLoop + PluginHost
--- + ImGui docking shell. Hosts Sandbox.dll by default. Reuses Loom's host-boot
--- helpers (GpuContext/FramePerf/LoomConfig) by source-compile -- host-to-host
--- reuse, NOT an Arcane->Arcane Editor dependency. Consumes only ARCANE_API otherwise.
+-- + ImGui docking shell. Hosts Sandbox.dll by default. Consumes the engine's
+-- host-boot helpers (Arcane::GpuContext/FramePerf/HostConfig, Arcane/Host/ --
+-- exported ARCANE_API from Arcane.dll, same as Loom) rather than source-compiling
+-- its own copy. Consumes only ARCANE_API otherwise.
 -- ============================================================================
 project "ArcaneEditor"
     location "ArcaneEditor"
@@ -445,13 +447,9 @@ project "ArcaneEditor"
     files {
         "%{prj.location}/src/**.cpp",
         "%{prj.location}/src/**.hpp",
-        -- Loom host-boot helpers, source-shared (same pattern as ArcaneTests).
-        "%{wks.location}/Loom/src/GpuContext.cpp",
-        "%{wks.location}/Loom/src/LoomConfig.cpp",
     }
     includedirs {
         "%{prj.location}/src",
-        "%{wks.location}/Loom/src",      -- GpuContext.hpp / FramePerf.hpp / LoomConfig.hpp
         "%{wks.location}/Arcane/src",
         "%{IncludeDir.Core}",
         "%{IncludeDir.nlohmann}",
@@ -538,11 +536,11 @@ project "ArcaneTests"
         "%{wks.location}/Sandbox/src/Scenes.cpp",
         "%{wks.location}/Sandbox/src/SandboxApp.cpp",
         "%{wks.location}/Sandbox/src/Hud.cpp",
-        -- LoomConfig (the typed Loom CLI result over Arcane::Cli) compiles into the
-        -- test exe so [loom] round-trips Parse without loading the Loom binary.
-        -- Module/Plugin/PluginHost moved into Arcane/Plugin (Arcane.dll, ARCANE_API);
-        -- the test exe now consumes them via the "Arcane" link, not source-compiled.
-        "%{wks.location}/Loom/src/LoomConfig.cpp",
+        -- HostConfig (the typed host CLI result over Arcane::Cli), GpuContext,
+        -- FramePerf, and ProjectBoot all moved into Arcane/Host (Arcane.dll,
+        -- ARCANE_API) alongside Module/Plugin/PluginHost (Arcane/Plugin) -- the
+        -- test exe now consumes all of them via the "Arcane" link, not source-
+        -- compiled. [host] round-trips HostConfig::Parse without loading Loom.exe.
         -- Task 3: ConsoleBuffer (Arcane Editor's log ring buffer) source-compiles into the
         -- test exe so the [editor] unit test drives it directly, mirroring the
         -- Sandbox helper-unit pattern above.
@@ -621,7 +619,6 @@ project "ArcaneTests"
         "%{IncludeDir.Core}",
         "%{wks.location}/Arcane/src",
         "%{wks.location}/Sandbox/src",   -- Interaction.hpp / Scenes.hpp / Camera.hpp for the [sandbox] tests
-        "%{wks.location}/Loom/src",      -- LoomConfig.hpp for the [loom] test
         "%{wks.location}/ArcaneEditor/src",  -- ConsoleBuffer.hpp for the [editor] test
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",

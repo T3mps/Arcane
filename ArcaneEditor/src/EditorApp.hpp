@@ -1,6 +1,6 @@
 #pragma once
-// EditorApp: the editor application. Constructed in main from a LoomConfig
-// (reused as the host config); Run() drives Init -> the frame loop -> Shutdown.
+// EditorApp: the editor application. Constructed in main from a HostConfig
+// (shared with Loom); Run() drives Init -> the frame loop -> Shutdown.
 // Member declaration order m_gpu -> m_runtime -> m_plugin is the TEARDOWN
 // CONTRACT (destruct reverse: plugin Unload while the DLL is still mapped ->
 // runtime -> render stack in GpuContext -> window last). Mirrors Loom.
@@ -15,9 +15,9 @@
 #include <utility>
 #include <vector>
 
-#include <LoomConfig.hpp>
-#include <GpuContext.hpp>
-#include <FramePerf.hpp>
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Host/GpuContext.hpp>
+#include <Arcane/Host/FramePerf.hpp>
 #include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
 #include "DocumentHost.hpp"
@@ -54,7 +54,7 @@ namespace Arcane::Editor
     class EditorApp
     {
     public:
-        explicit EditorApp(LoomConfig cfg);
+        explicit EditorApp(HostConfig cfg);
         int Run();   // Init() -> MainLoop() -> Shutdown(); process exit code
 
         // Raise File -> Open Project on the FIRST frame. Set by main() for a bare
@@ -149,7 +149,7 @@ namespace Arcane::Editor
         bool PresentFrame();
         void EndFrame(LoopState& ls);
 
-        LoomConfig                        m_config;
+        HostConfig                        m_config;
         std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST
 
         // The hosted plugin's OWN ImGui context, rendered INTO the viewport's

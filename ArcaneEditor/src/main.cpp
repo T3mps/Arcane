@@ -1,5 +1,5 @@
-// Arcane Editor -- the editor shell entry point. Parses argv into a LoomConfig
-// (reused as the host config), constructs the EditorApp object, and returns
+// Arcane Editor -- the editor shell entry point. Parses argv into a HostConfig
+// (shared with Loom), constructs the EditorApp object, and returns
 // its Run() exit code. All engine boot, the frame loop, and the load-bearing
 // teardown order live in EditorApp (EditorApp.hpp/.cpp); main is just the
 // wire-up (mirrors Loom/src/main.cpp).
@@ -7,8 +7,8 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>   // EditorLock: the direct-launch double-open guard
-#include <LoomConfig.hpp>
-#include <ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 #include "EditorApp.hpp"
 
 #include <cstdio>
@@ -35,7 +35,7 @@ int main(int argc, char** argv)
     Arcane::Log::Init();
     Arcane::Log::InstallMosaicSink();
     Arcane::Assert::InstallMosaicHandler();
-    const LoomConfig::ParseOutcome parsed = LoomConfig::Parse(argc, argv);
+    const Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);
     if (!parsed.config) return parsed.exitCode;
 
     // Probe: identity to stdout, nothing else. Deliberately BEFORE any engine

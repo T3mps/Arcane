@@ -1,0 +1,29 @@
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Cli/Cli.hpp>
+namespace Arcane
+{
+    HostConfig::ParseOutcome HostConfig::Parse(int argc, char** argv)
+    {
+        Cli cli{ "Arcane Loom", "M5 plugin host" };
+        cli.Option("backend", "dx12",        "graphics backend: dx12|vulkan").Choices({ "dx12", "vulkan" });
+        cli.Option("frames",  "0",           "render N frames then exit").Type(CliType::Uint);
+        cli.Flag  ("no-vsync",               "present without vsync");
+        cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
+        cli.Option("plugin",  "",            "game DLL to host (empty = host default: Loom Sandbox.dll, editor none)");
+        cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
+        cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
+
+        const Cli::Result r = cli.Parse(argc, argv);
+        if (!r.ok) return { std::nullopt, r.exitCode };
+
+        HostConfig cfg;
+        cfg.backend    = (r.Get("backend") == "vulkan") ? GraphicsBackend::Vulkan : GraphicsBackend::D3D12;
+        cfg.maxFrames  = r.GetAs<std::uint64_t>("frames");
+        cfg.vsync      = !r.Flag("no-vsync");
+        cfg.perf       = r.Flag("perf");
+        cfg.pluginPath = r.Get("plugin");
+        cfg.projectPath = r.Get("project");
+        cfg.printEngineInfo = r.Flag("print-engine-info");
+        return { cfg, 0 };
+    }
+}
