@@ -615,6 +615,13 @@ project "ArcaneTests"
         -- document closes). Draw (the only ImGui method) is never called --
         -- same precedent as ShaderEditorDocument above.
         "%{wks.location}/ArcaneEditor/src/SpriteDocument.cpp",
+        -- Task 5 (runtime-host-fold arc): RuntimeLaunch's PURE candidate-list/
+        -- argv builder (ExeCandidates/BuildArgs) source-compiles into the test
+        -- exe so the [editor] units drive them directly. SpawnDetached (the
+        -- one CreateProcessW call in the file) is compiled here too but never
+        -- invoked by any test -- process creation is desk-verify territory,
+        -- same "no spawn test" rule the task brief states outright.
+        "%{wks.location}/ArcaneEditor/src/RuntimeLaunch.cpp",
     }
 
     includedirs {
