@@ -53,6 +53,12 @@ namespace ax::NodeEditor
 
 namespace Arcane::Editor
 {
+    // The graph canvas's shader-rendered backdrop (GraphGridPass.hpp). Held by
+    // unique_ptr behind a forward declaration so the nvrhi pass machinery stays
+    // out of every translation unit that merely opens a document; the
+    // destructor below is out-of-line, which is what makes that legal.
+    class GraphGridPass;
+
     // Everything a document borrows from the app (all outlive the host's
     // document list -- see EditorApp member ordering).
     struct DocServices
@@ -382,6 +388,10 @@ namespace Arcane::Editor
 
         // ---- Graph mode (Slice 9; per-pass graphs) ----
         ax::NodeEditor::EditorContext* m_graphCtx = nullptr;   // lazy; dtor destroys
+        // Shader-rendered canvas backdrop, blitted under the canvas content.
+        // Lazy and optional: device-less services (the headless tests) and a
+        // missing shader artifact both leave it null and simply draw no grid.
+        std::unique_ptr<GraphGridPass> m_grid;
         // Per-pass codegen state, indexed by CHAIN index (0 = base). Sized by
         // RegenerateFromGraph; empty entries = text-owned or clean.
         std::vector<std::vector<Arcane::GraphError>> m_passGraphErrors;

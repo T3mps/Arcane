@@ -42,6 +42,8 @@ call :compile outline_jfa vs_main vs_6_5 outline_jfa_vs || exit /b 1
 call :compile outline_jfa ps_main ps_6_5 outline_jfa_ps || exit /b 1
 call :compile outline_composite vs_main vs_6_5 outline_composite_vs || exit /b 1
 call :compile outline_composite ps_main ps_6_5 outline_composite_ps || exit /b 1
+call :compile graph_grid vs_main vs_6_5 graph_grid_vs || exit /b 1
+call :compile graph_grid ps_main ps_6_5 graph_grid_ps || exit /b 1
 echo Shaders compiled to %OUT%
 exit /b 0
 

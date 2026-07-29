@@ -1,6 +1,7 @@
 #include "ShaderEditorDocument.hpp"
 
 #include "AssetBrowser.hpp"
+#include "GraphGridPass.hpp"
 #include "MaterialParamWidgets.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
@@ -136,6 +137,48 @@ namespace Arcane::Editor
                                                          : rem - kPinOutBase);
             d.valid = d.node != 0;
             return d;
+        }
+
+        // -------------------------------------------------------------------
+        // GRAPH CANVAS PALETTE -- the single place the canvas colors live, on
+        // the same rule EditorWidgets.cpp:239-251 states for the inspector's
+        // constants: no magic colors inside draw calls.
+        //
+        // All values are DISPLAY-REFERRED: ImGui draws post-tonemap into the
+        // backbuffer and samples the backdrop RT straight through
+        // (imgui.hlsl:1-5), so these are what the user sees.
+        //
+        // Tones follow the Unity Shader Graph reference: a near-flat dark
+        // canvas with a grid barely above its own tone.
+        // -------------------------------------------------------------------
+        constexpr ImVec4 kCanvasColor    = ImVec4(0.118f, 0.118f, 0.118f, 1.0f); // #1e1e1e
+        constexpr ImVec4 kGridMinorColor = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
+        constexpr ImVec4 kGridMajorColor = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
+
+        // ImVec4 -> the plain float[4] the grid CB mirrors.
+        void FillRgba(float (&dst)[4], const ImVec4& c) noexcept
+        {
+            dst[0] = c.x;
+            dst[1] = c.y;
+            dst[2] = c.z;
+            dst[3] = c.w;
+        }
+
+        // One-time style for a node-editor context. Written to the PERSISTENT
+        // style (ed::GetStyle returns a mutable reference, imgui_node_editor.h:295)
+        // instead of pushed per frame, because every value here is latched into
+        // the object at BeginNode time (imgui_node_editor.cpp:5270-5278) -- one
+        // assignment covers every node for the context's life.
+        void ApplyGraphCanvasStyle()
+        {
+            ed::Style& s = ed::GetStyle();
+            // The vendored grid AND background fill are switched off; the
+            // shader backdrop (graph_grid.hlsl) is blitted underneath instead.
+            // Wholesale replacement is the only option available: the built-in
+            // grid's 32 px spacing is a hardcoded local with no StyleVar and no
+            // LOD fade (imgui_node_editor.cpp:1506-1517).
+            s.Colors[ed::StyleColor_Grid] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            s.Colors[ed::StyleColor_Bg]   = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
         }
 
         // Re-key a saved-params entry old -> new. Merge rule (assisted rename):
@@ -2749,6 +2792,11 @@ namespace Arcane::Editor
             ed::Config cfg;
             cfg.SettingsFile = nullptr;   // layout persists in the .arcmat, not an ini
             m_graphCtx = ed::CreateEditor(&cfg);
+            // The style is per-context state, so a rebuilt context re-applies
+            // it -- including the switch that kills the vendored grid.
+            ed::SetCurrentEditor(m_graphCtx);
+            ApplyGraphCanvasStyle();
+            ed::SetCurrentEditor(nullptr);
         }
         if (switchedPass)
         {
@@ -2760,6 +2808,61 @@ namespace Arcane::Editor
         Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
         ed::SetCurrentEditor(m_graphCtx);
+        // ---- Shader-rendered backdrop, UNDER the canvas content ----
+        // The node editor offers no public way to draw beneath its own
+        // background/grid layer: everything it emits lands in channels the API
+        // does not expose, and the two it does expose (the per-node background
+        // draw list, the group-hint lists) sit ABOVE links. So the backdrop is
+        // blitted before ed::Begin, which puts it in the window draw list ahead
+        // of every channel the editor merges in afterwards.
+        //
+        // DISCLOSED CONSEQUENCE: the transform read here is the one ed::Begin
+        // installed LAST frame. The editor computes the new view in End()
+        // (imgui_node_editor.cpp:1357) and installs it in the next Begin()
+        // (:1257), so a frame that is actively panning or zooming draws the
+        // backdrop one frame behind the nodes. A settled canvas is exact.
+        // Reading it after ed::Begin would be exact but there is no channel
+        // under the content to put it in; the fix, if the lag ever reads badly,
+        // is to host the canvas in a child window and blit into the PARENT's
+        // draw list after ed::End (parent draw lists render first).
+        const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
+        const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+        if (!m_grid && m_services.device && m_services.shaders)
+            m_grid = GraphGridPass::Create(m_services.device, m_services.shaders);
+        if (m_grid && canvasSize.x > 0.0f && canvasSize.y > 0.0f)
+        {
+            GraphGridView view;
+            view.width  = static_cast<std::uint32_t>(canvasSize.x);
+            view.height = static_cast<std::uint32_t>(canvasSize.y);
+            // ed::GetCurrentZoom returns InvScale -- canvas units per screen
+            // pixel (imgui_node_editor_api.cpp:665-668) -- so the visual scale
+            // is its reciprocal. The pan term is the canvas coordinate under
+            // the region's top-left, scaled: see graph_grid.hlsl's coordinate
+            // contract for why that makes panning track 1:1.
+            const float invScale = ed::GetCurrentZoom();
+            view.zoom = invScale > 0.0001f ? 1.0f / invScale : 1.0f;
+            const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
+            view.panX = originCanvas.x * view.zoom;
+            view.panY = originCanvas.y * view.zoom;
+
+            GraphGridColors colors;
+            FillRgba(colors.canvas, kCanvasColor);
+            FillRgba(colors.minor,  kGridMinorColor);
+            FillRgba(colors.major,  kGridMajorColor);
+
+            if (nvrhi::ITexture* tex = m_grid->Update(view, colors))
+            {
+                // The target is over-allocated to a quantum, so only its
+                // top-left corner belongs to this region -- hence the UVs.
+                const float u = canvasSize.x / static_cast<float>(m_grid->AllocatedWidth());
+                const float v = canvasSize.y / static_cast<float>(m_grid->AllocatedHeight());
+                ImGui::GetWindowDrawList()->AddImage(
+                    static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(tex)),
+                    canvasMin, ImVec2(canvasMin.x + canvasSize.x,
+                                      canvasMin.y + canvasSize.y),
+                    ImVec2(0.0f, 0.0f), ImVec2(u, v));
+            }
+        }
         // Nothing is drawn above the canvas inside this function, so the
         // remaining region IS the canvas's height.
         ed::Begin("##graphcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
