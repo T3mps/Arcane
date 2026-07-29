@@ -39,20 +39,24 @@
 </div>
 
 <style>
+  /* No right padding: the caption buttons run to the window edge, exactly as
+     native ones do -- a mouse thrown at the corner lands on Close. */
   .chrome { position: sticky; top: 0; z-index: 10; height: var(--h-titlebar); flex: none;
-            display: flex; align-items: center; gap: 11px; padding: 0 6px 0 16px; }
+            display: flex; align-items: center; gap: 11px; padding: 0 0 0 16px; }
   /* pointer-events:none so the logo and title are part of the drag region
      rather than dead spots in the middle of it. */
   .mark { width: 20px; height: 20px; object-fit: contain; pointer-events: none; }
   .title { font-size: 12.5px; letter-spacing: .17em; color: var(--text-muted);
            pointer-events: none; }
-  .ctrls { margin-left: auto; display: flex; gap: 2px; }
-  /* 46x32 is the native Windows caption-button metric. Matching it makes the
-     controls land where muscle memory expects and gives a comfortable hit
-     target; the old 34x26 was noticeably under-sized against every other
-     window on the desktop. */
-  .ctrl { width: 46px; height: 32px; display: grid; place-items: center;
-          background: transparent; border: 0; border-radius: 5px;
+  /* Stretched to the titlebar's full height, no gaps: native caption buttons
+     are abutting full-bleed rectangles, and the hover wash filling the whole
+     corner is what makes them read as such. */
+  .ctrls { margin-left: auto; align-self: stretch; display: flex; }
+  /* 46px wide is the native Windows caption-button metric; the height is the
+     titlebar's own (user call 2026-07-29: full squares, not the floating
+     rounded 46x32 rects this replaced). */
+  .ctrl { width: 46px; height: 100%; display: grid; place-items: center;
+          background: transparent; border: 0; border-radius: 0;
           color: var(--text-dim); cursor: default;
           transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
   .ctrl:hover { background: rgba(255, 255, 255, .07); color: var(--text); }
