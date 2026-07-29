@@ -51,6 +51,20 @@ not a nit.
       there). All four rename sites inherit this from the one widget -- there is no
       per-site Escape handling. Earlier task-6/8 reports describing Escape-commits are
       historical and were true when written.
+      TWO PRE-EXISTING LIMITS, unchanged by R1 -- check them, but neither is a new
+      finding:
+      (a) **64-byte cap.** The shared buffer is 64 bytes, so a name of 63+ characters
+      seeds truncated, and Escape reverts to that truncation rather than to the live
+      value -- so touching such a field commits the shortened name however the edit
+      ends. Equally true of Enter/click-away. Only worth confirming it behaves the
+      same as before.
+      (b) **Click straight from one text edit into another.** All four sites share one
+      `m_textEdit` buffer keyed by one `activeKey`. If the edit you click INTO is
+      submitted earlier in the frame than the one you leave, it claims the shared key
+      while going active (`EditorWidgets.cpp:478-483`) and the edit you left then finds
+      the key already taken and returns without committing (`:484-485`) -- its typed
+      text is dropped. The other direction commits normally. Verified by reading, not
+      guessed; pre-existing and untouched by R1. Press Enter before moving on.
 - [ ] **8.** Sprite doc: undo of a ppu drag updates the viewport via the invalidate hook
       (drag ppu, Ctrl+Z, the sprite's on-screen size/geometry updates immediately --
       not just the Inspector-style field value).

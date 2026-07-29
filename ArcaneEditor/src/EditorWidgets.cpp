@@ -492,10 +492,20 @@ namespace Arcane::Editor
         // (imgui_widgets.cpp:5212), copies TextToRevertTo over the edited text
         // (:5300-5308), and ImStrncpy's the result into the caller's buffer
         // (:5447) -- so an escaped edit arrives here with buf == current and
-        // commits nothing. It arrives here at all because that same revert
-        // sets value_changed, which calls MarkItemEdited (:5700-5701): the
-        // item IS deactivated-after-edit even on Escape, which is precisely
-        // why comparing st.buf used to commit the abandoned text.
+        // commits nothing.
+        //
+        // It arrives here AT ALL because deactivated-after-edit remembers the
+        // whole edit, not this frame. Every earlier keystroke's MarkItemEdited
+        // latched g.ActiveIdHasBeenEditedBefore (imgui.cpp:4898); the escape
+        // frame's ClearActiveID (imgui_widgets.cpp:5452-5453 -> imgui.cpp:
+        // 4863-4866 -> SetActiveID :4797) copies that latch into
+        // DeactivatedItemData.HasBeenEditedBefore (:4808); and
+        // IsItemDeactivatedAfterEdit reads exactly that (:6562-6565). The
+        // revert's own value_changed -> MarkItemEdited only re-sets the same
+        // already-true flag (:4899-4900) -- it is not what makes the item
+        // report edited. So the flag means "was edited at some point", the
+        // escape being invisible to it and visible ONLY in the buffer, which
+        // is why comparing st.buf committed the abandoned text.
         if (committed && current != buf)
         {
             commit(buf);

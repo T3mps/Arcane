@@ -129,6 +129,13 @@ namespace Arcane::Editor
     // pre-focus text into the buffer as it deactivates, and the commit test
     // reads that post-widget buffer, so an escaped edit compares equal to
     // `current` and commits nothing -- see the citation chain in the .cpp.
+    //
+    // CAP CAVEAT, and it bounds that revert: the buffer below is 64 bytes, so
+    // a `current` of 63+ characters is seeded TRUNCATED. ImGui reverts to what
+    // it was handed at focus -- the truncation -- which then differs from the
+    // live value, so touching such a field commits the shortened text no
+    // matter how the edit ends. Pre-existing and equally true of Enter and
+    // click-away; the revert removes the typed text, not the cap.
     struct TextCommitState
     {
         std::uint64_t activeKey = 0;   // 0 = no edit in flight
