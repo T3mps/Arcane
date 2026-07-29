@@ -1,21 +1,27 @@
-// Copy the built Hub exe next to the other Arcane build outputs, so the dev
-// loop matches every C++ project in the workspace:
-//   Arcane/bin/<Config>-windows-x86_64-md/Hub/arcane_hub.exe
+// Copy the built Hub exe over the INSTALLED one, so a dev rebuild updates
+// the copy the .arcproj file association and the Start menu actually launch:
+//   %LOCALAPPDATA%\Arcane Hub\arcane_hub.exe
+// (User call 2026-07-29, replacing the old Arcane/bin/<Config>/Hub/ staging:
+// once the NSIS install existed, staging beside the C++ outputs just meant
+// two Hubs, and the one Windows launches was always the stale one.)
 //
-// This is a DEV convenience only. It does NOT mean the Hub may assume an
-// adjacent engine -- in production the Hub is installed to
-// %LOCALAPPDATA%\Programs\Arcane Hub\ and engines are registered by path.
-// Adjacency is used as a first-run SUGGESTION, never an assumption.
+// The exe must not be running when this copies -- the build scripts stop it
+// first. A debug stage ("stage:debug") lands in the same place: there is one
+// installed Hub, whichever profile built it.
 import { copyFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const profile = process.argv[2] === "debug" ? "debug" : "release";
-const config = profile === "debug" ? "Debug" : "Release";
 
 const src = resolve(here, "..", "bin-int", "hub-cargo", profile, "arcane_hub.exe");
-const outDir = resolve(here, "..", "bin", `${config}-windows-x86_64-md`, "Hub");
+const localAppData = process.env.LOCALAPPDATA;
+if (!localAppData) {
+  console.error("stage: LOCALAPPDATA is not set -- cannot find the install folder");
+  process.exit(1);
+}
+const outDir = join(localAppData, "Arcane Hub");
 const dst = join(outDir, "arcane_hub.exe");
 
 if (!existsSync(src)) {
