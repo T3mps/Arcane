@@ -269,7 +269,10 @@ namespace Arcane::Editor
         // thumbnails bind the chain's live intermediates as InputTexture(N).
         void RefreshNodePreviews();          // (re)submit stale per-node compiles
         void RenderNodePreviews(double dt);  // record all ready thumbnails (own CL)
-        void DrawNodePreviewImage(const Arcane::GraphNode& node);
+        // `width` is the node's measured content width (SG parity: the preview
+        // spans the node). Zero on a node's first frame -- no width has been
+        // measured yet -- which falls back to the minimum thumbnail size.
+        void DrawNodePreviewImage(const Arcane::GraphNode& node, float width);
         void DrawParamsPanel();
         // True when the ACTIVE surface has something bound to show.
         bool PreviewReady() const;
@@ -392,6 +395,12 @@ namespace Arcane::Editor
         // Lazy and optional: device-less services (the headless tests) and a
         // missing shader artifact both leave it null and simply draw no grid.
         std::unique_ptr<GraphGridPass> m_grid;
+        // Each node's measured width from the LAST frame it drew, keyed by node
+        // id. Right-aligned output rows and full-width previews both need a
+        // width that only exists after the node has been laid out, so they use
+        // the previous frame's -- which is stable, because aligning to width W
+        // produces rows of exactly W. Cleared with the canvas on a pass switch.
+        std::unordered_map<std::uint32_t, float> m_nodeWidths;
         // Per-pass codegen state, indexed by CHAIN index (0 = base). Sized by
         // RegenerateFromGraph; empty entries = text-owned or clean.
         std::vector<std::vector<Arcane::GraphError>> m_passGraphErrors;

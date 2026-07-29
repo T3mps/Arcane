@@ -140,20 +140,56 @@ namespace Arcane::Editor
         }
 
         // -------------------------------------------------------------------
-        // GRAPH CANVAS PALETTE -- the single place the canvas colors live, on
-        // the same rule EditorWidgets.cpp:239-251 states for the inspector's
-        // constants: no magic colors inside draw calls.
+        // GRAPH CANVAS PALETTE -- the single place the canvas and node colors
+        // live, on the same rule EditorWidgets.cpp:239-251 states for the
+        // inspector's constants: no magic colors inside draw calls.
         //
         // All values are DISPLAY-REFERRED: ImGui draws post-tonemap into the
         // backbuffer and samples the backdrop RT straight through
         // (imgui.hlsl:1-5), so these are what the user sees.
         //
-        // Tones follow the Unity Shader Graph reference: a near-flat dark
-        // canvas with a grid barely above its own tone.
+        // Tones follow the Unity Shader Graph reference -- a near-flat dark
+        // canvas, a node body one step above it, a title band one step below
+        // the body, a border one step above the body again.
         // -------------------------------------------------------------------
-        constexpr ImVec4 kCanvasColor    = ImVec4(0.118f, 0.118f, 0.118f, 1.0f); // #1e1e1e
-        constexpr ImVec4 kGridMinorColor = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
-        constexpr ImVec4 kGridMajorColor = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
+        constexpr ImVec4 kCanvasColor      = ImVec4(0.118f, 0.118f, 0.118f, 1.0f); // #1e1e1e
+        constexpr ImVec4 kGridMinorColor   = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
+        constexpr ImVec4 kGridMajorColor   = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
+        constexpr ImVec4 kNodeBodyColor    = ImVec4(0.176f, 0.176f, 0.188f, 1.0f); // #2d2d30
+        constexpr ImVec4 kNodeTitleColor   = ImVec4(0.137f, 0.137f, 0.149f, 1.0f); // #232326
+        constexpr ImVec4 kNodeBorderColor  = ImVec4(0.243f, 0.243f, 0.267f, 1.0f);
+        constexpr ImVec4 kNodeTitleText    = ImVec4(0.808f, 0.808f, 0.831f, 1.0f);
+        constexpr ImVec4 kNodeBadgeText    = ImVec4(1.0f,   0.4f,   0.3f,   1.0f);
+        // Selection/hover reuse the viewport's outline language so one accent
+        // means "selected" everywhere in the editor (SelectionOutline.hpp:47-48).
+        constexpr ImVec4 kNodeSelBorder    = ImVec4(1.0f,  0.65f, 0.10f, 1.0f);   // amber
+        constexpr ImVec4 kNodeHovBorder    = ImVec4(0.25f, 0.70f, 1.0f,  1.0f);   // cyan
+        constexpr ImVec4 kGroupBgColor     = ImVec4(0.220f, 0.220f, 0.235f, 0.25f);
+        constexpr ImVec4 kGroupBorderColor = ImVec4(0.290f, 0.290f, 0.310f, 0.60f);
+
+        // Pin/wire colors by PIN WIDTH. Unity's convention mapped onto Arcane's
+        // pin domain, which is 1 / 2 / 4 / 0-means-dynamic
+        // (GraphPinDesc::width, MaterialGraph.hpp:150-154). Unity's vec3-yellow
+        // and texture-red-orange entries have no counterpart here: Arcane has
+        // no 3-lane pin and textures are params, not pins -- so those two rows
+        // of the reference table are deliberately absent rather than mapped
+        // onto something they do not mean.
+        constexpr ImVec4 kPinScalarColor  = ImVec4(0.502f, 0.808f, 1.0f,   1.0f); // pale azure
+        constexpr ImVec4 kPinVec2Color    = ImVec4(0.549f, 0.863f, 0.549f, 1.0f); // green
+        constexpr ImVec4 kPinVec4Color    = ImVec4(0.941f, 0.549f, 0.863f, 1.0f); // magenta
+        constexpr ImVec4 kPinDynamicColor = ImVec4(0.745f, 0.745f, 0.765f, 1.0f); // gray
+
+        // Node geometry (canvas units at zoom 1).
+        constexpr float kNodeRounding    = 4.0f;
+        constexpr float kNodeBorderWidth = 1.0f;
+        constexpr float kNodeHovBorderWidth = 1.5f;
+        constexpr float kNodeSelBorderWidth = 2.0f;
+        constexpr float kNodePadX = 10.0f;
+        constexpr float kNodePadY = 6.0f;
+        constexpr float kPinDotRadius   = 4.0f;
+        constexpr float kPinRingWidth   = 1.6f;
+        constexpr int   kPinDotSegments = 12;
+        constexpr float kWireThickness  = 2.0f;
 
         // ImVec4 -> the plain float[4] the grid CB mirrors.
         void FillRgba(float (&dst)[4], const ImVec4& c) noexcept
@@ -164,11 +200,57 @@ namespace Arcane::Editor
             dst[3] = c.w;
         }
 
+        ImVec4 PinColorForWidth(int width) noexcept
+        {
+            switch (width)
+            {
+                case 1:  return kPinScalarColor;
+                case 2:  return kPinVec2Color;
+                case 4:  return kPinVec4Color;
+                default: return kPinDynamicColor;   // 0 = adapts to what feeds it
+            }
+        }
+
+        // One port dot: FILLED when a wire is attached, a hollow ring when not
+        // (the Shader Graph reading -- "this port carries something" is visible
+        // without tracing the wire). Advances the cursor by exactly the dot, so
+        // the caller follows with SameLine + the label.
+        void DrawPinDot(const ImVec4& color, bool connected)
+        {
+            const float lineH = ImGui::GetTextLineHeight();
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::Dummy(ImVec2(kPinDotRadius * 2.0f, lineH));
+            const ImVec2 c(p.x + kPinDotRadius, p.y + lineH * 0.5f);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImU32 col = ImGui::GetColorU32(color);
+            if (connected)
+                dl->AddCircleFilled(c, kPinDotRadius, col, kPinDotSegments);
+            else
+            {
+                dl->AddCircleFilled(c, kPinDotRadius,
+                                    ImGui::GetColorU32(kNodeBodyColor), kPinDotSegments);
+                dl->AddCircle(c, kPinDotRadius, col, kPinDotSegments, kPinRingWidth);
+            }
+        }
+
+        // Horizontal spacer that right-aligns a row of `rowWidth` inside a
+        // content column of `contentWidth`. Both are canvas units; a
+        // non-positive slack draws nothing, which is what the first frame of a
+        // brand-new node (no measured width yet) gets.
+        void RightAlignRow(float contentWidth, float rowWidth)
+        {
+            const float slack = contentWidth - rowWidth;
+            if (slack <= 1.0f)
+                return;
+            ImGui::Dummy(ImVec2(slack, 0.0f));
+            ImGui::SameLine(0.0f, 0.0f);
+        }
+
         // One-time style for a node-editor context. Written to the PERSISTENT
         // style (ed::GetStyle returns a mutable reference, imgui_node_editor.h:295)
         // instead of pushed per frame, because every value here is latched into
-        // the object at BeginNode time (imgui_node_editor.cpp:5270-5278) -- one
-        // assignment covers every node for the context's life.
+        // the object at BeginNode/BeginPin time (imgui_node_editor.cpp:5270-5278,
+        // 5367-5377) -- one assignment covers every node for the context's life.
         void ApplyGraphCanvasStyle()
         {
             ed::Style& s = ed::GetStyle();
@@ -179,6 +261,22 @@ namespace Arcane::Editor
             // LOD fade (imgui_node_editor.cpp:1506-1517).
             s.Colors[ed::StyleColor_Grid] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
             s.Colors[ed::StyleColor_Bg]   = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            s.Colors[ed::StyleColor_NodeBg]        = kNodeBodyColor;
+            s.Colors[ed::StyleColor_NodeBorder]    = kNodeBorderColor;
+            s.Colors[ed::StyleColor_HovNodeBorder] = kNodeHovBorder;
+            s.Colors[ed::StyleColor_SelNodeBorder] = kNodeSelBorder;
+            s.Colors[ed::StyleColor_GroupBg]       = kGroupBgColor;
+            s.Colors[ed::StyleColor_GroupBorder]   = kGroupBorderColor;
+            // A pin draws nothing of its own except a hover rect
+            // (imgui_node_editor.cpp:575-594) -- that rectangle would fight the
+            // dot, so its alpha goes to zero and the dot IS the pin visual.
+            s.Colors[ed::StyleColor_PinRect]       = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            s.Colors[ed::StyleColor_PinRectBorder] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            s.NodeRounding            = kNodeRounding;
+            s.NodeBorderWidth         = kNodeBorderWidth;
+            s.HoveredNodeBorderWidth  = kNodeHovBorderWidth;
+            s.SelectedNodeBorderWidth = kNodeSelBorderWidth;
+            s.NodePadding = ImVec4(kNodePadX, kNodePadY, kNodePadX, kNodePadY);
         }
 
         // Re-key a saved-params entry old -> new. Merge rule (assisted rename):
@@ -2751,11 +2849,16 @@ namespace Arcane::Editor
         return m_sceneStandIn.Get();
     }
 
-    void ShaderEditorDocument::DrawNodePreviewImage(const Arcane::GraphNode& n)
+    void ShaderEditorDocument::DrawNodePreviewImage(const Arcane::GraphNode& n, float width)
     {
         if (!m_showNodePreviews)
             return;
-        constexpr float kThumbDraw = 96.0f;
+        // SG parity: the thumbnail is square and spans the node, sitting below
+        // the port rows. `width` is last frame's measured content width -- a
+        // node drawing for the first time has none and gets the floor, which is
+        // also what keeps a narrow node from collapsing the thumbnail.
+        constexpr float kThumbMin = 96.0f;
+        const float kThumbDraw = width > kThumbMin ? width : kThumbMin;
         if (n.type == Arcane::GraphNodeType::Output)
         {
             // The Output node shows the material's own preview (the pass
@@ -2802,6 +2905,7 @@ namespace Arcane::Editor
         {
             m_graphShownPass = m_activePass;
             m_graphPositionsApplied = false;
+            m_nodeWidths.clear();   // ids are only unique per graph
             RebuildDiagBadges();
             RefreshNodePreviews();   // thumbnails belong to the shown graph
         }
@@ -2890,8 +2994,19 @@ namespace Arcane::Editor
         for (std::size_t i = 0; i < g.links.size(); ++i)
         {
             const Arcane::GraphLink& l = g.links[i];
+            // Wire tint = the SOURCE pin's type color, so a wire reads as the
+            // same thing its originating dot does. A dangling source (should
+            // not survive an edit, but the draw must not depend on that) falls
+            // back to the neutral dynamic color.
+            const Arcane::GraphNode* src = g.FindNode(l.fromNode);
+            const bool srcPinValid =
+                src && l.fromPin < Arcane::GraphNodeOutputCount(*src);
+            const ImVec4 tint =
+                srcPinValid ? PinColorForWidth(
+                                  Arcane::GraphNodeOutputPin(*src, l.fromPin).width)
+                            : kPinDynamicColor;
             ed::Link(ed::LinkId(i + 1), OutPin(l.fromNode, l.fromPin),
-                     InPin(l.toNode, l.toPin));
+                     InPin(l.toNode, l.toPin), tint, kWireThickness);
         }
 
         HandleGraphEdits();
@@ -3363,13 +3478,26 @@ namespace Arcane::Editor
         }
 
         const Arcane::GraphNodeTypeInfo& info = Arcane::GraphNodeInfo(n.type);
+
+        // The node's measured width from the LAST frame (see m_nodeWidths):
+        // output rows right-align to it and the preview spans it. Zero on a
+        // node's first frame, which both consumers treat as "no alignment".
+        const auto widthIt = m_nodeWidths.find(n.id);
+        const float contentW = widthIt == m_nodeWidths.end()
+                                   ? 0.0f
+                                   : widthIt->second - 2.0f * kNodePadX;
+
         ed::BeginNode(ed::NodeId(n.id));
         ImGui::PushID(static_cast<int>(n.id));
 
+        // Title row. The BAND behind it is a rectangle drawn after ed::EndNode
+        // (it spans the node's final width, which does not exist yet); this is
+        // only the text, and headerMaxY is the band's bottom edge.
         if (NodeBadged(n.id))
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "(!) %s", info.display);
+            ImGui::TextColored(kNodeBadgeText, "(!) %s", info.display);
         else
-            ImGui::TextUnformatted(info.display);
+            ImGui::TextColored(kNodeTitleText, "%s", info.display);
+        const float headerMaxY = ImGui::GetItemRectMax().y;
 
         // Gesture helpers (used by pin rows AND payload widgets below). Value
         // drags bracket a whole-graph gesture through EditGesture (before on
@@ -3435,11 +3563,32 @@ namespace Arcane::Editor
                     return true;
             return false;
         };
+        // Output side of the same question: an output FANS OUT, so any edge
+        // leaving it counts.
+        auto pinFanout = [&](std::uint32_t pin)
+        {
+            for (const Arcane::GraphLink& l : graph.links)
+                if (l.fromNode == n.id && l.fromPin == pin)
+                    return true;
+            return false;
+        };
 
         for (std::uint32_t pin = 0; pin < Arcane::GraphNodeInputCount(n); ++pin)
         {
+            // Read the descriptor BEFORE any of the widgets below can mutate
+            // the node: for a Custom pin, GraphPinDesc::name points into
+            // n.customPins (MaterialGraph.hpp:376-377), so it must be consumed
+            // ahead of the remove/rename controls.
+            const Arcane::GraphPinDesc inDesc = Arcane::GraphNodeInputPin(n, pin);
             ed::BeginPin(InPin(n.id, pin), ed::PinKind::Input);
-            ImGui::Text("-> %s", Arcane::GraphNodeInputPin(n, pin).name);
+            // Wires land on the dot, not on the row's bounding corner: pivot at
+            // the row's left edge, vertically centred, with a zero-size pivot
+            // so the anchor is that single point.
+            ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
+            ed::PinPivotSize(ImVec2(0.0f, 0.0f));
+            DrawPinDot(PinColorForWidth(inDesc.width), pinWired(pin));
+            ImGui::SameLine();
+            ImGui::TextUnformatted(inDesc.name);
             ed::EndPin();
             // Custom pins are user-authored: width cycle + remove beside each.
             if (n.type == Arcane::GraphNodeType::Custom)
@@ -3809,15 +3958,44 @@ namespace Arcane::Editor
 
         for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(n); ++pin)
         {
+            const Arcane::GraphPinDesc outDesc = Arcane::GraphNodeOutputPin(n, pin);
+            const float rowW = ImGui::CalcTextSize(outDesc.name).x +
+                               ImGui::GetStyle().ItemSpacing.x + kPinDotRadius * 2.0f;
+            RightAlignRow(contentW, rowW);
             ed::BeginPin(OutPin(n.id, pin), ed::PinKind::Output);
-            ImGui::Text("        %s ->", Arcane::GraphNodeOutputPin(n, pin).name);
+            ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));   // anchor on the dot
+            ed::PinPivotSize(ImVec2(0.0f, 0.0f));
+            ImGui::TextUnformatted(outDesc.name);
+            ImGui::SameLine();
+            DrawPinDot(PinColorForWidth(outDesc.width), pinFanout(pin));
             ed::EndPin();
         }
 
-        DrawNodePreviewImage(n);
+        DrawNodePreviewImage(n, contentW);
 
         ImGui::PopID();
         ed::EndNode();
+
+        // TITLE BAND + width measurement, both of which need the node's final
+        // laid-out rect and so can only happen here. GetNodeBackgroundDrawList
+        // paints into the node's own user-background channel -- above its body
+        // fill, below its content and pin chrome
+        // (imgui_node_editor.cpp:135-140) -- which is exactly where a header
+        // band belongs. Coordinates are canvas space, the space both
+        // GetNodePosition and plain ImGui use inside ed::Begin/End.
+        const ImVec2 nodePos  = ed::GetNodePosition(ed::NodeId(n.id));
+        const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(n.id));
+        if (nodeSize.x > 0.0f)
+        {
+            m_nodeWidths[n.id] = nodeSize.x;
+            if (ImDrawList* bg = ed::GetNodeBackgroundDrawList(ed::NodeId(n.id)))
+                bg->AddRectFilled(
+                    ImVec2(nodePos.x + kNodeBorderWidth, nodePos.y + kNodeBorderWidth),
+                    ImVec2(nodePos.x + nodeSize.x - kNodeBorderWidth,
+                           headerMaxY + kNodePadY),
+                    ImGui::GetColorU32(kNodeTitleColor),
+                    kNodeRounding, ImDrawFlags_RoundCornersTop);
+        }
     }
 
     void ShaderEditorDocument::HandleGraphEdits()
