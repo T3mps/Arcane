@@ -2,6 +2,7 @@
 
 #include "AssetBrowser.hpp"
 #include "EditorTheme.hpp"
+#include "IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "GraphGridPass.hpp"
 #include "MaterialParamWidgets.hpp"
 
@@ -931,6 +932,12 @@ namespace Arcane::Editor
                         m_data.id.ToString();
         m_snippet = m_data.snippet;
         m_anchor = std::make_shared<ShaderEditorDocument*>(this);
+        // Open on the chain overview only when there IS a chain to survey. A
+        // single-pass material's overview is base -> Output and says nothing
+        // the user came here for, so it opens straight in its graph; the
+        // overview stays one breadcrumb click away (which is also how Add Pass
+        // stays reachable for it).
+        m_inChainView = !m_data.passes.empty();
 
         // Device-less services (headless tests) skip the preview cleanly; the
         // document still parses, compiles, and saves.
@@ -1731,20 +1738,35 @@ namespace Arcane::Editor
         // The surviving split -- preview against params -- went with them.
         if (!IsInstance())
         {
-            // Pass canvas: fullscreen base materials only (sprite chains are
-            // refused; instances re-value the base's chain). Even a single-pass
-            // material shows base -> Output -- the pipeline affordance and the
-            // right-click Add Pass entry point.
-            if (m_surface == 0)
-                DrawPassCanvas(170.0f);
             if (m_activePass > static_cast<int>(m_data.passes.size()))
                 m_activePass = 0;   // stale selection after an outside reload
+
+            // ONE canvas area, TWO mutually exclusive views. The old stacked
+            // split (a fixed 170px pass strip permanently above the graph) is
+            // gone: it spent a fifth of the tab on a map the user needed only
+            // between edits, and it put two node canvases on screen at once,
+            // which read as one editor disagreeing with itself. UE shows one
+            // graph at a time and navigates between levels
+            // (BlueprintEditor.cpp:4439-4443); this is that shape.
+            //
+            // The chain overview only exists for fullscreen BASE materials --
+            // sprite chains are refused and instances re-value the base's chain
+            // -- so on a sprite surface the pass view is unreachable and the
+            // breadcrumb has nowhere to go. Skip the bar entirely there rather
+            // than draw a root crumb that does nothing.
+            const bool chainAvailable = m_surface == 0;
+            if (chainAvailable)
+                DrawBreadcrumbBar();
+            else
+                m_inChainView = false;
+
+            if (chainAvailable && m_inChainView)
+                DrawPassCanvas();
             // The canvas serves whichever pass is active and graph-owned;
             // text-owned passes -- and the vertex stage -- get the text editor.
             // Both fill the rest of the tab themselves (each measures the
-            // region at the point it opens): the space the errors panel used to
-            // reserve just falls to the canvas / text.
-            if (ActiveGraphOwned() && !m_showGeneratedText && !m_editVertex)
+            // region at the point it opens).
+            else if (ActiveGraphOwned() && !m_showGeneratedText && !m_editVertex)
                 DrawGraphPanel();
             else
                 DrawSnippetEditor();
@@ -2098,7 +2120,61 @@ namespace Arcane::Editor
         return true;
     }
 
-    void ShaderEditorDocument::DrawPassCanvas(float height)
+    void ShaderEditorDocument::EnterPass(int chainIndex)
+    {
+        m_activePass = std::clamp(chainIndex, 0,
+                                  static_cast<int>(m_data.passes.size()));
+        m_inChainView = false;
+    }
+
+    float ShaderEditorDocument::DrawBreadcrumbBar()
+    {
+        // One line, monochrome, no frame -- the editor's chrome language
+        // (EditorTheme.hpp): this is a location readout, not a toolbar. UE's is
+        // the same shape, a trail of text buttons with ">" separators
+        // (SGraphTitleBar.cpp:240-265).
+        //
+        // MODELLED AS DERIVED STATE, like UE's. Its crumbs are recomputed from
+        // (material, m_activePass) every frame rather than pushed and popped as
+        // the user navigates -- UE rebuilds its trail from the graph's outer
+        // chain on every refresh for the same reason. There is no history to
+        // desynchronise from the document that way.
+        const float startY = ImGui::GetCursorPosY();
+
+        // Root crumb: the material itself == the chain overview. A plain text
+        // button so the row stays flat; only the CURRENT crumb is full-strength
+        // text, the clickable ancestor is dimmed until hovered, which is the
+        // usual breadcrumb reading.
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::kPanelRaised);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Theme::kButtonActive);
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              m_inChainView ? Theme::kText : Theme::kTextDim);
+        // Stable ID suffix: a material whose NAME contained "##" would
+        // otherwise redefine the button's identity (and hide the rest of the
+        // label), and the name is user-authored.
+        const std::string rootCrumb = m_title + "###bcroot";
+        if (ImGui::SmallButton(rootCrumb.c_str()))
+            m_inChainView = true;   // always reachable -- see the member comment
+        ImGui::PopStyleColor(4);
+
+        if (!m_inChainView)
+        {
+            ImGui::SameLine(0.0f, 6.0f);
+            ImGui::TextColored(Theme::kTextDim, ">");
+            ImGui::SameLine(0.0f, 6.0f);
+            // The leaf crumb is where you are, so it is text rather than a
+            // button: clicking it would navigate nowhere.
+            ImGui::TextColored(Theme::kText, "%s",
+                               PassLabel(static_cast<std::size_t>(
+                                   (std::max)(0, m_activePass))).c_str());
+        }
+
+        ImGui::Separator();
+        return ImGui::GetCursorPosY() - startY;
+    }
+
+    void ShaderEditorDocument::DrawPassCanvas()
     {
         // The pass DAG as a canvas (replaces the pass bar): chain index c is
         // node id c+1, the Output node is kPassOutputNodeId, and the WIRES ARE
@@ -2130,7 +2206,8 @@ namespace Arcane::Editor
         auto nodeOf = [](std::size_t chain) { return static_cast<std::uint32_t>(chain) + 1; };
 
         ed::SetCurrentEditor(m_passCanvasCtx);
-        ed::Begin("##passcanvas", ImVec2(0.0f, height));
+        // Fills the region: this canvas IS the view now, not a strip over one.
+        ed::Begin("##passcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
 
         const bool seededThisFrame = !m_passCanvasSeeded;
         if (seededThisFrame)
@@ -2184,12 +2261,20 @@ namespace Arcane::Editor
                 for (const Arcane::ShaderDiag& d : m_passJobs[c].diags)
                     passError = passError ||
                                 d.severity == Arcane::ShaderDiagSeverity::Error;
+            // "> " marks the pass the editor is aimed at (the one Enter would
+            // return you to); the eye marks the preview truncation point, which
+            // is a SEPARATE piece of state and now needs its own indicator --
+            // it lost double-click to Enter, so the context menu is its only
+            // control and the node has to show what that control did.
+            const bool isPreviewCut =
+                (m_viewPass < 0 && c == total - 1) || m_viewPass == static_cast<int>(c);
             const std::string title =
-                (m_activePass == static_cast<int>(c) ? "> " : "") + PassLabel(c);
+                (m_activePass == static_cast<int>(c) ? "> " : "") + PassLabel(c) +
+                (isPreviewCut ? "  " ICON_LC_EYE : "");
             if (passError)
-                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "(!) %s", title.c_str());
+                ImGui::TextColored(kNodeBadgeText, "(!) %s", title.c_str());
             else
-                ImGui::TextUnformatted(title.c_str());
+                ImGui::TextColored(kNodeTitleText, "%s", title.c_str());
 
             // Extra passes rename in-node (StableTextEdit's stable-buffer
             // commit; one undo step on deactivate-after-edit -- renames are not
@@ -2476,34 +2561,31 @@ namespace Arcane::Editor
                 ed::NavigateToContent();
         }
 
-        // ---- selection -> edited pass; double-click -> viewed pass. Only on
-        // selection CHANGES -- re-asserting every frame would stomp any other
-        // writer of m_activePass (the pass canvas, and whatever navigation the
-        // Problems panel eventually adds).
+        // ---- double-click ENTERS a pass (UE's collapsed-graph gesture).
+        //
+        // Selection is now pure selection: it no longer writes m_activePass.
+        // It used to, because the pass canvas and the pass's graph were on
+        // screen together and single-click was the only way to re-aim the lower
+        // half. With one canvas at a time that reading is gone -- selecting a
+        // node to read its name, or marquee-selecting to drag two of them, must
+        // not silently re-aim the editor at a different pass.
+        //
+        // ENTER is what changes m_activePass, and it is deliberately the same
+        // gesture UE uses to descend into a collapsed graph: double-click ->
+        // swap the displayed graph into the SAME view rather than open a second
+        // one (BlueprintEditor.cpp:4439-4443 picks NavigatingCurrentDocument
+        // when the graph's outer is a UK2Node -- the collapsed-graph case --
+        // and the material editor mirrors it at MaterialEditor.cpp:6995-6998).
+        //
+        // Scene and Output are fixed chrome, not passes: they have nothing to
+        // descend into, so they no-op. Their double-click used to mean "preview
+        // the final image"; that meaning moved to the context menu with the
+        // rest of the preview-truncation controls (see below).
         {
-            if (ed::HasSelectionChanged())
-            {
-                std::vector<ed::NodeId> sel(
-                    static_cast<std::size_t>(std::max(0, ed::GetSelectedObjectCount())));
-                if (!sel.empty())
-                {
-                    const int count = ed::GetSelectedNodes(sel.data(),
-                                                           static_cast<int>(sel.size()));
-                    if (count == 1)
-                    {
-                        const std::uint32_t id =
-                            static_cast<std::uint32_t>(sel[0].Get());
-                        if (id >= 1 && id <= total)
-                            m_activePass = static_cast<int>(id - 1);
-                    }
-                }
-            }
             const std::uint32_t dbl =
                 static_cast<std::uint32_t>(ed::GetDoubleClickedNode().Get());
-            if (dbl == kPassOutputNodeId)
-                m_viewPass = -1;
-            else if (dbl >= 1 && dbl <= total)
-                m_viewPass = dbl == total ? -1 : static_cast<int>(dbl - 1);
+            if (dbl >= 1 && dbl <= total)
+                EnterPass(static_cast<int>(dbl - 1));
         }
 
         // ---- context menus (Suspend: popups live in screen space)
@@ -2527,7 +2609,7 @@ namespace Arcane::Editor
                 const std::uint32_t id = m_passCtxNode;
                 if (id == kPassOutputNodeId)
                 {
-                    if (ImGui::MenuItem("View Final"))
+                    if (ImGui::MenuItem("Preview Final", nullptr, m_viewPass < 0))
                         m_viewPass = -1;
                 }
                 else if (id == kPassSceneNodeId)
@@ -2537,7 +2619,19 @@ namespace Arcane::Editor
                 }
                 else if (id >= 1 && id <= total)
                 {
-                    if (ImGui::MenuItem("View This Pass"))
+                    // ENTER first: it is the primary gesture now, and a menu
+                    // that omitted it would leave double-click undiscoverable.
+                    if (ImGui::MenuItem("Edit This Pass"))
+                        EnterPass(static_cast<int>(id - 1));
+                    ImGui::Separator();
+                    // Preview truncation. This menu is its ONLY control since
+                    // double-click became Enter, so the item is checkable --
+                    // it has to report the state as well as set it (the node's
+                    // eye marker is the other half of that).
+                    const bool cutHere =
+                        (m_viewPass < 0 && id == total) ||
+                        m_viewPass == static_cast<int>(id - 1);
+                    if (ImGui::MenuItem("Preview Up To Here", nullptr, cutHere))
                         m_viewPass = id == total ? -1 : static_cast<int>(id - 1);
                     if (id >= 2 && ImGui::MenuItem("Remove Pass"))
                     {

@@ -263,11 +263,24 @@ namespace Arcane::Editor
         std::string& ActiveSnippet();
         // "base" / the extra pass's display name.
         std::string PassLabel(std::size_t pass) const;
-        // The pass CANVAS (replaces the old pass bar): every pass is a node
-        // with a live thumbnail; wires are the DAG (a wire into slot pin k IS
-        // inputs[k]). Click = edit that pass, double-click = view it, context
-        // menu adds/removes, drag wires to rewire. Structural edits recompile.
-        void   DrawPassCanvas(float height);
+        // Descend into a pass: `chainIndex` becomes the active pass and the
+        // canvas area swaps from the chain overview to that pass's editing
+        // view. Clamped, because callers read ids straight off the canvas.
+        void EnterPass(int chainIndex);
+        // The one-line breadcrumb above the canvas. Root crumb = the material
+        // (the chain overview), second crumb = the pass being edited. Drawn in
+        // BOTH views, so the overview is always one click away -- which is what
+        // keeps Add Pass reachable on a material that opened straight into its
+        // graph. Returns the height it consumed.
+        float DrawBreadcrumbBar();
+        // The pass CANVAS: every pass is a node with a live thumbnail; wires
+        // are the DAG (a wire into slot pin k IS inputs[k]). DOUBLE-CLICK a
+        // pass = descend into it (selection is pure selection and no longer
+        // re-aims the editor); context menu adds/removes and owns the preview
+        // truncation; drag wires to rewire. Structural edits recompile.
+        // Fills the canvas region -- it is one of the two mutually exclusive
+        // views, not a strip above another one.
+        void   DrawPassCanvas();
         // Keep execution order == array order after a rewire: stable topo sort
         // (positions/active/view indices ride along). False on a cycle.
         bool   TopoSortPasses();
@@ -461,6 +474,18 @@ namespace Arcane::Editor
         float m_passPopupX = 0.0f, m_passPopupY = 0.0f;
         int m_activePass = 0;   // which snippet the text editor shows (0 = base)
         int m_viewPass = -1;    // preview truncation; -1 = the full chain
+        // Which of the two mutually exclusive views owns the canvas area: the
+        // chain overview, or m_activePass's editing view. Seeded in the ctor
+        // from whether there IS a chain worth surveying, then driven by the
+        // breadcrumb (up) and double-click-to-enter (down).
+        //
+        // m_activePass keeps its value while the overview is up rather than
+        // being cleared: the preview, the params panel and the side Material
+        // tab all key off it, and blanking it on every trip to the overview
+        // would make them flicker back to the base and lose the user's place.
+        // The overview is a NAVIGATION layer over the document, not a different
+        // document -- so "which pass am I editing" survives a look at the map.
+        bool m_inChainView = false;
 
         // Instance mode (Slice 7): the resolved ancestry, immediate parent first,
         // BASE (the snippet owner) last. Empty for base materials.
