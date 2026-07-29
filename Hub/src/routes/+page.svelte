@@ -19,7 +19,7 @@
   import { nextSort, resolveEngine } from "$lib/format";
   import {
     loadState, refreshEngines, registerEngine, forgetEngine, deleteProject,
-    forgetProject, clearRecents,
+    forgetProject, clearRecents, runningProjects,
     openProject, createProject, suggestEngine, setProjectEngine,
     setProjectFavorite, setProjectArgs, revealProject, renameProject, relocateProject,
     loadSettings, saveSettings, defaultDialogDir,
@@ -50,6 +50,10 @@
   });
   let hubDir = $state("");
   let version = $state("");
+  // Normalised keys (format.normalisePath) of projects with a live editor.
+  // Replaced wholesale on every running-changed event -- the payload is the
+  // full set, so a missed event self-heals on the next transition.
+  let running = $state<Set<string>>(new Set());
   // ONE modal at a time, as a discriminated union rather than six independent
   // flags. Owned here so a dialog renders above the error banner and a failed
   // action keeps its dialog up with the message inside it, not behind the
@@ -109,6 +113,7 @@
     settings = await loadSettings();
     hubDir = await hubDataDir();
     version = await hubVersion();
+    running = new Set(await runningProjects());
     // Land on Engines when there is nothing to launch with -- the one thing the
     // user must do first. Replaces the old force-showing engines section.
     if (hub.engines.length === 0) view = "engines";
@@ -143,11 +148,17 @@
       const p = hub.recents.find((r) => r.path === e.payload);
       if (p) launch(p);
     });
+    // Which projects have a live editor -- drives the running badge and the
+    // launch tooltip's "focuses its window" phrasing.
+    const unRunning = listen<string[]>("running-changed", (e) => {
+      running = new Set(e.payload);
+    });
     return () => {
       unFailed.then((f) => f());
       unIdle.then((f) => f());
       unDisk.then((f) => f());
       unTray.then((f) => f());
+      unRunning.then((f) => f());
     };
   });
 
@@ -361,7 +372,7 @@
       {/each}
       {#if view === "projects"}
         <ProjectsView recents={hub.recents} engines={hub.engines}
-                      defaultEngine={selectedEngine} busy={busyUi}
+                      defaultEngine={selectedEngine} busy={busyUi} {running}
                       layout={settings.projectView}
                       confirmDelete={settings.confirmDelete}
                       sort={settings.projectSort} sortDesc={settings.projectSortDesc}

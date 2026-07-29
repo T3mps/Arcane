@@ -96,8 +96,16 @@ export function sortProjects<
  * Case and separator folding mirrors `state::normalise_path` in Rust, which
  * dedupes the recents list on the same basis.
  */
+/**
+ * Mirror of Rust's `state::normalise_path` -- the fold RunningEditors keys
+ * live under. Change BOTH or the running badge stops matching its project.
+ */
+export function normalisePath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
 export function projectKey(path: string): string {
-  const norm = path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const norm = normalisePath(path);
   const folder = norm.replace(/\/[^/]+\.arcproj$/, "");
   return folder === "" ? norm : folder;
 }

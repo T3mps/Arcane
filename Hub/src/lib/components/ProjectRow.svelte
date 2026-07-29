@@ -14,10 +14,12 @@
   // every other column right, and what makes a list scannable is the meta
   // lining up down the page, not each row being individually recognisable.
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
-        disabled = false, confirmDelete, actions }:
+        running = false, disabled = false, confirmDelete, actions }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       engineLabel: string; pinned: boolean; dangling: boolean;
+      /** A live editor has this project open; launching focuses it. */
+      running?: boolean;
       disabled?: boolean; confirmDelete: boolean;
       /** The whole per-project vocabulary -- see ProjectActions in ProjectMenu. */
       actions: ProjectActions;
@@ -63,12 +65,22 @@
 
   <button class="hit" type="button" disabled={disabled || gone}
           onclick={() => actions.launch(project)}
-          title={gone ? missingNote(project.path) : why} aria-label={project.name}>
+          title={gone ? missingNote(project.path)
+                      : running ? `${project.name} is open — this focuses its window.`
+                      : why} aria-label={project.name}>
     <span class="nm">{project.name}</span>
     <span class="path">{dir}</span>
   </button>
 
-  <span class="when">{since(project.lastOpenedUtc)}</span>
+  <!-- The Opened cell answers "when was this last live". While an editor has
+       it open the honest answer is NOW, so `running` replaces the relative
+       time rather than sitting beside it as one more chip. -->
+  {#if running}
+    <span class="when run" title="{project.name} is open — launching focuses its window.">
+      <span class="dot" aria-hidden="true"></span>running</span>
+  {:else}
+    <span class="when">{since(project.lastOpenedUtc)}</span>
+  {/if}
 
   <!-- Sibling of .hit, not nested: an interactive control inside a button is
        invalid HTML and its clicks are not reliably delivered. -->
@@ -128,6 +140,12 @@
          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .when { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The ok green the engine status dot already uses -- "alive" has one colour
+     in this app. The dot doubles the signal for anyone who cannot read the
+     hue. */
+  .when.run { display: flex; align-items: center; gap: 5px; color: var(--ok); }
+  .dot { flex: none; width: 6px; height: 6px; border-radius: 50%;
+         background: currentColor; }
 
   /* Negative inline margin so the button's own padding does not indent its
      label past the column it sits in: the hover surface should overhang the

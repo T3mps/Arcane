@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  isCompatible, filterProjects, coverFor, sortProjects, nextSort,
+  isCompatible, filterProjects, coverFor, sortProjects, nextSort, normalisePath,
   projectKey, projectDir, projectNameError, projectPathPreview, resolveEngine,
   engineChipText, engineChipTitle, compatibilityNote, missingNote, menuItemsFor,
   type SortKey,
@@ -111,6 +111,22 @@ describe("sortProjects", () => {
     const copy = [...items];
     sortProjects(items, "name", false, byEngine);
     expect(items).toEqual(copy);
+  });
+});
+
+describe("normalisePath", () => {
+  // MIRROR of Rust state::normalise_path -- these cases pin the parity the
+  // running badge depends on (RunningEditors keys are folded Rust-side).
+  it("folds backslashes, trailing separators and case", () => {
+    expect(normalisePath("D:\\Games\\MyGame\\")).toBe("d:/games/mygame");
+    expect(normalisePath("D:/Games/MyGame")).toBe("d:/games/mygame");
+    expect(normalisePath("d:/games/MYGAME///")).toBe("d:/games/mygame");
+  });
+  it("keeps a manifest file distinct from its folder", () => {
+    // Unlike projectKey: the Rust side does NOT strip the manifest name, so
+    // this must not either, or a file-recorded entry would never match.
+    expect(normalisePath("D:/Games/MyGame/MyGame.arcproj"))
+      .toBe("d:/games/mygame/mygame.arcproj");
   });
 });
 

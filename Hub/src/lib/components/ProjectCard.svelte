@@ -6,7 +6,7 @@
   import { since, type RecentProject } from "$lib/api";
 
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
-        disabled = false, confirmDelete, actions }:
+        running = false, disabled = false, confirmDelete, actions }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       /** Build name of the engine that will actually launch this project. */
@@ -15,6 +15,8 @@
       pinned: boolean;
       /** Pinned to an engine that is no longer registered. */
       dangling: boolean;
+      /** A live editor has this project open; launching focuses it. */
+      running?: boolean;
       disabled?: boolean; confirmDelete: boolean;
       /** The whole per-project vocabulary -- see ProjectActions in ProjectMenu. */
       actions: ProjectActions;
@@ -60,7 +62,9 @@
   <div class="top">
     <button class="hit" type="button" disabled={disabled || gone}
             onclick={() => actions.launch(project)}
-            title={gone ? missingNote(project.path) : why} aria-label={project.name}>
+            title={gone ? missingNote(project.path)
+                        : running ? `${project.name} is open — this focuses its window.`
+                        : why} aria-label={project.name}>
       <!-- The monogram, at BADGE scale. It was a 76px gradient band across the
            head of every card -- the last of the decorative-slab styling, and by
            some distance the least like anything else left in the Hub. Shrunk
@@ -103,7 +107,14 @@
     {:else}
       <span class="badge">abi {project.engineAbi}</span>
     {/if}
-    <span>{since(project.lastOpenedUtc)}</span>
+    <!-- Same substitution the list row makes: while an editor has this open,
+         "when was it last live" is answered by NOW, not a relative time. -->
+    {#if running}
+      <span class="run" title="{project.name} is open — launching focuses its window.">
+        <span class="dot" aria-hidden="true"></span>running</span>
+    {:else}
+      <span>{since(project.lastOpenedUtc)}</span>
+    {/if}
   </div>
 
   <!-- A SIBLING of .hit, not a child: nesting an interactive control inside a
@@ -156,6 +167,12 @@
   .meta { display: flex; justify-content: space-between; align-items: center;
           gap: 8px; padding: 9px 13px 10px; font-family: var(--font-mono);
           font-size: 11px; color: var(--text-dim); }
+
+  /* The ok green the engine status dot uses -- "alive" has one colour in this
+     app -- with the dot doubling the signal for anyone who cannot read hue. */
+  .run { display: flex; align-items: center; gap: 5px; color: var(--ok); }
+  .dot { flex: none; width: 6px; height: 6px; border-radius: 50%;
+         background: currentColor; }
 
   /* Same reveal-and-fill treatment as the list row's star (see ProjectRow):
      invisible until the card is hovered, always on once starred. */

@@ -140,6 +140,12 @@ export type OpenOutcome = {
 export const openProject = (projectPath: string, enginePath: string) =>
   invoke<OpenOutcome>("open_project", { projectPath, enginePath });
 
+/**
+ * Normalised keys (see format.normalisePath) of projects with a live editor.
+ * For the initial paint; transitions arrive as `running-changed` events.
+ */
+export const runningProjects = () => invoke<string[]>("running_projects");
+
 /** Returns the path of the `.arcproj` it wrote, ready to hand to openProject. */
 export const createProject = (dir: string, name: string, enginePath: string) =>
   invoke<string>("create_project", { dir, name, enginePath });

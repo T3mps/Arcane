@@ -5,18 +5,20 @@
   import ProjectRow from "$lib/components/ProjectRow.svelte";
   import type { ProjectActions } from "$lib/components/ProjectMenu.svelte";
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
-  import { filterProjects, isCompatible, resolveEngine, sortProjects,
+  import { filterProjects, isCompatible, normalisePath, resolveEngine, sortProjects,
            type ProjectView, type SortKey } from "$lib/format";
   import type { EngineEntry, RecentProject } from "$lib/api";
 
   // Both dialogs are owned by +page.svelte, not by this view: they are
   // app-level overlays that have to sit above the error banner, and +page is
   // the only stateful file by design.
-  let { recents, engines, defaultEngine, busy, layout, confirmDelete,
+  let { recents, engines, defaultEngine, busy, running, layout, confirmDelete,
         sort, sortDesc, actions, onOpen, onNew, onLayout, onSort }:
     {
       recents: RecentProject[]; engines: EngineEntry[];
       defaultEngine: EngineEntry | null; busy: boolean;
+      /** Keys (format.normalisePath) of projects with a live editor. */
+      running: Set<string>;
       layout: ProjectView;
       /** Passed straight through to the action menu, which labels Delete by it. */
       confirmDelete: boolean;
@@ -163,6 +165,7 @@
         engineLabel: r.engine ? r.engine.build : "none registered",
         pinned: r.pinned,
         dangling: r.dangling,
+        running: running.has(normalisePath(p.path)),
         disabled: busy || !r.engine,
         confirmDelete,
         actions,

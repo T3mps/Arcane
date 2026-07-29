@@ -52,6 +52,31 @@ pub enum OpenOutcome {
     EngineMissing,
 }
 
+/// Tell the frontend which projects have a live editor right now. Emitted on
+/// every spawn and every exit; the payload is the full key set rather than a
+/// delta, so a missed event costs one stale badge until the next, not a
+/// permanently wrong count. Keys are `state::normalise_path` of the recorded
+/// project path -- format.ts `normalisePath` mirrors that fold exactly.
+fn emit_running(app: &tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    let keys: Vec<String> = app
+        .state::<RunningEditors>()
+        .0
+        .lock()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    let _ = app.emit("running-changed", keys);
+}
+
+/// The same key set, pulled: the frontend's initial paint cannot wait for an
+/// event that only fires on the next transition.
+#[tauri::command]
+fn running_projects(editors: tauri::State<RunningEditors>) -> Vec<String> {
+    editors.0.lock().unwrap().keys().cloned().collect()
+}
+
 fn now_utc_iso() -> String {
     // Seconds since the epoch is enough to sort "last opened" and avoids
     // pulling a date crate in for a display string.
@@ -507,6 +532,7 @@ fn open_project(
         .map_err(|e| format!("could not launch the editor: {e}"))?;
 
     editors.0.lock().unwrap().insert(project_key.clone(), child.id());
+    emit_running(&app);
 
     // Hand the screen to the editor, per the configured behaviour. Checked
     // AFTER a successful spawn so a refused launch never hides the window the
@@ -547,6 +573,7 @@ fn open_project(
                 live.remove(&key);
                 live.is_empty()
             };
+            emit_running(&app);
 
             if started.elapsed() < std::time::Duration::from_secs(2) {
                 let why = match status.and_then(|s| s.code()) {
@@ -729,6 +756,7 @@ pub fn run() {
             reveal_project,
             rename_project,
             open_project,
+            running_projects,
             create_project,
             suggest_engine,
             load_settings,
