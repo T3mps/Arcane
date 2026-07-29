@@ -223,14 +223,16 @@ namespace Arcane
         // category is one enum value + one row here + the rows that use it.
         switch (c)
         {
-            case GraphNodeCategory::Input:      return "Input";
-            case GraphNodeCategory::Math:       return "Math";
-            case GraphNodeCategory::Vector:     return "Vector";
-            case GraphNodeCategory::Procedural: return "Procedural";
-            case GraphNodeCategory::Output:     return "Output";
-            case GraphNodeCategory::Utility:    return "Utility";
+            case GraphNodeCategory::Uncategorized: return "Uncategorized";
+            case GraphNodeCategory::Input:         return "Input";
+            case GraphNodeCategory::Math:          return "Math";
+            case GraphNodeCategory::Vector:        return "Vector";
+            case GraphNodeCategory::Procedural:    return "Procedural";
+            case GraphNodeCategory::Output:        return "Output";
+            case GraphNodeCategory::Utility:       return "Utility";
         }
-        return "Utility";   // unreachable for a valid enumerator; no UB on a cast-in value
+        return "Uncategorized";   // a cast-in value, not an enumerator: name it
+                                  // for what it is rather than guessing a bucket
     }
 
     bool GraphNodeTypeFromToken(std::string_view token, GraphNodeType& out) noexcept
@@ -282,7 +284,7 @@ namespace Arcane
         // A pin literal as an HLSL constant, formatted exactly like the Const*
         // node cases emit theirs, so an inline literal and a Const node wired
         // into the same pin produce identical text. `lanes` comes from
-        // PinLiteralLanes.
+        // GraphPinLiteralLanes.
         std::string PinLiteralExpr(const GraphPinLiteral& lit, int lanes)
         {
             if (lanes == 2)
@@ -694,7 +696,7 @@ namespace Arcane
                     // The literal adapts FROM its own lane count the same way
                     // the width-1 `def` string does below -- one adaptation
                     // table, no special case.
-                    const int lanes = PinLiteralLanes(GraphNodeInputPin(*n, pin).width);
+                    const int lanes = GraphPinLiteralLanes(GraphNodeInputPin(*n, pin).width);
                     return Adapt(PinLiteralExpr(*lit, lanes), lanes, t);
                 }
                 return Adapt(def, defWidth, t);
@@ -1236,21 +1238,21 @@ namespace Arcane
     // here, beside the switch they mirror, precisely because a duplicate on
     // the editor side would drift silently.
 
-    int PinLiteralLanes(int declaredWidth) noexcept
+    int GraphPinLiteralLanes(int declaredWidth) noexcept
     {
         // Fixed 2/4 keep their lanes; everything else -- INCLUDING dynamic
-        // (width-0) pins -- is a scalar. Width resolution (:659-662) reads
+        // (width-0) pins -- is a scalar. Width resolution (:661-664) reads
         // only CONNECTED inputs, so a literal never pins a node's width
         // regardless of lane count; the scalar choice instead splats it to
         // whatever width the node resolves to.
         return declaredWidth == 2 ? 2 : declaredWidth == 4 ? 4 : 1;
     }
 
-    bool PinAcceptsLiteral(const GraphNode& n, std::uint32_t pin) noexcept
+    bool GraphPinAcceptsLiteral(const GraphNode& n, std::uint32_t pin) noexcept
     {
         // The SEAM SCOPE exclusion switch. Every case below names an emission
         // case ABOVE that reads its unconnected input DIRECTLY instead of
-        // through argOr (:685-701, whose literal branch is :692-699), so a
+        // through argOr (:687-703, whose literal branch is :694-701), so a
         // literal stored on that pin is dead data. Cites are into this file.
         //
         // MAINTENANCE CONTRACT: a node type added to the emission switch that
@@ -1260,24 +1262,24 @@ namespace Arcane
         // was a dead editor widget nobody could see was dead.
         switch (n.type)
         {
-            case GraphNodeType::Output:          // :712-714
-            case GraphNodeType::TextureSample:   // :739-740, shared with
+            case GraphNodeType::Output:          // :714-716
+            case GraphNodeType::TextureSample:   // :741-742, shared with
             case GraphNodeType::SpriteTexture:   //   SpriteTexture
-            case GraphNodeType::PassInput:       // :973-975
-            case GraphNodeType::Split:           // :833-834
-            case GraphNodeType::Swizzle:         // :910-911
-            case GraphNodeType::VertexOutput:    // :959-964 (all three pins)
+            case GraphNodeType::PassInput:       // :975-977
+            case GraphNodeType::Split:           // :835-836
+            case GraphNodeType::Swizzle:         // :912-913
+            case GraphNodeType::VertexOutput:    // :961-966 (all three pins)
                 return false;                    // every input pin bypasses argOr
-            case GraphNodeType::TilingOffset:    // uv reads v.uv direct (:887-889)
-            case GraphNodeType::SimpleNoise:     // uv likewise (:952-953)
+            case GraphNodeType::TilingOffset:    // uv reads v.uv direct (:889-891)
+            case GraphNodeType::SimpleNoise:     // uv likewise (:954-955)
                 return pin != 0;
-            case GraphNodeType::Remap:           // ranges read float2(0,1) (:875-880)
+            case GraphNodeType::Remap:           // ranges read float2(0,1) (:877-882)
                 return pin == 0;
             default:
                 // Everything else routes every operand pin through argOr,
-                // INCLUDING Custom nodes' per-node pins (:801) and Panner's
+                // INCLUDING Custom nodes' per-node pins (:803) and Panner's
                 // uv, which -- unlike TilingOffset's -- takes its v.uv
-                // neutral THROUGH the seam as a width-2 default (:1056).
+                // neutral THROUGH the seam as a width-2 default (:1058).
                 return true;
         }
     }
@@ -1383,7 +1385,7 @@ namespace Arcane
                 nlohmann::json defs = nlohmann::json::array();
                 for (const GraphPinLiteral* l : lits)
                 {
-                    const int lanes = PinLiteralLanes(GraphNodeInputPin(*n, l->pin).width);
+                    const int lanes = GraphPinLiteralLanes(GraphNodeInputPin(*n, l->pin).width);
                     nlohmann::json v;
                     if (lanes == 1)
                         v = l->v[0];   // scalar pins stay bare numbers on disk

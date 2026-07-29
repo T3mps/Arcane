@@ -161,6 +161,13 @@ namespace Arcane
     // graph's contexts, then the escapes).
     enum class GraphNodeCategory : std::uint8_t
     {
+        // ZERO IS THE UNSET VALUE, on purpose. A table row that omits its
+        // category is a valid aggregate initializer -- the omitted member is
+        // value-initialized -- so without this the omission would silently
+        // mean "Input" and the node would land in a plausible-looking place.
+        // Named, it is a wrong answer a test can see: the node-table test
+        // asserts no shipped row carries it.
+        Uncategorized = 0,
         Input,        // sources: constants, params, texture reads, uv/time/color
         Math,         // arithmetic, curves, and the range kernels
         Vector,       // lane plumbing (split/combine/swizzle) + vector kernels
@@ -211,7 +218,7 @@ namespace Arcane
     // DECLARED width -- 1/2/4 fixed, and a SCALAR for dynamic (width-0) pins.
     // A literal never enters dynamic-width resolution regardless of lane
     // count -- that loop reads only CONNECTED inputs (MaterialGraph.cpp:
-    // 659-662). The scalar choice instead means a literal on a dynamic pin
+    // 661-664). The scalar choice instead means a literal on a dynamic pin
     // splats to whatever width the node resolves to, so it never needs
     // re-authoring when wiring changes. Unused lanes stay 0.
     struct GraphPinLiteral
@@ -285,7 +292,7 @@ namespace Arcane
         //
         // INVARIANT: at most one entry per pin. GraphFromJson's pinDefaults
         // loop keeps the first entry when a pin is duplicated on load
-        // (MaterialGraph.cpp:1559-1560), and FindPinLiteral below returns the
+        // (MaterialGraph.cpp:1561-1562), and FindPinLiteral below returns the
         // first match, so callers that mutate this vector must update an
         // existing entry in place rather than append a duplicate.
         //
@@ -384,7 +391,7 @@ namespace Arcane
     // emission switch it mirrors (MaterialGraph.cpp) so the two move together,
     // with MaterialGraphTest.cpp's explicit truth table as the tripwire when
     // they do not.
-    [[nodiscard]] ARCANE_API bool PinAcceptsLiteral(const GraphNode& n,
+    [[nodiscard]] ARCANE_API bool GraphPinAcceptsLiteral(const GraphNode& n,
                                                     std::uint32_t pin) noexcept;
 
     // How many lanes a literal stores for a pin of `declaredWidth` (the
@@ -393,7 +400,7 @@ namespace Arcane
     // Codegen, the serializer and the editor's drag widget all read this ONE
     // rule; a widget that edits more lanes than the file stores would show
     // values that never survive a save.
-    [[nodiscard]] ARCANE_API int PinLiteralLanes(int declaredWidth) noexcept;
+    [[nodiscard]] ARCANE_API int GraphPinLiteralLanes(int declaredWidth) noexcept;
 
     // Structured codegen diagnostics: the canvas badges the offending node (SG:
     // one badge per node, message on hover). nodeId 0 = graph-level message.

@@ -114,6 +114,12 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
         GraphNodeType parsed{};
         REQUIRE(GraphNodeTypeFromToken(info.token, parsed));
         CHECK(parsed == info.type);
+        // Every shipped row is categorised. Omitting the appended category
+        // member is a legal aggregate initializer that value-initializes it,
+        // so Uncategorized is the shape a forgotten row takes -- this is the
+        // only thing that can tell it from a deliberate one.
+        INFO(info.token);
+        CHECK(info.category != GraphNodeCategory::Uncategorized);
     }
     GraphNodeType t{};
     CHECK_FALSE(GraphNodeTypeFromToken("not_a_node", t));
@@ -809,11 +815,11 @@ TEST_CASE("pinDefaults serialization round-trip and tolerance", "[material][grap
     }
 }
 
-TEST_CASE("PinAcceptsLiteral agrees with the emission switch, pin by pin",
+TEST_CASE("GraphPinAcceptsLiteral agrees with the emission switch, pin by pin",
           "[material][graph]")
 {
-    // The tripwire for the SEAM SCOPE contract. PinAcceptsLiteral
-    // (MaterialGraph.cpp:1249-1283) is the ONE predicate the editor asks
+    // The tripwire for the SEAM SCOPE contract. GraphPinAcceptsLiteral
+    // (MaterialGraph.cpp:1251-1285) is the ONE predicate the editor asks
     // before drawing a literal widget; a pin it wrongly accepts gets a control
     // that silently edits nothing, which is invisible until someone notices
     // the shader ignoring a number they dragged.
@@ -822,25 +828,32 @@ TEST_CASE("PinAcceptsLiteral agrees with the emission switch, pin by pin",
     // mirrored switch would pass by construction and prove nothing. Every
     // (type, pin) NOT in this list must accept.
     //
-    // MAINTENANCE CONTRACT: a new node type whose emission reads an
-    // unconnected pin DIRECTLY (rather than through codegen's argOr seam) must
-    // be added to the emission switch AND to PinAcceptsLiteral AND listed
-    // here, in one commit. A type that routes every operand through argOr
-    // needs no edit -- the "everything else accepts" arm covers it. Cites are
-    // into MaterialGraph.cpp.
+    // MAINTENANCE CONTRACT, in two halves that catch different mistakes:
+    //   this list      -- the predicate must match the EXPECTATION recorded
+    //                     here, so a deliberate change to the seam has to be
+    //                     written down before it passes;
+    //   the behavioural
+    //   section below  -- the predicate must match the EMISSION, so a new node
+    //                     type that bypasses argOr and forgets the predicate
+    //                     fails even though nobody touched this list (the
+    //                     `default: return true` arm would otherwise agree
+    //                     with an expectation that also defaults to accept,
+    //                     and the list alone would prove nothing).
+    // A type that routes every operand through argOr needs no edit at all.
+    // Cites are into MaterialGraph.cpp.
     struct NonArgOrPin { const char* token; std::uint32_t pin; };
     static constexpr NonArgOrPin kExcluded[] = {
-        { "output",         0 },   // color reads in[0] directly     (:712-714)
-        { "texture_sample", 0 },   // uv -> v.uv directly            (:739-740)
+        { "output",         0 },   // color reads in[0] directly     (:714-716)
+        { "texture_sample", 0 },   // uv -> v.uv directly            (:741-742)
         { "sprite_texture", 0 },   // same emission case as above
-        { "pass_input",     0 },   // uv -> v.uv directly            (:973-975)
-        { "split",          0 },   // source read at native width    (:833-834)
-        { "swizzle",        0 },   // source read at native width    (:910-911)
-        { "remap",          1 },   // inRange  -> float2(0,1) direct (:875-880)
-        { "remap",          2 },   // outRange -> float2(0,1) direct (:875-880)
-        { "tiling_offset",  0 },   // uv -> v.uv directly            (:887-889)
-        { "simple_noise",   0 },   // uv -> v.uv directly            (:952-953)
-        { "vertex_output",  0 },   // connected-only, all three pins (:959-964)
+        { "pass_input",     0 },   // uv -> v.uv directly            (:975-977)
+        { "split",          0 },   // source read at native width    (:835-836)
+        { "swizzle",        0 },   // source read at native width    (:912-913)
+        { "remap",          1 },   // inRange  -> float2(0,1) direct (:877-882)
+        { "remap",          2 },   // outRange -> float2(0,1) direct (:877-882)
+        { "tiling_offset",  0 },   // uv -> v.uv directly            (:889-891)
+        { "simple_noise",   0 },   // uv -> v.uv directly            (:954-955)
+        { "vertex_output",  0 },   // connected-only, all three pins (:961-966)
         { "vertex_output",  1 },
         { "vertex_output",  2 },
     };
@@ -856,50 +869,113 @@ TEST_CASE("PinAcceptsLiteral agrees with the emission switch, pin by pin",
                 excluded = excluded ||
                            (std::string_view(info.token) == x.token && x.pin == pin);
             INFO(info.token << " pin " << pin);
-            CHECK(PinAcceptsLiteral(n, pin) == !excluded);
+            CHECK(GraphPinAcceptsLiteral(n, pin) == !excluded);
         }
     }
 
     // Custom's pins are PER-NODE data, so the table loop above cannot reach
     // them (a default Custom node has none). They are ordinary argOr operands
-    // (:801) -- every one accepts, whatever its width.
+    // (:803) -- every one accepts, whatever its width.
     GraphNode custom = Node(1, GraphNodeType::Custom);
     custom.customPins = { { "uv", 2 }, { "t", 1 }, { "tint", 4 } };
     REQUIRE(GraphNodeInputCount(custom) == 3);
     for (std::uint32_t pin = 0; pin < 3; ++pin)
     {
         INFO("custom pin " << pin);
-        CHECK(PinAcceptsLiteral(custom, pin));
+        CHECK(GraphPinAcceptsLiteral(custom, pin));
     }
 
     // The companion rule the widget sizes itself from: fixed 2/4 keep their
     // lanes, and dynamic (0) is a SCALAR like width 1.
-    CHECK(PinLiteralLanes(0) == 1);
-    CHECK(PinLiteralLanes(1) == 1);
-    CHECK(PinLiteralLanes(2) == 2);
-    CHECK(PinLiteralLanes(4) == 4);
+    CHECK(GraphPinLiteralLanes(0) == 1);
+    CHECK(GraphPinLiteralLanes(1) == 1);
+    CHECK(GraphPinLiteralLanes(2) == 2);
+    CHECK(GraphPinLiteralLanes(4) == 4);
 
-    SECTION("the exclusion is real: an excluded pin's literal never reaches the text")
+    SECTION("behavioural: the predicate matches the EMISSION, type by type, pin by pin")
     {
-        // TilingOffset carries one pin of each kind -- uv (excluded: reads its
-        // v.uv default directly) and offset (accepted: an argOr operand) -- so
-        // ONE snippet proves both halves against the emission switch itself,
-        // not against a restatement of it.
-        MaterialGraph g;
-        g.nodes.push_back(Node(1, GraphNodeType::Output));
-        GraphNode tile = Node(2, GraphNodeType::TilingOffset);
-        tile.pinLiterals.push_back(Literal(0, 7.0f, 7.0f));   // uv: dead data
-        tile.pinLiterals.push_back(Literal(2, 3.0f, 4.0f));   // offset: live
-        g.nodes.push_back(tile);
-        g.links.push_back(Link(2, 0, 1, 0));
+        // The half that makes the maintenance contract real. Above, the
+        // predicate is compared to an expectation; here it is compared to what
+        // codegen ACTUALLY does -- one minimal graph per (type, pin): put a
+        // distinctive literal on that unwired pin, generate, and look for it in
+        // the emitted text. A future node type that reads an unconnected pin
+        // directly and forgets GraphPinAcceptsLiteral fails HERE: the predicate
+        // accepts, the emission ignores the value, the mark never appears.
+        //
+        // ONE context serves every type -- nothing in this library is
+        // fullscreen-only: MaterialSurface::Sprite satisfies the Vertex Color /
+        // Sprite Texture gate (:511-516), availableInputs = 4 satisfies Pass
+        // Input's (:518-527), and a BASE graph (passGraph = false) is where
+        // Vertex Output is legal (:445-447).
+        //
+        // NO TYPE IS SKIPPED. Four need a different SHAPE, listed here with the
+        // reason, same discipline as kExcluded above:
+        //   output          it IS the root -- there is nothing to wire it into,
+        //                   so the literal goes on node 1 itself
+        //   vertex_output   no output pins, so it cannot feed the Output; it
+        //                   sits BESIDE it as the vertex walk's own root, and
+        //                   the mark is looked for in both snippets
+        //   texture_sample  needs a valid param name or decl validation refuses
+        //                   the graph before codegen runs (:470-474)
+        //   custom          pins and body are per-node data; a default node has
+        //                   neither, and this is also the only width-4 pin the
+        //                   walk can reach
+        // Types with no input pins (the constants, Param, UV, Time, Vertex
+        // Color, Comment) contribute no iterations -- there is no pin to carry
+        // a literal, which is the correct amount of coverage for them.
+        //
+        // 7.25 is the mark: exactly representable (FormatF is "%g" over the
+        // float), and no neutral, local name, or param name a generated snippet
+        // can contain includes that text. Lanes past the first carry their own
+        // values but only the first is searched for, so one mark works for
+        // scalar, float2 and float4 pins alike.
+        for (const GraphNodeTypeInfo& info : AllGraphNodeInfos())
+        {
+            GraphNode target = Node(2, info.type);
+            if (info.type == GraphNodeType::TextureSample)
+                target = TexNode(2, "Tex");
+            if (info.type == GraphNodeType::Custom)
+            {
+                target.customPins = { { "a", 1 }, { "b", 2 }, { "c", 4 } };
+                target.customOutWidth = 4;
+                // The body need not READ every pin -- they are function
+                // parameters either way, and it is the CALL that carries the
+                // literals.
+                target.customBody = "return float4(a, a, a, 1.0);";
+            }
 
-        const GraphCodegenResult r = GenerateGraphSnippet(g);
-        REQUIRE(r.Ok());
-        CHECK(r.snippet.find("v.uv * ") != std::string::npos);          // uv literal ignored
-        CHECK(r.snippet.find("float2(7, 7)") == std::string::npos);
-        CHECK(r.snippet.find("float2(3, 4)") != std::string::npos);     // offset literal used
-        CHECK_FALSE(PinAcceptsLiteral(tile, 0));
-        CHECK(PinAcceptsLiteral(tile, 2));
+            const std::uint32_t pins = GraphNodeInputCount(target);
+            for (std::uint32_t pin = 0; pin < pins; ++pin)
+            {
+                GraphNode probe = target;
+                probe.pinLiterals.push_back(Literal(pin, 7.25f, 8.5f, 9.75f, 6.5f));
+
+                MaterialGraph g;
+                g.nodes.push_back(Node(1, GraphNodeType::Output));
+                if (info.type == GraphNodeType::Output)
+                {
+                    g.nodes[0].pinLiterals = probe.pinLiterals;   // the root carries it
+                }
+                else
+                {
+                    g.nodes.push_back(probe);
+                    if (GraphNodeOutputCount(probe) > 0)
+                        g.links.push_back(Link(2, 0, 1, 0));
+                }
+
+                const GraphCodegenResult r =
+                    GenerateGraphSnippet(g, MaterialSurface::Sprite, 4);
+                INFO(info.token << " pin " << pin
+                                << "\nerrors: " << (r.errors.empty() ? std::string("none")
+                                                                     : r.errors[0].message)
+                                << "\npixel:\n" << r.snippet
+                                << "vertex:\n" << r.vertexSnippet);
+                REQUIRE(r.Ok());
+                const bool emitted = r.snippet.find("7.25") != std::string::npos ||
+                                     r.vertexSnippet.find("7.25") != std::string::npos;
+                CHECK(emitted == GraphPinAcceptsLiteral(probe, pin));
+            }
+        }
     }
 }
 
