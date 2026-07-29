@@ -212,6 +212,78 @@ pub fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A duplicate freshly made on disk, ready for the caller to list.
+pub struct Duplicated {
+    pub name: String,
+    pub manifest: PathBuf,
+    pub abi: u32,
+}
+
+/// The disk half of Duplicate: copy the project beside itself into the first
+/// free "X Copy" / "X Copy N" slot (skipping build output and .git at any
+/// depth -- project::DUPLICATE_SKIP has the reasoning per name), rename the
+/// manifest and the name inside it. Asset GUIDs copy as-is: they live in
+/// asset files/.meta sidecars and are scoped to the project's own registry,
+/// which rescans on open, so two projects holding the same GUIDs never meet.
+/// Any failure past the first write removes new_root -- it did not exist
+/// before this call, so the remove can only take the partial copy just made.
+pub fn duplicate_project_files(recorded: &Path) -> Result<Duplicated, String> {
+    let (root, manifest) = resolve_project(recorded)?;
+    let parent = root
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| format!("{} has no parent folder to copy within", root.display()))?;
+
+    let base = project::display_name(&recorded.to_string_lossy());
+    let mut pick = None;
+    for n in 1..=99 {
+        let name = project::copy_name(&base, n);
+        let dir = parent.join(&name);
+        if !dir.exists() {
+            pick = Some((name, dir));
+            break;
+        }
+    }
+    let (new_name, new_root) =
+        pick.ok_or_else(|| format!("99 copies of {base} already exist here"))?;
+    // The suffix can push a legal name over the 64-char cap; gate it like a
+    // typed name rather than minting a folder rename_project would refuse.
+    if let Some(why) = project::name_error(&new_name) {
+        return Err(why);
+    }
+
+    // Read and edit the manifest in memory BEFORE any disk work (the
+    // rename_project rule: discover a malformed .arcproj while nothing has
+    // been created yet).
+    let text = std::fs::read_to_string(&manifest)
+        .map_err(|e| format!("could not read {}: {e}", manifest.display()))?;
+    let edited = project::rename_in_manifest(&text, &new_name)?;
+
+    let fail = |e: String| {
+        let _ = std::fs::remove_dir_all(&new_root);
+        Err(e)
+    };
+    if let Err(e) = copy_tree(&root, &new_root) {
+        return fail(e);
+    }
+    let copied = new_root.join(manifest.file_name().unwrap_or_default());
+    let new_manifest = new_root.join(format!("{new_name}.{}", project::MANIFEST_EXT));
+    if copied != new_manifest {
+        if let Err(e) = std::fs::rename(&copied, &new_manifest) {
+            return fail(format!("could not rename {}: {e}", copied.display()));
+        }
+    }
+    if let Err(e) = std::fs::write(&new_manifest, &edited) {
+        return fail(format!("could not write {}: {e}", new_manifest.display()));
+    }
+
+    Ok(Duplicated {
+        name: new_name,
+        manifest: new_manifest,
+        abi: project::parse_manifest_abi(&edited).unwrap_or(0),
+    })
+}
+
 // These touch the real filesystem (that is this module's whole job), so each
 // test gets its own scratch dir -- same pattern as store.rs's tests.
 #[cfg(test)]
@@ -330,6 +402,31 @@ mod tests {
         assert!(!dst.join("Binaries").exists(), "root build output is skipped");
         assert!(!dst.join("Plugins/P/Intermediate").exists(), "nested build output too");
         assert!(!dst.join(".git").exists(), "a duplicate is not a second checkout");
+    }
+
+    #[test]
+    fn duplicate_project_files_copies_renames_and_numbers_slots() {
+        let dir = scratch("dup");
+        let src = mk(&dir, "G");
+        std::fs::write(src.join("G.arcproj"), project::manifest_json("G", 8).unwrap()).unwrap();
+        std::fs::create_dir_all(src.join("Content")).unwrap();
+        std::fs::write(src.join("Content/level.ascene"), b"scene").unwrap();
+        std::fs::create_dir_all(src.join("Binaries")).unwrap();
+        std::fs::write(src.join("Binaries/Game.dll"), b"x").unwrap();
+
+        let dup = duplicate_project_files(&src).unwrap();
+        assert_eq!(dup.name, "G Copy");
+        assert_eq!(dup.abi, 8, "the abi rides the rewritten manifest");
+        assert_eq!(dup.manifest, dir.join("G Copy").join("G Copy.arcproj"),
+                   "manifest renamed to match the copy's name");
+        let text = std::fs::read_to_string(&dup.manifest).unwrap();
+        assert!(text.contains("\"G Copy\""), "the name inside is rewritten: {text}");
+        assert!(dir.join("G Copy/Content/level.ascene").is_file(), "content travels");
+        assert!(!dir.join("G Copy/Binaries").exists(), "build output does not");
+
+        // The next duplicate takes the next slot.
+        let dup2 = duplicate_project_files(&src).unwrap();
+        assert_eq!(dup2.name, "G Copy 2");
     }
 
     #[test]
