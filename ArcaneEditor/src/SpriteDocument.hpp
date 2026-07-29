@@ -14,7 +14,7 @@
 // asset-type -> factory routing, and the unsaved-close confirm modal --
 // this class only ever flips m_dirty and answers Save()/Draw() truthfully
 // (same division of responsibility ShaderEditorDocument follows, see its
-// Draw() at ShaderEditorDocument.cpp:1512-1601: requestClose mirrors `open`
+// Draw() at ShaderEditorDocument.cpp:1607-1699: requestClose mirrors `open`
 // from ImGui::Begin, both on the collapsed-early-return path and the normal
 // end-of-frame path -- DocumentHost.cpp:151-157 is what actually turns that
 // into a close or a pending confirm).
@@ -113,8 +113,8 @@ namespace Arcane::Editor
         EditGesture::GestureState m_gesture;
 
         // Doc-identity handle for undo steps, mirroring ShaderEditorDocument's
-        // m_anchor (ShaderEditorDocument.hpp:360-363, minted
-        // ShaderEditorDocument.cpp:809): commands hold this WEAKLY and forward
+        // m_anchor (ShaderEditorDocument.hpp:381-384, minted
+        // ShaderEditorDocument.cpp:876): commands hold this WEAKLY and forward
         // through the pointee, so steps left on the shared stack after this
         // document closes go inert instead of dereferencing a dead `this`.
         std::shared_ptr<SpriteDocument*> m_anchor;

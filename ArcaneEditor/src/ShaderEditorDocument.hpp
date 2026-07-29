@@ -120,6 +120,49 @@ namespace Arcane::Editor
         void Tick(double dt) override;
         void Draw(bool& requestClose) override;
 
+        // ---- Pane layout: a GLOBAL editor preference, not per-document ----
+        // The two pane splits are one editor-wide setting shared by every open
+        // shader document (last drag wins), so a layout set once is the layout
+        // every material opens with. Deliberate: the alternative -- per-document
+        // ratios -- makes the user re-drag the same split for each asset, and
+        // there is no per-asset reason for the two to differ.
+        //
+        // Fractions of the shared extent the FIRST pane takes: `mainSplit` is
+        // the left column (graph / snippet, or an instance's params) against the
+        // preview column, dragged horizontally; `rightSplit` is the preview
+        // against the params panel inside the right column, dragged vertically
+        // (base materials only -- an instance's params live in the LEFT column,
+        // so its right column has nothing to split). Do not transpose them.
+        //
+        // The defaults are measured from the layout the user settled on at the
+        // desk: the graph takes about three quarters of the width, and the
+        // preview a little over half of the column beside it. Double-clicking a
+        // divider restores these.
+        static constexpr float kMainSplitDefault  = 0.74f;
+        static constexpr float kRightSplitDefault = 0.55f;
+
+        struct LayoutPrefs
+        {
+            float mainSplit  = kMainSplitDefault;
+            float rightSplit = kRightSplitDefault;
+        };
+        // The one instance (process-wide). Draw reads and the dividers write it.
+        static LayoutPrefs& Layout();
+
+        // Persistence: an ImGuiSettingsHandler registered on the CURRENT ImGui
+        // context, so the ratios ride the editor's existing imgui.ini next to
+        // ImGui's own window/dock state -- the editor has no settings store of
+        // its own, and this is ImGui's supported extension point for exactly
+        // this (imgui_internal.h:2212-2225 declares the handler struct,
+        // imgui.cpp:4498-4505 registers the stock "Window" one the same way).
+        //
+        // ORDERING: must run after ImGui::CreateContext and BEFORE the first
+        // NewFrame -- NewFrame is where ImGui loads the ini file, and handlers
+        // registered after that load see nothing. EditorApp::Init calls it.
+        // Idempotent; a no-op with no current context (the headless tests that
+        // never make one).
+        static void RegisterLayoutSettings();
+
         // True when the result belonged to this document's in-flight compiles.
         bool ConsumeResult(const Arcane::ShaderCompileResult& result);
 
@@ -328,28 +371,6 @@ namespace Arcane::Editor
         bool                            m_dirty = false;  // TEXT dirtiness (params: ParamsDirty)
         bool                            m_live = true;    // auto-compile on edit
         bool                            m_confirmSaveWithErrors = false;
-
-        // ---- Pane layout (draggable splits) ----
-        // Fraction of the shared extent the FIRST pane takes: m_splitMain is
-        // the left column (graph/snippet, or an instance's params) against the
-        // preview column; m_splitRight is the preview against the params panel
-        // inside the right column (base materials only -- an instance's params
-        // live in the left column, so its right column has nothing to split).
-        // Both are dragged by the dividers Draw submits between the panes, and
-        // double-clicking a divider restores kSplitDefault.
-        //
-        // The default is the ratio both splits were HARD-CODED to before they
-        // became draggable, so a freshly opened document looks exactly as it
-        // did (they were 55/45, never 50/50).
-        //
-        // RUNTIME-ONLY, deliberately: the editor has no user-preference store
-        // to put them in -- imgui.ini carries ImGui's own window/dock state and
-        // nothing in the editor registers an ImGuiSettingsHandler -- so a
-        // reopened document starts at the default again. Persisting these is
-        // work for a settings store once one exists.
-        static constexpr float          kSplitDefault = 0.55f;
-        float                           m_splitMain  = kSplitDefault;
-        float                           m_splitRight = kSplitDefault;
 
         // Param-dirtiness baseline: the instance serial at the last Save (or
         // rebind carrying no unsaved edits). m_paramsBaseDirty carries unsaved

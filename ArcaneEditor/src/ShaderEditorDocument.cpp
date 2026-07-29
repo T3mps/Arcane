@@ -18,6 +18,10 @@
 #include <Arcane/Render/ShaderConventions.hpp>
 
 #include <imgui.h>
+// AddSettingsHandler / FindSettingsHandler (:3502-3504), ImGuiSettingsHandler
+// (:2212-2225) and MarkIniSettingsDirty (:3499) are internal-only -- ImGui's
+// ini extension point has never been in the public header.
+#include <imgui_internal.h>
 #include <imgui_node_editor.h>
 
 #include <algorithm>
@@ -684,6 +688,60 @@ namespace Arcane::Editor
         constexpr float kSplitMinF   = 0.15f;    // ... unless the span is too
         constexpr float kSplitMaxF   = 0.85f;    //     small for two floors
 
+        // ---- Pane layout persistence (imgui.ini) ---------------------------
+        // The ini section the two ratios live in: "[ArcaneEditorLayout]
+        // [ShaderEditor]". TypeName may not contain '[' or ']'
+        // (imgui_internal.h:2214); the entry name is what ReadOpen matches on,
+        // and the pair is what lets a future panel add its own entry under the
+        // same type without touching this handler.
+        constexpr const char* kLayoutIniType = "ArcaneEditorLayout";
+        constexpr const char* kLayoutIniName = "ShaderEditor";
+
+        // A stored ratio arrives from a text file a human can edit, so it is
+        // not trusted: anything non-finite or outside the working range is
+        // pulled back to the fraction limits. The per-frame ClampSplit still
+        // applies the pixel floors on top of this -- this only has to keep a
+        // garbage line from parking a pane off-screen.
+        float SanitizeSplit(float v)
+        {
+            if (!(v > 0.0f) || !(v < 1.0f))   // false for NaN, by construction
+                return 0.5f;
+            return (std::min)((std::max)(v, kSplitMinF), kSplitMaxF);
+        }
+
+        // ReadOpen returns the entry the following lines write into; returning
+        // null makes ImGui skip the entry's lines, which is what an unknown
+        // name should do (imgui.cpp:4498-4505 registers the stock "Window"
+        // handler in this same shape).
+        void* LayoutSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name)
+        {
+            return std::strcmp(name, kLayoutIniName) == 0
+                       ? static_cast<void*>(&ShaderEditorDocument::Layout())
+                       : nullptr;
+        }
+
+        void LayoutSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
+                                    void* entry, const char* line)
+        {
+            auto* prefs = static_cast<ShaderEditorDocument::LayoutPrefs*>(entry);
+            float v = 0.0f;
+            if (std::sscanf(line, "MainSplit=%f", &v) == 1)
+                prefs->mainSplit = SanitizeSplit(v);
+            else if (std::sscanf(line, "RightSplit=%f", &v) == 1)
+                prefs->rightSplit = SanitizeSplit(v);
+        }
+
+        void LayoutSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
+                                    ImGuiTextBuffer* buf)
+        {
+            const ShaderEditorDocument::LayoutPrefs& prefs = ShaderEditorDocument::Layout();
+            buf->reserve(buf->size() + 64);
+            buf->appendf("[%s][%s]\n", handler->TypeName, kLayoutIniName);
+            buf->appendf("MainSplit=%.4f\n", prefs.mainSplit);
+            buf->appendf("RightSplit=%.4f\n", prefs.rightSplit);
+            buf->append("\n");
+        }
+
         // The fraction a split may actually use, given `span` pixels of shared
         // extent. The PIXEL floor is what keeps a pane usable in a large
         // window; the FRACTION floor is what keeps both panes alive in a small
@@ -738,8 +796,17 @@ namespace Arcane::Editor
             }
             // After the drag, so the reset wins on the frame it fires (that
             // frame's own drag delta is ~0 anyway -- the click did not move).
-            if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            const bool reset = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+            if (reset)
                 ratio = defaultRatio;
+            // Persist on RELEASE, not per frame: MarkIniSettingsDirty starts
+            // ImGui's own save timer (IniSavingRate), so marking every frame of
+            // a drag would keep re-arming a timer that writes the same file
+            // anyway. IsItemDeactivated is true on the frame the drag ends
+            // (imgui_internal.h's ActiveIdPreviousFrame bookkeeping), which is
+            // exactly one mark per gesture.
+            if (reset || ImGui::IsItemDeactivated())
+                ImGui::MarkIniSettingsDirty();
 
             // Style-relative and three-tone, the same ramp ImGui's own docking
             // splitter uses: a hairline in Separator at rest, one step brighter
@@ -1509,6 +1576,34 @@ namespace Arcane::Editor
             glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
     }
 
+    ShaderEditorDocument::LayoutPrefs& ShaderEditorDocument::Layout()
+    {
+        // One per process, defaulted from the class constants. Function-local so
+        // there is no static-init order question with the ini handler, which is
+        // registered from EditorApp::Init and may read this on its first line.
+        static LayoutPrefs prefs;
+        return prefs;
+    }
+
+    void ShaderEditorDocument::RegisterLayoutSettings()
+    {
+        // No context (headless) or already registered: nothing to do. ImGui
+        // COPIES the handler into the context (imgui.cpp's AddSettingsHandler
+        // does a push_back by value), so the local below may die here -- the
+        // stock handlers are registered from a local exactly the same way.
+        if (ImGui::GetCurrentContext() == nullptr ||
+            ImGui::FindSettingsHandler(kLayoutIniType) != nullptr)
+            return;
+
+        ImGuiSettingsHandler handler;
+        handler.TypeName   = kLayoutIniType;
+        handler.TypeHash   = ImHashStr(kLayoutIniType);
+        handler.ReadOpenFn = LayoutSettingsReadOpen;
+        handler.ReadLineFn = LayoutSettingsReadLine;
+        handler.WriteAllFn = LayoutSettingsWriteAll;
+        ImGui::AddSettingsHandler(&handler);
+    }
+
     void ShaderEditorDocument::Draw(bool& requestClose)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard. It
@@ -1528,16 +1623,19 @@ namespace Arcane::Editor
 
         DrawToolbar();
 
-        // Two draggable splits (PaneSplitter; both ratios are runtime-only --
-        // see m_splitMain). The MAIN one divides the left column (graph or
+        // Two draggable splits (PaneSplitter) over the SHARED layout preference
+        // -- every open shader document reads the same two ratios, and a drag
+        // in any of them is the layout all of them use (Layout(), which the ini
+        // handler persists). The MAIN one divides the left column (graph or
         // snippet, or an instance's params) from the preview column; the right
         // column carries its own, preview against params, further down.
         // The divider sits BETWEEN the two children, so the width it occupies
         // comes off the span the fractions divide.
+        LayoutPrefs& layout   = Layout();
         const ImVec2 content  = ImGui::GetContentRegionAvail();
         const float contentH  = content.y;
         const float mainSpan  = (std::max)(content.x - kSplitBarPx, 1.0f);
-        const float leftW     = mainSpan * ClampSplit(m_splitMain, mainSpan);
+        const float leftW     = mainSpan * ClampSplit(layout.mainSplit, mainSpan);
 
         ImGui::BeginChild("##left", ImVec2(leftW, contentH));
         if (IsInstance())
@@ -1574,7 +1672,7 @@ namespace Arcane::Editor
         // columns, and the layout above already reserved its width.
         ImGui::SameLine(0.0f, 0.0f);
         PaneSplitter("##splitmain", /*dragX=*/true, contentH, mainSpan,
-                     m_splitMain, kSplitDefault);
+                     layout.mainSplit, kMainSplitDefault);
         ImGui::SameLine(0.0f, 0.0f);
         ImGui::BeginChild("##right", ImVec2(0, contentH));
         {
@@ -1588,9 +1686,9 @@ namespace Arcane::Editor
             {
                 const ImVec2 col = ImGui::GetContentRegionAvail();
                 const float span = (std::max)(col.y - kSplitBarPx, 1.0f);
-                DrawPreviewPanel(span * ClampSplit(m_splitRight, span));
+                DrawPreviewPanel(span * ClampSplit(layout.rightSplit, span));
                 PaneSplitter("##splitright", /*dragX=*/false, col.x, span,
-                             m_splitRight, kSplitDefault);
+                             layout.rightSplit, kRightSplitDefault);
                 DrawParamsPanel();   // fills whatever the preview left
             }
         }
@@ -3854,7 +3952,7 @@ namespace Arcane::Editor
         // while a name field has focus is exactly that gesture.
         //
         // The KIND is checked, not just the id: m_textEdit is one buffer shared
-        // with the pass canvas (ShaderEditorDocument.hpp:493-503), and
+        // with the pass canvas (ShaderEditorDocument.hpp:514-524), and
         // a PassName key carries a chain INDEX that can collide with a node id.
         //
         // Value drags need no guard -- an abandoned gesture is closed by

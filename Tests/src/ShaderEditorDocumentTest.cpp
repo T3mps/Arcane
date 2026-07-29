@@ -16,7 +16,10 @@
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 
+#include <imgui.h>   // the pane-layout ini round-trip drives ImGui's settings API
+
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -495,4 +498,79 @@ TEST_CASE("ApplyPassListState swaps the pass list, clamps selection, dirties",
     CHECK(after.passes[1].name == "gain (renamed)");
     CHECK(after.activePass == 2);
     CHECK(after.viewPass == -1);
+}
+
+// ---------------------------------------------------------------------------
+// Pane-layout preference: the two splits are ONE editor-wide setting that
+// persists through ImGui's own ini (the editor has no settings store of its
+// own). This drives the handler RegisterLayoutSettings installs directly --
+// load from memory, save to memory -- so the round-trip is verified headlessly,
+// with no window, no frame and no file: SaveIniSettingsToMemory and
+// LoadIniSettingsFromMemory both work on a bare context.
+// ---------------------------------------------------------------------------
+TEST_CASE("shader editor pane layout round-trips through imgui.ini", "[editor][material]")
+{
+    using Layout = ShaderEditorDocument::LayoutPrefs;
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGui::GetIO().IniFilename = nullptr;   // never let a test touch a real ini
+
+    ShaderEditorDocument::Layout() = Layout{};   // the process default
+    ShaderEditorDocument::RegisterLayoutSettings();
+
+    auto approx = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
+
+    // The defaults are the user's measured desk layout.
+    CHECK(approx(ShaderEditorDocument::Layout().mainSplit, 0.74f));
+    CHECK(approx(ShaderEditorDocument::Layout().rightSplit, 0.55f));
+
+    // READ: a saved entry lands on the shared preference.
+    ImGui::LoadIniSettingsFromMemory(
+        "[ArcaneEditorLayout][ShaderEditor]\nMainSplit=0.3100\nRightSplit=0.6900\n");
+    CHECK(approx(ShaderEditorDocument::Layout().mainSplit, 0.31f));
+    CHECK(approx(ShaderEditorDocument::Layout().rightSplit, 0.69f));
+
+    // WRITE: what the dividers hold is what the ini gets, under the same
+    // section the reader matches on.
+    ShaderEditorDocument::Layout().mainSplit  = 0.4200f;
+    ShaderEditorDocument::Layout().rightSplit = 0.5800f;
+    const char* out = ImGui::SaveIniSettingsToMemory(nullptr);
+    const std::string text = out ? out : "";
+    CHECK(text.find("[ArcaneEditorLayout][ShaderEditor]") != std::string::npos);
+    CHECK(text.find("MainSplit=0.4200") != std::string::npos);
+    CHECK(text.find("RightSplit=0.5800") != std::string::npos);
+
+    // ... and that text reloads to the same layout (the actual round trip).
+    ShaderEditorDocument::Layout() = Layout{};
+    ImGui::LoadIniSettingsFromMemory(text.c_str());
+    CHECK(approx(ShaderEditorDocument::Layout().mainSplit, 0.42f));
+    CHECK(approx(ShaderEditorDocument::Layout().rightSplit, 0.58f));
+
+    // A hand-edited ini is not trusted: out-of-range values are pulled back
+    // inside the working limits rather than parking a pane off-screen.
+    ImGui::LoadIniSettingsFromMemory(
+        "[ArcaneEditorLayout][ShaderEditor]\nMainSplit=9.0\nRightSplit=-3.0\n");
+    CHECK(ShaderEditorDocument::Layout().mainSplit <= 0.85f);
+    CHECK(ShaderEditorDocument::Layout().mainSplit >= 0.15f);
+    CHECK(ShaderEditorDocument::Layout().rightSplit <= 0.85f);
+    CHECK(ShaderEditorDocument::Layout().rightSplit >= 0.15f);
+
+    // A foreign entry under the same type is skipped (ReadOpen returns null),
+    // so an unknown section cannot overwrite the shader editor's.
+    ShaderEditorDocument::Layout().mainSplit = 0.6000f;
+    ImGui::LoadIniSettingsFromMemory("[ArcaneEditorLayout][SomeOtherPanel]\nMainSplit=0.2000\n");
+    CHECK(approx(ShaderEditorDocument::Layout().mainSplit, 0.60f));
+
+    // Registration is idempotent -- a second call must not stack a duplicate
+    // handler (which would write the section twice into one ini).
+    ShaderEditorDocument::RegisterLayoutSettings();
+    const char* twice = ImGui::SaveIniSettingsToMemory(nullptr);
+    const std::string once = twice ? twice : "";
+    const std::size_t first = once.find("[ArcaneEditorLayout][ShaderEditor]");
+    REQUIRE(first != std::string::npos);
+    CHECK(once.find("[ArcaneEditorLayout][ShaderEditor]", first + 1) == std::string::npos);
+
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(nullptr);
+    ShaderEditorDocument::Layout() = Layout{};   // leave the default for other tests
 }

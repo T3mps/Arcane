@@ -124,6 +124,13 @@ namespace Arcane::Editor
         // interactive family is bright blue. It must run before the first frame --
         // ImGuiStyle is read live during widget submission, not latched.
         Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
+        // The shader editor's pane splits are a persisted editor preference, and
+        // they ride the editor's imgui.ini through an ImGuiSettingsHandler. It
+        // has to be registered HERE -- after the context exists (GpuContext::
+        // Create's ImGuiLayer::Create above) and before the first NewFrame,
+        // which is where ImGui reads the ini; a handler added later would never
+        // see the saved entry.
+        ShaderEditorDocument::RegisterLayoutSettings();
         InstallConsoleSink();
 
         // Editor fonts: Roboto base + merged lucide icons, on the editor context
