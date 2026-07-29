@@ -374,7 +374,7 @@ describe("menuItemsFor", () => {
   it("a healthy project gets the full vocabulary, delete last and danger", () => {
     const items = menuItemsFor(false, true);
     expect(items.map((i) => i.kind))
-      .toEqual(["reveal", "rename", "args", "forget", "delete"]);
+      .toEqual(["reveal", "rename", "duplicate", "args", "forget", "delete"]);
     expect(items.at(-1)?.danger).toBe(true);
     expect(items.filter((i) => i.danger)).toHaveLength(1);
   });

@@ -19,7 +19,7 @@
   import { nextSort, resolveEngine } from "$lib/format";
   import {
     loadState, refreshEngines, registerEngine, forgetEngine, deleteProject,
-    forgetProject, clearRecents, runningProjects,
+    duplicateProject, forgetProject, clearRecents, runningProjects,
     openProject, createProject, suggestEngine, setProjectEngine,
     setProjectFavorite, setProjectArgs, revealProject, renameProject, relocateProject,
     loadSettings, saveSettings, defaultDialogDir,
@@ -333,6 +333,7 @@
     changeEngine: (p) => (modal = { kind: "engine", p }),
     reveal: (p) => guard(() => revealProject(p.path)),
     rename: (p) => (modal = { kind: "rename", p }),
+    duplicate: (p) => guard(() => duplicateProject(p.path)),
     args: (p) => (modal = { kind: "args", p }),
     forget: (p) => guard(() => forgetProject(p.path)),
     locate,

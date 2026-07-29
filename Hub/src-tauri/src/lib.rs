@@ -354,6 +354,107 @@ fn rename_project(path: String, new_name: String) -> Result<String, String> {
     Ok(new_path)
 }
 
+// Duplicate a project on disk beside the original and list the copy.
+//
+// `async fn` ON PURPOSE: this is the one command whose duration scales with
+// the project (Content can be gigabytes), and a sync command runs on the main
+// thread with the whole window frozen for the duration. On the async runtime
+// the frontend's busy state stays honest instead.
+//
+// What a duplicate IS: the content, source, config and plugins -- everything
+// that cannot be rebuilt -- under a fresh name. Build output (Binaries/,
+// Intermediate/, at any depth) and .git are deliberately not copied
+// (project::DUPLICATE_SKIP has the reasoning per name). Asset GUIDs copy
+// as-is: they live in asset files/.meta sidecars and are scoped to the
+// project's own registry, which rescans on open, so two projects holding the
+// same GUIDs never meet.
+#[tauri::command]
+async fn duplicate_project(path: String) -> Result<String, String> {
+    let (root, manifest) = resolve::resolve_project(Path::new(&path))?;
+    let parent = root
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| format!("{} has no parent folder to copy within", root.display()))?;
+
+    // First free "X Copy" / "X Copy N" slot beside the original.
+    let base = project::display_name(&path);
+    let mut pick = None;
+    for n in 1..=99 {
+        let name = project::copy_name(&base, n);
+        let dir = parent.join(&name);
+        if !dir.exists() {
+            pick = Some((name, dir));
+            break;
+        }
+    }
+    let (new_name, new_root) =
+        pick.ok_or_else(|| format!("99 copies of {base} already exist here"))?;
+    // The suffix can push a legal name over the 64-char cap; gate it like a
+    // typed name rather than minting a folder rename_project would refuse.
+    if let Some(why) = project::name_error(&new_name) {
+        return Err(why);
+    }
+
+    // Read and edit the manifest in memory BEFORE any disk work (the
+    // rename_project rule: discover a malformed .arcproj while nothing has
+    // been created yet).
+    let text = std::fs::read_to_string(&manifest)
+        .map_err(|e| format!("could not read {}: {e}", manifest.display()))?;
+    let edited = project::rename_in_manifest(&text, &new_name)?;
+
+    // Any failure past this point removes new_root -- it did not exist before
+    // this command (checked above), so the remove can only take the partial
+    // copy this command just made.
+    let fail = |e: String| {
+        let _ = std::fs::remove_dir_all(&new_root);
+        Err(e)
+    };
+    if let Err(e) = resolve::copy_tree(&root, &new_root) {
+        return fail(e);
+    }
+    let copied = new_root.join(manifest.file_name().unwrap_or_default());
+    let new_manifest = new_root.join(format!("{new_name}.{}", project::MANIFEST_EXT));
+    if copied != new_manifest {
+        if let Err(e) = std::fs::rename(&copied, &new_manifest) {
+            return fail(format!("could not rename {}: {e}", copied.display()));
+        }
+    }
+    if let Err(e) = std::fs::write(&new_manifest, &edited) {
+        return fail(format!("could not write {}: {e}", new_manifest.display()));
+    }
+
+    // List the copy. The engine pin and arguments carry from the source (the
+    // same engine opens it, the same switches apply); the star does not --
+    // favouriting the original is not favouriting its copies. The stamp is
+    // NOW even though the copy has never been opened: the Opened column's
+    // real job is recency-of-interaction, creating IS the interaction, and a
+    // "never"-stamped copy would sort to the bottom and read as a failure.
+    let mut s = state::load();
+    let key = state::normalise_path(&path);
+    let (engine_id, args) = s
+        .recents
+        .iter()
+        .find(|e| state::normalise_path(&e.path) == key)
+        .map(|e| (e.engine_id.clone(), e.args.clone()))
+        .unwrap_or_default();
+    let new_path = new_manifest.to_string_lossy().to_string();
+    state::touch_recent(
+        &mut s.recents,
+        state::RecentProject {
+            path: new_path.clone(),
+            name: new_name,
+            last_opened_utc: now_utc_iso(),
+            engine_abi: project::parse_manifest_abi(&edited).unwrap_or(0),
+            engine_id,
+            args,
+            favorite: false,
+            missing: false,
+        },
+    );
+    state::save(&s)?;
+    Ok(new_path)
+}
+
 // Remove ONE project from the Hub's own list. It does not touch the project on
 // disk -- that is delete_project's job, and the menu labels the two apart.
 // Restored 2026-07-28: the project-actions wave dropped it when Delete took its
@@ -747,6 +848,7 @@ pub fn run() {
             refresh_engines,
             forget_engine,
             delete_project,
+            duplicate_project,
             forget_project,
             relocate_project,
             clear_recents,

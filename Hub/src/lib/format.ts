@@ -285,7 +285,8 @@ export function compatibilityNote(
  * no hand-written mapping to drift. `sep` opens the below-the-line group;
  * `danger` is the red hover reserved for the one action that touches disk.
  */
-export type MenuItemKind = "reveal" | "rename" | "args" | "forget" | "locate" | "delete";
+export type MenuItemKind =
+  "reveal" | "rename" | "duplicate" | "args" | "forget" | "locate" | "delete";
 export type MenuItem = { kind: MenuItemKind; label: string; danger?: boolean; sep?: boolean };
 
 /**
@@ -309,6 +310,8 @@ export function menuItemsFor(missing: boolean, confirmDelete: boolean): MenuItem
   return [
     { kind: "reveal", label: "Show in Explorer" },
     { kind: "rename", label: "Rename project…" },
+    // No ellipsis: it copies immediately, there is no dialog to promise.
+    { kind: "duplicate", label: "Duplicate project" },
     { kind: "args", label: "Command-line arguments…" },
     { kind: "forget", label: "Remove from list", sep: true },
     {

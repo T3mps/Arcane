@@ -78,6 +78,39 @@ pub fn resolve_project(recorded: &Path) -> Result<(PathBuf, PathBuf), String> {
     Ok((recorded.to_path_buf(), recorded.join(file)))
 }
 
+/// Recursively copy `from` into `to`, skipping `project::DUPLICATE_SKIP`
+/// directory names at every depth. Fails on the first IO error and leaves
+/// whatever was copied -- the CALLER removes the partial tree, because the
+/// rollback promise is part of duplicate_project's user-facing contract, not
+/// of a copy primitive.
+///
+/// Symlinks are neither followed nor copied: a link out of the project tree
+/// must not let "duplicate this project" copy an unbounded amount of
+/// somewhere else, and a broken link in the copy would be worse than none.
+pub fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|e| format!("could not create {}: {e}", to.display()))?;
+    let entries = std::fs::read_dir(from)
+        .map_err(|e| format!("could not read {}: {e}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("could not read {}: {e}", from.display()))?;
+        let name = entry.file_name();
+        let src = entry.path();
+        let ty = entry
+            .file_type()
+            .map_err(|e| format!("could not inspect {}: {e}", src.display()))?;
+        if ty.is_dir() {
+            if project::skip_in_duplicate(&name.to_string_lossy()) {
+                continue;
+            }
+            copy_tree(&src, &to.join(&name))?;
+        } else if ty.is_file() {
+            std::fs::copy(&src, to.join(&name))
+                .map_err(|e| format!("could not copy {}: {e}", src.display()))?;
+        }
+    }
+    Ok(())
+}
+
 // These touch the real filesystem (that is this module's whole job), so each
 // test gets its own scratch dir -- same pattern as store.rs's tests.
 #[cfg(test)]
@@ -95,6 +128,41 @@ mod tests {
         let m = dir.join(format!("{name}.arcproj"));
         std::fs::write(&m, project::manifest_json(name, abi).unwrap()).unwrap();
         m
+    }
+
+    #[test]
+    fn copy_tree_copies_content_and_skips_build_output_at_every_depth() {
+        let dir = scratch("copytree");
+        let src = dir.join("Src");
+        // A UE-shaped project: Content + Source at the root, build output at
+        // the root AND under a plugin -- the any-depth case.
+        std::fs::create_dir_all(src.join("Content/Maps")).unwrap();
+        std::fs::write(src.join("Content/Maps/level.ascene"), b"scene").unwrap();
+        std::fs::write(src.join("G.arcproj"), b"{}").unwrap();
+        std::fs::create_dir_all(src.join("Binaries")).unwrap();
+        std::fs::write(src.join("Binaries/Game.dll"), b"x").unwrap();
+        std::fs::create_dir_all(src.join("Plugins/P/Intermediate")).unwrap();
+        std::fs::write(src.join("Plugins/P/Intermediate/junk.obj"), b"x").unwrap();
+        std::fs::write(src.join("Plugins/P/P.dll"), b"p").unwrap();
+        std::fs::create_dir_all(src.join(".git")).unwrap();
+        std::fs::write(src.join(".git/HEAD"), b"ref").unwrap();
+
+        let dst = dir.join("Dst");
+        copy_tree(&src, &dst).unwrap();
+
+        assert!(dst.join("Content/Maps/level.ascene").is_file());
+        assert!(dst.join("G.arcproj").is_file());
+        assert!(dst.join("Plugins/P/P.dll").is_file());
+        assert!(!dst.join("Binaries").exists(), "root build output is skipped");
+        assert!(!dst.join("Plugins/P/Intermediate").exists(), "nested build output too");
+        assert!(!dst.join(".git").exists(), "a duplicate is not a second checkout");
+    }
+
+    #[test]
+    fn copy_tree_of_a_missing_source_fails_without_inventing_a_destination_tree() {
+        let dir = scratch("copytree-missing");
+        let dst = dir.join("Dst");
+        assert!(copy_tree(&dir.join("NotThere"), &dst).is_err());
     }
 
     #[test]

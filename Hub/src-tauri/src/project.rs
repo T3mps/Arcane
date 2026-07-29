@@ -167,6 +167,29 @@ pub fn name_error(name: &str) -> Option<String> {
     None
 }
 
+/// Directory names Duplicate never copies, at ANY depth: Binaries and
+/// Intermediate are build outputs the duplicate rebuilds from source (and
+/// they appear under Plugins/* as well as at the root, hence any-depth), and
+/// .git because a duplicate is a NEW project, not a second checkout quietly
+/// pushing to the same remote.
+pub const DUPLICATE_SKIP: [&str; 3] = ["Binaries", "Intermediate", ".git"];
+
+/// Case-insensitive, because Windows paths are.
+pub fn skip_in_duplicate(dir_name: &str) -> bool {
+    DUPLICATE_SKIP.iter().any(|s| dir_name.eq_ignore_ascii_case(s))
+}
+
+/// The nth candidate name for a duplicate: "X Copy", then "X Copy 2", ...
+/// Pure so the format is pinned by a test rather than by whatever the loop
+/// in duplicate_project happens to do.
+pub fn copy_name(base: &str, n: u32) -> String {
+    if n <= 1 {
+        format!("{base} Copy")
+    } else {
+        format!("{base} Copy {n}")
+    }
+}
+
 /// Why `root` must not be handed to a recursive delete, or None if it is safe.
 ///
 /// The caller has already established that `root` is a folder holding exactly
@@ -440,6 +463,24 @@ mod tests {
         // relaxed without this failing.
         assert!(name_error("..").is_some());
         assert!(name_error(".").is_some());
+    }
+
+    #[test]
+    fn copy_name_numbers_from_the_second_copy_onward() {
+        assert_eq!(copy_name("MyGame", 1), "MyGame Copy");
+        assert_eq!(copy_name("MyGame", 2), "MyGame Copy 2");
+        assert_eq!(copy_name("MyGame", 17), "MyGame Copy 17");
+    }
+
+    #[test]
+    fn skip_in_duplicate_names_build_output_and_the_repo() {
+        assert!(skip_in_duplicate("Binaries"));
+        assert!(skip_in_duplicate("Intermediate"));
+        assert!(skip_in_duplicate(".git"));
+        assert!(skip_in_duplicate("binaries"), "Windows paths are case-insensitive");
+        assert!(!skip_in_duplicate("Content"), "content is the point of the copy");
+        assert!(!skip_in_duplicate("Source"), "source rebuilds the skipped outputs");
+        assert!(!skip_in_duplicate("Config"));
     }
 
     #[test]

@@ -17,6 +17,8 @@
     changeEngine: (p: RecentProject) => void;
     reveal: (p: RecentProject) => void;
     rename: (p: RecentProject) => void;
+    /** Copy the project on disk (minus build output and .git) and list it. */
+    duplicate: (p: RecentProject) => void;
     args: (p: RecentProject) => void;
     /** Remove from the LIST only -- `delete` is the one that touches disk. */
     forget: (p: RecentProject) => void;

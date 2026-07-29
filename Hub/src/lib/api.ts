@@ -91,6 +91,12 @@ export const forgetEngine = (path: string) => invoke<void>("forget_engine", { pa
 export const deleteProject = (path: string) => invoke<void>("delete_project", { path });
 /** Remove one project from the list. Hub state ONLY -- nothing touches disk. */
 export const forgetProject = (path: string) => invoke<void>("forget_project", { path });
+/**
+ * Copy the project on disk as "<Name> Copy" beside it (skipping build output
+ * and .git), rename its manifest, and list it. Returns the new .arcproj path.
+ */
+export const duplicateProject = (path: string) =>
+  invoke<string>("duplicate_project", { path });
 /** Hub state ONLY -- unlike deleteProject, nothing is removed from disk. */
 export const clearRecents = () => invoke<void>("clear_recents");
 /** Pin a project to an engine, or pass null to send it back to the default. */
