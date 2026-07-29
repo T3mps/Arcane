@@ -2924,11 +2924,21 @@ namespace Arcane::Editor
         // installed LAST frame. The editor computes the new view in End()
         // (imgui_node_editor.cpp:1357) and installs it in the next Begin()
         // (:1257), so a frame that is actively panning or zooming draws the
-        // backdrop one frame behind the nodes. A settled canvas is exact.
-        // Reading it after ed::Begin would be exact but there is no channel
-        // under the content to put it in; the fix, if the lag ever reads badly,
-        // is to host the canvas in a child window and blit into the PARENT's
-        // draw list after ed::End (parent draw lists render first).
+        // backdrop one frame behind the nodes.
+        //
+        // What that costs is CONTINUITY, not correctness -- and continuity is
+        // the property that matters now that the grid's phase is STATE
+        // (GraphGridPass::UpdatePhase). The pass is fed the same sequence of
+        // views, just one frame late, so it accumulates the same phase; no
+        // error builds up over a gesture, and the final view of a gesture does
+        // arrive on the following frame, so the grid settles onto its exact
+        // position without a jump. Only the moving frames are offset.
+        //
+        // Reading it after ed::Begin would remove even that, but there is no
+        // channel under the content to put the blit in; the fix, if the lag
+        // ever reads badly, is to host the canvas in a child window and blit
+        // into the PARENT's draw list after ed::End (parent draw lists render
+        // first).
         const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
         if (!m_grid && m_services.device && m_services.shaders)
@@ -2938,16 +2948,21 @@ namespace Arcane::Editor
             GraphGridView view;
             view.width  = static_cast<std::uint32_t>(canvasSize.x);
             view.height = static_cast<std::uint32_t>(canvasSize.y);
+            // RAW view state only -- the grid derives its own phase from the
+            // history of these (GraphGridPass::UpdatePhase), because a
+            // sublinearly-scaled lattice has no canvas-space anchor to be read
+            // off any single frame.
+            //
             // ed::GetCurrentZoom returns InvScale -- canvas units per screen
             // pixel (imgui_node_editor_api.cpp:665-668) -- so the visual scale
-            // is its reciprocal. The pan term is the canvas coordinate under
-            // the region's top-left, scaled: see graph_grid.hlsl's coordinate
-            // contract for why that makes panning track 1:1.
+            // is its reciprocal. ScreenToCanvas is safe HERE and only here:
+            // inside ed::Begin/End the editor moves ImGui itself into canvas
+            // space (imgui_canvas.cpp:476-487), so this must stay ahead of it.
             const float invScale = ed::GetCurrentZoom();
-            view.zoom = invScale > 0.0001f ? 1.0f / invScale : 1.0f;
+            view.scale = invScale > 0.0001f ? 1.0f / invScale : 1.0f;
             const ImVec2 originCanvas = ed::ScreenToCanvas(canvasMin);
-            view.panX = originCanvas.x * view.zoom;
-            view.panY = originCanvas.y * view.zoom;
+            view.originX = originCanvas.x;
+            view.originY = originCanvas.y;
 
             GraphGridColors colors;
             FillRgba(colors.canvas, kCanvasColor);

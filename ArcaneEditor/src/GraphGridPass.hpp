@@ -13,9 +13,14 @@
 // the octave crossfade and the sublinear zoom curve for free. The vendored grid
 // is switched off through its public style seam (StyleColor_Grid alpha 0).
 //
-// IDLE COST IS ZERO: Update() compares the incoming view+palette against the
-// last rendered ones and returns the existing texture untouched when nothing
-// moved, so a still canvas records no command list at all. The target is
+// THE PHASE IS STATE, not a function of the view: see UpdatePhase below. That
+// is what makes a zoom scale the pattern about the point the editor zoomed
+// about rather than about the region's top-left corner.
+//
+// IDLE COST IS ZERO: Update() compares the phase+scale it just derived, plus
+// the palette, against the last rendered ones and returns the existing texture
+// untouched when nothing moved, so a still canvas records no command list at
+// all. The target is
 // over-allocated to a quantum so ordinary panel resizes do not churn GPU
 // memory (see kAllocQuantum) -- a real reallocation costs a waitForIdle, the
 // same trade OffscreenCanvas::Resize makes (OffscreenCanvas.cpp:131-147).
@@ -29,32 +34,32 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 
 namespace Arcane::Editor
 {
-    // The canvas transform, as the node editor reports it.
+    // The canvas transform, as the node editor reports it. This is RAW VIEW
+    // STATE -- the grid's own phase is derived from the HISTORY of these, not
+    // from any single one (see UpdatePhase).
     //
-    // ZOOM IS THE VISUAL SCALE (1 = 100%, 2 = zoomed in 2x). Note that
+    // SCALE IS THE VISUAL SCALE (1 = 100%, 2 = zoomed in 2x). Note that
     // ed::GetCurrentZoom() returns the RECIPROCAL of this -- it hands back
     // CanvasView::InvScale, i.e. canvas units per screen pixel
     // (imgui_node_editor_api.cpp:665-668, imgui_canvas.h:70). Callers must
     // invert it before filling this in.
     //
-    // panX/panY are the canvas-space coordinate under the region's top-left
-    // corner, MULTIPLIED BY zoom -- the shader's gPhasePx. See the coordinate
-    // contract at the top of graph_grid.hlsl for the derivation.
+    // originX/originY are the CANVAS-space coordinate under the region's
+    // top-left corner (ed::ScreenToCanvas of that corner), unscaled.
     struct GraphGridView
     {
         std::uint32_t width  = 0;
         std::uint32_t height = 0;
-        float panX = 0.0f;
-        float panY = 0.0f;
-        float zoom = 1.0f;
-
-        bool operator==(const GraphGridView&) const = default;
+        float originX = 0.0f;
+        float originY = 0.0f;
+        float scale   = 1.0f;
     };
 
     // Display-referred RGBA (ImGui draws post-tonemap, imgui.hlsl:1-5). The
@@ -97,8 +102,13 @@ namespace Arcane::Editor
             if (!EnsureTarget(view.width, view.height))
                 return nullptr;
 
+            // Phase first: it is the thing the render actually depends on, and
+            // it is a function of the view HISTORY, not of `view` alone.
+            UpdatePhase(view);
+
             const std::uint64_t generation = m_shaders->Generation();
-            if (m_rendered && m_lastView == view && m_lastColors == colors &&
+            const RenderKey key{ m_phaseX, m_phaseY, view.scale };
+            if (m_rendered && m_lastKey == key && m_lastColors == colors &&
                 m_lastGeneration == generation)
                 return m_tex.Get();   // idle: nothing recorded
 
@@ -108,9 +118,9 @@ namespace Arcane::Editor
 
             // Mirror of `cbuffer GraphGridCB` in graph_grid.hlsl.
             GridCB cb{};
-            cb.phaseX = view.panX;
-            cb.phaseY = view.panY;
-            cb.zoom   = view.zoom;
+            cb.phaseX = m_phaseX;
+            cb.phaseY = m_phaseY;
+            cb.zoom   = view.scale;
             cb.pad0   = 0.0f;
             std::memcpy(cb.canvasColor, colors.canvas, sizeof(cb.canvasColor));
             std::memcpy(cb.minorColor,  colors.minor,  sizeof(cb.minorColor));
@@ -129,7 +139,7 @@ namespace Arcane::Editor
             m_cl->close();
             m_device->executeCommandList(m_cl);
 
-            m_lastView       = view;
+            m_lastKey        = key;
             m_lastColors     = colors;
             m_lastGeneration = generation;
             m_rendered       = true;
@@ -157,9 +167,126 @@ namespace Arcane::Editor
         };
         static_assert(sizeof(GridCB) == 64, "GridCB must match graph_grid.hlsl");
 
+        // What the shader's output actually depends on. Deliberately NOT the
+        // raw view: two different views that evolve to the same phase render
+        // the same image, and the same view arriving twice must not re-render.
+        struct RenderKey
+        {
+            float phaseX = 0.0f, phaseY = 0.0f, scale = 0.0f;
+            bool operator==(const RenderKey&) const = default;
+        };
+
         // Targets are rounded up to this so dragging a dock splitter does not
         // reallocate (and waitForIdle) on every pixel of travel.
         static constexpr std::uint32_t kAllocQuantum = 256;
+
+        // ---------------------------------------------------------------
+        // MIRRORED CONSTANTS. These four must stay equal to graph_grid.hlsl's
+        // kZoomExponent / kBaseSpacingPx / kMinorTargetPx / kMajorEvery. They
+        // are duplicated here rather than passed in because the phase update
+        // has to know the grid's own screen scale and its coarsest period, and
+        // both are the shader's arithmetic; same mirrored-constant arrangement
+        // msdf.hlsl and TextSystem.cpp use for kPxRange/kAtlasSize.
+        // ---------------------------------------------------------------
+        static constexpr float kZoomExponent  = 0.4f;
+        static constexpr float kBaseSpacingPx = 20.0f;
+        static constexpr float kMinorTargetPx = 22.0f;
+        static constexpr float kMajorEvery    = 8.0f;
+
+        // A view scale change below this (relative) is treated as no change at
+        // all, which routes the update through the pure-pan branch. The zoom
+        // branch divides by (scaleOld - scaleNew), so this is also what keeps
+        // that division away from zero.
+        static constexpr float kScaleEpsilon = 1e-4f;
+
+        // The grid's own screen scale -- the sublinear answer to view zoom.
+        static float GridScale(float viewScale) noexcept
+        {
+            return std::pow(viewScale > 1e-4f ? viewScale : 1e-4f, kZoomExponent);
+        }
+
+        // The snapped minor period, in screen pixels. Mirror of the LOD block
+        // in graph_grid.hlsl's ps_main; always lands in (kMinorTargetPx/2, kMinorTargetPx].
+        static float MinorPeriod(float gridScale) noexcept
+        {
+            const float basePeriod = kBaseSpacingPx * gridScale;
+            const float level = std::log2(kMinorTargetPx /
+                                          (basePeriod > 1e-4f ? basePeriod : 1e-4f));
+            return basePeriod * std::exp2(std::floor(level));
+        }
+
+        // THE FIX for corner-anchored zoom, and the reason the phase is state.
+        //
+        // Because the screen period is pow(scale, k) with k < 1, the lattice
+        // matches no fixed canvas-space grid -- so nothing about the view tells
+        // us where it "should" sit, and computing the phase straight from the
+        // view (as the first version did) silently pins the scale change at the
+        // RT's top-left corner. Instead the phase is carried forward:
+        //
+        //   (a) PURE PAN. The content slides by -(dOrigin * scale); the phase is
+        //       a screen-space point, so it slides by the identical amount and
+        //       the grid tracks the nodes 1:1.
+        //
+        //   (b) ZOOM. Any step that changes the scale is, in screen space, a
+        //       scale-about-a-point, and that point is derived from the two view
+        //       states rather than read off the mouse -- which is what makes it
+        //       equally correct for cursor zoom, keyboard zoom, and
+        //       NavigateToContent/Selection (which pan AND zoom, and whose
+        //       fixed point is nowhere near the cursor). The canvas point c held
+        //       fixed by the step satisfies
+        //           (c - Oold)*Zold == (c - Onew)*Znew
+        //       =>  c = (Oold*Zold - Onew*Znew) / (Zold - Znew)
+        //       and its screen position is F = (c - Oold)*Zold. The phase then
+        //       scales about F by the GRID's own ratio Snew/Sold -- not the
+        //       view's -- so the pattern grows out of the same point the editor
+        //       zoomed about while still answering zoom sublinearly.
+        void UpdatePhase(const GraphGridView& v) noexcept
+        {
+            const float sNew = GridScale(v.scale);
+            if (!m_havePrevView)
+            {
+                // Seed. Any phase is legal (the lattice is virtual), so pick the
+                // one with a statement attached: at 100% zoom, and only there,
+                // the lines fall on canvas-space multiples of kBaseSpacingPx.
+                m_phaseX = -v.originX * sNew;
+                m_phaseY = -v.originY * sNew;
+                m_havePrevView = true;
+            }
+            else if (std::fabs(v.scale - m_prevScale) <= kScaleEpsilon * m_prevScale)
+            {
+                m_phaseX -= (v.originX - m_prevOriginX) * v.scale;
+                m_phaseY -= (v.originY - m_prevOriginY) * v.scale;
+            }
+            else
+            {
+                const float zOld = m_prevScale, zNew = v.scale;
+                const float denom = zOld - zNew;
+                const float cx = (m_prevOriginX * zOld - v.originX * zNew) / denom;
+                const float cy = (m_prevOriginY * zOld - v.originY * zNew) / denom;
+                const float fx = (cx - m_prevOriginX) * zOld;
+                const float fy = (cy - m_prevOriginY) * zOld;
+                const float r  = sNew / GridScale(m_prevScale);
+                m_phaseX = fx + (m_phaseX - fx) * r;
+                m_phaseY = fy + (m_phaseY - fy) * r;
+            }
+            m_prevOriginX = v.originX;
+            m_prevOriginY = v.originY;
+            m_prevScale   = v.scale;
+
+            // Keep the phase bounded so a long session of panning cannot walk it
+            // out to where float spacing swallows a line width. Wrapping by the
+            // COARSEST lattice actually drawn (16 * pm -- see ps_main's four
+            // LineCoverage calls) is invisible by construction: every drawn
+            // period divides it, so all four lattices land exactly where they
+            // were. Later LOD steps stay continuous regardless, because the
+            // octave crossfade's subset argument does not depend on phase.
+            const float wrap = MinorPeriod(sNew) * kMajorEvery * 2.0f;
+            if (wrap > 0.0f)
+            {
+                m_phaseX = std::fmod(m_phaseX, wrap);
+                m_phaseY = std::fmod(m_phaseY, wrap);
+            }
+        }
 
         bool Init()
         {
@@ -283,8 +410,14 @@ namespace Arcane::Editor
         std::uint32_t   m_allocW = 0, m_allocH = 0;
         std::uint64_t   m_pipelineGeneration = 0;
         std::uint64_t   m_lastGeneration = 0;
-        GraphGridView   m_lastView{};
+        RenderKey       m_lastKey{};
         GraphGridColors m_lastColors{};
+        // Grid phase (screen px, RT-relative) plus the view it was last carried
+        // forward from. See UpdatePhase -- this is the grid's whole memory.
+        float m_phaseX = 0.0f, m_phaseY = 0.0f;
+        float m_prevOriginX = 0.0f, m_prevOriginY = 0.0f;
+        float m_prevScale = 1.0f;
+        bool m_havePrevView = false;
         bool m_rendered = false;
         bool m_shaderMissing = false;
     };

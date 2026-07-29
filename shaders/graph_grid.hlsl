@@ -5,18 +5,25 @@
 // backdrop the canvas has.
 //
 // COORDINATE CONTRACT (the whole design in one paragraph):
-//   The node editor maps a canvas point c to the screen pixel
-//   p = (c - origin) * zoom, where `origin` is the canvas coordinate under the
-//   region's top-left corner. Feeding the grid a coordinate q = p + origin*zoom
-//   (= c*zoom) makes it PAN 1:1 with the content -- panning changes only
-//   `origin`, and q absorbs that change exactly. Zoom is then free to be
-//   answered however we like, because it only enters through the PERIOD.
-//
 //   Screen period = kBaseSpacingPx * pow(zoom, kZoomExponent). At
-//   kZoomExponent = 1 the grid is rigidly welded to canvas content (lines pass
-//   through fixed canvas coordinates); at 0 it never changes size at all. We
-//   want "visibly responds, much less than 1:1", so the exponent is fractional
-//   -- see kZoomExponent below.
+//   kZoomExponent = 1 the grid would be rigidly welded to canvas content
+//   (lines through fixed canvas coordinates); at 0 it would never change size.
+//   We want "visibly responds, much less than 1:1", so the exponent is
+//   fractional -- see kZoomExponent below.
+//
+//   THE CONSEQUENCE, and it is the whole reason gPhasePx exists: a sublinear
+//   period corresponds to NO fixed canvas-space lattice. The grid is a VIRTUAL
+//   lattice, so its phase is a free choice rather than something derivable
+//   from the view -- and derived-from-the-view is exactly the bug that produced
+//   corner-anchored zoom. The phase is therefore STATE, owned and evolved on
+//   the CPU by GraphGridPass::UpdatePhase (GraphGridPass.hpp): panning slides
+//   it by the screen-space pan delta, and a zoom step rescales it about that
+//   step's own screen-space fixed point, so the pattern appears to grow out of
+//   whatever the editor zoomed about.
+//
+//   gPhasePx is that state: the screen-space position (in pixels, relative to
+//   the RT's top-left, which is the canvas region's top-left) of the lattice's
+//   origin. So the grid coordinate at pixel p is simply q = p - gPhasePx.
 //
 // The cbuffer uses plain register(b0): the SPIR-V build applies
 // -fvk-b-shift 256 0 (matching nvrhi::VulkanBindingOffsets), so no #if SPIRV
@@ -58,7 +65,7 @@ static const float kFeatherPx   = 1.0;
 
 cbuffer GraphGridCB : register(b0)
 {
-    float2 gPhasePx;      // origin (canvas space) * zoom -- the pan term
+    float2 gPhasePx;      // lattice origin, in RT pixels -- the STATE, see above
     float  gZoom;         // node-editor view scale (1 = 100%)
     float  gPad0;
     float4 gCanvasColor;  // backdrop tone (a = unused, written opaque)
@@ -91,8 +98,10 @@ float LineCoverage(float2 q, float period)
 
 float4 ps_main(VSOutput i) : SV_Target0
 {
-    // Pan-locked grid coordinate (see the coordinate contract above).
-    float2 q = i.pos.xy + gPhasePx;
+    // Grid coordinate: the pixel measured from the lattice origin. gPhasePx
+    // carries every view response there is -- pan and the zoom re-anchor both
+    // land in it CPU-side (see the coordinate contract above).
+    float2 q = i.pos.xy - gPhasePx;
 
     // Octave LOD. `pm` is the snapped minor period; it always satisfies
     // pm = kMinorTargetPx * 2^-t for t in [0,1), i.e. pm in (T/2, T].
