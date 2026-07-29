@@ -267,7 +267,7 @@ namespace Arcane::Editor
         // operator== (MaterialGraph.hpp:334-372; neither GraphNode nor
         // GraphLink has one either), so this rides the existing public
         // serialization: GraphToJson's text is byte-stable for equal graphs,
-        // which MaterialGraphTest.cpp:749 and :1310 already assert. Doc-local
+        // which MaterialGraphTest.cpp:755 and :1386 already assert. Doc-local
         // on purpose -- an engine-header operator== is a wider commitment than
         // this guard needs.
         //
