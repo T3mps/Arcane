@@ -936,6 +936,13 @@ fn shell_open(app: &tauri::AppHandle, path: &str) {
             // alive) frontend now keeps the list honest the moment the
             // window comes back.
             let _ = app.emit("state-changed", &state::load());
+            // On a shell route the window starts hidden, and only `stay`
+            // earns a show: tray/hide launches go straight to the editor
+            // with no Hub flash (the editor's own window takes the
+            // foreground when it appears, moments after this).
+            if settings::load().launch_behavior == settings::BEHAVIOR_STAY {
+                tray::show_hub(app);
+            }
         }
         Ok(OpenOutcome::ProjectMissing) => {
             tray::show_hub(app);
@@ -1004,10 +1011,20 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             spawn_disk_watch(app.app_handle().clone());
-            // Cold start via the file association: the Hub was not running
-            // and Windows launched it with the .arcproj in argv.
+            // The window is created HIDDEN (tauri.conf.json): a cold start
+            // via the file association used to flash the Hub for a moment
+            // before the launch decision hid it again (user report,
+            // 2026-07-29). Now a shell-routed start stays invisible and the
+            // launch outcome decides -- tray parks, hide stays away, `stay`
+            // and every failure path show the window -- while a NORMAL start
+            // shows right here, the same moment it used to appear.
             let args: Vec<String> = std::env::args().collect();
-            route_shell_args(app.app_handle(), args.iter().map(|s| s.as_str()));
+            let routed = route_shell_args(app.app_handle(), args.iter().map(|s| s.as_str()));
+            if !routed {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
