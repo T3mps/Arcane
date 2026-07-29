@@ -425,6 +425,12 @@ namespace Arcane::Editor
                 // is in that position, and it fills this in. Left unset, the tail
                 // asks about the last item, which is that row's own content.
                 std::optional<bool> hovered;
+                // A full value the row's widget could only show TRUNCATED (a
+                // long mount path, a raw guid) -- composed into the row
+                // tooltip below, so hovering the shortened text reveals the
+                // whole thing. SetTooltip is last-wins per frame, which is
+                // why this rides the one tail instead of a second call.
+                std::optional<std::string> tooltipValue;
 
                 switch (kind)
                 {
@@ -704,12 +710,36 @@ namespace Arcane::Editor
                                     display = *mount;
                         }
 
+                        // SIZED to the cell, minus the clear button's seat when
+                        // one will render: an unsized button grows with its
+                        // label, and a long mount path pushed the "x" (and its
+                        // own text) off the panel. The label truncates with an
+                        // ellipsis to match; the FULL string joins the row
+                        // tooltip via tooltipValue.
+                        const bool wantClear = !readOnly && (v.IsValid() || refMixed);
+                        const ImGuiStyle& st = ImGui::GetStyle();
+                        const float clearW = wantClear
+                            ? ImGui::CalcTextSize("x").x + st.FramePadding.x * 2.0f
+                                  + st.ItemSpacing.x
+                            : 0.0f;
+                        const float btnW =
+                            std::max(ImGui::GetContentRegionAvail().x - clearW, 40.0f);
+                        const std::string shown = Arcane::Editor::EllipsisToWidth(
+                            display, btnW - st.FramePadding.x * 2.0f);
+                        if (shown.size() != display.size())
+                            tooltipValue = display;
+                        // Left-aligned like every value widget -- a centred
+                        // path reads as decoration, not data.
+                        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
                         // "###", not "##": only "###" resets the id hash
                         // (ImHashStr, imgui.cpp:2557), so with "##" the button's id
                         // was seeded by `display` -- a MUTABLE string that changes
                         // the moment an asset is picked. The id then changed under
                         // ImGui mid-interaction, dropping the item's state.
-                        if (ImGui::Button((display + "###assetref").c_str()))
+                        const bool pickPressed =
+                            ImGui::Button((shown + "###assetref").c_str(), ImVec2(btnW, 0.0f));
+                        ImGui::PopStyleVar();
+                        if (pickPressed)
                             ImGui::OpenPopup("##assetpick");
                         // This row may end on the clear button rather than on the
                         // asset button, so the tail below would ask about THAT and
@@ -983,12 +1013,23 @@ namespace Arcane::Editor
                     hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
                 if (labelHovered || *hovered)
                 {
+                    // Order: the full truncated value first (it is what the
+                    // user is squinting at), the authored prose next, the
+                    // greppable identifier last.
                     const std::string_view tip = Arcane::Editor::TooltipOfField(f);
-                    if (tip.empty())
-                        ImGui::SetTooltip("%s", rawName.c_str());
-                    else
-                        ImGui::SetTooltip("%.*s\n\n%s", static_cast<int>(tip.size()),
-                                          tip.data(), rawName.c_str());
+                    std::string text;
+                    if (tooltipValue)
+                    {
+                        text += *tooltipValue;
+                        text += "\n\n";
+                    }
+                    if (!tip.empty())
+                    {
+                        text += tip;
+                        text += "\n\n";
+                    }
+                    text += rawName;
+                    ImGui::SetTooltip("%s", text.c_str());
                 }
                 ImGui::PopID();
             }

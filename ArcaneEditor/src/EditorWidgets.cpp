@@ -443,6 +443,35 @@ namespace Arcane::Editor
         return changed;
     }
 
+    std::string EllipsisToWidth(std::string_view text, float maxWidth)
+    {
+        const std::string full(text);
+        if (ImGui::CalcTextSize(full.c_str()).x <= maxWidth)
+            return full;
+
+        // Longest prefix such that prefix + "..." fits, by binary search on the
+        // byte length -- text metrics are monotonic in the prefix.
+        const auto fits = [&](size_t bytes)
+        {
+            std::string probe(text.substr(0, bytes));
+            probe += "...";
+            return ImGui::CalcTextSize(probe.c_str()).x <= maxWidth;
+        };
+        size_t lo = 0, hi = text.size();
+        while (lo < hi)
+        {
+            const size_t mid = (lo + hi + 1) / 2;
+            if (fits(mid)) lo = mid;
+            else           hi = mid - 1;
+        }
+        // Never cut mid-codepoint: back off UTF-8 continuation bytes.
+        while (lo > 0 && (static_cast<unsigned char>(text[lo]) & 0xC0) == 0x80)
+            --lo;
+        std::string out(text.substr(0, lo));
+        out += "...";
+        return out;
+    }
+
     FieldGrid::FieldGrid(const char* id, float& labelColWidth)
         : m_open(BeginFieldGrid(id, labelColWidth))
     {

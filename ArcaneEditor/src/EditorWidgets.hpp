@@ -75,6 +75,13 @@ namespace Arcane::Editor
     // DragFloat2/3 gave it.
     [[nodiscard]] bool AxisDragFloatN(const char* label, float* v, int count, float speed);
 
+    // Truncate `text` with a trailing ellipsis so it fits `maxWidth` pixels of
+    // the CURRENT font; unchanged when it already fits. UTF-8-safe: a cut never
+    // lands mid-codepoint. For value buttons whose label is data (a mount path,
+    // a guid) -- an unsized button grows with its label and pushes its row
+    // neighbours off the panel.
+    [[nodiscard]] std::string EllipsisToWidth(std::string_view text, float maxWidth);
+
     // Two-column field region (UE's Details-panel shape: label left in one
     // column, value right, one draggable split shared by every section).
     //
