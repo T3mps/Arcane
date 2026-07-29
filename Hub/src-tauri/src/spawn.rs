@@ -17,6 +17,66 @@ use crate::engine;
 // ArcaneEditor is a ConsoleApp, so without this every spawn flashes a console.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// The taskbar family id. ArcaneEditor's main.cpp claims the SAME id
+/// unconditionally at boot, which is what makes the Hub's and every editor's
+/// taskbar buttons stack as one group -- Windows groups by AppUserModelID,
+/// not by who spawned whom.
+pub const APP_USER_MODEL_ID: &str = "com.starworks.arcanehub";
+
+/// Claim the family AUMID for THIS process. Must run before the first window
+/// exists, so lib.rs calls it at the top of run().
+pub fn claim_app_user_model_id() {
+    use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+    let wide: Vec<u16> = APP_USER_MODEL_ID
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        let _ = SetCurrentProcessExplicitAppUserModelID(wide.as_ptr());
+    }
+}
+
+/// Bring the first visible top-level window of `pid` to the foreground.
+/// False when the process has no such window (usually: it already exited) --
+/// the caller treats that as a stale entry, not an error.
+pub fn focus_process_window(pid: u32) -> bool {
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+        ShowWindow, SW_RESTORE,
+    };
+
+    struct Target {
+        pid: u32,
+        hwnd: HWND,
+    }
+    unsafe extern "system" fn find(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let t = unsafe { &mut *(lparam as *mut Target) };
+        let mut owner = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut owner) };
+        if owner == t.pid && unsafe { IsWindowVisible(hwnd) } != 0 {
+            t.hwnd = hwnd;
+            return 0; // found -- stop enumerating
+        }
+        1
+    }
+
+    let mut t = Target { pid, hwnd: std::ptr::null_mut() };
+    unsafe {
+        let _ = EnumWindows(Some(find), &mut t as *mut Target as LPARAM);
+    }
+    if t.hwnd.is_null() {
+        return false;
+    }
+    unsafe {
+        // Restore first: SetForegroundWindow on a minimized window succeeds
+        // without actually surfacing it.
+        let _ = ShowWindow(t.hwnd, SW_RESTORE);
+        SetForegroundWindow(t.hwnd) != 0
+    }
+}
+
 // How long the identity probe may take before we give up and kill it.
 //
 // The probe answers before booting a window, a device, or a registry

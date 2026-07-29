@@ -48,8 +48,12 @@ export type HubState = {
 export type Settings = {
   /** Starting directory for the New Project and Open dialogs; "" = OS default. */
   defaultProjectDir: string;
-  /** Close the Hub once a project launches. Read in `launch()`. */
-  closeAfterLaunch: boolean;
+  /**
+   * Hide the Hub while a launched editor runs, restored when the last one
+   * exits. Read RUST-side (open_project hides, the wait thread restores);
+   * the frontend only edits it. Replaced closeAfterLaunch 2026-07-29.
+   */
+  hideWhileRunning: boolean;
   /**
    * Project list layout. Rust normalises this through `clean_view` on both
    * load and save, so it is always one of the two -- never a stray string.

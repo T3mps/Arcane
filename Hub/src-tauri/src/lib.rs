@@ -21,9 +21,18 @@ pub mod spawn;
 pub mod state;
 pub mod store;
 
+use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+
+/// Live editors, keyed by normalised PROJECT path -> pid. One editor per
+/// project: the dangerous case is the same project open twice (two editors
+/// saving one project's files clobber each other); two different projects on
+/// one engine build stay legal. The pid, not the Child, lives here -- the
+/// wait thread owns the Child for its whole lifetime.
+pub struct RunningEditors(pub Mutex<HashMap<String, u32>>);
 
 fn now_utc_iso() -> String {
     // Seconds since the epoch is enough to sort "last opened" and avoids
@@ -386,11 +395,20 @@ fn hub_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-// Launch the editor on a project. Deliberately does NOT wait: the Hub stays
-// running, the editor is independent of it, and several editors may run at
-// once. Closing the Hub must not close editors.
+// Launch the editor on a project, as a TRACKED child: the command still
+// returns immediately (a wait thread owns the child), several editors may run
+// at once, and closing the Hub still cannot close editors -- Windows children
+// survive their parent absent a job object. What tracking buys: one editor
+// per project (a second launch focuses the running one), hide-the-Hub while
+// editors run (restored when the last exits), and the boot-refusal watchdog
+// riding the same wait instead of a separate 2s timer.
 #[tauri::command]
-fn open_project(app: tauri::AppHandle, project_path: String, engine_path: String) -> Result<(), String> {
+fn open_project(
+    app: tauri::AppHandle,
+    editors: tauri::State<RunningEditors>,
+    project_path: String,
+    engine_path: String,
+) -> Result<(), String> {
     let proj = PathBuf::from(&project_path);
     let exe = engine::resolve_editor_exe(Path::new(&engine_path));
     if !proj.exists() {
@@ -407,6 +425,21 @@ fn open_project(app: tauri::AppHandle, project_path: String, engine_path: String
     // (mid-rebuild, missing DLLs) is not about to open a project, and spawning
     // it anyway would produce a silent nothing.
     let info = spawn::probe_engine(&exe)?;
+
+    // One editor per project: a second launch means "take me there", so the
+    // running editor's window is focused instead of spawning a rival that
+    // would race it on every save. A pid whose window cannot be found is a
+    // stale entry (the wait thread races this check) and launches fresh.
+    let project_key = state::normalise_path(&project_path);
+    {
+        let mut live = editors.0.lock().unwrap();
+        if let Some(&pid) = live.get(&project_key) {
+            if spawn::focus_process_window(pid) {
+                return Ok(());
+            }
+            live.remove(&project_key);
+        }
+    }
 
     // Loaded before the spawn so this project's saved extra arguments can go on
     // the command line. Passed as an argv ARRAY, never a joined string: each
@@ -443,39 +476,64 @@ fn open_project(app: tauri::AppHandle, project_path: String, engine_path: String
         .spawn()
         .map_err(|e| format!("could not launch the editor: {e}"))?;
 
-    // Watchdog: a spawn that SUCCEEDS can still be an editor that REFUSES a
-    // moment later -- the project gate exits 2 before any window exists, so a
-    // detached launch turns that refusal into click-then-nothing. Watch the
-    // child briefly on a background thread and tell the frontend if it died at
-    // boot; the launch itself stays instant (this command returns without
-    // waiting). Two seconds covers the refuse-at-boot paths, which all exit
-    // before device init; an editor alive past that is launched, and the
-    // thread ends with the child disowned as before. stderr is deliberately
-    // NOT piped: a pipe nobody drains after this thread ends would eventually
+    editors.0.lock().unwrap().insert(project_key.clone(), child.id());
+
+    // Hand the screen to the editor: hide, restore when the last one exits.
+    // Checked AFTER a successful spawn so a refused launch never hides the
+    // window the error banner lives in.
+    if settings::load().hide_while_running {
+        use tauri::Manager;
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.hide();
+        }
+    }
+
+    // The wait thread owns the child for its WHOLE lifetime (this is what
+    // makes the live-editors map truthful). Three jobs on exit: drop the map
+    // entry; surface a boot-refusal (an exit inside 2s -- the project gate
+    // exits before any window, and a detached launch would otherwise be
+    // click-then-nothing); and when the LAST editor is gone, restore the Hub
+    // (re-read the setting at exit time, so toggling it mid-run behaves).
+    // stderr is deliberately NOT piped: a pipe nobody drains would eventually
     // BLOCK the editor mid-log -- the exit code has to carry the story.
     {
         let app = app.clone();
         let shown = project::display_name(&project_path);
+        let key = project_key.clone();
         std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            while std::time::Instant::now() < deadline {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        let why = match status.code() {
-                            // Exit 2 is the editor's own project gate
-                            // (ArcaneEditor main.cpp): wrong abi, unreadable
-                            // manifest, refused boot.
-                            Some(2) => "the editor refused the project (engine/abi gate)".to_string(),
-                            Some(c) => format!("the editor exited immediately with code {c}"),
-                            None => "the editor was killed before it opened".to_string(),
-                        };
-                        use tauri::Emitter;
-                        let _ = app.emit("launch-failed", format!("{shown}: {why}."));
-                        return;
-                    }
-                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
-                    Err(_) => return,
+            let started = std::time::Instant::now();
+            let status = child.wait().ok();
+
+            use tauri::{Emitter, Manager};
+            let none_left = {
+                let editors = app.state::<RunningEditors>();
+                let mut live = editors.0.lock().unwrap();
+                live.remove(&key);
+                live.is_empty()
+            };
+
+            if started.elapsed() < std::time::Duration::from_secs(2) {
+                let why = match status.and_then(|s| s.code()) {
+                    // Exit 2 is the editor's own project gate (ArcaneEditor
+                    // main.cpp): wrong abi, unreadable manifest, refused boot.
+                    Some(2) => "the editor refused the project (engine/abi gate)".to_string(),
+                    Some(c) => format!("the editor exited immediately with code {c}"),
+                    None => "the editor was killed before it opened".to_string(),
+                };
+                let _ = app.emit("launch-failed", format!("{shown}: {why}."));
+            }
+
+            if none_left && settings::load().hide_while_running {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
                 }
+            }
+            // Regardless of hiding: the list's opened-times and missing flags
+            // deserve a refresh when an editor ends.
+            if none_left {
+                let _ = app.emit("editors-idle", ());
             }
         });
     }
@@ -563,19 +621,27 @@ fn suggest_engine() -> Option<state::EngineEntry> {
 }
 
 pub fn run() {
+    // Before ANY window exists: claim the taskbar family id ArcaneEditor also
+    // sets, so the Hub's and every editor's buttons stack as one group.
+    spawn::claim_app_user_model_id();
     tauri::Builder::default()
         // FIRST plugin registered, per its own docs: it has to win the race
         // before anything else initialises. A second launch lands in this
         // callback inside the FIRST process; the new process exits on its own.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // "Show me the Hub": surface the window the user already has.
+            // show() as well as unminimize: while editors run the window may
+            // be HIDDEN (hide_while_running), and relaunching the Hub is the
+            // designed way to get it back before they exit.
             use tauri::Manager;
             if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .manage(RunningEditors(Mutex::new(HashMap::new())))
         .invoke_handler(tauri::generate_handler![
             load_state,
             register_engine,

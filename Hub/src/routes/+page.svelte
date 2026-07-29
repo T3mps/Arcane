@@ -3,7 +3,6 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import WindowChrome from "$lib/components/WindowChrome.svelte";
   import Sidebar, { type View } from "$lib/components/Sidebar.svelte";
   import type { ProjectActions } from "$lib/components/ProjectMenu.svelte";
@@ -46,7 +45,7 @@
   let busyUi = $state(false);
   let view = $state<View>("projects");
   let settings = $state<Settings>({
-    defaultProjectDir: "", closeAfterLaunch: false, projectView: "grid",
+    defaultProjectDir: "", hideWhileRunning: true, projectView: "grid",
     confirmDelete: true,
   });
   let hubDir = $state("");
@@ -125,10 +124,16 @@
   // returns before the verdict exists. Rendered as a notice, not `error`:
   // it is an async fact about a process, not a failed Hub action.
   onMount(() => {
-    const un = listen<string>("launch-failed", (e) => {
+    const unFailed = listen<string>("launch-failed", (e) => {
       if (!notices.includes(e.payload)) notices.push(e.payload);
     });
-    return () => { un.then((f) => f()); };
+    // The last tracked editor exited (the Hub may just have restored itself):
+    // opened-times and missing flags deserve fresh eyes.
+    const unIdle = listen("editors-idle", () => { refresh(); });
+    return () => {
+      unFailed.then((f) => f());
+      unIdle.then((f) => f());
+    };
   });
 
   async function guard(fn: () => Promise<unknown>) {
@@ -195,10 +200,9 @@
     // Same rule the card renders, so what launches is what the card said.
     const { engine } = resolveEngine(p.engineId, hub.engines, selectedEngine);
     if (!engine) return;
+    // Hiding-while-running happens RUST-side (open_project), which also owns
+    // the restore -- the frontend no longer touches the window on launch.
     await openProject(p.path, engine.path);
-    // Read at launch time, not cached at mount, so toggling the setting takes
-    // effect without restarting the Hub.
-    if (settings.closeAfterLaunch) await getCurrentWindow().close();
   });
 
   const chooseEngine = (engineId: string | null) => {
@@ -217,7 +221,6 @@
       const manifest = await createProject(dir, name, selectedEngine.path);
       await openProject(manifest, selectedEngine.path);
       ok = true;
-      if (settings.closeAfterLaunch) await getCurrentWindow().close();
     });
     // Close only on SUCCESS: a failed create keeps the typed name and folder so
     // the message (rendered inside the dialog) can be acted on.

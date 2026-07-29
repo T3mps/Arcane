@@ -133,12 +133,14 @@
       {:else if cat === "launching"}
         <section class="grp">
           <h3>After launching</h3>
-          <p class="d">The editor runs independently either way -- closing the Hub
-            never closes an editor that is already open.</p>
+          <p class="d">The Hub comes back on its own when the last editor
+            closes, and launching the Hub again brings it back sooner. Either
+            way the editor runs independently -- closing the Hub never closes
+            an editor that is already open.</p>
           <label class="check">
-            <input type="checkbox" checked={settings.closeAfterLaunch} disabled={busy}
-                   onchange={(e) => onSave({ ...settings, closeAfterLaunch: e.currentTarget.checked })} />
-            <span>Close the Hub after launching a project</span>
+            <input type="checkbox" checked={settings.hideWhileRunning} disabled={busy}
+                   onchange={(e) => onSave({ ...settings, hideWhileRunning: e.currentTarget.checked })} />
+            <span>Hide the Hub while an editor is running</span>
           </label>
         </section>
       {:else if cat === "data"}

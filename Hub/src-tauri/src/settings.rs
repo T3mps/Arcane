@@ -39,11 +39,16 @@ pub struct Settings {
     #[serde(default)]
     pub default_project_dir: String,
 
-    /// Close the Hub once a project launches. Launchers genuinely differ on
-    /// this -- Steam stays, most IDE launchers exit -- so it is a setting
-    /// rather than a decision made for the user. Read in `launch()`.
-    #[serde(default)]
-    pub close_after_launch: bool,
+    /// Hide the Hub window while a launched editor runs, restoring it when
+    /// the LAST editor exits -- launching hands the screen to the editor
+    /// without giving up the Hub (relaunching the Hub un-hides it early via
+    /// the single-instance callback). OFF keeps the Hub visible side by side.
+    /// Replaced close_after_launch 2026-07-29: hiding strictly dominates
+    /// closing now that restore exists. Read Rust-side in open_project (the
+    /// hide) and the editor wait thread (the restore).
+    /// `default = "yes"`: hide-until-done is the designed behavior.
+    #[serde(default = "yes")]
+    pub hide_while_running: bool,
 
     /// Project list layout: `grid` or `list`. Set from the toggle above the
     /// list rather than from the Settings tab -- it is a view control, and
@@ -82,7 +87,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_project_dir: String::new(),
-            close_after_launch: false,
+            hide_while_running: yes(),
             project_view: default_view(),
             confirm_delete: yes(),
         }
@@ -126,12 +131,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_the_pre_settings_behaviour() {
-        // Adding settings must not change what an existing user sees on the
-        // launch after the update.
+    fn defaults_are_the_designed_behaviour() {
         let s = Settings::default();
         assert_eq!(s.default_project_dir, "");
-        assert!(!s.close_after_launch, "the Hub stayed open before settings existed");
+        assert!(s.hide_while_running, "hide-until-done is the designed default");
         assert_eq!(s.project_view, VIEW_GRID, "the grid is what shipped first");
         assert!(s.confirm_delete, "deleting has always asked first");
     }
@@ -142,8 +145,16 @@ mod tests {
         // bare #[serde(default)] this loads as false, and every user who had
         // ever saved a setting would get a one-click project delete on the next
         // launch without touching anything.
-        let back: Settings = serde_json::from_str(r#"{"closeAfterLaunch":true}"#).unwrap();
+        let back: Settings = serde_json::from_str(r#"{"hideWhileRunning":true}"#).unwrap();
         assert!(back.confirm_delete);
+    }
+
+    #[test]
+    fn a_file_written_before_hide_existed_still_hides() {
+        // Same default = "yes" reasoning as confirm_delete: a bare default
+        // would silently opt existing files OUT of the designed behavior.
+        let back: Settings = serde_json::from_str(r#"{"confirmDelete":true}"#).unwrap();
+        assert!(back.hide_while_running);
     }
 
     #[test]
@@ -169,9 +180,9 @@ mod tests {
         // would fail the whole document, and a settings file that will not
         // parse is treated as corrupt and reset.
         let back: Settings =
-            serde_json::from_str(r#"{"closeAfterLaunch":true,"projectView":"nonsense"}"#)
+            serde_json::from_str(r#"{"hideWhileRunning":false,"projectView":"nonsense"}"#)
                 .expect("must still parse");
-        assert!(back.close_after_launch, "the other settings survive");
+        assert!(!back.hide_while_running, "the other settings survive");
         assert_eq!(clean_view(&back.project_view), VIEW_GRID);
     }
 
@@ -179,7 +190,7 @@ mod tests {
     fn settings_round_trip_through_json() {
         let s = Settings {
             default_project_dir: "D:/Games".to_string(),
-            close_after_launch: true,
+            hide_while_running: false,
             project_view: VIEW_LIST.to_string(),
             confirm_delete: false,
         };
@@ -191,15 +202,15 @@ mod tests {
     fn serialises_with_camel_case_keys_for_the_frontend() {
         let text = serde_json::to_string(&Settings::default()).unwrap();
         assert!(text.contains("defaultProjectDir"), "got {text}");
-        assert!(text.contains("closeAfterLaunch"), "got {text}");
+        assert!(text.contains("hideWhileRunning"), "got {text}");
         assert!(text.contains("confirmDelete"), "got {text}");
     }
 
     #[test]
     fn a_settings_file_missing_a_field_still_loads() {
         // Forward compat: an older file must not reset the fields it does have.
-        let back: Settings = serde_json::from_str(r#"{"closeAfterLaunch":true}"#).unwrap();
-        assert!(back.close_after_launch);
+        let back: Settings = serde_json::from_str(r#"{"hideWhileRunning":false}"#).unwrap();
+        assert!(!back.hide_while_running);
         assert_eq!(back.default_project_dir, "");
     }
 
