@@ -5,6 +5,7 @@
 
 #include <Json.hpp>
 #include <stb_image.h>
+#include <stb_image_write.h>
 
 #include <cstdlib>
 #include <filesystem>
@@ -506,5 +507,114 @@ namespace Arcane
         stbi_image_free(data);
 
         return tex;
+    }
+
+    void RepackStagingToRgba(const unsigned char* src, size_t rowPitch,
+                             uint32_t width, uint32_t height, bool bgraSource,
+                             std::vector<unsigned char>& out)
+    {
+        out.resize((size_t)width * height * 4);
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            const unsigned char* s = src + (size_t)y * rowPitch;
+            unsigned char* d = out.data() + (size_t)y * width * 4;
+            for (uint32_t x = 0; x < width; ++x)
+            {
+                const unsigned char* p = s + (size_t)x * 4;
+                if (bgraSource)
+                {
+                    d[x * 4 + 0] = p[2];
+                    d[x * 4 + 1] = p[1];
+                    d[x * 4 + 2] = p[0];
+                }
+                else
+                {
+                    d[x * 4 + 0] = p[0];
+                    d[x * 4 + 1] = p[1];
+                    d[x * 4 + 2] = p[2];
+                }
+                // Opaque ALWAYS -- see the header: the render target's alpha
+                // holds coverage math, not a statement about the picture.
+                d[x * 4 + 3] = 255;
+            }
+        }
+    }
+
+    bool SaveTexturePng(nvrhi::IDevice* device, nvrhi::ITexture* texture,
+                        const std::filesystem::path& path, uint32_t maxWidth)
+    {
+        if (!device || !texture)
+        {
+            ARC_WARN("SaveTexturePng: no device or texture for {}", path.string());
+            return false;
+        }
+        const nvrhi::TextureDesc& srcDesc = texture->getDesc();
+        const bool bgra = srcDesc.format == nvrhi::Format::BGRA8_UNORM;
+        if (!bgra && srcDesc.format != nvrhi::Format::RGBA8_UNORM)
+        {
+            ARC_WARN("SaveTexturePng: unsupported source format for {}", path.string());
+            return false;
+        }
+
+        // The PickBuffer idiom: staging copy, execute, waitForIdle, map. One
+        // synchronous stall, owned by a rare event (save/shutdown).
+        auto stagingDesc = nvrhi::TextureDesc()
+            .setWidth(srcDesc.width)
+            .setHeight(srcDesc.height)
+            .setFormat(srcDesc.format)
+            .setDebugName("SaveTexturePngStaging");
+        nvrhi::StagingTextureHandle staging =
+            device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
+        if (!staging)
+        {
+            ARC_WARN("SaveTexturePng: createStagingTexture failed for {}", path.string());
+            return false;
+        }
+
+        nvrhi::CommandListHandle cl = device->createCommandList();
+        cl->open();
+        cl->copyTexture(staging, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice());
+        cl->close();
+        device->executeCommandList(cl);
+        device->waitForIdle();
+
+        size_t rowPitch = 0;
+        const auto* mapped = static_cast<const unsigned char*>(device->mapStagingTexture(
+            staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
+        if (!mapped)
+        {
+            ARC_WARN("SaveTexturePng: mapStagingTexture failed for {}", path.string());
+            return false;
+        }
+        std::vector<unsigned char> rgba;
+        RepackStagingToRgba(mapped, rowPitch, srcDesc.width, srcDesc.height, bgra, rgba);
+        device->unmapStagingTexture(staging);
+        device->runGarbageCollection();
+
+        int w = (int)srcDesc.width, h = (int)srcDesc.height;
+        const unsigned char* pixels = rgba.data();
+        std::vector<unsigned char> scaled;
+        if (maxWidth > 0 && (uint32_t)w > maxWidth)
+        {
+            // Width-capped (not larger-dimension like the loader): the
+            // consumer is a fixed-width thumbnail tile, and the source is a
+            // viewport whose aspect the user chose.
+            int dw = (int)maxWidth;
+            int dh = (h * dw + w / 2) / w;
+            if (dh < 1) dh = 1;
+            DownsampleRGBA(pixels, w, h, scaled, dw, dh);
+            pixels = scaled.data();
+            w = dw;
+            h = dh;
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        if (!stbi_write_png(path.string().c_str(), w, h, 4, pixels, w * 4))
+        {
+            ARC_WARN("SaveTexturePng: write failed: {}", path.string());
+            return false;
+        }
+        return true;
     }
 }

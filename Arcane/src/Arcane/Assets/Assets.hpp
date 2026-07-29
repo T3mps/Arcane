@@ -109,4 +109,30 @@ namespace Arcane
     // UI's own bilinear then only minifies <=2x (a clean box) -- and it uploads far less VRAM.
     ARCANE_API nvrhi::TextureHandle LoadDisplayTexture(
         nvrhi::IDevice* device, const std::filesystem::path& path, uint32_t maxSize = 0);
+
+    // The CPU half of SaveTexturePng, exported so its byte-order contract is
+    // unit-testable without a device: repack mapped staging rows (rowPitch may
+    // exceed w*4) into a tight RGBA buffer, swizzling when the source rows are
+    // BGRA (the OffscreenCanvas output order) and forcing alpha OPAQUE either
+    // way -- a screenshot is a picture of the screen, and whatever coverage
+    // math left in the target's alpha channel must not punch holes in it.
+    ARCANE_API void RepackStagingToRgba(
+        const unsigned char* src, size_t rowPitch, uint32_t width, uint32_t height,
+        bool bgraSource, std::vector<unsigned char>& out);
+
+    // Save a GPU texture as a PNG on disk -- the writer twin of
+    // LoadDisplayTexture (the editor's Saved/AutoScreenshot.png, which the
+    // Arcane Hub reads as the project's cover thumbnail, rides this).
+    // SYNCHRONOUS: staging copy + waitForIdle + map, the PickBuffer idiom --
+    // one deliberate stall per call, so callers are rare events (a save, a
+    // shutdown), never the frame loop. Accepts BGRA8_UNORM (the tonemapped
+    // OffscreenCanvas output; swizzled) and RGBA8_UNORM; anything else is
+    // refused. maxWidth (0 = off) caps the width via the same area-average
+    // downscale the loader uses (aspect preserved) -- a thumbnail should not
+    // ship megabytes. Parent directories are created. False on any failure,
+    // logged as WARN, never ERROR: a screenshot that cannot be written must
+    // not trip the GPU tests' RenderErrorCount()==0 gate.
+    ARCANE_API bool SaveTexturePng(
+        nvrhi::IDevice* device, nvrhi::ITexture* texture,
+        const std::filesystem::path& path, uint32_t maxWidth = 0);
 }

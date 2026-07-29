@@ -484,6 +484,37 @@ namespace Arcane::Editor
         Arcane::Log::Engine()->sinks().push_back(cb);
     }
 
+    // The Hub reads <root>/Saved/AutoScreenshot.png as the project's cover
+    // (a hand-placed <Name>.png beside the .arcproj outranks it -- see the
+    // Hub's resolve.rs). Refreshed on scene save and clean exit, so the tile
+    // shows roughly what the project looked like when it was last worked on.
+    // The capture is the viewport output AS COMPOSITED: post-tonemap LDR,
+    // including the selection outline in Edit mode and the game HUD in Play.
+    // Accepted deliberately -- an outline-free shot would need a second scene
+    // render, and this is a memory aid, not a render product. Saved/ sits
+    // OUTSIDE Content/ on purpose: RegisterCreatedAsset would (correctly)
+    // refuse to register it, and the asset registry has no business knowing.
+    void EditorApp::WriteAutoScreenshot()
+    {
+        if (!m_runtime || !m_viewport || !m_gpu) return;
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        if (!proj) return;
+
+        // TextureId() round-trips the output texture pointer -- the same seam
+        // ImGui::Image consumes (precedent: OffscreenCanvasTest.cpp).
+        auto* tex = reinterpret_cast<nvrhi::ITexture*>(
+            static_cast<uintptr_t>(m_viewport->TextureId()));
+        if (!tex) return;
+
+        const std::filesystem::path file = proj->Root() / "Saved" / "AutoScreenshot.png";
+        // 512 wide: the Hub tile draws ~230px, so ~2x for clean minification
+        // (LoadDisplayTexture's own sizing rule), far under the Hub's 2 MB
+        // cover cap. Failure is already WARN-logged inside; a screenshot that
+        // cannot be written must not turn a save or a shutdown into an error.
+        if (Arcane::SaveTexturePng(m_gpu->Device().Nvrhi(), tex, file, 512))
+            ARC_INFO("Auto-screenshot {}", file.generic_string());
+    }
+
     void EditorApp::Shutdown()
     {
         // Deregister the console sink FIRST, before anything below can log through
@@ -498,6 +529,10 @@ namespace Arcane::Editor
             sinks.erase(std::remove(sinks.begin(), sinks.end(), m_consoleSink), sinks.end());
             m_consoleSink.reset();
         }
+
+        // While the device and viewport are still alive (m_gpu destructs after
+        // Run returns): leave the Hub a fresh cover of the last thing seen.
+        WriteAutoScreenshot();
 
         // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
         // the guard covers a future partial-init/destructor path.

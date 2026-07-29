@@ -261,6 +261,12 @@ namespace Arcane::Editor
 
         m_scene.Adopt(file, id, *m_undo);
         ARC_INFO("Saved scene {}", file.generic_string());
+
+        // A save is the moment the project's cover thumbnail is most honest
+        // -- what was just saved is on the viewport. Safe here: saves run
+        // from top-of-frame phases, never mid-render (this file's header),
+        // which is exactly what the capture's waitForIdle needs.
+        WriteAutoScreenshot();
         return true;
     }
 

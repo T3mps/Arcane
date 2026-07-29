@@ -467,6 +467,12 @@ namespace Arcane::Editor
         bool DoOpenScene(const std::filesystem::path& file);
         bool DoSaveScene(const std::filesystem::path& file);
 
+        // Write <projectRoot>/Saved/AutoScreenshot.png from the viewport
+        // output -- the editor half of the Arcane Hub's cover-thumbnail
+        // chain (Unreal's model). Called on scene save and on clean
+        // shutdown; a no-op without a project, a viewport, or a device.
+        void WriteAutoScreenshot();
+
         // Last scene failure, shown as a blocking modal until dismissed. Main
         // thread only (set in the effects, read in the ImGui pass).
         std::string m_sceneError;

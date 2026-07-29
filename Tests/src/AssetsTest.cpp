@@ -437,3 +437,42 @@ TEST_CASE("assets: json loader -- parse, cache identity, memoized failure", "[gp
     std::remove(jsonPath.string().c_str());
     std::remove(badPath.string().c_str());
 }
+
+TEST_CASE("assets: RepackStagingToRgba swizzles BGRA, skips row padding, forces opaque alpha",
+          "[assets]")
+{
+    // A 2x2 BGRA source with a PADDED row pitch (12 bytes for 8 of pixels) --
+    // the shape a mapped staging texture actually has. Per-texel byte order
+    // is [B,G,R,A]; OffscreenCanvasTest pins the same fact GPU-side. This is
+    // the CPU half of SaveTexturePng, exported exactly so this contract is
+    // testable without a device.
+    const unsigned char src[2 * 12] = {
+        // row 0: pure blue, pure green | 4 padding bytes of garbage
+        255, 0, 0, 7,    0, 255, 0, 7,    0xAA, 0xBB, 0xCC, 0xDD,
+        // row 1: pure red, mid grey | padding
+        0, 0, 255, 7,    64, 64, 64, 7,   0xAA, 0xBB, 0xCC, 0xDD,
+    };
+    std::vector<unsigned char> out;
+    Arcane::RepackStagingToRgba(src, 12, 2, 2, /*bgraSource=*/true, out);
+    REQUIRE(out.size() == 2 * 2 * 4);
+    // (0,0) B=255 -> RGBA (0,0,255); (1,0) G=255 -> (0,255,0).
+    CHECK(out[0] == 0);   CHECK(out[1] == 0);   CHECK(out[2] == 255); CHECK(out[3] == 255);
+    CHECK(out[4] == 0);   CHECK(out[5] == 255); CHECK(out[6] == 0);   CHECK(out[7] == 255);
+    // (0,1) R=255 -> (255,0,0): row 1 starts at pitch 12, so the padding
+    // garbage must NOT have leaked into it.
+    CHECK(out[8] == 255); CHECK(out[9] == 0);   CHECK(out[10] == 0);  CHECK(out[11] == 255);
+    // (1,1): grey survives the swizzle unchanged; source alpha 7 is
+    // overwritten OPAQUE -- coverage math is not a statement about the picture.
+    CHECK(out[12] == 64); CHECK(out[13] == 64); CHECK(out[14] == 64); CHECK(out[15] == 255);
+}
+
+TEST_CASE("assets: RepackStagingToRgba passes RGBA rows through, still forcing opaque alpha",
+          "[assets]")
+{
+    const unsigned char src[8] = {10, 20, 30, 0, 40, 50, 60, 128};
+    std::vector<unsigned char> out;
+    Arcane::RepackStagingToRgba(src, 8, 2, 1, /*bgraSource=*/false, out);
+    REQUIRE(out.size() == 8);
+    CHECK(out[0] == 10);  CHECK(out[1] == 20); CHECK(out[2] == 30); CHECK(out[3] == 255);
+    CHECK(out[4] == 40);  CHECK(out[5] == 50); CHECK(out[6] == 60); CHECK(out[7] == 255);
+}
