@@ -278,10 +278,12 @@
 
   .addwrap { position: relative; }
   /* Absolute under the trigger, not ProjectMenu's fixed layer: the header
-     neither clips nor scrolls, so the anchor cannot go stale. Right-aligned
-     to the trigger, matching where the ellipsis menus hang. Surface tokens
-     match ProjectMenu's .menu so the two popovers read as one species. */
-  .addmenu { position: absolute; z-index: 30; top: calc(100% + 4px); right: 0;
+     neither clips nor scrolls, so the anchor cannot go stale. Left edges
+     aligned, dropdown-button style (user call 2026-07-29) -- and it fits:
+     even at the 800px window minimum, the New project button to the right
+     leaves more room than the menu is wide. Surface tokens match
+     ProjectMenu's .menu so the two popovers read as one species. */
+  .addmenu { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0;
              width: 200px; padding: 5px;
              background: var(--surface); border: 1px solid var(--border);
              border-radius: var(--r-panel);
