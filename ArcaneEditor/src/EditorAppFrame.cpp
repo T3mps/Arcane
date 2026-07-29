@@ -1415,7 +1415,16 @@ namespace Arcane::Editor
                 if (ImGui::Button("Cancel", ImVec2(90, 0)) ||
                     ImGui::IsKeyPressed(ImGuiKey_Escape))
                 {
-                    m_launchModalPending = false;
+                    // BOTH gates, not just the modal's: the never-saved branch
+                    // above may already have armed m_launchAfterSceneSave and
+                    // opened the async Save-As dialog. Cancelling THAT dialog
+                    // stashes no path (SceneSavePickedThunk returns early on a
+                    // null path, EditorAppScene.cpp), so ConsumeSceneDialogResults
+                    // never runs and never clears the gate -- it would survive
+                    // here and fire LaunchStandalone off the next UNRELATED
+                    // successful save. Cancel means abandon the whole action.
+                    m_launchModalPending   = false;
+                    m_launchAfterSceneSave = false;
                     ImGui::CloseCurrentPopup();
                 }
             }

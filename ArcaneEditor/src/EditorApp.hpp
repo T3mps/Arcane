@@ -224,7 +224,11 @@ namespace Arcane::Editor
         // m_launchAfterSceneSave covers the never-saved sub-case: the modal's
         // Save button cannot save synchronously (no filename yet), so it falls
         // back to the async Save-As dialog and sets this; ConsumeSceneDialogResults
-        // resumes the launch once that dialog's save actually lands.
+        // resumes the launch once that dialog's save actually lands. TWO sites
+        // clear it: that one, and the modal's Cancel -- a cancelled Save-As
+        // dialog stashes no path at all, so the former never runs and Cancel is
+        // the only thing standing between a stale gate and a launch fired off
+        // some later, unrelated save.
         bool m_launchModalPending   = false;
         bool m_launchAfterSceneSave = false;
         // Last standalone-launch failure (no project open, ArcaneRuntime.exe not
