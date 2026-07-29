@@ -79,7 +79,7 @@ namespace Arcane::Editor
     SpriteDocument::~SpriteDocument()
     {
         // Teardown close, same shape and rationale as ShaderEditorDocument's
-        // (ShaderEditorDocument.cpp:981-1002). Documents are destroyed
+        // (ShaderEditorDocument.cpp:991-1012). Documents are destroyed
         // synchronously on close and there is no on-close hook: the X-button
         // path is already safe (requestClose is raised INSIDE Draw and acted on
         // after the loop, so Draw's ScopeGuard has run), but a close that
@@ -165,7 +165,7 @@ namespace Arcane::Editor
         if (!ImGui::Begin(m_windowLabel.c_str(), &open, flags))
         {
             // Collapsed (not closed): ShaderEditorDocument's same early-return
-            // shape (ShaderEditorDocument.cpp:1712-1721) -- `open` only goes
+            // shape (ShaderEditorDocument.cpp:1722-1731) -- `open` only goes
             // false when the titlebar X was clicked, so a merely-collapsed
             // window still reports requestClose=false here.
             m_windowFocused = false;   // see the member: a stale true misroutes Ctrl+S
@@ -302,7 +302,7 @@ namespace Arcane::Editor
                                               static_cast<float>(desc.width));
                 const ImVec2 imgPos = ImGui::GetCursorScreenPos();
                 // ImTextureID convention: the raw ITexture* cast to uintptr_t
-                // (ShaderEditorDocument.cpp:2389,2436; the backend keys its
+                // (ShaderEditorDocument.cpp:2479,2526; the backend keys its
                 // per-frame SRV binding-set cache on that same pointer,
                 // ImGuiNvrhi.cpp:246-252) -- any live ITexture* works, no
                 // per-document binding setup needed.

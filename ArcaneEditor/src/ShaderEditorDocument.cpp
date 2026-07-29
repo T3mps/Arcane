@@ -944,12 +944,22 @@ namespace Arcane::Editor
                         m_data.id.ToString();
         m_snippet = m_data.snippet;
         m_anchor = std::make_shared<ShaderEditorDocument*>(this);
-        // Open on the chain overview only when there IS a chain to survey. A
-        // single-pass material's overview is base -> Output and says nothing
-        // the user came here for, so it opens straight in its graph; the
-        // overview stays one breadcrumb click away (which is also how Add Pass
-        // stays reachable for it).
-        m_inChainView = !m_data.passes.empty();
+        // ALWAYS open on the chain overview -- single-pass materials included.
+        // The pipeline is what a fullscreen material IS, so it is what the
+        // document opens on; branching on pass count would make which screen
+        // you land on depend on the asset, and "where am I" would stop being
+        // answerable before the window finished drawing. A single-pass overview
+        // is just base -> Output, which is thin but true -- and it is where Add
+        // Pass lives.
+        //
+        // Corrected downstream for the two surfaces with no chain: Draw forces
+        // this false on a sprite surface, and instances never reach the branch.
+        m_inChainView = true;
+        // Seed the history with where the document opened, so the FIRST jump
+        // has somewhere to go back to. Without this the opening view would
+        // never be a destination.
+        m_navHistory.push_back(ViewEntry{ m_inChainView, m_activePass });
+        m_navIndex = 0;
 
         // Device-less services (headless tests) skip the preview cleanly; the
         // document still parses, compiles, and saves.
@@ -1767,6 +1777,33 @@ namespace Arcane::Editor
             // breadcrumb has nowhere to go. Skip the bar entirely there rather
             // than draw a root crumb that does nothing.
             const bool chainAvailable = m_surface == 0;
+
+            // MOUSE4/MOUSE5 = back/forward, the browser gesture. The SDL3
+            // backend maps X1/X2 to ImGui buttons 3/4
+            // (imgui_impl_sdl3.cpp:445-446) and ImGuiMouseButton_COUNT is 5
+            // (imgui.h:2045), so these are real, tracked buttons -- and nothing
+            // else in the editor binds them.
+            //
+            // GATED ON HOVER, not focus: it is a pointer gesture, so it belongs
+            // to whatever the pointer is over, the same way it does in a
+            // browser. RootAndChildWindows so the canvas and every child region
+            // inside the document still count as "in this document"; without
+            // the flags set, a popup over the window blocks it, which is what
+            // we want while a context menu is open. The gate is what keeps the
+            // buttons from navigating this document while the user is over the
+            // Inspector or the viewport.
+            //
+            // Fullscreen base materials only -- the other surfaces have exactly
+            // one view, so there is no history to walk.
+            if (chainAvailable &&
+                ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows))
+            {
+                if (ImGui::IsMouseClicked(ImGuiMouseButton(3)))
+                    NavStep(-1);
+                if (ImGui::IsMouseClicked(ImGuiMouseButton(4)))
+                    NavStep(+1);
+            }
+
             if (chainAvailable)
                 DrawBreadcrumbBar();
             else
@@ -2129,6 +2166,12 @@ namespace Arcane::Editor
             m_activePass = static_cast<int>(remap[static_cast<std::uint32_t>(m_activePass)]);
         if (m_viewPass > 0 && m_viewPass <= static_cast<int>(n))
             m_viewPass = static_cast<int>(remap[static_cast<std::uint32_t>(m_viewPass)]);
+        // The nav history stores pass INDICES, so it rides the same remap --
+        // otherwise a rewire that re-sorts the chain would silently re-point
+        // every recorded entry at whatever pass slid into its slot.
+        for (ViewEntry& e : m_navHistory)
+            if (!e.chainView && e.pass > 0 && e.pass <= static_cast<int>(n))
+                e.pass = static_cast<int>(remap[static_cast<std::uint32_t>(e.pass)]);
         return true;
     }
 
@@ -2137,6 +2180,50 @@ namespace Arcane::Editor
         m_activePass = std::clamp(chainIndex, 0,
                                   static_cast<int>(m_data.passes.size()));
         m_inChainView = false;
+        NavRecord();
+    }
+
+    void ShaderEditorDocument::NavRecord()
+    {
+        const ViewEntry now{ m_inChainView, m_activePass };
+        const bool haveCurrent =
+            m_navIndex >= 0 && m_navIndex < static_cast<int>(m_navHistory.size());
+        // Re-navigating to where we already are is not a history event -- it
+        // would otherwise let a repeatedly-clicked crumb push the forward
+        // branch off the end one entry at a time.
+        if (haveCurrent && m_navHistory[static_cast<std::size_t>(m_navIndex)] == now)
+            return;
+
+        // Truncate the forward branch, then append: the standard rule, and the
+        // reason a new jump abandons whatever forward history existed.
+        m_navHistory.resize(static_cast<std::size_t>(m_navIndex + 1));
+        m_navHistory.push_back(now);
+        if (static_cast<int>(m_navHistory.size()) > kNavHistoryMax)
+            m_navHistory.erase(m_navHistory.begin());
+        m_navIndex = static_cast<int>(m_navHistory.size()) - 1;
+    }
+
+    bool ShaderEditorDocument::NavStep(int dir)
+    {
+        const int count = static_cast<int>(m_navHistory.size());
+        for (int i = m_navIndex + dir; i >= 0 && i < count; i += dir)
+        {
+            const ViewEntry& e = m_navHistory[static_cast<std::size_t>(i)];
+            // SKIP a stale entry rather than land on it. Passes get deleted and
+            // re-sorted under a history that was recorded before either; the
+            // re-sort is remapped in TopoSortPasses, but a DELETE has no
+            // meaningful remap, so those entries simply stop being destinations.
+            // Walking past them keeps one delete from turning Back into a
+            // dead key.
+            if (!e.chainView &&
+                (e.pass < 0 || e.pass > static_cast<int>(m_data.passes.size())))
+                continue;
+            m_navIndex = i;
+            m_inChainView = e.chainView;
+            m_activePass = e.chainView ? m_activePass : e.pass;
+            return true;
+        }
+        return false;
     }
 
     float ShaderEditorDocument::DrawBreadcrumbBar()
@@ -2167,7 +2254,10 @@ namespace Arcane::Editor
         // label), and the name is user-authored.
         const std::string rootCrumb = m_title + "###bcroot";
         if (ImGui::SmallButton(rootCrumb.c_str()))
+        {
             m_inChainView = true;   // always reachable -- see the member comment
+            NavRecord();            // explicit navigation: it goes in history
+        }
         ImGui::PopStyleColor(4);
 
         if (!m_inChainView)
@@ -4234,7 +4324,7 @@ namespace Arcane::Editor
         // while a name field has focus is exactly that gesture.
         //
         // The KIND is checked, not just the id: m_textEdit is one buffer shared
-        // with the pass canvas (ShaderEditorDocument.hpp:592-602), and
+        // with the pass canvas (ShaderEditorDocument.hpp:626-636), and
         // a PassName key carries a chain INDEX that can collide with a node id.
         //
         // Value drags need no guard -- an abandoned gesture is closed by

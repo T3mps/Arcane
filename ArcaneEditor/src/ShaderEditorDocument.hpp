@@ -267,6 +267,15 @@ namespace Arcane::Editor
         // canvas area swaps from the chain overview to that pass's editing
         // view. Clamped, because callers read ids straight off the canvas.
         void EnterPass(int chainIndex);
+        // Record the view the document is CURRENTLY showing as a history entry,
+        // truncating any forward branch. Called after an EXPLICIT navigation
+        // (enter, crumb click) and never by back/forward itself.
+        void NavRecord();
+        // Walk the history by `dir` (-1 back, +1 forward). Entries whose pass
+        // no longer exists are SKIPPED rather than landed on, so a deleted pass
+        // cannot strand the user on a stale index. False when the walk runs off
+        // the end (nothing to go back/forward to).
+        bool NavStep(int dir);
         // The one-line breadcrumb above the canvas. Root crumb = the material
         // (the chain overview), second crumb = the pass being edited. Drawn in
         // BOTH views, so the overview is always one click away -- which is what
@@ -492,7 +501,32 @@ namespace Arcane::Editor
         // would make them flicker back to the base and lose the user's place.
         // The overview is a NAVIGATION layer over the document, not a different
         // document -- so "which pass am I editing" survives a look at the map.
-        bool m_inChainView = false;
+        bool m_inChainView = true;
+
+        // ---- Back/forward navigation (mouse4/mouse5) ----
+        // Browser semantics over the document's two-level view space. One
+        // visited view; `pass` is meaningful only when chainView is false.
+        struct ViewEntry
+        {
+            bool chainView = true;
+            int  pass = 0;
+            bool operator==(const ViewEntry&) const = default;
+        };
+        // Visited views, oldest first, with m_navIndex pointing at the CURRENT
+        // one -- so back/forward is index arithmetic and nothing else. Explicit
+        // navigation truncates everything after the index before appending,
+        // which is what makes a new jump abandon the forward branch.
+        //
+        // IN-MEMORY AND PER-DOCUMENT, deliberately: this is a record of a
+        // reading session, not of the asset, so it neither persists nor rides
+        // undo. Closing the document forgets it, which is what a browser tab
+        // does too.
+        std::vector<ViewEntry> m_navHistory;
+        int m_navIndex = -1;
+        // Modest cap; the oldest entry drops when it is hit. Nobody walks back
+        // 32 view changes, and an uncapped vector on a long session is a leak
+        // with extra steps.
+        static constexpr int kNavHistoryMax = 32;
 
         // Instance mode (Slice 7): the resolved ancestry, immediate parent first,
         // BASE (the snippet owner) last. Empty for base materials.
