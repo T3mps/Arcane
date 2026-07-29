@@ -12,13 +12,15 @@
   // Both dialogs are owned by +page.svelte, not by this view: they are
   // app-level overlays that have to sit above the error banner, and +page is
   // the only stateful file by design.
-  let { recents, engines, defaultEngine, busy, running, layout, confirmDelete,
+  let { recents, engines, defaultEngine, busy, running, covers, layout, confirmDelete,
         sort, sortDesc, actions, onOpen, onScan, onNew, onLayout, onSort }:
     {
       recents: RecentProject[]; engines: EngineEntry[];
       defaultEngine: EngineEntry | null; busy: boolean;
       /** Keys (format.normalisePath) of projects with a live editor. */
       running: Set<string>;
+      /** Cover data URLs by recorded path; absent = the card's monogram. */
+      covers: Record<string, string>;
       layout: ProjectView;
       /** Passed straight through to the action menu, which labels Delete by it. */
       confirmDelete: boolean;
@@ -175,7 +177,7 @@
         actions,
       }}
       {#if layout === "grid"}
-        <ProjectCard {...shared} />
+        <ProjectCard {...shared} cover={covers[p.path]} />
       {:else}
         <ProjectRow {...shared} />
       {/if}

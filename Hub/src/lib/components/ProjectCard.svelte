@@ -6,7 +6,7 @@
   import { since, type RecentProject } from "$lib/api";
 
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
-        running = false, disabled = false, confirmDelete, actions }:
+        running = false, cover = undefined, disabled = false, confirmDelete, actions }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       /** Build name of the engine that will actually launch this project. */
@@ -17,12 +17,19 @@
       dangling: boolean;
       /** A live editor has this project open; launching focuses it. */
       running?: boolean;
+      /**
+       * Cover thumbnail as a data URL (Unreal's chain: <Name>.png beside the
+       * manifest, else the editor's Saved/AutoScreenshot.png). Replaces the
+       * monogram when present -- a screenshot IS the project's identity, and
+       * two identity marks on one tile would compete.
+       */
+      cover?: string;
       disabled?: boolean; confirmDelete: boolean;
       /** The whole per-project vocabulary -- see ProjectActions in ProjectMenu. */
       actions: ProjectActions;
     } = $props();
 
-  const cover = $derived(coverFor(project.name, project.path));
+  const mono = $derived(coverFor(project.name, project.path));
   // The recorded path stopped resolving. Everything that acts on the folder
   // (launch, the engine band) disables; the menu shrinks to Locate/Remove.
   const gone = $derived(project.missing);
@@ -59,18 +66,26 @@
      modal scrim and WindowChrome's double-click-to-maximize. -->
 <div class="card" class:incompat={!compatible && !gone} class:gone
      oncontextmenu={(e) => { e.preventDefault(); menu.openAt(e.clientX, e.clientY); }}>
+  {#if cover}
+    <!-- The screenshot band. alt="" -- decorative to a screen reader, since
+         the name is text right below; the launch button carries the label. -->
+    <img class="shot" src={cover} alt="" draggable="false" />
+  {/if}
   <div class="top">
     <button class="hit" type="button" disabled={disabled || gone}
             onclick={() => actions.launch(project)}
             title={gone ? missingNote(project.path)
                         : running ? `${project.name} is open — this focuses its window.`
                         : why} aria-label={project.name}>
-      <!-- The monogram, at BADGE scale. It was a 76px gradient band across the
-           head of every card -- the last of the decorative-slab styling, and by
-           some distance the least like anything else left in the Hub. Shrunk
-           rather than dropped: it is the only per-project identity a grid has,
-           and at 40px the gradient reads as a tint instead of as a picture. -->
-      <span class="mono" style="--a: {cover.angle}deg" aria-hidden="true">{cover.monogram}</span>
+      <!-- The monogram, at BADGE scale -- the fallback identity when no
+           screenshot exists yet. (It was once a 76px gradient band; shrunk
+           because a gradient is decoration. The .shot band above is NOT that
+           regression: a screenshot is information about the project.) Hidden
+           when a cover renders, because two identity marks on one tile
+           compete. -->
+      {#if !cover}
+        <span class="mono" style="--a: {mono.angle}deg" aria-hidden="true">{mono.monogram}</span>
+      {/if}
       <span class="txt">
         <span class="nm">{project.name}</span>
         <span class="path">{dir}</span>
@@ -167,6 +182,14 @@
   .meta { display: flex; justify-content: space-between; align-items: center;
           gap: 8px; padding: 9px 13px 10px; font-family: var(--font-mono);
           font-size: 11px; color: var(--text-dim); }
+
+  /* 16:9-ish at the 230px track minimum. object-fit: cover because the
+     editor's shot follows the viewport's aspect, not the card's; display:
+     block kills the baseline gap under a bare img. Dimmed with the rest of
+     the card in its inert states. */
+  .shot { display: block; width: 100%; height: 118px; object-fit: cover;
+          border-bottom: 1px solid var(--border-soft); user-select: none; }
+  .card.incompat .shot, .card.gone .shot { opacity: .35; filter: grayscale(.6); }
 
   /* The ok green the engine status dot uses -- "alive" has one colour in this
      app -- with the dot doubling the signal for anyone who cannot read hue. */

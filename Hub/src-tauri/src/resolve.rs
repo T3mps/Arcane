@@ -78,6 +78,39 @@ pub fn resolve_project(recorded: &Path) -> Result<(PathBuf, PathBuf), String> {
     Ok((recorded.to_path_buf(), recorded.join(file)))
 }
 
+/// Covers larger than this are ignored rather than shipped to the webview: a
+/// base64 data URL is ~4/3 the file, held in memory per card. The editor's
+/// auto-screenshot is a few hundred KB; this cap only ever meets a giant
+/// hand-placed PNG, whose card falls back to the monogram.
+const COVER_MAX_BYTES: usize = 2 * 1024 * 1024;
+const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+
+/// The cover image for a project card, as a `data:image/png;base64,` URL.
+///
+/// Unreal's model outright: an explicit `<ManifestStem>.png` beside the
+/// manifest wins (the hand-picked thumbnail), else the editor's auto-written
+/// `Saved/AutoScreenshot.png`. Read fresh on every call -- the auto shot
+/// changes whenever the editor saves, and at card counts the reread is
+/// nothing. None for missing/oversized/non-PNG files: the card has a
+/// monogram to fall back to, and a broken image icon would be worse.
+pub fn project_cover(recorded: &Path) -> Option<String> {
+    use base64::Engine as _;
+    let (root, manifest) = resolve_project(recorded).ok()?;
+    let stem = manifest.file_stem()?.to_string_lossy().to_string();
+    let candidates =
+        [root.join(format!("{stem}.png")), root.join("Saved").join("AutoScreenshot.png")];
+    for c in candidates {
+        let Ok(bytes) = std::fs::read(&c) else { continue };
+        if bytes.len() <= COVER_MAX_BYTES && bytes.starts_with(&PNG_MAGIC) {
+            return Some(format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(bytes)
+            ));
+        }
+    }
+    None
+}
+
 /// What a recursive scan found. `ambiguous` counts folders holding MORE than
 /// one .arcproj (the engine refuses those, so the Hub must not guess);
 /// `truncated` is the no-silent-caps flag -- true when the visit budget ran
@@ -202,6 +235,38 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    // Smallest possible valid-magic "PNG": the 8 magic bytes. project_cover
+    // only checks the magic (decoding is the webview's job), so this is
+    // enough to stand in for a real file.
+    const TINY_PNG: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+
+    #[test]
+    fn project_cover_prefers_the_named_png_then_the_auto_screenshot() {
+        let dir = scratch("cover");
+        let m = write_manifest(&dir, "G", 7);
+        assert_eq!(project_cover(&m), None, "no files, no cover -- the monogram's case");
+
+        std::fs::create_dir_all(dir.join("Saved")).unwrap();
+        std::fs::write(dir.join("Saved/AutoScreenshot.png"), TINY_PNG).unwrap();
+        assert!(project_cover(&m).is_some(), "the editor's auto shot serves");
+
+        std::fs::write(dir.join("G.png"), TINY_PNG).unwrap();
+        let named = project_cover(&m).unwrap();
+        assert!(named.starts_with("data:image/png;base64,"));
+        // Both candidates exist; the hand-placed one must win. Distinguish by
+        // content: give the named file an extra byte.
+        std::fs::write(dir.join("G.png"), [&TINY_PNG[..], &[0u8]].concat()).unwrap();
+        assert_ne!(project_cover(&m).unwrap(), named, "the named PNG wins over the auto shot");
+    }
+
+    #[test]
+    fn project_cover_refuses_a_file_that_is_not_a_png() {
+        let dir = scratch("cover-notpng");
+        let m = write_manifest(&dir, "G", 7);
+        std::fs::write(dir.join("G.png"), b"JFIF pretending").unwrap();
+        assert_eq!(project_cover(&m), None, "magic check, not extension trust");
     }
 
     #[test]

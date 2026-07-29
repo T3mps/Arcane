@@ -42,6 +42,10 @@ serde = { version = "1", features = ["derive"] }
 # and the Hub would hand back a manifest reordered top to bottom for a one-field
 # edit -- a diff the user did not ask for in a file they may have in git.
 serde_json = { version = "1", features = ["preserve_order"] }
+# Project cover thumbnails travel to the webview as data: URLs -- the CSP is
+# closed to file protocols, and a couple of hundred KB of PNG per card does
+# not justify opening it.
+base64 = "0.22"
 # Deleting a project goes to the RECYCLE BIN, not to remove_dir_all. A launcher
 # that can erase months of work on a mis-click should hand the user the same
 # undo Explorer would; this wraps the Windows shell's IFileOperation, which is

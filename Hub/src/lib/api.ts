@@ -166,6 +166,15 @@ export type ScanReport = {
 export const scanForProjects = (dir: string) =>
   invoke<ScanReport>("scan_for_projects", { dir });
 
+/**
+ * Cover thumbnails as data URLs, keyed by the exact paths handed in; a
+ * project with no cover is simply absent (the card falls back to its
+ * monogram). Unreal's chain: `<Name>.png` beside the manifest, else the
+ * editor-written `Saved/AutoScreenshot.png`.
+ */
+export const projectCovers = (paths: string[]) =>
+  invoke<Record<string, string>>("project_covers", { paths });
+
 /** Returns the path of the `.arcproj` it wrote, ready to hand to openProject. */
 export const createProject = (dir: string, name: string, enginePath: string) =>
   invoke<string>("create_project", { dir, name, enginePath });

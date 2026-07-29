@@ -19,7 +19,7 @@
   import { nextSort, resolveEngine } from "$lib/format";
   import {
     loadState, refreshEngines, registerEngine, forgetEngine, deleteProject,
-    duplicateProject, forgetProject, clearRecents, runningProjects,
+    duplicateProject, forgetProject, clearRecents, projectCovers, runningProjects,
     openProject, createProject, scanForProjects, suggestEngine, setProjectEngine,
     setProjectFavorite, setProjectArgs, revealProject, renameProject, relocateProject,
     loadSettings, saveSettings, defaultDialogDir,
@@ -54,6 +54,14 @@
   // Replaced wholesale on every running-changed event -- the payload is the
   // full set, so a missed event self-heals on the next transition.
   let running = $state<Set<string>>(new Set());
+  // Cover thumbnails by recorded path. Refreshed after every state adoption
+  // (fire-and-forget: the grid renders monograms until the batch lands) --
+  // editors-idle routes through adoptState too, so a screenshot the editor
+  // just wrote appears the moment the Hub comes back.
+  let covers = $state<Record<string, string>>({});
+  async function refreshCovers(paths: string[]) {
+    covers = await projectCovers(paths);
+  }
   // ONE modal at a time, as a discriminated union rather than six independent
   // flags. Owned here so a dialog renders above the error banner and a failed
   // action keeps its dialog up with the message inside it, not behind the
@@ -100,6 +108,7 @@
     // compatibility row derived from it.
     selectedEngine = hub.engines.find((e) => e.id === selectedEngine?.id)
       ?? hub.engines[0] ?? null;
+    void refreshCovers(hub.recents.map((r) => r.path));
   }
 
   async function refresh() {
@@ -391,7 +400,7 @@
       {/each}
       {#if view === "projects"}
         <ProjectsView recents={hub.recents} engines={hub.engines}
-                      defaultEngine={selectedEngine} busy={busyUi} {running}
+                      defaultEngine={selectedEngine} busy={busyUi} {running} {covers}
                       layout={settings.projectView}
                       confirmDelete={settings.confirmDelete}
                       sort={settings.projectSort} sortDesc={settings.projectSortDesc}

@@ -759,6 +759,17 @@ fn do_open_project(
     Ok(OpenOutcome::Launched)
 }
 
+// Cover thumbnails for a batch of recorded project paths, keyed by the exact
+// path handed in. One IPC round-trip for the whole grid; only projects WITH
+// a cover appear in the map, so the frontend's fallback is a simple miss.
+#[tauri::command]
+fn project_covers(paths: Vec<String>) -> HashMap<String, String> {
+    paths
+        .into_iter()
+        .filter_map(|p| resolve::project_cover(Path::new(&p)).map(|c| (p, c)))
+        .collect()
+}
+
 /// What a Scan did, for the frontend's one-line report. Every count is
 /// surfaced -- a scan that silently dropped ambiguous folders or gave up on
 /// a budget would read as "found everything" when it did not.
@@ -1009,6 +1020,7 @@ pub fn run() {
             reveal_project,
             rename_project,
             open_project,
+            project_covers,
             running_projects,
             scan_for_projects,
             create_project,
