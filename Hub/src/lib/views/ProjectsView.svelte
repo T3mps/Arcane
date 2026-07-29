@@ -110,7 +110,13 @@
      window minimum there is not room for it beside the search. -->
 <header class="top">
   <h2 class="display view-title">Projects</h2>
-  <input class="search" bind:value={query} placeholder="Search projects" spellcheck="false" />
+  <!-- The magnifier keeps the field self-identifying once typing has
+       replaced the placeholder; span-wrapped so the icon positions without
+       reaching into the Icon component's scope. -->
+  <div class="searchwrap">
+    <span class="glass" aria-hidden="true"><Icon name="search" size={14} /></span>
+    <input class="search" bind:value={query} placeholder="Search projects" spellcheck="false" />
+  </div>
   <div class="acts">
     <!-- "Add", not "Open...": both routes put an EXISTING project into the
          list, which is what the word means in this kind of launcher. -->
@@ -231,8 +237,14 @@
   /* margin-left:auto pushes the search and the buttons to the right as one
      group, leaving the title hard left. flex:1 with a cap lets the field take
      the slack at 1024px without stretching absurdly on a maximised window,
-     and min-width:0 lets it give that slack back at the 800px minimum. */
-  .search { flex: 1; min-width: 0; max-width: 320px; margin-left: auto; }
+     and min-width:0 lets it give that slack back at the 800px minimum. The
+     wrapper carries the layout so the magnifier can anchor inside the field. */
+  .searchwrap { flex: 1; min-width: 0; max-width: 320px; margin-left: auto;
+                position: relative; }
+  .glass { position: absolute; left: 11px; top: 50%; translate: 0 -50%;
+           display: grid; place-items: center; color: var(--text-dim);
+           pointer-events: none; }
+  .search { width: 100%; box-sizing: border-box; padding-left: 32px; }
 
   .meta { display: flex; align-items: center; gap: 12px; margin: 10px 0 14px; }
   /* Beats the global .view-sub margin: inside this row the spacing is the

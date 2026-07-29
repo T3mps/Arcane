@@ -11,7 +11,7 @@
   // Path data only, no <rect>/<circle>, so one loop renders every icon.
   export type IconName =
     "folder" | "box" | "layers" | "gear" | "grid" | "list" | "x" | "ellipsis" | "star"
-    | "plus" | "chevron-down" | "check" | "arrow-up" | "arrow-down";
+    | "plus" | "chevron-down" | "check" | "arrow-up" | "arrow-down" | "search";
 
   const PATHS: Record<IconName, string[]> = {
     folder: [
@@ -69,6 +69,9 @@
     // review 2026-07-29) -- an arrow is a different word.
     "arrow-up": ["m5 12 7-7 7 7", "M12 19V5"],
     "arrow-down": ["M12 5v14", "m19 12-7 7-7-7"],
+    // Lucide's Search, with the lens circle as a two-arc path (this file's
+    // one loop draws paths only, no <circle> elements).
+    search: ["M11 3a8 8 0 1 0 0 16 8 8 0 1 0 0-16", "m21 21-4.35-4.35"],
   };
 </script>
 
