@@ -74,6 +74,14 @@ bool RuntimeApp::Init()
     // Open the project (if any) BEFORE loading input + the game module: both come from
     // the project when one is given. No --project => CurrentProject() stays null and the
     // legacy data/ + --plugin path is used (non-breaking).
+    // CONTRACT, deliberately different from the editor's (spec Part B): opening a
+    // project here takes NO editor lock and refuses no rivals. The editor may have
+    // the same project open -- that is the normal case, since its separate-window
+    // Play spawns us on the scene it is editing -- and two runtimes on one project
+    // are fine too. We only ever READ the project. (Spec Part B also said we answer
+    // no engine probe; that clause was wrong about the pre-fold state. --print-engine-info
+    // IS answered, as the pre-fold host already did, because both hosts share one
+    // HostConfig -- see main.cpp. Part A is behavior-preserving, so it stays.)
     if (!m_config.projectPath.empty())
     {
         if (!m_runtime->OpenProject(m_config.projectPath))
@@ -148,6 +156,15 @@ bool RuntimeApp::Init()
         {
             (void)Arcane::HostBoot::BootScene(*m_runtime, *proj);
         }
+    }
+    else if (!m_config.sceneOverride.empty())
+    {
+        // --scene names an asset IN a project, so with no project open (absent or
+        // failed --project) there is nothing to resolve it against. Say so rather
+        // than dropping it silently -- a silent no-op here looks identical to a
+        // scene that booted.
+        ARC_WARN("ArcaneRuntime: --scene '{}' ignored -- no project is open",
+                 m_config.sceneOverride);
     }
 
     return true;

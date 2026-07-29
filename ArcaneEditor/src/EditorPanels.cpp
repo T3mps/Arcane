@@ -334,10 +334,20 @@ namespace Arcane::Editor
             ImGui::OpenPopup("##play_mode");
         if (ImGui::BeginPopup("##play_mode"))
         {
+            // MarkIniSettingsDirty on change, as the shader editor's layout
+            // handler does (ShaderEditorDocument.cpp): ImGui::Shutdown saves the
+            // ini on a clean exit anyway, so without this the setting survives a
+            // normal quit but is LOST if the editor is killed or crashes.
             if (ImGui::MenuItem("In viewport", nullptr, mode == PlayLaunchMode::Viewport))
+            {
                 mode = PlayLaunchMode::Viewport;
+                ImGui::MarkIniSettingsDirty();
+            }
             if (ImGui::MenuItem("Separate window", nullptr, mode == PlayLaunchMode::SeparateWindow))
+            {
                 mode = PlayLaunchMode::SeparateWindow;
+                ImGui::MarkIniSettingsDirty();
+            }
             ImGui::EndPopup();
         }
 

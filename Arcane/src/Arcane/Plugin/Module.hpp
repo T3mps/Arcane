@@ -1,6 +1,6 @@
 #pragma once
 
-// Module: ArcaneRuntime's low-level RAII wrapper for one loaded system module
+// Module: the engine's low-level RAII wrapper for one loaded system module
 // (DLL/shared object). It knows paths and raw symbols only; plugin ABI and
 // reload policy live above this layer.
 

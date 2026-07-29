@@ -1,6 +1,8 @@
 #pragma once
 
-// Plugin: ArcaneRuntime's current game-runtime plugin protocol. Today there is one
+// Plugin: the engine's current game-runtime plugin protocol -- BOTH hosts consume
+// it (ArcaneRuntime and the editor), which is why it lives here and not in either
+// exe. Today there is one
 // plugin kind, so this class owns the GamePlugin_* ABI. If editor/tool plugins
 // appear later, split this into GamePlugin.
 

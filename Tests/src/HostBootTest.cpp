@@ -63,7 +63,7 @@ namespace
 
 TEST_CASE("HostConfig parses --project", "[host]")
 {
-    const char* argv[] = { "loom", "--project", "MyGame" };
+    const char* argv[] = { "ArcaneRuntime", "--project", "MyGame" };
     auto out = Arcane::HostConfig::Parse(3, const_cast<char**>(argv));
     REQUIRE(out.config.has_value());
     REQUIRE(out.config->projectPath == "MyGame");
@@ -71,7 +71,7 @@ TEST_CASE("HostConfig parses --project", "[host]")
 
 TEST_CASE("HostConfig defaults --project to empty", "[host]")
 {
-    const char* argv[] = { "loom" };
+    const char* argv[] = { "ArcaneRuntime" };
     auto out = Arcane::HostConfig::Parse(1, const_cast<char**>(argv));
     REQUIRE(out.config.has_value());
     REQUIRE(out.config->projectPath.empty());

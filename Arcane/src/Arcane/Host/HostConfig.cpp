@@ -4,7 +4,7 @@ namespace Arcane
 {
     HostConfig::ParseOutcome HostConfig::Parse(int argc, char** argv)
     {
-        Cli cli{ "Arcane Runtime", "M5 plugin host" };
+        Cli cli{ "Arcane Runtime", "standalone runtime host" };
         cli.Option("backend", "dx12",        "graphics backend: dx12|vulkan").Choices({ "dx12", "vulkan" });
         cli.Option("frames",  "0",           "render N frames then exit").Type(CliType::Uint);
         cli.Flag  ("no-vsync",               "present without vsync");
