@@ -139,6 +139,11 @@ namespace Arcane::Editor
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
         void DrawModals(LoopState& ls);
         void DrawViewportPanelPhase(FrameState& fs);
+        // Center-tab -> side-panel focus follow. Reads the one-frame
+        // "became visible" edges the Viewport panel and the material documents
+        // published THIS frame, and focuses the matching tab in their dock
+        // node. Must run after both have drawn.
+        void SyncCenterTabFocus(const FrameState& fs);
         void HandleViewportPick(const FrameState& fs);
         void DrawSelectionPanels();
         bool PresentFrame();
@@ -486,6 +491,19 @@ namespace Arcane::Editor
         // The dock node the Viewport occupied LAST frame (0 = floating):
         // where new document windows dock as sibling tabs (DrawAll).
         unsigned int m_viewportDockId = 0;
+
+        // ---- Material panel: which document it shows -----------------------
+        // The material document whose center tab is active, or the last one
+        // that was. Held as a GUID rather than a pointer because DocumentHost
+        // destroys documents synchronously on close (DocumentHost::Close erases
+        // the unique_ptr), so a cached raw pointer would dangle for the rest of
+        // the frame; the guid is re-resolved through FindByGuid every frame.
+        // Nil = show the empty state.
+        Arcane::Guid m_activeMaterialGuid;
+        // Open material-document count LAST frame, so "the last one closed" is
+        // a detectable edge even when the Viewport does not report Appearing
+        // (a document that was floating rather than tabbed over the scene).
+        std::size_t  m_materialDocCount = 0;
 
         // Open-failure surfacing: SwitchProject's refusals used to be console-only
         // and were repeatedly missed at the desk. Any refusal/failure sets this;

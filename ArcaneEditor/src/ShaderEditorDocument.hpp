@@ -120,31 +120,48 @@ namespace Arcane::Editor
         void Tick(double dt) override;
         void Draw(bool& requestClose) override;
 
+        // Draw the dockable "Material" panel for THIS document -- the preview
+        // image over the params editor, split vertically. Owns its own
+        // ImGui::Begin/End (and its own EditGesture::ScopeGuard, because the
+        // param rows that open gestures are submitted inside it).
+        //
+        // The panel is a SEPARATE dock window from the document's center tab:
+        // it lives beside the Inspector, so a material's parameters sit where
+        // an entity's components do. The free DrawMaterialPanel below routes
+        // the active document here (and draws the empty state when none).
+        void DrawMaterialWindow();
+
+        // True on the ONE frame this document's window became the visible tab
+        // (opened, or its tab was selected). Latched by Draw from
+        // ImGui::IsWindowAppearing (imgui.cpp:9236-9240 returns
+        // window->Appearing, which imgui.cpp:7905-7907 raises when a docked
+        // window's tab becomes visible after being hidden). The host reads it
+        // to fire the center-tab -> side-panel focus follow exactly once per
+        // transition rather than every frame.
+        bool TabBecameVisible() const { return m_tabBecameVisible; }
+
         // ---- Pane layout: a GLOBAL editor preference, not per-document ----
-        // The two pane splits are one editor-wide setting shared by every open
+        // The pane split is one editor-wide setting shared by every open
         // shader document (last drag wins), so a layout set once is the layout
         // every material opens with. Deliberate: the alternative -- per-document
         // ratios -- makes the user re-drag the same split for each asset, and
         // there is no per-asset reason for the two to differ.
         //
-        // Fractions of the shared extent the FIRST pane takes: `mainSplit` is
-        // the left column (graph / snippet, or an instance's params) against the
-        // preview column, dragged horizontally; `rightSplit` is the preview
-        // against the params panel inside the right column, dragged vertically
-        // (base materials only -- an instance's params live in the LEFT column,
-        // so its right column has nothing to split). Do not transpose them.
+        // `previewSplit` is the fraction of the Material panel's height the
+        // PREVIEW takes, against the params editor below it, dragged
+        // vertically. It is the only split left: the document's center tab is
+        // now a single column (the graph/snippet for a base, the preview for an
+        // instance) since preview+params moved out to the Material panel, so
+        // the old horizontal `mainSplit` had nothing left to divide.
         //
-        // The defaults are measured from the layout the user settled on at the
-        // desk: the graph takes about three quarters of the width, and the
-        // preview a little over half of the column beside it. Double-clicking a
-        // divider restores these.
-        static constexpr float kMainSplitDefault  = 0.74f;
-        static constexpr float kRightSplitDefault = 0.55f;
+        // The default is measured from the layout the user settled on at the
+        // desk: the preview takes a little over half the panel. Double-clicking
+        // the divider restores it.
+        static constexpr float kPreviewSplitDefault = 0.55f;
 
         struct LayoutPrefs
         {
-            float mainSplit  = kMainSplitDefault;
-            float rightSplit = kRightSplitDefault;
+            float previewSplit = kPreviewSplitDefault;
         };
         // The one instance (process-wide). Draw reads and the dividers write it.
         static LayoutPrefs& Layout();
@@ -457,8 +474,17 @@ namespace Arcane::Editor
         // focus race.
         int    m_callbackJumpLine = 0;
 
-        // The document's ONE edit-gesture bracket (EditGesture; the ScopeGuard
-        // at the top of Draw is its guaranteed close). Param-panel drags carry
+        // Latched by Draw from ImGui::IsWindowAppearing -- see TabBecameVisible.
+        bool   m_tabBecameVisible = false;
+
+        // The document's ONE edit-gesture bracket (EditGesture). TWO draw
+        // scopes open gestures against it now -- Draw (the graph's value/pin
+        // drags) and DrawMaterialWindow (the param rows) -- so BOTH declare a
+        // ScopeGuard as their first local. The host draws the Material panel
+        // BEFORE the documents (EditorApp::DrawEditorUi), which puts Draw's
+        // guard last in the frame: the guaranteed close still runs after every
+        // widget that can open a gesture has been submitted.
+        // Param-panel drags carry
         // the override value, graph value drags the WHOLE graph (small graphs --
         // the SG full-snapshot-undo pathology was per-edit reserialization plus
         // full preview regeneration, neither of which applies here). Before-
@@ -602,4 +628,20 @@ namespace Arcane::Editor
 
         friend struct SnippetCallbackForwarder;
     };
+
+    // The dockable "Material" panel. Docked as a TAB beside the Inspector by
+    // default (EditorPanels.cpp's BuildDefaultLayout); the user may re-dock it
+    // freely and imgui.ini remembers where.
+    //
+    // `active` is the material document whose content to show -- the one whose
+    // center tab is active, or the last one that was (EditorApp resolves it).
+    // Null draws the empty state: the panel window ALWAYS exists so its dock
+    // tab never pops in and out as documents open and close.
+    //
+    // SEAM: this panel is the intended home of selected-NODE properties too
+    // (Unity Shader Graph's Graph Inspector shape -- click a node in the
+    // canvas, edit its properties here). Nothing is built for that yet; when it
+    // lands it becomes a second section of this window, above or beside the
+    // params, and the graph canvas will publish its node selection to it.
+    void DrawMaterialPanel(ShaderEditorDocument* active);
 }

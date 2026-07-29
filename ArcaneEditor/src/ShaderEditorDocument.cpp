@@ -689,13 +689,22 @@ namespace Arcane::Editor
         constexpr float kSplitMaxF   = 0.85f;    //     small for two floors
 
         // ---- Pane layout persistence (imgui.ini) ---------------------------
-        // The ini section the two ratios live in: "[ArcaneEditorLayout]
-        // [ShaderEditor]". TypeName may not contain '[' or ']'
+        // The ini section the ratio lives in: "[ArcaneEditorLayout]
+        // [MaterialPanel]". TypeName may not contain '[' or ']'
         // (imgui_internal.h:2214); the entry name is what ReadOpen matches on,
         // and the pair is what lets a future panel add its own entry under the
         // same type without touching this handler.
+        //
+        // STALE ENTRIES from before the Material panel existed are inert, by
+        // the two mechanisms already in place: the retired "[ArcaneEditorLayout]
+        // [ShaderEditor]" section makes ReadOpen return null (which is how it
+        // has always rejected an unknown name -- ImGui then skips that entry's
+        // lines), and a retired "MainSplit=" line inside a section that IS
+        // matched simply fails both sscanf branches in ReadLine and is dropped.
+        // Neither path allocates or dereferences, so an old imgui.ini loads
+        // clean; the next save rewrites the file without them.
         constexpr const char* kLayoutIniType = "ArcaneEditorLayout";
-        constexpr const char* kLayoutIniName = "ShaderEditor";
+        constexpr const char* kLayoutIniName = "MaterialPanel";
 
         // A stored ratio arrives from a text file a human can edit, so it is
         // not trusted: anything non-finite or outside the working range is
@@ -725,10 +734,8 @@ namespace Arcane::Editor
         {
             auto* prefs = static_cast<ShaderEditorDocument::LayoutPrefs*>(entry);
             float v = 0.0f;
-            if (std::sscanf(line, "MainSplit=%f", &v) == 1)
-                prefs->mainSplit = SanitizeSplit(v);
-            else if (std::sscanf(line, "RightSplit=%f", &v) == 1)
-                prefs->rightSplit = SanitizeSplit(v);
+            if (std::sscanf(line, "PreviewSplit=%f", &v) == 1)
+                prefs->previewSplit = SanitizeSplit(v);
         }
 
         void LayoutSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
@@ -737,8 +744,7 @@ namespace Arcane::Editor
             const ShaderEditorDocument::LayoutPrefs& prefs = ShaderEditorDocument::Layout();
             buf->reserve(buf->size() + 64);
             buf->appendf("[%s][%s]\n", handler->TypeName, kLayoutIniName);
-            buf->appendf("MainSplit=%.4f\n", prefs.mainSplit);
-            buf->appendf("RightSplit=%.4f\n", prefs.rightSplit);
+            buf->appendf("PreviewSplit=%.4f\n", prefs.previewSplit);
             buf->append("\n");
         }
 
@@ -768,8 +774,15 @@ namespace Arcane::Editor
         // Double-click restores `defaultRatio` -- the only way back to a round
         // split once dragged.
         //
-        // Submit it OUTSIDE ed::Begin/End (Draw does; the canvas's Begin/End
-        // is down inside DrawGraphPanel): within the canvas the node editor
+        // Two axes, but only the vertical one (dragX=false) has a caller today
+        // -- the Material panel's preview/params divider. The horizontal branch
+        // is kept because the axis is the ONLY thing that differs between them
+        // (four ternaries), so specialising it would not shrink this function,
+        // and the node-properties section this panel is slated to grow is the
+        // obvious next horizontal split.
+        //
+        // Submit it OUTSIDE ed::Begin/End (both callers do; the canvas's
+        // Begin/End is down inside DrawGraphPanel): within the canvas the node editor
         // takes ImGui's input for itself and moves ImGui into canvas space
         // (imgui_canvas.cpp), so a divider there would both compete with the
         // pan/zoom gestures and drag at the zoom's rate rather than the
@@ -1611,6 +1624,12 @@ namespace Arcane::Editor
         // background tab, where no widget inside can report its deactivation).
         const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
 
+        // Cleared FIRST, every frame: it is a one-frame edge, and the host
+        // polls it unconditionally. Leaving a stale `true` on the early return
+        // below would re-fire the focus follow every frame this document spent
+        // as a background tab.
+        m_tabBecameVisible = false;
+
         bool open = true;
         ImGui::SetNextWindowSize(ImVec2(980, 640), ImGuiCond_FirstUseEver);
         ImGuiWindowFlags flags = Dirty() ? ImGuiWindowFlags_UnsavedDocument : 0;
@@ -1621,33 +1640,21 @@ namespace Arcane::Editor
             return;
         }
 
+        // Latch "this tab just became visible" for the host's focus follow.
+        // Read AFTER Begin returned true: a background tab is skipped by the
+        // early return above, and imgui.cpp:8778-8779 asserts that a skipped
+        // window is never Appearing, so the flag is only ever raised here.
+        m_tabBecameVisible = ImGui::IsWindowAppearing();
+
         DrawToolbar();
 
-        // Two draggable splits (PaneSplitter) over the SHARED layout preference
-        // -- every open shader document reads the same two ratios, and a drag
-        // in any of them is the layout all of them use (Layout(), which the ini
-        // handler persists). The MAIN one divides the left column (graph or
-        // snippet, or an instance's params) from the preview column; the right
-        // column carries its own, preview against params, further down.
-        // The divider sits BETWEEN the two children, so the width it occupies
-        // comes off the span the fractions divide.
-        LayoutPrefs& layout   = Layout();
-        const ImVec2 content  = ImGui::GetContentRegionAvail();
-        const float contentH  = content.y;
-        const float mainSpan  = (std::max)(content.x - kSplitBarPx, 1.0f);
-        const float leftW     = mainSpan * ClampSplit(layout.mainSplit, mainSpan);
-
-        ImGui::BeginChild("##left", ImVec2(leftW, contentH));
-        if (IsInstance())
-        {
-            // Instance mode: params-only -- the source belongs to the base.
-            // The list takes the whole column now that the errors panel is gone
-            // (diagnostics go to the Console).
-            ImGui::BeginChild("##instparams", ImVec2(0, 0));
-            DrawParamsPanel();
-            ImGui::EndChild();
-        }
-        else
+        // ONE column. The preview and the params editor moved OUT to the
+        // dockable Material panel (DrawMaterialWindow, docked beside the
+        // Inspector), which is what retired this window's right column and the
+        // horizontal "##splitmain" divider that used to size it: with the right
+        // column gone there was nothing left for a horizontal split to divide.
+        // The surviving split -- preview against params -- went with them.
+        if (!IsInstance())
         {
             // Pass canvas: fullscreen base materials only (sprite chains are
             // refused; instances re-value the base's chain). Even a single-pass
@@ -1659,7 +1666,7 @@ namespace Arcane::Editor
                 m_activePass = 0;   // stale selection after an outside reload
             // The canvas serves whichever pass is active and graph-owned;
             // text-owned passes -- and the vertex stage -- get the text editor.
-            // Both fill the rest of the column themselves (each measures the
+            // Both fill the rest of the tab themselves (each measures the
             // region at the point it opens): the space the errors panel used to
             // reserve just falls to the canvas / text.
             if (ActiveGraphOwned() && !m_showGeneratedText && !m_editVertex)
@@ -1667,35 +1674,76 @@ namespace Arcane::Editor
             else
                 DrawSnippetEditor();
         }
-        ImGui::EndChild();
-        // Zero spacing on either side: the divider IS the gap between the
-        // columns, and the layout above already reserved its width.
-        ImGui::SameLine(0.0f, 0.0f);
-        PaneSplitter("##splitmain", /*dragX=*/true, contentH, mainSpan,
-                     layout.mainSplit, kMainSplitDefault);
-        ImGui::SameLine(0.0f, 0.0f);
-        ImGui::BeginChild("##right", ImVec2(0, contentH));
+        else
         {
-            if (IsInstance())
-            {
-                // Instance mode: the params own the LEFT column, so the preview
-                // takes this one outright -- nothing to split here.
-                DrawPreviewPanel(ImGui::GetContentRegionAvail().y);
-            }
-            else
-            {
-                const ImVec2 col = ImGui::GetContentRegionAvail();
-                const float span = (std::max)(col.y - kSplitBarPx, 1.0f);
-                DrawPreviewPanel(span * ClampSplit(layout.rightSplit, span));
-                PaneSplitter("##splitright", /*dragX=*/false, col.x, span,
-                             layout.rightSplit, kRightSplitDefault);
-                DrawParamsPanel();   // fills whatever the preview left
-            }
+            // INSTANCE mode: an instance authors no source -- that belongs to
+            // its base -- and its params now live in the Material panel, which
+            // would leave this tab empty. So the preview takes the whole tab:
+            // an instance IS its values, and the large preview is the one thing
+            // this window can still say about them that the side panel cannot
+            // (the panel's preview is Inspector-column narrow). The toolbar
+            // above keeps Save and the parent-chain affordances reachable.
+            DrawPreviewPanel(ImGui::GetContentRegionAvail().y);
         }
-        ImGui::EndChild();
 
         ImGui::End();
         requestClose = !open;
+    }
+
+    void ShaderEditorDocument::DrawMaterialWindow()
+    {
+        // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
+        // The param rows below open gestures against m_gesture, and this scope
+        // has the same early-return/collapsed-window hazards Draw's guard
+        // covers (Begin refusing on a background tab, with no widget inside
+        // able to report its own deactivation).
+        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+
+        if (ImGui::Begin("Material"))
+        {
+            // Which material this is: the panel is a shared surface, so it has
+            // to name its subject the way the Inspector names the entity.
+            // m_title, NOT m_windowLabel -- the latter carries the "###matdoc_"
+            // id suffix that only ImGui::Begin strips, so a Text* call would
+            // print it verbatim.
+            ImGui::TextUnformatted(m_title.c_str());
+            if (IsInstance())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(Instance)");
+            }
+            ImGui::Separator();
+
+            // The one surviving draggable split (PaneSplitter) over the SHARED
+            // layout preference -- every open shader document reads the same
+            // ratio, and a drag is the layout all of them use (Layout(), which
+            // the ini handler persists). Preview on top, params below; the
+            // divider sits BETWEEN them, so the height it occupies comes off
+            // the span the fraction divides.
+            LayoutPrefs& layout = Layout();
+            const ImVec2 avail  = ImGui::GetContentRegionAvail();
+            const float span    = (std::max)(avail.y - kSplitBarPx, 1.0f);
+            DrawPreviewPanel(span * ClampSplit(layout.previewSplit, span));
+            PaneSplitter("##splitpreview", /*dragX=*/false, avail.x, span,
+                         layout.previewSplit, kPreviewSplitDefault);
+            DrawParamsPanel();   // fills whatever the preview left
+        }
+        ImGui::End();
+    }
+
+    void DrawMaterialPanel(ShaderEditorDocument* active)
+    {
+        if (active)
+        {
+            active->DrawMaterialWindow();
+            return;
+        }
+        // No material document open. The window is still submitted every frame
+        // so its dock tab stays put beside the Inspector rather than popping in
+        // and out of the node (which would churn the saved layout).
+        if (ImGui::Begin("Material"))
+            ImGui::TextDisabled("open a material to edit its parameters");
+        ImGui::End();
     }
 
     void ShaderEditorDocument::DrawToolbar()

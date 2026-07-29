@@ -77,6 +77,10 @@ namespace Arcane::Editor
         ViewportRect imageRect{};   // screen-space rect of the drawn image
         bool         hovered = false;
         bool         focused = false;
+        // True on the ONE frame this window became the visible tab (see the
+        // ImGui::IsWindowAppearing cite at the assignment site). Drives the
+        // center-tab -> side-panel focus follow, NOT input routing.
+        bool         appearing = false;
         uint32_t     desiredW = 0;  // content-region size (for OffscreenCanvas::Resize)
         uint32_t     desiredH = 0;
         bool         clicked = false;       // left-click landed inside the image this frame
