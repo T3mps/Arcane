@@ -342,6 +342,8 @@ async fn duplicate_project(path: String) -> Result<String, String> {
             args,
             favorite: false,
             missing: false,
+            // The freshly minted identity, never the original's.
+            guid: Some(dup.guid),
         },
     );
     state::save(&s)?;
@@ -374,10 +376,11 @@ fn relocate_project(path: String, new_path: String) -> Result<(), String> {
     // 0 = unknown, same as open_project: a manifest without a readable abi is
     // "no conflict provable", never a guessed number.
     let abi = resolve::manifest_abi(&manifest).unwrap_or(0);
+    let guid = resolve::manifest_guid(&manifest);
     let name = project::display_name(&new_path);
 
     let mut s = state::load();
-    if !state::relocate_recent(&mut s.recents, &path, &new_path, &name, abi) {
+    if !state::relocate_recent(&mut s.recents, &path, &new_path, &name, abi, guid) {
         return Err(format!("'{path}' is not in the project list"));
     }
     state::save(&s)
@@ -479,12 +482,15 @@ fn project_covers(paths: Vec<String>) -> HashMap<String, String> {
 
 /// What a Scan did, for the frontend's one-line report. Every count is
 /// surfaced -- a scan that silently dropped ambiguous folders or gave up on
-/// a budget would read as "found everything" when it did not.
+/// a budget would read as "found everything" when it did not. `relocated`
+/// counts missing entries healed onto a found project by guid: those rows
+/// un-greyed rather than appeared, which deserves its own word.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanReport {
     pub added: u32,
     pub already_listed: u32,
+    pub relocated: u32,
     pub ambiguous: u32,
     pub truncated: bool,
 }
@@ -508,6 +514,9 @@ async fn scan_for_projects(dir: String) -> Result<ScanReport, String> {
             state::RecentProject {
                 name: project::display_name(&path),
                 engine_abi: resolve::manifest_abi(m).unwrap_or(0),
+                // Read here so add_scanned can heal a moved project's missing
+                // entry onto this find instead of listing a stranger beside it.
+                guid: resolve::manifest_guid(m),
                 path,
                 last_opened_utc: "0".to_string(),
                 engine_id: None,
@@ -519,11 +528,17 @@ async fn scan_for_projects(dir: String) -> Result<ScanReport, String> {
         .collect();
 
     let mut s = state::load();
-    let (added, already_listed) = state::add_scanned(&mut s.recents, found);
-    if added > 0 {
+    let (added, already_listed, relocated) = state::add_scanned(&mut s.recents, found);
+    if added > 0 || relocated > 0 {
         state::save(&s)?;
     }
-    Ok(ScanReport { added, already_listed, ambiguous: outcome.ambiguous, truncated: outcome.truncated })
+    Ok(ScanReport {
+        added,
+        already_listed,
+        relocated,
+        ambiguous: outcome.ambiguous,
+        truncated: outcome.truncated,
+    })
 }
 
 #[tauri::command]
@@ -539,7 +554,9 @@ fn create_project(dir: String, name: String, engine_path: String) -> Result<Stri
     std::fs::create_dir_all(root.join("Content"))
         .map_err(|e| format!("could not create {}: {e}", root.display()))?;
 
-    let manifest = project::manifest_json(&name, info.engine_abi)?;
+    // A fresh identity at birth, same as the engine's own Project::Create --
+    // so a Hub-created project never needs the engine's open-time self-heal.
+    let manifest = project::manifest_json(&name, info.engine_abi, &project::new_guid())?;
     let file = root.join(format!("{name}.arcproj"));
     std::fs::write(&file, manifest).map_err(|e| format!("could not write {}: {e}", file.display()))?;
 

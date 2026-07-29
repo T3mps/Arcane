@@ -54,6 +54,10 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # closed to file protocols, and a couple of hundred KB of PNG per card does
 # not justify opening it.
 base64 = "0.22"
+# Fresh project identities: Duplicate regenerates the manifest's guid (a copy
+# is a NEW project) and create_project stamps one at birth. v4-only, matching
+# the engine's own Guid::Generate; already in tauri's dependency tree.
+uuid = { version = "1", features = ["v4"] }
 # HKCU registry writes for the .arcproj association self-heal (assoc.rs).
 # Exists because the NSIS-written command was UNQUOTED, and an unquoted
 # path through "...\AppData\Local\Arcane" -- our own data dir -- makes the

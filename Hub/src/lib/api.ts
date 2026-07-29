@@ -20,6 +20,12 @@ export type RecentProject = {
    * The row renders greyed with Locate/Remove instead of vanishing.
    */
   missing: boolean;
+  /**
+   * The manifest's project identity, recorded whenever Rust reads the
+   * manifest; null until then. Rust-side only (moved-project healing) --
+   * carried here because the two sides share one serialized shape.
+   */
+  guid: string | null;
 };
 
 export type EngineEntry = {
@@ -158,6 +164,12 @@ export const runningProjects = () => invoke<string[]>("running_projects");
 export type ScanReport = {
   added: number;
   alreadyListed: number;
+  /**
+   * Missing entries healed onto a found project by manifest guid: the moved
+   * project's row un-greyed in place, star and pin intact, instead of a
+   * stranger appearing beside it.
+   */
+  relocated: number;
   /** Folders holding MORE than one .arcproj; the engine refuses those. */
   ambiguous: number;
   /** The visit budget ran out before the tree did. */

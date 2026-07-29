@@ -61,6 +61,21 @@ pub struct RecentProject {
     /// `HubState::warnings`).
     #[serde(default)]
     pub missing: bool,
+
+    /// The manifest's `guid`, canonical form, recorded whenever a command
+    /// reads the manifest (launch, scan, locate, duplicate). None until then
+    /// -- including for projects whose manifest predates the field, which the
+    /// engine stamps at next open.
+    ///
+    /// This is the Hub's durable identity for a project: `heal_by_guid` uses
+    /// it to recognise a MOVED project at its new path and repoint the entry
+    /// in place -- keeping the star, the pin, the arguments, the history --
+    /// instead of minting a stranger row while the old one sits greyed
+    /// forever. Only a MISSING entry can be healed, so a hand-copied folder
+    /// (which carries the same guid while the original still exists) lists as
+    /// the separate project it is.
+    #[serde(default)]
+    pub guid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,22 +156,60 @@ pub fn project_dir_key(path: &str) -> String {
     }
 }
 
+/// Repoint the MISSING entry whose recorded guid matches onto the path where
+/// the project just turned up -- the moved-folder heal. The entry keeps its
+/// star, engine pin, arguments and history (relocate_recent's contract);
+/// no launcher in the field does this, they all make you re-add from scratch.
+///
+/// The one rule that keeps this out of the Unity productGUID trap: ONLY a
+/// missing entry heals. A guid match against an entry whose path still exists
+/// is a hand-copied folder, and merging would let the copy impersonate the
+/// original -- the caller lists it as the new project it is. `missing` is
+/// disk truth stamped by `load` on every read, so this stays pure.
+pub fn heal_by_guid(
+    v: &mut Vec<RecentProject>,
+    guid: &str,
+    new_path: &str,
+    new_name: &str,
+    new_abi: u32,
+) -> bool {
+    let Some(old_path) = v
+        .iter()
+        .find(|e| e.missing && e.guid.as_deref() == Some(guid))
+        .map(|e| e.path.clone())
+    else {
+        return false;
+    };
+    relocate_recent(v, &old_path, new_path, new_name, new_abi, Some(guid.to_string()))
+}
+
 /// Append every scanned entry whose project is not already listed, at the
 /// END: a bulk import must not bury the real recents under a wall of
-/// never-opened rows. Returns how many were added vs already present.
-pub fn add_scanned(v: &mut Vec<RecentProject>, found: Vec<RecentProject>) -> (u32, u32) {
+/// never-opened rows. A found project whose guid matches a MISSING entry
+/// heals that entry in place instead of appending a stranger beside it.
+/// Returns (added, already listed, relocated).
+pub fn add_scanned(v: &mut Vec<RecentProject>, found: Vec<RecentProject>) -> (u32, u32, u32) {
     let mut have: std::collections::HashSet<String> =
         v.iter().map(|e| project_dir_key(&e.path)).collect();
-    let (mut added, mut existing) = (0, 0);
+    let (mut added, mut existing, mut relocated) = (0, 0, 0);
     for entry in found {
-        if have.insert(project_dir_key(&entry.path)) {
+        let key = project_dir_key(&entry.path);
+        if have.contains(&key) {
+            existing += 1;
+        } else if entry
+            .guid
+            .as_deref()
+            .is_some_and(|g| heal_by_guid(v, g, &entry.path, &entry.name, entry.engine_abi))
+        {
+            have.insert(key);
+            relocated += 1;
+        } else {
+            have.insert(key);
             v.push(entry);
             added += 1;
-        } else {
-            existing += 1;
         }
     }
-    (added, existing)
+    (added, existing, relocated)
 }
 
 // Insert-or-move-to-front. Re-opening a project must refresh it, not duplicate
@@ -182,6 +235,11 @@ pub fn touch_recent(v: &mut Vec<RecentProject>, mut entry: RecentProject) {
         // about the star, so the previous value always wins. |= rather than
         // an if: unstarring is set_favorite's job, which edits in place.
         entry.favorite |= prev.favorite;
+        // The identity survives a caller that did not (or could not) read the
+        // manifest; a caller that DID read it wins, refreshing a stale value.
+        if entry.guid.is_none() {
+            entry.guid.clone_from(&prev.guid);
+        }
     }
 
     v.retain(|e| normalise_path(&e.path) != key);
@@ -227,6 +285,7 @@ pub fn relocate_recent(
     new_path: &str,
     new_name: &str,
     new_abi: u32,
+    new_guid: Option<String>,
 ) -> bool {
     let old_key = normalise_path(old_path);
     let new_key = normalise_path(new_path);
@@ -238,6 +297,11 @@ pub fn relocate_recent(
     v[i].name = new_name.to_string();
     v[i].engine_abi = new_abi;
     v[i].missing = false;
+    // Some = the manifest just read has an identity, record it. None = it does
+    // not (pre-guid manifest); keep whatever was known rather than forgetting.
+    if new_guid.is_some() {
+        v[i].guid = new_guid;
+    }
 
     // Retain by index so the entry just edited survives its own key check.
     let mut n = 0;
@@ -377,6 +441,7 @@ mod tests {
             args: String::new(),
             favorite: false,
             missing: false,
+            guid: None,
         }
     }
 
@@ -608,6 +673,7 @@ mod tests {
             "D:/Elsewhere/Old/Old.arcproj",
             "Old",
             8,
+            None,
         ));
         assert_eq!(v[0].path, "D:/Elsewhere/Old/Old.arcproj");
         assert_eq!(v[0].name, "Old");
@@ -631,7 +697,7 @@ mod tests {
     #[test]
     fn add_scanned_appends_only_unlisted_projects_at_the_end() {
         let mut v = vec![rp("C:/Games/Listed/Listed.arcproj", "9")];
-        let (added, existing) = add_scanned(
+        let (added, existing, relocated) = add_scanned(
             &mut v,
             vec![
                 // Same project, recorded folder-shaped: must count as existing.
@@ -639,7 +705,7 @@ mod tests {
                 rp("C:/Games/New/New.arcproj", "0"),
             ],
         );
-        assert_eq!((added, existing), (1, 1));
+        assert_eq!((added, existing, relocated), (1, 1, 0));
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].path, "C:/Games/Listed/Listed.arcproj", "recents stay on top");
         assert_eq!(v[1].path, "C:/Games/New/New.arcproj", "imports append at the end");
@@ -648,7 +714,7 @@ mod tests {
     #[test]
     fn add_scanned_dedupes_within_one_scan_too() {
         let mut v = Vec::new();
-        let (added, existing) = add_scanned(
+        let (added, existing, _) = add_scanned(
             &mut v,
             vec![rp("C:/G/A/A.arcproj", "0"), rp("C:/G/A", "0")],
         );
@@ -696,6 +762,7 @@ mod tests {
             "D:/Elsewhere/Old/Old.arcproj",
             "Old",
             8,
+            None,
         ));
         assert!(v[0].favorite, "moving a folder does not change what the user starred");
     }
@@ -731,7 +798,7 @@ mod tests {
         let mut v = Vec::new();
         touch_recent(&mut v, rp("C:/gone", "1"));
         touch_recent(&mut v, rp("C:/found/G.arcproj", "2"));
-        assert!(relocate_recent(&mut v, "C:/gone", "c:\\found\\G.arcproj", "G", 7));
+        assert!(relocate_recent(&mut v, "C:/gone", "c:\\found\\G.arcproj", "G", 7, None));
         assert_eq!(v.len(), 1);
         // The RELOCATED entry is the survivor, spelled as the caller passed it.
         assert_eq!(v[0].path, "c:\\found\\G.arcproj");
@@ -740,7 +807,118 @@ mod tests {
     #[test]
     fn relocate_recent_reports_an_unknown_project() {
         let mut v = Vec::new();
-        assert!(!relocate_recent(&mut v, "C:/a", "C:/b", "b", 7));
+        assert!(!relocate_recent(&mut v, "C:/a", "C:/b", "b", 7, None));
+    }
+
+    const GUID: &str = "a5e0c1de-1111-4222-8333-444455556666";
+
+    fn rp_guided(path: &str, when: &str, guid: &str, missing: bool) -> RecentProject {
+        let mut e = rp(path, when);
+        e.guid = Some(guid.to_string());
+        e.missing = missing;
+        e
+    }
+
+    #[test]
+    fn heal_by_guid_repoints_a_missing_entry_and_keeps_its_metadata() {
+        // The moved-folder story: the entry went missing, the project turned up
+        // elsewhere with the same guid -- everything the user set survives.
+        let mut v = vec![rp_guided("C:/Games/Old/Old.arcproj", "5", GUID, true)];
+        v[0].favorite = true;
+        v[0].engine_id = Some("eng-1".into());
+        v[0].args = "--frames 3".into();
+
+        assert!(heal_by_guid(&mut v, GUID, "D:/New/Old/Old.arcproj", "Old", 8));
+        assert_eq!(v.len(), 1, "healed, not duplicated");
+        assert_eq!(v[0].path, "D:/New/Old/Old.arcproj");
+        assert!(!v[0].missing);
+        assert!(v[0].favorite, "the star survives the move");
+        assert_eq!(v[0].engine_id.as_deref(), Some("eng-1"), "the pin survives");
+        assert_eq!(v[0].args, "--frames 3", "the arguments survive");
+        assert_eq!(v[0].last_opened_utc, "5", "healing is not opening");
+        assert_eq!(v[0].guid.as_deref(), Some(GUID));
+    }
+
+    #[test]
+    fn heal_by_guid_refuses_a_hand_copy_of_a_living_project() {
+        // THE anti-Unity rule: same guid at a new path while the original still
+        // exists on disk (missing == false) is a hand-copied folder. Healing
+        // would let the copy steal the original's entry.
+        let mut v = vec![rp_guided("C:/Games/G/G.arcproj", "5", GUID, false)];
+        assert!(!heal_by_guid(&mut v, GUID, "C:/Copies/G/G.arcproj", "G", 8));
+        assert_eq!(v[0].path, "C:/Games/G/G.arcproj", "the original entry is untouched");
+    }
+
+    #[test]
+    fn heal_by_guid_needs_a_recorded_guid_to_match() {
+        // An entry from before the guid landed (or never launched since) has
+        // None recorded; it cannot be healed, only Located by hand.
+        let mut v = vec![rp("C:/Games/Old/Old.arcproj", "5")];
+        v[0].missing = true;
+        assert!(!heal_by_guid(&mut v, GUID, "D:/New/Old/Old.arcproj", "Old", 8));
+    }
+
+    #[test]
+    fn add_scanned_heals_a_missing_entry_instead_of_appending_a_stranger() {
+        let mut v = vec![rp_guided("C:/Games/Moved/Moved.arcproj", "5", GUID, true)];
+        v[0].favorite = true;
+
+        let (added, existing, relocated) = add_scanned(
+            &mut v,
+            vec![
+                rp_guided("D:/Found/Moved/Moved.arcproj", "0", GUID, false),
+                rp("D:/Found/Fresh/Fresh.arcproj", "0"),
+            ],
+        );
+        assert_eq!((added, existing, relocated), (1, 0, 1));
+        assert_eq!(v.len(), 2, "one healed in place, one appended");
+        assert_eq!(v[0].path, "D:/Found/Moved/Moved.arcproj", "healed, in its old position");
+        assert!(v[0].favorite, "with its star");
+        assert_eq!(v[1].path, "D:/Found/Fresh/Fresh.arcproj");
+    }
+
+    #[test]
+    fn add_scanned_lists_a_hand_copy_as_its_own_project() {
+        // Scan finds a copied folder while the original is alive and listed:
+        // same guid, but the original is not missing -- two rows is the truth.
+        let mut v = vec![rp_guided("C:/Games/G/G.arcproj", "5", GUID, false)];
+        let (added, existing, relocated) =
+            add_scanned(&mut v, vec![rp_guided("C:/Copies/G/G.arcproj", "0", GUID, false)]);
+        assert_eq!((added, existing, relocated), (1, 0, 0));
+        assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn touch_recent_carries_the_guid_and_lets_a_fresh_read_win() {
+        let mut v = vec![rp_guided("C:/G/G.arcproj", "1", GUID, false)];
+        // A toucher that could not read the manifest keeps the known identity...
+        touch_recent(&mut v, rp("C:/G/G.arcproj", "2"));
+        assert_eq!(v[0].guid.as_deref(), Some(GUID));
+        // ...and one that did read it refreshes.
+        let other = "b6f1d2ef-2222-4333-9444-555566667777";
+        touch_recent(&mut v, rp_guided("C:/G/G.arcproj", "3", other, false));
+        assert_eq!(v[0].guid.as_deref(), Some(other));
+    }
+
+    #[test]
+    fn relocate_recent_records_a_guid_but_never_forgets_one() {
+        let mut v = vec![rp_guided("C:/old", "1", GUID, true)];
+        // Locate onto a pre-guid manifest: None must not erase what is known.
+        assert!(relocate_recent(&mut v, "C:/old", "C:/new", "N", 8, None));
+        assert_eq!(v[0].guid.as_deref(), Some(GUID));
+        // Locate onto a stamped manifest: the fresh read wins.
+        let other = "b6f1d2ef-2222-4333-9444-555566667777";
+        assert!(relocate_recent(&mut v, "C:/new", "C:/newer", "N", 8, Some(other.into())));
+        assert_eq!(v[0].guid.as_deref(), Some(other));
+    }
+
+    #[test]
+    fn a_recents_file_written_before_guids_existed_loads_none() {
+        let back: Vec<RecentProject> = serde_json::from_str(
+            r#"[{"path":"C:/a","name":"N","lastOpenedUtc":"1","engineAbi":7}]"#,
+        )
+        .unwrap();
+        assert_eq!(back[0].guid, None);
     }
 
     #[test]

@@ -33,6 +33,30 @@ pub fn manifest_abi(project_path: &Path) -> Option<u32> {
     project::parse_manifest_abi(&std::fs::read_to_string(file).ok()?)
 }
 
+/// The project's durable identity, read from its manifest and canonicalised.
+///
+/// None = no usable identity: no manifest, ambiguous folder, or a manifest
+/// that predates the guid field (the engine self-heals those at open time,
+/// so absence is a temporary state, not a fault). This is the key the Hub
+/// uses to recognise a MOVED project -- see state::heal_by_guid for the rule
+/// that keeps a hand-copied folder from impersonating the original.
+pub fn manifest_guid(project_path: &Path) -> Option<String> {
+    let file = if project_path.extension().is_some_and(|e| {
+        e.eq_ignore_ascii_case(project::MANIFEST_EXT)
+    }) {
+        project_path.to_path_buf()
+    } else {
+        let names: Vec<String> = std::fs::read_dir(project_path)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        project_path.join(project::pick_manifest(&names)?)
+    };
+    project::parse_manifest_guid(&std::fs::read_to_string(file).ok()?)
+}
+
 /// The FOLDER a project lives in: the parent of its .arcproj, or the recorded
 /// path itself when the entry is folder-shaped (how opens were recorded before
 /// the dialog asked for a manifest). Paired with `projectDir` in
@@ -47,7 +71,7 @@ pub fn project_dir(p: &Path) -> PathBuf {
 /// A recorded path resolved to (project root, manifest file).
 ///
 /// Applies the engine's own rule for a folder: exactly one .arcproj, or it is
-/// ambiguous and refused (Project.cpp:29-41). Renaming a project we could not
+/// ambiguous and refused (Project.cpp:142-160). Renaming a project we could not
 /// unambiguously identify would rename the wrong thing.
 pub fn resolve_project(recorded: &Path) -> Result<(PathBuf, PathBuf), String> {
     if recorded.is_file() {
@@ -217,14 +241,18 @@ pub struct Duplicated {
     pub name: String,
     pub manifest: PathBuf,
     pub abi: u32,
+    /// The copy's OWN identity, freshly minted -- never the original's.
+    pub guid: String,
 }
 
 /// The disk half of Duplicate: copy the project beside itself into the first
 /// free "X Copy" / "X Copy N" slot (skipping build output and .git at any
 /// depth -- project::DUPLICATE_SKIP has the reasoning per name), rename the
-/// manifest and the name inside it. Asset GUIDs copy as-is: they live in
-/// asset files/.meta sidecars and are scoped to the project's own registry,
-/// which rescans on open, so two projects holding the same GUIDs never meet.
+/// manifest and the name inside it, and REGENERATE its guid: a copy is a new
+/// project, and two manifests sharing one identity is the Unity productGUID
+/// trap. Asset GUIDs, by contrast, copy as-is: they live in asset files/.meta
+/// sidecars and are scoped to the project's own registry, which rescans on
+/// open, so two projects holding the same asset GUIDs never meet.
 /// Any failure past the first write removes new_root -- it did not exist
 /// before this call, so the remove can only take the partial copy just made.
 pub fn duplicate_project_files(recorded: &Path) -> Result<Duplicated, String> {
@@ -257,7 +285,9 @@ pub fn duplicate_project_files(recorded: &Path) -> Result<Duplicated, String> {
     // been created yet).
     let text = std::fs::read_to_string(&manifest)
         .map_err(|e| format!("could not read {}: {e}", manifest.display()))?;
-    let edited = project::rename_in_manifest(&text, &new_name)?;
+    let fresh_guid = project::new_guid();
+    let edited =
+        project::set_guid_in_manifest(&project::rename_in_manifest(&text, &new_name)?, &fresh_guid)?;
 
     let fail = |e: String| {
         let _ = std::fs::remove_dir_all(&new_root);
@@ -281,6 +311,7 @@ pub fn duplicate_project_files(recorded: &Path) -> Result<Duplicated, String> {
         name: new_name,
         manifest: new_manifest,
         abi: project::parse_manifest_abi(&edited).unwrap_or(0),
+        guid: fresh_guid,
     })
 }
 
@@ -297,9 +328,13 @@ mod tests {
         dir
     }
 
+    // A fixed identity for fixtures; tests that care about regeneration
+    // assert against this exact value.
+    const SRC_GUID: &str = "a5e0c1de-1111-4222-8333-444455556666";
+
     fn write_manifest(dir: &Path, name: &str, abi: u32) -> PathBuf {
         let m = dir.join(format!("{name}.arcproj"));
-        std::fs::write(&m, project::manifest_json(name, abi).unwrap()).unwrap();
+        std::fs::write(&m, project::manifest_json(name, abi, SRC_GUID).unwrap()).unwrap();
         m
     }
 
@@ -408,7 +443,7 @@ mod tests {
     fn duplicate_project_files_copies_renames_and_numbers_slots() {
         let dir = scratch("dup");
         let src = mk(&dir, "G");
-        std::fs::write(src.join("G.arcproj"), project::manifest_json("G", 8).unwrap()).unwrap();
+        std::fs::write(src.join("G.arcproj"), project::manifest_json("G", 8, SRC_GUID).unwrap()).unwrap();
         std::fs::create_dir_all(src.join("Content")).unwrap();
         std::fs::write(src.join("Content/level.ascene"), b"scene").unwrap();
         std::fs::create_dir_all(src.join("Binaries")).unwrap();
@@ -423,6 +458,12 @@ mod tests {
         assert!(text.contains("\"G Copy\""), "the name inside is rewritten: {text}");
         assert!(dir.join("G Copy/Content/level.ascene").is_file(), "content travels");
         assert!(!dir.join("G Copy/Binaries").exists(), "build output does not");
+
+        // The copy is a NEW project: its manifest carries a fresh, valid guid,
+        // never the original's (the Unity productGUID trap).
+        let copy_guid = project::parse_manifest_guid(&text).expect("the copy has a valid guid");
+        assert_ne!(copy_guid, SRC_GUID, "identity must be regenerated, not copied");
+        assert_eq!(dup.guid, copy_guid, "the returned guid is the one on disk");
 
         // The next duplicate takes the next slot.
         let dup2 = duplicate_project_files(&src).unwrap();

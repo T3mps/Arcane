@@ -44,7 +44,7 @@ pub const MANIFEST_EXT: &str = "arcproj";
 
 /// Pick the single manifest out of a folder's file names, or None.
 ///
-/// Mirrors `Project::Open` (Project.cpp:29-41): a folder with two `.arcproj`
+/// Mirrors `Project::Open` (Project.cpp:142-160): a folder with two `.arcproj`
 /// files is AMBIGUOUS and the engine refuses it, so the Hub must not guess
 /// either. Pure so the rule is testable without a filesystem.
 pub fn pick_manifest(names: &[String]) -> Option<&str> {
@@ -77,6 +77,73 @@ pub fn parse_manifest_abi(text: &str) -> Option<u32> {
     // u64 first, then narrow: a negative or fractional abi is malformed, not 0.
     let n = doc.get("engine")?.get("abi")?.as_u64()?;
     u32::try_from(n).ok()
+}
+
+/// A fresh project identity: RFC-4122 v4, canonical lowercase 8-4-4-4-12 --
+/// the same layout the engine's `Guid::Generate` emits (Guid.cpp:95), so a
+/// guid minted on either side of the process boundary is indistinguishable.
+pub fn new_guid() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// Canonicalise guid text, or None if it is not a guid.
+///
+/// MIRROR of the engine's `Guid::FromString` + `ToString` (Guid.cpp:54-93):
+/// dashes and braces are tolerated and case is ignored on the way in, exactly
+/// 32 hex digits are required, and the way out is lowercase 8-4-4-4-12. The
+/// Hub compares guids as strings, so BOTH sides must collapse every accepted
+/// spelling to the same canonical form -- change this and Guid.cpp together.
+pub fn normalise_guid(s: &str) -> Option<String> {
+    let mut hex = String::with_capacity(32);
+    for c in s.chars() {
+        match c {
+            '-' | '{' | '}' => continue,
+            c if c.is_ascii_hexdigit() => {
+                if hex.len() >= 32 {
+                    return None; // too many digits
+                }
+                hex.push(c.to_ascii_lowercase());
+            }
+            _ => return None, // non-hex char
+        }
+    }
+    if hex.len() != 32 {
+        return None; // too few digits
+    }
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    ))
+}
+
+/// Read the project identity out of a `.arcproj` document, canonicalised.
+///
+/// None for a manifest that predates the field OR carries a mangled value --
+/// both mean "this project has no usable identity yet", and the engine's
+/// Open-time self-heal stamps a fresh one in either case, so treating them
+/// alike here matches what the file is about to become.
+pub fn parse_manifest_guid(text: &str) -> Option<String> {
+    let doc: serde_json::Value = serde_json::from_str(text).ok()?;
+    normalise_guid(doc.get("guid")?.as_str()?)
+}
+
+/// Rewrite only the `guid` field of a `.arcproj` document -- same contract as
+/// `rename_in_manifest` below: every other key, their order, and any field a
+/// newer engine added all survive. Duplicate uses this because a copied
+/// project MUST NOT keep the original's identity (the Unity trap: hand-copied
+/// projects sharing a productGUID confuse every tool that trusts it).
+pub fn set_guid_in_manifest(text: &str, guid: &str) -> Result<String, String> {
+    let mut doc: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("the .arcproj is not valid JSON: {e}"))?;
+    let obj = doc
+        .as_object_mut()
+        .ok_or_else(|| "the .arcproj is not a JSON object".to_string())?;
+    obj.insert("guid".to_string(), serde_json::Value::String(guid.to_string()));
+    serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
 }
 
 /// Split a typed argument string into argv tokens.
@@ -238,14 +305,16 @@ pub fn rename_in_manifest(text: &str, new_name: &str) -> Result<String, String> 
     serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
 }
 
-pub fn manifest_json(name: &str, engine_abi: u32) -> Result<String, String> {
+pub fn manifest_json(name: &str, engine_abi: u32, guid: &str) -> Result<String, String> {
     // serde_json, not string concatenation -- a project name with a quote in it
-    // must not produce a corrupt manifest.
+    // must not produce a corrupt manifest. The guid is a PARAMETER so this stays
+    // pure and the caller's `new_guid()` is the one non-deterministic input.
     let doc = json!({
         "formatVersion": FORMAT_VERSION,
         "name": name,
         "description": "",
-        "engine": { "abi": engine_abi }
+        "engine": { "abi": engine_abi },
+        "guid": guid
     });
     serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
 }
@@ -255,9 +324,12 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    // A fixed identity for manifest fixtures; generation is the caller's job.
+    const G: &str = "a5e0c1de-1111-4222-8333-444455556666";
+
     #[test]
     fn manifest_has_the_three_required_fields() {
-        let v: serde_json::Value = serde_json::from_str(&manifest_json("MyGame", 7).unwrap()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&manifest_json("MyGame", 7, G).unwrap()).unwrap();
         assert!(v["formatVersion"].as_i64().unwrap() > 0);
         assert_eq!(v["name"], "MyGame");
         assert_eq!(v["engine"]["abi"], 7);
@@ -267,19 +339,19 @@ mod tests {
     fn manifest_stamps_the_probed_abi_not_a_constant() {
         // The whole reason slice 1's probe exists. A hardcoded ABI mints
         // projects that crash on open the moment the engine bumps.
-        let v: serde_json::Value = serde_json::from_str(&manifest_json("G", 42).unwrap()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&manifest_json("G", 42, G).unwrap()).unwrap();
         assert_eq!(v["engine"]["abi"], 42);
     }
 
     #[test]
     fn manifest_omits_game_module_for_a_content_only_project() {
-        let v: serde_json::Value = serde_json::from_str(&manifest_json("G", 7).unwrap()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&manifest_json("G", 7, G).unwrap()).unwrap();
         assert!(v.get("gameModule").is_none());
     }
 
     #[test]
     fn manifest_escapes_names_safely() {
-        let text = manifest_json("My \"Game\"", 7).unwrap();
+        let text = manifest_json("My \"Game\"", 7, G).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).expect("must stay valid JSON");
         assert_eq!(v["name"], "My \"Game\"");
     }
@@ -296,7 +368,7 @@ mod tests {
 
     #[test]
     fn pick_manifest_refuses_an_ambiguous_folder() {
-        // Project.cpp:37 returns nullopt here; guessing would pick a different
+        // Project.cpp:159 returns nullopt here; guessing would pick a different
         // project than the engine will.
         let n = names(&["A.arcproj", "B.arcproj"]);
         assert_eq!(pick_manifest(&n), None);
@@ -321,7 +393,7 @@ mod tests {
 
     #[test]
     fn parse_manifest_abi_reads_the_built_against_abi() {
-        let text = manifest_json("G", 5).unwrap();
+        let text = manifest_json("G", 5, G).unwrap();
         assert_eq!(parse_manifest_abi(&text), Some(5));
     }
 
@@ -579,8 +651,101 @@ mod tests {
 
     #[test]
     fn manifest_survives_a_backslash_in_the_name() {
-        let text = manifest_json("A\\B", 7).unwrap();
+        let text = manifest_json("A\\B", 7, G).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).expect("must stay valid JSON");
         assert_eq!(v["name"], "A\\B");
+    }
+
+    #[test]
+    fn manifest_stamps_the_guid_it_was_handed() {
+        let v: serde_json::Value = serde_json::from_str(&manifest_json("G", 7, G).unwrap()).unwrap();
+        assert_eq!(v["guid"], G);
+    }
+
+    #[test]
+    fn new_guid_is_canonical_and_v4() {
+        let g = new_guid();
+        // Round-trips the normaliser unchanged: already lowercase 8-4-4-4-12.
+        assert_eq!(normalise_guid(&g), Some(g.clone()));
+        // RFC-4122 layout, matching the engine's Generate(): version nibble 4
+        // (string index 14) and variant top bits 10 (index 19 in [89ab]).
+        let b: Vec<char> = g.chars().collect();
+        assert_eq!(b[14], '4');
+        assert!(matches!(b[19], '8' | '9' | 'a' | 'b'), "variant char was {}", b[19]);
+        assert_ne!(new_guid(), g, "two mints must differ");
+    }
+
+    // MIRROR of Guid::FromString/ToString (Guid.cpp:54-93): the same spellings
+    // the engine accepts, collapsed to the same canonical form. A drift here
+    // makes the Hub blind to a guid the engine considers valid, or vice versa.
+    #[test]
+    fn normalise_guid_mirrors_the_engines_tolerance() {
+        let canon = "a5e0c1de-1111-4222-8333-444455556666";
+        assert_eq!(normalise_guid(canon).as_deref(), Some(canon), "canonical passes through");
+        assert_eq!(
+            normalise_guid("A5E0C1DE-1111-4222-8333-444455556666").as_deref(),
+            Some(canon),
+            "case-insensitive in, lowercase out"
+        );
+        assert_eq!(
+            normalise_guid("{a5e0c1de-1111-4222-8333-444455556666}").as_deref(),
+            Some(canon),
+            "braces tolerated"
+        );
+        assert_eq!(
+            normalise_guid("a5e0c1de111142228333444455556666").as_deref(),
+            Some(canon),
+            "bare 32 hex digits re-grouped"
+        );
+    }
+
+    #[test]
+    fn normalise_guid_refuses_what_the_engine_refuses() {
+        assert_eq!(normalise_guid(""), None, "too few digits");
+        assert_eq!(normalise_guid("a5e0c1de-1111-4222-8333-44445555666"), None, "31 digits");
+        assert_eq!(normalise_guid("a5e0c1de-1111-4222-8333-4444555566667"), None, "33 digits");
+        assert_eq!(normalise_guid("g5e0c1de-1111-4222-8333-444455556666"), None, "non-hex char");
+        assert_eq!(normalise_guid("a5e0c1de 1111 4222 8333 444455556666"), None, "spaces are not dashes");
+    }
+
+    #[test]
+    fn parse_manifest_guid_reads_and_canonicalises() {
+        let text = manifest_json("G", 7, "{A5E0C1DE-1111-4222-8333-444455556666}").unwrap();
+        assert_eq!(
+            parse_manifest_guid(&text).as_deref(),
+            Some("a5e0c1de-1111-4222-8333-444455556666")
+        );
+    }
+
+    #[test]
+    fn parse_manifest_guid_is_none_for_absent_or_mangled_shapes() {
+        // None = "no usable identity yet" -- the engine's self-heal is about to
+        // stamp a fresh one, so a mangled value must read the same as absence.
+        assert_eq!(parse_manifest_guid(r#"{"formatVersion":1,"name":"G"}"#), None);
+        assert_eq!(parse_manifest_guid(r#"{"guid":"not-a-guid"}"#), None);
+        assert_eq!(parse_manifest_guid(r#"{"guid":42}"#), None);
+        assert_eq!(parse_manifest_guid("not json"), None);
+    }
+
+    #[test]
+    fn set_guid_in_manifest_replaces_only_the_guid() {
+        let before = r#"{"formatVersion":1,"name":"Old","guid":"a5e0c1de-1111-4222-8333-444455556666",
+                         "zzzFutureField":42}"#;
+        let after = set_guid_in_manifest(before, "b6f1d2ef-2222-4333-9444-555566667777").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v["guid"], "b6f1d2ef-2222-4333-9444-555566667777");
+        assert_eq!(v["name"], "Old");
+        assert_eq!(v["zzzFutureField"], 42, "a field a newer engine added must survive");
+        // preserve_order, same rule as rename_in_manifest.
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        assert_eq!(keys, ["formatVersion", "name", "guid", "zzzFutureField"]);
+    }
+
+    #[test]
+    fn set_guid_in_manifest_adds_the_guid_when_it_is_missing() {
+        // The duplicate of a pre-guid project still gets its own identity.
+        let after = set_guid_in_manifest(r#"{"formatVersion":1,"name":"G"}"#, G).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v["guid"], G);
     }
 }

@@ -312,6 +312,17 @@ pub fn do_open_project(
     // incompatible. 0 = unknown, which isCompatible treats as "no conflict
     // provable" rather than as a fault.
     let abi = resolve::manifest_abi(&proj).unwrap_or(0);
+
+    // The manifest's identity, and the moved-folder heal it enables: launching
+    // a project at a NEW path (shell double-click after a move is the common
+    // case) repoints the old missing entry -- star, pin, arguments intact --
+    // and the touch below then carries all of that forward, instead of a
+    // stranger row appearing while the old one sits greyed forever.
+    let guid = resolve::manifest_guid(&proj);
+    if let Some(g) = &guid {
+        state::heal_by_guid(&mut s.recents, g, &proj.to_string_lossy(), &name, abi);
+    }
+
     state::touch_recent(
         &mut s.recents,
         state::RecentProject {
@@ -333,6 +344,9 @@ pub fn do_open_project(
             // The project was just found on disk to launch; load() re-stamps
             // this on every read regardless.
             missing: false,
+            // The identity read above; None (pre-guid manifest) lets
+            // touch_recent keep whatever was already known.
+            guid,
         },
     );
     state::save(&s)?;
@@ -452,6 +466,7 @@ mod tests {
             args: String::new(),
             favorite: false,
             missing: false,
+            guid: None,
         }
     }
 

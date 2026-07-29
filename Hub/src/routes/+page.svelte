@@ -194,7 +194,7 @@
 
   // Pick the .arcproj FILE, not the containing folder. Project::Open accepts
   // both, but a folder holding two manifests is ambiguous and it bails --
-  // Project.cpp:37 returns nullopt, asserted by ProjectTest.cpp:52. Picking the
+  // Project.cpp:159 returns nullopt, asserted by ProjectTest.cpp:52. Picking the
   // file names the project unambiguously, and it is what the editor's own Open
   // dialog already asks for (EditorApp.cpp:1309 filters "Arcane Project"/arcproj).
   const addProject = () => guard(async () => {
@@ -228,6 +228,9 @@
     if (!dir) return;
     const r = await scanForProjects(dir);
     const bits = [`added ${r.added} ${r.added === 1 ? "project" : "projects"}`];
+    if (r.relocated > 0) {
+      bits.push(`relocated ${r.relocated} moved ${r.relocated === 1 ? "project" : "projects"}`);
+    }
     if (r.alreadyListed > 0) bits.push(`${r.alreadyListed} already listed`);
     if (r.ambiguous > 0) {
       bits.push(`skipped ${r.ambiguous} ${r.ambiguous === 1 ? "folder" : "folders"} holding more than one .arcproj`);
