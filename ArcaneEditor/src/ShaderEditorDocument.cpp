@@ -1,6 +1,7 @@
 #include "ShaderEditorDocument.hpp"
 
 #include "AssetBrowser.hpp"
+#include "EditorTheme.hpp"
 #include "GraphGridPass.hpp"
 #include "MaterialParamWidgets.hpp"
 
@@ -141,7 +142,7 @@ namespace Arcane::Editor
 
         // -------------------------------------------------------------------
         // GRAPH CANVAS PALETTE -- the single place the canvas and node colors
-        // live, on the same rule EditorWidgets.cpp:239-251 states for the
+        // live, on the same rule EditorWidgets.cpp:239-253 states for the
         // inspector's constants: no magic colors inside draw calls.
         //
         // All values are DISPLAY-REFERRED: ImGui draws post-tonemap into the
@@ -152,7 +153,12 @@ namespace Arcane::Editor
         // canvas, a node body one step above it, a title band one step below
         // the body, a border one step above the body again.
         // -------------------------------------------------------------------
-        constexpr ImVec4 kCanvasColor      = ImVec4(0.118f, 0.118f, 0.118f, 1.0f); // #1e1e1e
+        // The canvas surface IS the editor's panel tone, not a second opinion
+        // about it: a graph document's body is the same flat dark surface every
+        // other panel body is. Referencing the theme constant keeps them from
+        // drifting apart; the value is unchanged (#1e1e1e), so the approved
+        // canvas look is untouched.
+        constexpr ImVec4 kCanvasColor      = Theme::kPanel;                        // #1e1e1e
         constexpr ImVec4 kGridMinorColor   = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
         constexpr ImVec4 kGridMajorColor   = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
         constexpr ImVec4 kNodeBodyColor    = ImVec4(0.176f, 0.176f, 0.188f, 1.0f); // #2d2d30
@@ -2339,7 +2345,7 @@ namespace Arcane::Editor
             return;
         }
         // Severity rides BOTH the log level and the row text: the Console panel
-        // renders the sink's payload only (EditorApp.cpp:478-482, and the panel
+        // renders the sink's payload only (EditorApp.cpp:494-497, and the panel
         // at EditorPanels.cpp:288-297 prints it verbatim), so a level
         // alone would be invisible there. The material name is the source tag.
         ForEachDiagnosticRow([&](bool isError, const std::string& row)
@@ -3626,7 +3632,7 @@ namespace Arcane::Editor
         // (SGraphNode.cpp:1596-1607 -- the `&& !InlineEditableText->IsInEditMode()`
         // term). It matters MORE here than it does in UE. StableTextEdit parks
         // the typed text in m_textEdit and only commits on a
-        // deactivate-after-edit it can SEE (EditorWidgets.cpp:477-486); a field
+        // deactivate-after-edit it can SEE (EditorWidgets.cpp:479-488); a field
         // that stops being submitted mid-edit never reports one, so the typed
         // text would be silently dropped when the node came back. Wheel-zoom
         // while a name field has focus is exactly that gesture.

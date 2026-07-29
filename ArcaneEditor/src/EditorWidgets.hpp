@@ -103,7 +103,7 @@ namespace Arcane::Editor
     };
 
     // UE's Details treatment for CollapsingHeader/TreeNodeEx: a muted dark
-    // band in place of the theme's default bright-blue ImGuiCol_Header.
+    // band in place of ImGuiCol_Header (the editor theme's selection accent).
     // Scope it TIGHT around the header call only -- the band colors must not
     // leak into tooltips/popups, which read the theme's own ImGuiCol_* set.
     //

@@ -22,6 +22,7 @@
 
 #include "EditorApp.hpp"
 #include "EditorFonts.hpp"
+#include "EditorTheme.hpp"
 #include "SpriteDocument.hpp"
 
 #include <ProjectBoot.hpp>
@@ -117,6 +118,12 @@ namespace Arcane::Editor
         // a dockspace + panels in MainLoop) and route the engine logger into the
         // Console panel's ring buffer.
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        // The editor's own look, on the editor's context and nothing else: the
+        // three-tone monochrome ramp with near-black field wells (EditorTheme.hpp).
+        // Before this call the editor ran on ImGui's stock dark style, whose whole
+        // interactive family is bright blue. It must run before the first frame --
+        // ImGuiStyle is read live during widget submission, not latched.
+        Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
         InstallConsoleSink();
 
         // Editor fonts: Roboto base + merged lucide icons, on the editor context

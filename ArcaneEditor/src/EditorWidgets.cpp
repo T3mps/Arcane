@@ -238,14 +238,16 @@ namespace Arcane::Editor
 
         // ---------------------------------------------------------------------
         // Header bands (UE's Details treatment for CollapsingHeader/TreeNodeEx:
-        // a muted dark band in place of the theme's default bright-blue
-        // ImGuiCol_Header). Beside the axis palette per Section 2's rule that
-        // inspector style constants live in one place.
+        // a muted dark band in place of ImGuiCol_Header, which the editor theme
+        // spends on SELECTION -- EditorTheme.hpp). Beside the axis palette per
+        // Section 2's rule that inspector style constants live in one place.
         // ---------------------------------------------------------------------
 
         // Sampled off the UE reference screenshot, same as kAxisBarColors --
         // desk call, not measured off UE pixels. Hover/active step up in
-        // lightness so the row still visibly responds to input.
+        // lightness so the row still visibly responds to input. They sit ABOVE
+        // the theme's panel tone (#1e1e1e, EditorTheme.hpp kPanel), so the band
+        // still reads as raised against the body it heads.
         constexpr ImU32 kHeaderBandColor        = IM_COL32(48, 48, 52, 255);
         constexpr ImU32 kHeaderBandHoveredColor = IM_COL32(58, 58, 64, 255);
         constexpr ImU32 kHeaderBandActiveColor  = IM_COL32(66, 66, 73, 255);
