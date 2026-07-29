@@ -1,9 +1,9 @@
 #pragma once
 // EditorApp: the editor application. Constructed in main from a HostConfig
-// (shared with Loom); Run() drives Init -> the frame loop -> Shutdown.
+// (shared with ArcaneRuntime); Run() drives Init -> the frame loop -> Shutdown.
 // Member declaration order m_gpu -> m_runtime -> m_plugin is the TEARDOWN
 // CONTRACT (destruct reverse: plugin Unload while the DLL is still mapped ->
-// runtime -> render stack in GpuContext -> window last). Mirrors Loom.
+// runtime -> render stack in GpuContext -> window last). Mirrors ArcaneRuntime.
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -306,7 +306,7 @@ namespace Arcane::Editor
         // each frame.
         bool m_gizmoCapturedClick = false;
 
-        // Scene-in-a-panel viewport: the same canvas->batcher->tonemap path Loom
+        // Scene-in-a-panel viewport: the same canvas->batcher->tonemap path ArcaneRuntime
         // drives the backbuffer with, rendered into a panel texture instead. Resized
         // to the Viewport panel's content region each frame; input into the plugin
         // is gated on m_viewportActive and remapped through m_viewportRect (see

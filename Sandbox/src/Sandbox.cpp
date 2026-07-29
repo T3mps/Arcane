@@ -183,7 +183,7 @@ extern "C"
         // Push the plugin-owned camera to the engine BEFORE render: SetRenderContext
         // (called by the host after this Update phase) writes it into RenderContext2D,
         // so RenderSubmissionSystem + DrawPhysicsDebug apply the SAME world*scale+offset
-        // transform (sprites + debug overlay pan/zoom together). Loom stays camera-agnostic.
+        // transform (sprites + debug overlay pan/zoom together). ArcaneRuntime stays camera-agnostic.
         //
         // We push WorldToScreenScale() (== kPixelsPerMeter * zoom), NOT the raw zoom: the
         // engine's `zoom` field means world->SCREEN scale (it is unit-agnostic), so the

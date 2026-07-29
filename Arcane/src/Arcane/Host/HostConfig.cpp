@@ -4,12 +4,12 @@ namespace Arcane
 {
     HostConfig::ParseOutcome HostConfig::Parse(int argc, char** argv)
     {
-        Cli cli{ "Arcane Loom", "M5 plugin host" };
+        Cli cli{ "Arcane Runtime", "M5 plugin host" };
         cli.Option("backend", "dx12",        "graphics backend: dx12|vulkan").Choices({ "dx12", "vulkan" });
         cli.Option("frames",  "0",           "render N frames then exit").Type(CliType::Uint);
         cli.Flag  ("no-vsync",               "present without vsync");
         cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
-        cli.Option("plugin",  "",            "game DLL to host (empty = host default: Loom Sandbox.dll, editor none)");
+        cli.Option("plugin",  "",            "game DLL to host (empty = host default: ArcaneRuntime Sandbox.dll, editor none)");
         cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");

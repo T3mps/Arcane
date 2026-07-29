@@ -57,7 +57,7 @@ namespace Arcane
                 if (!m_canvas || !m_output)
                     return;
 
-                // Mirror Loom's main render loop: open -> clear canvas ->
+                // Mirror ArcaneRuntime's main render loop: open -> clear canvas ->
                 // batcher Begin/draw/End -> tonemap Run -> close -> execute.
                 // NVRHI manages all framebuffer transitions; no manual
                 // barriers here.

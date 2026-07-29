@@ -3,7 +3,7 @@
 // and hosts Sandbox.dll via the lifted Arcane::PluginHost. The frame loop
 // advances the sim through the RunLoop, renders the scene into an
 // OffscreenCanvas (the same canvas->batcher->
-// tonemap path Loom drives, into a panel texture instead of the backbuffer), and
+// tonemap path ArcaneRuntime drives, into a panel texture instead of the backbuffer), and
 // draws an editor shell -- a full-viewport dockspace (Arcane::Editor::BeginDockSpace)
 // hosting a Sim toolbar (play/pause/step + time-scale), a Console panel fed by a
 // callback sink on Arcane::Log::Engine(), and a dockable Viewport panel showing
@@ -98,12 +98,12 @@ namespace Arcane::Editor
 
         ARC_INFO("{} -- Arcane Editor host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
 
-        // Title the window as the editor. GpuContext defaults to "Arcane Loom" (the
-        // shared host helper Loom also uses); override it here so only this host reads
-        // "Arcane Editor" -- Loom keeps its own title.
+        // Title the window as the editor. GpuContext defaults to "Arcane Runtime" (the
+        // shared host helper ArcaneRuntime also uses); override it here so only this host
+        // reads "Arcane Editor" -- ArcaneRuntime keeps its own title.
         m_gpu->Win().SetTitle("Arcane Editor");
 
-        // Editor branding (Arcane Editor only -- Loom does neither): the Arcane logo as the
+        // Editor branding (Arcane Editor only -- ArcaneRuntime does neither): the Arcane logo as the
         // OS window/taskbar icon, and the SAME art as a display-referred texture for the
         // transport toolbar's top-left mark (Unity-style). One shared source PNG, copied
         // next to the exe at build. A missing file degrades quietly (default icon / no mark).
@@ -173,7 +173,7 @@ namespace Arcane::Editor
         // a headless host -> the plugin skips its GPU-resource creation.
         m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
 
-        // Open the project (if any) BEFORE loading input + the game module (mirrors Loom).
+        // Open the project (if any) BEFORE loading input + the game module (mirrors ArcaneRuntime).
         if (!m_config.projectPath.empty())
         {
             if (!m_runtime->OpenProject(m_config.projectPath))
@@ -266,7 +266,7 @@ namespace Arcane::Editor
         m_runtime->Loop().SetPaused(true);
 
         // Scene-in-a-panel viewport: an OffscreenCanvas running the SAME
-        // canvas->batcher->tonemap path Loom drives, into a panel texture instead
+        // canvas->batcher->tonemap path ArcaneRuntime drives, into a panel texture instead
         // of the backbuffer. The device is up by here in both the interactive host
         // and a headless `--frames N` run (which only differs in the audio backend).
         m_viewport = Arcane::OffscreenCanvas::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
@@ -575,7 +575,7 @@ namespace Arcane::Editor
         //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.
         //   m_gpu     -> ~GpuContext: the render stack (command list + framebuffer
         //                cache release their NVRHI handles before the device), window
-        //                LAST. So gpu outlives runtime + plugin exactly as Loom's did.
+        //                LAST. So gpu outlives runtime + plugin exactly as ArcaneRuntime's did.
         //                See GpuContext's header.
         // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
     }

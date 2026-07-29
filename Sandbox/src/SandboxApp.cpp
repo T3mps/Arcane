@@ -376,7 +376,7 @@ namespace Arcane::Sandbox
         if (w == 0 || h == 0)
             return m_inspectorCanvas.get();
 
-        // The device + ShaderLibrary live in the host (Loom); the Runtime render-
+        // The device + ShaderLibrary live in the host (ArcaneRuntime); the Runtime render-
         // resources bridge exposes them. Null in a headless host (the CPU [sandbox]
         // tests never wire a Runtime in) -> no GPU resource is created.
         if (!m_runtime)

@@ -148,7 +148,7 @@ TEST_CASE("Sandbox: compound bodies render as collider outlines (DrawPhysicsDebu
 // =============================================================================
 // Stress scene (BuildStressTest / scene 8): CPU-only stability + volume gate.
 // =============================================================================
-// Two DECOUPLED cases. The registered scene 8 / Loom perf showcase builds the
+// Two DECOUPLED cases. The registered scene 8 / ArcaneRuntime perf showcase builds the
 // full kStressBodyCount (10000) churn -- but that procedural grid is 20 columns
 // wide, so 10000 bodies stack ~500 rows / ~410 m tall (top row y ~ -404 m at MKS,
 // was ~ -40,000 px). That is fine for the perf scene, but it overshoots the

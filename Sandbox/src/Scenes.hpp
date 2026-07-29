@@ -10,7 +10,7 @@
 
 // ---- stress-scene knobs (exported so tests auto-scale with the constant) -----
 // kStressBodyCount - THE single knob: change this to scale the brutal CHURN/PERF
-//   scene (the registered scene 8, the Loom showcase). Procedurally fills a
+//   scene (the registered scene 8, the ArcaneRuntime showcase). Procedurally fills a
 //   20-column grid, so the spawn column is ceil(N/20) rows tall -- at 10000 that
 //   is a ~410 m column (0.82 m pitch) whose TOP sits ~ -404 m (far above the bowl).
 // kStressStabilityBodyCount - the count the *unit-test* stability check runs at.
@@ -91,7 +91,7 @@ namespace Arcane::Sandbox
 
     // The stress scene (scene 8) built at an arbitrary dynamic-body count, so the
     // unit-test stability check can run at kStressStabilityBodyCount while the
-    // registered roster scene (and the Loom perf showcase) stays at the full
+    // registered roster scene (and the ArcaneRuntime perf showcase) stays at the full
     // kStressBodyCount. Same arena/whisk/RNG seed as BuildStressTest -- only the
     // procedural body count differs. Requires the PhysicsResource world installed
     // (path-A bodies mint on the next PhysicsSystem fixedUpdate).

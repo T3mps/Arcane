@@ -1,6 +1,6 @@
 #pragma once
 
-// Module: Loom's low-level RAII wrapper for one loaded system module
+// Module: ArcaneRuntime's low-level RAII wrapper for one loaded system module
 // (DLL/shared object). It knows paths and raw symbols only; plugin ABI and
 // reload policy live above this layer.
 

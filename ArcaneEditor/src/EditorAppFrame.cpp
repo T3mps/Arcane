@@ -847,7 +847,7 @@ namespace Arcane::Editor
     // submit so it renders on top.
     void EditorApp::RenderSceneToViewport()
     {
-        // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path Loom
+        // Scene -> offscreen canvas (the SAME canvas->batcher->tonemap path ArcaneRuntime
         // drives, but into a panel texture). SetRenderContext writes RenderContext2D
         // in Arcane.dll and applies the plugin's stored camera; SubmitRender runs the
         // render scheduler (sprite submission + physics debug overlay) into this
@@ -1491,7 +1491,7 @@ namespace Arcane::Editor
 
         m_gpu->Cmd()->open();
         // Clear the backbuffer directly (Arcane Editor's scene will live in a panel,
-        // so there is no scene->tonemap->backbuffer pass as in Loom).
+        // so there is no scene->tonemap->backbuffer pass as in ArcaneRuntime).
         m_gpu->Cmd()->clearTextureFloat(backbuffer, nvrhi::AllSubresources,
                                         nvrhi::Color(0.06f, 0.06f, 0.08f, 1.0f));
         nvrhi::FramebufferHandle& fb = m_gpu->FramebufferFor(backbuffer);

@@ -7,7 +7,7 @@
 // on a bad/unknown/missing arg it prints the reason + usage and returns
 // {ok=false, exitCode=2}; the caller does `if (!r.ok) return r.exitCode;`.
 //
-// Reusable engine-wide (Loom today; future tools/Game host/harnesses). std-only,
+// Reusable engine-wide (ArcaneRuntime today; future tools/Game host/harnesses). std-only,
 // presentation-free. Out of scope (documented extension points, NOT built):
 // subcommands, config files, env-var fallback, positional/array options.
 // PRESENTATION-FREE + C++23-clean.

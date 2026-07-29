@@ -19,7 +19,7 @@ namespace Arcane
         // window is the value member that destructs LAST (imgui/inputDevices hold
         // SDL window refs); created FIRST so its lifetime spans every consumer.
         WindowDesc wd;
-        wd.title  = "Arcane Loom";
+        wd.title  = "Arcane Runtime";
         wd.vulkan = (cfg.backend == GraphicsBackend::Vulkan);
         if (!ctx->m_window.Create(wd)) { ARC_ERROR("GpuContext: window create failed"); return nullptr; }
 

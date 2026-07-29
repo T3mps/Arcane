@@ -37,7 +37,7 @@
 // Header-only and free of every editor type on purpose: ApplyEditorTheme takes
 // the ImGuiStyle to fill, so any Arcane ImGui consumer (a game's debug HUD, a
 // future tool host) can adopt the same look with one call. The editor is the
-// only caller today -- Loom/Sandbox HUDs are untouched.
+// only caller today -- ArcaneRuntime/Sandbox HUDs are untouched.
 
 #include <imgui.h>
 

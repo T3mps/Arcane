@@ -22,7 +22,7 @@
 
 namespace
 {
-    void RunLoomSlice(Arcane::GraphicsBackend backend)
+    void RunHostSlice(Arcane::GraphicsBackend backend)
     {
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
@@ -75,11 +75,11 @@ namespace
     }
 }
 
-// Headless: the input-store path Loom wires in its frame loop (SetInputSnapshot ->
+// Headless: the input-store path the host wires in its frame loop (SetInputSnapshot ->
 // Input()). No device needed -- the plugin reads input through Runtime::Input(), so
 // the host's per-frame store must round-trip the snapshot verbatim. ([sandbox] so it
 // runs alongside the rest of the v2 sandbox wiring under ~[gpu].)
-TEST_CASE("Loom input store: Runtime::Input reflects the last SetInputSnapshot", "[sandbox]")
+TEST_CASE("Host input store: Runtime::Input reflects the last SetInputSnapshot", "[sandbox]")
 {
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
 
@@ -106,12 +106,12 @@ TEST_CASE("Loom input store: Runtime::Input reflects the last SetInputSnapshot",
     CHECK(got.wantCaptureKeyboard);
 }
 
-TEST_CASE("d3d12: Loom slice renders the plugin scene, no validation errors", "[gpu][d3d12]")
+TEST_CASE("d3d12: host slice renders the plugin scene, no validation errors", "[gpu][d3d12]")
 {
-    RunLoomSlice(Arcane::GraphicsBackend::D3D12);
+    RunHostSlice(Arcane::GraphicsBackend::D3D12);
 }
 
-TEST_CASE("vulkan: Loom slice renders the plugin scene, no validation errors", "[gpu][vulkan]")
+TEST_CASE("vulkan: host slice renders the plugin scene, no validation errors", "[gpu][vulkan]")
 {
-    RunLoomSlice(Arcane::GraphicsBackend::Vulkan);
+    RunHostSlice(Arcane::GraphicsBackend::Vulkan);
 }

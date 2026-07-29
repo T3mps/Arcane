@@ -1,10 +1,10 @@
-// Loom: Init -> MainLoop -> Shutdown. The frame loop is the M4 Playground loop
+// RuntimeApp: Init -> MainLoop -> Shutdown. The frame loop is the M4 Playground loop
 // (scene content removed) interleaving the plugin's FixedUpdate/Update via the
 // RunLoop with the engine schedulers, plus a PluginHost watching the game DLL.
 // The render plumbing + teardown order live in GpuContext (m_gpu). The teardown
-// CONTRACT is encoded in the Loom member declaration order -- see Loom.hpp.
+// CONTRACT is encoded in the RuntimeApp member declaration order -- see RuntimeApp.hpp.
 
-#include "Loom.hpp"
+#include "RuntimeApp.hpp"
 
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
@@ -28,26 +28,26 @@
 #include <filesystem>
 #include <thread>
 
-Loom::Loom(Arcane::HostConfig cfg)
+RuntimeApp::RuntimeApp(Arcane::HostConfig cfg)
     : m_config(std::move(cfg)), m_perf(m_config.perf) {}
 
-bool Loom::Init()
+bool RuntimeApp::Init()
 {
     // The whole platform/render/input stack, booted in order. Owned by m_gpu and
-    // declared BEFORE m_runtime/m_plugin in Loom -- so it destructs AFTER them:
+    // declared BEFORE m_runtime/m_plugin in RuntimeApp -- so it destructs AFTER them:
     // the render resources it owns (window/device/swapchain/shaders/canvas/batcher/
     // tonemap/imgui/input + commandList/framebuffers) must outlive runtime + plugin.
     m_gpu = Arcane::GpuContext::Create(m_config);
     if (!m_gpu)
     {
-        ARC_ERROR("Loom: GPU context create failed");
+        ARC_ERROR("ArcaneRuntime: GPU context create failed");
         return false;
     }
 
-    ARC_INFO("{} -- Loom host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
+    ARC_INFO("{} -- ArcaneRuntime host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
 
     // The TypeContext is the process-wide type-identity singleton shared across
-    // Loom.exe, Arcane.dll, and every loaded plugin. It is intentionally
+    // ArcaneRuntime.exe, Arcane.dll, and every loaded plugin. It is intentionally
     // heap-allocated and never freed: TypeMeta entries registered by the plugin
     // (via ASTRA_REFLECT in Components.hpp) hold std::function thunks compiled
     // into the plugin DLL. After PluginHost::Unload -> DLClose, those thunks
@@ -60,14 +60,14 @@ bool Loom::Init()
     // plugin's -- own the MetaRegistry entries.)
     m_typeContext = new Astra::TypeContext();
     // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
-    // until quit). The scripted "Loom --frames N" GPU-verify is headless -> false ->
+    // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is headless -> false ->
     // miniaudio's null backend (no real device grabbed on a CI box).
     m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
 
     // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
     // Runtime so a plugin can build its own engine render objects (e.g. the
     // narrowphase inspector's OffscreenCanvas). Non-owning; the host outlives the
-    // plugin (m_gpu is declared before the runtime/plugin in Loom). Null in a
+    // plugin (m_gpu is declared before the runtime/plugin in RuntimeApp). Null in a
     // headless host -> the plugin skips its GPU-resource creation.
     m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
 
@@ -77,11 +77,11 @@ bool Loom::Init()
     if (!m_config.projectPath.empty())
     {
         if (!m_runtime->OpenProject(m_config.projectPath))
-            ARC_WARN("Loom: --project '{}' failed to open; using data/ + --plugin fallback",
+            ARC_WARN("ArcaneRuntime: --project '{}' failed to open; using data/ + --plugin fallback",
                      m_config.projectPath);
     }
     if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
-        ARC_WARN("Loom: input actions failed to load");
+        ARC_WARN("ArcaneRuntime: input actions failed to load");
 
     // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
     // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
@@ -96,8 +96,8 @@ bool Loom::Init()
                             ud);
     }
 
-    // Loom's default game module is the physics Sandbox showcase: with no --project
-    // and no --plugin, host Sandbox.dll. Loom IS that showcase (the Loom --frames
+    // ArcaneRuntime's default game module is the physics Sandbox showcase: with no --project
+    // and no --plugin, host Sandbox.dll. ArcaneRuntime IS that showcase (the ArcaneRuntime --frames
     // GPU-verify + CI depend on it), so it keeps the old default -- the editor, which
     // leaves pluginPath empty, is the host that starts with no game (see EditorApp).
     const std::string fallback = m_config.pluginPath.empty() ? "Sandbox.dll" : m_config.pluginPath;
@@ -111,7 +111,7 @@ bool Loom::Init()
         m_plugin->AddPlugin(dll);
     if (!m_plugin->Load())
     {
-        ARC_ERROR("Loom: failed to load game module '{}'", gameModule);
+        ARC_ERROR("ArcaneRuntime: failed to load game module '{}'", gameModule);
         return false;
     }
 
@@ -119,7 +119,7 @@ bool Loom::Init()
     // the editor shows for X instead of only whatever the plugin's Init spawned.
     // After the plugin load for the same reason EditorApp::Init does it there: a
     // scene naming a component the game module registers would otherwise be
-    // silently dropped. The result is discarded -- Loom has no scene session to
+    // silently dropped. The result is discarded -- ArcaneRuntime has no scene session to
     // adopt it into, and BootScene already logs both the file it loaded and every
     // reason it did not, so a project with no/broken boot scene just keeps what
     // the plugin built rather than failing the host. No --project means no
@@ -128,7 +128,7 @@ bool Loom::Init()
     {
         // --scene overrides the project's manifest bootScene with an explicit
         // asset Guid (HostConfig::sceneOverride) -- the editor's separate-window
-        // Play passes the currently-open scene here so Loom boots the SAME scene
+        // Play passes the currently-open scene here so ArcaneRuntime boots the SAME scene
         // instead of whatever the manifest names. Invalid override TEXT fails
         // Init outright (a typo'd --scene is a launch mistake, not the normal
         // "no boot scene" case); a well-formed Guid that resolves to no asset in
@@ -139,7 +139,7 @@ bool Loom::Init()
             const std::optional<Arcane::Guid> ov = Arcane::Guid::FromString(m_config.sceneOverride);
             if (!ov || !ov->IsValid())
             {
-                ARC_ERROR("Loom: --scene '{}' is not a valid asset id", m_config.sceneOverride);
+                ARC_ERROR("ArcaneRuntime: --scene '{}' is not a valid asset id", m_config.sceneOverride);
                 return false;
             }
             (void)Arcane::HostBoot::BootScene(*m_runtime, *proj, *ov);
@@ -153,7 +153,7 @@ bool Loom::Init()
     return true;
 }
 
-void Loom::MainLoop()
+void RuntimeApp::MainLoop()
 {
     // The reused command list + the lazy backbuffer-framebuffer cache live in
     // m_gpu (m_gpu->Cmd() / m_gpu->FramebufferFor(bb)) so they release their
@@ -212,7 +212,7 @@ void Loom::MainLoop()
 
         m_gpu->Imgui().BeginFrame();
         {
-            ImGui::Begin("Loom");
+            ImGui::Begin("ArcaneRuntime");
             ImGui::Text("Backend: %s", Arcane::ToString(m_gpu->Device().Backend()));
             ImGui::Text("Plugin gen: %u", m_plugin->Generation());
             const Arcane::Batch2DStats s = m_gpu->Batch().Stats();
@@ -252,7 +252,7 @@ void Loom::MainLoop()
 
         // Set the render context IN Arcane.dll so TypeID<RenderContext2D> resolves
         // in the correct module; then drive the plugin's RenderSubmissionSystem.
-        // Loom stays camera-agnostic: SetRenderContext writes the STORED camera the
+        // ArcaneRuntime stays camera-agnostic: SetRenderContext writes the STORED camera the
         // plugin drives via Runtime::SetCamera (default identity if it never does).
         {
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
@@ -325,14 +325,14 @@ void Loom::MainLoop()
     }
 }
 
-void Loom::Shutdown()
+void RuntimeApp::Shutdown()
 {
     // defensive: today Shutdown only runs after a successful Init, so m_gpu is non-null;
     // the guard covers a future partial-init/destructor path.
     if (m_gpu) m_gpu->Device().Nvrhi()->waitForIdle();
-    ARC_INFO("Loom exiting after {} frames", m_frameCount);
+    ARC_INFO("ArcaneRuntime exiting after {} frames", m_frameCount);
 
-    // The member destructors then run (after Run returns + ~Loom), in reverse
+    // The member destructors then run (after Run returns + ~RuntimeApp), in reverse
     // declaration order -- the load-bearing TEARDOWN CONTRACT:
     //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
     //                ResetRegistry) while the plugin DLL is STILL mapped.
@@ -344,7 +344,7 @@ void Loom::Shutdown()
     // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
 }
 
-int Loom::Run()
+int RuntimeApp::Run()
 {
     if (!Init()) return 1;
     MainLoop();

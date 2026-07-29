@@ -7,7 +7,7 @@
 #include <Arcane/Host/HostConfig.hpp>
 namespace {
     Arcane::HostConfig::ParseOutcome Run(std::vector<std::string> args) {
-        std::vector<char*> argv; argv.push_back(const_cast<char*>("Loom"));
+        std::vector<char*> argv; argv.push_back(const_cast<char*>("ArcaneRuntime"));
         for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
         return Arcane::HostConfig::Parse(static_cast<int>(argv.size()), argv.data());
     }
@@ -20,7 +20,7 @@ TEST_CASE("HostConfig: defaults", "[host]") {
     REQUIRE(o.config->vsync);
     REQUIRE_FALSE(o.config->perf);
     // --plugin defaults to EMPTY (was "Sandbox.dll"): each host supplies its own
-    // fallback -- Loom -> Sandbox.dll, the editor -> no game loaded.
+    // fallback -- ArcaneRuntime -> Sandbox.dll, the editor -> no game loaded.
     REQUIRE(o.config->pluginPath.empty());
 }
 TEST_CASE("HostConfig: every flag maps", "[host]") {

@@ -73,7 +73,7 @@ namespace Arcane::Audio
 		// host-owned render device is wired in AFTER construction, so it is always
 		// null at audio-init time, and neither the Runtime ctor nor HostConfig carries
 		// a headless flag). Defaulting off means every Runtime that links Arcane.dll
-		// (tests, servers, tools, the scripted "Loom --frames N" GPU-verify) cleanly
+		// (tests, servers, tools, the scripted "ArcaneRuntime --frames N" GPU-verify) cleanly
 		// uses the miniaudio noDevice null backend; an interactive host opts in by
 		// passing Runtime(ctx, /*enableAudioDevice=*/true). The real->noDevice->
 		// unavailable fallback in Runtime::InitAudio still covers a failed real device.

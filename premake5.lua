@@ -43,7 +43,7 @@ workspace "Arcane"
     -- imgui lives inside Arcane.dll (ImGuiLayer + first-party imgui_impl_nvrhi).
     -- Export it so GImGui and the sdl3 backend symbols live in ONE module:
     -- the imgui static lib builds with dllexport, the DLL's own TUs match,
-    -- and consumers (ArcaneTests/Loom) import. Without this each module
+    -- and consumers (ArcaneTests/ArcaneRuntime) import. Without this each module
     -- keeps its own null GImGui and ShowDemoWindow() from the test exe asserts.
     THIRDPARTY_IMGUI_API        = "__declspec(dllexport)"
     -- imgui-node-editor links into ArcaneEditor.exe, which IMPORTS imgui from
@@ -208,7 +208,7 @@ project "Arcane"
     -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
     -- object only produces an export when the linker actually pulls that
     -- object in, and the DLL itself references only a subset of the imgui API.
-    -- /WHOLEARCHIVE exports the full surface for consumers (tests/Loom).
+    -- /WHOLEARCHIVE exports the full surface for consumers (tests/ArcaneRuntime).
     -- NOTE: Linux port needs --whole-archive/-l imgui --no-whole-archive instead.
     filter "system:windows"
         linkoptions { "/WHOLEARCHIVE:imgui" }
@@ -269,8 +269,8 @@ project "Arcane"
 
 -- ============================================================================
 -- PlaygroundGame: the M4 scene as a game plugin (the first live ABI consumer).
--- SharedLib, /MD, links Arcane (NOT Core). Loaded by Loom at runtime. The
--- reserved Game/ slot stays empty for the future Aphelyon client port.
+-- SharedLib, /MD, links Arcane (NOT Core). Loaded by ArcaneRuntime at runtime.
+-- The reserved Game/ slot stays empty for the future Aphelyon client port.
 -- ============================================================================
 project "PlaygroundGame"
     location "PlaygroundGame"
@@ -310,9 +310,10 @@ project "PlaygroundGame"
 -- Sandbox: the physics-sandbox game plugin (Arcane Physics Sandbox, Task 4).
 -- SharedLib, /MD, v2 ABI. Mirrors PlaygroundGame (imgui import) but ALSO links Core:
 -- it is the first plugin to drive PhysicsSystem, whose header-only body calls into
--- the Core PhysicsWorld implementation (see the links{} note below). Loaded by Loom
--- (--plugin Sandbox.dll) and the SandboxSmokeTest; the DLL is copied beside BOTH
--- Loom.exe and ArcaneTests.exe (its own postbuild) so the host and the test can load it.
+-- the Core PhysicsWorld implementation (see the links{} note below). Loaded by
+-- ArcaneRuntime (--plugin Sandbox.dll) and the SandboxSmokeTest; the DLL is copied
+-- beside BOTH ArcaneRuntime.exe and ArcaneTests.exe (its own postbuild) so the host
+-- and the test can load it.
 -- ============================================================================
 project "Sandbox"
     location "Sandbox"
@@ -351,12 +352,12 @@ project "Sandbox"
     -- /WHOLEARCHIVE-exported there).
     defines { "GAME_BUILD_DLL", "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     floatingpoint "Strict"   -- physics determinism: match Core's /fp:strict (no /fp:fast)
-    -- Copy Sandbox.dll beside Loom.exe (host) AND ArcaneTests.exe (smoke test). The
-    -- Arcane/Core include dir is needed because Sandbox.cpp touches PhysicsWorld (Core).
+    -- Copy Sandbox.dll beside ArcaneRuntime.exe (host) AND ArcaneTests.exe (smoke test).
+    -- The Arcane/Core include dir is needed because Sandbox.cpp touches PhysicsWorld (Core).
     postbuildcommands {
-        '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/Loom"',
+        '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/ArcaneRuntime"',
         '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/ArcaneTests"',
-        '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/bin/' .. outputdir .. '/Loom/Sandbox.dll"',
+        '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/bin/' .. outputdir .. '/ArcaneRuntime/Sandbox.dll"',
         '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/bin/' .. outputdir .. '/ArcaneTests/Sandbox.dll"',
     }
     filter "system:windows"
@@ -369,12 +370,13 @@ project "Sandbox"
     filter {}
 
 -- ============================================================================
--- Loom: the thin host (Loom.exe). Engine boot + RunLoop + PluginHost. Hosts
--- Sandbox.dll by default (the physics/engine showcase); PlaygroundGame.dll is
--- also copied beside Loom.exe as the minimal hot-reload fixture / swap target.
+-- ArcaneRuntime: the thin standalone host (ArcaneRuntime.exe). Engine boot +
+-- RunLoop + PluginHost. Hosts Sandbox.dll by default (the physics/engine
+-- showcase); PlaygroundGame.dll is also copied beside ArcaneRuntime.exe as the
+-- minimal hot-reload fixture / swap target. Folded from "Loom" 2026-07-29.
 -- ============================================================================
-project "Loom"
-    location "Loom"
+project "ArcaneRuntime"
+    location "ArcaneRuntime"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
@@ -383,7 +385,7 @@ project "Loom"
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
-        "%{prj.location}/src",           -- Loom.hpp (self-resolving quoted include; kept for any future local header)
+        "%{prj.location}/src",           -- RuntimeApp.hpp (self-resolving quoted include; kept for any future local header)
         "%{wks.location}/Arcane/src",
         "%{IncludeDir.Core}",
         "%{IncludeDir.nlohmann}",
@@ -397,10 +399,10 @@ project "Loom"
     }
     -- Core is linked directly (alongside the Arcane DLL) even though the host-boot
     -- layer (HostConfig/GpuContext/FramePerf/ProjectBoot) moved INTO Arcane.dll as
-    -- Arcane/Host -- Loom.exe no longer source-compiles any of it. Core stays: it's
-    -- a cheap, established two-static-copies pattern (see the ArcaneTests links
+    -- Arcane/Host -- ArcaneRuntime.exe no longer source-compiles any of it. Core stays:
+    -- it's a cheap, established two-static-copies pattern (see the ArcaneTests links
     -- comment), and other exe TUs may still want un-exported Core APIs directly.
-    -- Core links into exactly ONE module per PROCESS holds because Loom.exe and
+    -- Core links into exactly ONE module per PROCESS holds because ArcaneRuntime.exe and
     -- Arcane.dll are distinct modules.
     links { "Core", "Arcane" }
     dependson { "PlaygroundGame", "Sandbox" }
@@ -433,8 +435,8 @@ project "Loom"
 -- Arcane Editor: the editor shell (ArcaneEditor.exe). Engine boot + RunLoop + PluginHost
 -- + ImGui docking shell. Hosts Sandbox.dll by default. Consumes the engine's
 -- host-boot helpers (Arcane::GpuContext/FramePerf/HostConfig, Arcane/Host/ --
--- exported ARCANE_API from Arcane.dll, same as Loom) rather than source-compiling
--- its own copy. Consumes only ARCANE_API otherwise.
+-- exported ARCANE_API from Arcane.dll, same as ArcaneRuntime) rather than source-
+-- compiling its own copy. Consumes only ARCANE_API otherwise.
 -- ============================================================================
 project "ArcaneEditor"
     location "ArcaneEditor"
@@ -540,7 +542,7 @@ project "ArcaneTests"
         -- FramePerf, and ProjectBoot all moved into Arcane/Host (Arcane.dll,
         -- ARCANE_API) alongside Module/Plugin/PluginHost (Arcane/Plugin) -- the
         -- test exe now consumes all of them via the "Arcane" link, not source-
-        -- compiled. [host] round-trips HostConfig::Parse without loading Loom.exe.
+        -- compiled. [host] round-trips HostConfig::Parse without loading ArcaneRuntime.exe.
         -- Task 3: ConsoleBuffer (Arcane Editor's log ring buffer) source-compiles into the
         -- test exe so the [editor] unit test drives it directly, mirroring the
         -- Sandbox helper-unit pattern above.

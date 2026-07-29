@@ -783,7 +783,7 @@ namespace Arcane::Sandbox
         //   seeded std::mt19937 => identical layout every build (deterministic tests)
         //
         // `bodyCount` is the number of procedural dynamic bodies. The registered
-        // roster scene + Loom perf showcase pass kStressBodyCount (10000); the
+        // roster scene + ArcaneRuntime perf showcase pass kStressBodyCount (10000); the
         // unit-test stability check passes kStressStabilityBodyCount (1200) via the
         // public BuildStressTestN forwarder so its spawn column fits the test bound.
         // The arena/whisk/seed are identical regardless of count.
@@ -970,7 +970,7 @@ namespace Arcane::Sandbox
             }
         }
 
-        // The registered roster / Loom-perf entry: full kStressBodyCount churn.
+        // The registered roster / ArcaneRuntime-perf entry: full kStressBodyCount churn.
         void BuildStressTest(Astra::Registry& reg)
         {
             BuildStressTestImpl(reg, kStressBodyCount);
@@ -998,7 +998,7 @@ namespace Arcane::Sandbox
 
     // Public forwarder onto the file-local BuildStressTestImpl so a test (or any
     // caller) can build the stress scene at a chosen body count without touching
-    // the registered scene 8 / Loom perf knob (which stays at kStressBodyCount).
+    // the registered scene 8 / ArcaneRuntime perf knob (which stays at kStressBodyCount).
     void BuildStressTestN(Astra::Registry& reg, int bodyCount)
     {
         BuildStressTestImpl(reg, bodyCount);

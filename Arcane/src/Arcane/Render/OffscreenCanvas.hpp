@@ -4,7 +4,7 @@
 // Canvas, a Batcher2D, a TonemapPass, and a display-referred (BGRA8_UNORM,
 // gamma-encoded by the tonemap) output texture + framebuffer. Draw() runs
 // the canonical canvas -> batcher ->
-// tonemap path (the SAME path Loom drives) into the output texture and
+// tonemap path (the SAME path ArcaneRuntime drives) into the output texture and
 // exposes it as an ImTextureID, so an ImGui panel can `ImGui::Image()` a
 // real engine 2D render -- no parallel ImDrawList path grows beside it
 // (homogenized-rendering mandate).

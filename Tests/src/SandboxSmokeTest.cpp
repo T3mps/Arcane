@@ -1,5 +1,5 @@
 // [sandbox][gpu] live integration: drive the Sandbox plugin through a real Runtime +
-// Batcher2D into an offscreen HDR canvas. Mirrors LoomSliceTest but loads Sandbox.dll
+// Batcher2D into an offscreen HDR canvas. Mirrors HostSliceTest but loads Sandbox.dll
 // (the physics sandbox plugin) instead of PlaygroundGame.dll: the plugin installs the
 // REAL engine stack (PhysicsSystem + TransformPropagationSystem in fixedUpdate;
 // RenderSubmissionSystem + the physics-debug overlay in render), builds a scene, then we

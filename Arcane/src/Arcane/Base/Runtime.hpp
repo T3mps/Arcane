@@ -47,7 +47,7 @@ namespace Arcane
     class ARCANE_API Runtime
     {
     public:
-        // externalContext == null: Runtime creates+owns a TypeContext (production: Loom).
+        // externalContext == null: Runtime creates+owns a TypeContext (production: ArcaneRuntime).
         // externalContext != null: install+use the caller's context so multiple modules
         // (a test exe + Arcane.dll + the plugin) share one component-ID space.
         //
@@ -61,7 +61,7 @@ namespace Arcane
         // compiler enforces that instead of convention.
         //
         // enableAudioDevice: opt into a real OS audio device. Defaults false (headless:
-        // tests/servers/tools and the scripted "Loom --frames N" verify use the null
+        // tests/servers/tools and the scripted "ArcaneRuntime --frames N" verify use the null
         // backend). An interactive host passes true; the real->null fallback still applies.
         explicit Runtime(Astra::TypeContext* externalContext, bool enableAudioDevice = false);
         ~Runtime();
@@ -126,7 +126,7 @@ namespace Arcane
 
         // --- render-resources bridge: device + shader library the host owns ---------
         // The plugin reaches the engine ONLY through this Runtime, but the nvrhi device
-        // and the ShaderLibrary are created + owned by the host (Loom's main). A plugin
+        // and the ShaderLibrary are created + owned by the host (ArcaneRuntime's main). A plugin
         // that needs to build its OWN engine render objects (e.g. an OffscreenCanvas for
         // a Minkowski-inset inspector) gets them here. The host calls SetRenderResources
         // ONCE after creating the device + shaders (before the plugin loads); both stay
@@ -145,7 +145,7 @@ namespace Arcane
         float     CameraZoom()   const noexcept;
 
         // --- input bridge ---
-        // Latest per-frame input snapshot. The host (Loom) stores it each frame
+        // Latest per-frame input snapshot. The host (ArcaneRuntime) stores it each frame
         // via SetInputSnapshot; plugins read it via Input() in their update hooks.
         void                 SetInputSnapshot(const InputSnapshot& snap) noexcept;
         const InputSnapshot& Input() const noexcept;

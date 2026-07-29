@@ -5,7 +5,7 @@
 // ViewportInput.hpp / SceneSession.hpp; the host performs every effect).
 //
 // WHY the editor owns a camera at all: Runtime::SetCamera is the PLUGIN's seam
-// (Loom: "plugin drives via Runtime::SetCamera, default identity if it never
+// (ArcaneRuntime: "plugin drives via Runtime::SetCamera, default identity if it never
 // does"), and a project whose game module never calls it gets offset (0,0) and
 // zoom 1. An authoring tool cannot depend on the game implementing navigation,
 // so EditorApp drives this camera from viewport input and pushes it in Edit

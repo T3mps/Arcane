@@ -1,6 +1,6 @@
 #pragma once
 
-// Host-boot helpers used by any runtime host (Loom, the Arcane Editor) that
+// Host-boot helpers used by any runtime host (ArcaneRuntime, the Arcane Editor) that
 // boots the engine via GpuContext/HostConfig -- all three now live in the
 // engine DLL as Arcane/Host, so a host consumes them rather than source-
 // compiling its own copy. They turn the engine's layered config + an open

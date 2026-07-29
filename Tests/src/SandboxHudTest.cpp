@@ -99,7 +99,7 @@ namespace
             std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg{components};
         Sbx::SandboxApp app;
-        // Epic 04: a real engine RunLoop drives the fixture's frames exactly as Loom does,
+        // Epic 04: a real engine RunLoop drives the fixture's frames exactly as ArcaneRuntime does,
         // so the sandbox's HUD sim-time controls (pause/single-step/time-scale, forwarded
         // to this loop via SetLoop) exercise RunLoop's actual fixed-phase gating.
         Arcane::SystemSchedulers sch{nullptr};   // null -> sequential executor
@@ -120,7 +120,7 @@ namespace
         }
 
         // One engine frame through the RunLoop -- the pause-gated fixed step(s) then the
-        // every-frame Update -- exactly as Loom drives the plugin. Honors the sim-time
+        // every-frame Update -- exactly as ArcaneRuntime drives the plugin. Honors the sim-time
         // controls (a paused loop runs zero fixed steps). `input` feeds both hooks.
         void Frame(const Arcane::InputSnapshot& input = Arcane::InputSnapshot{})
         {

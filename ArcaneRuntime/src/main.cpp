@@ -1,12 +1,12 @@
-// Loom -- the thin entry point. Parses argv into a HostConfig, constructs the
-// Loom application object, and returns its Run() exit code. All engine boot,
-// the frame loop, and the load-bearing teardown order now live in the Loom
-// class (Loom.hpp/.cpp); main is just the wire-up.
+// ArcaneRuntime -- the thin entry point. Parses argv into a HostConfig, constructs
+// the RuntimeApp application object, and returns its Run() exit code. All engine
+// boot, the frame loop, and the load-bearing teardown order now live in the
+// RuntimeApp class (RuntimeApp.hpp/.cpp); main is just the wire-up.
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/HostConfig.hpp>
-#include "Loom.hpp"
+#include "RuntimeApp.hpp"
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 
 #include <cstdio>
@@ -21,7 +21,7 @@ int main(int argc, char** argv)
 
     // Same probe as the editor: identity to stdout, no window, no device. The
     // flag lives in the SHARED HostConfig, so a flag that parsed on both hosts
-    // but only worked on one would be a trap. Loom does NOT get the editor's
+    // but only worked on one would be a trap. ArcaneRuntime does NOT get the editor's
     // no-project gate -- it hosts Sandbox.dll by default with no flags, by design.
     if (parsed.config->printEngineInfo)
     {
@@ -32,6 +32,6 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    Loom loom(*parsed.config);
-    return loom.Run();
+    RuntimeApp app(*parsed.config);
+    return app.Run();
 }

@@ -1,6 +1,6 @@
 #pragma once
 
-// Plugin: Loom's current game-runtime plugin protocol. Today there is one
+// Plugin: ArcaneRuntime's current game-runtime plugin protocol. Today there is one
 // plugin kind, so this class owns the GamePlugin_* ABI. If editor/tool plugins
 // appear later, split this into GamePlugin.
 

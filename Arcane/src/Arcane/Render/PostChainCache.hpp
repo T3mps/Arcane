@@ -2,7 +2,7 @@
 
 // PostChainCache (post arc, slice 2): resolves SAVED .arcmat material assets
 // into bound FullscreenMaterialChains for the scene post-processing hook
-// (OffscreenCanvas::SetPostChain; the Loom host's inline site). It is
+// (OffscreenCanvas::SetPostChain; the ArcaneRuntime host's inline site). It is
 // SpriteMaterialCache's twin -- same Services, same Request / Invalidate /
 // ConsumeResult / Clear lifecycle, same SAVED-asset + parent-chain resolution
 // -- but the build is BuildMaterialChainSource in POST mode (kSceneInput

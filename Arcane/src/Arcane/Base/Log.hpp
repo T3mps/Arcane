@@ -30,7 +30,7 @@ namespace Arcane::Log
 
     // Install the sink into the CALLING module's Mosaic storage. Inline on
     // purpose: Mosaic's g_logSink is a per-module inline atomic, so each module
-    // (Arcane.dll, Loom.exe, the plugin, tests) installs into its own copy.
+    // (Arcane.dll, ArcaneRuntime.exe, the plugin, tests) installs into its own copy.
     inline void InstallMosaicSink() noexcept { Mosaic::SetLogSink(MosaicSink(), nullptr); }
 }
 

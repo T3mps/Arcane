@@ -1,8 +1,8 @@
 // Arcane Editor -- the editor shell entry point. Parses argv into a HostConfig
-// (shared with Loom), constructs the EditorApp object, and returns
+// (shared with ArcaneRuntime), constructs the EditorApp object, and returns
 // its Run() exit code. All engine boot, the frame loop, and the load-bearing
 // teardown order live in EditorApp (EditorApp.hpp/.cpp); main is just the
-// wire-up (mirrors Loom/src/main.cpp).
+// wire-up (mirrors ArcaneRuntime/src/main.cpp).
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>

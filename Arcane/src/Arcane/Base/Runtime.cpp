@@ -174,13 +174,13 @@ namespace Arcane
             // AFTER construction (always null now), and neither this ctor nor HostConfig
             // carried a headless flag. So the host states its intent through a ctor flag --
             // enableAudioDevice (default false). Tests, servers, tools, and the scripted
-            // "Loom --frames N" GPU-verify leave it false and get the noDevice null backend;
+            // "ArcaneRuntime --frames N" GPU-verify leave it false and get the noDevice null backend;
             // an interactive host passes true. AudioDeviceDesc::enableDevice defaults false
             // for the same reason, so a real device is always opt-in.
             audioDesc.enableDevice = enableAudioDevice;
             assets = Assets::Create(nullptr);
             // Engine-default config layer (shipped beside the exe). A host with no
-            // project still gets this base (e.g. input bindings for bare Loom);
+            // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
             // OpenProject re-layers the project + user files on top.
             engineConfigDir = ExeDir() / "EngineConfig";
             config.LoadEngineDefaults(engineConfigDir);

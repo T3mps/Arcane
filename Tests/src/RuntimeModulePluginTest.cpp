@@ -7,7 +7,7 @@
 
 #include <filesystem>
 
-TEST_CASE("Loom Module loads a dynamic library and resolves symbols", "[loom][module]")
+TEST_CASE("ArcaneRuntime Module loads a dynamic library and resolves symbols", "[host][module]")
 {
     auto module = Arcane::Module::Load(std::filesystem::path("HotReloadPluginV1.dll"));
 
@@ -18,7 +18,7 @@ TEST_CASE("Loom Module loads a dynamic library and resolves symbols", "[loom][mo
     CHECK(module->Symbol("Definitely_Not_An_Exported_Symbol") == nullptr);
 }
 
-TEST_CASE("Loom Plugin resolves the current game plugin ABI", "[loom][plugin]")
+TEST_CASE("ArcaneRuntime Plugin resolves the current game plugin ABI", "[host][plugin]")
 {
     auto plugin = Arcane::Plugin::Load(std::filesystem::path("HotReloadPluginV1.dll"));
 
@@ -34,7 +34,7 @@ TEST_CASE("Loom Plugin resolves the current game plugin ABI", "[loom][plugin]")
     CHECK(plugin->VTable().LoadState != nullptr);
 }
 
-TEST_CASE("Loom Plugin rejects modules that do not satisfy the game plugin ABI", "[loom][plugin]")
+TEST_CASE("ArcaneRuntime Plugin rejects modules that do not satisfy the game plugin ABI", "[host][plugin]")
 {
     auto plugin = Arcane::Plugin::Load(std::filesystem::path("HotReloadPluginBad.dll"));
 
