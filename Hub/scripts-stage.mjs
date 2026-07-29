@@ -29,5 +29,16 @@ if (!existsSync(src)) {
   process.exit(1);
 }
 mkdirSync(outDir, { recursive: true });
-copyFileSync(src, dst);
+try {
+  copyFileSync(src, dst);
+} catch (e) {
+  // The one failure staging actually meets: the installed Hub (or a shell
+  // double-click that just relaunched it) holds the exe open. Say that,
+  // instead of dumping a stack over the build output.
+  if (e.code === "EBUSY" || e.code === "EPERM") {
+    console.error(`stage: ${dst} is in use -- close the Hub and run \`npm run stage\` again`);
+    process.exit(1);
+  }
+  throw e;
+}
 console.log(`stage: ${dst}`);
