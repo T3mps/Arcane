@@ -88,8 +88,8 @@
   const BEHAVIORS: { id: Settings["launchBehavior"]; label: string; d: string }[] = [
     { id: "tray", label: "Minimize to the tray",
       d: "The Hub waits in the system tray while editors run — click the icon to bring it back, right-click it to launch a recent project or quit — and comes back when the last editor closes." },
-    { id: "hide", label: "Hide until the editors close",
-      d: "The Hub vanishes entirely and comes back when the last editor closes. Launching the Hub again brings it back sooner." },
+    { id: "close", label: "Close the Hub",
+      d: "The Hub exits once the editor is up. The editor keeps running on its own; launch the Hub again from the Start menu or a project file. Launching a project the Hub no longer knows is open starts a second editor on it." },
     { id: "stay", label: "Keep the Hub open",
       d: "The window stays where it is, beside the editor." },
   ];

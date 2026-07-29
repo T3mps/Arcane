@@ -78,6 +78,12 @@ fn running_projects(editors: tauri::State<RunningEditors>) -> Vec<String> {
     editors.0.lock().unwrap().keys().cloned().collect()
 }
 
+/// How long a spawned editor gets to prove it can boot. The wait thread
+/// reports any exit inside this window as a refusal (the project gate exits
+/// before a window exists); close-mode's delayed exit waits this out plus a
+/// margin so the report always has a Hub left to show it.
+const BOOT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
+
 fn now_utc_iso() -> String {
     // Seconds since the epoch is enough to sort "last opened" and avoids
     // pulling a date crate in for a display string.
@@ -656,10 +662,33 @@ fn do_open_project(
         settings::BEHAVIOR_TRAY => {
             let _ = tray::park(app);
         }
-        settings::BEHAVIOR_HIDE => {
+        settings::BEHAVIOR_CLOSE => {
+            // Really close -- but not this instant: hide now (the window is
+            // gone from the user's view immediately), then exit only after
+            // the boot watchdog has had its window. If the editor dies
+            // inside it, the wait thread removes the pid and shows the Hub
+            // with the reason, and the check below finds the key gone and
+            // spares the process. Editors always outlive the Hub; what a
+            // real exit costs is the live pid map, so a later launch of the
+            // same project opens a second editor rather than focusing the
+            // first -- the price of the mode, stated in Settings.
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.hide();
             }
+            let app = app.clone();
+            let key = project_key.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(BOOT_WATCHDOG + std::time::Duration::from_millis(500));
+                let alive = app
+                    .state::<RunningEditors>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .contains_key(&key);
+                if alive {
+                    app.exit(0);
+                }
+            });
         }
         _ => {}
     }
@@ -689,7 +718,7 @@ fn do_open_project(
             };
             emit_running(&app);
 
-            if started.elapsed() < std::time::Duration::from_secs(2) {
+            if started.elapsed() < BOOT_WATCHDOG {
                 let why = match status.and_then(|s| s.code()) {
                     // Exit 2 is the editor's own project gate (ArcaneEditor
                     // main.cpp): wrong abi, unreadable manifest, refused boot.
@@ -701,13 +730,13 @@ fn do_open_project(
             }
 
             // A hidden window ALWAYS restores when the last editor exits,
-            // whatever hid it -- hide has no other handle, and tray hands
-            // the Hub back too (user call 2026-07-29: the icon is for
-            // DURING the run; when the work ends the user should be looking
-            // at the Hub to close it or launch the next thing). show_hub
-            // clears the tray icon along the way. `stay` windows are never
-            // hidden, so the guard alone keeps them from stealing focus
-            // from whatever the user moved on to.
+            // whatever hid it. Tray hands the Hub back by design (user call
+            // 2026-07-29: the icon is for DURING the run); close-mode only
+            // reaches here when the delayed exit was spared by a
+            // boot-refusal, where showing the Hub with the reason is
+            // exactly right. show_hub clears the tray icon along the way.
+            // `stay` windows are never hidden, so the guard alone keeps
+            // them from stealing focus from whatever the user moved on to.
             if none_left {
                 let hidden = app
                     .get_webview_window("main")

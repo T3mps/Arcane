@@ -17,7 +17,7 @@ pub const VIEW_GRID: &str = "grid";
 pub const VIEW_LIST: &str = "list";
 
 pub const BEHAVIOR_TRAY: &str = "tray";
-pub const BEHAVIOR_HIDE: &str = "hide";
+pub const BEHAVIOR_CLOSE: &str = "close";
 pub const BEHAVIOR_STAY: &str = "stay";
 
 pub const SORT_OPENED: &str = "opened";
@@ -40,11 +40,13 @@ pub fn clean_sort(v: &str) -> String {
 /// Normalise the after-launch behaviour, defaulting anything unrecognised to
 /// the tray. Same String-with-normaliser reasoning as `clean_view`: a serde
 /// enum fails the whole document on an unknown variant, and a settings file
-/// that will not parse is treated as corrupt and reset.
+/// that will not parse is treated as corrupt and reset. The retired `hide`
+/// value (replaced by `close` 2026-07-29, when the tray took over its
+/// come-back-later role) falls into the tray default like any unknown.
 pub fn clean_behavior(v: &str) -> String {
     let t = v.trim();
-    if t.eq_ignore_ascii_case(BEHAVIOR_HIDE) {
-        BEHAVIOR_HIDE.to_string()
+    if t.eq_ignore_ascii_case(BEHAVIOR_CLOSE) {
+        BEHAVIOR_CLOSE.to_string()
     } else if t.eq_ignore_ascii_case(BEHAVIOR_STAY) {
         BEHAVIOR_STAY.to_string()
     } else {
@@ -80,14 +82,17 @@ pub struct Settings {
     /// click brings it back early, right-click offers quick launch/quit,
     /// and when the last editor exits the Hub comes back on its own (user
     /// call 2026-07-29 -- the icon is for during the run, not after it).
-    /// `hide` -- vanish entirely with no icon, restore when the LAST editor
-    /// exits; relaunching the Hub un-hides it early via the single-instance
-    /// callback. `stay` -- keep the window open beside the editor.
-    /// Replaced the hide_while_running bool 2026-07-29 when the tray
-    /// arrived; no legacy read of the old key, per the no-migration rule.
-    /// Read Rust-side in open_project (how the window goes away) and the
-    /// editor wait thread (how it comes back). Always normalised through
-    /// `clean_behavior`, so consumers can trust the value.
+    /// `close` -- actually EXIT the Hub once the editor is off the ground
+    /// (it lingers hidden for the 2s boot watchdog first, so a refused
+    /// launch still gets its reason shown instead of a silent exit).
+    /// Editors always outlive the Hub; what closing costs is the live pid
+    /// map, so a re-launch of the same project opens a second editor
+    /// instead of focusing the first. `stay` -- keep the window open.
+    /// Replaced hide_while_running 2026-07-29 (tray), then `hide` became
+    /// `close` the same day (user call: tray owns come-back-later, so the
+    /// third option should really close). No legacy reads, per the
+    /// no-migration rule. Read Rust-side in open_project and the editor
+    /// wait thread. Always normalised through `clean_behavior`.
     #[serde(default = "default_behavior")]
     pub launch_behavior: String,
 
@@ -243,9 +248,10 @@ mod tests {
     #[test]
     fn clean_behavior_accepts_the_three_modes_and_defaults_the_rest() {
         assert_eq!(clean_behavior(BEHAVIOR_TRAY), BEHAVIOR_TRAY);
-        assert_eq!(clean_behavior(BEHAVIOR_HIDE), BEHAVIOR_HIDE);
+        assert_eq!(clean_behavior(BEHAVIOR_CLOSE), BEHAVIOR_CLOSE);
         assert_eq!(clean_behavior(BEHAVIOR_STAY), BEHAVIOR_STAY);
-        assert_eq!(clean_behavior("  Hide  "), BEHAVIOR_HIDE, "trimmed and case-folded");
+        assert_eq!(clean_behavior("  Close  "), BEHAVIOR_CLOSE, "trimmed and case-folded");
+        assert_eq!(clean_behavior("hide"), BEHAVIOR_TRAY, "the retired mode falls back");
         assert_eq!(clean_behavior("closeAfterLaunch"), BEHAVIOR_TRAY, "unknown falls back");
         assert_eq!(clean_behavior(""), BEHAVIOR_TRAY, "so does a pre-field file");
     }
@@ -307,8 +313,8 @@ mod tests {
     #[test]
     fn a_settings_file_missing_a_field_still_loads() {
         // Forward compat: an older file must not reset the fields it does have.
-        let back: Settings = serde_json::from_str(r#"{"launchBehavior":"hide"}"#).unwrap();
-        assert_eq!(back.launch_behavior, BEHAVIOR_HIDE);
+        let back: Settings = serde_json::from_str(r#"{"launchBehavior":"close"}"#).unwrap();
+        assert_eq!(back.launch_behavior, BEHAVIOR_CLOSE);
         assert_eq!(back.default_project_dir, "");
     }
 
