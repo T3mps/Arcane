@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialGraph.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
@@ -12,10 +13,14 @@
 #include <Arcane/Render/ShaderConventions.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 
+#include <spdlog/sinks/callback_sink.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <string_view>
 
 using namespace Arcane;
 
@@ -79,6 +84,23 @@ namespace
     {
         return std::any_of(r.errors.begin(), r.errors.end(),
                            [&](const GraphError& e) { return e.nodeId == nodeId; });
+    }
+
+    // Log-capture idiom, mirrored from SerializationNegativeTest.cpp:211-222:
+    // attach a callback sink to the engine logger so a WARN this suite fires ON
+    // PURPOSE is asserted on instead of dumped into the gate's output as noise.
+    // `out` holds the LAST record captured.
+    std::shared_ptr<spdlog::sinks::callback_sink_mt> AttachLogCapture(std::string& out)
+    {
+        auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
+            [&out](const spdlog::details::log_msg& m) { out.assign(m.payload.data(), m.payload.size()); });
+        Arcane::Log::Engine()->sinks().push_back(cb);
+        return cb;
+    }
+    void DetachLogCapture(const std::shared_ptr<spdlog::sinks::callback_sink_mt>& cb)
+    {
+        auto& sinks = Arcane::Log::Engine()->sinks();
+        sinks.erase(std::remove(sinks.begin(), sinks.end(), cb), sinks.end());
     }
 }
 
@@ -560,21 +582,53 @@ TEST_CASE("pin literal feeds an unwired input and beats the neutral default",
         // Custom pins are per-node data, but their emission calls the SAME
         // arg()/argOr() helper as every other node, so literals fall out with
         // no per-type work. FindPinLiteral indexes customPins order.
+        //
+        // The `tint` pin is the WIDTH-4 case, which is user-reachable exactly
+        // here: a width-4 pin is the only one whose widget is a DragFloat4,
+        // and Custom is the only node type that declares one. It covers
+        // PinLiteralExpr's four-lane branch (float4 formatting) and the
+        // four-element array shape on disk.
         MaterialGraph cg;
         cg.nodes.push_back(Node(1, GraphNodeType::Output));
         GraphNode custom = Node(2, GraphNodeType::Custom);
-        custom.customPins = { { "uv", 2 }, { "t", 1 } };
+        custom.customPins = { { "uv", 2 }, { "t", 1 }, { "tint", 4 } };
         custom.customOutWidth = 4;
-        custom.customBody = "return float4(uv, t, 1.0);";
+        custom.customBody = "return float4(uv, t, 1.0) * tint;";
         custom.pinLiterals.push_back(Literal(0, 0.25f, 0.75f));   // float2 pin
         custom.pinLiterals.push_back(Literal(1, 6.0f));           // scalar pin
+        // Exactly representable values only: FormatF is "%g" over the float,
+        // so 0.1f would print its double expansion's 6 significant digits.
+        custom.pinLiterals.push_back(Literal(2, 0.25f, 0.5f, 0.75f, 1.0f));
         cg.nodes.push_back(custom);
         cg.links.push_back(Link(2, 0, 1, 0));
 
         const GraphCodegenResult cr = GenerateGraphSnippet(cg);
         REQUIRE(cr.Ok());
-        CHECK(cr.snippet.find("float4 _n2 = _cf2(float2(0.25, 0.75), 6);") !=
-              std::string::npos);
+        CHECK(cr.snippet.find("float4 _n2 = _cf2(float2(0.25, 0.75), 6, "
+                              "float4(0.25, 0.5, 0.75, 1));") != std::string::npos);
+
+        // Round-trip: the width-4 pin writes a FOUR-element array (the scalar
+        // pin's bare number and the float2's pair are covered by the
+        // pinDefaults tolerance test; this is the four-lane shape).
+        const nlohmann::json j = GraphToJson(cg);
+        const nlohmann::json& defs = j["nodes"][1]["pinDefaults"];   // nodes sort by id
+        REQUIRE(defs.is_array());
+        REQUIRE(defs.size() == 3);
+        CHECK(defs[2]["pin"] == 2);
+        REQUIRE(defs[2]["value"].is_array());
+        REQUIRE(defs[2]["value"].size() == 4);
+        CHECK(defs[2]["value"][0] == 0.25f);
+        CHECK(defs[2]["value"][3] == 1.0f);
+
+        const auto back = GraphFromJson(j);
+        REQUIRE(back.has_value());
+        const GraphPinLiteral* tint = back->FindNode(2)->FindPinLiteral(2);
+        REQUIRE(tint != nullptr);
+        CHECK(tint->v[0] == 0.25f);
+        CHECK(tint->v[1] == 0.5f);
+        CHECK(tint->v[2] == 0.75f);
+        CHECK(tint->v[3] == 1.0f);
+        CHECK(GenerateGraphSnippet(*back).snippet == cr.snippet);
     }
 }
 
@@ -722,13 +776,26 @@ TEST_CASE("pinDefaults serialization round-trip and tolerance", "[material][grap
         nlohmann::json hand = j;
         hand["nodes"][2]["pinDefaults"].push_back(
             nlohmann::json{ { "pin", 9 }, { "value", 1.0 } });   // Mul has 2 inputs
+        // This load fires a REAL ARC_WARN by design, and it still PRINTS --
+        // the capture sink is added alongside the console one, exactly as
+        // SerializationNegativeTest does. What the capture buys is that the
+        // warn becomes an assertion instead of unchecked gate output: the
+        // drop is contractually loud, not silent.
+        std::string captured;
+        auto cb = AttachLogCapture(captured);
         const auto loaded = GraphFromJson(hand);
+        DetachLogCapture(cb);
         REQUIRE(loaded.has_value());              // NOT the nullopt refusal path
         CHECK(loaded->nodes.size() == 3);
         CHECK(loaded->links.size() == 2);
         REQUIRE(loaded->FindNode(3)->pinLiterals.size() == 1);
         CHECK(loaded->FindNode(3)->FindPinLiteral(1) != nullptr);
         CHECK(loaded->FindNode(3)->FindPinLiteral(9) == nullptr);
+        // The warn names the node, the offending pin, and the pin count it
+        // was checked against.
+        CHECK(captured.find("node 3") != std::string::npos);
+        CHECK(captured.find("unknown pin 9") != std::string::npos);
+        CHECK(captured.find("2 input(s)") != std::string::npos);
     }
 
     SECTION("an absent pinDefaults field leaves the node literal-free")
@@ -739,6 +806,100 @@ TEST_CASE("pinDefaults serialization round-trip and tolerance", "[material][grap
         REQUIRE(loaded.has_value());
         CHECK(loaded->FindNode(3)->pinLiterals.empty());
         CHECK(loaded->FindNode(3)->FindPinLiteral(1) == nullptr);
+    }
+}
+
+TEST_CASE("PinAcceptsLiteral agrees with the emission switch, pin by pin",
+          "[material][graph]")
+{
+    // The tripwire for the SEAM SCOPE contract. PinAcceptsLiteral
+    // (MaterialGraph.cpp:1249-1283) is the ONE predicate the editor asks
+    // before drawing a literal widget; a pin it wrongly accepts gets a control
+    // that silently edits nothing, which is invisible until someone notices
+    // the shader ignoring a number they dragged.
+    //
+    // The expectation below is DATA, not a second copy of the switch -- a
+    // mirrored switch would pass by construction and prove nothing. Every
+    // (type, pin) NOT in this list must accept.
+    //
+    // MAINTENANCE CONTRACT: a new node type whose emission reads an
+    // unconnected pin DIRECTLY (rather than through codegen's argOr seam) must
+    // be added to the emission switch AND to PinAcceptsLiteral AND listed
+    // here, in one commit. A type that routes every operand through argOr
+    // needs no edit -- the "everything else accepts" arm covers it. Cites are
+    // into MaterialGraph.cpp.
+    struct NonArgOrPin { const char* token; std::uint32_t pin; };
+    static constexpr NonArgOrPin kExcluded[] = {
+        { "output",         0 },   // color reads in[0] directly     (:712-714)
+        { "texture_sample", 0 },   // uv -> v.uv directly            (:739-740)
+        { "sprite_texture", 0 },   // same emission case as above
+        { "pass_input",     0 },   // uv -> v.uv directly            (:973-975)
+        { "split",          0 },   // source read at native width    (:833-834)
+        { "swizzle",        0 },   // source read at native width    (:910-911)
+        { "remap",          1 },   // inRange  -> float2(0,1) direct (:875-880)
+        { "remap",          2 },   // outRange -> float2(0,1) direct (:875-880)
+        { "tiling_offset",  0 },   // uv -> v.uv directly            (:887-889)
+        { "simple_noise",   0 },   // uv -> v.uv directly            (:952-953)
+        { "vertex_output",  0 },   // connected-only, all three pins (:959-964)
+        { "vertex_output",  1 },
+        { "vertex_output",  2 },
+    };
+
+    for (const GraphNodeTypeInfo& info : AllGraphNodeInfos())
+    {
+        GraphNode n = Node(1, info.type);
+        const std::uint32_t pins = GraphNodeInputCount(n);
+        for (std::uint32_t pin = 0; pin < pins; ++pin)
+        {
+            bool excluded = false;
+            for (const NonArgOrPin& x : kExcluded)
+                excluded = excluded ||
+                           (std::string_view(info.token) == x.token && x.pin == pin);
+            INFO(info.token << " pin " << pin);
+            CHECK(PinAcceptsLiteral(n, pin) == !excluded);
+        }
+    }
+
+    // Custom's pins are PER-NODE data, so the table loop above cannot reach
+    // them (a default Custom node has none). They are ordinary argOr operands
+    // (:801) -- every one accepts, whatever its width.
+    GraphNode custom = Node(1, GraphNodeType::Custom);
+    custom.customPins = { { "uv", 2 }, { "t", 1 }, { "tint", 4 } };
+    REQUIRE(GraphNodeInputCount(custom) == 3);
+    for (std::uint32_t pin = 0; pin < 3; ++pin)
+    {
+        INFO("custom pin " << pin);
+        CHECK(PinAcceptsLiteral(custom, pin));
+    }
+
+    // The companion rule the widget sizes itself from: fixed 2/4 keep their
+    // lanes, and dynamic (0) is a SCALAR like width 1.
+    CHECK(PinLiteralLanes(0) == 1);
+    CHECK(PinLiteralLanes(1) == 1);
+    CHECK(PinLiteralLanes(2) == 2);
+    CHECK(PinLiteralLanes(4) == 4);
+
+    SECTION("the exclusion is real: an excluded pin's literal never reaches the text")
+    {
+        // TilingOffset carries one pin of each kind -- uv (excluded: reads its
+        // v.uv default directly) and offset (accepted: an argOr operand) -- so
+        // ONE snippet proves both halves against the emission switch itself,
+        // not against a restatement of it.
+        MaterialGraph g;
+        g.nodes.push_back(Node(1, GraphNodeType::Output));
+        GraphNode tile = Node(2, GraphNodeType::TilingOffset);
+        tile.pinLiterals.push_back(Literal(0, 7.0f, 7.0f));   // uv: dead data
+        tile.pinLiterals.push_back(Literal(2, 3.0f, 4.0f));   // offset: live
+        g.nodes.push_back(tile);
+        g.links.push_back(Link(2, 0, 1, 0));
+
+        const GraphCodegenResult r = GenerateGraphSnippet(g);
+        REQUIRE(r.Ok());
+        CHECK(r.snippet.find("v.uv * ") != std::string::npos);          // uv literal ignored
+        CHECK(r.snippet.find("float2(7, 7)") == std::string::npos);
+        CHECK(r.snippet.find("float2(3, 4)") != std::string::npos);     // offset literal used
+        CHECK_FALSE(PinAcceptsLiteral(tile, 0));
+        CHECK(PinAcceptsLiteral(tile, 2));
     }
 }
 

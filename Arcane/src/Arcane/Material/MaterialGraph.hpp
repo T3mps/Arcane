@@ -153,6 +153,24 @@ namespace Arcane
         int         width;   // 1/2/4, or 0 = dynamic
     };
 
+    // Create-menu grouping. DISPLAY ONLY: never serialized, never read by
+    // codegen, and free to be re-cut whenever the menu reads badly -- moving a
+    // node between categories changes nothing but where it sits in the popup.
+    // ENUM ORDER IS THE MENU ORDER (the UE/Unity instinct: sources first, then
+    // the arithmetic, then the lane plumbing, then the generators, then the
+    // graph's contexts, then the escapes).
+    enum class GraphNodeCategory : std::uint8_t
+    {
+        Input,        // sources: constants, params, texture reads, uv/time/color
+        Math,         // arithmetic, curves, and the range kernels
+        Vector,       // lane plumbing (split/combine/swizzle) + vector kernels
+        Procedural,   // generators and uv transforms
+        Output,       // the graph's result contexts
+        Utility,      // designer escapes and canvas furniture
+    };
+
+    [[nodiscard]] ARCANE_API const char* GraphNodeCategoryName(GraphNodeCategory c) noexcept;
+
     // Static per-type description -- THE node table (SG lesson: ~90% of a node
     // library is data, not code). Codegen, the canvas (labels, pin colors,
     // create menu), and serialization all read this one table; adding a node
@@ -169,6 +187,10 @@ namespace Arcane
         const char*   display;   // canvas title / create-menu label
         std::span<const GraphPinDesc> inputs;
         std::span<const GraphPinDesc> outputs;
+        // APPENDED (2026-07-29), display-only -- see GraphNodeCategory above.
+        // Last on purpose: the member order is the table's initializer order,
+        // so appending leaves all 49 existing rows' meaning untouched.
+        GraphNodeCategory category;
     };
 
     [[nodiscard]] ARCANE_API const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept;
@@ -189,7 +211,7 @@ namespace Arcane
     // DECLARED width -- 1/2/4 fixed, and a SCALAR for dynamic (width-0) pins.
     // A literal never enters dynamic-width resolution regardless of lane
     // count -- that loop reads only CONNECTED inputs (MaterialGraph.cpp:
-    // 597-600). The scalar choice instead means a literal on a dynamic pin
+    // 659-662). The scalar choice instead means a literal on a dynamic pin
     // splats to whatever width the node resolves to, so it never needs
     // re-authoring when wiring changes. Unused lanes stay 0.
     struct GraphPinLiteral
@@ -263,7 +285,7 @@ namespace Arcane
         //
         // INVARIANT: at most one entry per pin. GraphFromJson's pinDefaults
         // loop keeps the first entry when a pin is duplicated on load
-        // (MaterialGraph.cpp:1444-1445), and FindPinLiteral below returns the
+        // (MaterialGraph.cpp:1559-1560), and FindPinLiteral below returns the
         // first match, so callers that mutate this vector must update an
         // existing entry in place rather than append a duplicate.
         //
@@ -352,6 +374,26 @@ namespace Arcane
                                                             std::uint32_t pin) noexcept;
     [[nodiscard]] ARCANE_API GraphPinDesc GraphNodeOutputPin(const GraphNode& n,
                                                              std::uint32_t pin) noexcept;
+
+    // Does a literal on `pin` actually REACH codegen? Only pins emitted
+    // through the argOr seam read one -- the SEAM SCOPE note on
+    // GraphNode::pinLiterals above is the contract, and this is that note as
+    // code. Pins that consume their unconnected default DIRECTLY ignore
+    // literals entirely, so a widget offered on one of those is a control that
+    // silently does nothing; ask this before drawing it. Lives beside the
+    // emission switch it mirrors (MaterialGraph.cpp) so the two move together,
+    // with MaterialGraphTest.cpp's explicit truth table as the tripwire when
+    // they do not.
+    [[nodiscard]] ARCANE_API bool PinAcceptsLiteral(const GraphNode& n,
+                                                    std::uint32_t pin) noexcept;
+
+    // How many lanes a literal stores for a pin of `declaredWidth` (the
+    // GraphPinDesc.width of the pin, hence int): fixed 2/4 keep their lanes,
+    // everything else -- INCLUDING dynamic (width-0) pins -- is a scalar.
+    // Codegen, the serializer and the editor's drag widget all read this ONE
+    // rule; a widget that edits more lanes than the file stores would show
+    // values that never survive a save.
+    [[nodiscard]] ARCANE_API int PinLiteralLanes(int declaredWidth) noexcept;
 
     // Structured codegen diagnostics: the canvas badges the offending node (SG:
     // one badge per node, message on hover). nodeId 0 = graph-level message.

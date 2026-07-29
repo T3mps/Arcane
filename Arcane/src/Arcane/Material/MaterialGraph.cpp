@@ -50,67 +50,123 @@ namespace Arcane
         constexpr std::span<const GraphPinDesc> Pins(const GraphPinDesc (&a)[N]) { return { a, N }; }
         constexpr std::span<const GraphPinDesc> NoPins() { return { kNoPins, std::size_t(0) }; }
 
+        // Row-local sugar for the last column only -- spelling
+        // GraphNodeCategory in 49 rows buys nothing that Cat:: does not, while
+        // GraphNodeType stays written out so the enum remains greppable from
+        // the table. Each row wraps onto two lines because the sixth column
+        // does not fit in one (the file's next-longest line is ~100 chars).
+        using Cat = GraphNodeCategory;
+
         const GraphNodeTypeInfo kNodeInfos[] = {
-            { GraphNodeType::Output,        "output",         "Output",         Pins(kOutputIn), NoPins()          },
-            { GraphNodeType::ConstFloat,    "const_float",    "Float",          NoPins(),        Pins(kOut1)       },
-            { GraphNodeType::ConstFloat2,   "const_float2",   "Float2",         NoPins(),        Pins(kOut2)       },
-            { GraphNodeType::ConstFloat4,   "const_float4",   "Float4",         NoPins(),        Pins(kOut4)       },
-            { GraphNodeType::ConstColor,    "const_color",    "Color",          NoPins(),        Pins(kOut4)       },
-            { GraphNodeType::Param,         "param",          "Param",          NoPins(),        Pins(kOutDyn)     },
-            { GraphNodeType::TextureSample, "texture_sample", "Texture Sample", Pins(kUvIn),     Pins(kSampleOut)  },
-            { GraphNodeType::SpriteTexture, "sprite_texture", "Sprite Texture", Pins(kUvIn),     Pins(kSampleOut)  },
-            { GraphNodeType::UV,            "uv",             "UV",             NoPins(),        Pins(kOut2)       },
-            { GraphNodeType::Time,          "time",           "Time",           NoPins(),        Pins(kOut1)       },
-            { GraphNodeType::VertexColor,   "vertex_color",   "Vertex Color",   NoPins(),        Pins(kOut4)       },
-            { GraphNodeType::Add,           "add",            "Add",            Pins(kBinaryIn), Pins(kOutDyn)     },
-            { GraphNodeType::Sub,           "sub",            "Subtract",       Pins(kBinaryIn), Pins(kOutDyn)     },
-            { GraphNodeType::Mul,           "mul",            "Multiply",       Pins(kBinaryIn), Pins(kOutDyn)     },
-            { GraphNodeType::Lerp,          "lerp",           "Lerp",           Pins(kLerpIn),   Pins(kOutDyn)     },
-            { GraphNodeType::Sin,           "sin",            "Sine",           Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Fraction,      "fraction",       "Fraction",       Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Saturate,      "saturate",       "Saturate",       Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::OneMinus,      "one_minus",      "One Minus",      Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Split,         "split",          "Split",          Pins(kUnaryIn),  Pins(kSplitOut)   },
+            { GraphNodeType::Output,        "output",         "Output",
+              Pins(kOutputIn),    NoPins(),         Cat::Output },
+            { GraphNodeType::ConstFloat,    "const_float",    "Float",
+              NoPins(),           Pins(kOut1),      Cat::Input },
+            { GraphNodeType::ConstFloat2,   "const_float2",   "Float2",
+              NoPins(),           Pins(kOut2),      Cat::Input },
+            { GraphNodeType::ConstFloat4,   "const_float4",   "Float4",
+              NoPins(),           Pins(kOut4),      Cat::Input },
+            { GraphNodeType::ConstColor,    "const_color",    "Color",
+              NoPins(),           Pins(kOut4),      Cat::Input },
+            { GraphNodeType::Param,         "param",          "Param",
+              NoPins(),           Pins(kOutDyn),    Cat::Input },
+            { GraphNodeType::TextureSample, "texture_sample", "Texture Sample",
+              Pins(kUvIn),        Pins(kSampleOut), Cat::Input },
+            { GraphNodeType::SpriteTexture, "sprite_texture", "Sprite Texture",
+              Pins(kUvIn),        Pins(kSampleOut), Cat::Input },
+            { GraphNodeType::UV,            "uv",             "UV",
+              NoPins(),           Pins(kOut2),      Cat::Input },
+            { GraphNodeType::Time,          "time",           "Time",
+              NoPins(),           Pins(kOut1),      Cat::Input },
+            { GraphNodeType::VertexColor,   "vertex_color",   "Vertex Color",
+              NoPins(),           Pins(kOut4),      Cat::Input },
+            { GraphNodeType::Add,           "add",            "Add",
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Sub,           "sub",            "Subtract",
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Mul,           "mul",            "Multiply",
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Lerp,          "lerp",           "Lerp",
+              Pins(kLerpIn),      Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Sin,           "sin",            "Sine",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Fraction,      "fraction",       "Fraction",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Saturate,      "saturate",       "Saturate",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::OneMinus,      "one_minus",      "One Minus",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Split,         "split",          "Split",
+              Pins(kUnaryIn),     Pins(kSplitOut),  Cat::Vector },
             // Custom's pins are PER-NODE data -- the table spans stay empty and
             // every pin query routes through GraphNodeInput/OutputPin below.
-            { GraphNodeType::Custom,        "custom",         "Custom (HLSL)",  NoPins(),        NoPins()          },
-            { GraphNodeType::Combine,       "combine",        "Combine",        Pins(kCombineIn), Pins(kOut4)      },
-            { GraphNodeType::Clamp,         "clamp",          "Clamp",          Pins(kClampIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Smoothstep,    "smoothstep",     "Smoothstep",     Pins(kSmoothIn), Pins(kOutDyn)     },
-            { GraphNodeType::Step,          "step",           "Step",           Pins(kStepIn),   Pins(kOutDyn)     },
-            { GraphNodeType::Power,         "power",          "Power",          Pins(kBinaryIn), Pins(kOutDyn)     },
-            { GraphNodeType::Remap,         "remap",          "Remap",          Pins(kRemapIn),  Pins(kOutDyn)     },
-            { GraphNodeType::TilingOffset,  "tiling_offset",  "Tiling & Offset", Pins(kTileIn),  Pins(kOut2)       },
-            { GraphNodeType::Cos,           "cos",            "Cosine",         Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Abs,           "abs",            "Absolute",       Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Min,           "min",            "Minimum",        Pins(kBinaryIn), Pins(kOutDyn)     },
-            { GraphNodeType::Max,           "max",            "Maximum",        Pins(kBinaryIn), Pins(kOutDyn)     },
+            { GraphNodeType::Custom,        "custom",         "Custom (HLSL)",
+              NoPins(),           NoPins(),         Cat::Utility },
+            { GraphNodeType::Combine,       "combine",        "Combine",
+              Pins(kCombineIn),   Pins(kOut4),      Cat::Vector },
+            { GraphNodeType::Clamp,         "clamp",          "Clamp",
+              Pins(kClampIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Smoothstep,    "smoothstep",     "Smoothstep",
+              Pins(kSmoothIn),    Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Step,          "step",           "Step",
+              Pins(kStepIn),      Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Power,         "power",          "Power",
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Remap,         "remap",          "Remap",
+              Pins(kRemapIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::TilingOffset,  "tiling_offset",  "Tiling & Offset",
+              Pins(kTileIn),      Pins(kOut2),      Cat::Procedural },
+            { GraphNodeType::Cos,           "cos",            "Cosine",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Abs,           "abs",            "Absolute",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Min,           "min",            "Minimum",
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Max,           "max",            "Maximum",
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
             // Swizzle's OUTPUT width is per-node data (the mask length) -- the
             // dynamic 0 here resolves through widthOf, which the emission case
             // pins to the mask (the Param pattern).
-            { GraphNodeType::Swizzle,       "swizzle",        "Swizzle",        Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::SimpleNoise,   "simple_noise",   "Simple Noise",   Pins(kNoiseIn),  Pins(kOut1)       },
-            { GraphNodeType::PassInput,     "pass_input",     "Pass Input",     Pins(kUvIn),     Pins(kSampleOut)  },
-            { GraphNodeType::VertexOutput,  "vertex_output",  "Vertex Output",  Pins(kVertexOutIn), NoPins()        },
-            { GraphNodeType::Comment,       "comment",        "Comment",        NoPins(),        NoPins()          },
+            { GraphNodeType::Swizzle,       "swizzle",        "Swizzle",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Vector },
+            { GraphNodeType::SimpleNoise,   "simple_noise",   "Simple Noise",
+              Pins(kNoiseIn),     Pins(kOut1),      Cat::Procedural },
+            { GraphNodeType::PassInput,     "pass_input",     "Pass Input",
+              Pins(kUvIn),        Pins(kSampleOut), Cat::Input },
+            { GraphNodeType::VertexOutput,  "vertex_output",  "Vertex Output",
+              Pins(kVertexOutIn), NoPins(),         Cat::Output },
+            { GraphNodeType::Comment,       "comment",        "Comment",
+              NoPins(),           NoPins(),         Cat::Utility },
             // Library growth batch 2 -- appended in the header's enum order.
-            { GraphNodeType::Exp,           "exp",            "Exponential",    Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Negate,        "negate",         "Negate",         Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Floor,         "floor",          "Floor",          Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Ceil,          "ceil",           "Ceiling",        Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Round,         "round",          "Round",          Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Sign,          "sign",           "Sign",           Pins(kUnaryIn),  Pins(kOutDyn)     },
-            { GraphNodeType::Normalize,     "normalize",      "Normalize",      Pins(kUnaryIn),  Pins(kOutDyn)     },
+            { GraphNodeType::Exp,           "exp",            "Exponential",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Negate,        "negate",         "Negate",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Floor,         "floor",          "Floor",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Ceil,          "ceil",           "Ceiling",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Round,         "round",          "Round",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Sign,          "sign",           "Sign",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+            { GraphNodeType::Normalize,     "normalize",      "Normalize",
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Vector },
             // Fixed width-1 OUTPUT -- the SimpleNoise row above is the
             // fixed-out-1 precedent (its INPUTS are fixed-width, unlike
             // these): the emission case adapts the operands to the node's
             // resolved width, then the intrinsic collapses to one float.
-            { GraphNodeType::Length,        "length",         "Length",         Pins(kUnaryIn),  Pins(kOut1)       },
-            { GraphNodeType::Distance,      "distance",       "Distance",       Pins(kBinaryIn), Pins(kOut1)       },
-            { GraphNodeType::Dot,           "dot",            "Dot Product",    Pins(kBinaryIn), Pins(kOut1)       },
-            { GraphNodeType::Panner,        "panner",         "Panner",         Pins(kPannerIn), Pins(kOut2)       },
+            { GraphNodeType::Length,        "length",         "Length",
+              Pins(kUnaryIn),     Pins(kOut1),      Cat::Vector },
+            { GraphNodeType::Distance,      "distance",       "Distance",
+              Pins(kBinaryIn),    Pins(kOut1),      Cat::Vector },
+            { GraphNodeType::Dot,           "dot",            "Dot Product",
+              Pins(kBinaryIn),    Pins(kOut1),      Cat::Vector },
+            { GraphNodeType::Panner,        "panner",         "Panner",
+              Pins(kPannerIn),    Pins(kOut2),      Cat::Procedural },
             // Gap-close -- appended in the header's enum order.
-            { GraphNodeType::ScaleOffset,   "scale_offset",   "Scale & Offset", Pins(kBiasScaleIn), Pins(kOutDyn)  },
+            { GraphNodeType::ScaleOffset,   "scale_offset",   "Scale & Offset",
+              Pins(kBiasScaleIn), Pins(kOutDyn),    Cat::Math },
         };
     }
 
@@ -161,6 +217,22 @@ namespace Arcane
         return { kNodeInfos, std::size(kNodeInfos) };
     }
 
+    const char* GraphNodeCategoryName(GraphNodeCategory c) noexcept
+    {
+        // Menu headings. Lives here, beside the column it names, so a new
+        // category is one enum value + one row here + the rows that use it.
+        switch (c)
+        {
+            case GraphNodeCategory::Input:      return "Input";
+            case GraphNodeCategory::Math:       return "Math";
+            case GraphNodeCategory::Vector:     return "Vector";
+            case GraphNodeCategory::Procedural: return "Procedural";
+            case GraphNodeCategory::Output:     return "Output";
+            case GraphNodeCategory::Utility:    return "Utility";
+        }
+        return "Utility";   // unreachable for a valid enumerator; no UB on a cast-in value
+    }
+
     bool GraphNodeTypeFromToken(std::string_view token, GraphNodeType& out) noexcept
     {
         for (const GraphNodeTypeInfo& info : kNodeInfos)
@@ -205,16 +277,6 @@ namespace Arcane
             char buf[48];
             std::snprintf(buf, sizeof(buf), "%g", v);
             return buf;
-        }
-
-        // How many lanes a pin literal stores for a pin of declared `width`:
-        // fixed 2/4 keep their lanes, everything else -- including DYNAMIC
-        // (width-0) pins -- is a scalar. Width resolution (:597-600) reads
-        // only CONNECTED inputs, excluding a literal regardless of lane
-        // count; the scalar choice instead splats it to the resolved width.
-        int PinLiteralLanes(int width)
-        {
-            return width == 2 ? 2 : width == 4 ? 4 : 1;
         }
 
         // A pin literal as an HLSL constant, formatted exactly like the Const*
@@ -1165,6 +1227,59 @@ namespace Arcane
         pg.nodes.push_back(std::move(wrap));
 
         return GenerateGraphSnippet(pg, MaterialSurface::Fullscreen, availableInputs);
+    }
+
+    // ------------------------------------------------- pin-literal predicates
+    // The two rules the emission switch above encodes, exported so this file
+    // is the ONE authority: the editor asks them to decide whether a pin gets
+    // a literal widget at all and how many lanes that widget edits. They live
+    // here, beside the switch they mirror, precisely because a duplicate on
+    // the editor side would drift silently.
+
+    int PinLiteralLanes(int declaredWidth) noexcept
+    {
+        // Fixed 2/4 keep their lanes; everything else -- INCLUDING dynamic
+        // (width-0) pins -- is a scalar. Width resolution (:659-662) reads
+        // only CONNECTED inputs, so a literal never pins a node's width
+        // regardless of lane count; the scalar choice instead splats it to
+        // whatever width the node resolves to.
+        return declaredWidth == 2 ? 2 : declaredWidth == 4 ? 4 : 1;
+    }
+
+    bool PinAcceptsLiteral(const GraphNode& n, std::uint32_t pin) noexcept
+    {
+        // The SEAM SCOPE exclusion switch. Every case below names an emission
+        // case ABOVE that reads its unconnected input DIRECTLY instead of
+        // through argOr (:685-701, whose literal branch is :692-699), so a
+        // literal stored on that pin is dead data. Cites are into this file.
+        //
+        // MAINTENANCE CONTRACT: a node type added to the emission switch that
+        // bypasses argOr on any pin must be added here in the SAME commit.
+        // MaterialGraphTest.cpp's explicit truth table fails otherwise, which
+        // is the whole point of it existing -- the failure mode this replaces
+        // was a dead editor widget nobody could see was dead.
+        switch (n.type)
+        {
+            case GraphNodeType::Output:          // :712-714
+            case GraphNodeType::TextureSample:   // :739-740, shared with
+            case GraphNodeType::SpriteTexture:   //   SpriteTexture
+            case GraphNodeType::PassInput:       // :973-975
+            case GraphNodeType::Split:           // :833-834
+            case GraphNodeType::Swizzle:         // :910-911
+            case GraphNodeType::VertexOutput:    // :959-964 (all three pins)
+                return false;                    // every input pin bypasses argOr
+            case GraphNodeType::TilingOffset:    // uv reads v.uv direct (:887-889)
+            case GraphNodeType::SimpleNoise:     // uv likewise (:952-953)
+                return pin != 0;
+            case GraphNodeType::Remap:           // ranges read float2(0,1) (:875-880)
+                return pin == 0;
+            default:
+                // Everything else routes every operand pin through argOr,
+                // INCLUDING Custom nodes' per-node pins (:801) and Panner's
+                // uv, which -- unlike TilingOffset's -- takes its v.uv
+                // neutral THROUGH the seam as a width-2 default (:1056).
+                return true;
+        }
     }
 
     // ------------------------------------------------------------------- json
