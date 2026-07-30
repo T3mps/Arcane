@@ -53,11 +53,13 @@ namespace Arcane::Editor
             std::snprintf(out, 10, "%02X%02X%02X%02X", b(c[0]), b(c[1]), b(c[2]), b(c[3]));
         }
 
-        // Returns true when `text` parsed as RRGGBB or RRGGBBAA. Alpha defaults to
-        // the incoming value so a 6-digit paste does not silently clear it.
+        // Returns true when `text` parsed as RRGGBB or RRGGBBAA. A 6-digit form
+        // leaves out[3] AS THE CALLER SEEDED IT, so a 6-digit paste keeps the
+        // colour's existing alpha rather than forcing it opaque.
         bool ParseHex(const char* text, float out[4]) noexcept
         {
-            unsigned r = 0, g = 0, b = 0, a = 255;
+            unsigned r = 0, g = 0, b = 0, a = 0;
+            bool haveAlpha = false;
             const std::size_t n = std::strlen(text);
             if (n == 6)
             {
@@ -66,13 +68,15 @@ namespace Arcane::Editor
             else if (n == 8)
             {
                 if (std::sscanf(text, "%2x%2x%2x%2x", &r, &g, &b, &a) != 4) return false;
+                haveAlpha = true;
             }
             else
             {
                 return false;
             }
-            out[0] = r / 255.0f; out[1] = g / 255.0f;
-            out[2] = b / 255.0f; out[3] = a / 255.0f;
+            out[0] = r / 255.0f; out[1] = g / 255.0f; out[2] = b / 255.0f;
+            if (haveAlpha)
+                out[3] = a / 255.0f;
             return true;
         }
 
@@ -86,6 +90,9 @@ namespace Arcane::Editor
             char buf[10];
             HexOf(shown, buf);
 
+            char seed[10];
+            std::memcpy(seed, buf, sizeof(seed));
+
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
             const bool committed = ImGui::InputText(label, buf, sizeof(buf),
                                                     ImGuiInputTextFlags_CharsHexadecimal
@@ -94,7 +101,13 @@ namespace Arcane::Editor
             if (!committed)
                 return false;
 
+            if (std::strcmp(buf, seed) == 0)
+                return false;      // bare Enter on an untouched field is not an edit --
+                                   // reparsing would re-quantize storage to 8 bits and
+                                   // report a change the user never made
+
             float parsed[4];
+            std::memcpy(parsed, shown, sizeof(parsed));   // alpha survives a 6-digit entry
             if (!ParseHex(buf, parsed))
                 return false;          // garbage typed -- reverts on the next frame's reseed
 
@@ -115,9 +128,13 @@ namespace Arcane::Editor
         if (size.y <= 0.0f) size.y = ImGui::GetFrameHeight();
         // AlphaPreviewHalf so a translucent colour is legible; NoTooltip because the
         // popup is one click away and a tooltip over a button that opens it is noise.
+        // NoDragDrop: this swatch is deliberately ENCODED, and ImGui's colour
+        // drag-drop payload is raw floats -- dropping it on a linear-space widget
+        // would write the sRGB number into linear storage.
         return ImGui::ColorButton(id, SwatchColor(linear),
                                   ImGuiColorEditFlags_AlphaPreviewHalf
-                                  | ImGuiColorEditFlags_NoTooltip,
+                                  | ImGuiColorEditFlags_NoTooltip
+                                  | ImGuiColorEditFlags_NoDragDrop,
                                   size);
     }
 
@@ -131,11 +148,13 @@ namespace Arcane::Editor
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Old");
         ImGui::ColorButton("##old", SwatchColor(original),
-                           ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoTooltip,
+                           ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoTooltip
+                           | ImGuiColorEditFlags_NoDragDrop,
                            ImVec2(ImGui::GetFontSize() * 4.0f, ImGui::GetFontSize() * 1.5f));
         ImGui::TextUnformatted("New");
         ImGui::ColorButton("##new", SwatchColor(linear),
-                           ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoTooltip,
+                           ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoTooltip
+                           | ImGuiColorEditFlags_NoDragDrop,
                            ImVec2(ImGui::GetFontSize() * 4.0f, ImGui::GetFontSize() * 1.5f));
         ImGui::EndGroup();
         ImGui::SameLine();
@@ -170,12 +189,18 @@ namespace Arcane::Editor
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.0f);
         // NoPicker/NoSmallPreview: this row is a numeric readout of storage, not a
         // second picker. Float display because storage IS float and this is the row
-        // that never lies about the space.
+        // that never lies about the space. DisplayRGB and NoOptions PIN that: without
+        // them the mode comes from the global g.ColorEditOptions and this row's own
+        // right-click menu can switch it to HSV, which would both mislabel the space
+        // and clobber the hue/saturation slot the picker above restores from.
         if (ImGui::ColorEdit4("##linear", linear,
                               ImGuiColorEditFlags_Float
                               | ImGuiColorEditFlags_NoPicker
                               | ImGuiColorEditFlags_NoSmallPreview
                               | ImGuiColorEditFlags_NoLabel
+                              | ImGuiColorEditFlags_NoDragDrop
+                              | ImGuiColorEditFlags_DisplayRGB
+                              | ImGuiColorEditFlags_NoOptions
                               | (hdr ? ImGuiColorEditFlags_HDR : 0)))
             changed = true;
 

@@ -15,7 +15,7 @@
 //     sRGB. This is forced, not chosen: the SV cursor position and picking response
 //     derive from HSV of the buffer, so linear values put display 0.735-1.0 across
 //     half the picking area and crush the whole shadow range into a sliver. Its
-//     alpha-bar tint (imgui_widgets.cpp:350) and side preview (:397) read the buffer
+//     alpha-bar tint (imgui_widgets.cpp:6350) and side preview (:6245) read the buffer
 //     too and render dark. Every colour picker works in gamma space for this reason.
 //   * Both hexes are shown, always, each labelled. Better than UE, which switches
 //     ONE field between modes (SColorPicker.cpp:378-413) and so still lets a reader
@@ -52,9 +52,11 @@ namespace Arcane::Editor
     //
     // `linear` is read and written in linear. `original` is the colour as it was
     // when the popup opened, for the Old/New pair -- the caller latches it once on
-    // open. `hdr` skips the sRGB encode and hides both hex rows, for values that may
-    // exceed 1 (a ConstColor node feeds raw shader maths); the SV response is poor
-    // for those, which is inherent and equally true in UE.
+    // open. `hdr` skips the sRGB encode for the PICKER BUFFER only and hides both hex
+    // rows, for values that may exceed 1 (a ConstColor node feeds raw shader maths);
+    // the Old/New swatches still encode unconditionally through SwatchColor regardless
+    // of `hdr` (swatches are ALWAYS encoded, per the contract above). The SV response
+    // is poor for HDR values, which is inherent and equally true in UE.
     //
     // Returns true only on frames ImGui reported a change.
     [[nodiscard]] bool ColorPopupBody(float linear[4], const float original[4], bool hdr);
