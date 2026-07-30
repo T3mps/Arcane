@@ -7,6 +7,7 @@
 #include "RuntimeApp.hpp"
 
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Assets/Assets.hpp>      // Arcane::SaveTexturePng (--screenshot)
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
@@ -60,6 +61,23 @@ bool RuntimeApp::Init()
     // and the test TUs that reflect these types are never unloaded, so their thunks -- not the
     // plugin's -- own the MetaRegistry entries.)
     m_typeContext = new Astra::TypeContext();
+    // Install the shared context in THIS module too. Astra's
+    // GetTypeContext()/SetTypeContext() resolve through a PER-MODULE static slot by
+    // design, and Runtime's ctor only installs it for Arcane.dll's slot
+    // (Runtime.cpp:120) -- ArcaneRuntime.exe is a separate binary and needs its own
+    // install, exactly as ArcaneEditor.exe does (EditorApp.cpp).
+    //
+    // THIS LINE'S ABSENCE WAS A REAL BUG (2026-07-30): the exe compiles the
+    // header-only ActiveSceneCamera sweep, so its TypeID<Camera>::Value() resolved
+    // against this module's own EMPTY DefaultTypeContext() and got an id that
+    // aliased Transform's in the shared one. CreateView<Camera> then returned every
+    // entity that had a Transform and read those bytes as a Camera -- position.x
+    // landed in orthographicSize, read 0, so the sweep reported "no usable camera",
+    // the view stayed identity at 1 px per metre, and a 1 m sprite drew as a
+    // single pixel in the corner. It looked exactly like "the sprite is missing".
+    // Nothing caught it because until the camera became a scene component this exe
+    // never touched a component type from its OWN code -- it only drove the plugin.
+    Astra::SetTypeContext(m_typeContext);
     // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
     // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is headless -> false ->
     // miniaudio's null backend (no real device grabbed on a CI box).
@@ -71,6 +89,13 @@ bool RuntimeApp::Init()
     // plugin (m_gpu is declared before the runtime/plugin in RuntimeApp). Null in a
     // headless host -> the plugin skips its GPU-resource creation.
     m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
+
+    // Prove the install above actually took, rather than trusting it: the failure
+    // mode is silent aliasing, not a crash, so it needs a tripwire that compares
+    // THIS module's component id against the registry's. Non-fatal by choice -- a
+    // host with a mismatch still runs (badly), and the error line is what turns
+    // "my sprite is invisible" into a five-second diagnosis.
+    (void)Arcane::HostBoot::VerifySharedTypeContext(m_runtime->Registry(), "ArcaneRuntime.exe");
 
     // Open the project (if any) BEFORE loading input + the game module: both come from
     // the project when one is given. No --project => CurrentProject() stays null and the
@@ -348,8 +373,24 @@ void RuntimeApp::MainLoop()
                 m_runtime->SetCamera(view->offset, view->zoom);
             else if (!m_warnedNoSceneCamera)
             {
-                ARC_WARN("scene has no active Camera entity -- nothing sets the view. "
-                         "Add a Camera component to an entity (a New Scene ships one).");
+                // The old message said "no active Camera entity" for THREE
+                // different situations and cost a debugging round: no Camera
+                // component in the scene at all, one present but active==false or
+                // orthographicSize<=0, or a component view that is empty in THIS
+                // module because it disagrees with the loader about the component
+                // id. Count the components here, host-side, and say which it is --
+                // the resolver logs its own census from inside Arcane.dll, so the
+                // two lines together localise the last case.
+                int total = 0;
+                m_runtime->Registry().CreateView<Arcane::Camera>().ForEach(
+                    [&](Astra::Entity, Arcane::Camera&) { ++total; });
+                if (total == 0)
+                    ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
+                             "Add a Camera component to an entity (a New Scene ships one).");
+                else
+                    ARC_WARN("scene carries {} Camera component(s) but none is usable "
+                             "(active == false, or orthographicSize <= 0) -- nothing sets "
+                             "the view", total);
                 m_warnedNoSceneCamera = true;
             }
             if (camCount > 1 && !m_warnedMultiSceneCamera)
@@ -431,7 +472,23 @@ void RuntimeApp::MainLoop()
         }
 
         ++m_frameCount;
-        if (m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames)
+        const bool lastFrame = m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames;
+
+        // --screenshot: capture the BACKBUFFER we just presented -- post-tonemap,
+        // post-ImGui, i.e. exactly the pixels a player sees. Taken on the final frame
+        // only, and SaveTexturePng stalls the device (staging copy + waitForIdle), so
+        // it never touches a steady-state frame. After Present, so the capture cannot
+        // race the recording that produced it.
+        if (lastFrame && !m_config.screenshotPath.empty())
+        {
+            if (Arcane::SaveTexturePng(m_gpu->Device().Nvrhi(), backbuffer,
+                                       m_config.screenshotPath))
+                ARC_INFO("screenshot written: {}", m_config.screenshotPath);
+            else
+                ARC_WARN("screenshot FAILED: {}", m_config.screenshotPath);
+        }
+
+        if (lastFrame)
             running = false;
     }
 }

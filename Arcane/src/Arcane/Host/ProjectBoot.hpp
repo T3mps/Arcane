@@ -15,7 +15,11 @@
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (engine identity probe)
 #include <Arcane/Project/AssetId.hpp>            // AssetId::FromGuid (BootSceneFile)
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Scene/Components.hpp>            // Arcane::Transform (VerifySharedTypeContext's default probe)
 #include <Arcane/Serialization/SceneAsset.hpp>    // ReadSceneFile/ApplySceneDocument/CreateEmpty (BootScene)
+
+#include <Astra/Component/ComponentRegistry.hpp>  // GetComponentIDFromHash (VerifySharedTypeContext)
+#include <Astra/Core/TypeID.hpp>                  // TypeID<T>::Value/Hash/Name (ditto)
 
 #include <Json.hpp>
 
@@ -29,6 +33,49 @@
 
 namespace Arcane::HostBoot
 {
+    // Is THIS module on the same Astra TypeContext as the engine's registry?
+    //
+    // Astra resolves GetTypeContext()/SetTypeContext() through a PER-MODULE static
+    // slot by design, so every binary that touches a component type must install the
+    // shared context itself (Runtime's ctor covers Arcane.dll only). A host that
+    // forgets gets its own empty DefaultTypeContext, and its TypeID<T>::Value()
+    // assigns ids from a private counter -- which silently ALIAS the shared ids.
+    // The failure is not a crash and not a miss: a view returns the wrong
+    // component's entities and reinterprets its bytes.
+    //
+    // That cost an evening (2026-07-30): ArcaneRuntime.exe lacked the install, so
+    // its TypeID<Camera> aliased Transform, ActiveSceneCamera read position.x as
+    // orthographicSize, saw 0, reported "no usable camera", and every scene rendered
+    // at 1 px per metre -- indistinguishable from "my sprite is missing".
+    //
+    // Being inline, this compiles into the CALLER's module, which is the only place
+    // the question can be asked. Call it once at boot, after the Runtime exists.
+    // Compares the caller-module id for a known engine component against the id the
+    // registry (populated inside Arcane.dll) holds for the same STABLE name hash.
+    // Returns false and logs ARC_ERROR on mismatch; true when correct or when the
+    // component is not registered yet (nothing to contradict).
+    template<typename Probe = Arcane::Transform>
+    inline bool VerifySharedTypeContext(const Astra::Registry& reg, const char* moduleName)
+    {
+        const auto* creg = reg.GetComponentRegistry();
+        if (!creg)
+            return true;
+        const auto shared = creg->GetComponentIDFromHash(Astra::TypeID<Probe>::Hash());
+        if (shared.IsErr())
+            return true;   // not registered yet -- no contradiction to report
+        const Astra::ComponentID mine = Astra::TypeID<Probe>::Value();
+        if (mine == *shared.GetValue())
+            return true;
+        ARC_ERROR("{}: this module is NOT on the engine's Astra TypeContext "
+                  "({} resolves to id {} here but id {} in the registry). Call "
+                  "Astra::SetTypeContext(ctx) in this module at boot -- every "
+                  "component view and GetComponent in it is reading the WRONG "
+                  "component's memory.",
+                  moduleName, Astra::TypeID<Probe>::Name(),
+                  (unsigned)mine, (unsigned)*shared.GetValue());
+        return false;
+    }
+
     // One-line JSON describing this engine build, for `--print-engine-info`.
     //
     // This exists so the Arcane Hub never HARDCODES a plugin ABI. A .arcproj

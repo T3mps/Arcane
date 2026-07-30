@@ -12,6 +12,7 @@ namespace Arcane
         cli.Option("plugin",  "",            "game DLL to host (empty = host default: ArcaneRuntime Sandbox.dll, editor none)");
         cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
+        cli.Option("screenshot", "", "write the last rendered frame to this PNG before exiting (pairs with --frames)");
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
 
         const Cli::Result r = cli.Parse(argc, argv);
@@ -25,6 +26,7 @@ namespace Arcane
         cfg.pluginPath = r.Get("plugin");
         cfg.projectPath = r.Get("project");
         cfg.sceneOverride = r.Get("scene");
+        cfg.screenshotPath = r.Get("screenshot");
         cfg.printEngineInfo = r.Flag("print-engine-info");
         return { cfg, 0 };
     }

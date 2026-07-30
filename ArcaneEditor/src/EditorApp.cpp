@@ -244,6 +244,13 @@ namespace Arcane::Editor
         // a headless host -> the plugin skips its GPU-resource creation.
         m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
 
+        // Prove the SetTypeContext install above actually took. It does today, but the
+        // failure mode is silent id ALIASING rather than a crash or a miss -- the same
+        // gap in ArcaneRuntime.exe made every scene there render at 1 px per metre and
+        // read like "my sprite is missing" (2026-07-30). Both hosts assert it now, so
+        // a future reorder of this boot sequence says so instead of rendering nonsense.
+        (void)Arcane::HostBoot::VerifySharedTypeContext(m_runtime->Registry(), "ArcaneEditor.exe");
+
         // Open the project (if any) BEFORE loading input + the game module (mirrors ArcaneRuntime).
         if (!m_config.projectPath.empty())
         {

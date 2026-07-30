@@ -23,6 +23,19 @@ namespace Arcane
         // the manifest. Editor separate-window play passes the ACTIVE scene here.
         std::string     sceneOverride = "";
 
+        // Write the LAST rendered frame to this PNG before exiting. Empty = off.
+        //
+        // This is the scripted GPU-verify's missing half. `--frames N` proved a host
+        // could run N frames without a validation error; it could not tell anyone
+        // WHAT was on screen, so "the scene renders" stayed a desk-only claim and a
+        // scene that drew every sprite as a single pixel (the 2026-07-30 TypeContext
+        // bug) looked identical to a healthy run in the log. Pairs with --frames:
+        // `--frames 60 --screenshot out.png` is a headless visual check.
+        //
+        // Captures the BACKBUFFER, after tonemap and ImGui -- the actual pixels a
+        // player sees, not an intermediate the eye never gets.
+        std::string     screenshotPath = "";
+
         // Print one line of engine-identity JSON to stdout and exit, without creating
         // a window or device. The Arcane Hub probes this to learn the plugin ABI it
         // must stamp into a new .arcproj -- see HostBoot::EngineInfoJson.

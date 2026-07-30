@@ -41,6 +41,11 @@ namespace Arcane
         // slice-3 post sweep already used.
         bool warnedMultiPost = false;
 
+        // Last reported census (see Refresh): -1 so the first sweep always logs.
+        int lastSeenSprites   = -1;
+        int lastTableSize     = -1;
+        int lastMaterialCount = -1;
+
         bool CompilerReady() const
         {
             return services.compiler && services.compiler->IsAvailable();
@@ -176,14 +181,48 @@ namespace Arcane
         // be drained and dropped, stranding the material as permanently
         // pending.
         const bool materialsReady = compilerReady && im.services.batcher != nullptr;
+        int seenSprites = 0, seenSpriteGuids = 0, seenMaterialGuids = 0;
         reg.CreateView<SpriteRenderer>().ForEach(
             [&](Astra::Entity, SpriteRenderer& s)
         {
+            ++seenSprites;
             if (s.sprite.IsValid())
+            {
+                ++seenSpriteGuids;
                 im.sprites->Request(s.sprite);
+            }
+            if (s.material.IsValid())
+                ++seenMaterialGuids;
             if (materialsReady && s.material.IsValid())
                 im.materials->Request(s.material, frame.now);
         });
+
+        // Census, logged once per distinct outcome. "Nothing draws" has too many
+        // indistinguishable causes to debug from a silent log: no SpriteRenderer in
+        // the scene, a nil sprite Guid, a Guid that would not resolve, or a
+        // component view that is empty because THIS module disagrees with the
+        // loader about the component id. Those need different fixes, and the
+        // absence of a warning used to be consistent with all of them.
+        // Deliberately counted in Arcane.dll, where the loader also runs, so
+        // comparing this line against a host-side count localises a cross-module
+        // id problem immediately.
+        // Watches the MATERIAL count too, not just the sprite counts: materials bind
+        // asynchronously (compile + drain), so the first frame always reports zero of
+        // them and a sprite-only trigger would never correct itself. Verified the hard
+        // way -- the log claimed "0 bound material(s)" for a run whose screenshot
+        // showed the material visibly animating.
+        if (seenSprites != im.lastSeenSprites ||
+            (int)im.sprites->Table().size() != im.lastTableSize ||
+            (int)im.materials->Table().size() != im.lastMaterialCount)
+        {
+            im.lastSeenSprites   = seenSprites;
+            im.lastTableSize     = (int)im.sprites->Table().size();
+            im.lastMaterialCount = (int)im.materials->Table().size();
+            ARC_INFO("scene resolution: {} SpriteRenderer(s), {} sprite guid(s), "
+                     "{} material guid(s) -> {} resolved sprite(s), {} bound material(s)",
+                     seenSprites, seenSpriteGuids, seenMaterialGuids,
+                     im.sprites->Table().size(), im.materials->Table().size());
+        }
 
         // (2) The scene's post assignment: FIRST entity with a valid material
         // wins (one scene, one chain -- per-camera stacks are a non-goal), and
