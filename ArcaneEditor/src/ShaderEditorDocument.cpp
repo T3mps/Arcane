@@ -4869,11 +4869,25 @@ namespace Arcane::Editor
                 if (n.type == Arcane::GraphNodeType::ConstColor)
                 {
                     ImGui::SameLine();
-                    // Preview swatch only (LINEAR floats; the full picker is a
-                    // popup and popups cannot open inside the canvas).
-                    ImGui::ColorButton("##swatch",
-                                       ImVec4(n.value[0], n.value[1], n.value[2], n.value[3]),
-                                       ImGuiColorEditFlags_NoTooltip, ImVec2(18, 18));
+                    // A LIVE swatch now: clicking it opens the shared picker.
+                    //
+                    // The comment this replaces said popups cannot open inside
+                    // the canvas. They can, and this very file already does it --
+                    // ed::Suspend()/ed::Resume() brackets at :2849, :3917 and
+                    // :3988 exist for exactly this, because a popup has to escape
+                    // the node editor's transformed coordinate space.
+                    //
+                    // hdr = true: a ConstColor feeds raw shader maths and may
+                    // legitimately exceed 1, where sRGB encoding is meaningless,
+                    // so it shows linear floats. The DragFloat4 above stays the
+                    // numeric entry; this is the graphical one.
+                    ed::Suspend();
+                    const bool swatchEdited = ColorField4("##swatch", n.value, /*hdr*/ true);
+                    gestureBegin("Edit Color");
+                    if (swatchEdited)
+                        valueEdited();
+                    gestureEnd();
+                    ed::Resume();
                 }
                 break;
             }
