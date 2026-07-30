@@ -30,24 +30,18 @@
 #include <filesystem>
 #include <thread>
 
-RuntimeApp::RuntimeApp(Arcane::HostConfig cfg)
-    : m_config(std::move(cfg)), m_perf(m_config.perf) {}
+RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
+    : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash) {}
 
-bool RuntimeApp::Init()
+// ---- Boot stages (Task 8: RuntimeApp::Init folded into RuntimeStages) ----
+// Each method below is one block lifted out of the old monolithic Init().
+// Run() wires each into the matching id on the vector
+// Arcane::HostBoot::RuntimeStages(ctx) returns -- see ProjectBoot.cpp's
+// CoreStages header comment for why the body has to live here (host-owned
+// members) rather than in Arcane.dll.
+
+bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
 {
-    // The whole platform/render/input stack, booted in order. Owned by m_gpu and
-    // declared BEFORE m_runtime/m_plugin in RuntimeApp -- so it destructs AFTER them:
-    // the render resources it owns (window/device/swapchain/shaders/canvas/batcher/
-    // tonemap/imgui/input + commandList/framebuffers) must outlive runtime + plugin.
-    m_gpu = Arcane::GpuContext::Create(m_config);
-    if (!m_gpu)
-    {
-        ARC_ERROR("ArcaneRuntime: GPU context create failed");
-        return false;
-    }
-
-    ARC_INFO("{} -- ArcaneRuntime host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
-
     // The TypeContext is the process-wide type-identity singleton shared across
     // ArcaneRuntime.exe, Arcane.dll, and every loaded plugin. It is intentionally
     // heap-allocated and never freed: TypeMeta entries registered by the plugin
@@ -77,45 +71,55 @@ bool RuntimeApp::Init()
     // single pixel in the corner. It looked exactly like "the sprite is missing".
     // Nothing caught it because until the camera became a scene component this exe
     // never touched a component type from its OWN code -- it only drove the plugin.
+    // Task 8 folds the fix into the SHARED type_context_install stage
+    // (ProjectBoot.cpp), which VerifySharedTypeContext's every host that
+    // populates ctx.runtime -- this exe's own SetTypeContext call still has to
+    // happen HERE, in this module, because Astra's slot is per-module.
     Astra::SetTypeContext(m_typeContext);
     // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
     // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is headless -> false ->
     // miniaudio's null backend (no real device grabbed on a CI box).
     m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
 
+    // Populate ctx for the SHARED type_context_install / project_open /
+    // input_config stage bodies (ProjectBoot.cpp), which only have `ctx`, not
+    // `this` -- "stages populate as they go".
+    ctx.runtime = &*m_runtime;
+    return true;
+}
+
+bool RuntimeApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
+{
+    // The whole platform/render/input stack, booted in order. Owned by m_gpu and
+    // declared BEFORE m_runtime/m_plugin in RuntimeApp -- so it destructs AFTER them:
+    // the render resources it owns (window/device/swapchain/shaders/canvas/batcher/
+    // tonemap/imgui/input + commandList/framebuffers) must outlive runtime + plugin.
+    m_gpu = Arcane::GpuContext::Create(m_config);
+    if (!m_gpu)
+    {
+        ARC_ERROR("ArcaneRuntime: GPU context create failed");
+        return false;
+    }
+
+    ARC_INFO("{} -- ArcaneRuntime host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
+    ctx.gpu = m_gpu.get();
+
+    // The presenter cannot exist before the device does. Bind it into the
+    // stable LazyBootPresenter Run() already handed BootSequence -- same
+    // shape as EditorApp::StageGpuCore.
+    m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
+    m_lazyPresenter.Bind(&*m_presenter);
+    return true;
+}
+
+bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext& ctx)
+{
     // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
     // Runtime so a plugin can build its own engine render objects (e.g. the
     // narrowphase inspector's OffscreenCanvas). Non-owning; the host outlives the
     // plugin (m_gpu is declared before the runtime/plugin in RuntimeApp). Null in a
     // headless host -> the plugin skips its GPU-resource creation.
     m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
-
-    // Prove the install above actually took, rather than trusting it: the failure
-    // mode is silent aliasing, not a crash, so it needs a tripwire that compares
-    // THIS module's component id against the registry's. Non-fatal by choice -- a
-    // host with a mismatch still runs (badly), and the error line is what turns
-    // "my sprite is invisible" into a five-second diagnosis.
-    (void)Arcane::HostBoot::VerifySharedTypeContext(m_runtime->Registry(), "ArcaneRuntime.exe");
-
-    // Open the project (if any) BEFORE loading input + the game module: both come from
-    // the project when one is given. No --project => CurrentProject() stays null and the
-    // legacy data/ + --plugin path is used (non-breaking).
-    // CONTRACT, deliberately different from the editor's (spec Part B): opening a
-    // project here takes NO editor lock and refuses no rivals. The editor may have
-    // the same project open -- that is the normal case, since its separate-window
-    // Play spawns us on the scene it is editing -- and two runtimes on one project
-    // are fine too. We only ever READ the project. (Spec Part B also said we answer
-    // no engine probe; that clause was wrong about the pre-fold state. --print-engine-info
-    // IS answered, as the pre-fold host already did, because both hosts share one
-    // HostConfig -- see main.cpp. Part A is behavior-preserving, so it stays.)
-    if (!m_config.projectPath.empty())
-    {
-        if (!m_runtime->OpenProject(m_config.projectPath))
-            ARC_WARN("ArcaneRuntime: --project '{}' failed to open; using data/ + --plugin fallback",
-                     m_config.projectPath);
-    }
-    if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
-        ARC_WARN("ArcaneRuntime: input actions failed to load");
 
     // ABI v2: install the host's ImGui context + allocators on the Runtime BEFORE
     // the plugin loads. PluginHost::RefreshContext copies these into the EngineContext
@@ -130,6 +134,22 @@ bool RuntimeApp::Init()
                             ud);
     }
 
+    // Show the REAL window, THEN close the pre-device splash -- the same
+    // handoff order EditorApp's dedicated splash_ready stage performs (see
+    // that stage's comment in ProjectBoot.cpp for why the order matters).
+    // The runtime has no editor_fonts-equivalent id to hang a separate stage
+    // off of (RuntimeStages appends nothing -- BootStageParityTest pins
+    // that), so this folds into render_bridge: the earliest core stage that
+    // runs strictly after gpu_core, by which point BootSequence has already
+    // called present() at least once for gpu_core's completion, so the
+    // swapchain holds a real drawn frame (the loading bar), never garbage.
+    if (ctx.gpu) ctx.gpu->Win().Show();
+    if (ctx.splash) ctx.splash->Close();
+    return true;
+}
+
+bool RuntimeApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
+{
     // ArcaneRuntime's default game module is the physics Sandbox showcase: with no --project
     // and no --plugin, host Sandbox.dll. ArcaneRuntime IS that showcase (the ArcaneRuntime --frames
     // GPU-verify + CI depend on it), so it keeps the old default -- the editor, which
@@ -151,23 +171,30 @@ bool RuntimeApp::Init()
 
     // Open into the project's boot scene, so `--project X` shows the SAME world
     // the editor shows for X instead of only whatever the plugin's Init spawned.
-    // After the plugin load for the same reason EditorApp::Init does it there: a
+    // After the plugin load for the same reason EditorApp does it there: a
     // scene naming a component the game module registers would otherwise be
-    // silently dropped. The result is discarded -- ArcaneRuntime has no scene session to
-    // adopt it into, and BootScene already logs both the file it loaded and every
-    // reason it did not, so a project with no/broken boot scene just keeps what
-    // the plugin built rather than failing the host. No --project means no
-    // project, hence no call: the scripted Sandbox.dll GPU-verify is untouched.
+    // silently dropped -- which is why this stays IN StagePluginLoad rather than
+    // moving to StageSpriteTables: sprite_tables and plugin_load are DAG
+    // SIBLINGS (both depend only on {project_open, render_bridge}), so nothing
+    // stops sprite_tables from running first; keeping the boot-scene load
+    // sequenced right after this stage's own Load() call is what preserves
+    // the "after plugin load" ordering the original code required. The result
+    // is discarded -- ArcaneRuntime has no scene session to adopt it into, and
+    // BootScene already logs both the file it loaded and every reason it did
+    // not, so a project with no/broken boot scene just keeps what the plugin
+    // built rather than failing the host. No --project means no project,
+    // hence no call: the scripted Sandbox.dll GPU-verify is untouched.
     if (const Arcane::Project* proj = m_runtime->CurrentProject())
     {
         // --scene overrides the project's manifest bootScene with an explicit
         // asset Guid (HostConfig::sceneOverride) -- the editor's separate-window
         // Play passes the currently-open scene here so ArcaneRuntime boots the SAME scene
         // instead of whatever the manifest names. Invalid override TEXT fails
-        // Init outright (a typo'd --scene is a launch mistake, not the normal
-        // "no boot scene" case); a well-formed Guid that resolves to no asset in
-        // this project falls through to BootScene's existing missing-bootScene
-        // path unchanged (logged there; the host keeps whatever the plugin built).
+        // this stage outright (a typo'd --scene is a launch mistake, not the
+        // normal "no boot scene" case); a well-formed Guid that resolves to no
+        // asset in this project falls through to BootScene's existing
+        // missing-bootScene path unchanged (logged there; the host keeps
+        // whatever the plugin built).
         if (!m_config.sceneOverride.empty())
         {
             const std::optional<Arcane::Guid> ov = Arcane::Guid::FromString(m_config.sceneOverride);
@@ -192,12 +219,17 @@ bool RuntimeApp::Init()
         ARC_WARN("ArcaneRuntime: --scene '{}' ignored -- no project is open",
                  m_config.sceneOverride);
     }
+    return true;
+}
 
+bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
+{
     // Scene asset resolution (sprite-resolution lift): the sprites, sprite
-    // materials and post chain a scene REFERENCES become bindable here. Built
-    // after the scene boot above only for tidiness -- Refresh sweeps the live
-    // registry every frame, so a scene loaded (or hot-reloaded) later is picked
-    // up all the same.
+    // materials and post chain a scene REFERENCES become bindable here.
+    // Refresh sweeps the live registry every frame, so a scene loaded (or
+    // hot-reloaded) later is picked up all the same regardless of the exact
+    // ordering between this stage and StagePluginLoad's boot-scene load
+    // (they are DAG siblings -- see StagePluginLoad's comment).
     //
     // The compile service is the same one the editor runs: material assets are
     // HLSL that gets stitched and compiled on demand, and ArcaneRuntime's
@@ -220,7 +252,6 @@ bool RuntimeApp::Init()
     // No consumeFirst: a standalone host has no open documents to give first
     // refusal to, so every drained result goes straight to the caches.
     m_resolver.emplace(std::move(rs));
-
     return true;
 }
 
@@ -519,7 +550,40 @@ void RuntimeApp::Shutdown()
 
 int RuntimeApp::Run()
 {
-    if (!Init()) return 1;
+    Arcane::HostBoot::BootContext ctx{};
+    ctx.runtime     = nullptr;              // stages populate as they go
+    ctx.gpu         = nullptr;
+    ctx.splash      = m_splash;
+    ctx.projectPath = m_config.projectPath.c_str();
+    ctx.pluginPath  = m_config.pluginPath.c_str();
+    ctx.moduleName  = "ArcaneRuntime.exe";
+
+    // HostBoot::RuntimeStages(ctx) is the SAME shared function
+    // BootStageParityTest exercises and EditorApp calls for its own list
+    // (EditorApp::Run) -- this is the literal call that keeps the two hosts
+    // from silently diverging on which steps exist. RuntimeStages already
+    // carries the Fatal-ABI-refusal override for project_open (ProjectBoot.cpp),
+    // so nothing about that stage needs patching here. Everything else that
+    // needs RuntimeApp's own private members (m_gpu/m_runtime/m_plugin/
+    // m_resolver/...) gets its `run` overwritten below -- ids/deps/policy/
+    // thread/weight (the DAG shape the parity test polices) are untouched.
+    std::vector<Arcane::BootStage> stages = Arcane::HostBoot::RuntimeStages(ctx);
+    for (Arcane::BootStage& stage : stages)
+    {
+        if (stage.id == "runtime_create")       stage.run = [this, &ctx] { return StageRuntimeCreate(ctx); };
+        else if (stage.id == "gpu_core")         stage.run = [this, &ctx] { return StageGpuCore(ctx); };
+        else if (stage.id == "render_bridge")    stage.run = [this, &ctx] { return StageRenderBridge(ctx); };
+        else if (stage.id == "sprite_tables")    stage.run = [this, &ctx] { return StageSpriteTables(ctx); };
+        else if (stage.id == "plugin_load")      stage.run = [this, &ctx] { return StagePluginLoad(ctx); };
+    }
+
+    Arcane::BootSequence seq(std::move(stages));
+    // Presenter is null until StageGpuCore creates the device; m_lazyPresenter
+    // tolerates that and the pre-device splash covers the gap.
+    const Arcane::BootResult boot = seq.Run(&m_lazyPresenter);
+    if (!boot.ok)
+        return boot.quitRequested ? 0 : 1;
+
     MainLoop();
     Shutdown();
     return 0;

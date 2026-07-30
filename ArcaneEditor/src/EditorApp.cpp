@@ -95,8 +95,8 @@ namespace Arcane::Editor
         constexpr const char* kPlayModeIniName = "State";
     }
 
-    EditorApp::EditorApp(HostConfig cfg)
-        : m_config(std::move(cfg)), m_perf(m_config.perf) {}
+    EditorApp::EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash)
+        : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash) {}
 
     void* EditorApp::PlayModeSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
                                               const char* name)
@@ -152,7 +152,50 @@ namespace Arcane::Editor
         ImGui::AddSettingsHandler(&handler);
     }
 
-    bool EditorApp::Init()
+    // ---- Boot stages (Task 8: EditorApp::Init folded into CoreStages) -------
+    // Each method below is one block lifted verbatim (or near-verbatim; noted
+    // where not) out of the old monolithic Init(). Run() wires each into the
+    // matching id on the vector Arcane::HostBoot::EditorStages(ctx) returns --
+    // see that function's header comment in ProjectBoot.cpp for why the body
+    // has to live here rather than in Arcane.dll (host-owned members,
+    // editor-exe-only types).
+
+    bool EditorApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
+    {
+        // The TypeContext is the process-wide type-identity singleton shared across
+        // ArcaneEditor.exe, Arcane.dll, and every loaded plugin. It is intentionally
+        // heap-allocated and never freed: TypeMeta entries registered by the plugin
+        // (via ASTRA_REFLECT in Components.hpp) hold std::function thunks compiled
+        // into the plugin DLL. After PluginHost::Unload -> DLClose, those thunks
+        // point to unmapped memory. If the TypeContext (and its MetaRegistry) were
+        // ever destructed, ~std::function() would invoke those thunks -> crash.
+        // Heap-leaking is the correct production pattern for a long-running host;
+        // the OS reclaims all process memory on exit anyway.
+        m_typeContext = new Astra::TypeContext();
+        // Install the shared context in THIS module too (ArcaneEditor.exe is a separate
+        // binary from Arcane.dll -- Astra::GetTypeContext()/SetTypeContext() resolve
+        // through a PER-MODULE static slot, by design; Runtime::Impl's ctor installs
+        // the same m_typeContext for Arcane.dll's own slot, see Runtime.cpp). Required
+        // BEFORE the gizmo interaction code's TypeID<Arcane::Transform>::Value()
+        // lookups (Registry::GetComponent<Transform> in the frame loop) -- without this,
+        // ArcaneEditor.exe's first TypeID<T>::Value() call would silently fall back to its
+        // own empty module-local DefaultTypeContext() instead of the shared one, so
+        // GetComponent<Transform> would resolve against the WRONG ComponentID
+        // (always-miss at best, aliasing a different component's bytes at worst).
+        Astra::SetTypeContext(m_typeContext);
+        // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
+        // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is headless -> false
+        // -> miniaudio's null backend (no real device grabbed on a CI box).
+        m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
+
+        // Populate ctx for the SHARED type_context_install / project_open /
+        // input_config / editor_lock stage bodies (ProjectBoot.cpp), which only
+        // have `ctx`, not `this` -- "stages populate as they go".
+        ctx.runtime = &*m_runtime;
+        return true;
+    }
+
+    bool EditorApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
     {
         // The whole platform/render/input stack, booted in order. Owned by m_gpu and
         // declared BEFORE m_runtime/m_plugin in EditorApp -- so it destructs AFTER
@@ -167,7 +210,28 @@ namespace Arcane::Editor
         }
 
         ARC_INFO("{} -- Arcane Editor host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
+        ctx.gpu = m_gpu.get();
 
+        // The presenter cannot exist before the device does. Bind it into the
+        // stable LazyBootPresenter Run() already handed BootSequence -- see
+        // EditorApp.hpp's LazyBootPresenter and Run() below.
+        m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
+        m_lazyPresenter.Bind(&*m_presenter);
+        return true;
+    }
+
+    bool EditorApp::StageEditorFonts(Arcane::HostBoot::BootContext&)
+    {
+        // Editor fonts: Roboto base + merged lucide icons, on the editor context
+        // (the only ImGui context created so far, see StageGpuCore's GpuContext::
+        // Create -> ImGuiLayer::Create), before the first frame and before the
+        // game ImGui context is created in StageRenderBridge. Zero engine change.
+        Arcane::Editor::InstallEditorFonts();
+        return true;
+    }
+
+    bool EditorApp::StageEditorShell(Arcane::HostBoot::BootContext&)
+    {
         // Title the window as the editor. GpuContext defaults to "Arcane Runtime" (the
         // shared host helper ArcaneRuntime also uses); override it here so only this host
         // reads "Arcane Editor" -- ArcaneRuntime keeps its own title.
@@ -198,45 +262,17 @@ namespace Arcane::Editor
         // The shader editor's pane splits are a persisted editor preference, and
         // they ride the editor's imgui.ini through an ImGuiSettingsHandler. It
         // has to be registered HERE -- after the context exists (GpuContext::
-        // Create's ImGuiLayer::Create above) and before the first NewFrame,
-        // which is where ImGui reads the ini; a handler added later would never
-        // see the saved entry.
+        // Create's ImGuiLayer::Create in StageGpuCore) and before the first
+        // NewFrame, which is where ImGui reads the ini; a handler added later
+        // would never see the saved entry.
         ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
         InstallConsoleSink();
+        return true;
+    }
 
-        // Editor fonts: Roboto base + merged lucide icons, on the editor context
-        // (current here -- the only ImGui context created so far, see GpuContext::
-        // Create's ImGuiLayer::Create above), before the first frame and before the
-        // game ImGui context is created below. Zero engine change.
-        Arcane::Editor::InstallEditorFonts();
-
-        // The TypeContext is the process-wide type-identity singleton shared across
-        // ArcaneEditor.exe, Arcane.dll, and every loaded plugin. It is intentionally
-        // heap-allocated and never freed: TypeMeta entries registered by the plugin
-        // (via ASTRA_REFLECT in Components.hpp) hold std::function thunks compiled
-        // into the plugin DLL. After PluginHost::Unload -> DLClose, those thunks
-        // point to unmapped memory. If the TypeContext (and its MetaRegistry) were
-        // ever destructed, ~std::function() would invoke those thunks -> crash.
-        // Heap-leaking is the correct production pattern for a long-running host;
-        // the OS reclaims all process memory on exit anyway.
-        m_typeContext = new Astra::TypeContext();
-        // Install the shared context in THIS module too (ArcaneEditor.exe is a separate
-        // binary from Arcane.dll -- Astra::GetTypeContext()/SetTypeContext() resolve
-        // through a PER-MODULE static slot, by design; Runtime::Impl's ctor installs
-        // the same m_typeContext for Arcane.dll's own slot, see Runtime.cpp). Required
-        // BEFORE the gizmo interaction code's TypeID<Arcane::Transform>::Value()
-        // lookups (Registry::GetComponent<Transform> in the frame loop) -- without this,
-        // ArcaneEditor.exe's first TypeID<T>::Value() call would silently fall back to its
-        // own empty module-local DefaultTypeContext() instead of the shared one, so
-        // GetComponent<Transform> would resolve against the WRONG ComponentID
-        // (always-miss at best, aliasing a different component's bytes at worst).
-        Astra::SetTypeContext(m_typeContext);
-        // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
-        // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is headless -> false
-        // -> miniaudio's null backend (no real device grabbed on a CI box).
-        m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
-
+    bool EditorApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
+    {
         // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
         // Runtime so a plugin can build its own engine render objects (e.g. the
         // narrowphase inspector's OffscreenCanvas). Non-owning; the host outlives the
@@ -244,47 +280,14 @@ namespace Arcane::Editor
         // a headless host -> the plugin skips its GPU-resource creation.
         m_runtime->SetRenderResources(m_gpu->Device().Nvrhi(), &m_gpu->Shaders());
 
-        // Prove the SetTypeContext install above actually took. It does today, but the
-        // failure mode is silent id ALIASING rather than a crash or a miss -- the same
-        // gap in ArcaneRuntime.exe made every scene there render at 1 px per metre and
-        // read like "my sprite is missing" (2026-07-30). Both hosts assert it now, so
-        // a future reorder of this boot sequence says so instead of rendering nonsense.
-        (void)Arcane::HostBoot::VerifySharedTypeContext(m_runtime->Registry(), "ArcaneEditor.exe");
-
-        // Open the project (if any) BEFORE loading input + the game module (mirrors ArcaneRuntime).
-        if (!m_config.projectPath.empty())
-        {
-            if (!m_runtime->OpenProject(m_config.projectPath))
-            {
-                ARC_WARN("Arcane Editor: --project '{}' failed to open; using data/ + --plugin fallback",
-                         m_config.projectPath);
-                // Surface at first frame -- the console line alone was missed twice.
-                m_projectOpenError = "--project '" + m_config.projectPath +
-                                     "' failed to open.\nRunning with the data/ + --plugin "
-                                     "fallback instead (see Console).";
-            }
-        }
-        // Claim the editor lock the moment a project is OURS: pid + process
-        // start time into <root>/Saved/editor.lock. The Hub reads it to
-        // focus this editor instead of spawning a rival -- across ITS
-        // restarts, which the in-memory pid map cannot survive. Cleared in
-        // Shutdown and on project switches; a crash's stale lock is defeated
-        // by ReadLive's start-time validation, never trusted.
-        if (const Arcane::Project* proj = m_runtime->CurrentProject())
-            Arcane::EditorLock::Write(proj->Root());
-
-        if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
-            ARC_WARN("Arcane Editor: input actions failed to load");
-        UpdateWindowTitle();
-
         // The hosted plugin draws its debug UI into its OWN "game" ImGui context,
         // composited INTO the viewport texture (see MainLoop), instead of the
         // editor context where a HUD would float over the editor chrome. Created
-        // here, AFTER the editor ImGui layer is up (GpuContext::Create) and BEFORE
-        // the plugin is loaded/adopts it below. Uses the SAME GPU device +
-        // ShaderLibrary the editor ImGui layer was built from. (Create leaves the
-        // current ImGui context null; harmless -- the editor's ImGuiLayer re-pins
-        // its own context on every BeginFrame/WantCapture*.)
+        // here, AFTER the editor ImGui layer is up (StageGpuCore) and BEFORE
+        // the plugin is loaded/adopts it in StagePluginLoad. Uses the SAME GPU
+        // device + ShaderLibrary the editor ImGui layer was built from. (Create
+        // leaves the current ImGui context null; harmless -- the editor's
+        // ImGuiLayer re-pins its own context on every BeginFrame/WantCapture*.)
         m_gameImgui = Arcane::OffscreenImGuiLayer::Create(m_gpu->Device(), m_gpu->Shaders());
         if (!m_gameImgui)
         {
@@ -309,44 +312,19 @@ namespace Arcane::Editor
                                 ud);
         }
 
-        // The editor loads a game module only when one is specified -- a project's
-        // gameModule, or an explicit --plugin. Bare `ArcaneEditor` (no --project, no
-        // --plugin) starts with NO game loaded (an empty editor) rather than the physics
-        // Sandbox: pluginPath defaults empty (HostConfig), so GameModule returns empty
-        // here and the plugin host is left disengaged. Every m_plugin-> use in MainLoop
-        // is optional-guarded, so a disengaged plugin is safe. Sandbox stays available on
-        // demand via --plugin Sandbox.dll or --project SampleProject.
-        const std::string gameModule =
-            Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
-        const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());
-        if (!gameModule.empty() || !pluginModules.empty())
-        {
-            // A game module OR just project plugin modules is enough to host: an empty
-            // gameModule makes a plugins-only host (open a plugin-only project to work on it
-            // before its game DLL exists). PluginHost handles the primary-less case.
-            m_plugin.emplace(*m_runtime,
-                gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
-            for (const auto& dll : pluginModules)
-                m_plugin->AddPlugin(dll);
-            if (!m_plugin->Load())
-            {
-                ARC_ERROR("Arcane Editor: failed to load the game module / project plugins");
-                return false;
-            }
-        }
-        else
-        {
-            ARC_INFO("Arcane Editor: no --project/--plugin -- starting with no game loaded");
-        }
-
-        // Task 8: Arcane Editor boots in Edit mode -- the sim starts paused. Play (m_play)
-        // unpauses it; Stop restores the snapshot and re-pauses.
-        m_runtime->Loop().SetPaused(true);
-
         // Scene-in-a-panel viewport: an OffscreenCanvas running the SAME
         // canvas->batcher->tonemap path ArcaneRuntime drives, into a panel texture instead
         // of the backbuffer. The device is up by here in both the interactive host
         // and a headless `--frames N` run (which only differs in the audio backend).
+        //
+        // DEVIATION from the brief's literal Init-block mapping: moved here from
+        // its original, later position in Init() (it used to run right after
+        // the plugin loaded) because StageSpriteTables's SceneRenderResolver
+        // needs m_viewport->Batch() to already exist, and sprite_tables's DAG
+        // dependency is on render_bridge (not on plugin_load or a separate
+        // "viewport" stage that does not exist). Pure reordering -- no field
+        // gains or loses a dependency it did not already have; m_viewport only
+        // ever needed m_gpu.
         m_viewport = Arcane::OffscreenCanvas::Create(m_gpu->Device().Nvrhi(), m_gpu->Shaders(), 1280, 720);
         if (!m_viewport)
         {
@@ -375,7 +353,11 @@ namespace Arcane::Editor
             ARC_ERROR("Arcane Editor: SelectionOutline creation failed");
             return false;
         }
+        return true;
+    }
 
+    bool EditorApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
+    {
         // Editor undo/redo history. The resolver re-reads Runtime::Registry()
         // EVERY call rather than capturing a Registry& up front: Runtime swaps
         // out the registry object on Play/Stop (PlaySession -> Runtime::
@@ -429,9 +411,9 @@ namespace Arcane::Editor
         // factory+peek shape). `this`-captures resolve m_sprites at CALL
         // time, not here -- m_sprites itself isn't constructed until the
         // block below, but nothing calls Save() (the only path that reaches
-        // invalidateSprite) until well after Init() returns, by which point
-        // it exists. Without this route, a double-clicked/minted .arcsprite
-        // hit DocumentHost's "no editor registered" warn-and-no-op
+        // invalidateSprite) until well after this stage returns, by which
+        // point it exists. Without this route, a double-clicked/minted
+        // .arcsprite hit DocumentHost's "no editor registered" warn-and-no-op
         // (DocumentHost.cpp:56) -- EditorAppFrame.cpp:1165 already calls
         // m_documents.OpenPath on a freshly minted sprite and expected this.
         const auto spriteFactory =
@@ -508,6 +490,62 @@ namespace Arcane::Editor
         // through MintOrReuseSpriteForTexture), only the argument changes.
         m_inspectorServices.mintSpriteForTexture =
             [this](const Arcane::Guid& textureGuid) { return MintOrReuseSpriteForTexture(textureGuid); };
+        return true;
+    }
+
+    bool EditorApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
+    {
+        // The editor loads a game module only when one is specified -- a project's
+        // gameModule, or an explicit --plugin. Bare `ArcaneEditor` (no --project, no
+        // --plugin) starts with NO game loaded (an empty editor) rather than the physics
+        // Sandbox: pluginPath defaults empty (HostConfig), so GameModule returns empty
+        // here and the plugin host is left disengaged. Every m_plugin-> use in MainLoop
+        // is optional-guarded, so a disengaged plugin is safe. Sandbox stays available on
+        // demand via --plugin Sandbox.dll or --project SampleProject.
+        const std::string gameModule =
+            Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
+        const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());
+        if (!gameModule.empty() || !pluginModules.empty())
+        {
+            // A game module OR just project plugin modules is enough to host: an empty
+            // gameModule makes a plugins-only host (open a plugin-only project to work on it
+            // before its game DLL exists). PluginHost handles the primary-less case.
+            m_plugin.emplace(*m_runtime,
+                gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
+            for (const auto& dll : pluginModules)
+                m_plugin->AddPlugin(dll);
+            if (!m_plugin->Load())
+            {
+                ARC_ERROR("Arcane Editor: failed to load the game module / project plugins");
+                return false;
+            }
+        }
+        else
+        {
+            ARC_INFO("Arcane Editor: no --project/--plugin -- starting with no game loaded");
+        }
+
+        // Task 8: Arcane Editor boots in Edit mode -- the sim starts paused. Play (m_play)
+        // unpauses it; Stop restores the snapshot and re-pauses.
+        m_runtime->Loop().SetPaused(true);
+        return true;
+    }
+
+    bool EditorApp::StageFinalize(Arcane::HostBoot::BootContext&)
+    {
+        // Surface a failed --project open as a blocking modal -- the console
+        // line alone was missed twice. project_open's SHARED body (ProjectBoot.cpp)
+        // already warned and kept booting project-less; this derives the same
+        // fact from STATE rather than duplicating the OpenProject call:
+        // Runtime::OpenProject leaves CurrentProject() null on any failure and
+        // never clears an already-open one, so "a project was requested and
+        // none is open now" is exactly "the open failed".
+        if (!m_config.projectPath.empty() && m_runtime && !m_runtime->CurrentProject())
+        {
+            m_projectOpenError = "--project '" + m_config.projectPath +
+                                 "' failed to open.\nRunning with the data/ + --plugin "
+                                 "fallback instead (see Console).";
+        }
 
         // Task 7: open into the project's boot scene, now that the plugin has
         // loaded (a scene naming a component the game module registers would
@@ -526,6 +564,12 @@ namespace Arcane::Editor
         }
         EnsureScene();
 
+        // Last: now that project/scene state is final, compute the real title
+        // rather than the "Untitled" placeholder a mid-boot call would have
+        // shown for one MainLoop tick (UpdateWindowTitle also runs every
+        // frame -- EditorAppFrame.cpp -- so this is a courtesy, not the only
+        // call site).
+        UpdateWindowTitle();
         return true;
     }
 
@@ -627,7 +671,48 @@ namespace Arcane::Editor
 
     int EditorApp::Run()
     {
-        if (!Init()) return 1;
+        Arcane::HostBoot::BootContext ctx{};
+        ctx.runtime     = nullptr;              // stages populate as they go
+        ctx.splash      = m_splash;
+        ctx.projectPath = m_config.projectPath.c_str();
+        ctx.pluginPath  = m_config.pluginPath.c_str();
+        ctx.moduleName  = "ArcaneEditor.exe";
+
+        // HostBoot::EditorStages(ctx) is the SAME shared function
+        // BootStageParityTest exercises and RuntimeApp calls for its own list
+        // (RuntimeApp::Run) -- this is the literal call that keeps the two
+        // hosts from silently diverging on which steps exist. The stages whose
+        // real work needs a private EditorApp member or an editor-exe-only
+        // type (EditorTheme/EditorFonts/ShaderEditorDocument, none of which
+        // Arcane.dll can see) get their `run` overwritten below with the
+        // matching Stage* method; type_context_install/project_open/
+        // input_config/splash_ready/editor_lock are left exactly as
+        // EditorStages built them -- their body is genuinely shared. This is
+        // the one deviation from the brief's literal one-line Run(): a direct
+        // `BootSequence seq(EditorStages(ctx))` cannot reach these private
+        // members from inside Arcane.dll, so the vector is captured, patched,
+        // then moved into BootSequence -- ids/deps/policy/thread/weight
+        // (the actual DAG shape the parity test polices) are untouched.
+        std::vector<Arcane::BootStage> stages = Arcane::HostBoot::EditorStages(ctx);
+        for (Arcane::BootStage& stage : stages)
+        {
+            if (stage.id == "runtime_create")       stage.run = [this, &ctx] { return StageRuntimeCreate(ctx); };
+            else if (stage.id == "gpu_core")         stage.run = [this, &ctx] { return StageGpuCore(ctx); };
+            else if (stage.id == "editor_fonts")     stage.run = [this, &ctx] { return StageEditorFonts(ctx); };
+            else if (stage.id == "editor_shell")     stage.run = [this, &ctx] { return StageEditorShell(ctx); };
+            else if (stage.id == "render_bridge")    stage.run = [this, &ctx] { return StageRenderBridge(ctx); };
+            else if (stage.id == "sprite_tables")    stage.run = [this, &ctx] { return StageSpriteTables(ctx); };
+            else if (stage.id == "plugin_load")      stage.run = [this, &ctx] { return StagePluginLoad(ctx); };
+            else if (stage.id == "finalize")         stage.run = [this, &ctx] { return StageFinalize(ctx); };
+        }
+
+        Arcane::BootSequence seq(std::move(stages));
+        // Presenter is null until StageGpuCore creates the device; m_lazyPresenter
+        // tolerates that and the pre-device splash covers the gap.
+        const Arcane::BootResult boot = seq.Run(&m_lazyPresenter);
+        if (!boot.ok)
+            return boot.quitRequested ? 0 : 1;
+
         MainLoop();
         Shutdown();
         return 0;

@@ -326,6 +326,12 @@ namespace Arcane::HostBoot
         BootSplashWindow* splash      = nullptr;   // pre-device splash; closed by splash_ready
         const char*       projectPath = nullptr;
         const char*       pluginPath  = nullptr;
+        // "ArcaneEditor.exe" / "ArcaneRuntime.exe" (Task 8): the identity the
+        // genuinely-shared stage bodies (type_context_install, project_open,
+        // input_config) log under -- VerifySharedTypeContext's diagnostic and
+        // the --project-failed warning both need to say which host they ran
+        // in. Null degrades to a generic "HostBoot" label, never a crash.
+        const char*       moduleName  = nullptr;
     };
 
     // THE CANONICAL BOOT SEQUENCE. Both hosts take this list WHOLE.

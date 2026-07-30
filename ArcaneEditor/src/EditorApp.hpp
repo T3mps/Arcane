@@ -18,6 +18,10 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 #include <Arcane/Host/FramePerf.hpp>
+#include <Arcane/Host/BootPresenter.hpp>
+#include <Arcane/Host/BootSequence.hpp>
+#include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>
 #include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
 #include "DocumentHost.hpp"
@@ -61,8 +65,16 @@ namespace Arcane::Editor
     class EditorApp
     {
     public:
-        explicit EditorApp(HostConfig cfg);
-        int Run();   // Init() -> MainLoop() -> Shutdown(); process exit code
+        // `splash` is a NON-OWNING pointer to main()'s stack-local
+        // Arcane::BootSplashWindow (Task 8, async-boot arc): main constructs
+        // and ultimately closes it (BootSplashWindow's ordering contract
+        // requires both from "main" -- never under the loader lock, never from
+        // two threads at once); EditorApp only reads it during Run()'s boot
+        // sequence and calls Close() once, synchronously, from the
+        // splash_ready stage (still on main's call stack -- see Run()). Null
+        // is tolerated (no splash to hand off).
+        explicit EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash = nullptr);
+        int Run();   // BootSequence -> MainLoop() -> Shutdown(); process exit code
 
         // Raise File -> Open Project on the FIRST frame. Set by main() for a bare
         // interactive launch (no --project, no --plugin): the editor supports the
@@ -70,10 +82,47 @@ namespace Arcane::Editor
         void RaiseOpenProjectOnStart() noexcept { m_raiseOpenProjectOnStart = true; }
 
     private:
-        bool Init();
+        // ---- Boot (EditorApp.cpp) -------------------------------------------
+        // Run() builds Arcane::HostBoot::EditorStages(ctx) -- the SAME shared
+        // function RuntimeApp calls for its own list -- then overwrites the
+        // ids below with these closures, because their real work touches
+        // EditorApp's own private members (m_gpu/m_runtime/m_plugin/...) or
+        // editor-exe-only types (EditorTheme/EditorFonts/ShaderEditorDocument)
+        // that Arcane.dll cannot see. type_context_install/project_open/
+        // input_config/splash_ready/editor_lock are NOT in this list -- their
+        // CoreStages/EditorStages body is genuinely shared and used as-is; see
+        // ProjectBoot.cpp for why each stage landed where it did. Every method
+        // returns false only where the equivalent Init() block used to.
+        bool StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx);
+        bool StageGpuCore(Arcane::HostBoot::BootContext& ctx);
+        bool StageEditorFonts(Arcane::HostBoot::BootContext& ctx);
+        bool StageEditorShell(Arcane::HostBoot::BootContext& ctx);
+        bool StageRenderBridge(Arcane::HostBoot::BootContext& ctx);
+        bool StageSpriteTables(Arcane::HostBoot::BootContext& ctx);
+        bool StagePluginLoad(Arcane::HostBoot::BootContext& ctx);
+        bool StageFinalize(Arcane::HostBoot::BootContext& ctx);
+
         void MainLoop();
         void Shutdown();
         void InstallConsoleSink();   // attach a callback sink on Arcane::Log::Engine() -> m_console
+
+        // Forwards to a real BootPresenter once StageGpuCore has built the
+        // device. Before that it reports "keep going" -- the pre-device splash
+        // is what the user is looking at, so there is nothing to draw here
+        // yet. BootSequence::Run takes ONE IBootPresenter* for the whole run,
+        // so this stable wrapper is what Run() passes; StageGpuCore binds the
+        // real BootPresenter into it once m_gpu exists.
+        class LazyBootPresenter final : public Arcane::IBootPresenter
+        {
+        public:
+            void Bind(Arcane::BootPresenter* p) noexcept { m_inner = p; }
+            bool Present(const Arcane::BootProgress& progress) override
+            {
+                return m_inner ? m_inner->Present(progress) : true;
+            }
+        private:
+            Arcane::BootPresenter* m_inner = nullptr;
+        };
 
         // ---- Frame loop (EditorAppFrame.cpp) --------------------------------
         // MainLoop is a straight sequence of the phase methods below, called in
@@ -158,6 +207,13 @@ namespace Arcane::Editor
 
         HostConfig                        m_config;
         std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST
+
+        // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
+        Arcane::BootSplashWindow*             m_splash = nullptr;
+        // Cannot be constructed before StageGpuCore builds m_gpu; m_lazyPresenter
+        // is the stable stand-in Run() hands BootSequence for the whole call.
+        std::optional<Arcane::BootPresenter>  m_presenter;
+        LazyBootPresenter                     m_lazyPresenter;
 
         // The hosted plugin's OWN ImGui context, rendered INTO the viewport's
         // output texture (Unity/Unreal "game view") so the plugin's debug HUD

@@ -5,6 +5,7 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 #include "RuntimeApp.hpp"
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
@@ -32,6 +33,12 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    RuntimeApp app(*parsed.config);
+    // Before ANY engine boot: something on screen within ~100ms. The probe
+    // return above stays free of any window on purpose. Never fails boot --
+    // BootSplashWindow's whole contract is "every error path degrades to no
+    // splash, silently".
+    Arcane::BootSplashWindow splash("data/images/arcane_logo.png");
+
+    RuntimeApp app(*parsed.config, &splash);
     return app.Run();
 }

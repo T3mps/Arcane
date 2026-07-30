@@ -7,6 +7,7 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>   // EditorLock: the direct-launch double-open guard
+#include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 #include "EditorApp.hpp"
@@ -113,7 +114,14 @@ int main(int argc, char** argv)
         }
     }
 
-    Arcane::Editor::EditorApp app(*parsed.config);
+    // Before ANY engine boot: something on screen within ~100ms. Every guard
+    // above (the probe, the no-project+--frames refusal, the rival-editor
+    // lock check) returns before this line specifically so none of them pays
+    // for a window they might not need. Never fails boot -- BootSplashWindow's
+    // whole contract is "every error path degrades to no splash, silently".
+    Arcane::BootSplashWindow splash("data/images/arcane_logo.png");
+
+    Arcane::Editor::EditorApp app(*parsed.config, &splash);
     if (noProject)
         app.RaiseOpenProjectOnStart();
     return app.Run();

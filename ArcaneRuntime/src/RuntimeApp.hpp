@@ -11,6 +11,10 @@
 #include <Arcane/Host/GpuContext.hpp>
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
+#include <Arcane/Host/BootPresenter.hpp>
+#include <Arcane/Host/BootSequence.hpp>
+#include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
@@ -20,17 +24,57 @@ namespace Astra { class TypeContext; }
 class RuntimeApp
 {
 public:
-    explicit RuntimeApp(Arcane::HostConfig cfg);
-    int Run();   // Init() -> MainLoop() -> Shutdown(); process exit code
+    // `splash` is a NON-OWNING pointer to main()'s stack-local
+    // Arcane::BootSplashWindow (Task 8, async-boot arc) -- same ordering
+    // contract as EditorApp's ctor: main constructs and ultimately closes it;
+    // RuntimeApp only reads it during Run()'s boot sequence. Null tolerated.
+    explicit RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash = nullptr);
+    int Run();   // BootSequence -> MainLoop() -> Shutdown(); process exit code
 private:
-    bool Init();
+    // ---- Boot (RuntimeApp.cpp) -------------------------------------------
+    // Run() builds Arcane::HostBoot::RuntimeStages(ctx) -- the SAME shared
+    // function BootStageParityTest exercises and EditorApp calls for its own
+    // list -- then overwrites the ids below with these closures, because
+    // their real work touches RuntimeApp's own private members. See
+    // ProjectBoot.cpp's CoreStages header comment for the full rationale;
+    // type_context_install/project_open/input_config are NOT in this list --
+    // their RuntimeStages/CoreStages body is genuinely shared and used as-is
+    // (project_open's Fatal-ABI-refusal override lives IN RuntimeStages
+    // itself, not here -- see ProjectBoot.cpp).
+    bool StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx);
+    bool StageGpuCore(Arcane::HostBoot::BootContext& ctx);
+    bool StageRenderBridge(Arcane::HostBoot::BootContext& ctx);
+    bool StageSpriteTables(Arcane::HostBoot::BootContext& ctx);
+    bool StagePluginLoad(Arcane::HostBoot::BootContext& ctx);
+
     void MainLoop();
     void Shutdown();
 
+    // Forwards to a real BootPresenter once StageGpuCore has built the device
+    // -- same shape and same reason as EditorApp::LazyBootPresenter (see that
+    // class's header comment).
+    class LazyBootPresenter final : public Arcane::IBootPresenter
+    {
+    public:
+        void Bind(Arcane::BootPresenter* p) noexcept { m_inner = p; }
+        bool Present(const Arcane::BootProgress& progress) override
+        {
+            return m_inner ? m_inner->Present(progress) : true;
+        }
+    private:
+        Arcane::BootPresenter* m_inner = nullptr;
+    };
+
     Arcane::HostConfig                  m_config;
     std::unique_ptr<Arcane::GpuContext> m_gpu;          // destructs LAST among engine state
+
+    // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
+    Arcane::BootSplashWindow*             m_splash = nullptr;
+    std::optional<Arcane::BootPresenter>  m_presenter;
+    LazyBootPresenter                     m_lazyPresenter;
+
     Astra::TypeContext*                 m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
-    // engaged by Init() before MainLoop()/Shutdown() touch them (bare -> deref is safe).
+    // engaged by the boot sequence before MainLoop()/Shutdown() touch them (bare -> deref is safe).
     std::optional<Arcane::Runtime>      m_runtime;      // destructs before m_gpu
     std::optional<Arcane::PluginHost>   m_plugin;       // destructs before m_runtime
     Arcane::FramePerf                   m_perf;
