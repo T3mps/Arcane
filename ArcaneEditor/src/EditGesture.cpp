@@ -68,8 +68,16 @@ namespace Arcane::Editor::EditGesture
             return;
         if (ShouldCloseStaleOnActivate(st.slots, static_cast<bool>(st.pendingCommit)))
             ClosePending(*stack, st);
-        st.slots.txn  = stack->Begin(label());
-        st.slots.item = ImGui::GetItemID();
+        // Park the WHOLE struct, never field by field. A partial assignment
+        // leaves the previous gesture's `popup` behind, and a widget gesture
+        // wearing that flag takes ShouldCloseAbandoned's popup arm -- where
+        // IsPopupOpen(widgetId) is never true, so the ScopeGuard reads
+        // abandonment on the frame the gesture opened and the rest of the drag
+        // runs untracked. ClosePending does not always run before this point:
+        // both it and ShouldCloseStaleOnActivate decline when txn == None and
+        // nothing is pending, which is exactly the JOINED state a popup can
+        // park.
+        st.slots = Slots{ stack->Begin(label()), ImGui::GetItemID(), /*popup*/ false };
         st.pendingCommit = onOpened();
     }
 
@@ -112,9 +120,7 @@ namespace Arcane::Editor::EditGesture
             return;                     // ours, already live -- every frame after the first
         if (ShouldCloseStaleOnActivate(st.slots, static_cast<bool>(st.pendingCommit)))
             ClosePending(*stack, st);
-        st.slots.txn  = stack->Begin(label());
-        st.slots.item = popupId;
-        st.slots.popup = true;
+        st.slots = Slots{ stack->Begin(label()), popupId, /*popup*/ true };
         st.pendingCommit = onOpened();
     }
 
