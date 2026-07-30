@@ -12,10 +12,12 @@ namespace Arcane::Editor::EditGesture
     }
 
     bool ShouldCloseAbandoned(const Slots& s, std::uint32_t activeId,
-                              bool hasPendingCommit) noexcept
+                              bool hasPendingCommit, bool popupOpen) noexcept
     {
         if (s.txn == Arcane::TransactionId::None && !hasPendingCommit)
             return false;
+        if (s.popup)
+            return !popupOpen;
         return activeId != s.item;
     }
 
@@ -112,6 +114,7 @@ namespace Arcane::Editor::EditGesture
             ClosePending(*stack, st);
         st.slots.txn  = stack->Begin(label());
         st.slots.item = popupId;
+        st.slots.popup = true;
         st.pendingCommit = onOpened();
     }
 
@@ -131,8 +134,12 @@ namespace Arcane::Editor::EditGesture
     {
         if (!stack)
             return;
+        // Both arms' inputs are gathered here; which one applies is the pure
+        // core's call, not the skin's.
         if (ShouldCloseAbandoned(st.slots, ImGui::GetActiveID(),
-                                 static_cast<bool>(st.pendingCommit)))
+                                 static_cast<bool>(st.pendingCommit),
+                                 ImGui::IsPopupOpen(static_cast<ImGuiID>(st.slots.item),
+                                                    ImGuiPopupFlags_None)))
             ClosePending(*stack, st);
     }
 }

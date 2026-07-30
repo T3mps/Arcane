@@ -79,24 +79,24 @@ TEST_CASE("EditGesture pure core: abandonment + stale checks", "[editor]")
 
     SECTION("cleared slots never close")
     {
-        CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, 0, false));
+        CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, 0, false, /*popupOpen*/ false));
         CHECK_FALSE(EditGesture::ShouldCloseStaleOnActivate(s, false));
     }
     SECTION("open txn + owner still holds ActiveId -> healthy, no close")
     {
         s.txn = static_cast<TransactionId>(3); s.item = 42;
-        CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, 42, false));
+        CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, 42, false, /*popupOpen*/ false));
     }
     SECTION("open txn + ActiveId moved on (or nothing active) -> abandoned")
     {
         s.txn = static_cast<TransactionId>(3); s.item = 42;
-        CHECK(EditGesture::ShouldCloseAbandoned(s, 0, false));
-        CHECK(EditGesture::ShouldCloseAbandoned(s, 7, false));
+        CHECK(EditGesture::ShouldCloseAbandoned(s, 0, false, /*popupOpen*/ false));
+        CHECK(EditGesture::ShouldCloseAbandoned(s, 7, false, /*popupOpen*/ false));
     }
     SECTION("builder-style joiner: txn None but a command is owed")
     {
         s.item = 42;
-        CHECK(EditGesture::ShouldCloseAbandoned(s, 7, true));
+        CHECK(EditGesture::ShouldCloseAbandoned(s, 7, true, /*popupOpen*/ false));
         CHECK(EditGesture::ShouldCloseStaleOnActivate(s, true));
     }
     SECTION("open txn -> stale on a fresh activation")
@@ -196,4 +196,45 @@ TEST_CASE("ShouldClosePopup: nothing parked means nothing to close", "[editor]")
     CHECK(EditGesture::ShouldClosePopup(s, 1234, /*open*/ false, /*hasPendingCommit*/ true));
     // ...and not while it is still open.
     CHECK_FALSE(EditGesture::ShouldClosePopup(s, 1234, /*open*/ true, /*hasPendingCommit*/ true));
+}
+
+TEST_CASE("ShouldCloseAbandoned: a popup gesture is judged by the POPUP, not ActiveId", "[editor]")
+{
+    EditGesture::Slots s;
+    s.txn   = static_cast<TransactionId>(7);
+    s.item  = 1234;                 // a POPUP id, not a widget id
+    s.popup = true;
+
+    // The whole point: ActiveId inside a popup is some FOREIGN widget's id (or
+    // 0), and it never equals the popup's own id. Under the widget rule that
+    // reads as abandonment every frame, which would commit and clear the
+    // transaction mid-session and leave one undo step per frame.
+    CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, /*activeId*/ 5678, false, /*popupOpen*/ true));
+    CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, /*activeId*/ 0,    false, /*popupOpen*/ true));
+
+    // Still the backstop: the popup is gone, so close. This is what covers the
+    // host panel ceasing to draw, where EndOnPopupClose is no longer called.
+    CHECK(EditGesture::ShouldCloseAbandoned(s, /*activeId*/ 0,    false, /*popupOpen*/ false));
+    CHECK(EditGesture::ShouldCloseAbandoned(s, /*activeId*/ 1234, false, /*popupOpen*/ false));
+
+    // JOINED popup gesture: txn None but a built command still owed.
+    s.txn = Arcane::TransactionId::None;
+    CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, 0, /*hasPendingCommit*/ true,  /*popupOpen*/ true));
+    CHECK(      EditGesture::ShouldCloseAbandoned(s, 0, /*hasPendingCommit*/ true,  /*popupOpen*/ false));
+    // Nothing parked at all -- popupOpen is irrelevant.
+    CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, 0, /*hasPendingCommit*/ false, /*popupOpen*/ false));
+}
+
+TEST_CASE("ShouldCloseAbandoned: the widget arm ignores popupOpen", "[editor]")
+{
+    EditGesture::Slots s;
+    s.txn  = static_cast<TransactionId>(7);
+    s.item = 42;                    // a WIDGET id; s.popup stays false
+
+    // popupOpen must not reach the widget verdict at all -- a colour popup open
+    // somewhere else in the frame must not keep an abandoned widget gesture alive.
+    CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, 42, false, /*popupOpen*/ false));
+    CHECK_FALSE(EditGesture::ShouldCloseAbandoned(s, 42, false, /*popupOpen*/ true));
+    CHECK(      EditGesture::ShouldCloseAbandoned(s, 99, false, /*popupOpen*/ false));
+    CHECK(      EditGesture::ShouldCloseAbandoned(s, 99, false, /*popupOpen*/ true));
 }

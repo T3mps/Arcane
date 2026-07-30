@@ -34,6 +34,14 @@ namespace Arcane::Editor::EditGesture
     {
         Arcane::TransactionId txn  = Arcane::TransactionId::None;
         std::uint32_t         item = 0;   // id of the widget that OPENED txn
+        // TRUE when the live gesture was opened by BeginOnPopupOpen, in which
+        // case `item` is a POPUP id rather than a widget id. It changes who
+        // judges abandonment: a widget gesture's owner is whoever holds
+        // ActiveId, but a popup's edits are made by FOREIGN widgets we do not
+        // submit, so ActiveId inside the popup is never `item` and the widget
+        // rule would read as abandonment on every frame. Cleared with the rest
+        // of the slots by ClosePending.
+        bool                  popup = false;
     };
 
     enum class EndAction { None, Commit, Cancel };
@@ -83,8 +91,16 @@ namespace Arcane::Editor::EditGesture
     // (:7045/:7075), before the field would have been drawn. A mouse-HELD drag
     // is NOT reachable this way: it never sets ActiveIdAllowOverlap, so the
     // same gate rejects every other item.
+    //
+    // The POPUP arm: when `s.popup` is set, `item` is a popup id and ActiveId is
+    // meaningless as an ownership signal, so abandonment is `!popupOpen` -- the
+    // same test ShouldClosePopup applies. The guard is still a backstop and not
+    // dead weight: if the host panel stops being drawn (document closed, tab
+    // backgrounded), EndOnPopupClose stops being called too, and this is the
+    // only thing left that can close the gesture.
     [[nodiscard]] bool ShouldCloseAbandoned(const Slots& s, std::uint32_t activeId,
-                                            bool hasPendingCommit) noexcept;
+                                            bool hasPendingCommit,
+                                            bool popupOpen) noexcept;
 
     // Activation-time stale check: a still-parked gesture means the previous
     // owner never got to close (click-through to a widget drawn ABOVE it in
