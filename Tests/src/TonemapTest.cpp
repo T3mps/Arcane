@@ -1,5 +1,8 @@
-// Color-pipeline golden test: linear HDR canvas -> ACES -> 2.2 encode must
-// byte-match the CPU reference (the client post_process.glsl oracle math).
+// Color-pipeline golden test: linear HDR canvas -> ACES -> TRUE sRGB encode must
+// byte-match the CPU reference. The curve is the IEC 61966-2-1 piecewise one,
+// deliberately NOT pow(1/2.2) -- it matches what SRGBA8_UNORM applies in hardware
+// on input, so the pipeline is symmetric. MIRRORS shaders/tonemap.hlsl; keep the
+// two in step (and ArcaneEditor/src/EditorWidgets.cpp's branching copy).
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -20,9 +23,17 @@ namespace
         return std::clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0f, 1.0f);
     }
 
+    // Same branchless algebra as the shader, so the only difference between the
+    // two is float evaluation order -- which the +/-2 byte tolerance below
+    // absorbs. Do NOT "simplify" this to the branching form: an identical
+    // expression is what makes this a drift detector rather than a second
+    // opinion.
     uint8_t ExpectedByte(float linearChannel)
     {
-        const float display = std::pow(AcesFilmic(linearChannel), 1.0f / 2.2f);
+        const float lin = AcesFilmic(linearChannel);
+        const float display = std::min(lin * 12.92f,
+                                       std::pow(std::max(lin, 0.0031308f), 1.0f / 2.4f)
+                                           * 1.055f - 0.055f);
         return (uint8_t)std::lround(display * 255.0f);
     }
 
