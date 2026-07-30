@@ -261,30 +261,30 @@ Expected: `Build succeeded`, 0 errors. `EditorWidgets.cpp` compiles into BOTH
 `ArcaneEditor.exe` and `ArcaneTests.exe` (`premake5.lua:611`), so a compile error
 here breaks the test exe too — that is expected and is the only coupling.
 
-- [ ] **Step 4 (optional, delete before committing): curve sanity print**
+- [ ] **Step 4: curve sanity check -- DONE OUT-OF-TREE, no temp code needed**
 
-The one thing the visual gate cannot catch is a plausible-but-wrong curve. Paste
-this temporarily at the top of `ColorField4`, run the editor once, read the
-console, then delete it:
+The one thing the visual gate cannot catch is a plausible-but-wrong curve. This
+step originally pasted a throwaway `ARC_INFO` into `ColorField4` to be deleted
+before commit; that is unnecessary -- the curve is nine lines of pure arithmetic
+with no ImGui or engine dependency, so it was evaluated in a scratch shell instead
+and the editor source was never polluted. Results (2026-07-30):
 
-```cpp
-        {
-            static bool once = false;
-            if (!once)
-            {
-                once = true;
-                ARC_INFO("srgb check: 128/255 -> {:.4f} (want 0.2158), "
-                         "0.5 lin -> {:.1f}/255 (want 186), rt(0.3)={:.6f}",
-                         SrgbToLinear(128.0f / 255.0f),
-                         LinearToSrgb(0.5f) * 255.0f,
-                         SrgbToLinear(LinearToSrgb(0.3f)));
-            }
-        }
-```
+| check | value | meaning |
+|---|---|---|
+| `SrgbToLinear(128/255)` | **0.215861** | LOAD-BEARING: matches the sRGB decode `SRGBA8_UNORM` applies in hardware, so a tint and a texture pixel authored alike now agree |
+| `LinearToSrgb(0.5) * 255` | **187.516** | -- |
+| stored `0.501961` displays as | **188** | this is the re-label the user sees at the gate |
+| piecewise boundary `S2L(0.04045)` | 0.0031308 both sides | continuous, no visible seam at the knee |
+| `S2L(L2S(0.3))`, `L2S(S2L(0.729))` | exact to 8 dp | round-trip stable |
+| `S2L(-0.25)`, `L2S(-0.25)` | -0.25 | negatives pass through, no NaN from `pow` |
+| `L2S(2.0)` | 1.3533, monotonic | the hdr path cannot clamp |
 
-Expected: `0.2158`, `186.0`, `0.300000`. The first number is the load-bearing one
-— it is what proves we match the texture hardware rather than merely being
-self-consistent. Requires `#include <Arcane/Base/Log.hpp>` while present.
+**CORRECTION to this plan's earlier numbers:** it previously expected `186`, and
+the spec's Decision 1 and desk-check item 7 said an existing `128` would re-label
+to `186`. That is wrong, and wrong in a telling way -- `186.084` is exactly
+`pow(0.5, 1/2.2) * 255`, i.e. it was computed with the 2.2 display gamma this arc
+explicitly forbids. The true sRGB curve gives **188**. Both documents are
+corrected; the gate list now says `188`.
 
 - [ ] **Step 5: Commit**
 
@@ -455,7 +455,7 @@ what the numbers meant."
 6. Select TWO entities with different tints: the channel boxes are blank for
    differing channels, and typing a number in one writes 0-255 sRGB to both.
 7. **Expected re-label, not a bug:** an existing tint authored as `128` now reads
-   `186`. The colour on screen must NOT change.
+   `188`. The colour on screen must NOT change.
 
 ---
 

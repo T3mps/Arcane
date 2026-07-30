@@ -43,7 +43,7 @@ as sRGB gamma, and it carries an explicit sRGB display toggle.
 1. **sRGB in, linear stored.** The widgets display and accept sRGB-encoded
    values; storage stays the linear float it is today. **Not a data migration** —
    no stored value changes, so nothing changes on screen. The visible consequence
-   is *re-labelling*: a tint authored as `128` reads `186` afterwards. 0, 255 and
+   is *re-labelling*: a tint authored as `128` reads `188` afterwards. 0, 255 and
    alpha are unaffected.
 2. **The true sRGB piecewise curve, not `pow(2.2)`.** The point is agreeing with
    the texture sampler, which uses the real curve, and with what a hex from a
@@ -181,15 +181,18 @@ What that means concretely:
   a pasted hex reproduces its source on screen; one Ctrl+Z per drag and none for
   a click that dragged nothing; multi-select blanks and writes correctly; the
   graph-node picker opens above the canvas; and the expected re-label (an
-  existing `128` reading `186`) with **no change to the rendered colour**.
+  existing `128` reading `188`) with **no change to the rendered colour**.
 - The undo claim in the section below is therefore verified by eye (one Ctrl+Z
   per drag) rather than by a headless frame-sequence test.
 
 One residual risk is accepted knowingly: a wrong transfer curve looks *plausible*
-on screen, so the visual gate cannot catch it. The plan carries an optional
-throwaway console print asserting `SrgbToLinear(128/255) == 0.2158` (the value
-that proves we match the texture hardware rather than merely being
-self-consistent) to be deleted before commit. It is a sanity check, not a test.
+on screen, so the visual gate cannot catch it. That risk is closed by arithmetic
+rather than by a test: the curve is pure scalar maths with no ImGui or engine
+dependency, so it was evaluated in a scratch shell (results tabulated in the
+plan's Task 1 Step 4) instead of pasting a throwaway print into the editor. The
+load-bearing number is `SrgbToLinear(128/255) = 0.215861` -- the value that proves
+agreement with the texture hardware rather than mere self-consistency. It is a
+sanity check, not a test.
 
 ## Non-goals
 
