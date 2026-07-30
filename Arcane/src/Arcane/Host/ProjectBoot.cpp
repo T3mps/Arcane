@@ -1,5 +1,6 @@
 #include <Arcane/Host/ProjectBoot.hpp>
 
+#include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 
 #include <type_traits>
@@ -15,6 +16,16 @@ namespace Arcane::HostBoot
     // ProjectBoot.hpp are ever removed or reordered past BootContext.
     static_assert(std::is_same_v<decltype(BootContext::gpu), Arcane::GpuContext*>,
                   "BootContext::gpu must bind Arcane::GpuContext -- see the "
+                  "Arcane-namespace forward declarations at the top of "
+                  "ProjectBoot.hpp");
+
+    // Same binding proof for BootContext::splash, added once Task 7 gave
+    // BootSplashWindow a real definition (the Task 5 forward declaration this
+    // guards against was already in place, but std::is_same_v needs no
+    // complete pointee -- an incomplete Arcane::BootSplashWindow would have
+    // worked here too; this is just the earliest point a real include exists).
+    static_assert(std::is_same_v<decltype(BootContext::splash), Arcane::BootSplashWindow*>,
+                  "BootContext::splash must bind Arcane::BootSplashWindow -- see the "
                   "Arcane-namespace forward declarations at the top of "
                   "ProjectBoot.hpp");
 
