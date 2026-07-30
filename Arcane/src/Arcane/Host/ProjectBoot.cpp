@@ -31,17 +31,41 @@ namespace Arcane::HostBoot
 
     namespace
     {
+        // The sentinel body for a stage no host has supplied real work for
+        // (Task 8, 2026-07-30 review fix). `Make(..., run)` with `run` left
+        // default-constructed (empty) installs this instead of a silent
+        // `return true`: a typo'd or renamed id, or a host that simply forgot
+        // to patch one, now logs loudly AND fails the stage, so a Fatal stage
+        // hard-aborts boot rather than reporting success with a step quietly
+        // skipped -- exactly the shape of all three shipped bugs this whole
+        // arc exists to close, and exactly the gap BootStageParityTest cannot
+        // see (it compares ids only, never invokes `.run`). See BootContext's
+        // "THE CANONICAL BOOT SEQUENCE" comment in ProjectBoot.hpp for the
+        // full contract, including how a host marks an id as an INTENTIONAL
+        // no-op rather than relying on this sentinel.
+        std::function<bool()> Unpatched(std::string id)
+        {
+            return [id = std::move(id)]
+            {
+                ARC_ERROR("BootStage '{}' has no host body -- a host forgot to "
+                          "patch it, or the id was renamed/typo'd without "
+                          "updating the patch site (see ProjectBoot.hpp's "
+                          "CoreStages comment)", id);
+                return false;
+            };
+        }
+
         BootStage Make(std::string id, std::vector<std::string> deps,
                        BootThread thread, BootPolicy policy, std::uint32_t weight,
-                       std::function<bool()> run)
+                       std::function<bool()> run = {})
         {
             BootStage s;
-            s.id = std::move(id);
+            s.id = id;   // copy: Unpatched(id) below still needs it if run is empty
             s.dependsOn = std::move(deps);
             s.thread = thread;
             s.policy = policy;
             s.weight = weight;
-            s.run = std::move(run);
+            s.run = run ? std::move(run) : Unpatched(std::move(id));
             return s;
         }
     }
@@ -60,17 +84,20 @@ namespace Arcane::HostBoot
         // ArcaneRuntime equivalents) that this module cannot see or own --
         // Arcane.dll cannot reach into an EXE's private members, and some of
         // the editor's own steps (theme/fonts/console sink/document routing)
-        // live in ArcaneEditor.exe, not here. Each host OVERWRITES that
-        // stage's `run` with its own closure after calling EditorStages/
-        // RuntimeStages (see EditorApp::Run / RuntimeApp::Run) -- the id,
-        // dependsOn, thread and weight it inherits from here are what stays
-        // canonical and shared; only the body differs, exactly as
+        // live in ArcaneEditor.exe, not here. Each host is REQUIRED to
+        // overwrite that stage's `run` with its own closure after calling
+        // EditorStages/RuntimeStages (see EditorApp::Run / RuntimeApp::Run)
+        // -- the id, dependsOn, thread and weight it inherits from here are
+        // what stays canonical and shared; only the body differs, exactly as
         // BootStageParityTest documents ("proves both hosts RUN the same
-        // stages, not that a stage's body behaves identically"). A context
-        // with no host override (e.g. the parity tests' all-null ctx, or a
-        // future host that forgets to patch one) safely no-ops here rather
-        // than crashing.
-        s.push_back(Make("runtime_create",       {},                                  BootThread::Main,   BootPolicy::Fatal,     5, [&ctx] { (void)ctx; return true; }));
+        // stages, not that a stage's body behaves identically"). `Make(...)`
+        // called with no trailing `run` argument (every push_back below with
+        // no lambda) installs Unpatched(id) instead of a silent success, so a
+        // host that forgets -- or a future rename this file's own id string
+        // and a host's patch-site string drift apart on -- fails LOUDLY
+        // instead of quietly reporting a healthy boot. See ProjectBoot.hpp's
+        // "THE CANONICAL BOOT SEQUENCE" comment for the full contract.
+        s.push_back(Make("runtime_create",       {},                                  BootThread::Main,   BootPolicy::Fatal,     5));
         s.push_back(Make("type_context_install", {"runtime_create"},                  BootThread::Main,   BootPolicy::Fatal,     1, [&ctx]
         {
             // The host's own Astra::SetTypeContext(...) call happens inside
@@ -78,11 +105,23 @@ namespace Arcane::HostBoot
             // TypeContext pointer, which only the host allocates. This half is
             // pure engine logic (VerifySharedTypeContext takes only a Registry&
             // and a label) and is genuinely shared by both hosts.
+            //
+            // BEHAVIOR CHANGE, DELIBERATE (2026-07-30 review): before this
+            // task, both hosts called VerifySharedTypeContext with the result
+            // explicitly discarded (`(void)...`) under a comment reading
+            // "Non-fatal by choice". This stage's policy is Fatal and its
+            // body RETURNS the check's result, so a genuine TypeContext
+            // mismatch now ABORTS boot on both hosts instead of merely
+            // logging and continuing with components silently misread. That
+            // is intentional and is being kept: a mismatch here IS motivating
+            // bug #3 (the 2026-07-30 Camera/Transform aliasing incident) --
+            // discovering it loudly at boot beats discovering it as "my
+            // sprite renders as one pixel" hours later.
             if (!ctx.runtime) return true;   // facility absent -- nothing to verify
             return VerifySharedTypeContext(ctx.runtime->Registry(),
                                            ctx.moduleName ? ctx.moduleName : "HostBoot");
         }));
-        s.push_back(Make("gpu_core",             {},                                  BootThread::Main,   BootPolicy::Fatal,    25, [&ctx] { (void)ctx; return true; }));
+        s.push_back(Make("gpu_core",             {},                                  BootThread::Main,   BootPolicy::Fatal,    25));
         s.push_back(Make("project_open",         {"runtime_create"},                  BootThread::Worker, BootPolicy::Optional, 45, [&ctx]
         {
             // Optional default: a failed/absent open is never fatal here -- the
@@ -96,7 +135,7 @@ namespace Arcane::HostBoot
                      ctx.moduleName ? ctx.moduleName : "HostBoot", ctx.projectPath);
             return true;
         }));
-        s.push_back(Make("render_bridge",        {"gpu_core", "runtime_create"},      BootThread::Main,   BootPolicy::Fatal,     3, [&ctx] { (void)ctx; return true; }));
+        s.push_back(Make("render_bridge",        {"gpu_core", "runtime_create"},      BootThread::Main,   BootPolicy::Fatal,     3));
         s.push_back(Make("input_config",         {"project_open", "gpu_core"},        BootThread::Main,   BootPolicy::Optional,  2, [&ctx]
         {
             if (!ctx.gpu || !ctx.runtime) return true;
@@ -104,10 +143,10 @@ namespace Arcane::HostBoot
                 ARC_WARN("{}: input actions failed to load", ctx.moduleName ? ctx.moduleName : "HostBoot");
             return true;
         }));
-        s.push_back(Make("sprite_tables",        {"project_open", "render_bridge"},   BootThread::Main,   BootPolicy::Optional,  2, [&ctx] { (void)ctx; return true; }));
-        s.push_back(Make("plugin_load",          {"project_open", "render_bridge"},   BootThread::Main,   BootPolicy::Fatal,     9, [&ctx] { (void)ctx; return true; }));
+        s.push_back(Make("sprite_tables",        {"project_open", "render_bridge"},   BootThread::Main,   BootPolicy::Optional,  2));
+        s.push_back(Make("plugin_load",          {"project_open", "render_bridge"},   BootThread::Main,   BootPolicy::Fatal,     9));
         s.push_back(Make("finalize",             {"plugin_load", "input_config",
-                                                  "sprite_tables"},                   BootThread::Main,   BootPolicy::Fatal,     1, [&ctx] { (void)ctx; return true; }));
+                                                  "sprite_tables"},                   BootThread::Main,   BootPolicy::Fatal,     1));
         return s;
     }
 
@@ -155,8 +194,34 @@ namespace Arcane::HostBoot
     std::vector<BootStage> EditorStages(BootContext& ctx)
     {
         std::vector<BootStage> s = CoreStages(ctx);
-        s.push_back(Make("editor_fonts",  {"gpu_core"},      BootThread::Main,   BootPolicy::Fatal,    5, [&ctx] { (void)ctx; return true; }));
-        s.push_back(Make("splash_ready",  {"editor_fonts"},  BootThread::Main,   BootPolicy::Fatal,    2, [&ctx]
+        // editor_fonts and editor_shell are host-patched (EditorApp::
+        // StageEditorFonts/StageEditorShell) with EditorTheme/EditorFonts/
+        // ShaderEditorDocument work this module cannot see -- but the ORDER
+        // constraint below IS this module's business, because it governs
+        // WHEN EditorApp is allowed to bind the real BootPresenter into
+        // m_lazyPresenter (2026-07-30 review fix, was a real bug: the
+        // presenter used to bind at the end of gpu_core, so BootSequence's
+        // very next present() call -- which fires unconditionally after
+        // EVERY completed main stage, including gpu_core itself -- reached a
+        // real BootPresenter::Present -> ImGui::NewFrame() BEFORE
+        // editor_fonts had installed Inter/the icon font and BEFORE
+        // editor_shell had applied the theme or registered the layout/
+        // play-mode ImGuiSettingsHandlers. The consequences were exactly
+        // what EditorFonts.cpp's own comment warns about ("Inter FIRST ->
+        // becomes Fonts[0], the implicit editor default") and what
+        // EditorApp.cpp's settings-handler comment warns about ("before the
+        // first NewFrame ... a handler added later would never see the
+        // saved entry"): stock ImGui font + missing icon glyphs, and
+        // imgui.ini's persisted editor layout/play-mode sections silently
+        // dropped on load. EditorApp::StageGpuCore now creates the device
+        // WITHOUT binding the presenter; EditorApp::StageEditorShell binds
+        // it at ITS OWN end, once fonts+theme+settings+console sink are all
+        // installed -- so editor_shell's own dependency on editor_fonts is
+        // what makes "both precede the first real NewFrame" a DAG guarantee,
+        // not a registration-order accident. Do not move the presenter bind
+        // earlier than this without re-deriving that guarantee.
+        s.push_back(Make("editor_fonts",  {"gpu_core"},      BootThread::Main,   BootPolicy::Fatal,    5));
+        s.push_back(Make("splash_ready",  {"editor_fonts", "editor_shell"}, BootThread::Main, BootPolicy::Fatal, 2, [&ctx]
         {
             // Show the REAL window first, THEN close the pre-device splash.
             // Reversing these leaves a frame with neither on screen. Pure
@@ -165,11 +230,20 @@ namespace Arcane::HostBoot
             // render_bridge override, since it has no editor_fonts dependency
             // to hang a dedicated stage id off of and RuntimeStages appends
             // nothing).
+            //
+            // Depends on editor_shell TOO, not just editor_fonts (2026-07-30
+            // review fix): editor_shell is what calls SetTitle/SetIcon/
+            // ApplyEditorTheme and binds the real presenter (see the comment
+            // above editor_fonts). Depending on editor_fonts alone let this
+            // stage's lower registration index win the ready-stage race
+            // against editor_shell, so Show() used to fire -- revealing the
+            // window and its "Arcane Runtime"/default-SDL-icon/stock-ImGui-
+            // blue first frame -- BEFORE editor_shell ever ran.
             if (ctx.gpu) ctx.gpu->Win().Show();
             if (ctx.splash) ctx.splash->Close();
             return true;
         }));
-        s.push_back(Make("editor_shell",  {"editor_fonts"},  BootThread::Main,   BootPolicy::Fatal,    3, [&ctx] { (void)ctx; return true; }));
+        s.push_back(Make("editor_shell",  {"editor_fonts"},  BootThread::Main,   BootPolicy::Fatal,    3));
         s.push_back(Make("editor_lock",   {"project_open"},  BootThread::Worker, BootPolicy::Optional, 1, [&ctx]
         {
             // Arcane::EditorLock is engine-visible (Project.hpp), so this is

@@ -575,6 +575,17 @@ int RuntimeApp::Run()
         else if (stage.id == "render_bridge")    stage.run = [this, &ctx] { return StageRenderBridge(ctx); };
         else if (stage.id == "sprite_tables")    stage.run = [this, &ctx] { return StageSpriteTables(ctx); };
         else if (stage.id == "plugin_load")      stage.run = [this, &ctx] { return StagePluginLoad(ctx); };
+        // "finalize" is DELIBERATELY left as CoreStages' Unpatched(id) sentinel
+        // for every id above -- but finalize itself needs an EXPLICIT opt-out,
+        // not silence, or a genuinely forgotten patch here would be
+        // indistinguishable from this comment (2026-07-30 review finding).
+        // RuntimeApp has no finalize-specific work: it has no window title to
+        // recompute and no scene session to adopt (those are editor-only
+        // concepts -- see EditorApp::StageFinalize), and its own boot-scene
+        // load already happens inside StagePluginLoad (see that method's
+        // comment for why it cannot move to sprite_tables). So this is a
+        // real, intentional no-op, stated as one:
+        else if (stage.id == "finalize")         stage.run = [] { return true; };
     }
 
     Arcane::BootSequence seq(std::move(stages));

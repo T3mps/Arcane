@@ -334,15 +334,44 @@ namespace Arcane::HostBoot
         const char*       moduleName  = nullptr;
     };
 
-    // THE CANONICAL BOOT SEQUENCE. Both hosts take this list WHOLE.
+    // THE CANONICAL BOOT SEQUENCE. Both hosts take this LIST whole: the ids,
+    // dependsOn, thread and weight below may not be omitted, reordered, or
+    // rewritten by a host -- so divergence between the editor and the runtime
+    // has to be written deliberately instead of forgotten. Three shipped bugs
+    // (camera, sprite tables, Astra TypeContext) were exactly that forgetting.
     //
-    // A host may APPEND its own stages. It may NOT omit, reorder, or rewrite one
-    // -- so divergence between the editor and the runtime has to be written
-    // deliberately instead of forgotten. Three shipped bugs (camera, sprite
-    // tables, Astra TypeContext) were exactly that forgetting.
+    // A stage's BODY is a different story (Task 8, 2026-07-30 review). Some
+    // ids get a real, shared implementation right here (type_context_install,
+    // project_open, input_config, and the editor-only splash_ready/
+    // editor_lock) because their work is fully expressible through
+    // BootContext alone. The rest are declared here with NO run callable
+    // (Make's `run` parameter defaults to an empty std::function) because
+    // their real work needs a HOST-OWNED object (EditorApp::m_gpu/m_runtime/
+    // m_plugin/m_resolver, ArcaneRuntime's equivalents) or an editor-exe-only
+    // type (EditorTheme/EditorFonts/ShaderEditorDocument) that this module,
+    // compiled into Arcane.dll, cannot reach or see -- Arcane.dll cannot
+    // depend on ArcaneEditor.exe. Each host is REQUIRED to overwrite that
+    // stage's `.run` by id, after calling EditorStages/RuntimeStages, before
+    // constructing a BootSequence (see EditorApp::Run / RuntimeApp::Run).
     //
-    // Adding an engine-wide install/publish step? Add it HERE and both hosts get
-    // it. BootStageParityTest fails if a host drops one.
+    // An id with no host override left empty is NOT tolerated silently: Make()
+    // substitutes a sentinel body that logs ARC_ERROR naming the exact id and
+    // returns false, so a Fatal stage hard-aborts boot instead of the host
+    // quietly skipping the step and reporting success -- the sentinel exists
+    // BECAUSE "a host forgot a step and nothing said so" is the literal shape
+    // of all three shipped bugs above, and BootStageParityTest's id-only
+    // comparison cannot catch a host that received the right id but never
+    // patched it. A host for which a given id is LEGITIMATELY a no-op (e.g.
+    // ArcaneRuntime has no finalize-specific work) must patch it to an
+    // explicit `[]{ return true; }` with a comment saying so -- relying on
+    // the sentinel to happen to look like success is exactly what this
+    // paragraph exists to forbid.
+    //
+    // Adding an engine-wide install/publish step? Add the id HERE (with a
+    // shared body if one is possible) and both hosts' lists gain it;
+    // BootStageParityTest fails if a host's id list drops one, and the
+    // sentinel fails loudly if a host's id list keeps it but never patches
+    // (or renames/typos) it.
     [[nodiscard]] ARCANE_API std::vector<BootStage> CoreStages(BootContext& ctx);
 
     // Ids only -- no context needed, so tests and tooling can ask "what is the

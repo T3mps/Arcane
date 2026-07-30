@@ -212,11 +212,19 @@ namespace Arcane::Editor
         ARC_INFO("{} -- Arcane Editor host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
         ctx.gpu = m_gpu.get();
 
-        // The presenter cannot exist before the device does. Bind it into the
-        // stable LazyBootPresenter Run() already handed BootSequence -- see
-        // EditorApp.hpp's LazyBootPresenter and Run() below.
-        m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
-        m_lazyPresenter.Bind(&*m_presenter);
+        // Deliberately does NOT construct/bind m_presenter here (2026-07-30
+        // review fix -- see the ordering comment on EditorStages'
+        // editor_fonts push_back in ProjectBoot.cpp for the full story). This
+        // stage completing does not yet mean it is safe to draw a real ImGui
+        // frame: no custom font is installed, no theme is applied, and the
+        // layout/play-mode settings handlers are not registered yet, all of
+        // which the FIRST NewFrame call locks in (font atlas build, imgui.ini
+        // read). BootSequence calls present() unconditionally after every
+        // completed main stage, including this one -- if the presenter were
+        // bound here, that next present() call would be the first NewFrame,
+        // before StageEditorFonts/StageEditorShell ever ran. m_lazyPresenter
+        // stays unbound (forwards "keep going" without touching ImGui) until
+        // StageEditorShell binds it at its own end.
         return true;
     }
 
@@ -268,6 +276,16 @@ namespace Arcane::Editor
         ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
         InstallConsoleSink();
+
+        // The presenter cannot exist before the device does, and -- as of the
+        // 2026-07-30 review fix -- must not be BOUND until fonts/theme/
+        // settings-handlers/console-sink above are all installed, since
+        // binding it is what lets the next BootSequence::present() call
+        // reach a real ImGui::NewFrame(). This is the LAST statement in this
+        // stage on purpose. See the ordering comment on EditorStages'
+        // editor_fonts push_back in ProjectBoot.cpp for the full story.
+        m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
+        m_lazyPresenter.Bind(&*m_presenter);
         return true;
     }
 

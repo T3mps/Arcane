@@ -106,12 +106,18 @@ namespace Arcane::Editor
         void Shutdown();
         void InstallConsoleSink();   // attach a callback sink on Arcane::Log::Engine() -> m_console
 
-        // Forwards to a real BootPresenter once StageGpuCore has built the
-        // device. Before that it reports "keep going" -- the pre-device splash
+        // Forwards to a real BootPresenter once StageEditorShell has bound
+        // one. Before that it reports "keep going" -- the pre-device splash
         // is what the user is looking at, so there is nothing to draw here
         // yet. BootSequence::Run takes ONE IBootPresenter* for the whole run,
-        // so this stable wrapper is what Run() passes; StageGpuCore binds the
-        // real BootPresenter into it once m_gpu exists.
+        // so this stable wrapper is what Run() passes. NOT bound at the end
+        // of StageGpuCore (2026-07-30 review fix): binding it there let
+        // BootSequence's next present() call reach a real ImGui::NewFrame()
+        // before fonts/theme/settings-handlers/console-sink were installed.
+        // StageEditorShell binds it at ITS OWN end instead, once m_gpu exists
+        // AND those are all in place -- see that stage's body and the
+        // ordering comment on EditorStages' editor_fonts push_back in
+        // ProjectBoot.cpp.
         class LazyBootPresenter final : public Arcane::IBootPresenter
         {
         public:
@@ -210,8 +216,10 @@ namespace Arcane::Editor
 
         // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
         Arcane::BootSplashWindow*             m_splash = nullptr;
-        // Cannot be constructed before StageGpuCore builds m_gpu; m_lazyPresenter
-        // is the stable stand-in Run() hands BootSequence for the whole call.
+        // Cannot be constructed before StageGpuCore builds m_gpu, and must not
+        // be BOUND into m_lazyPresenter before StageEditorShell finishes (see
+        // that stage's body) -- m_lazyPresenter is the stable stand-in Run()
+        // hands BootSequence for the whole call regardless.
         std::optional<Arcane::BootPresenter>  m_presenter;
         LazyBootPresenter                     m_lazyPresenter;
 
