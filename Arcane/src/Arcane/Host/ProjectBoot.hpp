@@ -32,6 +32,26 @@
 #include <utility>
 #include <vector>
 
+namespace Arcane
+{
+    // Forward declarations for BootContext below. An elaborated-type-specifier
+    // written from inside Arcane::HostBoot (e.g. "class GpuContext*") does
+    // ordinary unqualified lookup; if no Arcane::GpuContext is visible yet at
+    // that point (this header does not include GpuContext.hpp -- deliberately,
+    // to stay light for every consumer that only wants the input/asset/scene
+    // helpers), the compiler silently declares a NEW, distinct type in the
+    // innermost enclosing namespace (Arcane::HostBoot::GpuContext), not
+    // Arcane::GpuContext -- and which type you get would then depend on
+    // whether GpuContext.hpp happened to be included first in a given TU, an
+    // ODR hazard. These forward declarations pin the real Arcane:: types
+    // regardless of include order. Runtime is included in full above (line 12)
+    // and so is unaffected in practice, but is declared here too for the same
+    // reason and for symmetry with GpuContext/BootSplashWindow.
+    class Runtime;
+    class GpuContext;
+    class BootSplashWindow;   // Task 7 defines this, in namespace Arcane
+}
+
 namespace Arcane::HostBoot
 {
     // Is THIS module on the same Astra TypeContext as the engine's registry?
@@ -301,11 +321,11 @@ namespace Arcane::HostBoot
     // members null).
     struct BootContext
     {
-        class Runtime*          runtime     = nullptr;
-        class GpuContext*       gpu         = nullptr;
-        class BootSplashWindow* splash      = nullptr;   // pre-device splash; closed by splash_ready
-        const char*             projectPath = nullptr;
-        const char*             pluginPath  = nullptr;
+        Runtime*          runtime     = nullptr;
+        GpuContext*       gpu         = nullptr;
+        BootSplashWindow* splash      = nullptr;   // pre-device splash; closed by splash_ready
+        const char*       projectPath = nullptr;
+        const char*       pluginPath  = nullptr;
     };
 
     // THE CANONICAL BOOT SEQUENCE. Both hosts take this list WHOLE.

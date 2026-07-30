@@ -1,7 +1,23 @@
 #include <Arcane/Host/ProjectBoot.hpp>
 
+#include <Arcane/Host/GpuContext.hpp>
+
+#include <type_traits>
+
 namespace Arcane::HostBoot
 {
+    // Binding proof (2026-07-30 review): BootContext::gpu must be a real
+    // Arcane::GpuContext*, not a phantom Arcane::HostBoot::GpuContext* that an
+    // elaborated-type-specifier ("class GpuContext*") would silently conjure
+    // up if no Arcane::GpuContext were visible at the point BootContext is
+    // declared. Kept permanent rather than thrown away: it costs nothing at
+    // compile time and fails loudly if the forward declarations in
+    // ProjectBoot.hpp are ever removed or reordered past BootContext.
+    static_assert(std::is_same_v<decltype(BootContext::gpu), Arcane::GpuContext*>,
+                  "BootContext::gpu must bind Arcane::GpuContext -- see the "
+                  "Arcane-namespace forward declarations at the top of "
+                  "ProjectBoot.hpp");
+
     namespace
     {
         BootStage Make(std::string id, std::vector<std::string> deps,
