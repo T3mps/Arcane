@@ -23,7 +23,12 @@ namespace
         Arcane::Runtime  runtime{&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false};
         Astra::Registry& reg = runtime.Registry();
 
-        CameraFixture() { Arcane::RegisterSceneComponents(reg); }
+        // Deliberately does NOT call RegisterSceneComponents from THIS module:
+        // Runtime's ctor already registers the engine roster inside Arcane.dll, and
+        // that is the arrangement every real host has. Registering again here would
+        // make the test module the registrar and hide any cross-module id problem --
+        // which is exactly the shape of bug that aborts a host but not a test.
+        CameraFixture() = default;
 
         Astra::Entity AddCamera(glm::vec2 worldPos, float halfHeight, bool active = true)
         {
