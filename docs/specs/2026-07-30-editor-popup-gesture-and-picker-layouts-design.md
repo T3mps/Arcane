@@ -1,6 +1,18 @@
 # Popup-Scoped Edit Gestures + Selectable Picker Layouts — Design
 
-**Status:** proposed, 2026-07-30
+> **SUPERSEDED 2026-07-30 by `2026-07-30-ue-style-color-picker-design.md`.**
+> Kept for its reasoning, not as a plan of record.
+>
+> The gesture-hardening half (Decisions 1-4) carried over unchanged and is still
+> the design. The picker half was replaced after reading UE's actual
+> `SColorPicker`: tabbed geometry selection is dropped for a single dense panel,
+> the channel rows show linear floats rather than 0-255 sRGB, and the ambiguity
+> this arc exists to fix is addressed by two permanently-visible labelled hex
+> fields plus an sRGB-preview toggle. Decision 7 here (ImGui's row order) and
+> Decision 5's `NoSidePreview` both survive in the successor, for different
+> reasons than they were originally given.
+
+**Status:** SUPERSEDED, 2026-07-30
 **Supersedes nothing.** Builds directly on the colour-picker unification shipped
 earlier today (`8f2e7aac`..`deed9abe`).
 
