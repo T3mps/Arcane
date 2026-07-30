@@ -209,6 +209,27 @@ namespace Arcane::Editor::EditGesture
     //     the slots, so this compares .y against .y.
     void EndOnDeactivate(Arcane::CommandStack* stack, GestureState& st);
 
+    // The popup pair. Call BOTH every frame at a popup-hosted edit site, with the
+    // site's own popup id (ImGui::GetID on a stable string, the same id passed to
+    // ImGui::OpenPopup -- imgui.h:868 has the ImGuiID overload).
+    //
+    // BeginOnPopupOpen opens the gesture on the first frame the popup is observed
+    // open and is a no-op every frame after, so the caller needs no edge tracking.
+    // Liveness is `slots.item == popupId`: slots are cleared on close, and we park
+    // item only for a popup whose gesture we opened -- so unlike the widget path,
+    // where the header warns item is not an "is one open" flag, here it is exactly
+    // that. `popupId == 0` is rejected; ImGui never mints a zero id for a real
+    // popup and treating it as live would alias the cleared state.
+    void BeginOnPopupOpen(Arcane::CommandStack* stack, GestureState& st,
+                          std::uint32_t popupId,
+                          Arcane::FunctionRef<std::string()> label,
+                          Arcane::FunctionRef<std::function<void()>()> onOpened);
+
+    // Owner-guarded close on the popup going away; safe to call every frame. Always
+    // COMMITS (via ClosePending) -- see ShouldClosePopup on why there is no Cancel.
+    void EndOnPopupClose(Arcane::CommandStack* stack, GestureState& st,
+                         std::uint32_t popupId);
+
     // Commit-close a parked gesture NOW (stale-handoff + abandonment paths).
     // Commit semantics on purpose, for BOTH kinds of orphan:
     //   - mid-drag: the edits are already applied and the user watched them

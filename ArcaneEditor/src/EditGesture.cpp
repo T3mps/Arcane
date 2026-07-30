@@ -97,6 +97,36 @@ namespace Arcane::Editor::EditGesture
         st.slots = {};
     }
 
+    void BeginOnPopupOpen(Arcane::CommandStack* stack, GestureState& st,
+                          std::uint32_t popupId,
+                          Arcane::FunctionRef<std::string()> label,
+                          Arcane::FunctionRef<std::function<void()>()> onOpened)
+    {
+        if (!stack || popupId == 0)
+            return;
+        if (!ImGui::IsPopupOpen(static_cast<ImGuiID>(popupId), ImGuiPopupFlags_None))
+            return;
+        if (st.slots.item == popupId)
+            return;                     // ours, already live -- every frame after the first
+        if (ShouldCloseStaleOnActivate(st.slots, static_cast<bool>(st.pendingCommit)))
+            ClosePending(*stack, st);
+        st.slots.txn  = stack->Begin(label());
+        st.slots.item = popupId;
+        st.pendingCommit = onOpened();
+    }
+
+    void EndOnPopupClose(Arcane::CommandStack* stack, GestureState& st,
+                         std::uint32_t popupId)
+    {
+        if (!stack)
+            return;
+        if (ShouldClosePopup(st.slots, popupId,
+                             ImGui::IsPopupOpen(static_cast<ImGuiID>(popupId),
+                                                ImGuiPopupFlags_None),
+                             static_cast<bool>(st.pendingCommit)))
+            ClosePending(*stack, st);
+    }
+
     ScopeGuard::~ScopeGuard()
     {
         if (!stack)
