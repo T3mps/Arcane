@@ -93,3 +93,63 @@ TEST_CASE("CoreStages is exactly the canonical list", "[boot]")
     };
     CHECK(Arcane::HostBoot::CoreStageIds() == kCanonical);
 }
+
+TEST_CASE("EditorStages runs editor_fonts/editor_shell/splash_ready ahead of the plugin", "[boot]")
+{
+    // Change-detector BY DESIGN, same idiom as "CoreStages is exactly the
+    // canonical list" above -- pins REGISTRATION ORDER, not just presence,
+    // because BootSequence picks the lowest-INDEXED ready Main stage each
+    // iteration (BootSequence.cpp), so id/dependsOn membership alone (every
+    // other test in this file) cannot catch a reorder that puts these ids
+    // back after plugin_load.
+    //
+    // Why this specific order is load-bearing (2026-07-30 review rounds 2-3):
+    // PluginHost::Load -> the plugin's Init is free to call
+    // ImGui::SetCurrentContext(...) and never restore it (Sandbox.cpp:102).
+    // editor_fonts/editor_shell install the editor's font atlas, theme,
+    // ImGuiConfigFlags_DockingEnable, and settings handlers -- ALL of which
+    // must land on the EDITOR's ImGui context, not whatever a plugin last
+    // set GImGui to. If plugin_load's index is ever lower again, those calls
+    // silently reconfigure the game context instead: the editor keeps the
+    // stock ImGui font (every ICON_LC_* glyph a missing-glyph box), reveals
+    // in stock ImGui blue, drops its persisted imgui.ini layout, and --
+    // because the editor context's own docking flag was never set before its
+    // first NewFrame -- crashes in ImGui::DockBuilderAddNode
+    // (EXCEPTION_ACCESS_VIOLATION, imgui.cpp:20823) the first time
+    // EndDockSpace tries to rebuild the dock layout. splash_ready (which
+    // calls Window::Show()) has the same requirement for a DIFFERENT reason:
+    // if it runs after the slow tail (render_bridge/input_config/
+    // sprite_tables/plugin_load/finalize) instead of right after
+    // editor_shell, the loading screen stays behind a hidden window until
+    // ~98% of the boot's weight is already done -- see ProjectBoot.cpp's
+    // splash_ready insertion comment for the exact weight accounting.
+    Arcane::HostBoot::BootContext ctx{};
+    const std::vector<std::string> ids = Arcane::HostBoot::EditorStageIdsForTest(ctx);
+
+    const auto indexOf = [&](const std::string& id) -> std::ptrdiff_t
+    {
+        const auto it = std::find(ids.begin(), ids.end(), id);
+        REQUIRE(it != ids.end());
+        return it - ids.begin();
+    };
+
+    const auto fonts        = indexOf("editor_fonts");
+    const auto shell        = indexOf("editor_shell");
+    const auto splashReady  = indexOf("splash_ready");
+    const auto renderBridge = indexOf("render_bridge");
+    const auto pluginLoad   = indexOf("plugin_load");
+
+    CHECK(fonts       < pluginLoad);
+    CHECK(shell        < pluginLoad);
+    CHECK(splashReady < pluginLoad);
+    // splash_ready must reveal the window before the slow tail runs, not
+    // merely before plugin_load specifically -- render_bridge is the
+    // earliest of that tail and has no dependency on splash_ready, so
+    // nothing else forces this ordering.
+    CHECK(splashReady < renderBridge);
+    // The dependency chain itself, restated as index order: editor_fonts
+    // must precede editor_shell (already enforced by dependsOn + the
+    // scheduler), and splash_ready must follow both.
+    CHECK(fonts       < shell);
+    CHECK(shell        < splashReady);
+}

@@ -283,17 +283,14 @@ namespace Arcane::HostBoot
         // "gpu_core" in the vector -- ahead of render_bridge/input_config/
         // sprite_tables/plugin_load/finalize -- so they are the first Main
         // stages ready once gpu_core completes, regardless of how fast the
-        // project_open worker finishes. This is ALSO what makes the real
-        // loading screen non-vestigial: StageEditorShell binds the presenter
+        // project_open worker finishes. StageEditorShell binds the presenter
         // into m_lazyPresenter at its own end (unchanged from the first
-        // review fix), and with this reordering that bind now happens after
-        // only 3 stages (runtime_create/edit_core-or-similar/gpu_core/
-        // editor_fonts/editor_shell) instead of after 11 of 13 -- so the
-        // presenter is live for essentially the WHOLE remaining boot
-        // (project_open's worker tail, render_bridge, input_config,
-        // sprite_tables, plugin_load, finalize), not for two frames at ~99%
-        // -- confirm this held after the fix by tracing the actual stage
-        // sequence, don't just assume the reorder achieved it.
+        // review fix), so from here on the PRESENTER is live for the rest of
+        // boot. That is necessary but is NOT what makes the loading screen
+        // visible to a user -- the window itself is still created hidden
+        // (GpuContext.cpp) and stays that way until something calls
+        // Window::Show(). See splash_ready's own insertion below (third
+        // review fix) for why that call ALSO had to move.
         {
             std::vector<BootStage> editorEarly;
             editorEarly.push_back(Make("editor_fonts", {"gpu_core"},      BootThread::Main, BootPolicy::Fatal, 5));
@@ -302,36 +299,93 @@ namespace Arcane::HostBoot
             const auto gpuCoreIt = std::find_if(s.begin(), s.end(),
                 [](const BootStage& st) { return st.id == "gpu_core"; });
             // gpu_core is a CoreStages invariant guarded by BootStageParityTest's
-            // pinned kCanonical list, so this is always found in practice; the
-            // fallback (append at the end) degrades to the OLD, already-buggy
-            // ordering rather than an out-of-bounds insert if that ever changes.
+            // pinned kCanonical list, so this is always found in practice --
+            // but a silent fallback whose failure mode is "reintroduce the
+            // 2026-07-30 crash" must not stay silent (review round 3 minor).
+            if (gpuCoreIt == s.end())
+            {
+                ARC_ERROR("EditorStages: 'gpu_core' not found in CoreStages -- "
+                          "editor_fonts/editor_shell fall back to appending at "
+                          "the end, which REINTRODUCES the ImGui context-theft "
+                          "ordering bug this file's comments document at "
+                          "length (plugin_load would run first and steal "
+                          "GImGui before fonts/theme/docking-flag/settings-"
+                          "handlers are installed). This should be "
+                          "structurally impossible -- 'gpu_core' is a "
+                          "CoreStages invariant pinned by BootStageParityTest's "
+                          "kCanonical list.");
+            }
             const auto insertAt = (gpuCoreIt != s.end()) ? gpuCoreIt + 1 : s.end();
             s.insert(insertAt,
                      std::make_move_iterator(editorEarly.begin()),
                      std::make_move_iterator(editorEarly.end()));
         }
 
-        s.push_back(Make("splash_ready",  {"editor_fonts", "editor_shell"}, BootThread::Main, BootPolicy::Fatal, 2, [&ctx]
+        // splash_ready is ALSO inserted right after editor_shell, not appended
+        // at the end (2026-07-30 third review fix). Depending on editor_fonts/
+        // editor_shell by id was correct and remains unchanged -- but with
+        // splash_ready still APPENDED after CoreStages' 10 entries plus the
+        // 2 just inserted (index 12 of 13), render_bridge/input_config/
+        // sprite_tables/plugin_load/finalize all had LOWER indices and kept
+        // running before it, so Window::Show() (and the presenter it reveals)
+        // did not fire until the LAST Main stage the editor runs. Editor
+        // stage weights sum to 105; by the old ordering doneWeight reached
+        // ~103 before the window ever became visible -- the user's first
+        // visible frame was at ~98%, the SAME "invisible loading screen"
+        // symptom Fix 1/2 already closed once, just relocated from an
+        // unbound presenter to a hidden window. See EditorApp::StageGpuCore/
+        // StageEditorShell for why folding Show() directly into editor_shell's
+        // OWN body (mirroring the runtime's render_bridge) is NOT safe here:
+        // editor_shell binds the presenter at its own end but does not itself
+        // draw a frame -- the first real frame is the BootSequence present()
+        // call AFTER editor_shell's run() returns. Revealing the window from
+        // INSIDE editor_shell would show it before that frame exists. A
+        // separate stage that DEPENDS ON editor_shell (this one) is what
+        // guarantees at least one real frame has already been drawn by the
+        // time Show() runs -- see splash_ready's own body below for the
+        // Show()-then-Close() ordering within that guarantee.
         {
-            // Show the REAL window first, THEN close the pre-device splash.
-            // Reversing these leaves a frame with neither on screen. Pure
-            // ctx/engine logic (Window::Show, BootSplashWindow::Close) -- the
-            // runtime host performs the same handoff itself (folded into its
-            // render_bridge override, since it has no editor_fonts dependency
-            // to hang a dedicated stage id off of and RuntimeStages appends
-            // nothing).
-            //
-            // Depends on editor_shell TOO, not just editor_fonts: editor_shell
-            // is what calls SetTitle/SetIcon/ApplyEditorTheme and binds the
-            // real presenter (see the ordering comment above editor_fonts'
-            // insertion). splash_ready stays APPENDED (not moved forward with
-            // editor_fonts/editor_shell) precisely so it keeps running after
-            // both, whatever their own position -- dependency ids, not vector
-            // position, are the actual guarantee here.
-            if (ctx.gpu) ctx.gpu->Win().Show();
-            if (ctx.splash) ctx.splash->Close();
-            return true;
-        }));
+            BootStage splashReady = Make("splash_ready",  {"editor_fonts", "editor_shell"}, BootThread::Main, BootPolicy::Fatal, 2, [&ctx]
+            {
+                // Show the REAL window first, THEN close the pre-device splash.
+                // Reversing these leaves a frame with neither on screen. Pure
+                // ctx/engine logic (Window::Show, BootSplashWindow::Close) -- the
+                // runtime host performs the same handoff itself (folded into its
+                // render_bridge override, since it has no editor_fonts dependency
+                // to hang a dedicated stage id off of and RuntimeStages appends
+                // nothing).
+                //
+                // Depends on editor_shell TOO, not just editor_fonts: editor_shell
+                // is what calls SetTitle/SetIcon/ApplyEditorTheme and binds the
+                // real presenter (see the ordering comment on editor_fonts'
+                // insertion above). Both the DEPENDENCY (editor_shell must have
+                // completed) and the VECTOR POSITION (inserted right after it,
+                // not appended) matter now: the dependency is what guarantees a
+                // real frame already exists to reveal; the position is what
+                // guarantees render_bridge/input_config/sprite_tables/
+                // plugin_load/finalize -- none of which this stage depends on --
+                // don't run first and delay the reveal regardless.
+                if (ctx.gpu) ctx.gpu->Win().Show();
+                if (ctx.splash) ctx.splash->Close();
+                return true;
+            });
+
+            const auto editorShellIt = std::find_if(s.begin(), s.end(),
+                [](const BootStage& st) { return st.id == "editor_shell"; });
+            if (editorShellIt == s.end())
+            {
+                ARC_ERROR("EditorStages: 'editor_shell' not found after its own "
+                          "insertion -- splash_ready falls back to appending at "
+                          "the end, which reintroduces the invisible-loading-"
+                          "screen ordering bug (Window::Show() would not fire "
+                          "until the LAST Main stage instead of right after "
+                          "editor_shell). This should be structurally "
+                          "impossible -- editor_shell was just inserted above.");
+            }
+            const auto splashInsertAt = (editorShellIt != s.end()) ? editorShellIt + 1 : s.end();
+            s.insert(splashInsertAt, std::move(splashReady));
+        }
+
         s.push_back(Make("editor_lock",   {"project_open"},  BootThread::Worker, BootPolicy::Optional, 1, [&ctx]
         {
             // Arcane::EditorLock is engine-visible (Project.hpp), so this is
