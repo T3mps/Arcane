@@ -416,7 +416,12 @@ namespace Arcane::Editor
         // ArcaneRuntime now constructs the same object. It publishes the
         // registry's SpriteTable/SpriteMaterialTable, whose pointers are
         // non-owning, so it MUST destruct before m_runtime -- which it does,
-        // being declared after it (reverse-order destruction).
+        // being declared after it (reverse-order destruction), and before
+        // m_viewport, whose batcher it holds.
+        // ONE trap if this ever changes: m_documents below destructs FIRST, so
+        // the consumeFirst hook installed on the resolver (which reaches into
+        // m_documents) is dead by the time ~SceneRenderResolver runs. That is
+        // fine only because the dtor never drains -- it just un-publishes.
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
         Arcane::Editor::AssetBrowserState       m_assetBrowser;

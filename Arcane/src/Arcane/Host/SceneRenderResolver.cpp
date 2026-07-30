@@ -67,9 +67,13 @@ namespace Arcane
             return project ? project->ResolveAsset(AssetId::FromGuid(g)) : std::nullopt;
         };
 
+        // Hoisted, not read back off a moved-from Services below: all three
+        // caches load textures through the same facade.
+        Assets* assets = m_impl->services.runtime
+                       ? &m_impl->services.runtime->AssetsFacade() : nullptr;
+
         SpriteCache::Services spriteServices;
-        spriteServices.assets       = m_impl->services.runtime
-                                    ? &m_impl->services.runtime->AssetsFacade() : nullptr;
+        spriteServices.assets       = assets;
         spriteServices.batcher      = m_impl->services.batcher;
         spriteServices.resolveAsset = resolveAsset;
         m_impl->sprites = std::make_unique<SpriteCache>(std::move(spriteServices));
@@ -77,7 +81,7 @@ namespace Arcane
         SpriteMaterialCache::Services materialServices;
         materialServices.compiler     = m_impl->services.compiler;
         materialServices.sources      = m_impl->services.sources;
-        materialServices.assets       = spriteServices.assets;
+        materialServices.assets       = assets;
         materialServices.device       = m_impl->services.device;
         materialServices.backend      = m_impl->services.backend;
         materialServices.resolveAsset = resolveAsset;
@@ -86,7 +90,7 @@ namespace Arcane
         PostChainCache::Services postServices;
         postServices.compiler     = m_impl->services.compiler;
         postServices.sources      = m_impl->services.sources;
-        postServices.assets       = spriteServices.assets;
+        postServices.assets       = assets;
         postServices.device       = m_impl->services.device;
         postServices.backend      = m_impl->services.backend;
         postServices.resolveAsset = resolveAsset;

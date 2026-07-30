@@ -323,8 +323,8 @@ void RuntimeApp::MainLoop()
                              m_gpu->Cnv().Width(), m_gpu->Cnv().Height());
         // Engine-global material constants (Time/Delta/Viewport) for registered
         // sprite materials; sticky, so once per frame after Begin. Built-in
-        // pipelines ignore them -- but a material that animates read zeros here
-        // before this arc, since the host never called SetGlobals at all.
+        // pipelines ignore them -- but before this arc an animated material read
+        // zeros here, because the host never called SetGlobals at all.
         m_gpu->Batch().SetGlobals(m_frameGlobals);
 
         // Set the render context IN Arcane.dll so TypeID<RenderContext2D> resolves
