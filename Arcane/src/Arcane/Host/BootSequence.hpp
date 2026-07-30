@@ -44,12 +44,29 @@ namespace Arcane
 
     struct BootProgress
     {
-        float       fraction = 0.0f;   // 0..1, monotonic
-        std::string stageId;           // the stage being reported
-        std::string detail;            // optional sub-progress, e.g. "412 / 1180"
+        float fraction = 0.0f;   // 0..1, monotonic
+
+        // The BootStage::id this update is about: the stage that just
+        // completed on the main thread, or the stage currently running on
+        // the worker thread while the main thread has nothing else ready.
+        // Empty only at the final "boot complete" tick, where no single
+        // stage owns the update -- a presenter can treat empty as "no
+        // per-stage caption, just show the fraction".
+        std::string stageId;
+
+        // Reserved for a stage's own sub-progress (e.g. "412 / 1180").
+        // BootSequence never populates this itself today -- no stage in the
+        // current DAG has sub-progress to report -- it exists for a future
+        // stage callable to fill in, not something the scheduler fabricates.
+        std::string detail;
     };
 
     // The presentation seam. Return false to request an abort (window closed).
+    // During a Worker-stage overlap with nothing left to run on the main
+    // thread, Present() is called repeatedly at roughly display cadence
+    // (see BootSequence.cpp) instead of the main thread blocking silently
+    // for the whole overlap -- implementations must stay cheap and must not
+    // block, the same expectation as a window message pump.
     struct ARCANE_API IBootPresenter
     {
         virtual ~IBootPresenter() = default;

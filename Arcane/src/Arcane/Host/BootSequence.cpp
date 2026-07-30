@@ -4,6 +4,7 @@
 #include <Arcane/Base/ServiceThread.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -15,19 +16,6 @@ namespace Arcane
     struct BootSequence::Impl
     {
         std::vector<BootStage> stages;
-
-        // Worker handoff. One worker stage runs at a time by construction.
-        std::mutex              mx;
-        std::condition_variable cv;
-        int                     pending    = -1;    // index queued for the worker
-        int                     finished   = -1;    // index the worker completed
-        bool                    workerOk   = true;
-        // Distinct from `pending == -1` (which also means "idle, no job yet").
-        // The wait predicate below is `pending >= 0 || stopWorker`; folding stop
-        // into the same -1 sentinel as "no job" would leave the predicate with
-        // nothing that ever becomes true on RequestStop(), so the worker parks
-        // in cv.wait() forever and the ServiceThread destructor's join() hangs.
-        bool                    stopWorker = false;
     };
 
     BootSequence::BootSequence(std::vector<BootStage> stages)
@@ -77,6 +65,31 @@ namespace Arcane
         if (totalWeight == 0) totalWeight = 1;
         std::uint64_t doneWeight = 0;
 
+        // Worker handoff. Deliberately a Run()-local (not an Impl/BootSequence
+        // -lifetime) piece of state: every field here, including stopWorker,
+        // starts fresh on every call. Putting it on Impl would let a stale
+        // stopWorker == true from a PRIOR Run() make a freshly spawned worker
+        // exit after servicing exactly one job on a later Run() -- the reap
+        // would then wait on a thread that already exited, forever. Scoping
+        // the handoff to Run() makes that carry-over structurally impossible
+        // rather than relying on a reset call someone has to remember.
+        // One worker stage runs at a time by construction.
+        struct WorkerHandoff
+        {
+            std::mutex              mx;
+            std::condition_variable cv;
+            int                     pending    = -1;    // index queued for the worker
+            int                     finished   = -1;    // index the worker completed
+            bool                    workerOk   = true;
+            // Distinct from `pending == -1` (which also means "idle, no job
+            // yet"). The wait predicate below is `pending >= 0 || stopWorker`;
+            // folding stop into the same -1 sentinel as "no job" would leave
+            // the predicate with nothing that ever becomes true on
+            // RequestStop(), so the worker parks in cv.wait() forever and the
+            // ServiceThread destructor's join() hangs.
+            bool                    stopWorker = false;
+        } wh;
+
         std::optional<ServiceThread> worker;
         int workerRunning = -1;
 
@@ -101,6 +114,10 @@ namespace Arcane
             return true;
         };
 
+        // `stageId` is a real BootStage::id (see the header's BootProgress
+        // doc) -- callers pass the stage that just completed, or the stage
+        // presently running on the worker; an empty string only at the
+        // terminal "done" tick where no single stage owns the update.
         auto present = [&](const std::string& stageId)
         {
             if (!presenter) return true;
@@ -126,45 +143,45 @@ namespace Arcane
                         started[i]    = true;
                         workerRunning = static_cast<int>(i);
                         {
-                            std::lock_guard lk(im.mx);
-                            im.pending  = workerRunning;
-                            im.finished = -1;
+                            std::lock_guard lk(wh.mx);
+                            wh.pending  = workerRunning;
+                            wh.finished = -1;
                         }
                         if (!worker)
                         {
                             worker.emplace("boot.worker",
-                                [&im]
+                                [&wh, &im]
                                 {
                                     for (;;)
                                     {
                                         int job = -1;
                                         {
-                                            std::unique_lock lk(im.mx);
-                                            im.cv.wait(lk, [&] { return im.pending >= 0 || im.stopWorker; });
-                                            if (im.pending < 0)
+                                            std::unique_lock lk(wh.mx);
+                                            wh.cv.wait(lk, [&] { return wh.pending >= 0 || wh.stopWorker; });
+                                            if (wh.pending < 0)
                                                 return;   // stop requested, no job queued
-                                            job = im.pending;
-                                            im.pending = -1;
+                                            job = wh.pending;
+                                            wh.pending = -1;
                                         }
                                         bool ok = true;
                                         try { ok = im.stages[static_cast<std::size_t>(job)].run(); }
                                         catch (...) { ok = false; }
                                         {
-                                            std::lock_guard lk(im.mx);
-                                            im.workerOk = ok;
-                                            im.finished = job;
+                                            std::lock_guard lk(wh.mx);
+                                            wh.workerOk = ok;
+                                            wh.finished = job;
                                         }
-                                        im.cv.notify_all();
+                                        wh.cv.notify_all();
                                     }
                                 },
-                                [&im]
+                                [&wh]
                                 {
-                                    std::lock_guard lk(im.mx);
-                                    im.stopWorker = true;   // wake the worker's cv.wait
-                                    im.cv.notify_all();
+                                    std::lock_guard lk(wh.mx);
+                                    wh.stopWorker = true;   // wake the worker's cv.wait
+                                    wh.cv.notify_all();
                                 });
                         }
-                        im.cv.notify_all();
+                        wh.cv.notify_all();
                         break;
                     }
                 }
@@ -172,11 +189,13 @@ namespace Arcane
 
             // 2. Run ONE ready main stage, in registration order.
             bool didMain = false;
+            std::string ranStageId;
             for (std::size_t i = 0; i < n; ++i)
             {
                 if (ready(i) && im.stages[i].thread == BootThread::Main)
                 {
                     started[i] = true;
+                    ranStageId = im.stages[i].id;
                     bool ok = true;
                     try { ok = im.stages[i].run(); }
                     catch (...) { ok = false; }
@@ -192,7 +211,7 @@ namespace Arcane
                 }
             }
 
-            if (!present(didMain ? std::string("main") : std::string("waiting")))
+            if (didMain && !present(ranStageId))
             {
                 result.quitRequested = true;
                 result.failedStage   = "quit requested";
@@ -202,15 +221,45 @@ namespace Arcane
             // 3. Reap the worker if it finished.
             if (workerRunning >= 0)
             {
+                const std::string workerStageId = im.stages[static_cast<std::size_t>(workerRunning)].id;
                 int fin = -1; bool ok = true;
+                if (didMain)
                 {
-                    std::unique_lock lk(im.mx);
-                    if (!didMain)
-                        im.cv.wait(lk, [&] { return im.finished >= 0; });   // nothing else to do
-                    fin = im.finished;
-                    ok  = im.workerOk;
-                    if (fin >= 0) im.finished = -1;
+                    // Main had useful work this iteration -- just peek, do not block.
+                    std::lock_guard lk(wh.mx);
+                    fin = wh.finished;
+                    ok  = wh.workerOk;
+                    if (fin >= 0) wh.finished = -1;
                 }
+                else
+                {
+                    // Nothing else to do on main: park on the worker, but keep
+                    // the presenter pumping at roughly display cadence rather
+                    // than blocking silently for the whole overlap. This DAG
+                    // exists for exactly one overlap (see the header comment);
+                    // an unpumped main thread stops redrawing the loading
+                    // screen for as long as that overlap runs, and Windows
+                    // marks the window "Not Responding" -- the precise
+                    // failure this arc exists to prevent.
+                    std::unique_lock lk(wh.mx);
+                    for (;;)
+                    {
+                        wh.cv.wait_for(lk, std::chrono::milliseconds(8), [&] { return wh.finished >= 0; });
+                        if (wh.finished >= 0) break;
+                        lk.unlock();
+                        if (!present(workerStageId))
+                        {
+                            result.quitRequested = true;
+                            result.failedStage   = "quit requested";
+                            return result;
+                        }
+                        lk.lock();
+                    }
+                    fin = wh.finished;
+                    ok  = wh.workerOk;
+                    wh.finished = -1;
+                }
+
                 if (fin >= 0)
                 {
                     if (!complete(static_cast<std::size_t>(fin), ok))
@@ -235,7 +284,7 @@ namespace Arcane
             }
         }
 
-        present("done");
+        present(std::string());   // boot complete -- no single stage owns this update
         result.ok = true;
         return result;
     }

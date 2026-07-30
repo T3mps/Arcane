@@ -1,6 +1,7 @@
 // BootSequence: the boot-stage DAG. Pure scheduler, no GPU/window/ImGui.
 
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <thread>
 #include <vector>
@@ -48,14 +49,26 @@ TEST_CASE("stages run in dependency order", "[boot]")
 TEST_CASE("a worker stage genuinely overlaps a main stage", "[boot]")
 {
     // Proof, not assumption: the worker blocks until the main stage signals.
-    // If they were serialised this deadlocks and the test times out.
+    // Bounded, not infinite: Catch2 v3 has no built-in per-test timeout, so an
+    // unbounded spin here would wedge the whole process instead of failing if
+    // a future change ever serialised worker stages onto the main thread.
+    // The deadline turns that regression into a red CHECK -- workerSawOverlap
+    // is only set when mainRan flips WITHIN the deadline, so a serialised
+    // (worker-runs-to-completion-first) regression times out with
+    // workerSawOverlap left false, not a hang.
     std::atomic<bool> mainRan{false};
     std::atomic<bool> workerSawOverlap{false};
 
     std::vector<Arcane::BootStage> stages;
     stages.push_back(Stage("worker", {}, [&]
     {
-        while (!mainRan.load()) std::this_thread::yield();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!mainRan.load())
+        {
+            if (std::chrono::steady_clock::now() >= deadline)
+                return true;   // timed out: workerSawOverlap stays false
+            std::this_thread::yield();
+        }
         workerSawOverlap = true;
         return true;
     }, Arcane::BootThread::Worker));
@@ -68,8 +81,35 @@ TEST_CASE("a worker stage genuinely overlaps a main stage", "[boot]")
     Arcane::BootSequence seq(std::move(stages));
     const Arcane::BootResult r = seq.Run(nullptr);
 
+    CHECK(mainRan.load());
     CHECK(r.ok);
     CHECK(workerSawOverlap.load());
+}
+
+TEST_CASE("the presenter keeps ticking while a worker stage overlaps", "[boot]")
+{
+    // A worker stage long enough to guarantee more than one presenter tick
+    // during the overlap. If the main thread instead blocked silently for
+    // the whole overlap (the bug this test guards against), ticks would stay
+    // at 0 until the single post-boot "done" tick -- never more than 1.
+    struct Counter final : Arcane::IBootPresenter
+    {
+        int ticks = 0;
+        bool Present(const Arcane::BootProgress&) override { ++ticks; return true; }
+    } counter;
+
+    std::vector<Arcane::BootStage> stages;
+    stages.push_back(Stage("slow_worker", {}, [&]
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        return true;
+    }, Arcane::BootThread::Worker));
+
+    Arcane::BootSequence seq(std::move(stages));
+    const Arcane::BootResult r = seq.Run(&counter);
+
+    CHECK(r.ok);
+    CHECK(counter.ticks > 1);
 }
 
 TEST_CASE("a dependency cycle is refused and names the offenders", "[boot]")
