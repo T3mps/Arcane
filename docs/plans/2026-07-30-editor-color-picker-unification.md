@@ -16,6 +16,43 @@ here — see Verification), MSBuild via VS 18.
 
 Spec: `docs/superpowers/specs/2026-07-30-editor-color-picker-unification-design.md`
 
+## How this arc is being executed (read first — written to survive a context clear)
+
+**This file plus the spec are the whole brief. They assume no prior context.**
+
+- The user clears context, then says **"go"**. Execute all four tasks in order via
+  the repo's SDD flow (task brief -> implement -> report -> commit, logging to
+  `.superpowers/sdd/progress.md`), one commit per task.
+- **HARD STOP-GATE AFTER TASK 2.** Task 2 is the literal request. Stop there,
+  hand the user Task 2's desk-check list, and do NOT start Task 3 until they have
+  run their visual gate and said to continue.
+- **No unit tests in this arc** — the user's explicit call, because it is a visual
+  feature. Do not add them "for safety"; see the Verification section.
+- **Branch:** work continues on whatever branch the tree is already on (it was
+  `arcane-runtime-host-fold`). Run `git branch --show-current` before the first
+  commit. **Do NOT switch or create branches:** a concurrent session shares this
+  working tree, and a checkout under it scatters its commits. Never `git add -A`
+  for the same reason -- stage the exact paths each task names.
+
+### BLOCKER for the Task 2 gate, as of 2026-07-30
+
+`Arcane/src/Arcane/Host/GpuContext.cpp:27` sets `wd.hidden = true` for every host
+and **nothing calls `Window::Show()` yet** -- that is a concurrent arc's in-flight
+state (`8d24d63c`, its own Task 8 lands the `Show()`). So the editor currently
+launches with an INVISIBLE window and the visual gate cannot run.
+
+This blocks only the gate, not the implementation. Before handing over the gate,
+check whether `Show()` has a caller yet:
+
+```bash
+grep -rn "\.Show()\|->Show()" Arcane/ArcaneEditor/src Arcane/src | head
+```
+
+If it still has none, say so plainly at the stop-gate rather than asking the user
+to verify something they cannot see, and offer the options: wait for that arc's
+Task 8, or temporarily flip `wd.hidden = false` locally for the gate only (never
+commit that -- it belongs to the other arc).
+
 ## Global Constraints
 
 - **UTF-8 without BOM, ASCII comments only.** No em-dashes or non-ASCII glyphs in
