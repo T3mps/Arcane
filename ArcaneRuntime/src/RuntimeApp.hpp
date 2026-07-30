@@ -58,12 +58,18 @@ private:
     std::unique_ptr<Arcane::GpuContext> m_gpu;          // destructs LAST among engine state
 
     // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
-    // Task 8c: this is now BootSequence::Run's presenter for the WHOLE boot
-    // (via a local Arcane::BootSplashPresenter Run() constructs around this
-    // pointer), not merely a pre-device stand-in. The old LazyBootPresenter
-    // nested class that used to live here is gone -- see EditorApp.hpp's
-    // matching comment for why it is no longer needed by either host.
+    // Task 8c: this is now BootSequence::Run's presenter for the WHOLE boot,
+    // not merely a pre-device stand-in. The old LazyBootPresenter nested
+    // class that used to live here is gone -- see EditorApp.hpp's matching
+    // comment for why it is no longer needed by either host.
     Arcane::BootSplashWindow*             m_splash = nullptr;
+    // A class member, not a Run()-local (2026-07-30 review round 2, finding
+    // 2): StageFinalize needs to call Disarm() on THIS exact instance right
+    // before it closes the splash itself -- see EditorApp.hpp's matching
+    // comment for the full reasoning (identical here). Constructed from
+    // m_splash in the ctor's init list (declared right after it, so
+    // declaration order matches).
+    Arcane::BootSplashPresenter           m_splashPresenter;
     // Cannot be constructed before StageGpuCore builds m_gpu. Emplaced
     // lazily inside StageFinalize, the one place it is used now -- see that
     // method's body.

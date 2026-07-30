@@ -97,7 +97,8 @@ namespace Arcane::Editor
     }
 
     EditorApp::EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash)
-        : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash) {}
+        : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
+          m_splashPresenter(m_splash) {}
 
     void* EditorApp::PlayModeSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
                                               const char* name)
@@ -670,12 +671,60 @@ namespace Arcane::Editor
         //      real window -- which now holds that just-drawn frame, not
         //      garbage -- BEFORE Close()ing the pre-device splash. Reversing
         //      these two leaves a frame with neither on screen.
+        //
+        // 2026-07-30 review round 2, finding 2's second half: Present()'s
+        // return alone cannot distinguish "drew and presented" from "no
+        // backbuffer this call, drew nothing" -- both return true.
+        // HasPresentedFrame() is the added signal that lets this stage tell
+        // them apart, so it never Show()s a window nothing was drawn into.
         m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
         Arcane::BootProgress done;   // stageId/detail empty: the terminal tick
         done.fraction = 1.0f;
-        m_presenter->Present(done);
+
+        bool ok = m_presenter->Present(done);
+        if (ok && !m_presenter->HasPresentedFrame())
+        {
+            // Transient no-backbuffer (zero-size window mid-resize, surface
+            // out of date). Every OTHER Present() call in this class's life
+            // gets a "next frame" to self-correct on; this one does not --
+            // it IS the frame the window reveals. One retry.
+            ok = m_presenter->Present(done);
+        }
+        if (!ok)
+        {
+            // Quit requested during this pump: PumpEvents() drained a real
+            // SDL_EVENT_QUIT/WINDOW_CLOSE_REQUESTED for m_gpu's own window --
+            // distinct from m_splashPresenter's quit detection above (that
+            // one only covers the SPLASH being closed); this is the real
+            // window's own event backlog, unpumped for the whole boot until
+            // this exact call. Do not reveal an undrawn window -- abort as a
+            // Fatal-stage failure like any other boot stage would. (Honest
+            // asymmetry, not silently patched: this specific path reports
+            // exit code 1, not the 0 a quit normally gets via
+            // BootResult::quitRequested, because that flag is set only by
+            // BootSequence::Run's OWN present() calls, not by a stage's
+            // return value. An OS-shutdown broadcast landing in exactly this
+            // narrow window is the only realistic trigger.)
+            return false;
+        }
+        if (!m_presenter->HasPresentedFrame())
+        {
+            // Still nothing drawn after one retry -- extremely unlikely (two
+            // consecutive zero-size/surface-out-of-date reports back to
+            // back), but the never-fail-boot contract does not extend to
+            // "never fail to draw a window": refusing to reveal garbage is
+            // safer than showing it.
+            ARC_ERROR("Arcane Editor: failed to present the boot-complete frame -- refusing to reveal an undrawn window");
+            return false;
+        }
 
         m_gpu->Win().Show();
+        // Disarm BEFORE Close(): m_splashPresenter's own quit detection
+        // (Run()'s comment / BootSplashPresenter::Present) would otherwise
+        // see the splash we are about to close OURSELVES transition
+        // open->closed on the very next present() call and mistake it for
+        // the user closing it -- aborting a boot that actually just finished.
+        m_splashPresenter.Disarm();
         if (m_splash) m_splash->Close();
         return true;
     }
@@ -818,16 +867,19 @@ namespace Arcane::Editor
         }
 
         Arcane::BootSequence seq(std::move(stages));
-        // The pre-device splash is BootSequence's presenter for the WHOLE
-        // run (Task 8c) -- from runtime_create through finalize, every
-        // per-stage present() call reports into m_splash's status text +
-        // taskbar progress rather than the swapchain. Safe to construct
-        // unconditionally: BootSplashPresenter tolerates m_splash == nullptr,
-        // same never-fail contract as BootSplashWindow itself. The
-        // swapchain-backed BootPresenter (m_presenter) is used exactly once,
-        // explicitly, inside StageSplashReady -- never through this pump.
-        Arcane::BootSplashPresenter splashPresenter(m_splash);
-        const Arcane::BootResult boot = seq.Run(&splashPresenter);
+        // m_splashPresenter is BootSequence's presenter for the WHOLE run
+        // (Task 8c) -- from runtime_create through finalize, every per-stage
+        // present() call reports into m_splash's status text + taskbar
+        // progress rather than the swapchain, AND (2026-07-30 review round 2,
+        // finding 2) arms/checks the splash's own open/closed state so
+        // IBootPresenter's documented quit contract (BootSequence.hpp:65)
+        // still fires if the user closes the splash mid-boot -- see
+        // BootSplashPresenter::Present's own comment. Safe to run
+        // unconditionally: it tolerates m_splash == nullptr, same never-fail
+        // contract as BootSplashWindow itself. It is a class member, not
+        // constructed here, so StageSplashReady can Disarm() it before
+        // closing the splash intentionally -- see that method.
+        const Arcane::BootResult boot = seq.Run(&m_splashPresenter);
         if (!boot.ok)
             return boot.quitRequested ? 0 : 1;
 

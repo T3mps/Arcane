@@ -31,7 +31,8 @@
 #include <thread>
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
-    : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash) {}
+    : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
+      m_splashPresenter(m_splash) {}
 
 // ---- Boot stages (Task 8: RuntimeApp::Init folded into RuntimeStages) ----
 // Each method below is one block lifted out of the old monolithic Init().
@@ -272,12 +273,40 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
     //      been driven by the pre-device splash presenter for the WHOLE run.
     //   2. Never leave a gap with neither window on screen: Show() the real
     //      window (now holding that frame) BEFORE Close()ing the splash.
+    //
+    // 2026-07-30 review round 2, finding 2's second half: see EditorApp::
+    // StageSplashReady's matching comment for why Present()'s return alone
+    // is not enough (it returns true on BOTH "drew and presented" and "no
+    // backbuffer this call, drew nothing"), and why one retry + a hard
+    // refusal to Show() an undrawn window follow.
     m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
     Arcane::BootProgress done;   // stageId/detail empty: the terminal tick
     done.fraction = 1.0f;
-    m_presenter->Present(done);
+
+    bool ok = m_presenter->Present(done);
+    if (ok && !m_presenter->HasPresentedFrame())
+        ok = m_presenter->Present(done);   // one retry: transient no-backbuffer (zero-size/out-of-date)
+    if (!ok)
+    {
+        // Quit requested during this pump (m_gpu's own window's event
+        // backlog, unpumped for the whole boot until this exact call --
+        // distinct from m_splashPresenter's quit detection, which only
+        // covers the splash). Same honest asymmetry as the editor: this
+        // path reports exit code 1, not the 0 BootResult::quitRequested
+        // would give, because that flag is set only by BootSequence::Run's
+        // OWN present() calls, not a stage's return value.
+        return false;
+    }
+    if (!m_presenter->HasPresentedFrame())
+    {
+        ARC_ERROR("ArcaneRuntime: failed to present the boot-complete frame -- refusing to reveal an undrawn window");
+        return false;
+    }
 
     m_gpu->Win().Show();
+    // Disarm BEFORE Close() -- see EditorApp::StageSplashReady's matching
+    // comment for why this specific ordering is required.
+    m_splashPresenter.Disarm();
     if (m_splash) m_splash->Close();
     return true;
 }
@@ -620,16 +649,20 @@ int RuntimeApp::Run()
     }
 
     Arcane::BootSequence seq(std::move(stages));
-    // The pre-device splash is BootSequence's presenter for the WHOLE run
-    // (Task 8c) -- from runtime_create through finalize, every per-stage
-    // present() call reports into m_splash's status text + taskbar progress
-    // rather than the swapchain. Safe to construct unconditionally:
-    // BootSplashPresenter tolerates m_splash == nullptr, same never-fail
-    // contract as BootSplashWindow itself. The swapchain-backed BootPresenter
-    // (m_presenter) is used exactly once, explicitly, inside StageFinalize --
-    // never through this pump.
-    Arcane::BootSplashPresenter splashPresenter(m_splash);
-    const Arcane::BootResult boot = seq.Run(&splashPresenter);
+    // m_splashPresenter is BootSequence's presenter for the WHOLE run (Task
+    // 8c) -- from runtime_create through finalize, every per-stage present()
+    // call reports into m_splash's status text + taskbar progress rather
+    // than the swapchain, AND (2026-07-30 review round 2, finding 2)
+    // arms/checks the splash's own open/closed state so IBootPresenter's
+    // documented quit contract (BootSequence.hpp:65) still fires if the user
+    // closes the splash mid-boot -- see BootSplashPresenter::Present's own
+    // comment. Safe to run unconditionally: it tolerates m_splash ==
+    // nullptr, same never-fail contract as BootSplashWindow itself. It is a
+    // class member, not constructed here, so StageFinalize can Disarm() it
+    // before closing the splash intentionally -- see that method. The
+    // swapchain-backed BootPresenter (m_presenter) is used exactly once,
+    // explicitly, inside StageFinalize -- never through this pump.
+    const Arcane::BootResult boot = seq.Run(&m_splashPresenter);
     if (!boot.ok)
         return boot.quitRequested ? 0 : 1;
 

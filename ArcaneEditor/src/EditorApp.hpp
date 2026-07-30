@@ -214,6 +214,15 @@ namespace Arcane::Editor
         // the swapchain-backed m_presenter below is now used exactly once,
         // explicitly, by StageSplashReady, so there is nothing left to defer.
         Arcane::BootSplashWindow*             m_splash = nullptr;
+        // A class member, not a Run()-local (2026-07-30 review round 2,
+        // finding 2): StageSplashReady needs to call Disarm() on THIS exact
+        // instance right before it closes the splash itself, and Disarm()
+        // has to reach it through `this`, not through BootSequence's opaque
+        // IBootPresenter*. Declared right after m_splash (constructed from
+        // it, in declaration order, in the ctor's init list below) -- has no
+        // device dependency, so unlike m_presenter it can exist for the
+        // App's whole lifetime rather than being emplaced late.
+        Arcane::BootSplashPresenter           m_splashPresenter;
         // Cannot be constructed before StageGpuCore builds m_gpu. Emplaced
         // lazily inside StageSplashReady, the one place it is used -- see
         // that method's body for why the old "must not bind too early"

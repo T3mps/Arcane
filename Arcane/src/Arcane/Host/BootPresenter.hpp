@@ -74,17 +74,29 @@ namespace Arcane
 
         void SetShowProgress(bool show) noexcept { m_showProgress = show; }
 
+        // True once Present() has actually drawn+presented a frame at least
+        // once -- as opposed to returning true-but-drew-nothing on the
+        // no-backbuffer branch (BootPresenter.cpp: BeginFrame() can yield a
+        // null backbuffer transiently, e.g. a zero-size window mid-resize or
+        // a surface out of date; Present() reports "still going" rather than
+        // failing the whole boot over it). 2026-07-30 review round 2,
+        // finding 2's second half: the reveal stages (StageSplashReady /
+        // StageFinalize) use this to retry instead of revealing a window
+        // nothing was ever drawn into. Purely additive -- every OTHER caller
+        // of Present() (the general per-stage pump, Overlay mode) already
+        // ignored this field entirely (see its history below) and is
+        // unaffected by reading it.
+        [[nodiscard]] bool HasPresentedFrame() const noexcept { return m_hasPresentedFrame; }
+
     private:
         GpuContext&          m_gpu;
         BootPresenterMode    m_mode;
         bool                 m_showProgress = true;
-        // Reserved: an earlier draft of this class gated Window::Show() on
-        // "has this presenter ever produced a frame". That responsibility now
-        // lives in the splash_ready stage body instead (shows the real window,
-        // THEN closes the pre-device splash -- see docs/superpowers/specs/
-        // 2026-07-29-async-boot-loading-screen-design.md), so this is not read
-        // anywhere today. Left declared rather than dropped.
-        bool                 m_shownWindow  = false;
+        // Was "m_shownWindow", reserved and unread, until this task gave it
+        // the exact job its own old comment described: "has this presenter
+        // ever produced a frame". Set true at the end of the real draw+
+        // present path in Present(), never on the early no-backbuffer return.
+        bool                 m_hasPresentedFrame = false;
         nvrhi::TextureHandle m_splashTexture;
     };
 #if defined(_MSC_VER)

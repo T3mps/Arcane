@@ -115,22 +115,52 @@ namespace Arcane
         // nothing", matching BootSplashWindow's own never-fail-boot contract.
         explicit BootSplashPresenter(BootSplashWindow* splash) noexcept : m_splash(splash) {}
 
-        // Always returns true: the pre-device splash has no close affordance
-        // that should abort boot (WS_POPUP, no system menu, no titlebar).
-        // Quit-during-boot is unchanged -- still detected once the real
-        // BootPresenter exists, at the reveal stage's own explicit Present()
-        // call (see StageSplashReady/StageFinalize).
+        // Called by the reveal stage (StageSplashReady / StageFinalize)
+        // immediately BEFORE it closes the splash itself -- see Present()'s
+        // comment for why this specific ordering, not merely "somewhere in
+        // that stage", is required.
+        void Disarm() noexcept { m_armed = false; }
+
+        // Quit-during-boot (2026-07-30 review round 2): if the splash was
+        // ever open and is no longer, and nobody called Disarm() first, the
+        // user closed it (its only close affordance is Alt+F4 -- WS_POPUP
+        // has no titlebar/system-menu, but SW_SHOW still activates/focuses
+        // it, so Alt+F4's WM_CLOSE reaches it) -- request an abort exactly
+        // the way IBootPresenter documents (BootSequence.hpp:65):
+        // BootSequence::Run already converts a false return into
+        // BootResult::quitRequested + a clean exit, no new plumbing needed.
+        //
+        // "Ever been open" is tracked via m_armed rather than checking
+        // IsOpen() unconditionally, for two reasons that both matter:
+        //   1. Window creation is asynchronous (BootSplashWindow's own
+        //      thread) -- the very first Present() call, right after
+        //      runtime_create completes, can easily land before
+        //      CreateWindowExW has even run. Treating "not open YET" as a
+        //      quit here would abort nearly every boot.
+        //   2. If window creation fails outright (RegisterClassExW/
+        //      CreateWindowExW failing), IsOpen() is false FOREVER --
+        //      unconditionally checking it would turn "no splash" (a
+        //      documented, must-never-fail-boot degrade) into "boot
+        //      aborted", which is exactly the failure this class exists to
+        //      rule out.
+        // So: arm only once IsOpen() is actually observed true, and once
+        // armed, a later false means "it WAS open and now is not" -- the
+        // one unambiguous signal for "the user closed it."
         bool Present(const BootProgress& progress) override
         {
-            if (m_splash)
-            {
-                m_splash->SetStatusText(!progress.detail.empty() ? progress.detail : progress.stageId);
-                m_splash->SetProgress(progress.fraction);
-            }
+            if (!m_splash) return true;
+            m_splash->SetStatusText(!progress.detail.empty() ? progress.detail : progress.stageId);
+            m_splash->SetProgress(progress.fraction);
+
+            if (m_splash->IsOpen())
+                m_armed = true;
+            else if (m_armed)
+                return false;   // was open, now is not, and nobody Disarm()'d us: a real quit
             return true;
         }
 
     private:
         BootSplashWindow* m_splash;
+        bool m_armed = false;
     };
 }

@@ -22,6 +22,18 @@ CoreStages contract, the bug-class motivation) is unchanged and still
 accurate -- only WHERE `BootProgress` is rendered and WHEN the window is
 revealed moved.
 
+**Round-2 review fixes (2026-07-30), also folded into the sections below:**
+the splash now creates `WS_EX_APPWINDOW` (a taskbar-less `WS_EX_TOOLWINDOW`
+left `SetProgress`'s taskbar overlay with nowhere to render -- UE forces the
+same style for exactly this reason, `WindowsPlatformSplash.cpp:451-452`);
+`BootSplashPresenter` now arms itself once the splash is observed open and
+signals `IBootPresenter`'s documented quit (`BootSequence.hpp:65`) if it
+closes without a matching `Disarm()`, restoring quit-during-boot (see the
+"Quit during boot" bullet in §4); `SetStatusText` dedupes unchanged text and
+invalidates only the text row (§8's testing list, §9 item 2); and the splash
+image resolves exe-relative, not CWD-relative (`Arcane::ExecutablePathUtf8`,
+matching `Window::SetIcon`'s convention).
+
 **Status: design.** Today every Arcane host shows an undrawn window for the
 whole of startup: `EditorApp::Run()` is `Init()` -> `MainLoop()`, the window and
 device are created at the top of `Init()` (`GpuContext::Create`), but nothing is
@@ -462,9 +474,34 @@ handles an empty `gameModule` (plugins-only or plugin-less host).
 
 Two paths that do not exist today and come free with the loop:
 
-- **Quit during boot.** The event pump runs every frame, so closing the window
-  mid-load sets `quitRequested`; the sequence aborts, joins the worker, and the
-  host exits 0 without entering `MainLoop`.
+- **Quit during boot.** **(Task 8c correction, 2026-07-30 review round 2,
+  finding 4)** This section originally described "closing the window
+  mid-load" -- accurate before Task 8c, when the real (visible-from-
+  `editor_shell`-onward) editor window's own `PumpEvents()` was
+  `BootSequence`'s per-stage presenter and detected its own close directly.
+  Task 8c hides that window for the WHOLE boot, so from `runtime_create`
+  through the second-to-last stage there is nothing for the user to close --
+  the real window has no titlebar, no taskbar button, nothing. What ships
+  instead: `BootSplashPresenter` (`BootSplashWindow.hpp`) is `BootSequence`'s
+  presenter for that whole span, and it arms itself the first time it
+  observes the pre-device splash open (`BootSplashWindow::IsOpen()`), then
+  returns `false` -- `IBootPresenter`'s documented quit signal
+  (`BootSequence.hpp:65`) -- the moment it observes the splash go from open
+  to closed without having been told to expect that (`Disarm()`, called by
+  the reveal stage immediately before it closes the splash itself). Arming
+  only after a genuine open, rather than unconditionally, is what keeps
+  window-creation being asynchronous (a false read on the very first
+  `Present()` call, before `CreateWindowExW` has even run) and the splash
+  failing to create at all (`IsOpen()` false forever) from being
+  misread as "the user quit." The reveal stage's own manual `BootPresenter::
+  Present()` call at the very end (which DOES pump the real, still-hidden
+  window) is a second, independent quit check, for the narrow case of a
+  genuine OS-level quit signal landing in that window's own backlog right at
+  the reveal instant -- see `EditorApp::StageSplashReady` /
+  `RuntimeApp::StageFinalize`. Net effect either way: `BootSequence` aborts,
+  joins the worker, and the host exits 0 without entering `MainLoop` --
+  unchanged from the original design's promise, just detected through the
+  splash instead of the (now hidden-until-ready) real window.
 - **Worker exceptions** are caught at the stage boundary and converted to a
   stage failure. Nothing crosses the thread boundary unhandled.
 
@@ -562,7 +599,12 @@ headless-testable with fake stages. New tag `[boot]`:
   concurrently.
 - Dependency cycles are refused with the offending names.
 - An Optional stage's failure lets dependents run; a Fatal one aborts and joins.
-- Quit-during-boot aborts cleanly and joins the worker.
+- Quit-during-boot aborts cleanly and joins the worker -- this is `BootSequence`'s
+  own generic mechanism (any presenter returning `false`), covered headlessly
+  with fake stages here. The Task 8c-specific ARMING behaviour that makes a
+  real boot's quit detection correct (BootSplashPresenter's open-then-closed
+  check, `Disarm()`'s ordering) is desk-verify territory -- see §4's
+  "Quit during boot" bullet and §9 item 4.
 - Splash frames do not consume the `--frames N` budget.
 
 **The bug-class gate (§0) -- the most valuable test in this arc:**
@@ -639,8 +681,18 @@ that matter are that `--frames N` scripted runs still work and the existing
    ships one) renders without visible corruption, and a missing/unreadable
    image degrades to the plain background with no error dialog.
 3. Scan detail line shows real counts on a large project.
-4. Window can be dragged and closed mid-boot; closing exits cleanly with no
-   hang (proves the worker joins).
+4. **(Task 8c correction)** "Window can be dragged and closed mid-boot" no
+   longer applies as written -- the real window is hidden for the whole boot
+   (nothing to drag or close), and the pre-device splash (`WS_POPUP`, no
+   titlebar) is not draggable either. What to verify instead: close the
+   SPLASH mid-boot via Alt+F4 (its only close affordance -- `SW_SHOW`
+   activates/focuses it, so Alt+F4's `WM_CLOSE` reaches it) and confirm the
+   process exits cleanly with no hang and no `MainLoop` entry (proves both
+   the worker joins AND `BootSplashPresenter`'s armed quit-detection fires --
+   see §4's "Quit during boot" bullet). Separately, confirm the HAPPY path
+   still enters `MainLoop` normally when nothing is closed -- the armed
+   design's failure mode, if the `Disarm()`-before-`Close()` ordering were
+   ever wrong, is the editor silently exiting at 100% instead of opening.
 5. Project with a bad/missing `.arcproj`: boot completes project-less with the
    existing error surfaced at first frame.
 6. Project switch shows the overlay; a refused switch (unsaved docs) shows none.

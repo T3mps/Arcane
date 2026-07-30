@@ -1,5 +1,6 @@
 #include <Arcane/Host/BootSplashWindow.hpp>
 
+#include <Arcane/Base/Engine.hpp>   // ExecutablePathUtf8() -- exe-relative image path resolution
 #include <Arcane/Base/Log.hpp>
 
 #if defined(_WIN32)
@@ -85,6 +86,13 @@ namespace Arcane
         // allowed to touch impl->taskbar (see Impl::taskbar's comment above).
         constexpr UINT kMsgSetProgress = WM_APP + 1;
 
+        // Height of the status-text strip along the bottom edge, shared by
+        // PaintSplash (the fill + text rect) and SetStatusText (the narrowed
+        // InvalidateRect) so the two can never drift apart -- both need the
+        // EXACT same rect, or a text-only repaint could invalidate a region
+        // PaintSplash does not redraw (leaving stale pixels) or vice versa.
+        constexpr LONG kTextRowHeightPx = 24;
+
         std::wstring Utf8ToWide(const std::string& s)
         {
             if (s.empty()) return {};
@@ -95,30 +103,87 @@ namespace Arcane
             return w;
         }
 
+        // Resolve `imagePathUtf8` against the EXECUTABLE's own directory, not
+        // the process CWD (2026-07-30 review round 2 minor). GDI+'s
+        // Bitmap(filename) constructor otherwise resolves a relative path
+        // against the CWD, which is not the codebase convention --
+        // Window::SetIcon (Window.cpp:138-144) resolves exe-relative via
+        // SDL_GetBasePath(). This uses Arcane::ExecutablePathUtf8() instead
+        // (Engine.cpp): SDL's video subsystem is not initialised yet this
+        // early (SDL_InitSubSystem(VIDEO) only happens inside
+        // Window::Create, called from StageGpuCore, long after this
+        // constructor runs), while ExecutablePathUtf8 is a bare
+        // GetModuleFileNameW wrapper with no subsystem dependency at all --
+        // already proven safe this early, since main() calls it for the
+        // --print-engine-info probe before any engine boot. Both the exe
+        // path and the caller's path are converted via the SAME explicit-
+        // CP_UTF8 Utf8ToWide above, never through std::filesystem::path's
+        // narrow constructor (which uses the ACTIVE CODE PAGE, not UTF-8, on
+        // Windows) -- so a non-ASCII install path cannot mis-resolve here.
+        // Every failure (an absolute path already given, ExecutablePathUtf8
+        // returning empty, no path separator found) just returns the
+        // caller's path unchanged -- the same CWD-relative behaviour as
+        // before this fix, never worse.
+        std::wstring ResolveImagePathWide(const std::string& imagePathUtf8)
+        {
+            if (imagePathUtf8.empty()) return {};
+            const bool looksAbsolute =
+                (imagePathUtf8.size() >= 2 && imagePathUtf8[1] == ':') ||          // "C:\..."
+                (imagePathUtf8.size() >= 2 && imagePathUtf8[0] == '\\' && imagePathUtf8[1] == '\\') ||  // "\\server\..."
+                (imagePathUtf8.size() >= 2 && imagePathUtf8[0] == '/'  && imagePathUtf8[1] == '/');     // "//server/..."
+            const std::wstring wideImage = Utf8ToWide(imagePathUtf8);
+            if (looksAbsolute) return wideImage;
+
+            const std::string exeUtf8 = Arcane::ExecutablePathUtf8();
+            if (exeUtf8.empty()) return wideImage;
+            const std::wstring exeWide = Utf8ToWide(exeUtf8);
+            const std::size_t slash = exeWide.find_last_of(L"/\\");
+            if (slash == std::wstring::npos) return wideImage;
+
+            return exeWide.substr(0, slash + 1) + wideImage;
+        }
+
         // WM_PAINT's body, split out for readability. `impl` is never null
-        // when called (SplashProc guards). Draws, in order: (nothing here --
-        // the class background brush already filled via WM_ERASEBKGND, the
-        // guaranteed floor), the splash bitmap (best-effort, scaled to fit
-        // with a margin, skipped entirely if unavailable), the status line
-        // (bottom-left, matching WindowsPlatformSplash.cpp:99-116's
-        // StartupProgress slot).
-        void PaintSplash(HWND h, BootSplashWindow::Impl& impl, HDC hdc)
+        // when called (SplashProc guards). `paintRect` is BeginPaint's own
+        // PAINTSTRUCT::rcPaint -- the region actually invalidated -- so a
+        // SetStatusText-only repaint (which invalidates just the text row;
+        // see SetStatusText's own comment) can skip the expensive bicubic
+        // bitmap redraw entirely instead of re-running it on every stage-
+        // label change (2026-07-30 review round 2, finding 3: this fires up
+        // to ~125/sec while a Worker stage overlaps -- BootSequence.cpp's
+        // 8ms idle-pump cadence -- and was burning a core fraction on
+        // exactly the CPU-bound overlap this DAG exists to exploit). Draws,
+        // in order: (nothing here -- the class background brush already
+        // filled via WM_ERASEBKGND, the guaranteed floor), the splash bitmap
+        // (best-effort, scaled to fit with a margin, skipped when
+        // unavailable OR when this repaint's region does not touch it), the
+        // status line (bottom-left, matching WindowsPlatformSplash.cpp:
+        // 99-116's StartupProgress slot).
+        void PaintSplash(HWND h, BootSplashWindow::Impl& impl, HDC hdc, const RECT& paintRect)
         {
             RECT client{};
             GetClientRect(h, &client);
             const float clientW = static_cast<float>(client.right - client.left);
             const float clientH = static_cast<float>(client.bottom - client.top);
 
-            if (impl.bitmap && impl.bitmap->GetLastStatus() == Gdiplus::Ok)
+            RECT textRow = client;
+            textRow.top = client.bottom - kTextRowHeightPx;
+
+            RECT imageArea = client;
+            imageArea.bottom = textRow.top;   // everything above the text row
+            RECT dirtyImageArea{};
+            const bool imageMaybeDirty = IntersectRect(&dirtyImageArea, &paintRect, &imageArea) != FALSE;
+
+            if (imageMaybeDirty && impl.bitmap && impl.bitmap->GetLastStatus() == Gdiplus::Ok)
             {
                 const UINT bw = impl.bitmap->GetWidth();
                 const UINT bh = impl.bitmap->GetHeight();
                 if (bw > 0 && bh > 0)
                 {
-                    constexpr float kMarginPx  = 12.0f;
-                    constexpr float kTextRowPx = 24.0f;   // reserve room so the image never touches the status line
+                    constexpr float kMarginPx = 12.0f;
                     const float availW = clientW - 2.0f * kMarginPx;
-                    const float availH = clientH - 2.0f * kMarginPx - kTextRowPx;
+                    // kTextRowHeightPx: reserve room so the image never touches the status line.
+                    const float availH = clientH - 2.0f * kMarginPx - static_cast<float>(kTextRowHeightPx);
                     if (availW > 0.0f && availH > 0.0f)
                     {
                         const float scale = std::min(availW / static_cast<float>(bw), availH / static_cast<float>(bh));
@@ -148,20 +213,18 @@ namespace Arcane
             // SHORTER new label would leave the tail of a longer old one on
             // screen. GetClassLongPtrW reads back the same brush the window
             // class was registered with, rather than duplicating the colour
-            // constant here.
-            RECT textRow = client;
-            textRow.top = client.bottom - 24;
+            // constant here. Cheap plain-GDI fill -- unlike the bitmap draw
+            // above, this does not need a dirty-region gate.
             if (HBRUSH bg = reinterpret_cast<HBRUSH>(GetClassLongPtrW(h, GCLP_HBRBACKGROUND)))
                 FillRect(hdc, &textRow, bg);
 
             if (!text.empty())
             {
                 const std::wstring wtext = Utf8ToWide(text);
-                RECT textRect = client;
+                RECT textRect = textRow;
                 textRect.left   += 12;
                 textRect.right  -= 12;
-                textRect.top    = client.bottom - 24;
-                textRect.bottom = client.bottom - 6;
+                textRect.bottom -= 6;
 
                 SetBkMode(hdc, TRANSPARENT);
                 SetTextColor(hdc, RGB(160, 160, 160));   // matches WindowsPlatformSplash.cpp's StartupProgress colour
@@ -184,7 +247,7 @@ namespace Arcane
             {
                 PAINTSTRUCT ps;
                 HDC hdc = BeginPaint(h, &ps);
-                if (impl) PaintSplash(h, *impl, hdc);
+                if (impl) PaintSplash(h, *impl, hdc, ps.rcPaint);
                 EndPaint(h, &ps);
                 return 0;
             }
@@ -258,7 +321,21 @@ namespace Arcane
                     const int x = (GetSystemMetrics(SM_CXSCREEN) - kW) / 2;
                     const int y = (GetSystemMetrics(SM_CYSCREEN) - kH) / 2;
 
-                    HWND h = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                    // WS_EX_APPWINDOW, not WS_EX_TOOLWINDOW (2026-07-30 review
+                    // round 2, finding 1): a tool window never gets a taskbar
+                    // button, so SetProgress's ITaskbarList3 calls below had
+                    // nowhere to render -- the overlay was silently a no-op
+                    // for the ENTIRE splash lifetime, since the real window is
+                    // also hidden until reveal and so has no taskbar button of
+                    // its own either. UE forces exactly this for the editor
+                    // (WindowsPlatformSplash.cpp:451-452: "Force the editor
+                    // splash screen to show up in the taskbar and alt-tab
+                    // lists" -> `GIsEditor ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW`)
+                    // -- that style is WHY its SetProgress (:769-781) works at
+                    // all. Consequence, taken deliberately: the splash now has
+                    // a taskbar button and appears in Alt-Tab, matching UE's
+                    // editor behaviour. WS_EX_TOPMOST stays.
+                    HWND h = CreateWindowExW(WS_EX_APPWINDOW | WS_EX_TOPMOST,
                                              wc.lpszClassName, L"Arcane",
                                              WS_POPUP, x, y, kW, kH,
                                              nullptr, nullptr, wc.hInstance, nullptr);
@@ -295,7 +372,7 @@ namespace Arcane
                         Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr) == Gdiplus::Ok;
                     if (gdiplusOk && !impl->imagePath.empty())
                     {
-                        const std::wstring wpath = Utf8ToWide(impl->imagePath);
+                        const std::wstring wpath = ResolveImagePathWide(impl->imagePath);
                         auto bmp = std::make_unique<Gdiplus::Bitmap>(wpath.c_str());
                         if (bmp->GetLastStatus() == Gdiplus::Ok)
                         {
@@ -365,16 +442,42 @@ namespace Arcane
     void BootSplashWindow::SetStatusText(std::string text) noexcept
     {
         if (!m_impl) return;
+        bool changed = false;
         try
         {
             std::lock_guard<std::mutex> lk(m_impl->textMutex);
+            // Dedupe (2026-07-30 review round 2, finding 3): BootSequence
+            // calls present() with the SAME stageId up to ~125/sec while a
+            // Worker stage overlaps (its 8ms idle-pump cadence), so without
+            // this every one of those calls unconditionally re-stored and
+            // repainted -- matches WindowsPlatformSplash.cpp:798-805's own
+            // `bWasUpdated` guard.
+            if (m_impl->statusText == text)
+                return;
             m_impl->statusText = std::move(text);
+            changed = true;
         }
         catch (...) { return; }   // e.g. std::bad_alloc -- no status update, never fail boot
-        // nullptr would invalidate EVERY top-level window on the desktop, not
-        // "no-op" -- must check for a real hwnd before calling.
+        if (!changed) return;
         if (HWND h = m_impl->hwnd.load())
-            InvalidateRect(h, nullptr, FALSE);
+        {
+            // Invalidate only the text row, not the whole window (same
+            // finding): a full-window invalidate re-runs PaintSplash's
+            // bicubic bitmap DrawImage on every stage-label change, which is
+            // exactly the CPU cost this dedupe exists to avoid -- matches
+            // WindowsPlatformSplash.cpp:809's InvalidateRect(...,
+            // &GSplashScreenTextRects[InType], ...), one text slot only.
+            // PaintSplash itself also gates the bitmap redraw on whether the
+            // repaint's region reaches it (see its own comment), so this and
+            // that guard are two halves of the same fix -- narrowing the
+            // invalidated region alone would not help if the paint handler
+            // redrew the bitmap unconditionally anyway.
+            RECT client{};
+            GetClientRect(h, &client);
+            RECT textRow = client;
+            textRow.top = client.bottom - kTextRowHeightPx;
+            InvalidateRect(h, &textRow, FALSE);
+        }
     }
 
     void BootSplashWindow::SetProgress(float fraction01) noexcept

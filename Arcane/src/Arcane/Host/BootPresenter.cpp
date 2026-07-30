@@ -101,6 +101,7 @@ namespace Arcane
         m_gpu.Device().Nvrhi()->executeCommandList(cmd);
         m_gpu.Swap().Present();
 
+        m_hasPresentedFrame = true;   // real content is now in the swapchain -- see HasPresentedFrame()
         return true;
     }
 }
