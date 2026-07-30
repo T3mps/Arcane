@@ -9,6 +9,7 @@
 #include <Arcane/Guid.hpp>   // InspectorServices::mintSpriteForTexture
 #include <cstdint>
 #include <functional>
+#include <glm/vec4.hpp>   // InspectorState::colorPopupOriginal
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -223,6 +224,12 @@ namespace Arcane::Editor
         // row's activation-time cancel seed -- every member documented on
         // EditGesture::GestureState, which owns the behaviours that read them.
         EditGesture::GestureState gesture;
+        // The colour a picker popup was opened on, for its Old/New pair. Lives HERE
+        // rather than on the Inspector's per-field visitor because that visitor is
+        // rebuilt every frame (it holds only a pointer to `gesture` above), so a
+        // member there would reset each frame and Old would track New. One slot is
+        // enough: only one colour popup can be open at a time.
+        glm::vec4 colorPopupOriginal{ 1.0f, 1.0f, 1.0f, 1.0f };
         // Live search text. A fixed buffer rather than std::string because
         // ImGui::InputText writes into it directly; 128 is far past any
         // plausible field name. Nothing clears it, so a typed filter persists

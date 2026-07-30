@@ -3,6 +3,7 @@
 #include "AssetBrowser.hpp"
 #include "EditGesture.hpp"
 #include "EditorWidgets.hpp"
+#include "ColorPickerPopup.hpp"
 #include "InspectorFields.hpp"
 #include "InspectorMeta.hpp"
 
@@ -141,6 +142,10 @@ namespace Arcane::Editor
             // undo stack's, so it matters while Play runs too. The bracket itself
             // still no-ops during Play, on `stack` being null.
             EditGesture::GestureState*        gesture = nullptr;
+            // The colour a picker popup was opened on, for its Old/New pair.
+            // Same lifetime, same owner, same shape as `gesture` above --
+            // deliberately, so there is one rule to remember rather than two.
+            glm::vec4*                        originalColor = nullptr;
 
             // Fan-out targets. `selection` includes the primary; entities lacking
             // this component are skipped (the panel only shows components the whole
@@ -635,43 +640,21 @@ namespace Arcane::Editor
                         const bool isColor = Arcane::Editor::IsColorFieldName(rawName);
                         if (Multi())
                         {
-                            // Colour multi-select now shows the SAME 0-255 sRGB
-                            // numbers the single-select row does. Before this the
-                            // two disagreed INSIDE ONE FIELD: single-select drew
-                            // 0-255 while this row drew raw linear floats
-                            // (integral == false), so selecting a second entity
-                            // silently changed what the numbers meant.
-                            double cur[4];
-                            if (isColor)
-                            {
-                                float disp[4];
-                                ColorDisplayFromLinear(&v.x, /*hdr*/ false, disp);
-                                for (int i = 0; i < 4; ++i)
-                                    cur[i] = disp[i] * 255.0;
-                            }
-                            else
-                            {
-                                for (int i = 0; i < 4; ++i)
-                                    cur[i] = v[i];
-                            }
+                            // LINEAR floats, both here and in the popup. The 0-255
+                            // sRGB display this replaces made one stored value read
+                            // two ways depending on how many entities were selected;
+                            // showing storage directly cannot drift.
+                            const double cur[4]{ v.x, v.y, v.z, v.w };
                             double out = 0.0;
                             // Axis strips only on the NON-colour flavour: XYZW
-                            // colours under RGBA channels would label the values
-                            // as something they are not. Colours are integral --
-                            // they are 0-255 now, and a "128.000" box is the
-                            // crowding the single-select row already rejected.
+                            // colours under RGBA channels would label the values as
+                            // something they are not.
                             const int c = MultiScalarRow(widgetId.c_str(), 4, cur, MixedFor(f),
-                                                         /*integral*/ isColor,
+                                                         /*integral*/ false,
                                                          /*axisColors*/ !isColor, out);
                             if (c >= 0)
                             {
-                                // 0-255 sRGB typed back -> linear storage. Alpha
-                                // (channel 3) is coverage: it only rescales, and
-                                // must NOT go through the curve.
-                                const float fv = isColor
-                                    ? (c == 3 ? static_cast<float>(out / 255.0)
-                                              : SrgbToLinear(static_cast<float>(out / 255.0)))
-                                    : static_cast<float>(out);
+                                const float fv = static_cast<float>(out);
                                 ApplyImmediate(rawName, instance, [&](void* d)
                                                { if (glm::vec4* p = f.GetPtr<glm::vec4>(d)) (*p)[c] = fv; });
                             }
@@ -679,28 +662,65 @@ namespace Arcane::Editor
                         }
                         if (isColor)
                         {
-                            // The editor's one colour widget: 0-255 sRGB channel
-                            // boxes plus a swatch that opens the radial-wheel
-                            // picker with a pasteable hex box. The STORED value
-                            // stays the linear float vec4; ColorField4 owns the
-                            // encode/decode (EditorWidgets.hpp).
-                            //
-                            // The picker popup DOES land inside undo, which the
-                            // NoPicker comment this replaces got backwards. It
-                            // reasoned that popup edits happen on the popup's own
-                            // widgets so the gesture would never OPEN -- but ImGui
-                            // rewrites g.LastItemData.ID to the picker's ActiveId
-                            // while the popup is live, expressly so IsItemActive()
-                            // keeps working on ColorEdit4 (imgui_widgets.cpp:
-                            // 6044-6046), so IsItemActivated() fires and
-                            // BeginGestureIfActivated parks that id. The end is
-                            // the half that differs: on release ActiveId drops to
-                            // 0, EvaluateEnd's ownership guard correctly declines
-                            // the foreign id, and EditGesture::ScopeGuard's
-                            // abandonment path commits it that same frame. Net:
-                            // one drag = one undo step, same as the channel boxes.
-                            bool changed = ColorField4(widgetId.c_str(), &v.x);
+                            // Four LINEAR float boxes -- storage, unconverted -- plus
+                            // a swatch that opens the dense popup. The swatch is ours
+                            // (NoSmallPreview) so it can be sRGB-ENCODED: imgui.hlsl's
+                            // colours are display-referred, so a raw linear fill
+                            // renders too dark.
+                            const std::string popupKey = widgetId + "##colorpopup";
+                            const ImGuiID popupId = ColorPopupId(popupKey.c_str());
+
+                            bool changed = ImGui::ColorEdit4(widgetId.c_str(), &v.x,
+                                                             ImGuiColorEditFlags_Float
+                                                             | ImGuiColorEditFlags_NoSmallPreview
+                                                             | ImGuiColorEditFlags_NoPicker
+                                                             | ImGuiColorEditFlags_NoOptions);
+                            // The BOX row keeps the activation gesture it always had.
                             BeginGestureIfActivated(rawName, instance);
+
+                            ImGui::SameLine();
+                            if (ColorSwatchButton("##sw", &v.x))
+                            {
+                                // Latch the open-time colour for the popup's Old
+                                // swatch. It MUST live in InspectorState, not on this
+                                // visitor: the visitor is rebuilt per frame (it holds
+                                // only a POINTER to the gesture state, see
+                                // InspectorView.cpp:143), so a member here would reset
+                                // every frame and the Old swatch would track New.
+                                // One slot is enough -- only one colour popup can be
+                                // open at a time.
+                                *originalColor = v;
+                                ImGui::OpenPopup(popupId);
+                            }
+
+                            // POPUP-lifetime gesture, NOT the activation pair: ImGui
+                            // only lends its ActiveId to popups it opened itself, and
+                            // this one is ours (EditGesture.hpp, ShouldClosePopup).
+                            //
+                            // The onOpened body is BeginGestureIfActivated's fan-out
+                            // verbatim (InspectorView.cpp:192-194): one Begin + N
+                            // SnapshotComponent + one Commit = one undo step, and the
+                            // pending-commit slot stays empty because the before-state
+                            // rides the transaction.
+                            EditGesture::BeginOnPopupOpen(
+                                stack, *gesture, popupId,
+                                [&] { return "Edit " + typeName + "." + rawName; },
+                                [&]
+                                {
+                                    ForEachTarget(instance,
+                                                  [&](Astra::Entity e, void*)
+                                                  { stack->SnapshotComponent(e, descriptor); });
+                                    return std::function<void()>{};
+                                });
+
+                            if (ImGui::BeginPopup(popupKey.c_str()))
+                            {
+                                if (ColorPopupBody(&v.x, &originalColor->x, /*hdr*/ false))
+                                    changed = true;
+                                ImGui::EndPopup();
+                            }
+                            EditGesture::EndOnPopupClose(stack, *gesture, popupId);
+
                             if (changed)
                                 ForEachTarget(instance, [&](Astra::Entity, void* d)
                                               { if (glm::vec4* p = f.GetPtr<glm::vec4>(d)) *p = v; });
@@ -1090,6 +1110,7 @@ namespace Arcane::Editor
         // the Escape-cancel semantics, which are ImGui's and not the undo
         // stack's.
         visitor.gesture    = &args.state.gesture;
+        visitor.originalColor = &args.state.colorPopupOriginal;
         visitor.registry   = &args.registry;
         visitor.selection  = args.selection;
         visitor.componentDisplayName = args.componentDisplayName;
