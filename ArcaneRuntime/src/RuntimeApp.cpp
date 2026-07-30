@@ -168,6 +168,34 @@ bool RuntimeApp::Init()
                  m_config.sceneOverride);
     }
 
+    // Scene asset resolution (sprite-resolution lift): the sprites, sprite
+    // materials and post chain a scene REFERENCES become bindable here. Built
+    // after the scene boot above only for tidiness -- Refresh sweeps the live
+    // registry every frame, so a scene loaded (or hot-reloaded) later is picked
+    // up all the same.
+    //
+    // The compile service is the same one the editor runs: material assets are
+    // HLSL that gets stitched and compiled on demand, and ArcaneRuntime's
+    // postbuild already ships dxcompiler.dll + dxil.dll + shaders/materials
+    // beside the exe for exactly this (premake5.lua). A missing DXC degrades to
+    // a warn: sprites still resolve (no compile step), materials and the post
+    // chain simply stay unbound.
+    if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/0.2))
+        ARC_WARN("ArcaneRuntime: dxcompiler.dll unavailable -- sprite materials "
+                 "and the scene post chain will not bind");
+    m_shaderSources.AddRoot("shaders");
+
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime  = &*m_runtime;
+    rs.batcher  = &m_gpu->Batch();
+    rs.device   = m_gpu->Device().Nvrhi();
+    rs.backend  = m_gpu->Device().Backend();
+    rs.compiler = &m_shaderCompiler;
+    rs.sources  = &m_shaderSources;
+    // No consumeFirst: a standalone host has no open documents to give first
+    // refusal to, so every drained result goes straight to the caches.
+    m_resolver.emplace(std::move(rs));
+
     return true;
 }
 
@@ -202,6 +230,12 @@ void RuntimeApp::MainLoop()
             const auto now = std::chrono::steady_clock::now();
             const double frameDt = std::chrono::duration<double>(now - lastFrameTime).count();
             lastFrameTime = now;
+            // The host clock the compile service debounces against + the frame dt
+            // the material globals report. Advanced exactly once per frame, here,
+            // because this is where the frame's wall-clock delta is measured (the
+            // editor's m_editorClock does the same job in its phase 9).
+            m_lastFrameDt = frameDt;
+            m_hostClock += frameDt;
             const Arcane::InputSnapshot snap =
                 m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(),
                                           m_gpu->Imgui().WantCaptureMouse());
@@ -261,12 +295,37 @@ void RuntimeApp::MainLoop()
             }
         }
 
+        // Scene asset resolution, BEFORE the batcher's Begin and before
+        // SubmitRender: the drain inside registers compiled materials with the
+        // batcher (a pipeline/binding-set table mutation that does not belong
+        // inside a recording), and the SpriteTable/SpriteMaterialTable it
+        // publishes are what THIS frame's submission reads. Without this call the
+        // host published no tables at all, so every sprite fell back to the 1x1 m
+        // untextured quad and every material to the plain pipeline -- which is
+        // exactly what "the game window draws nothing but the editor viewport
+        // looks right" was.
+        if (m_resolver)
+        {
+            Arcane::SceneRenderResolver::FrameInfo frame;
+            frame.now            = m_hostClock;
+            frame.dt             = m_lastFrameDt;
+            frame.viewportWidth  = (float)m_gpu->Cnv().Width();
+            frame.viewportHeight = (float)m_gpu->Cnv().Height();
+            m_resolver->Refresh(frame);
+            m_frameGlobals = m_resolver->Globals();
+        }
+
         m_gpu->Cmd()->open();
         m_gpu->Cmd()->clearTextureFloat(m_gpu->Cnv().Texture(), nvrhi::AllSubresources,
                                         nvrhi::Color(0.02f, 0.02f, 0.04f, 1.0f));
 
         m_gpu->Batch().Begin(m_gpu->Cmd(), m_gpu->Cnv().Framebuffer(),
                              m_gpu->Cnv().Width(), m_gpu->Cnv().Height());
+        // Engine-global material constants (Time/Delta/Viewport) for registered
+        // sprite materials; sticky, so once per frame after Begin. Built-in
+        // pipelines ignore them -- but a material that animates read zeros here
+        // before this arc, since the host never called SetGlobals at all.
+        m_gpu->Batch().SetGlobals(m_frameGlobals);
 
         // Set the render context IN Arcane.dll so TypeID<RenderContext2D> resolves
         // in the correct module; then drive the plugin's RenderSubmissionSystem.
@@ -319,17 +378,23 @@ void RuntimeApp::MainLoop()
             // Scene post hook (post arc): with a bound chain the linear canvas
             // feeds it as the external Scene input and the tonemap samples the
             // chain's output -- without one this is exactly the old line
-            // (byte-identical). Slice 3's PostProcess sweep feeds the members.
+            // (byte-identical). The chain comes from the resolver's PostProcess
+            // sweep, re-read every frame because a drain may swap the bound
+            // instance under an asset re-save.
+            Arcane::FullscreenMaterialChain* postChain =
+                m_resolver ? m_resolver->PostChain() : nullptr;
+            const Arcane::MaterialInstance* postInstance =
+                m_resolver ? m_resolver->PostInstance() : nullptr;
             Arcane::Canvas* post =
-                (m_postChain && m_postChain->Ready() && m_postInstance)
+                (postChain && postChain->Ready() && postInstance)
                     ? m_gpu->EnsurePost() : nullptr;
             if (post)
             {
-                m_postChain->Render(m_gpu->Cmd(), post->Framebuffer(),
-                                    *m_postInstance, m_postGlobals,
-                                    &m_runtime->AssetsFacade(),
-                                    static_cast<std::size_t>(-1),
-                                    m_gpu->Cnv().Texture());
+                postChain->Render(m_gpu->Cmd(), post->Framebuffer(),
+                                  *postInstance, m_frameGlobals,
+                                  &m_runtime->AssetsFacade(),
+                                  static_cast<std::size_t>(-1),
+                                  m_gpu->Cnv().Texture());
                 m_gpu->Tone().Run(m_gpu->Cmd(), post->Texture(), fb);
             }
             else
@@ -380,6 +445,11 @@ void RuntimeApp::Shutdown()
 
     // The member destructors then run (after Run returns + ~RuntimeApp), in reverse
     // declaration order -- the load-bearing TEARDOWN CONTRACT:
+    //   m_resolver -> ~SceneRenderResolver: un-publishes the registry's sprite
+    //                tables (whose pointers are non-owning) and drops its nvrhi
+    //                keep-alive texture handles. Declared LAST so it runs FIRST,
+    //                while the runtime it publishes through and the device those
+    //                handles belong to are both still alive.
     //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
     //                ResetRegistry) while the plugin DLL is STILL mapped.
     //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.
