@@ -11,6 +11,7 @@
 #include <Arcane/Base/Log.hpp>           // ARC_WARN/ARC_ERROR/ARC_INFO (not pulled in transitively by any of the below)
 #include <Arcane/Base/Runtime.hpp>       // Runtime::ResetRegistry/Registry (BootScene)
 #include <Arcane/Config/Config.hpp>
+#include <Arcane/Host/BootSequence.hpp>  // BootStage/BootThread/BootPolicy (CoreStages)
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (engine identity probe)
 #include <Arcane/Project/AssetId.hpp>            // AssetId::FromGuid (BootSceneFile)
@@ -293,4 +294,40 @@ namespace Arcane::HostBoot
     {
         return Detail::ApplySceneFile(runtime, BootSceneFile(project, id));
     }
+
+    // What a boot stage needs to do its work. Pointers are host-owned and
+    // outlive the sequence; null members mean "that facility is absent in this
+    // host", which stages must tolerate (the parity tests build one with all
+    // members null).
+    struct BootContext
+    {
+        class Runtime*          runtime     = nullptr;
+        class GpuContext*       gpu         = nullptr;
+        class BootSplashWindow* splash      = nullptr;   // pre-device splash; closed by splash_ready
+        const char*             projectPath = nullptr;
+        const char*             pluginPath  = nullptr;
+    };
+
+    // THE CANONICAL BOOT SEQUENCE. Both hosts take this list WHOLE.
+    //
+    // A host may APPEND its own stages. It may NOT omit, reorder, or rewrite one
+    // -- so divergence between the editor and the runtime has to be written
+    // deliberately instead of forgotten. Three shipped bugs (camera, sprite
+    // tables, Astra TypeContext) were exactly that forgetting.
+    //
+    // Adding an engine-wide install/publish step? Add it HERE and both hosts get
+    // it. BootStageParityTest fails if a host drops one.
+    [[nodiscard]] ARCANE_API std::vector<BootStage> CoreStages(BootContext& ctx);
+
+    // Ids only -- no context needed, so tests and tooling can ask "what is the
+    // canonical list?" without constructing a host.
+    [[nodiscard]] ARCANE_API std::vector<std::string> CoreStageIds();
+
+    // Exactly what each host builds, exposed for BootStageParityTest. These must
+    // be the SAME functions the hosts call, not reimplementations -- a parallel
+    // copy would test itself and prove nothing.
+    [[nodiscard]] ARCANE_API std::vector<BootStage> EditorStages(BootContext& ctx);
+    [[nodiscard]] ARCANE_API std::vector<BootStage> RuntimeStages(BootContext& ctx);
+    [[nodiscard]] ARCANE_API std::vector<std::string> EditorStageIdsForTest(BootContext& ctx);
+    [[nodiscard]] ARCANE_API std::vector<std::string> RuntimeStageIdsForTest(BootContext& ctx);
 }
