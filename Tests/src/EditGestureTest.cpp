@@ -166,3 +166,34 @@ TEST_CASE("EditGesture::ClosePending drops a no-op gesture, redo intact", "[edit
     CHECK(st.slots.item == 0u);
     CHECK_FALSE(static_cast<bool>(st.pendingCommit));
 }
+
+TEST_CASE("ShouldClosePopup: closes only when OUR popup stopped being open", "[editor]")
+{
+    EditGesture::Slots s;
+    s.txn  = static_cast<TransactionId>(7);
+    s.item = 1234;                      // the popup id that opened the gesture
+
+    // Still open -> nothing to do. This is the every-frame no-op case.
+    CHECK_FALSE(EditGesture::ShouldClosePopup(s, 1234, /*open*/ true,  /*hasPendingCommit*/ false));
+    // Ours, and gone -> close.
+    CHECK(      EditGesture::ShouldClosePopup(s, 1234, /*open*/ false, /*hasPendingCommit*/ false));
+
+    // OWNERSHIP GUARD: a different site asking about ITS popup must never close
+    // ours. Same rule EvaluateEnd enforces via lastItemId, and the reason is the
+    // same -- Cancel/Commit on a foreign live token corrupts the owner's edit.
+    CHECK_FALSE(EditGesture::ShouldClosePopup(s, 9999, /*open*/ false, /*hasPendingCommit*/ false));
+}
+
+TEST_CASE("ShouldClosePopup: nothing parked means nothing to close", "[editor]")
+{
+    EditGesture::Slots s;                            // txn == None, item == 0
+
+    CHECK_FALSE(EditGesture::ShouldClosePopup(s, 1234, /*open*/ false, /*hasPendingCommit*/ false));
+
+    // JOINED gesture: txn is None because another consumer owned the stack, but a
+    // built command is still owed. It must still close, or the command is lost.
+    s.item = 1234;
+    CHECK(EditGesture::ShouldClosePopup(s, 1234, /*open*/ false, /*hasPendingCommit*/ true));
+    // ...and not while it is still open.
+    CHECK_FALSE(EditGesture::ShouldClosePopup(s, 1234, /*open*/ true, /*hasPendingCommit*/ true));
+}

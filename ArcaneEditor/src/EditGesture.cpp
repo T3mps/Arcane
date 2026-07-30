@@ -23,6 +23,16 @@ namespace Arcane::Editor::EditGesture
     {
         return s.txn != Arcane::TransactionId::None || hasPendingCommit;
     }
+
+    bool ShouldClosePopup(const Slots& s, std::uint32_t popupId,
+                          bool open, bool hasPendingCommit) noexcept
+    {
+        if (s.txn == Arcane::TransactionId::None && !hasPendingCommit)
+            return false;          // nothing parked
+        if (s.item != popupId)
+            return false;          // not ours -- see the ownership guard note
+        return !open;
+    }
 }
 
 #include <imgui.h>

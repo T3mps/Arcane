@@ -102,6 +102,27 @@ namespace Arcane::Editor::EditGesture
     [[nodiscard]] bool ShouldCloseStaleOnActivate(const Slots& s,
                                                   bool hasPendingCommit) noexcept;
 
+    // Popup-lifetime close test -- the FOURTH edit boundary. `open` is whether the
+    // popup that owns the parked gesture is still open this frame; `popupId` is
+    // the asking site's own popup id.
+    //
+    // Why a popup needs its own shape rather than reusing the activation pair: a
+    // popup's edits are made by FOREIGN widgets we do not submit, so there is no
+    // item of ours to observe activating or deactivating. Worse, the reason the
+    // activation pair appears to work for ImGui's OWN colour popup is a loan --
+    // ColorEdit4 does `g.LastItemData.ID = g.ActiveId` while its picker window is
+    // active (imgui_widgets.cpp, "so IsItemActive() will function on
+    // ColorEdit4()"), and that only happens when ImGui opened the popup itself. A
+    // hand-rolled popup gets no such loan, so IsItemActivated() never fires and
+    // the edits would land outside undo entirely.
+    //
+    // There is no Cancel counterpart on purpose: for a popup, closed IS the end,
+    // and the layer's invariant is that abandonment COMMITS -- the edits were
+    // applied live and the user watched them happen. Escape and click-away
+    // therefore keep the edit and leave exactly one step; Ctrl+Z is the way back.
+    [[nodiscard]] bool ShouldClosePopup(const Slots& s, std::uint32_t popupId,
+                                        bool open, bool hasPendingCommit) noexcept;
+
     // ---- ImGui-facing skin (thin; NOT unit-driven -- the pure core above is) ----
 
     struct GestureState
