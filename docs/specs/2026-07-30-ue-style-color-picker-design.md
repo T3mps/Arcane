@@ -114,13 +114,29 @@ Arithmetic cross-check confirming UE's curve is ours: the screenshot's
 
 ### The picker
 
-5. **Property rows become a swatch only.** Inspector, material panel, and the
-   graph node all draw a clickable colour swatch and nothing else. Clicking opens
-   the dense popup. This matches UE, and permanently removes the row-crowding
-   problem rather than re-litigating it.
+5. **Property rows keep four channel boxes plus a swatch — a deliberate divergence
+   from UE.** UE's row is a swatch only; ours keeps in-row numeric editing, because
+   typing a channel without opening a popup is worth the width. Clicking the
+   swatch opens the dense popup.
 
-   Accepted cost, stated plainly: you can no longer type a channel value without
-   opening the popup. One extra click for a quick tweak.
+   **The four boxes show LINEAR floats, and this is not negotiable within this
+   design.** If the row displayed 0-255 sRGB while the popup displayed linear
+   floats, one widget would present the same stored value in two unlabelled spaces
+   — precisely the defect this arc exists to remove, reintroduced at a smaller
+   scale. Row and popup must agree.
+
+   A welcome consequence: the inline path gets *simpler* than what shipped today.
+   Storage is linear and display is linear, so there is **no conversion at all** in
+   the row — `ColorEdit4` with `Float | NoSmallPreview | NoPicker | NoOptions` over
+   the stored value directly. `NoSmallPreview` because we draw the swatch ourselves,
+   so it can honour Decision 9's preview toggle and carry the popup's click.
+
+   **Known tension, flagged rather than buried:** `ImGuiColorEditFlags_Float` at
+   `%.3f` is what was rejected on 2026-07-29 for crowding the row. Four boxes of
+   `0.578` need roughly 40 px more than four of `201`. This design accepts that,
+   and the visual gate below is where it gets judged. If it reads as too tight in
+   practice, the fallback is UE's actual answer — swatch-only rows — which is a
+   one-line change at each of the three sites and removes no other decision here.
 
 6. **The popup shows LINEAR floats, and never relabels anything.** Stored values
    are linear; the channel rows display them raw. A tint stored as `0.502` reads
@@ -223,9 +239,9 @@ Arithmetic cross-check confirming UE's curve is ours: the screenshot's
 |---|---|
 | `8f2e7aac` `SrgbToLinear` / `LinearToSrgb` | **SURVIVES, still load-bearing** — now drives the `Hex sRGB` field and Decision 9's preview instead of the channel boxes |
 | `8f2e7aac` `ColorDisplayFromLinear` / `ColorLinearFromDisplay` / `ColorField4` | replaced — the sRGB-display-for-channels premise is gone |
-| `77fabd6b` Inspector single-select 0-255 sRGB boxes | reverted to a swatch |
+| `77fabd6b` Inspector single-select 0-255 sRGB boxes | boxes STAY (Decision 5) but display linear floats; the encode/decode drops out, and the swatch becomes ours so it can open the popup and honour the preview toggle |
 | `77fabd6b` Inspector multi-select 0-255 sRGB encoding | reverted to linear floats, i.e. close to its pre-arc state. The "two disagreed inside one field" defect it fixed stays fixed — both sides are now linear rather than both sRGB |
-| `0a571b0e` material param `ColorField4` adoption | reverted to a swatch |
+| `0a571b0e` material param `ColorField4` adoption | same shape as the Inspector row: linear float boxes + our swatch |
 | `deed9abe` `ConstColor` node swatch + `ed::Suspend/Resume` | swatch and Suspend/Resume **survive**; it opens the new popup, and the Suspend/Resume becomes Decision 4's named helper |
 
 The curve work is not wasted. What reverts is the decision about *where sRGB is
@@ -267,26 +283,34 @@ is a decision table with an existing headless harness, not a visual.
 
 **Widget — visual gate.**
 
-1. A colour property row is a swatch; clicking it opens the dense popup.
-2. Channel rows show linear floats. **No existing colour's displayed number
+1. A colour property row shows four channel boxes plus a swatch; clicking the
+   swatch opens the dense popup, and typing in a box still edits without it.
+2. **Row width judgement (Decision 5):** with four `0.578`-width boxes, the row is
+   not crowded at the default label-column split, and the boxes do not clip at a
+   narrow panel width. This is the item that decides whether swatch-only is needed.
+3. Channel boxes and popup channel rows show **the same linear floats** — no
+   unlabelled space change anywhere in the widget.
+4. Channel rows show linear floats. **No existing colour's displayed number
    changes when this ships** — the strongest signal the relabel class is gone.
-3. `Hex sRGB` and `Hex Linear` are both visible, both labelled, and disagree with
+5. `Hex sRGB` and `Hex Linear` are both visible, both labelled, and disagree with
    each other in the expected direction (sRGB brighter for mid-tones).
-4. Pasting `C9A0DC` into `Hex sRGB` sets the sprite to that colour and it *looks*
+6. Pasting `C9A0DC` into `Hex sRGB` sets the sprite to that colour and it *looks*
    like that colour.
-5. Typing into `Hex Linear` and into `Hex sRGB` both work and agree afterwards.
-6. Ticking `sRGB Preview` changes only swatches; every number stays put.
-7. With it ticked, the swatch reads much closer to the sprite in the viewport than
+7. Typing into `Hex Linear` and into `Hex sRGB` both work and agree afterwards.
+8. Ticking `sRGB Preview` changes only swatches; every number stays put.
+9. With it ticked, the swatch reads much closer to the sprite in the viewport than
    unticked.
-8. One `Ctrl+Z` undoes one whole popup session, not one step per frame.
-9. Opening and closing the popup without editing creates no undo step.
-10. `Escape` and click-away both keep the edit and leave exactly one undo step
+10. One `Ctrl+Z` undoes one whole popup session, not one step per frame.
+11. Editing a channel box in the row (no popup) is still one undo step per drag —
+    the existing activation gesture, unchanged and not regressed by the new shape.
+12. Opening and closing the popup without editing creates no undo step.
+13. `Escape` and click-away both keep the edit and leave exactly one undo step
     (Decision 11 — verify the intended behaviour, since it differs from UE).
-11. Drag value to black and back up — hue is preserved (Decision 7's guard).
-12. The `ConstColor` popup opens above the canvas, unclipped, and survives a pan.
-13. `hdr` mode shows float channels and **no** hex rows.
-14. Untick the preview, restart the editor — still unticked.
-15. Corrupt the ini entry by hand, restart — falls back to ticked, no crash.
+14. Drag value to black and back up — hue is preserved (Decision 7's guard).
+15. The `ConstColor` popup opens above the canvas, unclipped, and survives a pan.
+16. `hdr` mode shows float channels and **no** hex rows.
+17. Untick the preview, restart the editor — still unticked.
+18. Corrupt the ini entry by hand, restart — falls back to ticked, no crash.
 
 ## Risks
 
@@ -297,10 +321,10 @@ is a decision table with an existing headless harness, not a visual.
   fights `Suspend`/`Resume` in a way the three existing sites did not, fall back to
   leaving that node on its `DragFloat4` and ship the other sites; the node keeps
   working as it does today.
-- **Swatch-only rows are a capability removal.** If typing a channel in the row
-  turns out to matter more in practice than it seemed, the recovery is expandable
-  child rows (UE's own answer via `FLinearColor`'s child properties) — which needs
-  the Inspector's field grid to support expandable struct children, unverified.
+- **Row width is the open question.** Keeping four float boxes revisits the
+  2026-07-29 crowding rejection (Decision 5). It is accepted deliberately and
+  judged at the gate; the fallback is swatch-only rows, one line per site. No
+  capability is removed either way — the popup always has the full set.
 - **Reverting shipped call sites means re-verifying them.** Tasks 3 and 4's desk
   checks were never walked; those sites are being rewritten before anyone confirmed
   the first version. Net saving, but the gate list above must be run in full rather
