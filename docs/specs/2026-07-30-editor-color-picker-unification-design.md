@@ -165,29 +165,31 @@ test, not assumed — see below.
 
 ## Verification
 
-Headless, in the `~[gpu]` gate. `EditorWidgetsTest.cpp` does not exist yet, so it
-is a NEW source file: run `Arcane\GenerateProjects.bat` before building, then run
-the new tests BY TAG and confirm the assertion count moved. The projects glob but
-the `.vcxproj` is generated, so a new file is silently not compiled — this has
-produced a green gate running zero new tests twice in this project.
+**USER'S CALL (2026-07-30): no in-depth tests for this arc — "just my visual
+gate, as this is a very visual thing."** This section is written to that decision;
+an earlier draft specified three headless test groups and is deliberately
+superseded. The per-task desk-check lists in the plan are the verification of
+record.
 
-- **Conversion** (`EditorWidgetsTest`, new): round-trip within 1/255 across the
-  range; `SrgbToLinear(0) == 0` and `SrgbToLinear(1) == 1` exactly; alpha
-  untouched by both directions; and the load-bearing assertion —
-  `SrgbToLinear(128/255) ≈ 0.2158`, computed against the sRGB spec formula
-  independently in the test, which is what proves we match the texture hardware
-  rather than merely being self-consistent.
-- **Quantisation guard:** `ColorField4` leaves the stored value bit-identical on
-  a frame where ImGui reports no change (drives the "only write on changed" rule).
-- **Gesture** (`EditGestureTest`, extended): the picker frame sequence —
-  activate with a foreign (popup) item id parks it; a release frame reporting the
-  ColorEdit's own id returns `EndAction::None` via the ownership guard;
-  `ShouldCloseAbandoned` with `activeId == 0` then returns true. One step, no
-  strand.
+What that means concretely:
 
-Desk (the parts no test covers): the wheel appears on swatch click in all three
-sites; a pasted hex reproduces its source on screen; one Ctrl+Z per drag; the
-graph-node picker actually opens inside the canvas.
+- Each task ends with a clean build, plus an explicit check that
+  `ArcaneEditor.exe` actually relinked — a green `Arcane`/`ArcaneTests` build does
+  NOT prove it, since neither compiles `InspectorView.cpp` or
+  `ShaderEditorDocument.cpp`.
+- The user's visual gate covers: the wheel appears on swatch click at every site;
+  a pasted hex reproduces its source on screen; one Ctrl+Z per drag and none for
+  a click that dragged nothing; multi-select blanks and writes correctly; the
+  graph-node picker opens above the canvas; and the expected re-label (an
+  existing `128` reading `186`) with **no change to the rendered colour**.
+- The undo claim in the section below is therefore verified by eye (one Ctrl+Z
+  per drag) rather than by a headless frame-sequence test.
+
+One residual risk is accepted knowingly: a wrong transfer curve looks *plausible*
+on screen, so the visual gate cannot catch it. The plan carries an optional
+throwaway console print asserting `SrgbToLinear(128/255) == 0.2158` (the value
+that proves we match the texture hardware rather than merely being
+self-consistent) to be deleted before commit. It is a sanity check, not a test.
 
 ## Non-goals
 
