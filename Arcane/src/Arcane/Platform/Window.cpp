@@ -125,6 +125,11 @@ namespace Arcane
         SDL_SetWindowSize(m_window, (int)width, (int)height);
     }
 
+    void Window::Show()
+    {
+        if (m_window) SDL_ShowWindow(m_window);
+    }
+
     bool Window::SetIcon(const std::filesystem::path& path)
     {
         if (!m_window)

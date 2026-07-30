@@ -21,6 +21,10 @@ namespace Arcane
         WindowDesc wd;
         wd.title  = "Arcane Runtime";
         wd.vulkan = (cfg.backend == GraphicsBackend::Vulkan);
+        // Hidden until the first presented frame (Task 8's splash_ready stage
+        // calls Show()). A window that exists but has never been drawn is the
+        // black rectangle this arc exists to remove.
+        wd.hidden = true;
         if (!ctx->m_window.Create(wd)) { ARC_ERROR("GpuContext: window create failed"); return nullptr; }
 
         RenderDeviceDesc dd;

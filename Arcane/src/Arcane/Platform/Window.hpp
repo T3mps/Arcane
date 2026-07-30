@@ -47,6 +47,11 @@ namespace Arcane
         void SetTitle(const std::string& title);
         void SetSize(uint32_t width, uint32_t height);
 
+        // Un-hide a window created with WindowDesc::hidden. Hosts create hidden
+        // and show at the first presented frame, so a window never exists in an
+        // undrawn state. Idempotent.
+        void Show();
+
         // Set the OS window icon (title bar + taskbar) from an image file. Opt-in per
         // host: only a host that calls this gets a custom icon -- others keep the SDL
         // default. Decodes to RGBA via stb (compiled into this DLL); SDL_SetWindowIcon
