@@ -3,7 +3,7 @@
   "name": "SampleProject",
   "description": "Slice 1b demo: proves Project::Open host wiring (gameModule = Sandbox.dll).",
   "engine": {
-    "abi": 8
+    "abi": 9
   },
   "gameModule": "Sandbox.dll",
   "plugins": [],

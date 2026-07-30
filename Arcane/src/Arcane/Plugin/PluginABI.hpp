@@ -66,7 +66,22 @@ namespace Arcane
     //     of tint.w. It also resolves a TextureTable resource the engine no
     //     longer registers. Corruption rather than a guaranteed AV, and silent
     //     either way; reject the pairing.
-    inline constexpr uint32_t kGamePluginABIVersion = 8;
+    // v9 (2026-07-29): Astra re-vendored to dev f8c9998 -- 40 of 60 shared
+    //     headers changed, 8 added, 1 removed (Archetype/ArchetypeGraph.hpp).
+    //     Same reasoning as the v5 entry above (:28-31), which bumped for a
+    //     previous Astra re-vendor: plugins compile Astra's headers THEMSELVES
+    //     (Registry, ComponentRegistry, Archetype storage, EntityTable,
+    //     Serialization's Binary{Reader,Writer} -- the very types crossing the
+    //     boundary through EngineContext::typeContext and the SaveState/
+    //     LoadState entry points), so a plugin built against the old headers
+    //     and a host built against the new ones disagree on layout and on
+    //     TypeContext identity rules. Concretely observable: the new
+    //     TypeContext REFUSES a type whose unqualified name-hash collides with
+    //     an already-registered one (it used to alias them silently), handing
+    //     back an INVALID ComponentID that then overflows the component bitmap
+    //     -- an assert in a checked build, a wrong-component read in a
+    //     shipping one. Reject the pairing.
+    inline constexpr uint32_t kGamePluginABIVersion = 9;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
