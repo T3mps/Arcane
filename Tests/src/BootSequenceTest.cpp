@@ -88,20 +88,42 @@ TEST_CASE("a worker stage genuinely overlaps a main stage", "[boot]")
 
 TEST_CASE("the presenter keeps ticking while a worker stage overlaps", "[boot]")
 {
-    // A worker stage long enough to guarantee more than one presenter tick
-    // during the overlap. If the main thread instead blocked silently for
-    // the whole overlap (the bug this test guards against), ticks would stay
-    // at 0 until the single post-boot "done" tick -- never more than 1.
+    // Count ticks observed WHILE THE WORKER STAGE IS ACTUALLY IN FLIGHT, not a
+    // raw total. A raw total does not discriminate: the pre-fix scheduler
+    // called present() unconditionally once per loop iteration plus once more
+    // at the terminal "done" tick, which is already 2 calls for a single
+    // worker stage even with zero pumping while parked -- so a bare
+    // `ticks > 1` (or even a naive `>= 2`) stays green on the starving
+    // scheduler this test exists to catch. Flagging "in flight" from inside
+    // the worker stage itself and counting only ticks observed while that
+    // flag is set measures the property directly, independent of how many
+    // ticks happen to land outside the overlap.
+    std::atomic<bool> workerInFlight{false};
     struct Counter final : Arcane::IBootPresenter
     {
-        int ticks = 0;
-        bool Present(const Arcane::BootProgress&) override { ++ticks; return true; }
+        std::atomic<bool>* inFlight = nullptr;
+        int overlapTicks = 0;
+        bool Present(const Arcane::BootProgress&) override
+        {
+            if (inFlight->load()) ++overlapTicks;
+            return true;
+        }
     } counter;
+    counter.inFlight = &workerInFlight;
 
     std::vector<Arcane::BootStage> stages;
     stages.push_back(Stage("slow_worker", {}, [&]
     {
+        workerInFlight = true;
+        // 60ms against the scheduler's 8ms pump cadence (BootSequence.cpp)
+        // yields roughly 7 in-flight ticks -- a >=3 floor leaves about 2x
+        // margin under the observed count even before accounting for a slow
+        // CI box, while still being unreachable by the starving scheduler
+        // (which produces 0 in-flight ticks: its one "waiting" tick lands
+        // before the freshly-dispatched worker thread has set the flag, and
+        // its one "done" tick lands after the worker already cleared it).
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        workerInFlight = false;
         return true;
     }, Arcane::BootThread::Worker));
 
@@ -109,7 +131,7 @@ TEST_CASE("the presenter keeps ticking while a worker stage overlaps", "[boot]")
     const Arcane::BootResult r = seq.Run(&counter);
 
     CHECK(r.ok);
-    CHECK(counter.ticks > 1);
+    CHECK(counter.overlapTicks >= 3);
 }
 
 TEST_CASE("a dependency cycle is refused and names the offenders", "[boot]")
