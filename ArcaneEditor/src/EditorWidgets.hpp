@@ -160,10 +160,12 @@ namespace Arcane::Editor
     // and a texture pixel authored as the same number meant DIFFERENT colours in
     // the same multiply (#808080 -> linear 0.216 as a pixel, 0.502 as a tint).
     //
-    // Deliberately NOT pow(2.2): that is the tonemap's display encode
-    // (shaders/tonemap.hlsl:33, byte-matched to the retired client) and answers a
-    // different question. Values outside [0,1] pass through monotonically so the
-    // hdr path below cannot clamp anything.
+    // Values outside [0,1] pass through monotonically, so an hdr path cannot clamp
+    // anything.
+    //
+    // CURVE IS MIRRORED in two other places -- keep all three in step:
+    //   shaders/tonemap.hlsl        (HLSL, branchless min form)
+    //   Tests/src/TonemapTest.cpp   (CPU golden reference, branchless)
     [[nodiscard]] float SrgbToLinear(float srgb) noexcept;
     [[nodiscard]] float LinearToSrgb(float linear) noexcept;
 
