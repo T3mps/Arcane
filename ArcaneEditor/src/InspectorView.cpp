@@ -635,17 +635,43 @@ namespace Arcane::Editor
                         const bool isColor = Arcane::Editor::IsColorFieldName(rawName);
                         if (Multi())
                         {
-                            const double cur[4]{ v.x, v.y, v.z, v.w };
+                            // Colour multi-select now shows the SAME 0-255 sRGB
+                            // numbers the single-select row does. Before this the
+                            // two disagreed INSIDE ONE FIELD: single-select drew
+                            // 0-255 while this row drew raw linear floats
+                            // (integral == false), so selecting a second entity
+                            // silently changed what the numbers meant.
+                            double cur[4];
+                            if (isColor)
+                            {
+                                float disp[4];
+                                ColorDisplayFromLinear(&v.x, /*hdr*/ false, disp);
+                                for (int i = 0; i < 4; ++i)
+                                    cur[i] = disp[i] * 255.0;
+                            }
+                            else
+                            {
+                                for (int i = 0; i < 4; ++i)
+                                    cur[i] = v[i];
+                            }
                             double out = 0.0;
                             // Axis strips only on the NON-colour flavour: XYZW
-                            // colours under RGBA channels would label the
-                            // values as something they are not.
+                            // colours under RGBA channels would label the values
+                            // as something they are not. Colours are integral --
+                            // they are 0-255 now, and a "128.000" box is the
+                            // crowding the single-select row already rejected.
                             const int c = MultiScalarRow(widgetId.c_str(), 4, cur, MixedFor(f),
-                                                         /*integral*/ false,
+                                                         /*integral*/ isColor,
                                                          /*axisColors*/ !isColor, out);
                             if (c >= 0)
                             {
-                                const float fv = static_cast<float>(out);
+                                // 0-255 sRGB typed back -> linear storage. Alpha
+                                // (channel 3) is coverage: it only rescales, and
+                                // must NOT go through the curve.
+                                const float fv = isColor
+                                    ? (c == 3 ? static_cast<float>(out / 255.0)
+                                              : SrgbToLinear(static_cast<float>(out / 255.0)))
+                                    : static_cast<float>(out);
                                 ApplyImmediate(rawName, instance, [&](void* d)
                                                { if (glm::vec4* p = f.GetPtr<glm::vec4>(d)) (*p)[c] = fv; });
                             }
@@ -653,22 +679,27 @@ namespace Arcane::Editor
                         }
                         if (isColor)
                         {
-                            // NoPicker ON PURPOSE (for now): picker-popup edits
-                            // happen on the POPUP's own widgets, so the
-                            // activation-bracketed gesture below would never
-                            // open and those writes would land outside undo.
-                            // The inline channel drags + swatch preview gesture
-                            // correctly; a popup-aware gesture is later polish.
+                            // The editor's one colour widget: 0-255 sRGB channel
+                            // boxes plus a swatch that opens the radial-wheel
+                            // picker with a pasteable hex box. The STORED value
+                            // stays the linear float vec4; ColorField4 owns the
+                            // encode/decode (EditorWidgets.hpp).
                             //
-                            // NOT ImGuiColorEditFlags_Float: that mode prints a
-                            // fixed three decimals per channel and crowded the
-                            // row (user call 2026-07-29). Default 0-255 display
-                            // is Unity's RGBA mode; the STORED value stays the
-                            // 0..1 float vec4, edits quantize to 255ths, which
-                            // is what colour authoring means everywhere.
-                            bool changed = ImGui::ColorEdit4(widgetId.c_str(), &v.x,
-                                                             ImGuiColorEditFlags_NoPicker
-                                                             | ImGuiColorEditFlags_AlphaBar);
+                            // The picker popup DOES land inside undo, which the
+                            // NoPicker comment this replaces got backwards. It
+                            // reasoned that popup edits happen on the popup's own
+                            // widgets so the gesture would never OPEN -- but ImGui
+                            // rewrites g.LastItemData.ID to the picker's ActiveId
+                            // while the popup is live, expressly so IsItemActive()
+                            // keeps working on ColorEdit4 (imgui_widgets.cpp:
+                            // 6044-6046), so IsItemActivated() fires and
+                            // BeginGestureIfActivated parks that id. The end is
+                            // the half that differs: on release ActiveId drops to
+                            // 0, EvaluateEnd's ownership guard correctly declines
+                            // the foreign id, and EditGesture::ScopeGuard's
+                            // abandonment path commits it that same frame. Net:
+                            // one drag = one undo step, same as the channel boxes.
+                            bool changed = ColorField4(widgetId.c_str(), &v.x);
                             BeginGestureIfActivated(rawName, instance);
                             if (changed)
                                 ForEachTarget(instance, [&](Astra::Entity, void* d)
