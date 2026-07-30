@@ -15,6 +15,37 @@ as a presentation one.
 Three consumers, one mechanism: editor boot, `ArcaneRuntime` host boot, and the
 in-editor project switch.
 
+## 0. The stronger justification: a recurring bug class (added 2026-07-30)
+
+The loading screen is the visible motivation. The *structural* one is bigger.
+
+`EditorApp::Init` and `RuntimeApp` each hand-roll boot as a straight-line
+function. Nothing forces them to agree, and divergence never fails loudly -- the
+missing step degrades to "component not found" or "nothing drawn". Three bugs in
+two days came from exactly this:
+
+1. **Camera** was editor host state; the runtime had none (fixed @7b3b7f65 by
+   making it a scene component).
+2. **Sprite/material tables** -- `RenderSubmissionSystem` reads pre-resolved
+   tables the HOST must publish per frame; the caches were editor-side only, so
+   the runtime drew nothing textured.
+3. **Astra TypeContext** -- `ArcaneRuntime.exe` never called
+   `Astra::SetTypeContext` in its own module (Astra's context is a per-module
+   static slot by design). The exe's private empty context assigned ids from its
+   own counter, which ALIASED the shared ones: `TypeID<Camera>` collided with
+   `Transform`'s id, so `CreateView<Camera>` returned every entity with a
+   Transform and reinterpreted those bytes as a Camera. Not a miss -- a
+   misread. Fixed @a6992da3.
+
+`GpuContext` extracted the shared GPU prefix; the rest of boot stayed
+duplicated. **This arc's real product is that the duplication becomes
+impossible** -- see the CoreStages contract in section 2.
+
+Note what this does NOT fix: a shared *mechanism* is not a shared *list*. An
+earlier draft of this spec said "ArcaneRuntime registers a shorter list of the
+same stages", which is the same divergence hazard in new syntax. The contract
+below is what actually closes it.
+
 ```
 main   |--runtime_create--|--gpu_core------|--fonts--|--splash--|--shell--|--plugin_load--|
 worker                    |--project_open (scan)--------|--lock--|
@@ -81,22 +112,76 @@ never exists in an undrawn state.
 `EditorApp::Init()`'s straight-line body decomposes into these registrations.
 Weights are approximate shares of a typical boot and feed the determinate bar.
 
-| Stage | Thread | Depends on | Policy | Wt | Work |
-|---|---|---|---|---|---|
-| `runtime_create` | main | -- | Fatal | 5 | `TypeContext` + `Runtime` (enkiTS pool + engine component roster, `Runtime.cpp:114-121`). |
-| `project_open` | **worker** | `runtime_create` | Optional | 45 | `Project::Open` -> `ScanContent` -> ABI gate -> content root -> asset resolver -> config layering (`Runtime.cpp:385-420`). |
-| `gpu_core` | main | -- | Fatal | 25 | `GpuContext::Create`: window (hidden) / device / swapchain / shaders / canvas / batcher / tonemap / ImGui / input / command list. |
-| `editor_fonts` | main | `gpu_core` | Fatal | 5 | Theme + `InstallEditorFonts` (Roboto + merged lucide). Must precede the first presented frame -- see below. |
-| `splash_ready` | main | `editor_fonts` | Fatal | 2 | Load splash texture, `Window::Show()`, present frame 1. |
-| `editor_shell` | main | `editor_fonts` | Fatal | 3 | Title, icon, toolbar logo, docking flag, layout settings, console sink. |
-| `render_bridge` | main | `gpu_core`, `runtime_create` | Fatal | 3 | `SetRenderResources`, `OffscreenImGuiLayer::Create`, `SetImGui`. |
-| `editor_lock` | worker | `project_open` | Optional | 1 | `EditorLock::Write`. |
-| `input_config` | main | `project_open`, `gpu_core` | Optional | 2 | `HostBoot::LoadInputConfig`. |
-| `plugin_load` | main | `project_open`, `render_bridge` | Fatal | 9 | `PluginHost` emplace + `AddPlugin` + `Load`. |
-| `finalize` | main | all | Fatal | -- | `UpdateWindowTitle`, raise-open-project, hand off to `MainLoop`. |
+**CORE** stages come from `HostBoot::CoreStages()` and are shared verbatim.
+**Editor** stages are appended by `EditorApp` only.
 
-`ArcaneRuntime` registers a shorter list of the same stages (no editor shell, no
-editor lock). The project switch registers a four-stage list (§5).
+| Stage | Set | Thread | Depends on | Policy | Wt | Work |
+|---|---|---|---|---|---|---|
+| `runtime_create` | core | main | -- | Fatal | 5 | `TypeContext` + `Runtime` (enkiTS pool + engine component roster, `Runtime.cpp:114-121`). |
+| `type_context_install` | core | main | `runtime_create` | Fatal | 1 | `Astra::SetTypeContext` in **this module's** slot + `HostBoot::VerifySharedTypeContext`. Bug-class instance 3 lived here. |
+| `project_open` | core | **worker** | `runtime_create` | Optional | 45 | `Project::Open` -> `ScanContent` -> ABI gate -> content root -> asset resolver -> config layering (`Runtime.cpp:385-420`). |
+| `gpu_core` | core | main | -- | Fatal | 25 | `GpuContext::Create`: window (hidden) / device / swapchain / shaders / canvas / batcher / tonemap / ImGui / input / command list. |
+| `render_bridge` | core | main | `gpu_core`, `runtime_create` | Fatal | 3 | `SetRenderResources`, `OffscreenImGuiLayer::Create`, `SetImGui`. |
+| `input_config` | core | main | `project_open`, `gpu_core` | Optional | 2 | `HostBoot::LoadInputConfig`. |
+| `sprite_tables` | core | main | `project_open`, `render_bridge` | Optional | 2 | Publish `SpriteTable` / `SpriteMaterialTable`. Bug-class instance 2 lived here. |
+| `plugin_load` | core | main | `project_open`, `render_bridge` | Fatal | 9 | `PluginHost` emplace + `AddPlugin` + `Load`. |
+| `editor_fonts` | editor | main | `gpu_core` | Fatal | 5 | Theme + `InstallEditorFonts`. Must precede the first presented frame -- see below. |
+| `splash_ready` | editor | main | `editor_fonts` | Fatal | 2 | Load splash texture, `Window::Show()`, present frame 1. |
+| `editor_shell` | editor | main | `editor_fonts` | Fatal | 3 | Title, icon, toolbar logo, docking flag, layout settings, console sink. |
+| `editor_lock` | editor | worker | `project_open` | Optional | 1 | `EditorLock::Write`. |
+| `finalize` | core | main | all | Fatal | -- | `UpdateWindowTitle`, hand off to `MainLoop`. |
+
+`sprite_tables` and `type_context_install` are listed as core stages because
+those are the two places bug-class instances 2 and 3 actually lived; confirm
+against the shipped fixes (@a6992da3 and the sprite-lift work) and fold in
+whatever those settled on rather than re-deriving them.
+
+### The CoreStages contract -- what actually kills the bug class
+
+```cpp
+// Arcane/Arcane/src/Arcane/Host/HostBoot.hpp
+// The canonical boot sequence. BOTH hosts take this list whole. A host may
+// APPEND its own stages; it may not omit, reorder, or rewrite one. Divergence
+// therefore has to be written deliberately -- it can no longer be forgotten,
+// which is exactly how the camera / sprite-table / TypeContext bugs happened.
+[[nodiscard]] std::vector<BootStage> CoreStages(BootContext& ctx);
+```
+
+Usage is deliberately asymmetric-looking but identical in substance:
+
+```cpp
+// EditorApp
+auto stages = Arcane::HostBoot::CoreStages(ctx);
+stages.push_back(EditorFontsStage(ctx));
+stages.push_back(SplashReadyStage(ctx));
+stages.push_back(EditorShellStage(ctx));
+stages.push_back(EditorLockStage(ctx));
+
+// RuntimeApp -- appends nothing. That is the point.
+auto stages = Arcane::HostBoot::CoreStages(ctx);
+```
+
+Enforced by test (§8): build both hosts' stage lists and assert every id in
+`CoreStages()` appears in each. A future engine-wide install step added to
+`CoreStages` is then automatically in the runtime host too, and a host that
+tries to drop one fails the gate.
+
+The project switch registers a four-stage list (§5) and is deliberately NOT
+`CoreStages` -- it runs against an already-booted process.
+
+### `ArcaneRuntime` gains the ABI gate it never had
+
+Separate from the stage work, and found during the same survey:
+`RuntimeApp.cpp:113-115` treats a failed `OpenProject` as a warning and falls
+through to the `data/` + `--plugin` fallback, so an ABI-stale project **silently
+boots the wrong content** where the editor at least shows a modal. The runtime
+must refuse with a clear message instead. Same bug class -- the runtime host
+quietly doing less than the editor.
+
+(Related, for the follow-on arc rather than this one: the Hub maps editor exit
+code 2 to "the editor refused the project (engine/abi gate)" at
+`launch.rs:273-274`, but `main.cpp:89`'s only `return 2` is the unrelated
+`--frames`-with-no-project case. That error path is currently unreachable.)
 
 ### Thread assignment rationale
 
@@ -280,9 +365,29 @@ headless-testable with fake stages. New tag `[boot]`:
 - Quit-during-boot aborts cleanly and joins the worker.
 - Splash frames do not consume the `--frames N` budget.
 
+**The bug-class gate (§0) -- the most valuable test in this arc:**
+
+- Build `EditorApp`'s stage list and `RuntimeApp`'s stage list, and assert that
+  **every id in `CoreStages()` appears in both**. This is what makes a future
+  engine-wide install step impossible to forget in the runtime host, and it is
+  the automated expression of the contract in §2.
+- Assert `CoreStages()` ids are unique and that appended host stages cannot
+  shadow a core id (a duplicate id would silently replace a core stage).
+- Assert the runtime host's list is exactly `CoreStages()` -- it appends
+  nothing today, and if that ever changes it should be a deliberate edit to
+  this test.
+
+These are cheap (no GPU, no window, no plugin) precisely because stage lists are
+data. Note the honest limitation: this proves both hosts *run* the same stages,
+not that a stage's body is correct in both modules. Instance 3 was a
+per-module static slot, which is why `type_context_install` also carries the
+`VerifySharedTypeContext` runtime check -- the list test and the in-stage check
+cover different halves.
+
 Plus: `ConsoleBuffer` concurrency test (worker pushes while main reads) beside
 its mutex fix; `ScanContent` progress-callback test (monotonic, terminates at
-total).
+total); and `ArcaneRuntime` refusing an ABI-stale project instead of falling
+through to the `data/` fallback (§2).
 
 Splash appearance itself is **desk-verify only** -- windowed runs SIGSEGV under
 this box's virtual-display setup, so `[gpu]` and interactive runs happen at the
@@ -310,6 +415,10 @@ that matter are that `--frames N` scripted runs still work and the existing
 7. `ArcaneRuntime` splash: default branding; `"enabled": false` shows no splash.
 8. `ArcaneEditor --project <p> --frames 10` still exits with the same frame
    count as before.
+9. `ArcaneRuntime --project <p>` on an ABI-stale project REFUSES with a clear
+   message instead of silently booting the `data/` fallback.
+10. `ArcaneRuntime --frames N --screenshot out.png` still captures the scene --
+   the runtime host's stage list is now `CoreStages()` and must lose nothing.
 
 ## 10. Non-goals
 
@@ -318,3 +427,20 @@ that matter are that `--frames N` scripted runs still work and the existing
 - Animated/scripted splash content beyond a static image plus the bar.
 - A progress API for game code (the game owns the window after `plugin_load`).
 - Any server-side change (§7).
+- **The ABI detect-and-rebuild flow.** Scoped OUT deliberately (decision
+  2026-07-30) and deferred to its own arc, because two pieces it needs do not
+  exist yet: a `BootSequence` stage that can PAUSE FOR USER CONSENT (stages
+  today run to completion or fail -- you do not silently rebuild someone's
+  source), and a build service. That service must NOT use the JobSystem: it is
+  one enkiTS pool that `JobSystem.hpp` calls "the only thread source for the
+  simulation", sized to hardware threads for short fork-join compute, and
+  parking a worker on a multi-minute `msbuild` wait would starve it.
+  `ShaderCompiler` faced the same choice and used a dedicated `std::thread`
+  (`ShaderCompiler.cpp:415,604`) behind a main-thread-only
+  `Submit`/`Poll`/`Drain` API -- that is the shape to copy. The follow-on arc
+  also covers stale detection (DLL-exported ABI + source mtime rather than a
+  hand-authored manifest int), manifest auto-stamping, Problems-panel
+  integration for build diagnostics, and the Hub's pre-launch "Rebuild &
+  Launch". Note `RewriteManifestField` (`Project.cpp:33`) can only write
+  TOP-LEVEL STRING keys today, so re-stamping nested `engine.abi` needs new
+  code.
