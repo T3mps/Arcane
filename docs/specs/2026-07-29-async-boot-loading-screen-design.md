@@ -90,6 +90,70 @@ disjoint-ownership proof** (the one in §2 for `project_open` was verified, not
 assumed). Sequential-and-join is the safer default; parallelism here is a
 deliberate, narrow exception, not the house style.
 
+### `ServiceThread.{hpp,cpp}` -- the one shape for blocking workers (added 2026-07-30)
+
+**Why this rides in the boot arc.** This arc's thesis is "two things that should
+be the same must not be able to drift apart." `BootSequence` is about to
+hand-roll worker thread #2 (`ShaderCompiler` is #1, the deferred build service
+will be #3). Letting each hand-roll its own start/stop/join/drain semantics is
+the same failure as letting each host hand-roll its boot -- just in a different
+dimension.
+
+**Deliberately NOT a unification of the two threading models.** Arcane has two
+genuinely different needs and they must stay different:
+
+| Need | Mechanism | Rule |
+|---|---|---|
+| Fork-join compute (ECS iteration, physics) | `JobSystem` (enkiTS) | Workers must NEVER block. A blocked worker starves the pool -- `JobSystem.hpp` calls it "the only thread source for the simulation". |
+| Long-lived BLOCKING service (compile, build, file I/O) | `ServiceThread` | Owns one dedicated thread. Never submit these to `JobSystem`. |
+
+UE has exactly this split too (`FTaskGraphInterface` for fork-join,
+`LaunchEngineLoop.cpp:2419-2429`, alongside dedicated `FRunnable` threads for
+render, audio, async loading, and the splash). Collapsing ours onto one
+mechanism would be a regression, not a cleanup.
+
+**Scope: thread lifetime and queue plumbing ONLY.**
+
+```cpp
+namespace Arcane
+{
+    class ARCANE_API ServiceThread
+    {
+    public:
+        explicit ServiceThread(std::string debugName);
+        ~ServiceThread();                        // stop + join, always
+        ServiceThread(const ServiceThread&)            = delete;
+        ServiceThread& operator=(const ServiceThread&) = delete;
+
+        void SubmitRaw(std::function<void()> work);
+        [[nodiscard]] bool StopRequested() const noexcept;   // cooperative cancel
+    };
+}
+```
+
+Debounce, coalescing-by-key, superseded-drop, and last-good stay in
+`ShaderCompiler` -- they are ITS policy, not everyone's. A build service likely
+wants coalescing but not a 200ms keystroke debounce; `BootSequence`'s worker
+wants neither. Extracting them from a sample size of one is how you get a wrong
+abstraction; keep the base thin enough to be certainly right.
+
+**ShaderCompiler is retrofitted onto it in this arc, and that is the point.**
+Adopting the abstraction in its one proven consumer is the honest test of
+whether the design is correct -- if `ShaderCompiler` cannot adopt it without
+distorting, `ServiceThread` is wrong and we find out now rather than after a
+third hand-rolled copy. The constraint is that ShaderCompiler's OBSERVABLE
+behaviour must not change: debounce, coalesce keys, superseded-drop, last-good
+survives a failed compile, `CompileNow`, and main-thread-only
+`Submit`/`Poll`/`Drain` all stay exactly as they are. Its existing
+`[shadercompile]` suite is the regression gate.
+
+**Risk, stated plainly:** this couples a working, load-bearing compile service
+to a boot arc. If the retrofit fights the existing debounce/superseded machinery
+at implementation time, back it out and ship `ServiceThread` with
+`BootSequence` as its only consumer -- the abstraction still earns its keep, and
+`ShaderCompiler` retrofits when the build service provides a third data point.
+Do not force it.
+
 ### `BootPresenter.{hpp,cpp}` -- the frame
 
 Draws and presents exactly one loading frame, and owns nothing but the splash
@@ -441,6 +505,23 @@ not that a stage's body is correct in both modules. Instance 3 was a
 per-module static slot, which is why `type_context_install` also carries the
 `VerifySharedTypeContext` runtime check -- the list test and the in-stage check
 cover different halves.
+
+**`ServiceThread`** (new tag `[threading]`, all headless):
+
+- Destructor stops and joins even with work still queued -- no leak, no detach.
+- `StopRequested()` flips before the thread is joined, so cooperative cancel
+  actually has a window to observe it.
+- Submitted work runs on the service thread, never on the caller's.
+- Destroying immediately after construction (zero work submitted) is clean.
+
+**The ShaderCompiler retrofit's gate is its EXISTING suite, unchanged.** The
+whole point is that observable behaviour does not move: run `[shadercompile]`
+before and after and require the same result. Specifically preserved -- debounce
+coalescing keystrokes, superseded-result drop at `Drain`, last-good staying
+bound through a failed compile, `CompileNow`'s synchronous path, and
+`Submit`/`Poll`/`Drain` remaining main-thread-only. If any of those need a test
+change to pass, the retrofit is distorting the consumer and should be backed out
+per §1.
 
 Plus: `ConsoleBuffer` concurrency test (worker pushes while main reads) beside
 its mutex fix; `ScanContent` progress-callback test (monotonic, terminates at
