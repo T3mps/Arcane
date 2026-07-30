@@ -348,11 +348,19 @@ TEST_CASE("a malformed parent, links, or non-object components field is tolerate
     }
 }
 
-TEST_CASE("CreateEmpty yields a saveable one-entity scene", "[scene][json]")
+TEST_CASE("CreateEmpty yields a saveable scene with a root and a camera", "[scene][json]")
 {
     // SaveJson walks the SceneRoot subtree and returns an EMPTY document when the
     // resource is absent, so New Scene has to establish a root or the first save
     // silently writes nothing.
+    //
+    // Two entities, not one: the camera arc made CreateEmpty ship a "Main Camera"
+    // child, because a scene with no Camera renders nothing in a runtime host and
+    // "author a level, press Play, get a black window" is a terrible first five
+    // minutes (Unity puts a Main Camera in every new scene for the same reason).
+    // The count below is the assertion that keeps that default HONEST -- it is
+    // what proves the camera is inside the saved subtree rather than a sibling of
+    // the root, which SaveJson would silently drop.
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
@@ -371,7 +379,7 @@ TEST_CASE("CreateEmpty yields a saveable one-entity scene", "[scene][json]")
 
     const nlohmann::json doc = Arcane::Scene::SaveJson(reg);
     REQUIRE(doc.contains("entities"));
-    CHECK(doc["entities"].size() == 1);
+    CHECK(doc["entities"].size() == 2);   // the root + its "Main Camera" child
 }
 
 TEST_CASE("SaveSceneFile reports an unwritable path instead of throwing", "[scene][json]")

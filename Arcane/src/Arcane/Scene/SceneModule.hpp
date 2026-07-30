@@ -25,6 +25,12 @@ namespace Arcane
         creg.RegisterComponent<PostProcess>();
         creg.RegisterComponent<Identity>();
         creg.RegisterComponent<Hidden>();
+        // APPEND new engine components here rather than inserting above. Ids are a
+        // monotonic first-touch counter (Runtime.cpp explains the numbering), so
+        // inserting shifts every id after it. Nothing in-process is hurt by a shift
+        // today, but appending costs nothing and keeps the ids of everything already
+        // registered stable.
+        creg.RegisterComponent<Camera>();
     }
 
     inline void RegisterSceneComponents(Astra::Registry& reg)

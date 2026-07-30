@@ -24,6 +24,7 @@
 #include <Arcane/Render/PickBuffer.hpp>   // Arcane::PickBuffer (GPU hit-proxy viewport pick)
 #include <Arcane/Render/SelectionOutline.hpp>   // Arcane::SelectionOutline (Edit-mode viewport outline)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
+#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect)
 #include <Arcane/Scene/TransformSystems.hpp>   // Edit-mode derived-transform refresh
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -845,10 +846,22 @@ namespace Arcane::Editor
         // SubmitRender below; moving it earlier hands the view back to
         // the plugin.
         //
-        // Play mode deliberately does NOT push: the plugin's camera wins
-        // so the game looks like the game.
+        // Play mode pushes the SCENE's camera instead of the editor's, so
+        // play-in-editor shows what a standalone ArcaneRuntime would show --
+        // both now resolve the view from the same place (ActiveSceneCamera).
+        // Falls through to the plugin's own camera when the scene has no
+        // active Camera entity, which is what keeps the Sandbox showcase
+        // (a plugin that drives its own camera) working unchanged.
         if (!m_play.IsPlaying())
+        {
             m_runtime->SetCamera(m_camera.offset, m_camera.zoom);
+        }
+        else if (const auto sceneCam = Arcane::ActiveSceneCamera(
+                     m_runtime->Registry(),
+                     (float)m_viewport->Width(), (float)m_viewport->Height()))
+        {
+            m_runtime->SetCamera(sceneCam->offset, sceneCam->zoom);
+        }
 
         m_viewport->SetPostGlobals(postGlobals);
         m_viewport->SetPostChain(postChain, postInst,
@@ -888,6 +901,45 @@ namespace Arcane::Editor
                 // only (mirrors the interaction gate; no viewport-hover requirement
                 // here -- the gizmo should stay visible while e.g. the mouse is over
                 // the Inspector, just not be interactable there).
+                // Camera rect: what the scene camera will actually capture, drawn
+                // in the EDIT view so framing is authorable without guessing (the
+                // affordance Unity's camera gizmo provides). Edit mode only -- in
+                // Play the view IS the camera, so a rect would just trace the
+                // viewport border.
+                //
+                // Asked for at the camera's OWN aspect (the viewport's), then drawn
+                // through the EDITOR's camera: ActiveSceneCamera reports the authored
+                // worldCenter/halfHeight precisely so a caller can draw the camera
+                // instead of looking through it.
+                if (!m_play.IsPlaying())
+                {
+                    const float vw = (float)m_viewport->Width();
+                    const float vh = (float)m_viewport->Height();
+                    if (const auto cam = Arcane::ActiveSceneCamera(m_runtime->Registry(), vw, vh))
+                    {
+                        const float aspect = (vh > 0.0f) ? (vw / vh) : 1.0f;
+                        const glm::vec2 halfWorld(cam->halfHeight * aspect, cam->halfHeight);
+                        // screen = world * zoom + offset, the one canonical mapping
+                        // (SceneResources.hpp) -- here with the EDITOR's view, which
+                        // the phase above already pushed for this frame.
+                        const glm::vec2 eo = m_runtime->CameraOffset();
+                        const float     ez = m_runtime->CameraZoom();
+                        const glm::vec2 c  = cam->worldCenter * ez + eo;
+                        const glm::vec2 h  = halfWorld * ez;
+                        const glm::vec2 tl(c.x - h.x, c.y - h.y);
+                        const glm::vec2 br(c.x + h.x, c.y + h.y);
+                        // A thin desaturated line stays legible over both bright and
+                        // dark scene content without competing with the selection
+                        // outline or the gizmo axes. (Dashed would read better still,
+                        // but the batcher has no dash primitive.)
+                        const glm::vec4 col(0.45f, 0.62f, 0.78f, 0.75f);
+                        b.Line(glm::vec2(tl.x, tl.y), glm::vec2(br.x, tl.y), 1.0f, col);
+                        b.Line(glm::vec2(br.x, tl.y), glm::vec2(br.x, br.y), 1.0f, col);
+                        b.Line(glm::vec2(br.x, br.y), glm::vec2(tl.x, br.y), 1.0f, col);
+                        b.Line(glm::vec2(tl.x, br.y), glm::vec2(tl.x, tl.y), 1.0f, col);
+                    }
+                }
+
                 if (!m_play.IsPlaying() && m_gizmoEnabled && m_selection.HasSelection())
                 {
                     Astra::Registry& drawReg = m_runtime->Registry();

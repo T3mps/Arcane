@@ -42,4 +42,11 @@ private:
     Arcane::FullscreenMaterialChain*  m_postChain = nullptr;
     const Arcane::MaterialInstance*   m_postInstance = nullptr;
     Arcane::GlobalParams              m_postGlobals{};
+
+    // Scene-camera warnings, latched so a per-frame condition is reported ONCE and
+    // does not bury the log it would be found in (the same warn-once shape the
+    // editor's PostProcess sweep uses). Never reset: a host run is one scene's
+    // worth of complaint, and the log is truncated per launch anyway.
+    bool m_warnedNoSceneCamera    = false;
+    bool m_warnedMultiSceneCamera = false;
 };

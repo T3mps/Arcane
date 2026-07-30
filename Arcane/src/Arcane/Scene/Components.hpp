@@ -99,6 +99,33 @@ namespace Arcane
         Guid material{};
     };
 
+    // The scene's viewpoint. The entity's WorldTransform supplies the POSITION --
+    // there is deliberately none stored here, the same call SpriteRenderer makes
+    // about size, and the same one Unity and Unreal make (a Camera component /
+    // ACameraActor is placed BY its transform; it does not carry one).
+    //
+    // Before this existed the camera was host state driven through
+    // Runtime::SetCamera -- a Sandbox-era artifact from when the physics showcase
+    // owned its own camera class. That made the editor viewport and a standalone
+    // runtime get their view from different places, so a scene could look correct
+    // in the editor and render nothing in the game. A camera IS scene data.
+    //
+    // orthographicSize is the half-HEIGHT of the visible world in METERS -- the
+    // resolution-INDEPENDENT unit (Unity's Camera.orthographicSize). Each host
+    // derives zoom = viewportHalfHeight / orthographicSize per frame, so one scene
+    // frames identically in a 720p runtime window and in a docked editor viewport
+    // of any size. Storing a pixels-per-meter zoom instead would make every scene
+    // wrong at any other window size.
+    //
+    // One scene, one active camera: the FIRST active one wins and >1 warns once,
+    // exactly as PostProcess above resolves. `active` lets a scene keep alternates
+    // (a cutscene angle, a debug wide shot) without deleting them.
+    struct Camera
+    {
+        float orthographicSize = 5.0f;   // half-height of the view, in meters
+        bool  active = true;
+    };
+
     // The editor-facing identity (Outliner arc): a STABLE Guid + display name.
     // Policy: the EDITOR adds this AT ENTITY CREATION ONLY (Edit::CreateEntity,
     // and scene load); runtime spawns are never forced to carry strings. A
@@ -209,6 +236,18 @@ namespace Arcane
     // One field, so no Category -- see Transform above.
     ASTRA_REFLECT_TYPE(PostProcess)
         ASTRA_REFLECT_FIELD(PostProcess, material)
+    ASTRA_END_REFLECT_TYPE()
+
+    // Two fields of one concern, so no Category (same rule as PostProcess above).
+    // The Range floor is deliberately above zero: a zero or negative half-height
+    // has no view to derive, and ActiveSceneCamera treats it as "no camera" rather
+    // than dividing by it.
+    ASTRA_REFLECT_TYPE(Camera)
+        ASTRA_REFLECT_FIELD(Camera, orthographicSize)
+            ASTRA_REFLECT_ATTR(Tooltip, "Half-height of the visible world, in meters. Resolution-independent: each host derives its zoom from the viewport height, so the framing holds at any window size.")
+            ASTRA_REFLECT_ATTR(Range, 0.01, 10000.0, 0.1)
+        ASTRA_REFLECT_FIELD(Camera, active)
+            ASTRA_REFLECT_ATTR(Tooltip, "Only active cameras are considered; the first one found renders the scene.")
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(Identity)

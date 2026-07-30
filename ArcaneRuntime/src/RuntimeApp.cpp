@@ -17,6 +17,7 @@
 #include <Arcane/Render/Batcher2D.hpp>   // Arcane::Batch2DStats (loop HUD + perf tick)
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/FullscreenMaterialChain.hpp>   // scene post hook
+#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (the scene owns the view)
 
 #include <Astra/Core/TypeContext.hpp>
 
@@ -271,6 +272,34 @@ void RuntimeApp::MainLoop()
         // in the correct module; then drive the plugin's RenderSubmissionSystem.
         // ArcaneRuntime stays camera-agnostic: SetRenderContext writes the STORED camera the
         // plugin drives via Runtime::SetCamera (default identity if it never does).
+        // Scene camera: the ACTIVE Camera entity owns the view. Pushed HERE, after
+        // the plugin's update ran, so a scene that ships a camera beats a plugin
+        // that also pushes one -- the scene is the authored artifact. No camera
+        // leaves the stored camera untouched (a plugin-driven camera, e.g. the
+        // Sandbox showcase, therefore still works exactly as before) and says so
+        // once, rather than substituting an identity view that would render an
+        // older scene as an unexplained black window.
+        {
+            int camCount = 0;
+            const auto view = Arcane::ActiveSceneCamera(m_runtime->Registry(),
+                                                        (float)m_gpu->Cnv().Width(),
+                                                        (float)m_gpu->Cnv().Height(),
+                                                        &camCount);
+            if (view)
+                m_runtime->SetCamera(view->offset, view->zoom);
+            else if (!m_warnedNoSceneCamera)
+            {
+                ARC_WARN("scene has no active Camera entity -- nothing sets the view. "
+                         "Add a Camera component to an entity (a New Scene ships one).");
+                m_warnedNoSceneCamera = true;
+            }
+            if (camCount > 1 && !m_warnedMultiSceneCamera)
+            {
+                ARC_WARN("scene carries {} active Camera entities -- the first found wins", camCount);
+                m_warnedMultiSceneCamera = true;
+            }
+        }
+
         {
             const auto t0 = m_perf.On() ? m_perf.Now() : Arcane::FramePerf::Clock::time_point{};
             m_runtime->SetRenderContext(&m_gpu->Batch());

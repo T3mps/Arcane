@@ -206,11 +206,17 @@ namespace Arcane::Scene
                                   const Arcane::Guid& id, std::string* error);
 
     // The New Scene registry shape: one root entity carrying Transform +
-    // Identity, published as the SceneRoot resource.
+    // Identity, published as the SceneRoot resource, with a "Main Camera" child.
     //
     // Not optional. SaveJson walks the SceneRoot subtree and returns an EMPTY
     // document when the resource is absent, so a New Scene without this would
     // save nothing at all and report success.
+    //
+    // The camera ships with the scene for the same reason Unity puts a Main Camera
+    // in every new scene: a scene with no camera renders nothing in a runtime host,
+    // and "author a level, press Play, get a black window" is a terrible first
+    // five minutes. It is an ORDINARY entity -- deletable, movable, renameable,
+    // and re-addable through Add Component -- not a hidden fixture.
     inline Astra::Entity CreateEmpty(Astra::Registry& reg)
     {
         const Astra::Entity root = reg.CreateEntity();
@@ -218,6 +224,17 @@ namespace Arcane::Scene
         reg.AddComponent<Arcane::Identity>(root,
                                              Arcane::Identity{Arcane::Guid::Generate(), "Scene"});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+        // Parented under the root: SaveJson and TransformPropagationSystem both walk
+        // ONLY the SceneRoot subtree, so a camera created as a SIBLING of the root
+        // would never propagate a WorldTransform and would be dropped by the next
+        // save (the hazard Edit::CreateSceneEntity exists to prevent).
+        const Astra::Entity camera = reg.CreateEntity();
+        reg.AddComponent<Arcane::Transform>(camera, Arcane::Transform{});
+        reg.AddComponent<Arcane::Camera>(camera, Arcane::Camera{});
+        reg.AddComponent<Arcane::Identity>(camera,
+                                             Arcane::Identity{Arcane::Guid::Generate(), "Main Camera"});
+        reg.SetParent(camera, root);
         return root;
     }
 }
