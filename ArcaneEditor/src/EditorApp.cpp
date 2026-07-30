@@ -442,26 +442,14 @@ namespace Arcane::Editor
                 // through sprite field edits in the order they happened
                 // alongside everything else.
                 spriteDocServices.undo = m_undo ? &*m_undo : nullptr;
+                // Evict-then-re-resolve on a sprite re-save. The no-gap
+                // requirement (a frame must never render the 1x1 placeholder in
+                // between) is the resolver's contract now, so this is one call:
+                // SceneRenderResolver::InvalidateSprite.
                 spriteDocServices.invalidateSprite = [this](const Arcane::Guid& g)
                 {
-                    if (m_sprites)
-                    {
-                        // Invalidate THEN Request synchronously, not Invalidate alone:
-                        // RenderSceneToViewport (EditorAppFrame.cpp:127) runs BEFORE
-                        // PumpShaderEditor's re-Request (EditorAppFrame.cpp:130), so an
-                        // Invalidate-only callback would erase the entry and let the
-                        // very next frame draw the 1x1 placeholder before anything
-                        // re-resolved it. SpriteCache::Request is synchronous (no async
-                        // compile step like SpriteMaterialCache), so calling it here
-                        // re-resolves the entry before this callback returns -- no
-                        // frame ever renders without it. Same no-gap property
-                        // SpriteMaterialCache gets from its needsRefresh/last-good
-                        // scheme (SpriteMaterialCache.hpp:67-70), just achieved
-                        // synchronously here instead of keeping the stale entry bound
-                        // until a fresh compile lands.
-                        m_sprites->Invalidate(g);
-                        m_sprites->Request(g);
-                    }
+                    if (m_resolver)
+                        m_resolver->InvalidateSprite(g);
                 };
                 return std::make_unique<Arcane::Editor::SpriteDocument>(
                     std::move(spriteDocServices), p, std::move(*data));
@@ -474,59 +462,38 @@ namespace Arcane::Editor
             };
         m_documents.RegisterFactory(".arcsprite", spriteFactory, spritePeek);
 
-        // Scene sprite materials (Slice 8): SAVED .arcmat assets referenced by
-        // SpriteRenderer::material compile through the same service and
-        // register with the viewport's scene batcher.
+        // Scene asset resolution (sprite-resolution lift): ONE engine-side
+        // service resolves everything a scene references into what the
+        // submission path can bind -- sprites (.arcsprite -> texture/UVs/size/
+        // pivot), sprite materials and the post chain (.arcmat -> a registered
+        // batcher material / a bound FullscreenMaterialChain). It owns the three
+        // caches, the asset resolver, and the compile drain site; the editor
+        // keeps only the compile SERVICE (documents submit through it) and hands
+        // the resolver the document routing below.
         {
-            const auto resolveAsset = [rt = &*m_runtime](const Arcane::Guid& g)
-                -> std::optional<std::filesystem::path>
+            Arcane::SceneRenderResolver::Services rs;
+            rs.runtime  = &*m_runtime;
+            rs.batcher  = &m_viewport->Batch();   // scene batcher: material binds + texture eviction
+            rs.device   = m_gpu->Device().Nvrhi();
+            rs.backend  = m_gpu->Device().Backend();
+            rs.compiler = m_shaderCompiler.get();
+            rs.sources  = &m_shaderSources;
+            // Open shader documents get first refusal on every drained result,
+            // the order the editor has always used: a document's compiles and a
+            // cache's compiles for the SAME asset ride disjoint coalesce keys,
+            // so neither claims the other's.
+            rs.consumeFirst = [this](const Arcane::ShaderCompileResult& r) -> bool
             {
-                const Arcane::Project* project = rt->CurrentProject();
-                return project ? project->ResolveAsset(Arcane::AssetId::FromGuid(g))
-                               : std::nullopt;
+                bool consumed = false;
+                m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+                {
+                    if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d))
+                        consumed = doc->ConsumeResult(r) || consumed;
+                });
+                return consumed;
             };
-            Arcane::SpriteMaterialCache::Services cacheServices;
-            cacheServices.compiler = m_shaderCompiler.get();
-            cacheServices.sources = &m_shaderSources;
-            cacheServices.assets = &m_runtime->AssetsFacade();
-            cacheServices.device = m_gpu->Device().Nvrhi();
-            cacheServices.backend = m_gpu->Device().Backend();
-            cacheServices.resolveAsset = resolveAsset;
-            m_spriteMaterials =
-                std::make_unique<Arcane::SpriteMaterialCache>(std::move(cacheServices));
-
-            // Sprite-asset arc, Task 3: SpriteRenderer::sprite's .arcsprite
-            // Guids resolve into SpriteEntry records through the same Assets
-            // facade as the material cache above, plus the viewport's scene
-            // batcher for texture eviction (RemoveTexture --
-            // Batcher2D.hpp:181-191). The resolver lambda is AssetId-shaped
-            // (not Guid-shaped like resolveAsset above) because
-            // Project::ResolveAsset already takes an AssetId -- no Guid
-            // round-trip needed.
-            Arcane::Editor::SpriteCache::Services spriteServices;
-            spriteServices.assets = &m_runtime->AssetsFacade();
-            spriteServices.batcher = &m_viewport->Batch();
-            spriteServices.resolveAsset =
-                [rt = &*m_runtime](const Arcane::AssetId& assetId)
-                    -> std::optional<std::filesystem::path>
-            {
-                const Arcane::Project* project = rt->CurrentProject();
-                return project ? project->ResolveAsset(assetId) : std::nullopt;
-            };
-            m_sprites =
-                std::make_unique<Arcane::Editor::SpriteCache>(std::move(spriteServices));
-
-            // Post-chain twin (post arc, slice 2): same services, same drain
-            // site; slice 3's PostProcess sweep drives Request.
-            Arcane::PostChainCache::Services postServices;
-            postServices.compiler = m_shaderCompiler.get();
-            postServices.sources = &m_shaderSources;
-            postServices.assets = &m_runtime->AssetsFacade();
-            postServices.device = m_gpu->Device().Nvrhi();
-            postServices.backend = m_gpu->Device().Backend();
-            postServices.resolveAsset = resolveAsset;
-            m_postChains =
-                std::make_unique<Arcane::PostChainCache>(std::move(postServices));
+            m_resolver =
+                std::make_unique<Arcane::SceneRenderResolver>(std::move(rs));
         }
 
         // Sprite-asset arc, Task 4: built once here rather than per-frame in

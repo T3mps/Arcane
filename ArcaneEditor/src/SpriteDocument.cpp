@@ -115,7 +115,7 @@ namespace Arcane::Editor
         // offering a redundant save, never toward silently dropping one.
         m_dirty = true;
         // Same republish Save does, and for the same reason: SpriteCache's
-        // resolve is a once-per-Guid cache (SpriteCache.cpp:20), so without
+        // resolve is a once-per-Guid cache (Render/SpriteCache.cpp:37), so without
         // this the viewport would keep drawing the PRE-undo geometry. An undo
         // the user cannot see in the scene is indistinguishable from an undo
         // that did not happen.
@@ -142,7 +142,7 @@ namespace Arcane::Editor
             return false;   // failed save: m_dirty stays set, edits are not silently lost
         m_dirty = false;
         // The SpriteCache resolve this replaces is otherwise permanent (once-per-Guid,
-        // SpriteCache.cpp:20) -- without this call the viewport keeps showing the
+        // Render/SpriteCache.cpp:37) -- without this call the viewport keeps showing the
         // PRE-edit geometry/texture until something else evicts the entry.
         if (m_services.invalidateSprite)
             m_services.invalidateSprite(m_data.id);
@@ -311,7 +311,7 @@ namespace Arcane::Editor
 
                 // Outline the resolved sub-rect. Reuses ComputeSpriteGeom
                 // (SpriteAsset.cpp:101-117) -- the SAME function
-                // SpriteCache::Request calls at SpriteCache.cpp:71 to build
+                // SpriteCache::Request calls at Render/SpriteCache.cpp:88 to build
                 // what actually renders -- rather than re-deriving the
                 // fullRect/pos/size branch here, so this outline can never
                 // drift out of sync with the real geometry (including its

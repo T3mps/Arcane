@@ -57,11 +57,11 @@ namespace Arcane::Editor
             // lost edit.
             Arcane::CommandStack* undo = nullptr;
             // Fired after a successful Save with the asset's Guid -- lets the
-            // app's SpriteCache drop its cached resolve (SpriteCache.hpp:
-            // 60-67 Invalidate), so the NEXT Request() re-reads the saved
-            // file. This is the whole mechanism that makes an edit show up
-            // in the viewport (SpriteCache::Request is otherwise a
-            // once-per-Guid cache, SpriteCache.cpp:20).
+            // app's SpriteCache drop its cached resolve
+            // (Render/SpriteCache.hpp:69-76 Invalidate), so the NEXT Request()
+            // re-reads the saved file. This is the whole mechanism that makes
+            // an edit show up in the viewport (SpriteCache::Request is
+            // otherwise a once-per-Guid cache, Render/SpriteCache.cpp:37).
             std::function<void(const Arcane::Guid&)> invalidateSprite;
         };
 

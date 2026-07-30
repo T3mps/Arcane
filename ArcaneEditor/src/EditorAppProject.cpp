@@ -41,10 +41,8 @@ namespace Arcane::Editor
         s.backend  = m_gpu->Device().Backend();
         s.onAssetSaved = [this](const Arcane::Guid& id)
         {
-            if (m_spriteMaterials)
-                m_spriteMaterials->Invalidate(id);
-            if (m_postChains)
-                m_postChains->Invalidate(id);
+            if (m_resolver)
+                m_resolver->InvalidateMaterial(id);
             // Re-baseline the file watcher: our own save is not an external
             // edit and must not bounce back as a reload.
             if (const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject()
@@ -105,10 +103,8 @@ namespace Arcane::Editor
             // a warn (dirty -- never stomped), and open documents whose
             // PARENT chain contains it re-resolve + recompile.
             ARC_INFO("material '{}' changed on disk", e.name);
-            if (m_spriteMaterials)
-                m_spriteMaterials->Invalidate(e.guid);
-            if (m_postChains)
-                m_postChains->Invalidate(e.guid);
+            if (m_resolver)
+                m_resolver->InvalidateMaterial(e.guid);
             m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
             {
                 auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
@@ -369,15 +365,12 @@ namespace Arcane::Editor
             return;
         }
         m_documents.CloseAll();
-        // Materials resolved against the outgoing project's registry.
-        if (m_spriteMaterials)
-            m_spriteMaterials->Clear();
-        if (m_postChains)
-            m_postChains->Clear();
-        // Sprite-asset arc, Task 3 review fix (F2): sprites resolve through
-        // the same outgoing-project registry, so they need the same Clear.
-        if (m_sprites)
-            m_sprites->Clear();
+        // Sprites, materials and the post chain all resolved against the
+        // OUTGOING project's registry, so all three caches drop together (one
+        // Clear since the sprite-resolution lift; it was three calls, and the
+        // sprite one had to be added as a review fix after being forgotten).
+        if (m_resolver)
+            m_resolver->Clear();
 
         // Return to Edit + clear editor state that references the outgoing scene.
         ClearSceneReferences();

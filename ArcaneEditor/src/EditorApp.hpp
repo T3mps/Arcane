@@ -27,7 +27,6 @@
 #include "SceneSession.hpp"
 #include "SelectionContext.hpp"
 #include "ShaderEditorDocument.hpp"
-#include "SpriteCache.hpp"
 #include "ViewportInput.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
@@ -36,13 +35,12 @@
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Render/OffscreenCanvas.hpp>
 #include <Arcane/Render/PickBuffer.hpp>
-#include <Arcane/Render/PostChainCache.hpp>
 #include <Arcane/Render/SelectionOutline.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
-#include <Arcane/Render/SpriteMaterialCache.hpp>
 
 #include <spdlog/sinks/callback_sink.h>
 
@@ -140,11 +138,11 @@ namespace Arcane::Editor
                                     float lx, float ly, bool gameUiClaims);
         void AdvanceSim(LoopState& ls);
         void ApplyPendingViewportResize();
-        void UpdateScenePostChain();
+        void RefreshSceneResolution();
         void RenderSceneToViewport();
         void CompositeGameUi();
         void RenderSelectionOutline();
-        void PumpShaderEditor();
+        void PumpEditorDocuments();
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
         void DrawModals(LoopState& ls);
         void DrawViewportPanelPhase(FrameState& fs);
@@ -402,31 +400,24 @@ namespace Arcane::Editor
         std::unique_ptr<Arcane::SelectionOutline> m_outline;
 
         // Shader-editor services + open documents (Slice 5). The compiler is the
-        // app-shared compile service (documents Submit through it; PumpShaderEditor
-        // Polls/Drains it once per frame and routes results to documents -- the
-        // drain site is the ONE place compile results become NVRHI shaders).
+        // app-shared compile service: documents Submit through it, and the
+        // resolver's Refresh (phase 9) Polls/Drains it once per frame, offering
+        // each result to the open documents first -- that drain is the ONE place
+        // compile results become NVRHI shaders.
         // Documents hold NVRHI resources -> declared after m_gpu (destruct
         // before the device) and after m_runtime (they borrow its Assets).
         std::unique_ptr<Arcane::ShaderCompiler> m_shaderCompiler;
         Arcane::ShaderSourceProvider            m_shaderSources;
-        // Scene sprite materials (Slice 8): resolves SAVED .arcmat assets
-        // referenced by SpriteRenderer::material into registered Batcher2D
-        // materials; the drain site feeds it, the frame loop publishes its
-        // table through Runtime::SetSpriteMaterials.
-        std::unique_ptr<Arcane::SpriteMaterialCache> m_spriteMaterials;
-        // Sprite-asset arc, Task 3: resolves SpriteRenderer::sprite's
-        // .arcsprite Guids into Arcane::SpriteEntry records (texture + UVs +
-        // size + pivot). Synchronous (no compile pipeline, unlike the
-        // material cache above) -- constructed beside it from the same
-        // services, swept in the same PumpShaderEditor loop, and published
-        // through Runtime::SetSpriteTable.
-        std::unique_ptr<Arcane::Editor::SpriteCache> m_sprites;
-        // Scene post chain (post arc, slice 2): resolves the assigned post
-        // material into a bound FullscreenMaterialChain for the viewport's
-        // SetPostChain hook. Same drain site, same invalidation rides
-        // (onAssetSaved + the material watcher); slice 3's PostProcess sweep
-        // drives Request and hands Chain()/Instance() to the viewport.
-        std::unique_ptr<Arcane::PostChainCache> m_postChains;
+        // Scene asset resolution (sprite-resolution lift, 2026-07-29): ONE
+        // engine-side service owning the sprite / sprite-material / post-chain
+        // caches, swept and published once per frame by RefreshSceneResolution.
+        // It replaced three editor-held caches -- and the editor holding them was
+        // exactly why the standalone runtime host could draw none of the three.
+        // ArcaneRuntime now constructs the same object. It publishes the
+        // registry's SpriteTable/SpriteMaterialTable, whose pointers are
+        // non-owning, so it MUST destruct before m_runtime -- which it does,
+        // being declared after it (reverse-order destruction).
+        std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
         Arcane::Editor::AssetBrowserState       m_assetBrowser;
         double m_editorClock = 0.0;   // the compile service's Poll/Submit clock
@@ -439,9 +430,6 @@ namespace Arcane::Editor
         void PollMaterialWatch();
         std::unordered_map<std::string, std::filesystem::file_time_type> m_materialMtimes;
         double m_materialWatchNext = 0.0;
-        // >1 PostProcess assignments in the scene: warned once, reset when the
-        // count drops back (the post sweep in UpdateScenePostChain).
-        bool m_warnedMultiPost = false;
 
         // Async file-dialog results for the material flows (same background-
         // thread stash pattern as m_pendingProjectPath below).

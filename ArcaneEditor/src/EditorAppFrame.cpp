@@ -124,11 +124,11 @@ namespace Arcane::Editor
             FrameInput(ls, fs);
             AdvanceSim(ls);
             ApplyPendingViewportResize();
-            UpdateScenePostChain();
+            RefreshSceneResolution();
             RenderSceneToViewport();
             CompositeGameUi();
             RenderSelectionOutline();
-            PumpShaderEditor();
+            PumpEditorDocuments();
             DrawEditorUi(ls, fs);
             DrawModals(ls);
             DrawViewportPanelPhase(fs);
@@ -772,52 +772,50 @@ namespace Arcane::Editor
         }
     }
 
-    // Phase 9: post-chain sweep + the Edit-mode derived-transform refresh +
-    // the SECOND camera push. All three sit immediately before the scene
+    // Phase 9: scene asset resolution + the Edit-mode derived-transform refresh
+    // + the SECOND camera push. All three sit immediately before the scene
     // submit in the next phase, and each says below why it has to.
-    void EditorApp::UpdateScenePostChain()
+    void EditorApp::RefreshSceneResolution()
     {
-        // Scene post chain (post arc, slice 3): sweep for the assignment and
-        // feed the viewport hook from the CURRENT cache state. The FIRST
-        // entity with a valid PostProcess.material wins (>1 warns once);
-        // none/unresolved leaves the hook null -- today's path. Chain/
-        // Instance are re-fetched every frame BEFORE Draw: last frame's
-        // drain may have swapped the bound instance under a re-save.
-        Arcane::Guid postId{};
-        int postCount = 0;
-        m_runtime->Registry().CreateView<Arcane::PostProcess>().ForEach(
-            [&](Astra::Entity, Arcane::PostProcess& pp)
-        {
-            if (!pp.material.IsValid())
-                return;
-            if (postCount++ == 0)
-                postId = pp.material;
-        });
-        if (postCount > 1)
-        {
-            if (!m_warnedMultiPost)
-                ARC_WARN("scene carries {} PostProcess assignments -- "
-                         "the first found wins", postCount);
-            m_warnedMultiPost = true;
-        }
-        else
-        {
-            m_warnedMultiPost = false;
-        }
+        // Sprite / sprite-material / post-chain resolution, in ONE engine-side
+        // call the standalone runtime host makes too (sprite-resolution lift).
+        // It sweeps the scene for referenced Guids, pumps the compile service
+        // (routing results to open documents first, via the consumeFirst hook
+        // installed in EditorApp::Init), and publishes the registry's
+        // SpriteTable + SpriteMaterialTable.
+        //
+        // WHY HERE, before RenderSceneToViewport rather than after it: the
+        // tables this publishes are what THIS frame's submission reads. The
+        // pre-lift editor swept and published in phase 13, AFTER the scene
+        // render, so every table update was one frame late -- a newly referenced
+        // sprite drew the 1x1 placeholder for a frame first. It also must stay
+        // outside the frame batcher's Begin/End, since the drain REGISTERS
+        // materials with it.
+        //
+        // The compile clock advances here (phase 13 advanced it pre-lift) because
+        // everything downstream -- Request debounce, material globals, document
+        // Submits -- reads it, and it must advance exactly ONCE per frame.
+        m_editorClock += m_lastFrameDt;
 
         Arcane::FullscreenMaterialChain* postChain = nullptr;
         const Arcane::MaterialInstance* postInst = nullptr;
-        if (postId.IsValid() && m_postChains)
-        {
-            m_postChains->Request(postId, m_editorClock);
-            postChain = m_postChains->Chain(postId);
-            postInst = m_postChains->Instance(postId);
-        }
         Arcane::GlobalParams postGlobals;
-        postGlobals.time = (float)m_editorClock;
-        postGlobals.deltaTime = (float)m_lastFrameDt;
-        postGlobals.viewportWidth = (float)m_viewport->Width();
-        postGlobals.viewportHeight = (float)m_viewport->Height();
+        if (m_resolver)
+        {
+            Arcane::SceneRenderResolver::FrameInfo frame;
+            frame.now            = m_editorClock;
+            frame.dt             = m_lastFrameDt;
+            frame.viewportWidth  = (float)m_viewport->Width();
+            frame.viewportHeight = (float)m_viewport->Height();
+            m_resolver->Refresh(frame);
+
+            // Read AFTER Refresh: a drain may have swapped the bound instance
+            // under an asset re-save, and the sweep decides which Guid is the
+            // scene's post assignment at all.
+            postChain  = m_resolver->PostChain();
+            postInst   = m_resolver->PostInstance();
+            postGlobals = m_resolver->Globals();
+        }
         // Derived transforms, refreshed for THIS frame before anything reads
         // them.
         //
@@ -883,13 +881,12 @@ namespace Arcane::Editor
             [&](Arcane::Batcher2D& b)
             {
                 // Globals for registered sprite materials (Time/Delta/
-                // Viewport); built-in pipelines ignore them.
-                Arcane::GlobalParams sceneGlobals;
-                sceneGlobals.time = (float)m_editorClock;
-                sceneGlobals.deltaTime = (float)m_lastFrameDt;
-                sceneGlobals.viewportWidth = (float)m_viewport->Width();
-                sceneGlobals.viewportHeight = (float)m_viewport->Height();
-                b.SetGlobals(sceneGlobals);
+                // Viewport); built-in pipelines ignore them. Taken from the
+                // resolver, which built them from the same frame in phase 9 --
+                // this used to be a second hand-rolled copy of the same four
+                // fields, and two copies of one fact is how the editor and the
+                // runtime drifted apart in the first place.
+                b.SetGlobals(m_resolver ? m_resolver->Globals() : Arcane::GlobalParams{});
 
                 m_runtime->SetRenderContext(&b);
                 m_runtime->Loop().SubmitRender();
@@ -1043,76 +1040,17 @@ namespace Arcane::Editor
         }
     }
 
-    // Phase 13: the compile-service pump. This is the ONE drain site where
-    // compile results become NVRHI shaders; it also advances m_editorClock,
-    // which every phase above reads as "this frame's time".
-    void EditorApp::PumpShaderEditor()
+    // Phase 13: the editor's own document upkeep. The compile pump that used to
+    // live here -- Poll/Drain, the scene sweep, the table publish and the clock
+    // advance -- moved into SceneRenderResolver::Refresh (phase 9) when
+    // resolution was lifted into the engine so both hosts share it. Open
+    // documents still get first refusal on every drained result through the
+    // consumeFirst hook installed in EditorApp::Init, so the process still has
+    // exactly ONE drain site. What stays is what only an editor has: the
+    // external-edit watcher and the per-document tick (each document renders its
+    // preview on its own OffscreenCanvas).
+    void EditorApp::PumpEditorDocuments()
     {
-        // Shader-editor pump (Slice 5): advance the compile clock, dispatch
-        // due jobs, and route drained results to their documents AND the
-        // sprite-material cache -- the ONE drain site where compile results
-        // become NVRHI shaders. Then tick every document (preview render on
-        // its own OffscreenCanvas).
-        m_editorClock += m_lastFrameDt;
-        // Sprite-asset arc, Task 3 review fix (F1): compilerAvailable now
-        // gates ONLY the material path (Request + the Poll/Drain/Consume
-        // block below), not the sprite-asset sweep. It used to wrap the
-        // whole sweep, but SpriteCache::Request has no compile-pipeline
-        // dependency at all -- it is a synchronous JSON-load + Assets-facade
-        // resolve -- and ShaderCompiler::IsAvailable() (ShaderCompiler.hpp:
-        // 108-113) is literally "did dxcompiler.dll/dxil.dll load". Under
-        // the old gate, a DXC-less machine would silently never resolve ANY
-        // sprite (not even the negative-result default entry), so every
-        // sprite rendered as an indistinguishable untextured 1x1 tint quad
-        // with no diagnostic. The material path's own condition is
-        // unchanged (still exactly `m_shaderCompiler &&
-        // m_shaderCompiler->IsAvailable()`, just named instead of inlined),
-        // so material behavior is byte-identical to before this fix.
-        const bool compilerAvailable = m_shaderCompiler && m_shaderCompiler->IsAvailable();
-
-        // Sweep the scene once per frame for BOTH per-SpriteRenderer Guids --
-        // one CreateView<SpriteRenderer> walk covers s.material (Slice 8,
-        // gated on compilerAvailable) and s.sprite (sprite-asset arc Task 3,
-        // ungated) so this fix does not add a second full component-view
-        // pass per frame. Request no-ops once a Guid is known either way, so
-        // this is a cheap per-frame guarantee that whatever the scene
-        // references is compiling/bound (materials) or resolved (sprites).
-        if (m_spriteMaterials || m_sprites)
-        {
-            auto sprites = m_runtime->Registry().CreateView<Arcane::SpriteRenderer>();
-            sprites.ForEach([&](Astra::Entity, Arcane::SpriteRenderer& s)
-            {
-                if (compilerAvailable && m_spriteMaterials && s.material.IsValid())
-                    m_spriteMaterials->Request(s.material, m_editorClock);
-                if (m_sprites && s.sprite.IsValid())
-                    m_sprites->Request(s.sprite);
-            });
-        }
-
-        if (compilerAvailable)
-        {
-            m_shaderCompiler->Poll(m_editorClock);
-            for (const Arcane::ShaderCompileResult& r : m_shaderCompiler->Drain())
-            {
-                bool consumed = false;
-                m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
-                {
-                    if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d))
-                        consumed = doc->ConsumeResult(r) || consumed;
-                });
-                if (!consumed && m_spriteMaterials)
-                    consumed = m_spriteMaterials->ConsumeResult(r, m_viewport->Batch());
-                if (!consumed && m_postChains)
-                    m_postChains->ConsumeResult(r);
-            }
-        }
-        // Publish the resolution table every frame (the map's address is
-        // stable; re-setting keeps the resource honest across project
-        // switches and registry swaps).
-        if (m_spriteMaterials)
-            m_runtime->SetSpriteMaterials(&m_spriteMaterials->Table());
-        if (m_sprites)
-            m_runtime->SetSpriteTable(&m_sprites->Table());
         PollMaterialWatch();   // external .arcmat edits (~1 Hz mtime sweep)
         m_documents.TickAll(m_lastFrameDt);
     }
