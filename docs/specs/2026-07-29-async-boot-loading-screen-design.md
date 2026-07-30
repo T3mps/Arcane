@@ -74,6 +74,22 @@ Ordering is a stable Kahn topological sort -- the same shape as
 `TopoSortPasses` in the material pass chain, so it reads like existing engine
 code. Cycles are refused at `Run()` with the offending stage names.
 
+**Why a DAG at all, stated so it is not cargo-culted later.** The graph exists
+for exactly ONE overlap: `project_open` (filesystem) against `gpu_core` (device
+creation). Absent that, ordered buckets would be simpler and sufficient -- which
+is what UE actually uses: `ELoadingPhase` is an enum pumped by a flat `for` loop
+(`ModuleDescriptor.cpp:741-764`) with no sort at all. UE *ships*
+`Algo/KahnTopologicalSort.h` but applies it to cooking and blueprint
+compilation, never to boot, and carries a `@todo` at `:751-754` conceding that
+module load order is unverified. UE's boot is sequential and repeatedly JOINS on
+background work rather than overlapping it (`WaitForAsyncTasks` at
+`LaunchEngineLoop.cpp:2907`, `:3502`, `:4103`).
+
+Take that as a caution: **every new Worker stage must carry its own
+disjoint-ownership proof** (the one in §2 for `project_open` was verified, not
+assumed). Sequential-and-join is the safer default; parallelism here is a
+deliberate, narrow exception, not the house style.
+
 ### `BootPresenter.{hpp,cpp}` -- the frame
 
 Draws and presents exactly one loading frame, and owns nothing but the splash
@@ -88,6 +104,40 @@ Two modes:
 
 - **Fullscreen** (boot): the whole backbuffer is the splash.
 - **Overlay** (project switch): a modal panel over the last editor frame.
+
+### `BootSplashWindow.{hpp,cpp}` -- the pre-device splash (added 2026-07-30)
+
+**The gap this closes.** `BootPresenter` cannot present until `gpu_core`
+finishes, because it renders through the real swapchain and ImGui. The original
+draft called that harmless "because the window is hidden" -- but the actual
+experience is *click, then ~1s of nothing at all*, which reads as a failed
+launch. That is a regression against the very problem this arc exists to fix.
+
+UE does not have this gap, and the reason is architectural: its splash is a
+separate OS window on its own thread (`WindowsPlatformSplash.cpp:722` creates
+the thread; the thread entry at `:407` registers its own `WNDCLASS` and
+`WndProc`), shown at `LaunchEngineLoop.cpp:2913-2917` **deliberately before**
+`FSlateApplication::Create()` at `:2920` -- the comment at `:2891` states it
+must precede any window. It needs no graphics device because it blits a bitmap
+with GDI.
+
+We copy that shape:
+
+- A plain OS window on its own thread, created at the very top of `main()`,
+  before `BootSequence` and long before `gpu_core`. No device, no swapchain,
+  no ImGui -- a static image (and, in the editor, one line of status text).
+- Torn down by `splash_ready`, which is also the frame that calls
+  `Window::Show()` on the real window. Ordering matters: show the real window
+  *first*, then close the pre-device splash, so there is never a frame with
+  neither on screen. UE gets this right in the game host by hiding its splash
+  during the first `Tick` rather than at the end of `Init`
+  (`GameEngine.cpp:1975`, on a `static bool bFirstTime`).
+- **Windows-only to start.** Elsewhere it compiles to a no-op and boot behaves
+  as the original draft described. This is a UX nicety, not a correctness
+  requirement, and it must never be able to fail boot.
+- It is NOT a `BootSequence` stage. It has to exist before the sequence does,
+  and it must not participate in the DAG, the progress model, or the failure
+  policies.
 
 ### `BootProgress` -- the cross-thread surface
 
@@ -312,11 +362,19 @@ manifest:
   "enabled": true,
   "image": "game://Branding/splash.png",
   "backgroundColor": [0.05, 0.05, 0.06],
-  "showProgress": true,
+  "showProgress": false,
   "minDurationSeconds": 0.0
 }
 ```
 
+- `showProgress` **defaults to `false` for the runtime host** (changed
+  2026-07-30). The editor always shows progress; a player does not care that we
+  are scanning asset 412 of 1180. UE reached the same conclusion and enforces it
+  structurally: `FFeedbackContext::ProgressReported` is a no-op base
+  (`FeedbackContext.h:103`) and only the editor overrides it
+  (`FeedbackContextEditor.cpp:664-669`), with the splash backend commenting at
+  `WindowsPlatformSplash.cpp:783-790` that startup progress is *"not interesting
+  to an end-user"*. Opt in per project if you want it.
 - Block absent -> Arcane engine branding.
 - `"enabled": false` -> no splash at all; the window stays hidden until the
   game's first real frame, so a game wanting a fully custom loading experience
@@ -400,8 +458,15 @@ that matter are that `--frames N` scripted runs still work and the existing
 
 ## 9. Desk-verify checklist
 
-1. Editor cold start on a real project: no black window at any point -- nothing,
-   then the splash, then the editor.
+1. Editor cold start on a real project: **something is on screen within ~100ms
+   of the click** (the pre-device splash), then the real window takes over, then
+   the editor. At no point is there a black window, and at no point is there a
+   second of nothing.
+1b. Watch the pre-device -> real-window handoff frame by frame: the real window
+   must appear BEFORE the pre-device splash closes. A flicker of empty desktop
+   between them is the bug this ordering exists to prevent.
+1c. Kill the pre-device splash path (or run on a non-Windows build) and confirm
+   boot still completes normally -- it must never be able to fail boot.
 2. Bar advances from both stages (it should move during the scan while the GPU
    chain is still building) and reaches 100% without going backwards.
 2b. Splash text renders in Roboto from the first frame -- no stock-ImGui font
