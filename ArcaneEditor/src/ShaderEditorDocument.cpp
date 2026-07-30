@@ -2,6 +2,7 @@
 
 #include "AssetBrowser.hpp"
 #include "EditorTheme.hpp"
+#include "EditorWidgets.hpp"   // ColorField4: the editor's one colour widget
 #include "IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "GraphGridPass.hpp"
 #include "MaterialParamWidgets.hpp"
@@ -5823,7 +5824,21 @@ namespace Arcane::Editor
                     edited = ImGui::DragFloat4(d.name.c_str(), value.f, 0.01f);
                     break;
                 case ParamWidget::ColorEdit:
-                    edited = ImGui::ColorEdit4(d.name.c_str(), value.f);
+                    // The same colour widget the Inspector uses: 0-255 sRGB plus
+                    // the radial picker. This row used to be raw 0..1 floats with
+                    // ImGui's square picker, so colour authored here and colour
+                    // authored in the Inspector neither looked nor behaved alike.
+                    //
+                    // hdr = false (the default) on purpose: MatParamType::Color
+                    // exists precisely because "the editor shows a color picker"
+                    // (MaterialTypes.hpp:26), so it IS a colour and authors like
+                    // one. Nothing declares a colour param as HDR -- ParamMeta
+                    // carries only sliderMin/sliderMax (MaterialTypes.hpp:133-139),
+                    // documented for the Float slider and ignored here, and every
+                    // existing template leaves them 0..1. A param that wants an
+                    // unclamped multiplier is a Float4, which keeps its DragFloat4
+                    // above and is not a colour widget at all.
+                    edited = ColorField4(d.name.c_str(), value.f);
                     break;
                 case ParamWidget::TexturePicker:
                     DrawTextureParam(d, value);
