@@ -176,6 +176,13 @@ namespace Arcane::Editor
         ImGui::BeginGroup();
         if (!hdr)
             ImGui::TextUnformatted("sRGB");
+        // Pin the wheel's size. ColorPicker4 takes CalcItemWidth(), which in a
+        // popup with no explicit width is 65% of the window -- and the window
+        // auto-fits to the Linear row and the hex fields below, so the wheel's
+        // diameter would be an accident of rows unrelated to it, with a
+        // first-frame transient while the fit converges. ImGui's own colour
+        // popup pins the same way (imgui_widgets.cpp:5978).
+        ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 12.0f);
         if (ImGui::ColorPicker4("##picker", display, pickerFlags))
         {
             DecodeFromDisplay(display, hdr, linear);

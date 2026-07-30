@@ -640,10 +640,13 @@ namespace Arcane::Editor
                         const bool isColor = Arcane::Editor::IsColorFieldName(rawName);
                         if (Multi())
                         {
-                            // LINEAR floats, both here and in the popup. The 0-255
-                            // sRGB display this replaces made one stored value read
-                            // two ways depending on how many entities were selected;
-                            // showing storage directly cannot drift.
+                            // LINEAR floats, shown directly -- matching the
+                            // single-select row's own boxes (this arm has no
+                            // swatch and no popup; multi-select gets no picker).
+                            // The 0-255 sRGB display this replaces made one
+                            // stored value read two ways depending on how many
+                            // entities were selected; showing storage directly
+                            // cannot drift.
                             const double cur[4]{ v.x, v.y, v.z, v.w };
                             double out = 0.0;
                             // Axis strips only on the NON-colour flavour: XYZW

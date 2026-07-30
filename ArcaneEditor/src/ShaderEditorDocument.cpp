@@ -5906,7 +5906,15 @@ namespace Arcane::Editor
                     const std::string popupKey = d.name + "##colorpopup";
                     const ImGuiID     popupId  = ColorPopupId(popupKey.c_str());
 
-                    if (ColorSwatchButton("##sw", value.f))
+                    // This loop has no PushID, so the swatch id must carry the
+                    // param name -- same reason "##ov_" and "x##reset_" do
+                    // above/below. A bare "##sw" would mint the same ImGuiID
+                    // for every Color param in the template, and with two the
+                    // first swatch would clear the shared ActiveId before the
+                    // second is even submitted, so the second could never
+                    // report a press.
+                    const std::string swatchId = "##sw_" + d.name;
+                    if (ColorSwatchButton(swatchId.c_str(), value.f))
                     {
                         std::memcpy(m_colorPopupOriginal, value.f, sizeof(m_colorPopupOriginal));
                         ImGui::OpenPopup(popupId);

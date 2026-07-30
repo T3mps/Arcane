@@ -1,8 +1,10 @@
 #pragma once
 
 // Render module: the ONLY writer of display-referred output. Samples a
-// linear HDR texture, applies Narkowicz ACES + gamma 2.2 (the client
-// oracle), draws a fullscreen triangle into the target framebuffer.
+// linear HDR texture, applies Narkowicz ACES + the true IEC 61966-2-1
+// piecewise sRGB encode (matching what SRGBA8_UNORM applies in hardware
+// on input; the old gamma-2.2 client-oracle byte-match is retired), draws
+// a fullscreen triangle into the target framebuffer.
 
 #include <Arcane/Base/Api.hpp>
 
