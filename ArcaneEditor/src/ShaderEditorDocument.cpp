@@ -4545,50 +4545,72 @@ namespace Arcane::Editor
 
         // Gesture helpers (used by pin rows AND payload widgets below). Value
         // drags bracket a whole-graph gesture through EditGesture (before on
-        // activation, one undo step at close); popup-widgets (combos, color
-        // pickers) cannot live inside the canvas, so types use cycle buttons.
-        // The label rides the OPEN call because the transaction carries it --
-        // CommandStack::Commit stamps the step with Begin's label, not the
-        // pushed command's.
+        // activation, one undo step at close); a popup-widget has to leave the
+        // canvas's transformed space first (CanvasPopupScope), so node TYPES use
+        // cycle buttons rather than combos. The label rides the OPEN call
+        // because the transaction carries it -- CommandStack::Commit stamps the
+        // step with Begin's label, not the pushed command's.
+        //
+        // ONE builder serves BOTH boundaries below: a value drag closes on
+        // widget deactivation and the ConstColor popup closes on the popup going
+        // away, but the step they owe the stack is identical. Neither may park
+        // an EMPTY builder: this document is not registry-backed, so nothing
+        // snapshots into the transaction and Commit's empty-transaction drop
+        // (CommandStack.cpp:61-62) would swallow the whole thing -- the edit
+        // applied live and recorded nowhere.
+        auto buildGraphEdit = [&](const char* label) -> std::function<void()>
+        {
+            // Whole-graph before AND the pass it belongs to, both
+            // pinned at activation. The command builds at CLOSE from
+            // this plus whatever the drag did -- which is why an
+            // abandoned drag now lands on the stack instead of
+            // vanishing. Pinning the PASS is what keeps that safe: a
+            // close can land after the active pass moved (a ctrl+click
+            // text entry parks a gesture without deactivating it, the
+            // pass canvas is submitted before this panel, and the
+            // abandoned close runs later still at the ScopeGuard), and
+            // a command pairing pass B's index with pass A's `before`
+            // would have Undo overwrite B's graph with A's.
+            //
+            // NO-OP GUARD: the close runs on EVERY close path, including
+            // the abandonment ones (stale-close, collapsed window,
+            // document teardown) where the gesture never edited
+            // anything. Pushing there would leave a junk step whose
+            // before == after AND clear the redo stack
+            // (CommandStack.cpp:70) -- a generic Push is its own
+            // transaction, so it never meets Commit's empty-transaction
+            // drop at :61-62. So compare first; an EDITED gesture still
+            // differs and still pushes exactly one step.
+            return std::function<void()>(
+                [this, label = std::string(label),
+                 pass = static_cast<std::size_t>((std::max)(0, m_activePass)),
+                 before = ActiveGraphOpt()]() mutable
+                {
+                    if (GraphOptEqual(before, GraphOptAt(pass)))
+                        return;   // nothing changed -- no step, redo intact
+                    PushGraphUndo(label.c_str(), std::move(before), pass);
+                });
+        };
         auto gestureBegin = [&](const char* label)
         {
             EditGesture::BeginOnActivate(m_services.undo, m_gesture,
                 [&] { return std::string(label); },
-                [&]
-                {
-                    // Whole-graph before AND the pass it belongs to, both
-                    // pinned at activation. The command builds at CLOSE from
-                    // this plus whatever the drag did -- which is why an
-                    // abandoned drag now lands on the stack instead of
-                    // vanishing. Pinning the PASS is what keeps that safe: a
-                    // close can land after the active pass moved (a ctrl+click
-                    // text entry parks a gesture without deactivating it, the
-                    // pass canvas is submitted before this panel, and the
-                    // abandoned close runs later still at the ScopeGuard), and
-                    // a command pairing pass B's index with pass A's `before`
-                    // would have Undo overwrite B's graph with A's.
-                    //
-                    // NO-OP GUARD: the close runs on EVERY close path, including
-                    // the abandonment ones (stale-close, collapsed window,
-                    // document teardown) where the gesture never edited
-                    // anything. Pushing there would leave a junk step whose
-                    // before == after AND clear the redo stack
-                    // (CommandStack.cpp:70) -- a generic Push is its own
-                    // transaction, so it never meets Commit's empty-transaction
-                    // drop at :61-62. So compare first; an EDITED gesture still
-                    // differs and still pushes exactly one step.
-                    return std::function<void()>(
-                        [this, label = std::string(label),
-                         pass = static_cast<std::size_t>((std::max)(0, m_activePass)),
-                         before = ActiveGraphOpt()]() mutable
-                        {
-                            if (GraphOptEqual(before, GraphOptAt(pass)))
-                                return;   // nothing changed -- no step, redo intact
-                            PushGraphUndo(label.c_str(), std::move(before), pass);
-                        });
-                });
+                [&] { return buildGraphEdit(label); });
         };
         auto gestureEnd = [&] { EditGesture::EndOnDeactivate(m_services.undo, m_gesture); };
+        // The popup pair, keyed on a popup id instead of the last submitted
+        // item -- a hand-rolled popup's edits come from FOREIGN widgets, so
+        // IsItemActivated() never fires for it (EditGesture.hpp:121-133).
+        auto popupGestureBegin = [&](const char* label, std::uint32_t popupId)
+        {
+            EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture, popupId,
+                                          [&] { return std::string(label); },
+                                          [&] { return buildGraphEdit(label); });
+        };
+        auto popupGestureEnd = [&](std::uint32_t popupId)
+        {
+            EditGesture::EndOnPopupClose(m_services.undo, m_gesture, popupId);
+        };
         auto valueEdited = [&]
         {
             m_dirty = true;
@@ -4872,25 +4894,39 @@ namespace Arcane::Editor
                     // hdr = true: a ConstColor feeds raw shader maths and may exceed
                     // 1, where an sRGB encode is meaningless and a hex is a clamped
                     // lie -- so the popup shows linear floats and no hex rows. The
-                    // SV response is poor for HDR values; inherent, and equally true
-                    // in UE.
-                    const CanvasPopupScope canvasPopup;   // popups must leave the canvas space
-                    const ImGuiID popupId = ColorPopupId("##constcolorpopup");
-                    if (ColorSwatchButton("##swatch", n.value, ImVec2(18, 18)))
+                    // swatch is still ENCODED, because a swatch is a display object
+                    // whatever the value feeds. The SV response is poor for HDR
+                    // values; inherent, and equally true in UE.
+                    //
+                    // The swatch is submitted in CANVAS space, outside the scope
+                    // below. ed::Suspend leaves the canvas's transformed space, and
+                    // Canvas::LeaveLocalSpace only transforms the vertices recorded
+                    // inside it -- so a swatch drawn while suspended would render
+                    // offset by the canvas position and pan, and unscaled by zoom.
+                    // Only the popup has to leave, and the other two CanvasPopupScope
+                    // uses in this file wrap exactly that much.
+                    const bool swatchClicked =
+                        ColorSwatchButton("##swatch", n.value, ImVec2(18, 18));
                     {
-                        std::memcpy(m_colorPopupOriginal, n.value, sizeof(m_colorPopupOriginal));
-                        ImGui::OpenPopup(popupId);
+                        const CanvasPopupScope canvasPopup;   // popups live in screen space
+                        // The id is computed INSIDE the scope and used for every
+                        // id-consuming call here, so open/draw/gesture cannot disagree.
+                        const ImGuiID popupId = ColorPopupId("##constcolorpopup");
+                        if (swatchClicked)
+                        {
+                            std::memcpy(m_colorPopupOriginal, n.value,
+                                        sizeof(m_colorPopupOriginal));
+                            ImGui::OpenPopup(popupId);
+                        }
+                        popupGestureBegin("Edit Color", popupId);
+                        if (ImGui::BeginPopup("##constcolorpopup"))
+                        {
+                            if (ColorPopupBody(n.value, m_colorPopupOriginal, /*hdr*/ true))
+                                valueEdited();
+                            ImGui::EndPopup();
+                        }
+                        popupGestureEnd(popupId);
                     }
-                    EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture, popupId,
-                                                  [&] { return std::string("Edit Color"); },
-                                                  [&] { return std::function<void()>(); });
-                    if (ImGui::BeginPopup("##constcolorpopup"))
-                    {
-                        if (ColorPopupBody(n.value, m_colorPopupOriginal, /*hdr*/ true))
-                            valueEdited();
-                        ImGui::EndPopup();
-                    }
-                    EditGesture::EndOnPopupClose(m_services.undo, m_gesture, popupId);
                 }
                 break;
             }
@@ -5842,50 +5878,55 @@ namespace Arcane::Editor
                     break;
                 case ParamWidget::ColorEdit:
                 {
-                    // Same shape as the Inspector row: linear float boxes plus an
-                    // encoded swatch opening the dense popup. hdr = false because
-                    // MatParamType::Color exists precisely so "the editor shows a
-                    // color picker" (MaterialTypes.hpp:26) -- it IS a colour, and
-                    // nothing declares one as HDR (ParamMeta carries only
-                    // sliderMin/sliderMax, MaterialTypes.hpp:133-139). A param
+                    // Same shape as the Inspector row: an sRGB-ENCODED swatch that
+                    // opens the dense popup, beside four LINEAR float boxes.
+                    //
+                    // hdr = false because MatParamType::Color exists precisely so
+                    // "the editor shows a color picker" (MaterialTypes.hpp:26) -- it
+                    // IS a colour. Nothing declares one as HDR (ParamMeta carries
+                    // only sliderMin/sliderMax, MaterialTypes.hpp:133-139). A param
                     // wanting an unclamped multiplier is a Float4.
-                    const std::string popupKey = d.name + "##colorpopup";
-                    const ImGuiID popupId = ColorPopupId(popupKey.c_str());
-
+                    //
+                    // SUBMISSION ORDER IS LOAD-BEARING: the shared gesture pair
+                    // after this switch reads g.LastItemData, so the ColorEdit4 that
+                    // owns the box drags has to be the last item this arm submits
+                    // (EditGesture.hpp:176). Hence swatch first, boxes last, and the
+                    // name back on ColorEdit4's own label rather than a separate
+                    // TextUnformatted -- a text item carries id 0 and would make
+                    // IsItemActivated() unsatisfiable for the whole row.
+                    // BeginPopup/EndPopup in between are safe: End() restores
+                    // g.LastItemData from the parent window's backup.
+                    //
                     // DisplayRGB and InputRGB PIN the mode: NoOptions only
                     // suppresses this row's own right-click menu, and without a
                     // display or input bit ColorEdit4 takes both from the global
                     // g.ColorEditOptions (imgui_widgets.cpp:5830-5837), which any
                     // colour widget lacking NoOptions can flip to HSV -- writing
                     // HSV components into storage this row promises is linear.
-                    //
-                    // Hidden label: ImGui draws a visible label AFTER the input
-                    // boxes, so a visible d.name here would separate the swatch
-                    // from the boxes it previews ([boxes] Name [swatch]). Drawing
-                    // the name ourselves after the swatch keeps the Inspector's
-                    // [boxes][swatch] adjacency (Spec Decision 8): [boxes][swatch] Name.
-                    const std::string boxesId = "##" + d.name;
-                    edited = ImGui::ColorEdit4(boxesId.c_str(), value.f,
-                                               ImGuiColorEditFlags_Float
-                                               | ImGuiColorEditFlags_NoSmallPreview
-                                               | ImGuiColorEditFlags_NoPicker
-                                               | ImGuiColorEditFlags_NoOptions
-                                               | ImGuiColorEditFlags_DisplayRGB
-                                               | ImGuiColorEditFlags_InputRGB);
-                    ImGui::SameLine();
+                    const std::string popupKey = d.name + "##colorpopup";
+                    const ImGuiID     popupId  = ColorPopupId(popupKey.c_str());
+
                     if (ColorSwatchButton("##sw", value.f))
                     {
                         std::memcpy(m_colorPopupOriginal, value.f, sizeof(m_colorPopupOriginal));
                         ImGui::OpenPopup(popupId);
                     }
-                    ImGui::SameLine();
-                    ImGui::TextUnformatted(d.name.c_str());
                     if (ImGui::BeginPopup(popupKey.c_str()))
                     {
                         if (ColorPopupBody(value.f, m_colorPopupOriginal, /*hdr*/ false))
                             edited = true;
                         ImGui::EndPopup();
                     }
+                    ImGui::SameLine();
+                    const bool boxesEdited =
+                        ImGui::ColorEdit4(d.name.c_str(), value.f,
+                                          ImGuiColorEditFlags_Float
+                                          | ImGuiColorEditFlags_NoSmallPreview
+                                          | ImGuiColorEditFlags_NoPicker
+                                          | ImGuiColorEditFlags_NoOptions
+                                          | ImGuiColorEditFlags_DisplayRGB
+                                          | ImGuiColorEditFlags_InputRGB);
+                    edited = edited || boxesEdited;
                     break;
                 }
                 case ParamWidget::TexturePicker:
@@ -5909,35 +5950,44 @@ namespace Arcane::Editor
             // "no override, nothing typed" reads as unchanged; an EDITED
             // gesture still differs (its live Set both creates the override and
             // moves the value) and still pushes exactly one step.
+            //
+            // ONE builder for both boundaries. The box row closes on widget
+            // deactivation and the popup closes on the popup going away, but the
+            // step they owe the stack is identical -- and an empty builder would
+            // record nothing at all here, because this document is not
+            // registry-backed, so Commit's empty-transaction drop
+            // (CommandStack.cpp:61-62) swallows the whole transaction.
+            auto buildParamEdit = [&]() -> std::function<void()>
+            {
+                const bool hadBefore = m_instance->HasOverride(d.nameHash);
+                Arcane::MatParamValue before{};
+                if (hadBefore)
+                    m_instance->GetParam(d.nameHash, before);
+                return std::function<void()>(
+                    [this, nameHash = d.nameHash, name = d.name, hadBefore, before]
+                    {
+                        Arcane::MatParamValue after;
+                        if (!m_instance || !m_instance->GetParam(nameHash, after))
+                            return;   // the snippet dropped the param
+                        // Read the override flag, not a hardcoded true: it
+                        // is what distinguishes "the drag created an
+                        // override" from "nothing happened", and it is the
+                        // truthful Redo target either way (ApplyParamEdit
+                        // clears the override when hasAfter is false, the
+                        // shape the reset button below pushes).
+                        const bool hasAfter = m_instance->HasOverride(nameHash);
+                        if (hadBefore == hasAfter &&
+                            (!hadBefore || before == after))
+                            return;   // nothing changed -- no step, redo intact
+                        m_services.undo->Push(std::make_unique<ParamEditCommand>(
+                            m_anchor, nameHash, "Edit " + name,
+                            hadBefore, before, hasAfter, after));
+                    });
+            };
+
             EditGesture::BeginOnActivate(m_services.undo, m_gesture,
                 [&] { return "Edit " + d.name; },
-                [&]
-                {
-                    const bool hadBefore = m_instance->HasOverride(d.nameHash);
-                    Arcane::MatParamValue before{};
-                    if (hadBefore)
-                        m_instance->GetParam(d.nameHash, before);
-                    return std::function<void()>(
-                        [this, nameHash = d.nameHash, name = d.name, hadBefore, before]
-                        {
-                            Arcane::MatParamValue after;
-                            if (!m_instance || !m_instance->GetParam(nameHash, after))
-                                return;   // the snippet dropped the param
-                            // Read the override flag, not a hardcoded true: it
-                            // is what distinguishes "the drag created an
-                            // override" from "nothing happened", and it is the
-                            // truthful Redo target either way (ApplyParamEdit
-                            // clears the override when hasAfter is false, the
-                            // shape the reset button below pushes).
-                            const bool hasAfter = m_instance->HasOverride(nameHash);
-                            if (hadBefore == hasAfter &&
-                                (!hadBefore || before == after))
-                                return;   // nothing changed -- no step, redo intact
-                            m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                                m_anchor, nameHash, "Edit " + name,
-                                hadBefore, before, hasAfter, after));
-                        });
-                });
+                buildParamEdit);
 
             if (edited)
             {
@@ -5958,7 +6008,7 @@ namespace Arcane::Editor
                 EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture,
                                               ColorPopupId((d.name + "##colorpopup").c_str()),
                                               [&] { return std::string("Edit ") + d.name; },
-                                              [&] { return std::function<void()>(); });
+                                              buildParamEdit);
                 EditGesture::EndOnPopupClose(m_services.undo, m_gesture,
                                              ColorPopupId((d.name + "##colorpopup").c_str()));
             }
