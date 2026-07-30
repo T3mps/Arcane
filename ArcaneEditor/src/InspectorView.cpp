@@ -1,9 +1,9 @@
 #include "InspectorView.hpp"
 
 #include "AssetBrowser.hpp"
+#include "ColorPickerPopup.hpp"
 #include "EditGesture.hpp"
 #include "EditorWidgets.hpp"
-#include "ColorPickerPopup.hpp"
 #include "InspectorFields.hpp"
 #include "InspectorMeta.hpp"
 
@@ -670,11 +670,30 @@ namespace Arcane::Editor
                             const std::string popupKey = widgetId + "##colorpopup";
                             const ImGuiID popupId = ColorPopupId(popupKey.c_str());
 
+                            // Reserve the swatch's strip before the boxes claim the
+                            // cell. FieldLabelCell leaves SetNextItemWidth(-FLT_MIN)
+                            // pending and NoSmallPreview zeroes ColorEdit4's own
+                            // button width (imgui_widgets.cpp:5845), so without this
+                            // the boxes end exactly at the cell's right edge and the
+                            // SameLine'd swatch lands outside the column clip rect --
+                            // culled by ItemAdd, drawn never, clickable never.
+                            // A negative width means "to the right edge, minus this".
+                            ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight()
+                                                      + ImGui::GetStyle().ItemSpacing.x));
+                            // DisplayRGB and InputRGB PIN the mode: NoOptions only
+                            // suppresses this row's own menu, and without a display
+                            // or input bit ColorEdit4 takes both from the global
+                            // g.ColorEditOptions, which any other colour widget
+                            // lacking NoOptions can flip to HSV. A row captioned as
+                            // linear storage must not silently become H/S/V, and
+                            // InputHSV would write HSV components into linear storage.
                             bool changed = ImGui::ColorEdit4(widgetId.c_str(), &v.x,
                                                              ImGuiColorEditFlags_Float
                                                              | ImGuiColorEditFlags_NoSmallPreview
                                                              | ImGuiColorEditFlags_NoPicker
-                                                             | ImGuiColorEditFlags_NoOptions);
+                                                             | ImGuiColorEditFlags_NoOptions
+                                                             | ImGuiColorEditFlags_DisplayRGB
+                                                             | ImGuiColorEditFlags_InputRGB);
                             // The BOX row keeps the activation gesture it always had.
                             BeginGestureIfActivated(rawName, instance);
 
