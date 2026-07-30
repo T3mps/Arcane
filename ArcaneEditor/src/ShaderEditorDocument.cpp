@@ -1,6 +1,7 @@
 #include "ShaderEditorDocument.hpp"
 
 #include "AssetBrowser.hpp"
+#include "CanvasPopupScope.hpp"
 #include "EditorTheme.hpp"
 #include "EditorWidgets.hpp"   // ColorField4: the editor's one colour widget
 #include "IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
@@ -2846,8 +2847,8 @@ namespace Arcane::Editor
         }
 
         // ---- context menus (Suspend: popups live in screen space)
-        ed::Suspend();
         {
+            const CanvasPopupScope canvasPopup;   // ed::Suspend/Resume, see the header
             ed::NodeId ctxNode;
             if (ed::ShowNodeContextMenu(&ctxNode))
             {
@@ -2954,7 +2955,6 @@ namespace Arcane::Editor
                 ImGui::EndPopup();
             }
         }
-        ed::Resume();
 
         // ---- position readback (skip the seed frame)
         if (!seededThisFrame && !structural)
@@ -3914,8 +3914,8 @@ namespace Arcane::Editor
         }
 
         // Node context menu -> alignment over the current selection.
-        ed::Suspend();
         {
+            const CanvasPopupScope canvasPopup;   // ed::Suspend/Resume, see the header
             ed::NodeId ctxNode;
             if (ed::ShowNodeContextMenu(&ctxNode))
                 ImGui::OpenPopup("##graphnodemenu");
@@ -3981,7 +3981,6 @@ namespace Arcane::Editor
                 ImGui::EndPopup();
             }
         }
-        ed::Resume();
 
         // Background context menu -> create node (Suspend: popups live in
         // normal ImGui space, not canvas space).
