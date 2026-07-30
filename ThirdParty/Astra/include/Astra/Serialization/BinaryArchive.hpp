@@ -81,8 +81,20 @@ namespace Astra
      * v2: Portable checksum; explicit uint64 container sizes; resource block
      * v3: Adds the root (zero-component) archetype record; v2 archives (which
      *     lack this record) remain readable via version-gated deserialize
+     * v4: Persists per-chunk disabled-bit state (disabledCount + words) for
+     *     each ASTRA_ENABLEABLE column, written immediately after that
+     *     column's component array (Archetype::Serialize/Deserialize).
+     *     Non-enableable columns write nothing (zero-cost, invariant 1).
+     *     Pre-v4 archives never wrote this section; Deserialize skips reading
+     *     it for them, so every enableable component loads enabled (chunks
+     *     are already zero-init/all-enabled from construction).
+     * v5: Per-column block compression when the header's compressionMode is
+     *     LZ4 (each chunk-column becomes a WriteCompressedBlock/ReadCompressedBlock
+     *     frame), orthogonal to per-element versioning. v5 archives written with
+     *     compressionMode == None are layout-identical to v4 (inline per-element
+     *     columns, uncompressed).
      */
-    inline constexpr uint16_t BINARY_FORMAT_VERSION = 3;
+    inline constexpr uint16_t BINARY_FORMAT_VERSION = 5;
     inline constexpr char BINARY_MAGIC[6] = "ASTRA";
     
     /**

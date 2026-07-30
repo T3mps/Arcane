@@ -9,8 +9,17 @@
 #include "Base.hpp"
 #include "TypeContext.hpp"
 
+#if defined(__cpp_rtti) || defined(_CPPRTTI)
+#include <typeinfo>
+#endif
+
 namespace Astra
 {
+    // Forward declaration so Detail::TypeIDStorage::Value() can name it under
+    // two-phase lookup (gcc/clang); defined after struct TypeID below.
+    template<typename T>
+    ASTRA_NODISCARD TypeIdentity MakeTypeIdentity() noexcept;
+
     namespace Detail
     {
         // Compile-time XXHash64 implementation for type name hashing
@@ -214,12 +223,22 @@ namespace Astra
             ASTRA_NODISCARD static ComponentID Value()
             {
                 static const ComponentID s_id =
-                    GetTypeContext()->GetOrAssignComponentID(TypeHash<T>(), TypeNameInternal<T>());
+                    GetTypeContext()->GetOrAssignComponentID(
+                        TypeHash<T>(), TypeNameInternal<T>(), MakeTypeIdentity<T>());
                 return s_id;
             }
         };
     }
 
+    // NOTE: type identity derives from the compiler pretty-name, so every type
+    // must have a UNIQUE unqualified name. Two distinct types that share a
+    // pretty-name (e.g. same-named types in anonymous namespaces in different
+    // translation units) collide; the collision is DETECTED at id assignment and
+    // the second type is refused with a logged error (see
+    // TypeContext::GetOrAssignComponentID). Detection is complete wherever RTTI is
+    // enabled; in RTTI-off builds it catches every collision whose types differ in
+    // size/alignment/triviality (the memory-corrupting cases), but two distinct
+    // types with identical layout evade detection (logical mislabel, not corruption).
     template<typename T>
     struct TypeID
     {
@@ -251,4 +270,24 @@ namespace Astra
             return Hash() == hash;
         }
     };
+
+    // Build the per-type discriminator used by TypeContext to DETECT identity
+    // collisions (see TypeContext::GetOrAssignComponentID). Structural fields are
+    // always present (all configs); the RTTI type_info is added only where RTTI
+    // is enabled. Never enters the hash/id/wire format.
+    template<typename T>
+    ASTRA_NODISCARD inline TypeIdentity MakeTypeIdentity() noexcept
+    {
+        TypeIdentity id;
+        id.size  = static_cast<uint32_t>(sizeof(T));
+        id.align = static_cast<uint32_t>(alignof(T));
+        id.flags = static_cast<uint8_t>(
+            (std::is_trivially_copyable_v<T>    ? TIF_TriviallyCopyable     : 0) |
+            (std::is_trivially_destructible_v<T> ? TIF_TriviallyDestructible : 0) |
+            (std::is_empty_v<T>                 ? TIF_Empty                 : 0));
+#if defined(__cpp_rtti) || defined(_CPPRTTI)
+        id.rtti = &typeid(T);
+#endif
+        return id;
+    }
 }

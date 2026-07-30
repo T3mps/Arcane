@@ -37,7 +37,11 @@ namespace Astra
         using ExcludedTuple = typename Classifier::ExcludedComponents;
         using AnyGroups = typename Classifier::AnyGroups;
         using OneOfGroups = typename Classifier::OneOfGroups;
-        
+
+        static_assert(std::tuple_size_v<typename Classifier::WithComponents> == 0,
+            "With<T> is not yet supported in Relations queries (it would be silently ignored). "
+            "Use a plain required component, or filter after the relation query.");
+
     public:
         Relations(std::shared_ptr<ArchetypeManager> manager, Entity entity,
                   std::shared_ptr<const RelationshipGraph> graph,
@@ -210,14 +214,23 @@ namespace Astra
             if (!m_relationsGraph) ASTRA_UNLIKELY
                 return;  // Registry destroyed
 
-            const auto& cache = m_relationsGraph->GetDescendantsCached(m_rootEntity);
-            const size_t count = cache.entries.size();
-
             // Astra creates no threads — parallelism requires an injected scheduler.
+            // Fall back to the sequential path (which takes its own snapshot) before
+            // paying for a cache copy when there's no scheduler at all.
             if (!m_scheduler)
             {
                 return ForEachDescendant(std::forward<Func>(func));
             }
+
+            // Snapshot (value copy): GetDescendantsCached() returns a TraversalCache
+            // value copied under the cache lock. We must own a local copy here -- the
+            // ParallelFor lambda reads cache.entries lock-free from worker threads, and
+            // a concurrent insertion into the non-pointer-stable cache map would rehash
+            // and dangle any reference into it (CR-1). The lambda captures this local
+            // copy by reference; ParallelFor is synchronous, so the copy outlives every
+            // worker.
+            auto cache = m_relationsGraph->GetDescendantsCached(m_rootEntity);
+            const size_t count = cache.entries.size();
 
             if (count < MIN_ENTITIES_FOR_PARALLEL) ASTRA_LIKELY
             {

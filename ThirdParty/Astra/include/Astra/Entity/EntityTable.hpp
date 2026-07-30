@@ -9,6 +9,7 @@
 #include "../Core/Base.hpp"
 #include "../Core/Memory.hpp"
 #include "Entity.hpp"
+#include "EntityRecord.hpp"
 
 namespace Astra
 {
@@ -22,17 +23,13 @@ namespace Astra
         
         static constexpr VersionType NULL_VERSION = 0;      // Marks uninitialized/destroyed slots
         static constexpr VersionType INITIAL_VERSION = 1;   // First valid version
-        
-        // Memory constants
-        static constexpr size_t SEGMENT_SIZE = 64 * 1024;           // 64KB per segment
-        static constexpr size_t SEGMENTS_PER_HUGE_PAGE = HUGE_PAGE_SIZE / SEGMENT_SIZE; // 32 segments
-        
+
         struct Config
         {
             static constexpr IDType DEFAULT_ENTITIES_PER_SEGMENT =
                 static_cast<IDType>(std::min<uint64_t>(65536ull, static_cast<uint64_t>(Entity::ID_MASK) + 1ull));
 
-            IDType entitiesPerSegment = DEFAULT_ENTITIES_PER_SEGMENT;      // 64K entities = 64KB per segment (must be power of 2)
+            IDType entitiesPerSegment = DEFAULT_ENTITIES_PER_SEGMENT;      // 64K entities × sizeof(EntityRecord) per segment (must be power of 2)
             IDType entitiesPerSegmentShift = static_cast<IDType>(std::countr_zero(DEFAULT_ENTITIES_PER_SEGMENT));    // log2(entitiesPerSegment) for fast division
             IDType entitiesPerSegmentMask = static_cast<IDType>(DEFAULT_ENTITIES_PER_SEGMENT - 1);  // entitiesPerSegment - 1 for fast modulo
             float releaseThreshold = 0.1f;          // Release when <10% used
@@ -121,8 +118,13 @@ namespace Astra
             ASTRA_ASSERT(segment, "Failed to create segment");
             
             size_t localIdx = segment->ToLocal(id);
-            VersionType oldVersion = segment->versions[localIdx];
-            
+            VersionType oldVersion = segment->records[localIdx].version;
+
+            // Write the version before any accounting that can release the
+            // segment (MaybeReleaseSegments may segment.reset() this segment);
+            // writing after that would be a use-after-free.
+            segment->records[localIdx].version = version;
+
             // Update alive count
             if (oldVersion == NULL_VERSION && version != NULL_VERSION)
             {
@@ -133,15 +135,13 @@ namespace Astra
             {
                 --segment->aliveCount;
                 --m_totalAlive;
-                
+
                 // Check if we should release the segment
                 if (m_config.autoRelease && segment->aliveCount == 0) ASTRA_UNLIKELY
                 {
                     MaybeReleaseSegments();
                 }
             }
-            
-            segment->versions[localIdx] = version;
         }
 
         ASTRA_NODISCARD VersionType GetVersion(IDType id) const noexcept
@@ -150,7 +150,7 @@ namespace Astra
             if (!segment) ASTRA_UNLIKELY
                 return NULL_VERSION;
             size_t localIdx = segment->ToLocal(id);
-            return segment->versions[localIdx];
+            return segment->records[localIdx].version;
         }
 
         ASTRA_NODISCARD bool IsAlive(IDType id, VersionType version) const noexcept
@@ -160,6 +160,43 @@ namespace Astra
             return GetVersion(id) == version;
         }
 
+        ASTRA_NODISCARD EntityRecord* GetRecord(IDType id) noexcept
+        {
+            Segment* segment = GetSegment(id);
+            if (!segment) ASTRA_UNLIKELY
+                return nullptr;
+            return &segment->records[segment->ToLocal(id)];
+        }
+
+        ASTRA_NODISCARD EntityRecord* GetOrCreateRecord(IDType id)
+        {
+            Segment* segment = GetOrCreateSegment(id);
+            return &segment->records[segment->ToLocal(id)];
+        }
+
+        void SetRecord(IDType id, Archetype* archetype, ArchetypeChunk* chunk, EntityLocation location)
+        {
+            EntityRecord* r = GetOrCreateRecord(id);   // does NOT change version
+            r->archetype = archetype;
+            r->chunk     = chunk;
+            r->location  = location;
+        }
+
+        template<class F>
+        void ForEachRecord(F&& f) const
+        {
+            for (const auto& segment : m_segments)
+            {
+                if (!segment) continue;
+                for (IDType local = 0; local < segment->capacity; ++local)
+                {
+                    const EntityRecord& rec = segment->records[local];
+                    if (rec.version != NULL_VERSION)
+                        f(static_cast<IDType>(segment->baseID + local), rec);
+                }
+            }
+        }
+
         VersionType Destroy(IDType id) noexcept
         {
             auto* segment = GetSegment(id);
@@ -167,11 +204,11 @@ namespace Astra
                 return NULL_VERSION;
             
             size_t localIdx = segment->ToLocal(id);
-            VersionType oldVersion = segment->versions[localIdx];
-            
+            VersionType oldVersion = segment->records[localIdx].version;
+
             if (oldVersion != NULL_VERSION)
             {
-                segment->versions[localIdx] = NULL_VERSION;
+                segment->records[localIdx].version = NULL_VERSION;
                 --segment->aliveCount;
                 --m_totalAlive;
                 
@@ -312,7 +349,7 @@ namespace Astra
             {
                 ASTRA_ASSERT(m_currentSegment, "Iterator out of range");
                 IDType id = m_currentSegment->baseID + static_cast<IDType>(m_localIdx);
-                VersionType version = m_currentSegment->versions[m_localIdx];
+                VersionType version = m_currentSegment->records[m_localIdx].version;
                 ASTRA_ASSERT(version != NULL_VERSION, "Iterator on invalid entity");
                 return {id, version};
             }
@@ -363,7 +400,7 @@ namespace Astra
                     // Find next valid entity in current segment
                     while (m_localIdx < m_currentSegment->capacity) ASTRA_LIKELY
                     {
-                        if (m_currentSegment->versions[m_localIdx] != NULL_VERSION) ASTRA_LIKELY
+                        if (m_currentSegment->records[m_localIdx].version != NULL_VERSION) ASTRA_LIKELY
                         {
                             return; // Found valid entity
                         }
@@ -402,40 +439,39 @@ namespace Astra
 
             IDType baseID;                              // First ID in this segment (mutable for reuse)
             const IDType capacity;                      // Entities in this segment
-            VersionType* versions;                      // Version array (either from huge page or heap)
-            std::unique_ptr<VersionType[]> ownedMemory; // Only set if we own the memory
+            EntityRecord* records;                       // Record array (either from huge page or heap)
+            std::unique_ptr<EntityRecord[]> ownedMemory; // Only set if we own the memory
             size_t aliveCount = 0;                      // Number of alive entities
             bool isFromHugePage = false;                // True if memory is from huge page
 
             // Constructor for huge page allocation
-            Segment(IDType base, IDType cap, VersionType* hugePageMemory) :
+            Segment(IDType base, IDType cap, EntityRecord* hugePageMemory) :
                 baseID(base),
                 capacity(cap),
-                versions(hugePageMemory),
+                records(hugePageMemory),
                 ownedMemory(nullptr),
                 isFromHugePage(true)
             {
-                std::fill_n(versions, capacity, NULL_VERSION);
+                std::uninitialized_fill_n(records, capacity, EntityRecord{});  // raw huge-page memory
             }
-            
+
             // Constructor for regular allocation
             explicit Segment(IDType base, IDType cap) :
                 baseID(base),
                 capacity(cap),
-                versions(nullptr),
-                ownedMemory(std::make_unique<VersionType[]>(cap)),
+                records(nullptr),
+                ownedMemory(std::make_unique<EntityRecord[]>(cap)),          // default-constructs (version==0)
                 isFromHugePage(false)
             {
-                versions = ownedMemory.get();
-                std::fill_n(versions, capacity, NULL_VERSION);
+                records = ownedMemory.get();
             }
-            
+
             // Reset segment for reuse with new base ID
             void Reset(IDType newBaseID) noexcept
             {
                 baseID = newBaseID;
                 aliveCount = 0;
-                std::fill_n(versions, capacity, NULL_VERSION);
+                std::fill_n(records, capacity, EntityRecord{});               // objects already live here
             }
 
             bool Contains(IDType id) const noexcept
@@ -460,6 +496,16 @@ namespace Astra
                 return capacity > 0 ? static_cast<float>(aliveCount) / capacity : 0.0f;
             }
         };
+
+        size_t SegmentBytes() const noexcept
+        {
+            return static_cast<size_t>(m_config.entitiesPerSegment) * sizeof(EntityRecord);
+        }
+        size_t SegmentsPerHugePage() const noexcept
+        {
+            const size_t sb = SegmentBytes();
+            return sb ? (HUGE_PAGE_SIZE / sb) : 0;   // sb==0 (degenerate) => 0; a segment larger than a huge page also yields 0 via integer division => heap fallback in both cases
+        }
 
         // Get segment for an ID, creating it if necessary
         Segment* GetOrCreateSegment(IDType id)
@@ -486,12 +532,12 @@ namespace Astra
                     segment->Reset(baseId);
                 }
                 // Try to allocate from huge page
-                else if (m_hugePageMemory && m_nextHugePageSegment < SEGMENTS_PER_HUGE_PAGE)
+                else if (m_hugePageMemory && m_nextHugePageSegment < SegmentsPerHugePage())
                 {
                     // Calculate offset into huge page
-                    VersionType* segmentMemory = reinterpret_cast<VersionType*>(
-                        m_hugePageMemory + (m_nextHugePageSegment * SEGMENT_SIZE));
-                    
+                    EntityRecord* segmentMemory = reinterpret_cast<EntityRecord*>(
+                        m_hugePageMemory + (m_nextHugePageSegment * SegmentBytes()));
+
                     segment = std::make_unique<Segment>(baseId, m_config.entitiesPerSegment, segmentMemory);
                     m_nextHugePageSegment++;
                 }

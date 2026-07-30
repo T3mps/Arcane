@@ -32,6 +32,8 @@ namespace Astra
         ResourceAdded    = 1 << 8,
         ResourceRemoved  = 1 << 9,
         ResourceUpdated  = 1 << 10,
+        ComponentEnabled  = 1 << 11,
+        ComponentDisabled = 1 << 12,
         // Reserve space for future signals
         All = ~0u
     };
@@ -122,7 +124,26 @@ namespace Astra
             ComponentID componentId;
             void* component;
         };
-        
+
+        // Enableable-components signal pair (spec 2026-07-25 §2). Gated OFF by
+        // default like every other signal; no emission wired up yet -- Task 1
+        // is groundwork only (enum bits + Events structs).
+        struct ComponentEnabled
+        {
+            static constexpr Signal flag = Signal::ComponentEnabled;
+            Entity entity;
+            ComponentID componentId;
+            void* component;
+        };
+
+        struct ComponentDisabled
+        {
+            static constexpr Signal flag = Signal::ComponentDisabled;
+            Entity entity;
+            ComponentID componentId;
+            void* component;
+        };
+
         struct ParentChanged
         {
             static constexpr Signal flag = Signal::ParentChanged;
@@ -276,6 +297,11 @@ namespace Astra
         template<Event E>
         static constexpr size_t IndexOf() noexcept
         {
+            // ComponentEnabled/ComponentDisabled appended at the END so every existing
+            // slot index is unchanged. The order here MUST stay in lockstep with the
+            // m_handlers tuple below (IndexOf<E> indexes it). Task 1 declared the Events
+            // structs + enum bits but did not wire dispatch; Task 2 completes it so the
+            // enableable signal pair can actually Emit (spec §8 / invariant 6).
             return Detail::EventIndex<E,
                 Events::EntityCreated,
                 Events::EntityDestroyed,
@@ -287,7 +313,9 @@ namespace Astra
                 Events::LinkRemoved,
                 Events::ResourceAdded,
                 Events::ResourceRemoved,
-                Events::ResourceUpdated
+                Events::ResourceUpdated,
+                Events::ComponentEnabled,
+                Events::ComponentDisabled
             >;
         }
 
@@ -302,7 +330,9 @@ namespace Astra
             MulticastDelegate<void(const Events::LinkRemoved&)>,
             MulticastDelegate<void(const Events::ResourceAdded&)>,
             MulticastDelegate<void(const Events::ResourceRemoved&)>,
-            MulticastDelegate<void(const Events::ResourceUpdated&)>
+            MulticastDelegate<void(const Events::ResourceUpdated&)>,
+            MulticastDelegate<void(const Events::ComponentEnabled&)>,
+            MulticastDelegate<void(const Events::ComponentDisabled&)>
         > m_handlers;
 
         Signal m_enabledSignals;

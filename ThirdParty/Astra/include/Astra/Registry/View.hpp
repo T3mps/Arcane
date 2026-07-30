@@ -13,11 +13,17 @@
 #include "../Core/Base.hpp"
 #include "../Core/WorkScheduler.hpp"
 #include "../Entity/Entity.hpp"
+#include "EnabledRuns.hpp"
 #include "Query.hpp"
 #include "ViewIterator.hpp"
 
+#include <bit>
+#include <cstdint>
+
 namespace Astra
 {
+    enum class QueryError { NotMatched, Empty, MultipleMatched };
+
     template<typename... QueryArgs>
     class View
     {
@@ -27,6 +33,22 @@ namespace Astra
         using RequiredTypes = typename Detail::QueryClassifier<QueryArgs...>::RequiredComponents;
         using OptionalTypes = typename Detail::QueryClassifier<QueryArgs...>::OptionalComponents;
         using QueryBuilder = Astra::QueryBuilder<QueryArgs...>;  // qualified to avoid -Wchanges-meaning
+
+        // ================= Enableable-components query filtering (spec §5) =================
+        //
+        // EnabledRequiredFilter: bare required enableable components (IncludeDisabled
+        // opts out) -- drives run extraction + chunk skipping. EnabledOptionalFilter:
+        // enableable Optional<T> -- pointer nulled per entity while disabled.
+        //
+        // HasEnabledFilter is the load-bearing compile-time gate: when it is false the
+        // whole filtered path is never instantiated and ForEach/ParallelForEach/Size
+        // compile to the exact pre-existing loops (invariant 1, zero cost when unused).
+        using EnabledRequiredFilter = Detail::EnableableRequiredFilter_t<QueryArgs...>;
+        using EnabledOptionalFilter = Detail::FilterEnableable_t<OptionalTypes>;
+
+        static constexpr bool HasRequiredFilter = std::tuple_size_v<EnabledRequiredFilter> > 0;
+        static constexpr bool HasOptionalFilter = std::tuple_size_v<EnabledOptionalFilter> > 0;
+        static constexpr bool HasEnabledFilter  = HasRequiredFilter || HasOptionalFilter;
 
         // Parallel execution thresholds - based on empirical testing
         static constexpr size_t AVG_ENTITIES_PER_CHUNK = 256;                           // Typical for 16KB chunks with ~50 byte entities
@@ -45,10 +67,15 @@ namespace Astra
             m_lastRefreshCounter(0),
             m_lastGeneration(0)
         {
-            CollectArchetypes();
-            m_lastRefreshCounter = m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire);
-            m_lastGeneration = m_archetypeManager->m_generation;
-            m_lastRemovalCounter = m_archetypeManager->m_archetypeRemovalCounter.load(std::memory_order_acquire);
+            if (manager)
+            {
+                CollectArchetypes();
+                m_lastRefreshCounter = m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire);
+                m_lastGeneration = m_archetypeManager->m_generation;
+                m_lastRemovalCounter = m_archetypeManager->m_archetypeRemovalCounter.load(std::memory_order_acquire);
+            }
+            // else: null manager -> empty/invalid view; all m_last* counters keep their
+            // default-initialized 0 (View.hpp member initializers).
         }
         
         /**
@@ -61,7 +88,8 @@ namespace Astra
         }
 
         /**
-         * Invoke func(Entity, Components&...) for every entity matching this View.
+         * Invoke func(Entity, Components&...) -- or func(Components&...) (the
+         * leading Entity is optional) -- for every entity matching this View.
          *
          * CONTRACT: structural mutation is NOT supported during this call. Do not
          * create or destroy entities, or add/remove components, from within func --
@@ -99,9 +127,10 @@ namespace Astra
             if (m_archetypes.empty()) ASTRA_UNLIKELY
                 return;
 
+            auto adapted = MakeEntityOptionalAdapter(func);
             for (Archetype* archetype : m_archetypes)
             {
-                ForEachImpl(archetype, std::forward<Func>(func), RequiredTypes{}, OptionalTypes{});
+                ForEachImpl(archetype, adapted, RequiredTypes{}, OptionalTypes{});
             }
 
 #ifdef ASTRA_BUILD_DEBUG
@@ -121,7 +150,9 @@ namespace Astra
             
             if (m_archetypes.empty()) ASTRA_UNLIKELY
                 return;
-            
+
+            auto adapted = MakeEntityOptionalAdapter(func);
+
             // Quick check: if we have very few matching entities, don't even try parallel
             size_t quickCount = 0;
             for (Archetype* archetype : m_archetypes)
@@ -131,12 +162,12 @@ namespace Astra
 
             if (quickCount < MIN_ENTITIES_QUICK_CHECK)
             {
-                return ForEach(std::forward<Func>(func));
+                return ForEach(adapted);
             }
 
             // No scheduler injected: Astra spawns no threads — run sequentially inline.
             if (!m_scheduler)
-                return ForEach(std::forward<Func>(func));
+                return ForEach(adapted);
 
             std::vector<std::pair<Archetype*, size_t>> chunkWork;
             // Better estimation based on typical entities per 16KB chunk
@@ -161,7 +192,7 @@ namespace Astra
             // Fall back to sequential for tiny workloads
             if (chunkWork.empty() || totalMatchingEntities < MIN_ENTITIES_FOR_PARALLEL || chunkWork.size() < MIN_CHUNKS_FOR_PARALLEL)
             {
-                return ForEach(std::forward<Func>(func));
+                return ForEach(adapted);
             }
 
             m_scheduler->ParallelFor(chunkWork.size(), MIN_CHUNKS_PER_THREAD,
@@ -170,7 +201,7 @@ namespace Astra
                     for (size_t w = begin; w < end; ++w)
                     {
                         auto [archetype, chunkIndex] = chunkWork[w];
-                        ParallelForEachChunkImpl(archetype, chunkIndex, func, RequiredTypes{}, OptionalTypes{});
+                        ParallelForEachChunkImpl(archetype, chunkIndex, adapted, RequiredTypes{}, OptionalTypes{});
                     }
                 });
         }
@@ -310,9 +341,22 @@ namespace Astra
             EnsureArchetypes();
 
             size_t total = 0;
-            for (Archetype* archetype : m_archetypes)
+            if constexpr (!HasRequiredFilter)
             {
-                total += archetype->GetEntityCount();
+                // No required enableable filter: entity count is unaffected by
+                // disabled bits (optional filtering never removes entities), so
+                // this is the pre-existing sum (invariant 1).
+                for (Archetype* archetype : m_archetypes)
+                {
+                    total += archetype->GetEntityCount();
+                }
+            }
+            else
+            {
+                for (Archetype* archetype : m_archetypes)
+                {
+                    total += SizeFiltered(archetype);
+                }
             }
             return total;
         }
@@ -320,6 +364,11 @@ namespace Astra
         ASTRA_NODISCARD bool Empty() noexcept
         {
             return Size() == 0;
+        }
+
+        ASTRA_NODISCARD bool Contains(Entity e) const
+        {
+            return VisibleRecord(e) != nullptr;
         }
 
         // ============= Range-based for loop support =============
@@ -336,6 +385,22 @@ namespace Astra
          */
         ASTRA_FORCEINLINE Iterator begin()
         {
+            // Range-based for cannot honor the enableable disabled-bit filter:
+            // ViewIterator has no access to the per-chunk disabled words, so
+            // `for (auto x : view)` would visit disabled entities that
+            // ForEach()/Size() skip -- the two surfaces would silently disagree
+            // (IM-7). Refuse at compile time when a REQUIRED enableable filter is
+            // active; the body of this non-template member is only instantiated
+            // when begin() is actually used, so ForEach()/Size()-only usage of
+            // such a View still compiles. Optional-only enableable filters are
+            // NOT gated: range-for never yields optional components and the
+            // visited entity set is identical to ForEach()'s, so they do not
+            // diverge.
+            static_assert(!HasRequiredFilter,
+                "Range-based for over a View with a required enableable-component filter is not "
+                "supported: it would bypass disabled-bit filtering and disagree with ForEach()/Size(). "
+                "Use ForEach() or ParallelForEach() instead.");
+
             if (!m_archetypeManager) ASTRA_UNLIKELY
                 return Iterator(nullptr, 0);
 
@@ -348,10 +413,131 @@ namespace Astra
          */
         ASTRA_FORCEINLINE ViewSentinel end() const noexcept
         {
+            // See begin(): range-for is compile-time refused on required
+            // enableable-filtered views so it cannot silently diverge from
+            // ForEach()/Size() (IM-7).
+            static_assert(!HasRequiredFilter,
+                "Range-based for over a View with a required enableable-component filter is not "
+                "supported: it would bypass disabled-bit filtering and disagree with ForEach()/Size(). "
+                "Use ForEach() or ParallelForEach() instead.");
             return ViewSentinel{};
         }
 
     private:
+        // Random-access yield shape: each required -> a pointer (const preserved),
+        // each optional -> a pointer. Mirrors ForEach's yielded arguments.
+        template<typename ReqTuple, typename OptTuple> struct AccessTupleImpl;
+        template<typename... R, typename... O>
+        struct AccessTupleImpl<std::tuple<R...>, std::tuple<O...>>
+        {
+            using type = std::tuple<R*..., O*...>;
+        };
+
+        template<typename R>
+        ASTRA_FORCEINLINE R* BindRequired(const EntityRecord* rec) const
+        {
+            using Bare = std::remove_const_t<R>;
+            return rec->archetype->template GetComponent<Bare>(rec->location);   // Bare* -> R* (adds const if any)
+        }
+        template<typename O>
+        ASTRA_FORCEINLINE O* BindOptional(const EntityRecord* rec) const
+        {
+            using Bare = std::remove_const_t<O>;
+            if (!rec->archetype->template HasComponent<Bare>())
+                return nullptr;
+            if constexpr (IsEnableableV<Bare>)
+            {
+                const ArchetypeColumnMeta& cm = rec->archetype->GetColumnMeta();
+                if (rec->chunk->IsDisabled(cm.idToColumn[TypeID<Bare>::Value()], rec->location.GetEntityIndex()))
+                    return nullptr;
+            }
+            return rec->archetype->template GetComponent<Bare>(rec->location);
+        }
+
+        template<typename... R, typename... O, size_t... Ri, size_t... Oi>
+        ASTRA_FORCEINLINE auto MakeAccessTuple(const EntityRecord* rec,
+                                               std::tuple<R...>, std::tuple<O...>,
+                                               std::index_sequence<Ri...>, std::index_sequence<Oi...>) const
+        {
+            return typename AccessTupleImpl<RequiredTypes, OptionalTypes>::type{
+                BindRequired<std::tuple_element_t<Ri, RequiredTypes>>(rec)...,
+                BindOptional<std::tuple_element_t<Oi, OptionalTypes>>(rec)...
+            };
+        }
+
+    public:
+        using AccessTuple = typename AccessTupleImpl<RequiredTypes, OptionalTypes>::type;
+
+        /**
+         * Filter-aware random access: returns pointers to the yielded components for
+         * `e` (required -> T*, Optional -> T*), or Err(NotMatched) if `e` is absent,
+         * dead, filtered out, or disabled under this view's enabled filter. The
+         * pointers point INTO live chunk storage and are invalidated by any structural
+         * change (create/destroy/add/remove/defragment) — do not retain them across
+         * one. In-place value edits through the pointers are fine.
+         */
+        ASTRA_NODISCARD Result<AccessTuple, QueryError> Get(Entity e) const
+        {
+            const EntityRecord* rec = VisibleRecord(e);
+            if (!rec) ASTRA_UNLIKELY
+                return Result<AccessTuple, QueryError>::Err(QueryError::NotMatched);
+            return Result<AccessTuple, QueryError>::Ok(
+                MakeAccessTuple(rec, RequiredTypes{}, OptionalTypes{},
+                                std::make_index_sequence<std::tuple_size_v<RequiredTypes>>{},
+                                std::make_index_sequence<std::tuple_size_v<OptionalTypes>>{}));
+        }
+
+        /**
+         * Filter-aware exactly-one-match accessor: Err(Empty) if no entity
+         * matches this view, Err(MultipleMatched) if more than one does,
+         * otherwise Ok(Get(the one match)). Non-const because it reuses
+         * ForEach (which calls EnsureArchetypes()).
+         */
+        ASTRA_NODISCARD Result<AccessTuple, QueryError> Single()
+        {
+            Entity found{};
+            size_t count = 0;
+            ForEach([&](Entity e, auto&&...) { if (count == 0) found = e; ++count; });
+            if (count == 0) ASTRA_UNLIKELY
+                return Result<AccessTuple, QueryError>::Err(QueryError::Empty);
+            if (count > 1) ASTRA_UNLIKELY
+                return Result<AccessTuple, QueryError>::Err(QueryError::MultipleMatched);
+            return Get(found);   // exactly one visible match; Get re-validates and materializes
+        }
+
+    private:
+        // The record iff `e` is alive AND structurally matches this view AND is
+        // enabled-visible; else nullptr. No EnsureArchetypes needed — matching is
+        // tested against the entity's OWN archetype mask.
+        ASTRA_NODISCARD const EntityRecord* VisibleRecord(Entity e) const
+        {
+            if (!m_archetypeManager) ASTRA_UNLIKELY return nullptr;
+            const EntityRecord* rec = m_archetypeManager->GetEntityRecord(e);
+            if (!rec) return nullptr;   // dead/absent (GetEntityRecord checks version + archetype)
+            if (!QueryBuilder::Matches(rec->archetype->GetMask())) return nullptr;
+            if constexpr (HasRequiredFilter)
+            {
+                if (!EnabledVisible(rec)) return nullptr;
+            }
+            return rec;
+        }
+
+        // False iff any required enableable component is DISABLED for this entity.
+        // Only instantiated when HasRequiredFilter (guarded at the call site).
+        ASTRA_NODISCARD bool EnabledVisible(const EntityRecord* rec) const
+        {
+            return EnabledVisibleImpl(rec, EnabledRequiredFilter{});
+        }
+        template<typename... Fs>
+        ASTRA_NODISCARD bool EnabledVisibleImpl(const EntityRecord* rec, std::tuple<Fs...>) const
+        {
+            const ArchetypeColumnMeta& cm = rec->archetype->GetColumnMeta();
+            const size_t idx = rec->location.GetEntityIndex();
+            bool disabled = false;
+            ((disabled = disabled || rec->chunk->IsDisabled(cm.idToColumn[TypeID<Fs>::Value()], idx)), ...);
+            return !disabled;
+        }
+
         struct ArchetypeEntityCountComparator
         {
             bool operator()(Archetype* a, Archetype* b) const
@@ -405,7 +591,8 @@ namespace Astra
             }
 
             auto archetypes = m_archetypeManager->GetArchetypes();
-            const size_t queryComponentCount = QueryBuilder::GetRequiredMask().Count();
+            const size_t queryComponentCount =
+                (QueryBuilder::GetRequiredMask() | QueryBuilder::GetWithMask()).Count();
 
             m_archetypes.reserve(archetypes.size());
 
@@ -427,16 +614,53 @@ namespace Astra
             std::sort(m_archetypes.begin(), m_archetypes.end(), ArchetypeEntityCountComparator{});
         }
 
+        // Wrap a user callback so it can be invoked as (Entity, Comps&...): if the
+        // callback also accepts the leading Entity, forward it; otherwise drop it.
+        // Additive: an existing (Entity, Comps...) body hits the first branch and is
+        // called identically. Resolves once per fixed component pack (per view type).
+        template<typename Func>
+        ASTRA_FORCEINLINE static auto MakeEntityOptionalAdapter(Func&& func)
+        {
+            return [&func](Astra::Entity e, auto&&... comps)
+            {
+                if constexpr (std::is_invocable_v<Func&, Astra::Entity, decltype(comps)...>)
+                    func(e, std::forward<decltype(comps)>(comps)...);
+                else if constexpr (std::is_invocable_v<Func&, decltype(comps)...>)
+                    func(std::forward<decltype(comps)>(comps)...);
+                else
+                    static_assert(sizeof(Func) == 0,
+                        "View callback must be invocable as (Entity, Comps&...) or (Comps&...). "
+                        "Component params must be 'T&' (write) or 'const T&' (read); "
+                        "Optional<T> supplies a 'T*' argument.");
+            };
+        }
+
         template<typename Func, typename... Required, typename... Optional>
         ASTRA_FORCEINLINE void ForEachImpl(Archetype* archetype, Func&& func, std::tuple<Required...>, std::tuple<Optional...>)
         {
-            if constexpr (sizeof...(Optional) == 0)
+            if constexpr (!HasEnabledFilter)
             {
-                archetype->ForEach<Required...>(std::forward<Func>(func));
+                // No enableable (non-IncludeDisabled) type in the query: the filtered
+                // path below is not instantiated at all, so this is the pre-existing,
+                // byte-identical loop (invariant 1).
+                if constexpr (sizeof...(Optional) == 0)
+                {
+                    archetype->ForEach<Required...>(std::forward<Func>(func));
+                }
+                else
+                {
+                    ForEachWithOptional<Required..., Optional...>(archetype, std::forward<Func>(func), std::make_index_sequence<sizeof...(Required)>{}, std::make_index_sequence<sizeof...(Optional)>{});
+                }
             }
             else
             {
-                ForEachWithOptional<Required..., Optional...>(archetype, std::forward<Func>(func), std::make_index_sequence<sizeof...(Required)>{}, std::make_index_sequence<sizeof...(Optional)>{});
+                const auto& chunks = archetype->GetChunks();
+                for (auto& chunk : chunks)
+                {
+                    VisitChunkFiltered(archetype, chunk.get(), func,
+                                       std::make_index_sequence<sizeof...(Required)>{},
+                                       std::make_index_sequence<sizeof...(Optional)>{});
+                }
             }
         }
         
@@ -477,13 +701,28 @@ namespace Astra
         template<typename Func, typename... Required, typename... Optional>
         ASTRA_FORCEINLINE void ParallelForEachChunkImpl(Archetype* archetype, size_t chunkIndex, Func&& func, std::tuple<Required...>, std::tuple<Optional...>)
         {
-            if constexpr (sizeof...(Optional) == 0)
+            if constexpr (!HasEnabledFilter)
             {
-                archetype->ForEachChunk<Required...>(chunkIndex, std::forward<Func>(func));
+                // Pre-existing byte-identical chunk walk (invariant 1).
+                if constexpr (sizeof...(Optional) == 0)
+                {
+                    archetype->ForEachChunk<Required...>(chunkIndex, std::forward<Func>(func));
+                }
+                else
+                {
+                    ParallelForEachChunkWithOptional<Required..., Optional...>(archetype, chunkIndex, std::forward<Func>(func), std::make_index_sequence<sizeof...(Required)>{}, std::make_index_sequence<sizeof...(Optional)>{});
+                }
             }
             else
             {
-                ParallelForEachChunkWithOptional<Required..., Optional...>(archetype, chunkIndex, std::forward<Func>(func), std::make_index_sequence<sizeof...(Required)>{}, std::make_index_sequence<sizeof...(Optional)>{});
+                // Same per-chunk three-tier filter as the serial path; partitioning
+                // (which chunk this worker got) is unchanged.
+                const auto& chunks = archetype->GetChunks();
+                if (chunkIndex >= chunks.size()) ASTRA_UNLIKELY
+                    return;
+                VisitChunkFiltered(archetype, chunks[chunkIndex].get(), func,
+                                   std::make_index_sequence<sizeof...(Required)>{},
+                                   std::make_index_sequence<sizeof...(Optional)>{});
             }
         }
         
@@ -519,13 +758,196 @@ namespace Astra
             InvokeEntityCallback(entities, requiredPtrs, optionalPtrs, count, std::forward<Func>(func), std::make_index_sequence<sizeof...(RequiredTs)>{}, std::make_index_sequence<sizeof...(OptionalTs)>{});
         }
 
+        // Empty (tag) required components have no storage, so
+        // chunk->GetComponentArray<T>() returns nullptr for them. Indexing that
+        // raw pointer (`ptr[i]`) would bind a reference to a null-derived address
+        // (UB; UBSan traps). Mirror the plain path's Archetype::GetComponentValue
+        // and hand out a shared static instance instead. For non-empty components
+        // this force-inlines to the identical `array[index]`, so the hot path is
+        // unchanged.
+        template<typename T>
+        ASTRA_FORCEINLINE static auto& RequiredElement(T* array, size_t index) noexcept
+        {
+            if constexpr (std::is_empty_v<T>)
+            {
+                static T s_emptyInstance{};
+                return s_emptyInstance;
+            }
+            else
+            {
+                return array[index];
+            }
+        }
+
         template<typename EntitiesVec, typename ReqTuple, typename OptTuple, typename Func, size_t... ReqIs, size_t... OptIs>
         ASTRA_FORCEINLINE void InvokeEntityCallback(const EntitiesVec& entities, const ReqTuple& reqPtrs, const OptTuple& optPtrs, size_t count, Func&& func, std::index_sequence<ReqIs...>, std::index_sequence<OptIs...>)
         {
             for (size_t i = 0; i < count; ++i)
             {
-                func(entities[i], std::get<ReqIs>(reqPtrs)[i]..., (std::get<OptIs>(optPtrs) ? &std::get<OptIs>(optPtrs)[i] : nullptr)...);
+                func(entities[i], RequiredElement(std::get<ReqIs>(reqPtrs), i)..., (std::get<OptIs>(optPtrs) ? &std::get<OptIs>(optPtrs)[i] : nullptr)...);
             }
+        }
+
+        // ============ Enableable-components filtered iteration (spec §5) ============
+        // Everything below is instantiated ONLY when HasEnabledFilter is true (the
+        // callers gate it with `if constexpr`); an unfiltered view never sees it.
+
+        // Resolve one required enableable-filtered column: record its disabled-word
+        // pointer and fold its all-enabled / all-disabled state into the flags.
+        template<size_t F>
+        ASTRA_FORCEINLINE void ResolveOneRequired(ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm, size_t count,
+                                                  const uint64_t** reqWords, bool& allZero, bool& anyFull)
+        {
+            using T = std::tuple_element_t<F, EnabledRequiredFilter>;
+            const int col = cm.idToColumn[TypeID<T>::Value()];  // required => present, enableable => has words
+            reqWords[F] = chunk->GetDisabledWords(col);
+            const uint32_t dc = chunk->GetDisabledCount(col);
+            if (dc == static_cast<uint32_t>(count)) anyFull = true;   // fully disabled => empty intersection
+            if (dc != 0) allZero = false;
+        }
+
+        template<size_t... Fs>
+        ASTRA_FORCEINLINE bool ResolveRequiredFilter(ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm, size_t count,
+                                                     const uint64_t** reqWords, bool& allZero, std::index_sequence<Fs...>)
+        {
+            bool anyFull = false;
+            allZero = true;
+            (ResolveOneRequired<Fs>(chunk, cm, count, reqWords, allZero, anyFull), ...);
+            return anyFull;
+        }
+
+        // A present, enableable optional with any disabled entity forces the mixed
+        // path so its per-entity pointer can be nulled.
+        template<size_t K, typename OptTuple>
+        ASTRA_FORCEINLINE void CheckOptionalAllEnabled(const OptTuple& optPtrs, ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm, bool& allZero)
+        {
+            using OptT = std::tuple_element_t<K, OptionalTypes>;
+            if constexpr (IsEnableableV<OptT>)
+            {
+                if (std::get<K>(optPtrs) && chunk->GetDisabledCount(cm.idToColumn[TypeID<OptT>::Value()]) != 0)
+                    allZero = false;
+            }
+        }
+
+        // Per-entity optional pointer for the mixed path: null while the entity is
+        // disabled in an enableable optional column; otherwise the usual present/
+        // absent pointer. The bit test exists ONLY for enableable optionals (the
+        // "second if constexpr"), so required-only / non-enableable-optional views
+        // pay nothing.
+        template<size_t K, typename OptTuple>
+        ASTRA_FORCEINLINE auto FilteredOptionalArg(const OptTuple& optPtrs, size_t i, ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm)
+        {
+            using OptT = std::tuple_element_t<K, OptionalTypes>;
+            OptT* base = std::get<K>(optPtrs);
+            if constexpr (IsEnableableV<OptT>)
+            {
+                if (base && chunk->IsDisabled(cm.idToColumn[TypeID<OptT>::Value()], i))
+                    return static_cast<OptT*>(nullptr);
+            }
+            return base ? &base[i] : static_cast<OptT*>(nullptr);
+        }
+
+        template<typename EntitiesVec, typename ReqTuple, typename OptTuple, typename Func, size_t... ReqIs, size_t... OptIs>
+        ASTRA_FORCEINLINE void InvokeEntityCallbackFiltered(const EntitiesVec& entities, const ReqTuple& reqPtrs, const OptTuple& optPtrs,
+                                                            size_t begin, size_t end, ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm,
+                                                            Func&& func, std::index_sequence<ReqIs...>, std::index_sequence<OptIs...>)
+        {
+            for (size_t i = begin; i < end; ++i)
+            {
+                func(entities[i], RequiredElement(std::get<ReqIs>(reqPtrs), i)..., FilteredOptionalArg<OptIs>(optPtrs, i, chunk, cm)...);
+            }
+        }
+
+        // Three-tier enabled-only filter for one chunk (shared by the serial and
+        // parallel paths). count==0 chunks are no-ops.
+        template<typename Func, size_t... ReqIs, size_t... OptIs>
+        ASTRA_FORCEINLINE void VisitChunkFiltered(Archetype* archetype, ArchetypeChunk* chunk, Func&& func,
+                                                  std::index_sequence<ReqIs...> reqSeq, std::index_sequence<OptIs...> optSeq)
+        {
+            const size_t count = chunk->GetCount();
+            if (count == 0) ASTRA_UNLIKELY
+                return;
+
+            const ArchetypeColumnMeta& cm = archetype->GetColumnMeta();
+
+            std::array<bool, sizeof...(OptIs)> hasOptional =
+            {
+                archetype->HasComponent<std::tuple_element_t<OptIs, OptionalTypes>>()...
+            };
+            std::tuple<std::tuple_element_t<ReqIs, RequiredTypes>*...> reqPtrs =
+            {
+                chunk->GetComponentArray<std::tuple_element_t<ReqIs, RequiredTypes>>()...
+            };
+            std::tuple<std::tuple_element_t<OptIs, OptionalTypes>*...> optPtrs =
+            {
+                (hasOptional[OptIs] ? chunk->GetComponentArray<std::tuple_element_t<OptIs, OptionalTypes>>() : nullptr)...
+            };
+            const auto& entities = chunk->GetEntities();
+
+            constexpr size_t NReq = std::tuple_size_v<EnabledRequiredFilter>;
+            const uint64_t* reqWords[NReq == 0 ? 1 : NReq];
+            bool allZero = true;
+            const bool anyReqFull = ResolveRequiredFilter(chunk, cm, count, reqWords, allZero, std::make_index_sequence<NReq>{});
+            if (anyReqFull) ASTRA_UNLIKELY
+                return;   // Tier 2: a required column is fully disabled -> skip whole chunk
+
+            if constexpr (HasOptionalFilter)
+            {
+                (CheckOptionalAllEnabled<OptIs>(optPtrs, chunk, cm, allZero), ...);
+            }
+
+            if (allZero)
+            {
+                // Tier 1: all relevant columns fully enabled -> pre-existing body, no bit tests.
+                InvokeEntityCallback(entities, reqPtrs, optPtrs, count, func, reqSeq, optSeq);
+                return;
+            }
+
+            // Tier 3: mixed -> enabled runs of the required intersection, per-entity
+            // optional nulling inside the runs.
+            Detail::ForEachEnabledRun(reqWords, NReq, count,
+                [&](size_t begin, size_t end)
+                {
+                    InvokeEntityCallbackFiltered(entities, reqPtrs, optPtrs, begin, end, chunk, cm, func, reqSeq, optSeq);
+                });
+        }
+
+        // Exact visible-entity count for a required-filtered view: enabled-in-all
+        // required enableable columns, per chunk. Called only when HasRequiredFilter.
+        size_t SizeFiltered(Archetype* archetype)
+        {
+            const ArchetypeColumnMeta& cm = archetype->GetColumnMeta();
+            size_t total = 0;
+            for (auto& chunkPtr : archetype->GetChunks())
+            {
+                ArchetypeChunk* chunk = chunkPtr.get();
+                const size_t count = chunk->GetCount();
+                if (count == 0) ASTRA_UNLIKELY
+                    continue;
+
+                constexpr size_t NReq = std::tuple_size_v<EnabledRequiredFilter>;
+                const uint64_t* reqWords[NReq == 0 ? 1 : NReq];
+                bool allZero = true;
+                const bool anyFull = ResolveRequiredFilter(chunk, cm, count, reqWords, allZero, std::make_index_sequence<NReq>{});
+                if (anyFull) continue;                    // 0 visible in this chunk
+                if (allZero) { total += count; continue; }
+
+                // Mixed: subtract popcount of the disabled union, tail-masked to count.
+                const size_t numWords = (count + 63) >> 6;
+                size_t disabled = 0;
+                for (size_t w = 0; w < numWords; ++w)
+                {
+                    uint64_t dis = 0;
+                    for (size_t s = 0; s < NReq; ++s)
+                        dis |= reqWords[s][w];
+                    const size_t validBits = count - (w << 6);
+                    if (validBits < 64)
+                        dis &= (uint64_t(1) << validBits) - 1;
+                    disabled += static_cast<size_t>(std::popcount(dis));
+                }
+                total += count - disabled;
+            }
+            return total;
         }
 
         std::vector<Archetype*> m_archetypes;
@@ -535,5 +957,25 @@ namespace Astra
         uint32_t m_lastRefreshCounter = 0;
         uint32_t m_lastGeneration = 0;
         uint32_t m_lastRemovalCounter = 0;
+    };
+
+    // Compile-time read/write access sets of a View's type args, for the scheduler
+    // (Stage 2). With<T>/Not<T>/Any/OneOf contribute nothing (match-only). Masks are
+    // built at runtime from the type-lists, mirroring how SystemScheduler harvests
+    // component masks today.
+    template<typename V> struct ViewAccess;
+
+    template<typename... Args>
+    struct ViewAccess<View<Args...>>
+    {
+        using Reads  = typename Detail::AccessReads<Args...>::type;
+        using Writes = typename Detail::AccessWrites<Args...>::type;
+
+        static ComponentMask ReadMask()  { return MaskOf(static_cast<Reads*>(nullptr)); }
+        static ComponentMask WriteMask() { return MaskOf(static_cast<Writes*>(nullptr)); }
+
+    private:
+        template<typename... Ts>
+        static ComponentMask MaskOf(std::tuple<Ts...>*) { return MakeComponentMask<Ts...>(); }
     };
 } // namespace Astra

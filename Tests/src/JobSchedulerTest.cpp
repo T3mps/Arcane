@@ -13,7 +13,15 @@
 
 namespace
 {
-    struct Counter { int value = 0; };
+    // NAME must be unique across the whole test exe, anonymous namespace or not:
+    // Astra identifies a type by its UNQUALIFIED name hash, and refuses the second
+    // type that hashes the same (TypeContext.hpp -- "do not place two same-named
+    // types in anonymous namespaces across translation units"). This was plain
+    // `Counter`, byte-identical to RuntimeTest.cpp's own anonymous `Counter`; the
+    // older Astra silently ALIASED them onto one ComponentID, so these two suites
+    // were quietly sharing a component. The vendor sync turned that into a loud
+    // refusal, which is how it was finally noticed.
+    struct JobCounter { int value = 0; };
 }
 
 TEST_CASE("enkiTS work scheduler drives Astra parallel iteration", "[jobs]")
@@ -26,15 +34,15 @@ TEST_CASE("enkiTS work scheduler drives Astra parallel iteration", "[jobs]")
     Astra::Registry::Config cfg;
     cfg.workScheduler = sched;
     Astra::Registry reg(cfg);
-    reg.GetComponentRegistry()->RegisterComponent<Counter>();
+    reg.GetComponentRegistry()->RegisterComponent<JobCounter>();
 
     constexpr int kN = 4096;
     for (int i = 0; i < kN; ++i)
-        reg.CreateEntityWith(Counter{i});
+        reg.CreateEntityWith(JobCounter{i});
 
     std::atomic<int> visited{0};
-    auto view = reg.CreateView<Counter>();
-    view.ParallelForEach([&](Astra::Entity, Counter& c)
+    auto view = reg.CreateView<JobCounter>();
+    view.ParallelForEach([&](Astra::Entity, JobCounter& c)
     {
         c.value += 1;
         visited.fetch_add(1, std::memory_order_relaxed);

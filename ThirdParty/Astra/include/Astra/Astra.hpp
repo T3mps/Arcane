@@ -41,7 +41,6 @@
 // Archetype system
 #include "Archetype/Archetype.hpp"
 #include "Archetype/ArchetypeChunkPool.hpp"
-#include "Archetype/ArchetypeGraph.hpp"
 #include "Archetype/ArchetypeManager.hpp"
 
 // Registry and queries
@@ -60,6 +59,7 @@
 #include "System/SystemContext.hpp"
 #include "System/SystemExecutor.hpp"
 #include "System/SystemMetadata.hpp"
+#include "System/SystemParam.hpp"
 #include "System/SystemScheduler.hpp"
 
 // Serialization

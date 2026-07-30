@@ -119,19 +119,44 @@ namespace Astra
                 return false;
             }
 
-            // Calculate next version with wraparound
-            VersionType nextVersion = currentVersion + 1;
-            if (nextVersion == NULL_VERSION) ASTRA_UNLIKELY  // Wrap from 255 to 1
-            {
-                nextVersion = INITIAL_VERSION;
-            }
+            // Calculate next version with wraparound (mask-correct for any VersionBits)
+            const VersionType nextVersion = Detail::NextEntityVersion<VersionType>(
+                currentVersion, static_cast<VersionType>(Entity::VERSION_MASK), NULL_VERSION, INITIAL_VERSION);
 
             // Mark as destroyed in table
             m_table.Destroy(id);
 
             // Recycle the ID with next version
             m_idStack.Recycle(id, nextVersion, true);  // preferLocal = true for segment locality
-            
+
+            return true;
+        }
+
+        // Record-completing variant: the caller (Registry::DestroyEntity) already
+        // holds the entity's VALIDATED record, so the IsValid/GetVersion re-walks
+        // are skipped. The version write stays HERE -- EntityManager alone owns
+        // EntityRecord::version (W1).
+        bool Destroy(Entity entity, EntityRecord* rec) noexcept
+        {
+            ASTRA_ASSERT(rec == m_table.GetRecord(entity.GetID()), "record/entity mismatch");
+            const VersionType currentVersion = entity.GetVersion();
+            if (rec->version != currentVersion) ASTRA_UNLIKELY
+            {
+                return false;
+            }
+
+            const IDType id = entity.GetID();
+
+            // Calculate next version with wraparound (mask-correct for any VersionBits)
+            const VersionType nextVersion = Detail::NextEntityVersion<VersionType>(
+                currentVersion, static_cast<VersionType>(Entity::VERSION_MASK), NULL_VERSION, INITIAL_VERSION);
+
+            // Mark as destroyed in table
+            m_table.Destroy(id);
+
+            // Recycle the ID with next version
+            m_idStack.Recycle(id, nextVersion, true);  // preferLocal = true for segment locality
+
             return true;
         }
 
@@ -168,12 +193,9 @@ namespace Astra
                 // Verify version matches
                 if (m_table.GetVersion(id) != currentVersion) ASTRA_UNLIKELY continue;
                 
-                // Calculate next version
-                VersionType nextVersion = currentVersion + 1;
-                if (nextVersion == NULL_VERSION) ASTRA_UNLIKELY
-                {
-                    nextVersion = INITIAL_VERSION;
-                }
+                // Calculate next version (mask-correct for any VersionBits)
+                const VersionType nextVersion = Detail::NextEntityVersion<VersionType>(
+                    currentVersion, static_cast<VersionType>(Entity::VERSION_MASK), NULL_VERSION, INITIAL_VERSION);
                 
                 // Mark as destroyed
                 m_table.Destroy(id);
@@ -203,6 +225,13 @@ namespace Astra
         {
             return m_table.GetVersion(id);
         }
+
+        // The shared paged EntityRecord table. ArchetypeManager is injected a
+        // pointer to this same table so validate (version) and locate
+        // (archetype/location) hit one paged slot. EntityManager owns its
+        // lifecycle; ArchetypeManager only writes archetype/location, never version.
+        ASTRA_NODISCARD EntityTable&       GetRecordTable()       noexcept { return m_table; }
+        ASTRA_NODISCARD const EntityTable& GetRecordTable() const noexcept { return m_table; }
 
         void Clear() noexcept
         {

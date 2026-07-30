@@ -25,7 +25,13 @@ namespace Astra
         
         // Components this system writes (mutable access)
         ComponentMask writes;
-        
+
+        // Resources this system reads / writes (singleton state; keyed by the
+        // resource type's ComponentID, in masks distinct from the component
+        // reads/writes so component-vs-resource can never false-conflict).
+        ComponentMask resourceReads;
+        ComponentMask resourceWrites;
+
         // Runtime type identifier for the system (type-erased)
         size_t typeId;
         
@@ -34,6 +40,24 @@ namespace Astra
 
         // True if the system declared Astra::Exclusive (runs in its own solo group).
         bool requiresExclusive = false;
+
+        // Explicit ordering edges (Phase D), resolved to the target systems'
+        // TypeID::Hash() -- the same 64-bit key m_systemIndices uses. Filled by
+        // ExtractSystemTraits; resolved to indices in BuildExecutionPlan.
+        std::vector<uint64_t> beforeIds;
+        std::vector<uint64_t> afterIds;
+        std::vector<uint64_t> ambiguousWithIds;
+
+        // Position of this system in the topological execution order (filled by
+        // BuildExecutionPlan). Equals insertionOrder when no ordering edges
+        // exist. Primary key of the deferred-command SortKey (see Task 4).
+        size_t scheduleOrder = 0;
+
+        // Sync-point segment this system belongs to (Phase E): the number of
+        // AddSyncPoint() fences registered before it. Systems never reorder or
+        // group across a segment boundary; deferred commands flush at each fence.
+        // 0 for every system when no SyncPoint is used (byte-identical to Phase D).
+        size_t segmentIndex = 0;
     };
     
     /**

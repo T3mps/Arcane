@@ -11,6 +11,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <tuple>
@@ -33,72 +34,13 @@
 #include "../Serialization/BinaryReader.hpp"
 #include "../Serialization/BinaryWriter.hpp"
 #include "ArchetypeChunkPool.hpp"
+#include "EntityLocation.hpp"
 
 namespace Astra
 {
     class ArchetypeManager;
     class Registry;
 
-    using ArchetypeChunk = ArchetypeChunkPool::Chunk;
-
-    struct EntityLocation
-    {
-        uint32_t chunkIndex;
-        uint32_t entityIndex;
-
-        constexpr EntityLocation() noexcept :
-            chunkIndex(std::numeric_limits<uint32_t>::max()),
-            entityIndex(std::numeric_limits<uint32_t>::max())
-        {}
-
-        constexpr EntityLocation(uint32_t chunk, uint32_t entity) noexcept : chunkIndex(chunk), entityIndex(entity) {}
-
-        ASTRA_NODISCARD constexpr static EntityLocation Create(size_t chunkIndex, size_t entityIndex) noexcept
-        {
-            return EntityLocation(static_cast<uint32_t>(chunkIndex), static_cast<uint32_t>(entityIndex));
-        }
-
-        ASTRA_NODISCARD constexpr size_t GetChunkIndex() const noexcept
-        {
-            return chunkIndex;
-        }
-
-        ASTRA_NODISCARD constexpr size_t GetEntityIndex() const noexcept
-        {
-            return entityIndex;
-        }
-
-        ASTRA_NODISCARD constexpr bool IsValid() const noexcept
-        {
-            return chunkIndex != std::numeric_limits<uint32_t>::max();
-        }
-
-        constexpr bool operator==(const EntityLocation& other) const noexcept 
-        { 
-            return chunkIndex == other.chunkIndex && entityIndex == other.entityIndex; 
-        }
-        constexpr bool operator!=(const EntityLocation& other) const noexcept 
-        { 
-            return !(*this == other); 
-        }
-        constexpr bool operator<(const EntityLocation& other) const noexcept 
-        { 
-            return chunkIndex < other.chunkIndex || (chunkIndex == other.chunkIndex && entityIndex < other.entityIndex); 
-        }
-        constexpr bool operator>(const EntityLocation& other) const noexcept 
-        { 
-            return other < *this; 
-        }
-        constexpr bool operator<=(const EntityLocation& other) const noexcept 
-        { 
-            return !(other < *this); 
-        }
-        constexpr bool operator>=(const EntityLocation& other) const noexcept 
-        { 
-            return !(*this < other); 
-        }
-    };
-    
     template<Component... Components>
     ASTRA_NODISCARD ComponentMask MakeComponentMask() noexcept
     {
@@ -114,20 +56,206 @@ namespace Astra
             m_mask(mask),
             m_componentCount(mask.Count()),
             m_entityCount(0),
-            m_entitiesPerChunk(0),
-            m_entitiesPerChunkShift(0),
-            m_entitiesPerChunkMask(0),
             m_initialized(false)
         {}
         
         ~Archetype() = default;
-        
+
+    private:
+        // Builds m_columnMeta from m_componentDescriptors: excludes tags (desc.size == 0) from
+        // columns, sorts columns ascending by id (required by the merge-join used for
+        // cross-archetype moves), maps id -> column index, and flags the archetype complex if
+        // any column is not trivially copyable. Called once, from Initialize(), immediately
+        // after m_componentDescriptors is set.
+        void BuildColumnMeta()
+        {
+            m_columnMeta = ArchetypeColumnMeta{};   // resets idToColumn to -1, columnCount/isComplex to 0/false
+            for (const ComponentDescriptor& desc : m_componentDescriptors)
+            {
+                if (desc.size == 0) continue;       // tag: no storage column (idToColumn stays -1)
+                const uint16_t col = m_columnMeta.columnCount++;
+                m_columnMeta.columns[col] = { desc.id, static_cast<uint32_t>(desc.size), &desc };
+                if (!desc.is_trivially_copyable) m_columnMeta.isComplex = true;
+            }
+            // Guarantee ascending-by-id column order (merge-join requirement in W3). If
+            // m_componentDescriptors is already id-ascending this is a no-op; sort defensively.
+            std::sort(m_columnMeta.columns, m_columnMeta.columns + m_columnMeta.columnCount,
+                      [](const ArchetypeColumnMeta::ColumnDesc& a, const ArchetypeColumnMeta::ColumnDesc& b)
+                      { return a.id < b.id; });
+            for (uint16_t c = 0; c < m_columnMeta.columnCount; ++c)
+                m_columnMeta.idToColumn[m_columnMeta.columns[c].id] = static_cast<int16_t>(c);
+
+            // Record which columns opted into ASTRA_ENABLEABLE, in final (post-sort)
+            // ordinal order. enableableColumnCount == 0 is the zero-cost early-out the
+            // chunk carve + every preservation site takes for non-enableable archetypes.
+            m_columnMeta.enableableColumnCount = 0;
+            for (uint16_t c = 0; c < m_columnMeta.columnCount; ++c)
+            {
+                if (m_columnMeta.columns[c].descriptor->isEnableable)
+                    m_columnMeta.enableableColumns[m_columnMeta.enableableColumnCount++] = c;
+            }
+        }
+
+        // Exact (non-pow2) capacity for a chunk of chunkBytes, under the same
+        // conservative alignment-overhead estimate Initialize() uses. Zero-size
+        // archetypes (tag-only / the root archetype every registry carries) store
+        // their entities in the chunk's side vector rather than in chunk memory:
+        // give them chunkBytes/64 slots, which reproduces the legacy 256-at-16KB.
+        ASTRA_NODISCARD size_t ComputeCapacityForBytes(size_t chunkBytes) const noexcept
+        {
+            if (m_perEntitySize == 0)
+            {
+                return chunkBytes >> 6;
+            }
+            const size_t usable = chunkBytes > m_alignmentOverhead ? chunkBytes - m_alignmentOverhead : 0;
+            size_t cap = usable / m_perEntitySize;
+
+            // Enableable columns carve disabled-bit words INSIDE the chunk (Task 2),
+            // which the column-only estimate above does not account for. Archetypes
+            // with NO enableable column skip this entirely and keep the exact legacy
+            // value (verified: enableableColumnCount == 0 => early return of `cap`).
+            // Otherwise shrink `cap` until the precise carve layout (columns + word
+            // regions, mirrored by ComputeLayoutBytesForCapacity) fits chunkBytes,
+            // using an overshoot-proportional step so even tiny components converge in
+            // a couple of iterations, then reclaim any slack the step overshot.
+            if (m_columnMeta.enableableColumnCount > 0 && cap > 0)
+            {
+                size_t layout = ComputeLayoutBytesForCapacity(cap);
+                while (cap > 0 && layout > chunkBytes)
+                {
+                    // Each unit of cap contributes >= m_perEntitySize column bytes, so
+                    // this step can never under-shrink into a non-terminating loop.
+                    size_t dec = (layout - chunkBytes) / m_perEntitySize;
+                    if (dec == 0) dec = 1;
+                    cap -= std::min(cap, dec);
+                    layout = ComputeLayoutBytesForCapacity(cap);
+                }
+                while (ComputeLayoutBytesForCapacity(cap + 1) <= chunkBytes)
+                    ++cap;
+            }
+            return cap;
+        }
+
+        // Exact byte footprint of a chunk holding `cap` entities, byte-for-byte
+        // mirroring ArchetypeChunk::InitializeColumns: cache-line-aligned column
+        // blocks followed by 8-byte-aligned disabled-word regions for each enableable
+        // column. The single source of truth the capacity math shrinks against so the
+        // chunk's own `offset <= m_chunkSize` carve assert can never trip.
+        ASTRA_NODISCARD size_t ComputeLayoutBytesForCapacity(size_t cap) const noexcept
+        {
+            size_t offset = 0;
+            for (uint16_t c = 0; c < m_columnMeta.columnCount; ++c)
+            {
+                offset = (offset + CACHE_LINE_SIZE - 1) & ~(CACHE_LINE_SIZE - 1);
+                offset += static_cast<size_t>(m_columnMeta.columns[c].stride) * cap;
+            }
+            const size_t words = (cap + 63) / 64;
+            for (uint16_t e = 0; e < m_columnMeta.enableableColumnCount; ++e)
+            {
+                offset = (offset + 7) & ~size_t(7);
+                offset += words * 8;
+            }
+            return offset;
+        }
+
+        // Byte size a chunk must be allocated at to be GUARANTEED to hold exactly
+        // `cap` entities once ComputeCapacityForBytes re-derives its capacity, i.e.
+        // the conservative column estimate (perEntitySize*cap + alignmentOverhead)
+        // PLUS an upper bound on the enableable word regions. Callers that size a
+        // chunk from a known capacity (Deserialize) MUST use this rather than the raw
+        // column formula, or the word carve would shrink the re-derived capacity below
+        // `cap` and overflow. Zero-size archetypes keep the legacy entity-vector sizing.
+        ASTRA_NODISCARD size_t ChunkBytesToHold(size_t cap) const noexcept
+        {
+            if (m_perEntitySize == 0)
+                return std::max<size_t>(64, cap << 6);
+            size_t bytes = cap * m_perEntitySize + m_alignmentOverhead;
+            const uint16_t ec = m_columnMeta.enableableColumnCount;
+            if (ec > 0)
+            {
+                const size_t words = (cap + 63) / 64;
+                bytes += static_cast<size_t>(ec) * (words * 8 + 8);   // +8/col: 8-byte-align slack upper bound
+            }
+            return bytes;
+        }
+
+        // Grow-as-populate (Phase 2 Unit C part 2): size each NEW chunk from the
+        // archetype's current data footprint. Empty archetype -> minChunkBytes;
+        // geometric ramp (~1.5x total per chunk at divisor 2) toward maxChunkBytes.
+        // Zero-size archetypes keep the legacy fixed chunk size (entities live in
+        // the side vector; there is nothing to ramp).
+        //
+        // Fit-one-entity floor: the ramp target computed from the data footprint
+        // (raw) is never allowed to fall below oneEntityBytes, one entity's own
+        // footprint under the same conservative alignment estimate
+        // ComputeCapacityForBytes subtracts. Without this floor, the FIRST chunk
+        // of any archetype is always sized from raw == 0 (m_totalCapacity == 0),
+        // which clamps straight to minChunkBytes (4KB) regardless of how big a
+        // single entity actually is -- so any component whose footprint exceeded
+        // ~4KB usable made Initialize's refusal path below trip, even though a
+        // 512KB-capable pool could easily have fit that one entity. Flooring at
+        // oneEntityBytes guarantees a chunk sized to fit >= 1 entity is always
+        // attempted first; the min/max clamp still applies around it, so small
+        // components keep their 4KB first chunk and big components get a first
+        // chunk just big enough (up to maxChunkBytes).
+        ASTRA_NODISCARD size_t NextChunkBytes() const noexcept
+        {
+            if (!m_chunkPool)
+                return ArchetypeChunkPool::DEFAULT_CHUNK_SIZE;
+            if (m_perEntitySize == 0)
+                return m_chunkPool->GetChunkSize();
+            const size_t dataBytes = m_totalCapacity * m_perEntitySize;
+            const size_t raw = dataBytes / m_chunkPool->GetGrowDivisor();
+            const size_t oneEntityBytes = m_perEntitySize + m_alignmentOverhead;
+            const size_t target = std::max(raw, oneEntityBytes);
+            return std::clamp(target, m_chunkPool->GetMinChunkBytes(), m_chunkPool->GetMaxChunkBytes());
+        }
+
+        // THE single chunk-creation path: computes the chunk's exact capacity from
+        // its byte size, allocates it, and keeps m_totalCapacity in step. Returns
+        // nullptr (never throws) when no layout is possible or the pool is out.
+        ArchetypeChunk* AppendChunk(size_t chunkBytes)
+        {
+            const size_t capacity = ComputeCapacityForBytes(chunkBytes);
+            if (capacity == 0 || !m_chunkPool) ASTRA_UNLIKELY
+            {
+                return nullptr;
+            }
+
+            auto chunk = m_chunkPool->CreateChunk(capacity, chunkBytes, &m_columnMeta);
+            if (!chunk) ASTRA_UNLIKELY
+            {
+                return nullptr;
+            }
+
+            m_totalCapacity += capacity;
+            m_chunks.emplace_back(std::move(chunk));
+            return m_chunks.back().get();
+        }
+
+        // Drops the trailing chunk, keeping m_totalCapacity in step. Every chunk
+        // removal must go through here (or recompute the sum) or the running
+        // total silently drifts above the real capacity.
+        void PopBackChunk()
+        {
+            ASTRA_ASSERT(!m_chunks.empty(), "PopBackChunk on an empty chunk list");
+            const size_t capacity = m_chunks.back()->GetCapacity();
+            ASTRA_ASSERT(m_totalCapacity >= capacity, "m_totalCapacity underflow");
+            m_totalCapacity -= capacity;
+            m_chunks.pop_back();
+        }
+
+    public:
         void Initialize(const std::vector<ComponentDescriptor>& componentDescriptors)
         {
             if (m_initialized) ASTRA_UNLIKELY
                 return;
 
             m_componentDescriptors = componentDescriptors;
+            // m_columnMeta.descriptor pointers point into m_componentDescriptors above, which is
+            // a std::vector set once here and never mutated afterward -- see the stability note
+            // on m_columnMeta's declaration.
+            BuildColumnMeta();
 
             size_t perEntitySize = 0;
 
@@ -150,45 +278,44 @@ namespace Astra
                 ? (nonEmptyComponents - 1) * CACHE_LINE_SIZE
                 : 0;
 
-            size_t chunkSize = m_chunkPool ? m_chunkPool->GetChunkSize() : ArchetypeChunkPool::DEFAULT_CHUNK_SIZE;
-            size_t remainingSpace = chunkSize > alignmentOverhead ? chunkSize - alignmentOverhead : 0;
+            m_perEntitySize = perEntitySize;
+            m_alignmentOverhead = alignmentOverhead;
+
+            // Grow-as-populate: the archetype is empty (m_totalCapacity == 0), so
+            // this always clamps to minChunkBytes for non-zero-size archetypes.
+            const size_t chunkBytes = NextChunkBytes();
 
             // A single entity's footprint must fit in the usable chunk space. The old
-            // code clamped m_entitiesPerChunk to 1 and proceeded even when perEntitySize
-            // exceeded remainingSpace, so writing that one entity's components later
-            // overflowed past the chunk's actual allocation into neighboring memory.
-            // There is no valid per-chunk layout for this component set at this chunk
-            // size: refuse to initialize instead of clamping-and-overflowing. Leave
-            // m_initialized == false and m_entitiesPerChunk == 0 (its constructed
-            // default) and create no chunk; GetOrCreateChunk() and the batch-add paths
-            // check m_entitiesPerChunk == 0 and refuse to create a chunk that could
-            // never legally hold even one entity, so callers degrade gracefully
-            // (entity creation succeeds but the entity never gets this component)
-            // instead of overflowing.
-            if (perEntitySize > remainingSpace) ASTRA_UNLIKELY
+            // code clamped the per-chunk count to 1 and proceeded even when
+            // perEntitySize exceeded that space, so writing that one entity's
+            // components later overflowed past the chunk's actual allocation into
+            // neighboring memory. NextChunkBytes() floors its ramp target at one
+            // entity's footprint (perEntitySize + alignmentOverhead), so the first
+            // chunk it proposes is always big enough to hold one entity UNLESS that
+            // footprint itself exceeds the pool's maxChunkBytes ceiling (the clamp's
+            // upper bound wins over the floor). This check therefore no longer fires
+            // merely because a component is bigger than some particular chunk size
+            // in the ramp -- it fires only when there is no chunk size this pool
+            // could ever produce, at any point in the ramp, that could hold even one
+            // entity. Refuse to initialize instead of clamping-and-overflowing.
+            // Leave m_initialized == false and create no chunk; GetOrCreateChunk()
+            // and the batch-add paths check m_initialized and refuse to create a
+            // chunk that could never legally hold even one entity, so callers
+            // degrade gracefully (entity creation succeeds but the entity never
+            // gets this component) instead of overflowing.
+            if (perEntitySize > 0 && ComputeCapacityForBytes(chunkBytes) == 0) ASTRA_UNLIKELY
             {
                 m_initialized = false;
                 return;
             }
-
-            size_t maxEntities = perEntitySize > 0 ? remainingSpace / perEntitySize : 256;
-
-            // Round down to nearest power of 2 for fast modulo/division operations
-            m_entitiesPerChunk = maxEntities > 0 ? std::bit_floor(maxEntities) : 1;
-            m_entitiesPerChunk = std::max(size_t(1), m_entitiesPerChunk);
-
-            m_entitiesPerChunkMask = m_entitiesPerChunk - 1;
-            m_entitiesPerChunkShift = std::countr_zero(m_entitiesPerChunk);
 
             m_initialized = true;
 
-            auto chunk = m_chunkPool->CreateChunk(m_entitiesPerChunk, m_componentDescriptors);
-            if (!chunk) ASTRA_UNLIKELY
+            if (!AppendChunk(chunkBytes)) ASTRA_UNLIKELY
             {
                 m_initialized = false;
                 return;
             }
-            m_chunks.emplace_back(std::move(chunk));
         }
 
         EntityLocation AddEntity(Entity entity)
@@ -217,28 +344,30 @@ namespace Astra
             std::vector<EntityLocation> locations;
             locations.reserve(count);
 
-            // Calculate and allocate needed chunks upfront
+            // Calculate and allocate needed chunks upfront. Chunk capacities can
+            // differ, so grow by asking each newly appended chunk what it added
+            // rather than dividing by a uniform per-chunk count.
             size_t remainingCapacity = GetRemainingCapacity();
             if (count > remainingCapacity) ASTRA_UNLIKELY
             {
-                if (m_entitiesPerChunk == 0) ASTRA_UNLIKELY
+                if (!m_initialized) ASTRA_UNLIKELY
                 {
                     // See GetOrCreateChunk(): this archetype never found a valid
                     // per-chunk layout and can never hold an entity.
                     return locations;
                 }
 
-                size_t additionalNeeded = count - remainingCapacity;
-                size_t newChunksNeeded = (additionalNeeded + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
-
-                for (size_t i = 0; i < newChunksNeeded; ++i)
+                // Recompute NextChunkBytes() every iteration (not hoisted): each
+                // appended chunk grows m_totalCapacity, so sizes must ramp within
+                // this one batch, not just across separate AddEntities calls.
+                while (remainingCapacity < count)
                 {
-                    auto chunk = m_chunkPool->CreateChunk(m_entitiesPerChunk, m_componentDescriptors);
+                    ArchetypeChunk* chunk = AppendChunk(NextChunkBytes());
                     if (!chunk) ASTRA_UNLIKELY
                     {
                         return locations;
                     }
-                    m_chunks.emplace_back(std::move(chunk));
+                    remainingCapacity += chunk->GetCapacity();
                 }
             }
 
@@ -248,7 +377,7 @@ namespace Astra
             while (entityIndex < count && chunkIndex < m_chunks.size()) ASTRA_LIKELY
             {
                 auto& chunk = m_chunks[chunkIndex];
-                size_t available = m_entitiesPerChunk - chunk->GetCount();
+                size_t available = chunk->GetCapacity() - chunk->GetCount();
 
                 if (available > 0) ASTRA_LIKELY
                 {
@@ -290,28 +419,57 @@ namespace Astra
             size_t remainingCapacity = GetRemainingCapacity();
             if (count > remainingCapacity) ASTRA_UNLIKELY
             {
-                if (m_entitiesPerChunk == 0) ASTRA_UNLIKELY
+                if (!m_initialized) ASTRA_UNLIKELY
                 {
                     // See GetOrCreateChunk(): this archetype never found a valid
                     // per-chunk layout and can never hold an entity.
                     return locations;
                 }
 
-                size_t additionalNeeded = count - remainingCapacity;
-                size_t newChunksNeeded = (additionalNeeded + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
-
-                for (size_t i = 0; i < newChunksNeeded; ++i)
+                // Recompute NextChunkBytes() every iteration -- see AddEntities.
+                while (remainingCapacity < count)
                 {
-                    auto chunk = m_chunkPool->CreateChunk(m_entitiesPerChunk, m_componentDescriptors);
+                    ArchetypeChunk* chunk = AppendChunk(NextChunkBytes());
                     if (!chunk) ASTRA_UNLIKELY
                     {
                         return locations;
                     }
-                    m_chunks.emplace_back(std::move(chunk));
+                    remainingCapacity += chunk->GetCapacity();
                 }
             }
 
-            for (size_t i = 0; i < count; ++i)
+            // Deduce the generator's component tuple ONCE (the generator is never
+            // called here -- the contract is exactly one invocation per entity, in
+            // index order, inside the run loop below).
+            using TupleType = std::decay_t<std::invoke_result_t<Generator&, size_t>>;
+            constexpr size_t tupleSize = std::tuple_size_v<TupleType>;
+
+            const ArchetypeColumnMeta& cm = m_columnMeta;
+
+            // Uncovered storage columns: those the generator tuple does NOT produce.
+            // On this path the archetype was built from the tuple's exact component set,
+            // so this is normally empty -- computed ONCE (not per entity) and kept as a
+            // defensive guard so a column the tuple misses is still default-constructed
+            // rather than left as raw (zeroed) bytes.
+            uint16_t uncovered[MAX_COMPONENTS];
+            uint16_t uncoveredCount = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+                for (uint16_t c = 0; c < cm.columnCount; ++c)
+                {
+                    const ComponentID id = cm.columns[c].id;
+                    const bool covered = ((TypeID<std::decay_t<std::tuple_element_t<Is, TupleType>>>::Value() == id) || ...);
+                    if (!covered) ASTRA_UNLIKELY
+                        uncovered[uncoveredCount++] = c;
+                }
+            }(std::make_index_sequence<tupleSize>{});
+
+            // Chunk-run loop: claim a contiguous run of slots in the current non-full
+            // chunk, hoist that chunk's typed column bases ONCE for the run, then
+            // move-construct each entity's components directly through those typed
+            // pointers (no idToColumn resolution, no per-element fn-ptr indirection).
+            size_t produced = 0;
+            while (produced < count)
             {
                 auto [chunkIndex, wasCreated] = GetOrCreateChunk();
                 if (chunkIndex == INVALID_CHUNK_INDEX) ASTRA_UNLIKELY
@@ -319,46 +477,69 @@ namespace Astra
                     break;
                 }
 
-                auto& chunk = m_chunks[chunkIndex];
-                size_t entityIndex = chunk->GetCount();
-                chunk->GetEntities().push_back(entities[i]);
-                chunk->SetCount(chunk->GetCount() + 1);
-                
-                auto componentTuple = generator(i);
-                
-                using TupleType = decltype(componentTuple);
-                constexpr size_t tupleSize = std::tuple_size_v<TupleType>;
-                
-                [&]<std::size_t... Is>(std::index_sequence<Is...>)
+                ArchetypeChunk* chunk = m_chunks[chunkIndex].get();
+                const size_t startSlot = chunk->GetCount();
+                const size_t capacity  = chunk->GetCapacity();
+                const size_t runLen    = std::min(count - produced, capacity - startSlot);
+                ASTRA_ASSERT(runLen > 0 && startSlot + runLen <= capacity,
+                             "AddEntitiesWith: run exceeds chunk capacity");
+
+                // One bulk entity-handle append + one count bump for the whole run.
+                std::vector<Entity>& entityVec = chunk->GetEntities();
+                entityVec.insert(entityVec.end(),
+                                 entities.begin() + produced,
+                                 entities.begin() + produced + runLen);
+                chunk->SetCount(startSlot + runLen);
+
+                // Hoist the run's typed column bases ONCE. Empty (tag) components yield
+                // a null base -- never dereferenced; their placement-new is elided below.
+                auto bases = [&]<std::size_t... Is>(std::index_sequence<Is...>)
                 {
-                    for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
-                    {
-                        const auto& info = chunk->GetComponentArrays()[id];
-                        if (!info.isValid || info.base == nullptr)
-                        {
-                            continue;
-                        }
-                        
-                        bool willBeConstructed = ((TypeID<std::decay_t<std::tuple_element_t<Is, TupleType>>>::Value() == id) || ...);
-                        
-                        if (!willBeConstructed)
-                        {
-                            void* ptr = static_cast<std::byte*>(info.base) + entityIndex * info.stride;
-                            info.descriptor.DefaultConstruct(ptr);
-                        }
-                    }
-                    
-                    ((chunk->ConstructComponentAt(entityIndex, std::get<Is>(std::move(componentTuple)))), ...);
+                    return std::tuple{ chunk->template GetComponentArray<std::decay_t<std::tuple_element_t<Is, TupleType>>>()... };
                 }(std::make_index_sequence<tupleSize>{});
-                
-                ++m_entityCount;
-                
-                if (chunk->IsFull()) ASTRA_UNLIKELY
+
+                for (size_t r = 0; r < runLen; ++r)
+                {
+                    const size_t slot = startSlot + r;
+                    ASTRA_ASSERT(slot < capacity, "AddEntitiesWith: slot out of chunk capacity");
+
+                    auto componentTuple = generator(produced + r);   // exactly once, in order
+
+                    [&]<std::size_t... Is>(std::index_sequence<Is...>)
+                    {
+                        // Move-construct each covered element straight into its slot
+                        // through the hoisted typed base (ConstructComponentAt semantics
+                        // without the id->column lookup).
+                        (([&]
+                        {
+                            using ElemT = std::decay_t<std::tuple_element_t<Is, TupleType>>;
+                            if constexpr (!std::is_empty_v<ElemT>)
+                            {
+                                ::new (static_cast<void*>(std::get<Is>(bases) + slot))
+                                    ElemT(std::get<Is>(std::move(componentTuple)));
+                            }
+                        }()), ...);
+                    }(std::make_index_sequence<tupleSize>{});
+
+                    // Defensive: default-construct any column the tuple did not cover.
+                    for (uint16_t u = 0; u < uncoveredCount; ++u)
+                    {
+                        const uint16_t c = uncovered[u];
+                        cm.columns[c].descriptor->DefaultConstruct(chunk->GetColumnPointer(c, slot));
+                    }
+
+                    locations.push_back(EntityLocation::Create(chunkIndex, slot));
+                }
+
+                produced += runLen;
+                m_entityCount += runLen;
+
+                // Chunk transition: advance the non-full cursor past a now-full chunk
+                // (IsFull => chunkIndex + 1), matching AddEntities' convention.
+                if (chunk->IsFull() && chunkIndex == m_firstNonFullChunkIndex) ASTRA_UNLIKELY
                 {
                     m_firstNonFullChunkIndex = chunkIndex + 1;
                 }
-                
-                locations.push_back(EntityLocation::Create(chunkIndex, entityIndex));
             }
 
             return locations;
@@ -384,7 +565,7 @@ namespace Astra
 
             if (chunkIndex == m_chunks.size() - 1 && chunkIndex > 0 && m_chunks[chunkIndex]->IsEmpty()) ASTRA_UNLIKELY
             {
-                m_chunks.pop_back();
+                PopBackChunk();
 
                 if (m_firstNonFullChunkIndex >= m_chunks.size()) ASTRA_UNLIKELY
                 {
@@ -446,7 +627,7 @@ namespace Astra
             {
                 while (!m_chunks.empty() && m_chunks.back()->IsEmpty() && m_chunks.size() > 1) ASTRA_UNLIKELY
                 {
-                    m_chunks.pop_back();
+                    PopBackChunk();
                 }
             }
 
@@ -478,31 +659,52 @@ namespace Astra
 
             auto& dstChunk = m_chunks[dstChunkIndex];
             auto& srcChunk = srcArchetype.m_chunks[srcChunkIndex];
-            const auto& dstArrays = dstChunk->GetComponentArrays();
-            const auto& srcArrays = srcChunk->GetComponentArrays();
+            const ArchetypeColumnMeta& dm = m_columnMeta;
+            const ArchetypeColumnMeta& sm = srcArchetype.m_columnMeta;
 
-            for (const auto& dstDesc : m_componentDescriptors)
+            // Merge-join over the two archetypes' storage columns -- both sorted ascending by id
+            // (BuildColumnMeta guarantees this). For each destination column: a matching source
+            // column is moved (std::memcpy for a trivially-copyable component, MoveConstruct
+            // otherwise); a destination-only column is default-constructed. Source-only columns
+            // (present in src, absent from dst) are simply advanced past -- their slots are
+            // destructed by the caller's source-entity removal, so this function only ever
+            // CONSTRUCTS into the destination (never destructs the source).
+            //
+            // The per-column is_trivially_copyable check is the CORRECTNESS GATE, not a mere
+            // optimization: memcpy of a move-only / non-trivially-relocatable component (e.g. one
+            // owning a unique_ptr, or with lifetime-counting invariants) would skip its move ctor
+            // and corrupt it. It must NOT be widened to a blanket memcpy.
+            uint16_t a = 0, b = 0;
+            while (a < dm.columnCount)
             {
-                ComponentID id = dstDesc.id;
-                const auto& dstInfo = dstArrays[id];
+                const ComponentID dId = dm.columns[a].id;
+                // dstEntityIndex is < the dst chunk's count here: AllocateEntitySlot (invoked by
+                // MoveEntityInternal before this runs) already bumped the destination slot's
+                // count, so the count-asserting GetColumnPointer is safe on the destination.
+                void* dstPtr = dstChunk->GetColumnPointer(a, dstEntityIndex);
 
-                if (dstInfo.base == nullptr) ASTRA_UNLIKELY
-                {
-                    continue;  // empty component: presence is carried by the mask
-                }
+                // Advance src past any ids strictly less than dId (src-only columns: dropped).
+                while (b < sm.columnCount && sm.columns[b].id < dId) ++b;
 
-                void* dstPtr = static_cast<std::byte*>(dstInfo.base) + dstEntityIndex * dstInfo.stride;
-
-                const auto& srcInfo = srcArrays[id];
-                if (srcInfo.isValid) ASTRA_LIKELY
+                if (b < sm.columnCount && sm.columns[b].id == dId) ASTRA_LIKELY   // matched: move src -> dst
                 {
-                    void* srcPtr = static_cast<std::byte*>(srcInfo.base) + srcEntityIndex * srcInfo.stride;
-                    dstInfo.descriptor.MoveConstruct(dstPtr, srcPtr);
+                    void* srcPtr = srcChunk->GetColumnPointer(b, srcEntityIndex);
+                    const ComponentDescriptor& desc = *dm.columns[a].descriptor;
+                    if (desc.is_trivially_copyable) std::memcpy(dstPtr, srcPtr, dm.columns[a].stride);
+                    else                            desc.MoveConstruct(dstPtr, srcPtr);
+                    // Disabled-bit carry (Task 2): shared enableable column keeps its
+                    // state. dst slot is freshly allocated (born enabled); the src bit
+                    // is cleared by the caller's source swap-remove. Both column a (dst)
+                    // and b (src) share id dId => same enableable-ness.
+                    if (desc.isEnableable) ASTRA_UNLIKELY
+                        dstChunk->SetDisabled(a, dstEntityIndex, srcChunk->IsDisabled(b, srcEntityIndex));
+                    ++b;
                 }
-                else ASTRA_UNLIKELY
+                else ASTRA_UNLIKELY                                              // dst-only: default-construct
                 {
-                    dstInfo.descriptor.DefaultConstruct(dstPtr);
+                    dm.columns[a].descriptor->DefaultConstruct(dstPtr);
                 }
+                ++a;
             }
         }
 
@@ -624,13 +826,15 @@ namespace Astra
         void EnsureCapacity(size_t additionalCount)
         {
             size_t required = m_entityCount + additionalCount;
-            size_t currentCapacity = m_chunks.size() * m_entitiesPerChunk;
 
-            if (required > currentCapacity) ASTRA_UNLIKELY
+            if (required > m_totalCapacity) ASTRA_UNLIKELY
             {
-                // Ceiling division: ceil(a/b) = floor((a + b - 1) / b)
-                // For power of 2: ceil(a/b) = (a + b - 1) >> log2(b)
-                size_t neededChunks = (required - currentCapacity + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
+                // Vector-reserve estimate only: chunk capacities may differ under
+                // grow-as-populate ramping, so this sizes off the NEXT chunk's
+                // projected capacity and lets the actual growth paths append
+                // however many are really needed.
+                const size_t perChunk = std::max<size_t>(1, ComputeCapacityForBytes(NextChunkBytes()));
+                const size_t neededChunks = (required - m_totalCapacity + perChunk - 1) / perChunk;
                 m_chunks.reserve(m_chunks.size() + neededChunks);
             }
         }
@@ -643,7 +847,7 @@ namespace Astra
             size_t remaining = 0;
             for (size_t i = m_firstNonFullChunkIndex; i < m_chunks.size(); ++i)
             {
-                remaining += m_entitiesPerChunk - m_chunks[i]->GetCount();
+                remaining += m_chunks[i]->GetCapacity() - m_chunks[i]->GetCount();
             }
             return remaining;
         }
@@ -652,12 +856,15 @@ namespace Astra
         {
             if (m_chunks.empty() || m_entityCount == 0)
                 return 0.0f;
-            
-            // Calculate optimal chunk count (if perfectly packed)
-            size_t optimalChunkCount = (m_entityCount + m_entitiesPerChunk - 1) / m_entitiesPerChunk;
-            
-            // Fragmentation = (actual chunks - optimal chunks) / actual chunks
-            return static_cast<float>(m_chunks.size() - optimalChunkCount) / static_cast<float>(m_chunks.size());
+
+            // Fill-based: 0 == perfectly packed, 1 == all wasted space. With
+            // per-chunk capacities there is no single "optimal chunk count" to
+            // compare against, and unused slots are what defragmentation actually
+            // reclaims -- so measure them directly.
+            if (m_totalCapacity == 0) ASTRA_UNLIKELY
+                return 0.0f;
+
+            return 1.0f - static_cast<float>(m_entityCount) / static_cast<float>(m_totalCapacity);
         }
         
         void Serialize(BinaryWriter& writer) const
@@ -668,7 +875,22 @@ namespace Astra
                 writer(m_mask.Data()[i]);
             }
             writer(static_cast<uint64_t>(m_entityCount));
-            writer(static_cast<uint64_t>(m_entitiesPerChunk));
+
+            // Field layout is unchanged, but its MEANING is now the maximum
+            // per-chunk entity count rather than a uniform per-chunk capacity:
+            // chunks no longer share a capacity, and the bound is all the reader
+            // ever uses this field for (it validates each chunkEntityCount
+            // against it, then sizes each chunk to an exact fit). Floored at 1 so
+            // an all-empty archetype still round-trips through the reader's
+            // `chunkEntityCount > entitiesPerChunk` guard.
+            uint64_t maxChunkEntityCount = 1;
+            for (const auto& chunk : m_chunks)
+            {
+                if (chunk) ASTRA_LIKELY
+                    maxChunkEntityCount = std::max(maxChunkEntityCount, static_cast<uint64_t>(chunk->GetCount()));
+            }
+            writer(maxChunkEntityCount);
+
             writer(static_cast<uint32_t>(m_chunks.size()));
 
             // Write component descriptors
@@ -679,6 +901,15 @@ namespace Astra
                 writer(static_cast<uint64_t>(desc.size));
                 writer(static_cast<uint64_t>(desc.alignment));
                 writer(desc.version);
+
+                // IM-9 (format v4): record whether this component carries a per-chunk
+                // disabled-bit section (written below iff desc.isEnableable). Recording
+                // presence EXPLICITLY makes it a property of the ARCHIVE rather than of
+                // the loading build -- so a component whose ASTRA_ENABLEABLE status
+                // differs between the saving and loading builds no longer desyncs the
+                // reader from the byte stream. Written unconditionally in the current
+                // (v4) format; the reader consumes it iff the archive is v4+.
+                writer(static_cast<uint8_t>(desc.isEnableable ? 1 : 0));
             }
             
             // Write each chunk's data
@@ -702,41 +933,33 @@ namespace Astra
                 {
                     void* componentArray = chunk->GetComponentArrayByID(desc.id);
                     if (!componentArray) continue;
-                    
-                    size_t arraySize = chunkEntityCount * desc.size;
-                    
-                    // Use component's serialization function if available
-                    if (desc.serializeVersioned || desc.serialize)
+
+                    // (componentArray null / tag columns already skipped by the
+                    //  `if (!componentArray) continue;` above)
+                    if (writer.GetCompressionMode() == CompressionMode::LZ4)
                     {
-                        // For custom serialization, we can't compress the whole array
-                        // as each component is serialized individually
-                        if (desc.serializeVersioned)
+                        // Per-column block (orthogonal to versioning): serialize the
+                        // column (data + disabled section) into a sub-buffer with
+                        // checksum off, then compress that buffer as ONE block into
+                        // the main stream. WriteCompressedBlock stores raw when below
+                        // threshold / incompressible, so tiny columns never inflate.
+                        // The sub-writer's memory ctor defaults to None mode, so the
+                        // inner SerializeColumn writes plain (uncompressed) bytes;
+                        // compression happens exactly once, here in the outer stream.
+                        std::vector<std::byte> colBuf;
                         {
-                            for (size_t i = 0; i < chunkEntityCount; ++i)
-                            {
-                                void* componentPtr = static_cast<char*>(componentArray) + (i * desc.size);
-                                desc.serializeVersioned(writer, componentPtr);
-                            }
+                            BinaryWriter sub(colBuf);
+                            sub.SetChecksumEnabled(false);
+                            SerializeColumn(sub, chunk.get(), desc, chunkEntityCount);
+                            sub.Flush();
                         }
-                        else
-                        {
-                            for (size_t i = 0; i < chunkEntityCount; ++i)
-                            {
-                                void* componentPtr = static_cast<char*>(componentArray) + (i * desc.size);
-                                desc.serialize(writer, componentPtr);
-                            }
-                        }
-                    }
-                    else if (desc.is_trivially_copyable)
-                    {
-                        // For POD types, compress the entire array if beneficial
-                        // WriteCompressedBlock will automatically handle compression threshold
-                        writer.WriteCompressedBlock(componentArray, arraySize);
+                        writer.WriteCompressedBlock(colBuf.data(), colBuf.size());
                     }
                     else
                     {
-                        // Should not happen - components should be serializable
-                        ASTRA_ASSERT(false, "Component type is not serializable");
+                        // None mode: byte-identical to the pre-compression format --
+                        // SerializeColumn writes straight into the main stream.
+                        SerializeColumn(writer, chunk.get(), desc, chunkEntityCount);
                     }
                 }
             }
@@ -790,9 +1013,11 @@ namespace Astra
             }
 
             // Same bound, sized to a descriptor entry's fixed on-disk fields:
-            // hash(8) + size(8) + alignment(8) + version(4) = 28 bytes, written
-            // unconditionally by Archetype::Serialize for every descriptor.
-            constexpr uint64_t kMinBytesPerDescriptor = sizeof(uint64_t) * 3 + sizeof(uint32_t);
+            // hash(8) + size(8) + alignment(8) + version(4) = 28 bytes, plus a 1-byte
+            // has-disabled-section flag (IM-9) present only from format v4 onward,
+            // written unconditionally by Archetype::Serialize for every descriptor.
+            const uint64_t kMinBytesPerDescriptor = sizeof(uint64_t) * 3 + sizeof(uint32_t)
+                + (reader.GetVersion() >= 4 ? sizeof(uint8_t) : 0);
             if (reader.CountExceedsRemaining(descriptorCount, kMinBytesPerDescriptor))
             {
                 return ResultType::Err(SerializationError::CorruptedData);
@@ -801,12 +1026,28 @@ namespace Astra
             std::vector<ComponentDescriptor> descriptors;
             descriptors.reserve(descriptorCount);
 
+            // IM-9: per-descriptor "archive carries a disabled-bit section for this
+            // column" flags, kept in lockstep with `descriptors` (both are pushed
+            // together only when the hash resolves). Drives section CONSUMPTION on the
+            // chunk-read path below so it depends on the archive, not the local build.
+            std::vector<uint8_t> diskHasDisabledSection;
+            diskHasDisabledSection.reserve(descriptorCount);
+
             for (uint32_t i = 0; i < descriptorCount; ++i)
             {
                 uint64_t hash;
                 uint64_t size, alignment;
                 uint32_t version;
                 reader(hash)(size)(alignment)(version);
+
+                // IM-9: format v4+ records a per-descriptor has-disabled-section flag
+                // right after version. Pre-v4 archives have no such byte and never wrote
+                // a disabled section, so it defaults to 0 (absent) for them.
+                uint8_t hasDisabledSection = 0;
+                if (reader.GetVersion() >= 4)
+                {
+                    reader(hasDisabledSection);
+                }
 
                 if (reader.HasError())
                 {
@@ -819,6 +1060,7 @@ namespace Astra
                 if (it != registryDescriptors.end())
                 {
                     descriptors.push_back(*it);
+                    diskHasDisabledSection.push_back(hasDisabledSection);
                 }
                 else
                 {
@@ -828,9 +1070,40 @@ namespace Astra
                 }
             }
 
+            // CR-4: the on-disk ComponentMask words (read above into `mask`) hold the
+            // SAVING run's ComponentID bit positions. ComponentIDs are assigned per-run
+            // and are NOT stable across processes, so constructing the archetype from
+            // those raw bits desyncs Has<T>/queries/the archetype-map key when the
+            // archive is loaded in a different run. The per-descriptor block, by
+            // contrast, is keyed on the stable TypeID::Hash() and was just resolved to
+            // THIS run's descriptors (each carrying this run's desc.id, tags included).
+            // Rebuild the mask from those resolved ids so it is correct in the loading
+            // run; the raw disk words are consumed off the wire but their VALUES are not
+            // trusted.
+            ComponentMask localMask;
+            for (const auto& d : descriptors)
+            {
+                localMask.Set(d.id);
+            }
+
+            // Cross-process integrity check: the saved mask's popcount is run-
+            // independent (it counts how many components the archetype has, not which
+            // ids), so it must equal the descriptor count regardless of process. A
+            // mismatch means the mask half and the descriptor half of the record
+            // disagree -> corrupt/crafted input.
+            if (mask.Count() != descriptors.size())
+            {
+                return ResultType::Err(SerializationError::CorruptedData);
+            }
+
             // Validate that the saved per-chunk layout fits the pool we will
-            // allocate from — a save produced with a larger chunkSize must
-            // fail cleanly instead of overflowing chunk memory.
+            // allocate from — a save produced with a larger chunk than this pool
+            // can ever produce must fail cleanly instead of overflowing chunk
+            // memory. Bound against the pool's grow-as-populate CEILING
+            // (maxChunkBytes), not its legacy fixed chunkSize: chunks are written
+            // at whatever size the archetype had ramped to at save time (up to
+            // maxChunkBytes), so a save with large ramped chunks must still load;
+            // old 16KB-era saves still pass, since 16KB < the 512KB default cap.
             {
                 size_t perEntitySize = 0;
                 size_t nonEmptyComponents = 0;
@@ -843,8 +1116,8 @@ namespace Astra
                 size_t alignmentOverhead = nonEmptyComponents > 1
                     ? (nonEmptyComponents - 1) * CACHE_LINE_SIZE
                     : 0;
-                size_t poolChunkSize = componentPool ? componentPool->GetChunkSize()
-                                                     : ArchetypeChunkPool::DEFAULT_CHUNK_SIZE;
+                size_t poolChunkSize = componentPool ? componentPool->GetMaxChunkBytes()
+                                                     : ArchetypeChunkPool::DEFAULT_MAX_CHUNK_BYTES;
                 if (static_cast<size_t>(entitiesPerChunk) * perEntitySize + alignmentOverhead > poolChunkSize)
                 {
                     return ResultType::Err(SerializationError::SizeMismatch);
@@ -867,8 +1140,9 @@ namespace Astra
                 }
             }
 
-            // Create new archetype
-            auto archetype = std::make_unique<Archetype>(mask);
+            // Create new archetype from the run-local mask rebuilt above (CR-4), not
+            // the untrusted raw disk mask.
+            auto archetype = std::make_unique<Archetype>(localMask);
             archetype->m_chunkPool = componentPool;
             archetype->Initialize(descriptors);
 
@@ -877,8 +1151,10 @@ namespace Astra
                 return ResultType::Err(SerializationError::CorruptedData);
             }
             
-            // Clear the pre-allocated chunk
+            // Clear the pre-allocated chunk. m_totalCapacity is the running sum
+            // over m_chunks, so it has to be reset alongside it.
             archetype->m_chunks.clear();
+            archetype->m_totalCapacity = 0;
             archetype->m_entityCount = 0;
 
             // Read each chunk's data
@@ -905,11 +1181,28 @@ namespace Astra
                     return ResultType::Err(SerializationError::CorruptedData);
                 }
 
-                // Create new chunk
-                auto chunk = componentPool ? componentPool->CreateChunk(static_cast<size_t>(entitiesPerChunk), descriptors) : nullptr;
+                // Create the chunk at an EXACT fit for the entities it actually
+                // carries, through the archetype so m_totalCapacity stays correct
+                // (m_chunks was cleared above). This is location-safe: entity slots
+                // stay [0, count) within each chunk, so every serialized
+                // EntityRecord (chunkIndex, entityIndex) still resolves identically.
+                // The reconstructed archetype's Initialize() above already built its
+                // m_columnMeta (via BuildColumnMeta) from `descriptors`, and its
+                // m_componentDescriptors (which the meta's descriptor pointers
+                // reference) is set once and never reassigned, so that pointer is
+                // stable for the life of every chunk created here.
+                const size_t capacity = std::max<size_t>(1, chunkEntityCount);
+                // ChunkBytesToHold (not the raw column formula) so that when an
+                // enableable archetype's chunk re-derives its capacity via
+                // ComputeCapacityForBytes, the carved disabled-word regions do not
+                // shrink it below `capacity` and overflow. Reduces to the legacy
+                // formula exactly when there are no enableable columns.
+                const size_t chunkBytes = archetype->ChunkBytesToHold(capacity);
+
+                ArchetypeChunk* chunk = archetype->AppendChunk(chunkBytes);
                 if (!chunk)
                 {
-                    // Out of memory - cannot continue
+                    // Out of memory (or no valid layout) - cannot continue
                     return ResultType::Err(SerializationError::OutOfMemory);
                 }
 
@@ -926,63 +1219,51 @@ namespace Astra
                     return ResultType::Err(reader.GetError());
                 }
 
-                // Read component arrays (SOA layout)
-                for (const auto& desc : descriptors)
+                // Read component arrays (SOA layout). Indexed (not range-for) so each
+                // descriptor's disk has-disabled-section flag can be looked up by the
+                // same ordinal (IM-9).
+                for (size_t di = 0; di < descriptors.size(); ++di)
                 {
+                    const ComponentDescriptor& desc = descriptors[di];
                     void* componentArray = chunk->GetComponentArrayByID(desc.id);
                     if (!componentArray) continue;
 
-                    size_t arraySize = chunkEntityCount * desc.size;
-
-                    if (desc.deserializeVersioned || desc.deserialize)
+                    // Mirror of the write path (Serialize above): LZ4 archives wrap
+                    // each column in a compressed block, so read+decompress it into a
+                    // memory sub-reader (checksum off, matching the writer) and let
+                    // DeserializeColumn consume the plain bytes. None archives feed
+                    // the main reader directly -- byte-identical to the old format.
+                    ResultType colResult = ResultType::Ok(nullptr);
+                    // Compressed columns exist only in v5+ archives. A v<=4 file predates
+                    // per-column compression, so its columns are always plain -- even when
+                    // its header carries a CompressionMode::LZ4 flag (the flag was written
+                    // but never acted on before v5, so last-build v4 "LZ4" files hold plain
+                    // columns). Gate on version AND mode so those legacy files read as raw
+                    // (spec 4), never misparsed through ReadCompressedBlock.
+                    if (reader.GetVersion() >= 5 && reader.GetCompressionMode() == CompressionMode::LZ4)
                     {
-                        // For custom deserialization, components are not compressed
-                        // as they were serialized individually
-                        if (desc.deserializeVersioned)
-                        {
-                            for (uint32_t i = 0; i < chunkEntityCount; ++i)
-                            {
-                                void* componentPtr = static_cast<char*>(componentArray) + (i * desc.size);
-                                desc.deserializeVersioned(reader, componentPtr);
-                            }
-                        }
-                        else
-                        {
-                            for (uint32_t i = 0; i < chunkEntityCount; ++i)
-                            {
-                                void* componentPtr = static_cast<char*>(componentArray) + (i * desc.size);
-                                desc.deserialize(reader, componentPtr);
-                            }
-                        }
-
-                        if (reader.HasError())
-                        {
-                            return ResultType::Err(reader.GetError());
-                        }
-                    }
-                    else if (desc.is_trivially_copyable)
-                    {
-                        // POD types may be compressed - use ReadCompressedBlock
-                        auto result = reader.ReadCompressedBlock();
-                        if (result.IsErr())
-                        {
-                            // Error reading compressed block
+                        auto blk = reader.ReadCompressedBlock();
+                        if (blk.IsErr())
                             return ResultType::Err(SerializationError::CorruptedData);
-                        }
-
-                        auto& data = *result.GetValue();
-                        if (data.size() != arraySize)
-                        {
-                            // Size mismatch - data corruption
-                            return ResultType::Err(SerializationError::SizeMismatch);
-                        }
-
-                        // Copy decompressed data to component array
-                        std::memcpy(componentArray, data.data(), arraySize);
+                        const auto& bytes = *blk.GetValue();   // std::vector<uint8_t>
+                        BinaryReader sub(std::span<const std::byte>(
+                            reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+                        sub.SetChecksumEnabled(false);
+                        colResult = DeserializeColumn(sub, chunk, archetype.get(), desc,
+                                                      static_cast<size_t>(chunkEntityCount),
+                                                      diskHasDisabledSection[di]);
                     }
+                    else
+                    {
+                        colResult = DeserializeColumn(reader, chunk, archetype.get(), desc,
+                                                      static_cast<size_t>(chunkEntityCount),
+                                                      diskHasDisabledSection[di]);
+                    }
+                    if (colResult.IsErr())
+                        return colResult;
                 }
 
-                archetype->m_chunks.push_back(std::move(chunk));
+                // AppendChunk already installed the chunk in archetype->m_chunks.
             }
 
             archetype->m_entityCount = static_cast<size_t>(entityCount);
@@ -990,117 +1271,148 @@ namespace Astra
             return ResultType::Ok(std::move(archetype));
         }
         
-        ASTRA_NODISCARD bool ShouldCoalesce(float utilizationThreshold = 0.5f) const
+        // Rebuild-style compaction (Phase 2 Unit D): repack every live entity
+        // into fresh chunks sized for the CURRENT live count (the study formula
+        // applied directly -- N is known here), free all old chunks (TLSF
+        // coalesces them), and report EVERY entity's new location so the caller
+        // rewrites all records. Column moves memcpy whole runs for trivially
+        // copyable columns and MoveConstruct+Destruct element-wise otherwise.
+        //
+        // Replaces the old ShouldCoalesce/CoalesceChunks pair, which erased empty
+        // middle chunks from m_chunks -- shifting every later chunk's index -- but
+        // reported new locations only for the entities it moved, leaving entities
+        // in the shifted chunks with stale chunkIndex records (a since-confirmed
+        // out-of-bounds/aliasing defect). Reporting every entity's location makes
+        // that whole class of bug impossible.
+        std::pair<size_t, std::vector<std::pair<Entity, EntityLocation>>> CompactChunks()
         {
-            if (m_chunks.size() <= 1) ASTRA_LIKELY return false;
-            
-            // Simple heuristic: coalesce if we have sparse chunks
-            for (size_t i = 1; i < m_chunks.size(); ++i)
-            {
-                float utilization = static_cast<float>(m_chunks[i]->GetCount()) / m_entitiesPerChunk;
-                if (utilization < utilizationThreshold)
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
+            std::vector<std::pair<Entity, EntityLocation>> newLocations;
+            if (m_chunks.size() <= 1 || m_entityCount == 0)
+                return {0, std::move(newLocations)};
 
-        std::pair<size_t, std::vector<std::pair<Entity, EntityLocation>>> CoalesceChunks(float utilizationThreshold = 0.5f)
-        {
-            std::vector<std::pair<Entity, EntityLocation>> allMovedEntities;
-            if (m_chunks.size() <= 1) ASTRA_LIKELY return {0, allMovedEntities};
-
-            // Single pass: find sparse chunks and calculate total entities to move
-            std::vector<std::pair<size_t, float>> sparseChunks;
-            size_t totalEntitiesToMove = 0;
-            size_t totalAvailableSpace = 0;
-            
-            for (size_t i = 0; i < m_chunks.size(); ++i)
+            const size_t oldChunkCount = m_chunks.size();
+            // Fit-one-entity floor (mirrors NextChunkBytes): without it, a fragmented
+            // low-live-count archetype whose per-entity footprint exceeds the raw
+            // liveBytes/divisor value would compute a targetBytes too small to hold
+            // even one entity, so ComputeCapacityForBytes(targetBytes) == 0 below and
+            // compaction aborts every time it is tried -- a silent permanent no-op for
+            // that archetype. Flooring the pre-clamp value at oneEntityBytes (then
+            // clamping min/max, same order NextChunkBytes uses -- clamping oneEntityBytes
+            // directly could otherwise present std::clamp with lo > hi when
+            // oneEntityBytes exceeds maxChunkBytes) guarantees a chunk sized to fit
+            // >= 1 entity is always attempted; components bigger than the pool's cap
+            // still legitimately hit capacity == 0 below and abort.
+            const size_t targetBytes = [this]
             {
-                size_t count = m_chunks[i]->GetCount();
-                float utilization = static_cast<float>(count) / m_entitiesPerChunk;
-                
-                if (i > 0 && utilization < utilizationThreshold)  // Skip first chunk for sparse check
-                {
-                    sparseChunks.emplace_back(i, utilization);
-                    totalEntitiesToMove += count;
-                }
-                
-                // Calculate available space in all chunks
-                // We count space in all chunks because sparse chunks can consolidate into each other
-                size_t available = m_entitiesPerChunk - count;
-                if (available > 0)
-                {
-                    totalAvailableSpace += available;
-                }
-            }
+                if (!m_chunkPool || m_perEntitySize == 0)
+                    return m_chunkPool ? m_chunkPool->GetChunkSize() : ArchetypeChunkPool::DEFAULT_CHUNK_SIZE;
+                const size_t liveBytes = m_entityCount * m_perEntitySize;
+                const size_t raw = liveBytes / m_chunkPool->GetGrowDivisor();
+                const size_t oneEntityBytes = m_perEntitySize + m_alignmentOverhead;
+                const size_t target = std::max(raw, oneEntityBytes);
+                return std::clamp(target, m_chunkPool->GetMinChunkBytes(), m_chunkPool->GetMaxChunkBytes());
+            }();
 
-            // Early exit: no sparse chunks
-            if (sparseChunks.empty()) ASTRA_LIKELY return {0, allMovedEntities};
-            
-            // Early exit: not enough space to consolidate meaningfully
-            if (totalAvailableSpace < totalEntitiesToMove / 2)
+            // Build the new chunk list on the side; on ANY allocation failure,
+            // abort untouched (compaction is an optimization, not an obligation).
+            std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>> newChunks;
+            const size_t capacity = ComputeCapacityForBytes(targetBytes);
+            if (capacity == 0) ASTRA_UNLIKELY
+                return {0, std::move(newLocations)};
+            const size_t chunkCountNeeded = (m_entityCount + capacity - 1) / capacity;
+            newChunks.reserve(chunkCountNeeded);
+            for (size_t i = 0; i < chunkCountNeeded; ++i)
             {
-                return {0, allMovedEntities};
+                auto chunk = m_chunkPool->CreateChunk(capacity, targetBytes, &m_columnMeta);
+                if (!chunk) ASTRA_UNLIKELY
+                    return {0, std::move(newLocations)};   // old chunks untouched
+                newChunks.emplace_back(std::move(chunk));
             }
 
-            // Only sort if we have multiple sparse chunks
-            if (sparseChunks.size() > 1)
+            newLocations.reserve(m_entityCount);
+            size_t dstChunk = 0, dstIndex = 0;
+            for (auto& src : m_chunks)
             {
-                std::sort(sparseChunks.begin(), sparseChunks.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
-            }
-
-            // Try to pack entities from sparse chunks into denser ones
-            for (const auto& [sparseIndex, _] : sparseChunks)
-            {
-                auto& sparseChunk = m_chunks[sparseIndex];
-                size_t entitiesToMove = sparseChunk->GetCount();
-
-                if (entitiesToMove == 0) continue;
-
-                // Find destination chunks with available space
-                for (size_t destIndex = 0; destIndex < m_chunks.size(); ++destIndex)
+                const size_t srcCount = src->GetCount();
+                size_t srcIndex = 0;
+                while (srcIndex < srcCount)
                 {
-                    if (destIndex == sparseIndex) continue;
+                    if (dstIndex == capacity) { ++dstChunk; dstIndex = 0; }
+                    auto& dst = newChunks[dstChunk];
+                    const size_t run = std::min(srcCount - srcIndex, capacity - dstIndex);
 
-                    auto& destChunk = m_chunks[destIndex];
-                    size_t available = m_entitiesPerChunk - destChunk->GetCount();
-
-                    if (available > 0)
+                    // Entities: bulk-append the run.
+                    auto& srcEntities = src->GetEntities();
+                    auto& dstEntities = dst->GetEntities();
+                    for (size_t k = 0; k < run; ++k)
                     {
-                        size_t toMove = std::min(available, entitiesToMove);
-
-                        // Move entities from sparse to destination chunk
-                        auto movedEntities = MoveEntitiesBetweenChunks(sparseIndex, destIndex, toMove);
-                        allMovedEntities.insert(allMovedEntities.end(), movedEntities.begin(), movedEntities.end());
-
-                        entitiesToMove -= toMove;
-                        if (entitiesToMove == 0) break;
+                        const Entity e = srcEntities[srcIndex + k];
+                        dstEntities.push_back(e);
+                        newLocations.emplace_back(e, EntityLocation::Create(dstChunk, dstIndex + k));
                     }
+
+                    // Components: per column, memcpy the whole run when trivially
+                    // copyable, else per-element MoveConstruct + Destruct.
+                    for (uint16_t c = 0; c < m_columnMeta.columnCount; ++c)
+                    {
+                        const ComponentID id = m_columnMeta.columns[c].id;
+                        const uint32_t stride = m_columnMeta.columns[c].stride;
+                        const ComponentDescriptor& desc = *m_columnMeta.columns[c].descriptor;
+                        std::byte* srcPtr = static_cast<std::byte*>(src->GetComponentArrayByID(id)) + srcIndex * stride;
+                        std::byte* dstPtr = static_cast<std::byte*>(dst->GetComponentArrayByID(id)) + dstIndex * stride;
+                        if (desc.is_trivially_copyable)
+                        {
+                            std::memcpy(dstPtr, srcPtr, run * static_cast<size_t>(stride));
+                        }
+                        else
+                        {
+                            for (size_t k = 0; k < run; ++k)
+                            {
+                                desc.MoveConstruct(dstPtr + k * stride, srcPtr + k * stride);
+                                desc.Destruct(srcPtr + k * stride);
+                            }
+                        }
+
+                        // Disabled-bit carry (Task 2, spec §12.5): src and dst are
+                        // chunks of the SAME archetype, so column ordinal `c` matches on
+                        // both. dst is a fresh chunk (born enabled); copy each moved
+                        // slot's bit. src bits need no clearing -- the old chunks are
+                        // freed wholesale below.
+                        if (desc.isEnableable) ASTRA_UNLIKELY
+                        {
+                            for (size_t k = 0; k < run; ++k)
+                                dst->SetDisabled(c, dstIndex + k, src->IsDisabled(c, srcIndex + k));
+                        }
+                    }
+
+                    dst->SetCount(dst->GetCount() + run);
+                    srcIndex += run;
+                    dstIndex += run;
                 }
+                // Every element was moved out (trivial columns need no Destruct;
+                // complex ones were destructed above): make the chunk inert so its
+                // destructor doesn't re-destruct moved-from slots.
+                src->GetEntities().clear();
+                src->SetCount(0);
             }
 
-            // Early exit: if no entities were moved, no chunks will be freed
-            if (allMovedEntities.empty())
-            {
-                return {0, allMovedEntities};
-            }
+            m_chunks = std::move(newChunks);   // old chunks free here -> TLSF coalesces
+            m_totalCapacity = chunkCountNeeded * capacity;
+            // Every new chunk except possibly the last is packed exactly full. Point
+            // m_firstNonFullChunkIndex at the last chunk when it has room; when the
+            // live count is an exact multiple of capacity the last chunk is itself
+            // full, so point one past the end -- mirroring the "chunk became full ->
+            // chunkIndex + 1" convention AllocateEntitySlot/AddEntities already use.
+            // GetOrCreateChunk tolerates either (it rescans from this index and
+            // appends when nothing is free), but the precise value spares the next
+            // allocation a wasted IsFull() probe. (The brief's literal code used a
+            // flat size()-1; this refinement is documented in the task report.)
+            m_firstNonFullChunkIndex = m_chunks.back()->IsFull() ? m_chunks.size() : m_chunks.size() - 1;
 
-            // Remove empty chunks
-            size_t chunksFreed = 0;
-            for (size_t i = m_chunks.size() - 1; i > 0; --i)  // Keep first chunk
-            {
-                if (m_chunks[i]->IsEmpty())
-                {
-                    m_chunks.erase(m_chunks.begin() + i);
-                    ++chunksFreed;
-                }
-            }
-
-            return {chunksFreed, allMovedEntities};
+            const size_t freed = oldChunkCount > m_chunks.size() ? oldChunkCount - m_chunks.size() : 0;
+            return {freed, std::move(newLocations)};
         }
-        
+
         ASTRA_NODISCARD bool IsInitialized() const noexcept { return m_initialized; }
         ASTRA_NODISCARD const ComponentMask& GetMask() const noexcept { return m_mask; }
 
@@ -1108,14 +1420,263 @@ namespace Astra
         ASTRA_NODISCARD size_t GetChunkCount() const noexcept { return m_chunks.size(); }
         ASTRA_NODISCARD size_t GetComponentCount() const noexcept { return m_componentCount; }
         ASTRA_NODISCARD size_t GetChunkEntityCount(size_t chunkIndex) const noexcept { return (chunkIndex < m_chunks.size()) ? m_chunks[chunkIndex]->GetCount() : 0; }
-        ASTRA_NODISCARD size_t GetEntitiesPerChunk() const noexcept { return m_entitiesPerChunk; }
+        // Sum of the live chunks' capacities. Chunks are no longer uniformly
+        // sized, so this replaces `chunkCount * entitiesPerChunk` everywhere.
+        ASTRA_NODISCARD size_t GetTotalCapacity() const noexcept { return m_totalCapacity; }
 
         ASTRA_NODISCARD const std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>>& GetChunks() const { return m_chunks; }
         ASTRA_NODISCARD const std::vector<ComponentDescriptor>& GetComponentDescriptors() const { return m_componentDescriptors; }
+        ASTRA_NODISCARD const ArchetypeColumnMeta& GetColumnMeta() const noexcept { return m_columnMeta; }
 
         void SetComponentPool(ArchetypeChunkPool* pool) { m_chunkPool = pool; }
 
+        ASTRA_NODISCARD Archetype* GetAddEdge(ComponentID id) const noexcept
+        {
+            ASTRA_ASSERT(id < MAX_COMPONENTS, "component id out of range");
+            return m_addEdges ? m_addEdges[id] : nullptr;
+        }
+        ASTRA_NODISCARD Archetype* GetRemoveEdge(ComponentID id) const noexcept
+        {
+            ASTRA_ASSERT(id < MAX_COMPONENTS, "component id out of range");
+            return m_removeEdges ? m_removeEdges[id] : nullptr;
+        }
+        void SetAddEdge(ComponentID id, Archetype* to)
+        {
+            ASTRA_ASSERT(id < MAX_COMPONENTS, "component id out of range");
+            if (!m_addEdges) m_addEdges = std::make_unique<Archetype*[]>(MAX_COMPONENTS);  // value-inits to nullptr
+            m_addEdges[id] = to;
+        }
+        void SetRemoveEdge(ComponentID id, Archetype* to)
+        {
+            ASTRA_ASSERT(id < MAX_COMPONENTS, "component id out of range");
+            if (!m_removeEdges) m_removeEdges = std::make_unique<Archetype*[]>(MAX_COMPONENTS);
+            m_removeEdges[id] = to;
+        }
+        void ClearEdgesTo(Archetype* target) noexcept
+        {
+            if (m_addEdges)    for (ComponentID i = 0; i < MAX_COMPONENTS; ++i) if (m_addEdges[i]    == target) m_addEdges[i]    = nullptr;
+            if (m_removeEdges) for (ComponentID i = 0; i < MAX_COMPONENTS; ++i) if (m_removeEdges[i] == target) m_removeEdges[i] = nullptr;
+        }
+        // Drop ALL cached transition edges (both directions). Used when every edge
+        // target has been freed en masse (e.g. Deserialize replaces the archetype set)
+        // so lazy recompute repopulates correctly instead of reading freed archetypes.
+        void ClearAllEdges() noexcept
+        {
+            m_addEdges.reset();
+            m_removeEdges.reset();
+        }
+
     private:
+        // Writes one component column's per-chunk data: custom serialize
+        // (versioned or plain) or a compressed trivially-copyable block,
+        // followed by the column's disabled-bit section iff it is enableable.
+        // Extracted verbatim from Serialize()'s per-column loop body (Task 2 of
+        // the LZ4 per-column compression plan, NO behavior change) so Task 3's
+        // compressed-column path can reuse it. Caller guarantees
+        // chunk->GetComponentArrayByID(desc.id) is non-null (null/tag columns
+        // are skipped before calling).
+        void SerializeColumn(BinaryWriter& w, ArchetypeChunk* chunk, const ComponentDescriptor& desc, size_t chunkEntityCount) const
+        {
+            void* componentArray = chunk->GetComponentArrayByID(desc.id);
+
+            // Per-element serialize. Every registered component has serializeVersioned
+            // (ComponentRegistry.hpp), so the first arm always runs; the plain-serialize
+            // arm is kept for completeness. The former `is_trivially_copyable ->
+            // WriteCompressedBlock(rawArray)` bypass was REMOVED with the LZ4
+            // per-column wrapper (compression is now orthogonal to versioning and lives
+            // in Serialize()'s column loop, never here) -- it silently skipped
+            // versioning for POD columns and never actually ran anyway.
+            // Every registered component gets both serialize hooks set unconditionally
+            // (ComponentRegistry), so the branch below always runs. Assert the precondition
+            // in Debug: a descriptor with neither hook would silently write zero bytes for
+            // chunkEntityCount elements -- a stream desync with no other trip.
+            ASTRA_ASSERT(desc.serializeVersioned || desc.serialize,
+                "SerializeColumn: component descriptor has no serialize hook");
+            if (desc.serializeVersioned || desc.serialize)
+            {
+                // For custom serialization, we can't compress the whole array
+                // as each component is serialized individually
+                if (desc.serializeVersioned)
+                {
+                    for (size_t i = 0; i < chunkEntityCount; ++i)
+                    {
+                        void* componentPtr = static_cast<char*>(componentArray) + (i * desc.size);
+                        desc.serializeVersioned(w, componentPtr);
+                    }
+                }
+                else
+                {
+                    for (size_t i = 0; i < chunkEntityCount; ++i)
+                    {
+                        void* componentPtr = static_cast<char*>(componentArray) + (i * desc.size);
+                        desc.serialize(w, componentPtr);
+                    }
+                }
+            }
+
+            // Enableable-components (Task 4, format v4): persist this column's
+            // per-chunk disabled-bit state immediately after its component data.
+            // Zero-cost for non-enableable columns (invariant 1) -- the branch
+            // below is skipped entirely unless the descriptor opted into
+            // ASTRA_ENABLEABLE, so a zero-enableable archetype's serialized size
+            // is unchanged by this feature (beyond the version-constant bump).
+            if (desc.isEnableable)
+            {
+                // Tag components (desc.size == 0) never reach here -- their
+                // componentArray is null and the caller's null-skip already
+                // skipped them -- so this ordinal is always a real storage column.
+                const int col = m_columnMeta.idToColumn[desc.id];
+                w(chunk->GetDisabledCount(col));
+
+                const uint64_t* words = chunk->GetDisabledWords(col);
+                // Word count mirrors the EXACT capacity Deserialize will
+                // reconstruct this chunk at (max(1, chunkEntityCount)), not this
+                // (possibly larger, not-yet-full) live chunk's own capacity. Any
+                // bit at or beyond chunkEntityCount is guaranteed zero by the
+                // disabled-bit invariant (spec 14.2), so truncating to the
+                // reader's exact-fit word count loses no information.
+                const size_t wordCapacity = std::max<size_t>(1, chunkEntityCount);
+                const size_t wordCount = (wordCapacity + 63) / 64;
+                for (size_t wi = 0; wi < wordCount; ++wi)
+                {
+                    w(words[wi]);
+                }
+            }
+        }
+
+        // Reads one component column's per-chunk data (custom deserialize,
+        // versioned or plain, or a compressed trivially-copyable block) into
+        // the chunk's component array, then (iff hasDisabledSection) reads,
+        // validates, and applies the column's disabled-bit section. Extracted
+        // verbatim from Deserialize()'s per-column loop body (Task 2 of the LZ4
+        // per-column compression plan, NO behavior change) so Task 3's
+        // compressed-column path can reuse it. Caller guarantees
+        // chunk->GetComponentArrayByID(desc.id) is non-null (null/tag columns
+        // are skipped before calling); hasDisabledSection is the per-descriptor
+        // disk flag (diskHasDisabledSection[di], IM-9), not this build's
+        // desc.isEnableable. Static (like Deserialize itself): archetype is
+        // passed explicitly rather than accessed via `this`.
+        static Result<std::unique_ptr<Archetype>, SerializationError> DeserializeColumn(BinaryReader& r, ArchetypeChunk* chunk, Archetype* archetype, const ComponentDescriptor& desc, size_t chunkEntityCount, bool hasDisabledSection)
+        {
+            using ResultType = Result<std::unique_ptr<Archetype>, SerializationError>;
+
+            void* componentArray = chunk->GetComponentArrayByID(desc.id);
+
+            // Per-element deserialize (mirror of SerializeColumn). The former
+            // `is_trivially_copyable -> ReadCompressedBlock` arm was REMOVED with the
+            // LZ4 per-column wrapper: decompression now happens once, in Deserialize()'s
+            // column loop, which hands this helper the already-decompressed plain bytes.
+            // Mirror of SerializeColumn's precondition assert: a hookless descriptor would
+            // silently read zero bytes for chunkEntityCount elements -> stream desync.
+            ASTRA_ASSERT(desc.deserializeVersioned || desc.deserialize,
+                "DeserializeColumn: component descriptor has no deserialize hook");
+            if (desc.deserializeVersioned || desc.deserialize)
+            {
+                // For custom deserialization, components are not compressed
+                // as they were serialized individually
+                if (desc.deserializeVersioned)
+                {
+                    for (uint32_t i = 0; i < chunkEntityCount; ++i)
+                    {
+                        void* componentPtr = static_cast<char*>(componentArray) + (i * desc.size);
+                        desc.deserializeVersioned(r, componentPtr);
+                    }
+                }
+                else
+                {
+                    for (uint32_t i = 0; i < chunkEntityCount; ++i)
+                    {
+                        void* componentPtr = static_cast<char*>(componentArray) + (i * desc.size);
+                        desc.deserialize(r, componentPtr);
+                    }
+                }
+
+                if (r.HasError())
+                {
+                    return ResultType::Err(r.GetError());
+                }
+            }
+
+            // Enableable-components (Task 4, format v4): mirror-image of the
+            // write side above. When the ARCHIVE recorded a disabled-bit section
+            // for this column (hasDisabledSection -- the per-descriptor flag read
+            // from the descriptor block), a disabledCount + word section follows
+            // this column's component data. Consume it iff that flag is set --
+            // NOT iff THIS build marks the component enableable (IM-9):
+            // recording presence in the stream keeps the reader byte-synchronized
+            // even when a component's ASTRA_ENABLEABLE status differs between the
+            // saving and loading builds. The flag is only ever set for v4+
+            // archives (pre-v4 defaults it to 0), which subsumes the old explicit
+            // version gate; pre-v4 archives never wrote this section for ANY
+            // column, so the chunk's word region stays zero-init from
+            // AppendChunk/InitializeColumns above and every entity comes back
+            // enabled (invariant 8's "legacy loads all-enabled" contract).
+            //
+            // The section is always VALIDATED (refuse-not-trust, spec 14 invariant
+            // 8): a disabledCount that doesn't match popcount(words), or any bit
+            // set at or beyond this chunk's live entity count, is corrupted data
+            // and fails the whole load rather than loading it silently.
+            if (hasDisabledSection)
+            {
+                const size_t wordCapacity = std::max<size_t>(1, static_cast<size_t>(chunkEntityCount));
+                const size_t wordCount = (wordCapacity + 63) / 64;
+
+                uint32_t diskDisabledCount = 0;
+                r(diskDisabledCount);
+                if (r.HasError())
+                {
+                    return ResultType::Err(r.GetError());
+                }
+
+                // Read into a local buffer first and validate BEFORE touching the
+                // live chunk -- a rejected section must not leave the chunk's real
+                // word region partially written (the archetype is discarded on Err
+                // either way, but this keeps the write atomic/all-or-nothing,
+                // matching the compressed-block read above).
+                std::vector<uint64_t> diskWords(wordCount, 0);
+                uint32_t popcount = 0;
+                for (size_t w = 0; w < wordCount; ++w)
+                {
+                    r(diskWords[w]);
+                    popcount += static_cast<uint32_t>(std::popcount(diskWords[w]));
+                }
+                if (r.HasError())
+                {
+                    return ResultType::Err(r.GetError());
+                }
+
+                if (diskDisabledCount != popcount)
+                {
+                    return ResultType::Err(SerializationError::CorruptedData);
+                }
+
+                for (size_t i = static_cast<size_t>(chunkEntityCount); i < wordCount * 64; ++i)
+                {
+                    if ((diskWords[i >> 6] >> (i & 63)) & 1ull)
+                    {
+                        return ResultType::Err(SerializationError::CorruptedData);
+                    }
+                }
+
+                if (desc.isEnableable)
+                {
+                    // This build still stores per-entity disabled bits for the
+                    // type -- apply the validated section to the live chunk.
+                    const int col = archetype->m_columnMeta.idToColumn[desc.id];
+                    uint64_t* liveWords = chunk->GetDisabledWords(col);
+                    std::memcpy(liveWords, diskWords.data(), wordCount * sizeof(uint64_t));
+                    chunk->m_columns[col].disabledCount = diskDisabledCount;
+                }
+                // else: the archive carried disabled bits, but THIS build no
+                // longer marks the component ASTRA_ENABLEABLE. The bytes are
+                // consumed and validated (stream stays in sync) then dropped;
+                // every entity of this type loads enabled -- graceful schema
+                // evolution for a column that lost ASTRA_ENABLEABLE.
+            }
+
+            return ResultType::Ok(nullptr);
+        }
+
         static constexpr size_t INVALID_CHUNK_INDEX = std::numeric_limits<size_t>::max();
 
         template<typename AddFunc>
@@ -1151,35 +1712,32 @@ namespace Astra
             size_t remainingCapacity = GetRemainingCapacity();
             if (count > remainingCapacity) ASTRA_UNLIKELY
             {
-                if (m_entitiesPerChunk == 0) ASTRA_UNLIKELY
+                if (!m_initialized) ASTRA_UNLIKELY
                 {
                     // See GetOrCreateChunk(): this archetype never found a valid
                     // per-chunk layout and can never hold an entity.
                     return {};
                 }
 
-                size_t additionalNeeded = count - remainingCapacity;
-                size_t newChunksNeeded = (additionalNeeded + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
+                // All-or-nothing growth, as before: if any chunk in the run cannot
+                // be allocated, unwind the ones already appended so a failed batch
+                // move leaves the archetype exactly as it found it. NextChunkBytes()
+                // is recomputed every iteration so sizes ramp within this batch.
+                const size_t chunksBefore = m_chunks.size();
 
-                // Pre-allocate all chunks needed - ensure we can complete the operation
-                std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>> newChunks;
-                newChunks.reserve(newChunksNeeded);
-                
-                for (size_t i = 0; i < newChunksNeeded; ++i)
+                while (remainingCapacity < count)
                 {
-                    auto chunk = m_chunkPool->CreateChunk(m_entitiesPerChunk, m_componentDescriptors);
+                    ArchetypeChunk* chunk = AppendChunk(NextChunkBytes());
                     if (!chunk) ASTRA_UNLIKELY
                     {
                         // Failed to allocate all required chunks - return empty to indicate failure
+                        while (m_chunks.size() > chunksBefore)
+                        {
+                            PopBackChunk();
+                        }
                         return {};
                     }
-                    newChunks.push_back(std::move(chunk));
-                }
-                
-                // All chunks allocated successfully - add them to our chunks vector
-                for (auto& chunk : newChunks)
-                {
-                    m_chunks.emplace_back(std::move(chunk));
+                    remainingCapacity += chunk->GetCapacity();
                 }
             }
 
@@ -1189,7 +1747,7 @@ namespace Astra
             while (entityIndex < count && chunkIndex < m_chunks.size()) ASTRA_LIKELY
             {
                 auto& chunk = m_chunks[chunkIndex];
-                size_t available = m_entitiesPerChunk - chunk->GetCount();
+                size_t available = chunk->GetCapacity() - chunk->GetCount();
 
                 if (available > 0) ASTRA_LIKELY
                 {
@@ -1335,7 +1893,7 @@ namespace Astra
         
         std::pair<size_t, bool> GetOrCreateChunk()
         {
-            if (m_entitiesPerChunk == 0) ASTRA_UNLIKELY
+            if (!m_initialized) ASTRA_UNLIKELY
             {
                 // Initialize() never found a valid per-chunk layout for this component
                 // set (single-entity footprint exceeds the usable chunk space) - refuse
@@ -1360,16 +1918,14 @@ namespace Astra
                 }
             }
             
-            auto chunk = m_chunkPool->CreateChunk(m_entitiesPerChunk, m_componentDescriptors);
-            if (!chunk) ASTRA_UNLIKELY
+            if (!AppendChunk(NextChunkBytes())) ASTRA_UNLIKELY
             {
                 return {INVALID_CHUNK_INDEX, false};
             }
-            
-            m_chunks.emplace_back(std::move(chunk));
+
             chunkIndex = m_chunks.size() - 1;
             m_firstNonFullChunkIndex = chunkIndex;
-            
+
             return {chunkIndex, true};
         }
 
@@ -1382,14 +1938,12 @@ namespace Astra
             }
 
             auto* chunk = m_chunks[chunkIndex].get();
-            
+
             ASTRA_ASSERT(chunk->GetCount() < chunk->GetCapacity(), "Chunk is full");
-            chunk->GetEntities().resize(chunk->GetCount() + 1);
             size_t entityIndex = chunk->GetCount();
-            chunk->SetCount(chunk->GetCount() + 1);
-            
-            chunk->GetEntities()[entityIndex] = entity;
-            
+            chunk->GetEntities().push_back(entity);   // capacity pre-reserved at chunk creation: never reallocates
+            chunk->SetCount(entityIndex + 1);
+
             ++m_entityCount;
             
             if (chunk->IsFull()) ASTRA_UNLIKELY
@@ -1426,26 +1980,37 @@ namespace Astra
                 EntityLocation destEntityLocation = EntityLocation::Create(destChunkIndex, destEntityIndex);
                 movedEntities.emplace_back(entity, destEntityLocation);
                 
-                // Move components using O(1) lookups
-                const auto& srcArrays = srcChunk->GetComponentArrays();
-                const auto& destArrays = destChunk->GetComponentArrays();
-                
-                for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
+                // Move components column by column. Both chunks belong to this
+                // archetype, so they share m_columnMeta (identical column layout).
+                // destEntityIndex is transiently >= destChunk's count here (the count
+                // is bumped after the loop), so resolve the base directly and index it
+                // rather than going through GetComponentPointer's count-bounded assert.
+                for (uint16_t c = 0; c < m_columnMeta.columnCount; ++c)
                 {
-                    const auto& srcInfo = srcArrays[id];
-                    if (!srcInfo.isValid || srcInfo.base == nullptr)
-                    {
-                        continue;
-                    }
+                    const ComponentID id = m_columnMeta.columns[c].id;
+                    const uint32_t stride = m_columnMeta.columns[c].stride;
+                    const ComponentDescriptor& desc = *m_columnMeta.columns[c].descriptor;
 
-                    void* srcPtr = static_cast<std::byte*>(srcInfo.base) + srcEntityIndex * srcInfo.stride;
-                    void* destPtr = static_cast<std::byte*>(destArrays[id].base) + destEntityIndex * destArrays[id].stride;
-                    
+                    void* srcPtr = static_cast<std::byte*>(srcChunk->GetComponentArrayByID(id)) + srcEntityIndex * stride;
+                    void* destPtr = static_cast<std::byte*>(destChunk->GetComponentArrayByID(id)) + destEntityIndex * stride;
+
                     // Use move constructor to transfer component data
-                    srcInfo.descriptor.MoveConstruct(destPtr, srcPtr);
-                    srcInfo.descriptor.Destruct(srcPtr);
+                    desc.MoveConstruct(destPtr, srcPtr);
+                    desc.Destruct(srcPtr);
+
+                    // Disabled-bit carry (Task 2): same archetype => same column ordinal
+                    // on both chunks. dst slot is freshly counted (born enabled); the
+                    // src bit is cleared right after via the pop below shrinking count.
+                    // NOTE: this method currently has no live callers (referenced only
+                    // in a comment); the carry is here so every entity-relocation path
+                    // is uniformly covered if it is ever revived.
+                    if (desc.isEnableable) ASTRA_UNLIKELY
+                    {
+                        destChunk->SetDisabled(c, destEntityIndex, srcChunk->IsDisabled(c, srcEntityIndex));
+                        srcChunk->SetDisabled(c, srcEntityIndex, false);
+                    }
                 }
-                
+
                 // Remove entity from source chunk's entity vector
                 srcChunk->GetEntities().pop_back();
             }
@@ -1457,20 +2022,30 @@ namespace Astra
             return movedEntities;
         }
 
-        ASTRA_NODISCARD size_t GetEntitiesPerChunkShift() const noexcept { return m_entitiesPerChunkShift; }
-        ASTRA_NODISCARD size_t GetEntitiesPerChunkMask() const noexcept { return m_entitiesPerChunkMask; }
-
         ComponentMask m_mask;
         size_t m_componentCount;  // Cached component count for fast access
         std::vector<ComponentDescriptor> m_componentDescriptors;
+        // Built once by BuildColumnMeta() in Initialize(); columns[*].descriptor points into
+        // m_componentDescriptors above, which is set once and never reassigned afterward.
+        ArchetypeColumnMeta m_columnMeta;
         std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>> m_chunks;
         size_t m_entityCount;
-        size_t m_entitiesPerChunk;
-        size_t m_entitiesPerChunkShift;     // For fast division via bit shift (log2(m_entitiesPerChunk))
-        size_t m_entitiesPerChunkMask;      // For fast modulo operations (m_entitiesPerChunk - 1)
+        // Chunks of one archetype no longer share a capacity (Phase 2), so the
+        // uniform m_entitiesPerChunk + shift/mask trio is gone. What Initialize
+        // establishes is the LAYOUT (bytes per entity plus the conservative
+        // per-column padding estimate); a chunk's capacity is then derived from
+        // its own byte size, and the archetype only caches the running sum.
+        size_t m_perEntitySize = 0;         // summed non-empty component sizes
+        size_t m_alignmentOverhead = 0;     // conservative per-chunk column padding estimate
+        size_t m_totalCapacity = 0;         // sum of m_chunks[i]->GetCapacity(), maintained incrementally
         size_t m_firstNonFullChunkIndex = 0;  // Track first chunk with available space for O(1) lookup
         bool m_initialized;
         ArchetypeChunkPool* m_chunkPool = nullptr;
+
+        // Add/remove transition edges, indexed by ComponentID (< MAX_COMPONENTS).
+        // Lazily allocated on first edge; nullptr slot = no cached edge; freed with the archetype.
+        std::unique_ptr<Archetype*[]> m_addEdges;
+        std::unique_ptr<Archetype*[]> m_removeEdges;
 
         friend class ArchetypeManager;
         friend class Registry;

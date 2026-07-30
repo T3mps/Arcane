@@ -16,27 +16,38 @@ namespace Astra
     // Forward declarations
     template<typename T> struct Optional;
     template<typename T> struct Not;
+    template<typename T> struct IncludeDisabled;
     template<typename... Ts> struct Any;
     template<typename... Ts> struct OneOf;
-    
+    template<typename T> struct With;
+
     namespace Detail
     {
         // Type trait to check if T is a query modifier
         template<typename T>
         struct IsModifier : std::false_type {};
-        
+
         template<typename T>
         struct IsModifier<Optional<T>> : std::true_type {};
-        
+
         template<typename T>
         struct IsModifier<Not<T>> : std::true_type {};
+
+        // IncludeDisabled<T> is a modifier for parsing purposes (so it passes
+        // ValidQueryArg and is not double-counted as a bare required component),
+        // but classifies T as REQUIRED for matching -- see GetRequired below.
+        template<typename T>
+        struct IsModifier<IncludeDisabled<T>> : std::true_type {};
         
         template<typename... Ts>
         struct IsModifier<Any<Ts...>> : std::true_type {};
         
         template<typename... Ts>
         struct IsModifier<OneOf<Ts...>> : std::true_type {};
-        
+
+        template<typename T>
+        struct IsModifier<With<T>> : std::true_type {};
+
         template<typename T>
         inline constexpr bool IsModifier_v = IsModifier<T>::value;
         
@@ -58,7 +69,19 @@ namespace Astra
         {
             using type = T;
         };
-        
+
+        template<typename T>
+        struct ExtractComponent<IncludeDisabled<T>>
+        {
+            using type = T;
+        };
+
+        template<typename T>
+        struct ExtractComponent<With<T>>
+        {
+            using type = T;
+        };
+
         // Extract all component types from a parameter pack
         template<typename... Ts>
         struct ExtractComponents;
@@ -191,13 +214,95 @@ namespace Astra
                     decltype(std::tuple_cat(std::tuple<T>{}, std::declval<typename GetRequired<Rest...>::type>()))
                 >;
             };
-            
+
+            // IncludeDisabled<T> is required-for-matching (T must be present and is
+            // passed by reference to the callback) but is excluded from enabled
+            // filtering. More specialised than the generic (modifier-skipping) case,
+            // so it wins; T lands in RequiredComponents exactly like a bare required
+            // component, and the enabled-filter set is built separately from the raw
+            // query args so this T never enters it.
+            template<typename T, typename... Rest>
+            struct GetRequired<IncludeDisabled<T>, Rest...>
+            {
+                using type = decltype(std::tuple_cat(std::tuple<T>{}, std::declval<typename GetRequired<Rest...>::type>()));
+            };
+
             using RequiredComponents = typename GetRequired<QueryArgs...>::type;
             using OptionalComponents = typename FilterByModifier<Optional, QueryArgs...>::type;
             using ExcludedComponents = typename FilterByModifier<Not, QueryArgs...>::type;
             using AnyGroups = typename FilterByModifier<Any, QueryArgs...>::type;
             using OneOfGroups = typename FilterByModifier<OneOf, QueryArgs...>::type;
+            using WithComponents     = typename FilterByModifier<With, QueryArgs...>::type;
         };
+
+        // ============ Enableable-components query-filter type sets (spec §5) ============
+        //
+        // The enabled-filter set of a view = required + optional components that
+        // are IsEnableableV and NOT wrapped in IncludeDisabled. Built directly from
+        // the raw query args (for required) and from the already-classified optional
+        // tuple. When both sets are empty the view compiles to the pre-existing,
+        // byte-identical iteration loops (invariant 1: zero cost when unused).
+
+        // Bare (unwrapped) required components that are enableable. A modifier --
+        // Optional/Not/Any/OneOf/IncludeDisabled -- is skipped, so IncludeDisabled<T>
+        // is automatically excluded (its T never appears here => no filtering). This
+        // set drives per-chunk run extraction and chunk skipping.
+        template<typename... QueryArgs>
+        struct EnableableRequiredFilter
+        {
+            using type = decltype(std::tuple_cat(
+                std::conditional_t<(!IsModifier_v<QueryArgs> && IsEnableableV<QueryArgs>),
+                                   std::tuple<QueryArgs>, std::tuple<>>{}...));
+        };
+        template<typename... QueryArgs>
+        using EnableableRequiredFilter_t = typename EnableableRequiredFilter<QueryArgs...>::type;
+
+        // Filter a component tuple down to its enableable members. Applied to the
+        // Optional tuple: those optionals whose pointer is nulled per entity while
+        // disabled.
+        template<typename Tuple>
+        struct FilterEnableable;
+        template<typename... Ts>
+        struct FilterEnableable<std::tuple<Ts...>>
+        {
+            using type = decltype(std::tuple_cat(
+                std::conditional_t<IsEnableableV<Ts>, std::tuple<Ts>, std::tuple<>>{}...));
+        };
+        template<typename Tuple>
+        using FilterEnableable_t = typename FilterEnableable<Tuple>::type;
+
+        // Per-query-arg read/write classification for ViewAccess.
+        // Default (bare data arg): const T -> read, T -> write.
+        template<typename Arg>
+        struct ArgAccess
+        {
+            using Read  = std::conditional_t<std::is_const_v<Arg>, std::tuple<std::remove_const_t<Arg>>, std::tuple<>>;
+            using Write = std::conditional_t<std::is_const_v<Arg>, std::tuple<>, std::tuple<Arg>>;
+        };
+        // Optional<T>: yields a pointer; const T -> read, T -> write.
+        template<typename T>
+        struct ArgAccess<Optional<T>>
+        {
+            using Read  = std::conditional_t<std::is_const_v<T>, std::tuple<std::remove_const_t<T>>, std::tuple<>>;
+            using Write = std::conditional_t<std::is_const_v<T>, std::tuple<>, std::tuple<T>>;
+        };
+        // IncludeDisabled<T>: yielded mutable (see GetRequired) -> write.
+        template<typename T>
+        struct ArgAccess<IncludeDisabled<T>>
+        {
+            using Read  = std::tuple<>;
+            using Write = std::tuple<T>;
+        };
+        // Match-only / grouping modifiers: zero access footprint.
+        template<typename T>    struct ArgAccess<With<T>> { using Read = std::tuple<>; using Write = std::tuple<>; };
+        template<typename T>    struct ArgAccess<Not<T>>  { using Read = std::tuple<>; using Write = std::tuple<>; };
+        template<typename... T> struct ArgAccess<Any<T...>>   { using Read = std::tuple<>; using Write = std::tuple<>; };
+        template<typename... T> struct ArgAccess<OneOf<T...>> { using Read = std::tuple<>; using Write = std::tuple<>; };
+
+        template<typename... Args>
+        struct AccessReads  { using type = decltype(std::tuple_cat(std::declval<typename ArgAccess<Args>::Read>()...)); };
+        template<typename... Args>
+        struct AccessWrites { using type = decltype(std::tuple_cat(std::declval<typename ArgAccess<Args>::Write>()...)); };
     }
     
     // Query modifier types
@@ -212,7 +317,30 @@ namespace Astra
     {
         static_assert(Component<T>, "Not can only be used with valid components");
     };
-    
+
+    // Match-only filter: T must be present on the archetype for a match, but T is
+    // NOT yielded to the callback and carries zero access footprint for scheduling
+    // (ViewAccess ignores it). The positive twin of Not<T>.
+    template<typename T>
+    struct With
+    {
+        static_assert(Component<T>, "With can only be used with valid components");
+    };
+
+    // View modifier: opt a REQUIRED enableable component OUT of enabled-only
+    // filtering. `CreateView<IncludeDisabled<T>>` matches (and hands the callback)
+    // every entity that has T, disabled ones included -- the DOTS "include
+    // disabled" query. T is still required for matching; it is only removed from
+    // the per-view enabled-filter set (spec §5).
+    template<typename T>
+    struct IncludeDisabled
+    {
+        static_assert(Component<T>, "IncludeDisabled can only be used with valid components");
+        static_assert(IsEnableableV<T>,
+            "IncludeDisabled<T> requires an enableable component (opt in with `static constexpr bool AstraEnableable = true;`); "
+            "a non-enableable component is never enabled-filtered, so opting it out is meaningless");
+    };
+
     template<typename... Ts>
     struct Any
     {
@@ -261,7 +389,13 @@ namespace Astra
         {
             return MakeMaskFromTuple<typename Classifier::ExcludedComponents>();
         }
-        
+
+        // Match-only components (With<T>): required for matching, never yielded.
+        static ComponentMask GetWithMask()
+        {
+            return MakeMaskFromTuple<typename Classifier::WithComponents>();
+        }
+
         // Handle Any groups - must have at least one component from each group
         template<typename Tuple, size_t... Is>
         static bool CheckAnyGroups(const ComponentMask& archetypeMask, std::index_sequence<Is...>)
@@ -312,8 +446,8 @@ namespace Astra
         // Check if archetype matches this query
         static bool Matches(const ComponentMask& archetypeMask)
         {
-            // Must have all required components
-            if (!archetypeMask.HasAll(GetRequiredMask()))
+            // Must have all required AND all With components
+            if (!archetypeMask.HasAll(GetRequiredMask() | GetWithMask()))
                 return false;
             
             // Must NOT have any excluded components

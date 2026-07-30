@@ -1,0 +1,11 @@
+﻿Astra vendored from the standalone repo. DO NOT EDIT THESE HEADERS IN PLACE --
+change them in the Astra repo and re-run scripts\sync-astra.ps1, or the next
+sync silently reverts your edit.
+
+source  : D:\dev\starworks\Astra
+commit  : f8c99987e55cb205ecc6963d22dcc236168c105b
+branch  : dev
+subject : chore(studio): polish batch -- bytesReserved surfaced, dedup, warnings killed
+synced  : 2026-07-29 19:10:01
+scope   : include/ only (Arcane compiles nothing else from this tree --
+          see Arcane/premake5.lua IncludeDir["Astra"])

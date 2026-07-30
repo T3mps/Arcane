@@ -37,7 +37,11 @@ namespace Astra
         // Resource commands
         SetResource,
         RemoveResource,
-        ClearResources
+        ClearResources,
+
+        // Enableable-component commands (spec 2026-07-25 §7). Appended, not
+        // inserted -- CommandType values are not serialized.
+        SetEnabled
     };
 
     /**
@@ -181,6 +185,16 @@ namespace Astra
     {
         Entity entity;
         ComponentID componentId;
+    };
+
+    /**
+     * Payload for SetEnabled command (enableable components, spec 2026-07-25 §7).
+     */
+    struct SetEnabledPayload
+    {
+        Entity entity;
+        ComponentID componentId;
+        uint8_t enable;   // bool, fixed-width for the POD payload
     };
 
     /**
@@ -362,40 +376,6 @@ namespace Astra
     inline constexpr size_t AlignUp(size_t value, size_t alignment)
     {
         return (value + alignment - 1) & ~(alignment - 1);
-    }
-
-    /**
-     * Calculate total command size for AddComponent.
-     */
-    inline size_t CalculateAddComponentSize(size_t dataSize, size_t dataAlignment)
-    {
-        size_t payloadStart = sizeof(CommandHeader);
-        size_t dataStart = payloadStart + sizeof(AddComponentPayload);
-        dataStart = AlignUp(dataStart, dataAlignment);
-        return dataStart + dataSize;
-    }
-
-    /**
-     * Calculate total command size for AddComponentBatch.
-     */
-    inline size_t CalculateAddComponentBatchSize(size_t entityCount, size_t dataSize, size_t dataAlignment)
-    {
-        size_t payloadStart = sizeof(CommandHeader);
-        size_t entitiesStart = payloadStart + sizeof(AddComponentBatchPayload);
-        size_t dataStart = entitiesStart + entityCount * sizeof(Entity);
-        dataStart = AlignUp(dataStart, dataAlignment);
-        return dataStart + dataSize;
-    }
-
-    /**
-     * Calculate total command size for SetResource.
-     */
-    inline size_t CalculateSetResourceSize(size_t dataSize, size_t dataAlignment)
-    {
-        size_t payloadStart = sizeof(CommandHeader);
-        size_t dataStart = payloadStart + sizeof(SetResourcePayload);
-        dataStart = AlignUp(dataStart, dataAlignment);
-        return dataStart + dataSize;
     }
 
 } // namespace Astra

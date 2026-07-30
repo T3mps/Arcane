@@ -1,6 +1,5 @@
 #pragma once
 
-#include <any>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -11,7 +10,9 @@
 
 #include "../Core/Base.hpp"
 #include "../Core/TypeID.hpp"
+#include "AnyValue.hpp"
 #include "Attribute.hpp"
+#include "ContainerTraits.hpp"
 
 namespace Astra
 {
@@ -50,11 +51,11 @@ namespace Astra
         // Setter: copies value from input buffer to instance field
         std::function<void(void* instance, const void* inValue)> setter;
 
-        // Getter returning std::any for dynamic type handling
-        std::function<std::any(const void* instance)> getterAny;
+        // Getter returning AnyValue for dynamic (type-erased, RTTI-free) handling
+        std::function<AnyValue(const void* instance)> getterAny;
 
-        // Setter accepting std::any for dynamic type handling
-        std::function<bool(void* instance, const std::any& value)> setterAny;
+        // Setter accepting AnyValue for dynamic (type-erased, RTTI-free) handling
+        std::function<bool(void* instance, const AnyValue& value)> setterAny;
 
         // Attributes attached to this field
         std::vector<const Attribute*> attributes;
@@ -144,26 +145,26 @@ namespace Astra
         }
 
         /**
-         * Gets the field value as std::any for dynamic handling.
+         * Gets the field value as AnyValue for dynamic handling.
          * @param instance Pointer to the containing struct instance
-         * @return The field value wrapped in std::any
+         * @return The field value wrapped in AnyValue
          */
-        ASTRA_NODISCARD std::any GetAny(const void* instance) const
+        ASTRA_NODISCARD AnyValue GetAny(const void* instance) const
         {
             if (getterAny)
             {
                 return getterAny(instance);
             }
-            return std::any{};
+            return AnyValue{};
         }
 
         /**
-         * Sets the field value from std::any for dynamic handling.
+         * Sets the field value from AnyValue for dynamic handling.
          * @param instance Pointer to the containing struct instance
          * @param value The value to set
          * @return true if the value was set successfully, false on type mismatch
          */
-        bool SetAny(void* instance, const std::any& value) const
+        bool SetAny(void* instance, const AnyValue& value) const
         {
             if (isConst || !setterAny)
             {
@@ -335,6 +336,20 @@ namespace Astra
     namespace Detail
     {
         /**
+         * Detects whether ContainerTraits<T> exposes a `static constexpr bool IsString`
+         * member. Only the std::basic_string specializations currently define it;
+         * std::string otherwise shares std::vector's IsSequence/HasContiguousStorage/
+         * !HasFixedSize fingerprint in ContainerTraits, so this is needed to tell them
+         * apart when deriving FieldInfo::isVector below.
+         */
+        template<typename T, typename = void>
+        struct ContainerIsStringTrait : std::false_type {};
+
+        template<typename T>
+        struct ContainerIsStringTrait<T, std::void_t<decltype(ContainerTraits<T>::IsString)>>
+            : std::bool_constant<ContainerTraits<T>::IsString> {};
+
+        /**
          * Creates a FieldInfo for a member field.
          * This is used internally by the registration macros.
          */
@@ -364,8 +379,15 @@ namespace Astra
             info.isEnum = std::is_enum_v<DecayedType>;
             info.isClass = std::is_class_v<DecayedType>;
             info.isArray = std::is_array_v<FieldType>;
-            info.isStdArray = false; // Will be set by ContainerTraits
-            info.isVector = false;   // Will be set by ContainerTraits
+            // std::array is the only ContainerTraits specialization with HasFixedSize
+            // set; std::vector is a contiguous, non-fixed-size sequence that is not
+            // std::basic_string (which shares the same IsSequence/HasContiguousStorage/
+            // !HasFixedSize fingerprint).
+            info.isStdArray = ContainerTraits<DecayedType>::HasFixedSize;
+            info.isVector = ContainerTraits<DecayedType>::IsSequence
+                && ContainerTraits<DecayedType>::HasContiguousStorage
+                && !ContainerTraits<DecayedType>::HasFixedSize
+                && !ContainerIsStringTrait<DecayedType>::value;
 
             // Type-erased getter
             info.getter = [](const void* instance, void* outValue) {
@@ -382,17 +404,17 @@ namespace Astra
                 };
             }
 
-            // std::any getter
-            info.getterAny = [](const void* instance) -> std::any {
+            // AnyValue getter (RTTI-free)
+            info.getterAny = [](const void* instance) -> AnyValue {
                 const Class* obj = static_cast<const Class*>(instance);
-                return std::any(obj->*FieldPtr);
+                return AnyValue(obj->*FieldPtr);
             };
 
-            // std::any setter (uses pointer overload to avoid exceptions)
+            // AnyValue setter (TryCast returns null on type mismatch -- never throws)
             if constexpr (!std::is_const_v<FieldType>)
             {
-                info.setterAny = [](void* instance, const std::any& value) -> bool {
-                    const DecayedType* ptr = std::any_cast<DecayedType>(&value);
+                info.setterAny = [](void* instance, const AnyValue& value) -> bool {
+                    const DecayedType* ptr = value.TryCast<DecayedType>();
                     if (!ptr)
                     {
                         return false;

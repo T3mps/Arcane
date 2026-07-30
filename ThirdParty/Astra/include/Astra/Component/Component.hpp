@@ -1,5 +1,7 @@
 #pragma once
 
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -32,6 +34,33 @@ namespace Astra
     class TypeMeta;          // Forward declaration for reflection integration
     class IFieldVisitor;     // Forward declaration for format-agnostic visitor seam
 
+    /**
+     * Opt-in enableability (spec 2026-07-25 §2). A component is enableable iff
+     * it declares `static constexpr bool AstraEnableable = true` or specializes
+     * Astra::EnableableTraits<T>. Enableable columns carry per-chunk disabled
+     * bits; everything else pays nothing.
+     */
+    template<typename T>
+    struct EnableableTraits
+    {
+        // NOTE: `requires {...} && T::AstraEnableable` (the spec's literal shape) does
+        // NOT compile as a single expression -- the right operand of && is not inside
+        // the requires-expression's SFINAE-protected scope, so for a T lacking the
+        // member (or a non-class T like `int`) MSVC hard-errors resolving `T::AstraEnableable`
+        // instead of short-circuiting. if constexpr genuinely gates instantiation of the
+        // branch not taken, which is what the spec's short-circuit intent requires.
+        static constexpr bool value = []() constexpr
+        {
+            if constexpr (requires { { T::AstraEnableable } -> std::convertible_to<bool>; })
+                return T::AstraEnableable;
+            else
+                return false;
+        }();
+    };
+
+    template<typename T>
+    inline constexpr bool IsEnableableV = EnableableTraits<std::remove_const_t<T>>::value;
+
     struct ComponentDescriptor
     {
         using ConstructFn = void(void*);
@@ -60,7 +89,9 @@ namespace Astra
         bool is_nothrow_move_constructible;
         bool is_nothrow_default_constructible;
         bool is_trivially_default_constructible;
+        bool is_trivially_destructible = false;   // ONLY trait bool with a default: false = always-call-fn-ptr, so a descriptor built outside the registry factory stays safe; siblings are factory-assigned only
         bool is_empty;
+        bool isEnableable = false;   // defaults false (same rationale as is_trivially_destructible above): a hand-built descriptor stays safe; the registry factory assigns IsEnableableV<T>
         ConstructFn* defaultConstruct;
         DestructFn* destruct;
         CopyConstructFn* copyConstruct;
@@ -153,7 +184,30 @@ namespace Astra
         
         inline void Destruct(void* ptr) const
         {
+            if (size == 0) return;  // empty (tag) component: nothing to destruct (mirrors DefaultConstruct)
+            if (is_trivially_destructible)
+            {
+                return;  // trivial destructor is a no-op: skip the indirect call entirely
+            }
             destruct(ptr);
         }
     };
+
+    // Stable, non-null pointer used as the "component pointer" for a present zero-size (tag)
+    // component: by-hash/name Get returns it and by-ID signals fire with it, so Get(...) !=
+    // nullptr agrees with Has(...). It points at a real static byte; callers must NOT read
+    // through it (a tag has no data -- desc.size == 0). All tags share this one address; the
+    // ComponentID carried alongside identifies the type.
+    //
+    // Note: a present tag deliberately has more than one distinct non-null "do-not-deref"
+    // pointer convention across surfaces -- this sentinel on the by-hash/name Get and by-ID
+    // signal paths, versus a per-type &emptyInstance on the typed AddComponent<T>/RemoveComponent<T>
+    // signal paths. Both mean "present, no data"; do NOT compare a tag's component pointer for
+    // identity across paths. (Registry::InspectEntity still reports nullptr for a tag -- a
+    // tracked follow-up to unify on this sentinel.)
+    inline void* EmptyComponentSentinel() noexcept
+    {
+        static std::byte sentinel{};
+        return &sentinel;
+    }
 }
