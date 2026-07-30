@@ -40,38 +40,34 @@ private:
     // type_context_install/project_open/input_config are NOT in this list --
     // their RuntimeStages/CoreStages body is genuinely shared and used as-is
     // (project_open's Fatal-ABI-refusal override lives IN RuntimeStages
-    // itself, not here -- see ProjectBoot.cpp).
+    // itself, not here -- see ProjectBoot.cpp). StageFinalize joined this
+    // list in Task 8c (2026-07-30 correction): it now performs the window
+    // reveal (see its own comment), which RuntimeStages' "finalize" id used
+    // to have patched to an explicit no-op.
     bool StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx);
     bool StageGpuCore(Arcane::HostBoot::BootContext& ctx);
     bool StageRenderBridge(Arcane::HostBoot::BootContext& ctx);
     bool StageSpriteTables(Arcane::HostBoot::BootContext& ctx);
     bool StagePluginLoad(Arcane::HostBoot::BootContext& ctx);
+    bool StageFinalize(Arcane::HostBoot::BootContext& ctx);
 
     void MainLoop();
     void Shutdown();
-
-    // Forwards to a real BootPresenter once StageGpuCore has built the device
-    // -- same shape and same reason as EditorApp::LazyBootPresenter (see that
-    // class's header comment).
-    class LazyBootPresenter final : public Arcane::IBootPresenter
-    {
-    public:
-        void Bind(Arcane::BootPresenter* p) noexcept { m_inner = p; }
-        bool Present(const Arcane::BootProgress& progress) override
-        {
-            return m_inner ? m_inner->Present(progress) : true;
-        }
-    private:
-        Arcane::BootPresenter* m_inner = nullptr;
-    };
 
     Arcane::HostConfig                  m_config;
     std::unique_ptr<Arcane::GpuContext> m_gpu;          // destructs LAST among engine state
 
     // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
+    // Task 8c: this is now BootSequence::Run's presenter for the WHOLE boot
+    // (via a local Arcane::BootSplashPresenter Run() constructs around this
+    // pointer), not merely a pre-device stand-in. The old LazyBootPresenter
+    // nested class that used to live here is gone -- see EditorApp.hpp's
+    // matching comment for why it is no longer needed by either host.
     Arcane::BootSplashWindow*             m_splash = nullptr;
+    // Cannot be constructed before StageGpuCore builds m_gpu. Emplaced
+    // lazily inside StageFinalize, the one place it is used now -- see that
+    // method's body.
     std::optional<Arcane::BootPresenter>  m_presenter;
-    LazyBootPresenter                     m_lazyPresenter;
 
     Astra::TypeContext*                 m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
     // engaged by the boot sequence before MainLoop()/Shutdown() touch them (bare -> deref is safe).

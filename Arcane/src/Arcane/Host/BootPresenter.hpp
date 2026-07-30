@@ -7,11 +7,24 @@
 // It cannot present before gpu_core completes -- that is what BootSplashWindow
 // covers.
 //
+// Task 8c (2026-07-30 correction, "the splash carries the loading UI, not the
+// editor window"): in Fullscreen mode this is no longer BootSequence's
+// per-stage presenter -- the pre-device splash (BootSplashPresenter,
+// BootSplashWindow.hpp) is, for the WHOLE boot. Fullscreen mode is now used
+// exactly ONCE, explicitly, by the last boot stage (EditorApp::
+// StageSplashReady / RuntimeApp::StageFinalize) to draw the single frame that
+// must exist in the swapchain before Window::Show() reveals it -- never a
+// live per-stage loading screen. Overlay mode (the in-editor project switch)
+// is unaffected: it still drives BootSequence's presenter directly for that
+// short-lived, already-visible-window flow.
+//
 // Tick-cadence contract (see IBootPresenter in BootSequence.hpp): during a
 // Worker-stage overlap this is called repeatedly at roughly display cadence
 // instead of the main thread blocking silently. Present() therefore does
 // exactly one frame of window-pump + ImGui + present per call and returns --
-// it never loops or waits on anything unbounded.
+// it never loops or waits on anything unbounded. (Fullscreen mode's one boot
+// use above only ever calls Present() once, so this contract matters to it
+// only in the trivial sense; Overlay mode is where it is exercised for real.)
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Host/BootSequence.hpp>
@@ -31,7 +44,7 @@ namespace Arcane
 
     enum class BootPresenterMode : std::uint8_t
     {
-        Fullscreen,   // boot: the whole backbuffer
+        Fullscreen,   // boot's single reveal frame (Task 8c): the whole backbuffer
         Overlay,      // project switch: a modal panel over the last editor frame
     };
 

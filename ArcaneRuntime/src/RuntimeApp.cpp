@@ -104,15 +104,17 @@ bool RuntimeApp::StageGpuCore(Arcane::HostBoot::BootContext& ctx)
     ARC_INFO("{} -- ArcaneRuntime host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
     ctx.gpu = m_gpu.get();
 
-    // The presenter cannot exist before the device does. Bind it into the
-    // stable LazyBootPresenter Run() already handed BootSequence -- same
-    // shape as EditorApp::StageGpuCore.
-    m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
-    m_lazyPresenter.Bind(&*m_presenter);
+    // Does NOT construct m_presenter here (Task 8c, 2026-07-30 correction):
+    // the swapchain-backed BootPresenter is needed exactly once now, for the
+    // single reveal frame StageFinalize draws right before Show()/Close() --
+    // BootSequence's per-stage pump is driven by the pre-device splash
+    // (Arcane::BootSplashPresenter, bound for the whole Run() call in Run()
+    // below) for the ENTIRE boot instead. m_presenter is emplaced lazily
+    // inside StageFinalize, the one place it is used.
     return true;
 }
 
-bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext& ctx)
+bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
 {
     // Render-resources bridge: hand the host-owned device + ShaderLibrary to the
     // Runtime so a plugin can build its own engine render objects (e.g. the
@@ -134,17 +136,12 @@ bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext& ctx)
                             ud);
     }
 
-    // Show the REAL window, THEN close the pre-device splash -- the same
-    // handoff order EditorApp's dedicated splash_ready stage performs (see
-    // that stage's comment in ProjectBoot.cpp for why the order matters).
-    // The runtime has no editor_fonts-equivalent id to hang a separate stage
-    // off of (RuntimeStages appends nothing -- BootStageParityTest pins
-    // that), so this folds into render_bridge: the earliest core stage that
-    // runs strictly after gpu_core, by which point BootSequence has already
-    // called present() at least once for gpu_core's completion, so the
-    // swapchain holds a real drawn frame (the loading bar), never garbage.
-    if (ctx.gpu) ctx.gpu->Win().Show();
-    if (ctx.splash) ctx.splash->Close();
+    // Window reveal used to fold in HERE (Show() then Close() the splash),
+    // right after gpu_core, matching the pre-Task-8c design where the editor
+    // window carried the loading bar. Task 8c (2026-07-30 correction) moves
+    // that to StageFinalize instead -- see that method's comment for the
+    // reveal-ordering reasoning, which now needs to run dead last, not right
+    // after gpu_core.
     return true;
 }
 
@@ -252,6 +249,36 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     // No consumeFirst: a standalone host has no open documents to give first
     // refusal to, so every drained result goes straight to the caches.
     m_resolver.emplace(std::move(rs));
+    return true;
+}
+
+bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
+{
+    // Task 8c (2026-07-30 correction, "the splash carries the loading UI,
+    // not the editor window"): the window reveal moved here from
+    // StageRenderBridge (see that method's comment) -- RuntimeStages appends
+    // nothing (BootStageParityTest pins that), so there is no dedicated
+    // splash_ready id to hang this on the way the editor has one; "finalize"
+    // is the LAST core stage both hosts run, matching where the editor's own
+    // splash_ready now sits (it depends on "finalize" -- see ProjectBoot.cpp).
+    //
+    // Same two constraints as the editor's StageSplashReady, and the same
+    // resolution -- see that method's comment in EditorApp.cpp for the full
+    // reasoning (UnrealEdGlobals.cpp:215-236's hide-then-show shape):
+    //   1. Never reveal an undrawn window: Present() one real frame through
+    //      the swapchain-backed BootPresenter (fraction=1.0, the terminal
+    //      tick) before doing anything else -- nothing has drawn into this
+    //      window's swapchain yet, because BootSequence's per-stage pump has
+    //      been driven by the pre-device splash presenter for the WHOLE run.
+    //   2. Never leave a gap with neither window on screen: Show() the real
+    //      window (now holding that frame) BEFORE Close()ing the splash.
+    m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
+    Arcane::BootProgress done;   // stageId/detail empty: the terminal tick
+    done.fraction = 1.0f;
+    m_presenter->Present(done);
+
+    m_gpu->Win().Show();
+    if (m_splash) m_splash->Close();
     return true;
 }
 
@@ -575,28 +602,34 @@ int RuntimeApp::Run()
         else if (stage.id == "render_bridge")    stage.run = [this, &ctx] { return StageRenderBridge(ctx); };
         else if (stage.id == "sprite_tables")    stage.run = [this, &ctx] { return StageSpriteTables(ctx); };
         else if (stage.id == "plugin_load")      stage.run = [this, &ctx] { return StagePluginLoad(ctx); };
-        // "finalize" is DELIBERATELY left as CoreStages' Unpatched(id) sentinel
-        // for every id above -- but finalize itself needs an EXPLICIT opt-out,
-        // not silence, or a genuinely forgotten patch here would be
-        // indistinguishable from this comment (2026-07-30 review finding).
-        // RuntimeApp has no finalize-specific work: it has no window title to
-        // recompute and no scene session to adopt (those are editor-only
-        // concepts -- see EditorApp::StageFinalize), and its own boot-scene
-        // load already happens inside StagePluginLoad (see that method's
-        // comment for why it cannot move to sprite_tables). So this is a
-        // real, intentional no-op, stated as one:
-        else if (stage.id == "finalize")         stage.run = [] { return true; };
+        // "finalize" USED to be DELIBERATELY left as an explicit no-op --
+        // RuntimeApp had no window title to recompute and no scene session
+        // to adopt (editor-only concepts). Task 8c (2026-07-30 correction)
+        // gives it real work: the window reveal, which used to live in
+        // StageRenderBridge -- see StageFinalize's own comment for why it
+        // moved here specifically (RuntimeStages appends nothing, so
+        // "finalize", the last core stage, is where the editor's own
+        // splash_ready now points too).
+        else if (stage.id == "finalize")         stage.run = [this, &ctx] { return StageFinalize(ctx); };
         // "edit_core" (2026-07-30 review, Fix 5): the editor's undo/redo
         // history and structural-edit binding have no runtime analog -- the
-        // runtime has no scene session to undo/redo against. Same explicit-
-        // no-op shape as "finalize" above, for the same reason.
+        // runtime has no scene session to undo/redo against. Explicit
+        // no-op, stated as one rather than relying on the Unpatched sentinel
+        // to happen to look like success.
         else if (stage.id == "edit_core")        stage.run = [] { return true; };
     }
 
     Arcane::BootSequence seq(std::move(stages));
-    // Presenter is null until StageGpuCore creates the device; m_lazyPresenter
-    // tolerates that and the pre-device splash covers the gap.
-    const Arcane::BootResult boot = seq.Run(&m_lazyPresenter);
+    // The pre-device splash is BootSequence's presenter for the WHOLE run
+    // (Task 8c) -- from runtime_create through finalize, every per-stage
+    // present() call reports into m_splash's status text + taskbar progress
+    // rather than the swapchain. Safe to construct unconditionally:
+    // BootSplashPresenter tolerates m_splash == nullptr, same never-fail
+    // contract as BootSplashWindow itself. The swapchain-backed BootPresenter
+    // (m_presenter) is used exactly once, explicitly, inside StageFinalize --
+    // never through this pump.
+    Arcane::BootSplashPresenter splashPresenter(m_splash);
+    const Arcane::BootResult boot = seq.Run(&splashPresenter);
     if (!boot.ok)
         return boot.quitRequested ? 0 : 1;
 

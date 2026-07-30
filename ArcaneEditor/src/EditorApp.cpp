@@ -219,19 +219,16 @@ namespace Arcane::Editor
         // against this, see its own body).
         m_editorImguiContext = ImGui::GetCurrentContext();
 
-        // Deliberately does NOT construct/bind m_presenter here (2026-07-30
-        // review fix -- see the ordering comment on EditorStages'
-        // editor_fonts push_back in ProjectBoot.cpp for the full story). This
-        // stage completing does not yet mean it is safe to draw a real ImGui
-        // frame: no custom font is installed, no theme is applied, and the
-        // layout/play-mode settings handlers are not registered yet, all of
-        // which the FIRST NewFrame call locks in (font atlas build, imgui.ini
-        // read). BootSequence calls present() unconditionally after every
-        // completed main stage, including this one -- if the presenter were
-        // bound here, that next present() call would be the first NewFrame,
-        // before StageEditorFonts/StageEditorShell ever ran. m_lazyPresenter
-        // stays unbound (forwards "keep going" without touching ImGui) until
-        // StageEditorShell binds it at its own end.
+        // Does NOT construct m_presenter here (Task 8c, 2026-07-30
+        // correction): the swapchain-backed BootPresenter is needed exactly
+        // once now, for the single reveal frame StageSplashReady draws right
+        // before Show()/Close() -- there is no more "next automatic
+        // present() call" to worry about landing on an unready ImGui context,
+        // because BootSequence's per-stage pump is driven by the pre-device
+        // splash (Arcane::BootSplashPresenter, bound for the whole Run() call
+        // in Run() below) for the ENTIRE boot, never by this swapchain
+        // presenter. m_presenter is emplaced lazily inside StageSplashReady,
+        // the one place it is used.
         return true;
     }
 
@@ -322,15 +319,16 @@ namespace Arcane::Editor
         RegisterPlayModeSettings();
         InstallConsoleSink();
 
-        // The presenter cannot exist before the device does, and -- as of the
-        // 2026-07-30 review fix -- must not be BOUND until fonts/theme/
-        // settings-handlers/console-sink above are all installed, since
-        // binding it is what lets the next BootSequence::present() call
-        // reach a real ImGui::NewFrame(). This is the LAST statement in this
-        // stage on purpose. See the ordering comment on EditorStages'
-        // editor_fonts push_back in ProjectBoot.cpp for the full story.
-        m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
-        m_lazyPresenter.Bind(&*m_presenter);
+        // Does NOT construct or bind the swapchain-backed m_presenter (Task
+        // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now
+        // happens for the first time ever inside StageSplashReady, which runs
+        // strictly after finalize -- i.e. after fonts/theme/docking-flag/
+        // settings-handlers above AND everything else boot does. The old
+        // concern this comment used to describe (binding too early lets the
+        // NEXT automatic present() call reach an unready ImGui context) no
+        // longer applies: BootSequence's per-stage pump is driven by the
+        // pre-device splash for this entire run (see Run() below), which
+        // never touches ImGui at all.
         return true;
     }
 
@@ -647,6 +645,41 @@ namespace Arcane::Editor
         return true;
     }
 
+    bool EditorApp::StageSplashReady(Arcane::HostBoot::BootContext&)
+    {
+        // Task 8c (2026-07-30 correction, "the splash carries the loading UI,
+        // not the editor window"): depends on "finalize" (ProjectBoot.cpp's
+        // EditorStages), so this is the LAST stage the editor runs -- the
+        // window is revealed only once boot is actually finished, matching
+        // UnrealEdGlobals.cpp:215-236 ("Hide the splash screen now that
+        // everything is ready to go" -> Hide() -> "Do final set up on the
+        // editor frame and show it" -> CreateDefaultMainFrame).
+        //
+        // Two constraints still bind even though the reveal moved to the end:
+        //   1. Never reveal an undrawn window. m_gpu's window has existed
+        //      (hidden) since StageGpuCore, but nothing has ever presented a
+        //      frame into its swapchain -- BootSequence's per-stage pump has
+        //      been driven by the pre-device splash (Arcane::
+        //      BootSplashPresenter, see Run() below) for this WHOLE boot, and
+        //      that presenter never touches the swapchain. So: construct the
+        //      swapchain-backed BootPresenter here (first and only use) and
+        //      Present() ONE real frame at fraction=1.0 before doing anything
+        //      else -- stageId/detail are left empty, matching BootProgress's
+        //      own documented "terminal tick" shape (BootSequence.hpp).
+        //   2. Never leave a gap with neither window on screen. Show() the
+        //      real window -- which now holds that just-drawn frame, not
+        //      garbage -- BEFORE Close()ing the pre-device splash. Reversing
+        //      these two leaves a frame with neither on screen.
+        m_presenter.emplace(*m_gpu, Arcane::BootPresenterMode::Fullscreen);
+        Arcane::BootProgress done;   // stageId/detail empty: the terminal tick
+        done.fraction = 1.0f;
+        m_presenter->Present(done);
+
+        m_gpu->Win().Show();
+        if (m_splash) m_splash->Close();
+        return true;
+    }
+
     void EditorApp::UpdateWindowTitle()
     {
         // m_undo is built later in Init than the first title push; a session with no
@@ -760,8 +793,10 @@ namespace Arcane::Editor
         // type (EditorTheme/EditorFonts/ShaderEditorDocument, none of which
         // Arcane.dll can see) get their `run` overwritten below with the
         // matching Stage* method; type_context_install/project_open/
-        // input_config/splash_ready/editor_lock are left exactly as
-        // EditorStages built them -- their body is genuinely shared. This is
+        // input_config/editor_lock are left exactly as EditorStages built
+        // them -- their body is genuinely shared. splash_ready moved into
+        // this overridden set in Task 8c (see StageSplashReady's own comment
+        // for why -- it now needs m_presenter, host-owned state). This is
         // the one deviation from the brief's literal one-line Run(): a direct
         // `BootSequence seq(EditorStages(ctx))` cannot reach these private
         // members from inside Arcane.dll, so the vector is captured, patched,
@@ -779,12 +814,20 @@ namespace Arcane::Editor
             else if (stage.id == "sprite_tables")    stage.run = [this, &ctx] { return StageSpriteTables(ctx); };
             else if (stage.id == "plugin_load")      stage.run = [this, &ctx] { return StagePluginLoad(ctx); };
             else if (stage.id == "finalize")         stage.run = [this, &ctx] { return StageFinalize(ctx); };
+            else if (stage.id == "splash_ready")     stage.run = [this, &ctx] { return StageSplashReady(ctx); };
         }
 
         Arcane::BootSequence seq(std::move(stages));
-        // Presenter is null until StageGpuCore creates the device; m_lazyPresenter
-        // tolerates that and the pre-device splash covers the gap.
-        const Arcane::BootResult boot = seq.Run(&m_lazyPresenter);
+        // The pre-device splash is BootSequence's presenter for the WHOLE
+        // run (Task 8c) -- from runtime_create through finalize, every
+        // per-stage present() call reports into m_splash's status text +
+        // taskbar progress rather than the swapchain. Safe to construct
+        // unconditionally: BootSplashPresenter tolerates m_splash == nullptr,
+        // same never-fail contract as BootSplashWindow itself. The
+        // swapchain-backed BootPresenter (m_presenter) is used exactly once,
+        // explicitly, inside StageSplashReady -- never through this pump.
+        Arcane::BootSplashPresenter splashPresenter(m_splash);
+        const Arcane::BootResult boot = seq.Run(&splashPresenter);
         if (!boot.ok)
             return boot.quitRequested ? 0 : 1;
 

@@ -283,14 +283,17 @@ namespace Arcane::HostBoot
         // "gpu_core" in the vector -- ahead of render_bridge/input_config/
         // sprite_tables/plugin_load/finalize -- so they are the first Main
         // stages ready once gpu_core completes, regardless of how fast the
-        // project_open worker finishes. StageEditorShell binds the presenter
-        // into m_lazyPresenter at its own end (unchanged from the first
-        // review fix), so from here on the PRESENTER is live for the rest of
-        // boot. That is necessary but is NOT what makes the loading screen
-        // visible to a user -- the window itself is still created hidden
-        // (GpuContext.cpp) and stays that way until something calls
-        // Window::Show(). See splash_ready's own insertion below (third
-        // review fix) for why that call ALSO had to move.
+        // project_open worker finishes.
+        //
+        // Task 8c (2026-07-30 correction, "the splash carries the loading UI,
+        // not the editor window") does NOT touch this insertion point -- it
+        // is a DIFFERENT invariant from splash_ready's (see that stage's own
+        // comment below) and stays exactly here: fonts/theme/docking-flag/
+        // settings-handlers still have to land on the editor's OWN ImGui
+        // context before plugin_load can steal GImGui, regardless of when the
+        // window is revealed. What DID change is what StageEditorShell does
+        // at its own end -- it no longer binds a live swapchain presenter
+        // there at all (see StageEditorShell's comment in EditorApp.cpp).
         {
             std::vector<BootStage> editorEarly;
             editorEarly.push_back(Make("editor_fonts", {"gpu_core"},      BootThread::Main, BootPolicy::Fatal, 5));
@@ -321,71 +324,6 @@ namespace Arcane::HostBoot
                      std::make_move_iterator(editorEarly.end()));
         }
 
-        // splash_ready is ALSO inserted right after editor_shell, not appended
-        // at the end (2026-07-30 third review fix). Depending on editor_fonts/
-        // editor_shell by id was correct and remains unchanged -- but with
-        // splash_ready still APPENDED after CoreStages' 10 entries plus the
-        // 2 just inserted (index 12 of 13), render_bridge/input_config/
-        // sprite_tables/plugin_load/finalize all had LOWER indices and kept
-        // running before it, so Window::Show() (and the presenter it reveals)
-        // did not fire until the LAST Main stage the editor runs. Editor
-        // stage weights sum to 105; by the old ordering doneWeight reached
-        // ~103 before the window ever became visible -- the user's first
-        // visible frame was at ~98%, the SAME "invisible loading screen"
-        // symptom Fix 1/2 already closed once, just relocated from an
-        // unbound presenter to a hidden window. See EditorApp::StageGpuCore/
-        // StageEditorShell for why folding Show() directly into editor_shell's
-        // OWN body (mirroring the runtime's render_bridge) is NOT safe here:
-        // editor_shell binds the presenter at its own end but does not itself
-        // draw a frame -- the first real frame is the BootSequence present()
-        // call AFTER editor_shell's run() returns. Revealing the window from
-        // INSIDE editor_shell would show it before that frame exists. A
-        // separate stage that DEPENDS ON editor_shell (this one) is what
-        // guarantees at least one real frame has already been drawn by the
-        // time Show() runs -- see splash_ready's own body below for the
-        // Show()-then-Close() ordering within that guarantee.
-        {
-            BootStage splashReady = Make("splash_ready",  {"editor_fonts", "editor_shell"}, BootThread::Main, BootPolicy::Fatal, 2, [&ctx]
-            {
-                // Show the REAL window first, THEN close the pre-device splash.
-                // Reversing these leaves a frame with neither on screen. Pure
-                // ctx/engine logic (Window::Show, BootSplashWindow::Close) -- the
-                // runtime host performs the same handoff itself (folded into its
-                // render_bridge override, since it has no editor_fonts dependency
-                // to hang a dedicated stage id off of and RuntimeStages appends
-                // nothing).
-                //
-                // Depends on editor_shell TOO, not just editor_fonts: editor_shell
-                // is what calls SetTitle/SetIcon/ApplyEditorTheme and binds the
-                // real presenter (see the ordering comment on editor_fonts'
-                // insertion above). Both the DEPENDENCY (editor_shell must have
-                // completed) and the VECTOR POSITION (inserted right after it,
-                // not appended) matter now: the dependency is what guarantees a
-                // real frame already exists to reveal; the position is what
-                // guarantees render_bridge/input_config/sprite_tables/
-                // plugin_load/finalize -- none of which this stage depends on --
-                // don't run first and delay the reveal regardless.
-                if (ctx.gpu) ctx.gpu->Win().Show();
-                if (ctx.splash) ctx.splash->Close();
-                return true;
-            });
-
-            const auto editorShellIt = std::find_if(s.begin(), s.end(),
-                [](const BootStage& st) { return st.id == "editor_shell"; });
-            if (editorShellIt == s.end())
-            {
-                ARC_ERROR("EditorStages: 'editor_shell' not found after its own "
-                          "insertion -- splash_ready falls back to appending at "
-                          "the end, which reintroduces the invisible-loading-"
-                          "screen ordering bug (Window::Show() would not fire "
-                          "until the LAST Main stage instead of right after "
-                          "editor_shell). This should be structurally "
-                          "impossible -- editor_shell was just inserted above.");
-            }
-            const auto splashInsertAt = (editorShellIt != s.end()) ? editorShellIt + 1 : s.end();
-            s.insert(splashInsertAt, std::move(splashReady));
-        }
-
         s.push_back(Make("editor_lock",   {"project_open"},  BootThread::Worker, BootPolicy::Optional, 1, [&ctx]
         {
             // Arcane::EditorLock is engine-visible (Project.hpp), so this is
@@ -395,6 +333,65 @@ namespace Arcane::HostBoot
                     Arcane::EditorLock::Write(proj->Root());
             return true;
         }));
+
+        // splash_ready: pushed LAST, and depends on "finalize" -- NOT
+        // "editor_fonts"/"editor_shell" (Task 8c, 2026-07-30 correction,
+        // superseding the second and third 2026-07-30 review fixes' shape,
+        // which revealed the window right after editor_shell instead). The
+        // human ruling: today's boot UX was backwards relative to Unreal --
+        // the pre-device splash was a mute rectangle and the real editor
+        // window was revealed early to show a loading bar inside IT. UE does
+        // the opposite: engine init, module/plugin load, and the startup-map
+        // load all run with the SPLASH up and reporting into it
+        // (UnrealEdGlobals.cpp:167-194), and the main editor window is not
+        // even created until loading is finished (UnrealEdGlobals.cpp:
+        // 215-236: "Hide the splash screen now that everything is ready to
+        // go" -> Hide() -> "Do final set up on the editor frame and show it"
+        // -> CreateDefaultMainFrame). BootProgress is now RENDERED by the
+        // splash for the whole run (Arcane::BootSplashPresenter,
+        // BootSplashWindow.hpp; wired in EditorApp::Run) instead of the
+        // editor window's ImGui bar, so there is no more reason to reveal the
+        // window early -- doing so was always in service of showing that bar
+        // to the user, and the bar has moved.
+        //
+        // Depends on `run` being a HOST override, not a ctx-only shared
+        // lambda like it was before this task: revealing the window now also
+        // needs to Present() one real frame through the swapchain-backed
+        // BootPresenter first (see the "who draws the reveal frame" note
+        // below), and that presenter is host-owned state
+        // (EditorApp::m_presenter) this module cannot reach -- the same
+        // structural reason render_bridge/plugin_load/etc. are host
+        // overrides. `Make(...)` below is therefore called with NO trailing
+        // `run` argument, which installs Make's Unpatched(id) sentinel (see
+        // this file's top) -- EditorApp::Run() is REQUIRED to overwrite it
+        // with StageSplashReady, same as every other host-owned id.
+        //
+        // Two constraints still bind even though the reveal moved to the
+        // end, and they are in tension:
+        //   1. Never reveal an undrawn window. Nothing has presented a frame
+        //      into the swapchain by this point -- BootSequence's per-stage
+        //      pump has been driven by the pre-device splash presenter for
+        //      the ENTIRE run, and that presenter never touches the
+        //      swapchain. StageSplashReady's body resolves this by
+        //      Present()-ing ONE real frame through the swapchain-backed
+        //      BootPresenter (Fullscreen, fraction=1.0) BEFORE calling
+        //      Show() -- one frame the user will not perceive as a loading
+        //      screen, matching UE's splash->main-frame handoff being a
+        //      single hide/show pair rather than a fade.
+        //   2. Never leave a gap with neither window on screen. Show() the
+        //      real window (now holding that just-drawn frame) BEFORE
+        //      Close()ing the pre-device splash -- reversing these two still
+        //      leaves the gap this whole component exists to avoid.
+        // Depending on "finalize" (Fatal) transitively guarantees editor_fonts/
+        // editor_shell already ran too, without needing to name them again:
+        // finalize's own dependency chain (plugin_load/input_config/
+        // sprite_tables/edit_core) only becomes ready long after
+        // editor_fonts/editor_shell, which are inserted right after gpu_core
+        // specifically so they are the FIRST main stages ready (see that
+        // insertion's own comment above) -- that ordering invariant is
+        // unchanged by this task.
+        s.push_back(Make("splash_ready", {"finalize"}, BootThread::Main, BootPolicy::Fatal, 2));
+
         return s;
     }
 

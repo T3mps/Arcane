@@ -1,5 +1,27 @@
 # Async boot + loading screen (BootSequence / BootPresenter)
 
+**Task 8c correction (2026-07-30), read this first.** This document's original
+draft (below) had the loading UI backwards relative to Unreal: the pre-device
+splash was a mute image and `splash_ready` revealed the real editor window
+early so ITS ImGui bar could show progress. UE does the opposite -- the splash
+itself carries live status text and drives the Windows taskbar progress
+overlay for the WHOLE boot, and the main window is revealed only once loading
+is finished (`UnrealEdGlobals.cpp:215-236`: "Hide the splash screen now that
+everything is ready to go" -> `Hide()` -> "Do final set up on the editor frame
+and show it" -> `CreateDefaultMainFrame`). Task 8c fixed this:
+`BootSplashWindow` now paints a bitmap + status line and drives
+`ITaskbarList3::SetProgressValue` (`WindowsPlatformSplash.cpp:769-781`); a new
+`Arcane::BootSplashPresenter` (`Arcane/Host/BootSplashWindow.hpp`) is
+`BootSequence::Run`'s presenter for the entire boot in both hosts;
+`splash_ready` (editor) / the reveal folded into `RuntimeApp::StageFinalize`
+(runtime) now depend on `finalize` instead of `editor_shell`, so the window is
+revealed dead last. Sections 2, and the "Why `editor_fonts` precedes
+`splash_ready`" and scheduling-policy subsections below, are corrected in
+place with a **Task 8c** marker; the rest of the document (the DAG shape, the
+CoreStages contract, the bug-class motivation) is unchanged and still
+accurate -- only WHERE `BootProgress` is rendered and WHEN the window is
+revealed moved.
+
 **Status: design.** Today every Arcane host shows an undrawn window for the
 whole of startup: `EditorApp::Run()` is `Init()` -> `MainLoop()`, the window and
 device are created at the top of `Init()` (`GpuContext::Create`), but nothing is
@@ -47,12 +69,17 @@ same stages", which is the same divergence hazard in new syntax. The contract
 below is what actually closes it.
 
 ```
-main   |--runtime_create--|--gpu_core------|--fonts--|--splash--|--shell--|--plugin_load--|
+main   |--runtime_create--|--gpu_core------|--fonts--|--shell--|-------...core tail...-------|--finalize--|--splash_ready--|
 worker                    |--project_open (scan)--------|--lock--|
-                                                         ^
-                                                         first presented frame;
-                                                         window is HIDDEN until here
 ```
+
+(Task 8c correction: the diagram above is the CURRENT shape -- `splash_ready`
+moved to the very end, after `finalize`, and reveals the window there. There
+is no more "first presented frame" marker mid-sequence: nothing presents into
+the real swapchain until `splash_ready`'s own body does, once, right before
+`Window::Show()`. For the whole run up to that point, `BootProgress` is
+rendered by the pre-device splash window instead -- see `BootSplashPresenter`
+in section 1.)
 
 ## 1. Components
 
@@ -166,10 +193,18 @@ theme for free and adds no new pipeline state.
 
 Two modes:
 
-- **Fullscreen** (boot): the whole backbuffer is the splash.
-- **Overlay** (project switch): a modal panel over the last editor frame.
+- **Fullscreen**: **(Task 8c correction)** used exactly ONCE per boot now, not
+  as a live per-stage loading screen -- the last boot stage (`splash_ready` /
+  `RuntimeApp::StageFinalize`) draws one frame here (the whole backbuffer)
+  immediately before `Window::Show()` reveals it, so the swapchain never holds
+  an undrawn frame. `BootSequence`'s per-stage presenter for the rest of boot
+  is the pre-device splash (`BootSplashPresenter` below), not this.
+- **Overlay** (project switch): a modal panel over the last editor frame,
+  unaffected by Task 8c -- this flow still drives `BootPresenter` directly
+  across a short live sequence, same as originally designed.
 
-### `BootSplashWindow.{hpp,cpp}` -- the pre-device splash (added 2026-07-30)
+### `BootSplashWindow.{hpp,cpp}` -- the pre-device splash (added 2026-07-30;
+### now the WHOLE-BOOT presenter surface, Task 8c 2026-07-30 correction)
 
 **The gap this closes.** `BootPresenter` cannot present until `gpu_core`
 finishes, because it renders through the real swapchain and ImGui. The original
@@ -183,19 +218,42 @@ the thread; the thread entry at `:407` registers its own `WNDCLASS` and
 `WndProc`), shown at `LaunchEngineLoop.cpp:2913-2917` **deliberately before**
 `FSlateApplication::Create()` at `:2920` -- the comment at `:2891` states it
 must precede any window. It needs no graphics device because it blits a bitmap
-with GDI.
+via WIC/GDI (`WindowsPlatformSplash.cpp`'s `LoadSplashBitmap` + the `WM_PAINT`
+handler's `DrawState`/`TextOut` calls, `:85-174`).
 
 We copy that shape:
 
 - A plain OS window on its own thread, created at the very top of `main()`,
   before `BootSequence` and long before `gpu_core`. No device, no swapchain,
-  no ImGui -- a static image (and, in the editor, one line of status text).
-- Torn down by `splash_ready`, which is also the frame that calls
-  `Window::Show()` on the real window. Ordering matters: show the real window
-  *first*, then close the pre-device splash, so there is never a frame with
-  neither on screen. UE gets this right in the game host by hiding its splash
-  during the first `Tick` rather than at the end of `Init`
-  (`GameEngine.cpp:1975`, on a `static bool bFirstTime`).
+  no ImGui.
+- **(Task 8c correction)** It is no longer a static image with the status
+  bar living elsewhere. `WM_PAINT` now draws a bitmap (loaded via GDI+
+  `Gdiplus::Bitmap`, since there is no device/Assets facade this early -- our
+  splash image is a PNG, so GDI+ rather than UE's WIC/raw-GDI path) plus one
+  status line (`DrawTextW`, bottom-left, matching UE's `StartupProgress` slot)
+  -- both best-effort, degrading silently to the plain background if the
+  image is missing or GDI+ fails to start. `SetProgress` drives the Windows
+  taskbar overlay (`ITaskbarList3::SetProgressValue`, matching
+  `WindowsPlatformSplash.cpp:769-781`) rather than an in-window bar -- UE
+  draws no bar in the splash window either (no rectangle/fill call in
+  `WindowsPlatformSplash.cpp`'s paint handler). A new `Arcane::
+  BootSplashPresenter` (same header) is `BootSequence::Run`'s ONE
+  `IBootPresenter` for the entire boot in both hosts, forwarding every
+  `BootProgress` update into `SetStatusText`/`SetProgress` -- so live status
+  now lives on the pre-device splash for the whole run, not on an in-editor
+  ImGui bar (see the top-of-document Task 8c note).
+- Torn down by `splash_ready` (editor) / `RuntimeApp::StageFinalize`
+  (runtime), which is also where `Window::Show()` on the real window is
+  called. Ordering matters: show the real window *first*, then close the
+  pre-device splash, so there is never a frame with neither on screen. Before
+  `Show()`, that same stage body Present()s ONE real frame through the
+  swapchain-backed `BootPresenter` (Fullscreen), so the revealed window never
+  shows an undrawn backbuffer. **(Task 8c correction)** this reveal now
+  happens dead last (`splash_ready`/`StageFinalize` depend on `finalize`),
+  not right after `editor_shell` -- matching `UnrealEdGlobals.cpp:215-236`'s
+  editor-boot shape (hide the splash only once loading is actually finished)
+  rather than the game host's `GameEngine.cpp:1975` shape the original draft
+  cited, which we no longer follow.
 - **Windows-only to start.** Elsewhere it compiles to a no-op and boot behaves
   as the original draft described. This is a UX nicety, not a correctness
   requirement, and it must never be able to fail boot.
@@ -239,11 +297,11 @@ Weights are approximate shares of a typical boot and feed the determinate bar.
 | `input_config` | core | main | `project_open`, `gpu_core` | Optional | 2 | `HostBoot::LoadInputConfig`. |
 | `sprite_tables` | core | main | `project_open`, `render_bridge` | Optional | 2 | Publish `SpriteTable` / `SpriteMaterialTable`. Bug-class instance 2 lived here. |
 | `plugin_load` | core | main | `project_open`, `render_bridge` | Fatal | 9 | `PluginHost` emplace + `AddPlugin` + `Load`. |
-| `editor_fonts` | editor | main | `gpu_core` | Fatal | 5 | Theme + `InstallEditorFonts`. Must precede the first presented frame -- see below. |
-| `splash_ready` | editor | main | `editor_fonts` | Fatal | 2 | Load splash texture, `Window::Show()`, present frame 1. |
+| `editor_fonts` | editor | main | `gpu_core` | Fatal | 5 | Theme + `InstallEditorFonts`. Must precede `plugin_load` -- see below. (Task 8c: no longer "must precede the first presented frame" -- there is no presented frame in the real window until `splash_ready`, dead last.) |
 | `editor_shell` | editor | main | `editor_fonts` | Fatal | 3 | Title, icon, toolbar logo, docking flag, layout settings, console sink. |
 | `editor_lock` | editor | worker | `project_open` | Optional | 1 | `EditorLock::Write`. |
 | `finalize` | core | main | all | Fatal | -- | `UpdateWindowTitle`, hand off to `MainLoop`. |
+| `splash_ready` | editor | main | `finalize` **(Task 8c correction; was `editor_fonts`)** | Fatal | 2 | Present ONE real frame via the swapchain-backed `BootPresenter` at fraction=1.0, `Window::Show()`, `BootSplashWindow::Close()` -- in that order. Runs LAST, not right after `editor_shell`. |
 
 `sprite_tables` and `type_context_install` are listed as core stages because
 those are the two places bug-class instances 2 and 3 actually lived; confirm
@@ -305,22 +363,30 @@ it is pure CPU + filesystem: it touches `Runtime` state and the `Assets` facade
 
 The overlap is safe by **disjoint ownership, verified not assumed**: while
 `project_open` runs, the concurrently-eligible main stages (`gpu_core`,
-`editor_fonts`, `splash_ready`, `editor_shell`) touch only `GpuContext`, ImGui,
-and free functions. `InstallEditorFonts` builds an ImGui font atlas from files;
+`editor_fonts`, `editor_shell`) touch only `GpuContext`, ImGui, and free
+functions. `InstallEditorFonts` builds an ImGui font atlas from files;
 `LoadDisplayTexture` is a free function taking the nvrhi device directly. Neither
-goes through the `Assets` facade that `project_open` mutates.
+goes through the `Assets` facade that `project_open` mutates. **(Task 8c
+correction)** `splash_ready` is no longer in this concurrently-eligible set --
+it depends on `finalize` now, so it is the LAST stage ready, long after
+`project_open` has already finished.
 
-### Why `editor_fonts` precedes `splash_ready`
+### Why `editor_fonts` precedes `splash_ready` -- superseded, kept for history (Task 8c)
 
-The splash label needs a font, and the only font available before
-`InstallEditorFonts` is ImGui's stock built-in. Installing the real fonts
-afterwards would rebuild the font atlas and re-upload its texture *while
-presented frames are already in flight* -- a needless hazard against the
-ImGui-NVRHI backend's texture lifetime, and a visible font pop on the splash.
-
-Ordering fonts before the first present costs nothing (they are read from disk
-either way) and makes the splash render in Roboto from frame one. The atlas is
-then built exactly once per boot. Do not reorder these two.
+**This section described the pre-Task-8c design and no longer applies as
+written.** `editor_fonts` still has to precede `plugin_load` (see the stage
+table and `EditorStages`' insertion comment in `ProjectBoot.cpp`), for the
+ImGui-context-theft reason covered in section 0/the CoreStages contract --
+that invariant is unchanged. What is GONE is the reason this section
+originally gave: there is no more "the splash label needs a font" concern,
+because the pre-device `BootSplashWindow` draws its own status text with plain
+Win32 `DrawTextW` (no ImGui, no font atlas, no device) -- see the
+`BootSplashWindow` subsection above. The editor's ImGui font atlas is built
+once fonts install (`editor_fonts`), same as always, but the FIRST time it is
+ever presented is inside `splash_ready`'s single reveal frame, dead last --
+there is no "presented frames already in flight" hazard to order around
+anymore, because there are no presented frames in the real window until that
+one.
 
 Everything with genuine thread affinity is `MainThread` and chunked instead: the
 SDL event pump and window, ImGui's single context, plugin `LoadLibrary` /
@@ -337,15 +403,27 @@ that running it first to unblock the worker costs nothing.
    to the worker, and main then spends the next second in `gpu_core` while the
    scan runs.
 2. **Among ready main stages, registration order wins** (stable Kahn).
-   `splash_ready` is registered immediately after `gpu_core` so pixels appear at
-   the earliest possible moment.
+   `editor_fonts`/`editor_shell` are registered immediately after `gpu_core`
+   so the ImGui-context-theft ordering (section 0 / the CoreStages contract)
+   is closed regardless of how fast `project_open` finishes. **(Task 8c
+   correction)** pixels do NOT appear in the real window at this point
+   anymore -- the "pixels appear at the earliest possible moment" this item
+   used to say about `splash_ready` was true only while `splash_ready` sat
+   right here too; it is now registered LAST (depends on `finalize`) and
+   pixels appear in the PRE-DEVICE splash instead, which has been on screen
+   since before `BootSequence` even started (see the `BootSplashWindow`
+   subsection).
 3. **One main stage per frame, then present.** Stages reporting sub-progress are
    chunked across frames so the animation never stalls.
 
 One stage cannot honor rule 3: `gpu_core` is a single monolithic call and no
-frames are presented during it. This is harmless *because* the window is hidden
-until `splash_ready` -- the user sees nothing, then the splash, which is the
-Unity/UE behavior. Do not "fix" this by showing the window earlier.
+frames are presented into the real WINDOW during it -- but the pre-device
+splash keeps updating regardless, since `BootSplashPresenter`'s own writes
+(`SetStatusText`/`SetProgress`) are cheap, non-blocking calls that do not
+depend on `gpu_core` having finished. **(Task 8c correction)** the real
+window stays hidden for essentially the WHOLE boot now, not merely until
+`splash_ready`'s old early position -- do not "fix" this by showing the
+window earlier; that is exactly the inversion this correction undoes.
 
 A single worker thread runs at most one Worker stage at a time. Two Worker
 stages are never co-scheduled, so worker-vs-worker interleaving does not exist.
@@ -548,10 +626,18 @@ that matter are that `--frames N` scripted runs still work and the existing
    between them is the bug this ordering exists to prevent.
 1c. Kill the pre-device splash path (or run on a non-Windows build) and confirm
    boot still completes normally -- it must never be able to fail boot.
-2. Bar advances from both stages (it should move during the scan while the GPU
-   chain is still building) and reaches 100% without going backwards.
-2b. Splash text renders in Roboto from the first frame -- no stock-ImGui font
-   visible, and no font "pop" partway through the splash.
+2. **(Task 8c correction)** The pre-device splash's status TEXT and Windows
+   taskbar progress overlay both advance for the WHOLE boot now, not just
+   during the GPU prefix -- watch the splash's bottom-left label change as
+   stages complete (it should update during the `project_open` scan too) and
+   the taskbar icon's progress fill move monotonically to 100%, then clear.
+   There is no in-window ImGui bar to watch anymore until the single reveal
+   frame right before the window appears.
+2b. **(Task 8c correction)** Superseded -- the splash's status text is drawn
+   with plain Win32 `DrawTextW`, not ImGui, so there is no font atlas/Roboto
+   concern here at all. Verify instead: the splash bitmap (if the project
+   ships one) renders without visible corruption, and a missing/unreadable
+   image degrades to the plain background with no error dialog.
 3. Scan detail line shows real counts on a large project.
 4. Window can be dragged and closed mid-boot; closing exits cleanly with no
    hang (proves the worker joins).

@@ -89,10 +89,20 @@ namespace Arcane::Editor
         // EditorApp's own private members (m_gpu/m_runtime/m_plugin/...) or
         // editor-exe-only types (EditorTheme/EditorFonts/ShaderEditorDocument)
         // that Arcane.dll cannot see. type_context_install/project_open/
-        // input_config/splash_ready/editor_lock are NOT in this list -- their
+        // input_config/editor_lock are NOT in this list -- their
         // CoreStages/EditorStages body is genuinely shared and used as-is; see
         // ProjectBoot.cpp for why each stage landed where it did. Every method
         // returns false only where the equivalent Init() block used to.
+        //
+        // splash_ready IS in this list now (Task 8c, 2026-07-30 correction:
+        // "the splash carries the loading UI, not the editor window") --
+        // revealing the window needs m_presenter, a host-owned member
+        // ProjectBoot.cpp's ctx-only lambda cannot reach, exactly the same
+        // structural reason render_bridge/plugin_load/etc. are host-owned.
+        // EditorStages() installs Make()'s Unpatched(id) sentinel for
+        // splash_ready's `run` (empty by default) for the same reason it does
+        // for every other host-owned id -- a host that forgets to patch it
+        // fails loudly instead of quietly skipping the reveal.
         bool StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx);
         bool StageGpuCore(Arcane::HostBoot::BootContext& ctx);
         bool StageEditorFonts(Arcane::HostBoot::BootContext& ctx);
@@ -102,34 +112,11 @@ namespace Arcane::Editor
         bool StageSpriteTables(Arcane::HostBoot::BootContext& ctx);
         bool StagePluginLoad(Arcane::HostBoot::BootContext& ctx);
         bool StageFinalize(Arcane::HostBoot::BootContext& ctx);
+        bool StageSplashReady(Arcane::HostBoot::BootContext& ctx);
 
         void MainLoop();
         void Shutdown();
         void InstallConsoleSink();   // attach a callback sink on Arcane::Log::Engine() -> m_console
-
-        // Forwards to a real BootPresenter once StageEditorShell has bound
-        // one. Before that it reports "keep going" -- the pre-device splash
-        // is what the user is looking at, so there is nothing to draw here
-        // yet. BootSequence::Run takes ONE IBootPresenter* for the whole run,
-        // so this stable wrapper is what Run() passes. NOT bound at the end
-        // of StageGpuCore (2026-07-30 review fix): binding it there let
-        // BootSequence's next present() call reach a real ImGui::NewFrame()
-        // before fonts/theme/settings-handlers/console-sink were installed.
-        // StageEditorShell binds it at ITS OWN end instead, once m_gpu exists
-        // AND those are all in place -- see that stage's body and the
-        // ordering comment on EditorStages' editor_fonts push_back in
-        // ProjectBoot.cpp.
-        class LazyBootPresenter final : public Arcane::IBootPresenter
-        {
-        public:
-            void Bind(Arcane::BootPresenter* p) noexcept { m_inner = p; }
-            bool Present(const Arcane::BootProgress& progress) override
-            {
-                return m_inner ? m_inner->Present(progress) : true;
-            }
-        private:
-            Arcane::BootPresenter* m_inner = nullptr;
-        };
 
         // ---- Frame loop (EditorAppFrame.cpp) --------------------------------
         // MainLoop is a straight sequence of the phase methods below, called in
@@ -216,13 +203,22 @@ namespace Arcane::Editor
         std::unique_ptr<GpuContext>       m_gpu;                    // destructs LAST
 
         // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
+        // Task 8c: this is now BootSequence::Run's presenter for the WHOLE
+        // boot (via a local Arcane::BootSplashPresenter Run() constructs
+        // around this pointer -- see Run()'s body) -- not merely a pre-device
+        // stand-in. The old LazyBootPresenter nested class that used to live
+        // here is gone: it existed to defer binding a swapchain-backed
+        // presenter until StageEditorShell had installed fonts/theme, which
+        // mattered only because BootSequence used to drive THAT presenter's
+        // Present() automatically after every stage. It no longer does --
+        // the swapchain-backed m_presenter below is now used exactly once,
+        // explicitly, by StageSplashReady, so there is nothing left to defer.
         Arcane::BootSplashWindow*             m_splash = nullptr;
-        // Cannot be constructed before StageGpuCore builds m_gpu, and must not
-        // be BOUND into m_lazyPresenter before StageEditorShell finishes (see
-        // that stage's body) -- m_lazyPresenter is the stable stand-in Run()
-        // hands BootSequence for the whole call regardless.
+        // Cannot be constructed before StageGpuCore builds m_gpu. Emplaced
+        // lazily inside StageSplashReady, the one place it is used -- see
+        // that method's body for why the old "must not bind too early"
+        // hazard this comment used to describe no longer applies.
         std::optional<Arcane::BootPresenter>  m_presenter;
-        LazyBootPresenter                     m_lazyPresenter;
 
         // Captured at the end of StageGpuCore (right after GpuContext::Create
         // has created the editor's ImGuiLayer, which is the only ImGui
