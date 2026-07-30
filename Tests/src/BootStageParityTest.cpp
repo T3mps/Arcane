@@ -83,8 +83,11 @@ TEST_CASE("CoreStages is exactly the canonical list", "[boot]")
     // Change-detector BY DESIGN. Adding an engine-wide boot step is a
     // DELIBERATE act -- edit this list in the same commit. Do not weaken
     // it in passing. Three shipped bugs came from a step going missing.
+    //
+    // "edit_core" added 2026-07-30 (review Fix 5): split out of the old
+    // monolithic "sprite_tables" -- see ProjectBoot.cpp's edit_core comment.
     const std::vector<std::string> kCanonical = {
-        "runtime_create", "type_context_install", "gpu_core",
+        "runtime_create", "edit_core", "type_context_install", "gpu_core",
         "project_open", "render_bridge", "input_config",
         "sprite_tables", "plugin_load", "finalize",
     };

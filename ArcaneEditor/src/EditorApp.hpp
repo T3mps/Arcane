@@ -98,6 +98,7 @@ namespace Arcane::Editor
         bool StageEditorFonts(Arcane::HostBoot::BootContext& ctx);
         bool StageEditorShell(Arcane::HostBoot::BootContext& ctx);
         bool StageRenderBridge(Arcane::HostBoot::BootContext& ctx);
+        bool StageEditCore(Arcane::HostBoot::BootContext& ctx);
         bool StageSpriteTables(Arcane::HostBoot::BootContext& ctx);
         bool StagePluginLoad(Arcane::HostBoot::BootContext& ctx);
         bool StageFinalize(Arcane::HostBoot::BootContext& ctx);
@@ -222,6 +223,19 @@ namespace Arcane::Editor
         // hands BootSequence for the whole call regardless.
         std::optional<Arcane::BootPresenter>  m_presenter;
         LazyBootPresenter                     m_lazyPresenter;
+
+        // Captured at the end of StageGpuCore (right after GpuContext::Create
+        // has created the editor's ImGuiLayer, which is the only ImGui
+        // context in existence at that point) and checked against
+        // ImGui::GetCurrentContext() at the top of StageEditorShell
+        // (2026-07-30 review, Fix 1's verification requirement): a
+        // permanent regression tripwire for the exact bug this fix closes --
+        // if some future boot-stage reordering lets plugin_load (or anything
+        // else that can call ImGui::SetCurrentContext) run before
+        // editor_shell again, this fires immediately with a clear cause
+        // instead of degrading into wrong fonts/theme and a much later,
+        // much harder to diagnose DockBuilderAddNode crash.
+        ImGuiContext*                          m_editorImguiContext = nullptr;
 
         // The hosted plugin's OWN ImGui context, rendered INTO the viewport's
         // output texture (Unity/Unreal "game view") so the plugin's debug HUD

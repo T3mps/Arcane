@@ -586,6 +586,11 @@ int RuntimeApp::Run()
         // comment for why it cannot move to sprite_tables). So this is a
         // real, intentional no-op, stated as one:
         else if (stage.id == "finalize")         stage.run = [] { return true; };
+        // "edit_core" (2026-07-30 review, Fix 5): the editor's undo/redo
+        // history and structural-edit binding have no runtime analog -- the
+        // runtime has no scene session to undo/redo against. Same explicit-
+        // no-op shape as "finalize" above, for the same reason.
+        else if (stage.id == "edit_core")        stage.run = [] { return true; };
     }
 
     Arcane::BootSequence seq(std::move(stages));

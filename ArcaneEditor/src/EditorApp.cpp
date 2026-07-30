@@ -27,6 +27,7 @@
 #include "SpriteDocument.hpp"
 
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Base/Assert.hpp>   // ARC_ASSERT (StageEditorShell's context tripwire)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputActions.hpp>
@@ -212,6 +213,12 @@ namespace Arcane::Editor
         ARC_INFO("{} -- Arcane Editor host, backend {}", Arcane::BuildInfo(), Arcane::ToString(m_config.backend));
         ctx.gpu = m_gpu.get();
 
+        // Capture the editor's own ImGui context right after GpuContext::
+        // Create built it -- the ONLY ImGui context in existence at this
+        // point (the plugin has not loaded yet; StageEditorShell asserts
+        // against this, see its own body).
+        m_editorImguiContext = ImGui::GetCurrentContext();
+
         // Deliberately does NOT construct/bind m_presenter here (2026-07-30
         // review fix -- see the ordering comment on EditorStages'
         // editor_fonts push_back in ProjectBoot.cpp for the full story). This
@@ -240,10 +247,48 @@ namespace Arcane::Editor
 
     bool EditorApp::StageEditorShell(Arcane::HostBoot::BootContext&)
     {
+        // Regression tripwire (2026-07-30 review, Fix 1's verification
+        // requirement): everything below touches ImGui global state (fonts,
+        // style, ConfigFlags, settings handlers) and MUST land on the
+        // editor's own context, captured in StageGpuCore right after
+        // GpuContext::Create built it. If this ever fires, some boot-stage
+        // reordering let plugin code (PluginHost::Load -> the plugin's Init,
+        // e.g. Sandbox.cpp:102's ImGui::SetCurrentContext) run before this
+        // stage again -- see EditorStages' ordering comment in
+        // ProjectBoot.cpp for the full incident this guards against.
+        // PluginHost itself now also brackets every entry point against
+        // leaking a context change (Fix 3, PluginHost.cpp) -- this assert is
+        // the second, independent line of defense, verifying the OUTCOME
+        // rather than trusting that guard alone.
+        ARC_ASSERT(ImGui::GetCurrentContext() == m_editorImguiContext,
+                   "StageEditorShell is not running on the editor's own ImGui "
+                   "context -- something switched GImGui (a plugin's Init?) "
+                   "before this stage ran. See ProjectBoot.hpp's EditorStages "
+                   "ordering comment.");
+
         // Title the window as the editor. GpuContext defaults to "Arcane Runtime" (the
         // shared host helper ArcaneRuntime also uses); override it here so only this host
         // reads "Arcane Editor" -- ArcaneRuntime keeps its own title.
-        m_gpu->Win().SetTitle("Arcane Editor");
+        //
+        // Updates m_windowTitle too, not just the OS title (2026-07-30 review,
+        // Fix 4): UpdateWindowTitle's `if (title == m_windowTitle) return;`
+        // (below) compares against this cache, and StageFinalize's own
+        // UpdateWindowTitle() call runs at a DIFFERENT point in the boot
+        // sequence depending on how editor_shell and finalize happen to be
+        // scheduled. If this call set the OS title WITHOUT updating the
+        // cache, whichever of these two stages ran SECOND would either
+        // silently stomp the other's title (cache never noticed the OS title
+        // changed under it) or -- if finalize's real title had already been
+        // cached first -- the OS title would get stomped to "Arcane Editor"
+        // by this line and then STAY that way forever, since the cache still
+        // held the (now wrong) real title and every subsequent per-frame
+        // UpdateWindowTitle call (EditorAppFrame.cpp) would recompute the
+        // same real title, compare equal to the stale-but-matching cache,
+        // and never call SetTitle again. Keeping cache and OS title in sync
+        // at every write site makes this self-correcting on the very next
+        // frame regardless of which stage runs first.
+        m_windowTitle = "Arcane Editor";
+        m_gpu->Win().SetTitle(m_windowTitle);
 
         // Editor branding (Arcane Editor only -- ArcaneRuntime does neither): the Arcane logo as the
         // OS window/taskbar icon, and the SAME art as a display-referred texture for the
@@ -374,8 +419,15 @@ namespace Arcane::Editor
         return true;
     }
 
-    bool EditorApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
+    bool EditorApp::StageEditCore(Arcane::HostBoot::BootContext&)
     {
+        // edit_core (2026-07-30 review, Fix 5): m_undo/m_editBinding need
+        // nothing but m_runtime, so this stage depends only on runtime_create
+        // -- moved OUT of the old monolithic StageSpriteTables, which gated
+        // them behind project_open AND render_bridge for no reason and, being
+        // Optional-policy at the time, could leave m_undo never constructed
+        // while StageFinalize still unconditionally dereferenced it.
+        //
         // Editor undo/redo history. The resolver re-reads Runtime::Registry()
         // EVERY call rather than capturing a Registry& up front: Runtime swaps
         // out the registry object on Play/Stop (PlaySession -> Runtime::
@@ -396,7 +448,11 @@ namespace Arcane::Editor
         {
             return rt->RestoreRegistry(bytes);
         };
+        return true;
+    }
 
+    bool EditorApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
+    {
         // Shader-editor services (Slice 5): the shared compile service, the
         // template source root, and the .arcmat -> ShaderEditorDocument routing.
         // A missing dxcompiler.dll degrades to a warn (documents show status).
@@ -719,6 +775,7 @@ namespace Arcane::Editor
             else if (stage.id == "editor_fonts")     stage.run = [this, &ctx] { return StageEditorFonts(ctx); };
             else if (stage.id == "editor_shell")     stage.run = [this, &ctx] { return StageEditorShell(ctx); };
             else if (stage.id == "render_bridge")    stage.run = [this, &ctx] { return StageRenderBridge(ctx); };
+            else if (stage.id == "edit_core")        stage.run = [this, &ctx] { return StageEditCore(ctx); };
             else if (stage.id == "sprite_tables")    stage.run = [this, &ctx] { return StageSpriteTables(ctx); };
             else if (stage.id == "plugin_load")      stage.run = [this, &ctx] { return StagePluginLoad(ctx); };
             else if (stage.id == "finalize")         stage.run = [this, &ctx] { return StageFinalize(ctx); };
