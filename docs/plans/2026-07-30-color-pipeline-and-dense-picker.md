@@ -16,10 +16,23 @@ imgui-node-editor, Catch2, MSBuild via VS 18.
 
 Spec: `docs/superpowers/specs/2026-07-30-ue-style-color-picker-design.md`
 
-## How this arc is being executed (read first)
+## How this arc is being executed (read first — written to survive a context clear)
 
+**This file plus the spec are the whole brief. They assume no prior context.**
+
+- **The user clears context, then says "go".** Execute via
+  **superpowers:subagent-driven-development** — the user asked for SDD explicitly, so
+  dispatching subagents is authorised for this arc. One task per subagent, review
+  between tasks, one commit per task.
+- **Read the spec too, not just this plan.** A prior arc's review found every task
+  reviewer read the plan and never the spec, and this design has reasoning that only
+  lives there — chiefly WHY the picker buffer is sRGB-encoded and why there is only
+  ever one `ColorPicker4` call. Spec:
+  `docs/superpowers/specs/2026-07-30-ue-style-color-picker-design.md`.
 - **Task 1 is the tonemap and it goes FIRST** (user's call, 2026-07-30). Everything
   downstream encodes colour; the transfer must be right before any of it lands.
+- **Suggested checkpoint after Task 1** so the user can eyeball the shadow change
+  before anything builds on it. Ask rather than assume.
 - **The tonemap change is NOT behaviour-preserving.** Rendered output changes: deep
   shadows darken (linear 0.002 encodes 0.059 -> 0.026, ~8/255). Do not describe it
   as a refactor in commits.
