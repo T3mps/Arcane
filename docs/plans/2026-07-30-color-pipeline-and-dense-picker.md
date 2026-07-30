@@ -1049,28 +1049,44 @@ Replace the whole `if (isColor) { ... break; }` block with:
                             if (ColorSwatchButton("##sw", &v.x))
                             {
                                 // Latch the open-time colour for the popup's Old
-                                // swatch. One slot on the view is enough: only one
-                                // colour popup can be open at a time.
-                                m_colorPopupOriginal = v;
+                                // swatch. It MUST live in InspectorState, not on this
+                                // visitor: the visitor is rebuilt per frame (it holds
+                                // only a POINTER to the gesture state, see
+                                // InspectorView.cpp:143), so a member here would reset
+                                // every frame and the Old swatch would track New.
+                                // One slot is enough -- only one colour popup can be
+                                // open at a time.
+                                *originalColor = v;
                                 ImGui::OpenPopup(popupId);
                             }
 
                             // POPUP-lifetime gesture, NOT the activation pair: ImGui
                             // only lends its ActiveId to popups it opened itself, and
                             // this one is ours (EditGesture.hpp, ShouldClosePopup).
+                            //
+                            // The onOpened body is BeginGestureIfActivated's fan-out
+                            // verbatim (InspectorView.cpp:192-194): one Begin + N
+                            // SnapshotComponent + one Commit = one undo step, and the
+                            // pending-commit slot stays empty because the before-state
+                            // rides the transaction.
                             EditGesture::BeginOnPopupOpen(
-                                m_services.undo, m_gesture, popupId,
-                                [&] { return std::string("Edit ") + rawName; },
-                                [&] { SnapshotTargets(rawName, instance);
-                                      return std::function<void()>(); });
+                                stack, *gesture, popupId,
+                                [&] { return "Edit " + typeName + "." + rawName; },
+                                [&]
+                                {
+                                    ForEachTarget(instance,
+                                                  [&](Astra::Entity e, void*)
+                                                  { stack->SnapshotComponent(e, descriptor); });
+                                    return std::function<void()>{};
+                                });
 
                             if (ImGui::BeginPopup(popupKey.c_str()))
                             {
-                                if (ColorPopupBody(&v.x, &m_colorPopupOriginal.x, /*hdr*/ false))
+                                if (ColorPopupBody(&v.x, &originalColor->x, /*hdr*/ false))
                                     changed = true;
                                 ImGui::EndPopup();
                             }
-                            EditGesture::EndOnPopupClose(m_services.undo, m_gesture, popupId);
+                            EditGesture::EndOnPopupClose(stack, *gesture, popupId);
 
                             if (changed)
                                 ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -1079,13 +1095,40 @@ Replace the whole `if (isColor) { ... break; }` block with:
                         }
 ```
 
-**Two names above must be reconciled with what `InspectorView.cpp` actually has,
-and this is the one place this plan cannot supply verbatim code:**
-`m_colorPopupOriginal` is a NEW `glm::vec4` member to add to the view class, and
-`SnapshotTargets(rawName, instance)` stands for whatever the file's existing
-snapshot fan-out is called — `BeginGestureIfActivated` already performs it, so read
-that function and reuse its body. If it has no separately callable form, extract one
-and note the extraction in the task report.
+**Two supporting edits this needs, both exact:**
+
+1. **Add the persistent slot to `InspectorState`**, in
+   `Arcane/ArcaneEditor/src/EditorPanels.hpp`, immediately after the
+   `EditGesture::GestureState gesture;` member at `:225`:
+
+```cpp
+        // The colour a picker popup was opened on, for its Old/New pair. Lives HERE
+        // rather than on the Inspector's per-field visitor because that visitor is
+        // rebuilt every frame (it holds only a pointer to `gesture` above), so a
+        // member there would reset each frame and Old would track New. One slot is
+        // enough: only one colour popup can be open at a time.
+        glm::vec4 colorPopupOriginal{ 1.0f, 1.0f, 1.0f, 1.0f };
+```
+
+   If `EditorPanels.hpp` does not already include glm's vec4, add
+   `#include <glm/vec4.hpp>` to its include block.
+
+2. **Thread it into the visitor** in `InspectorView.cpp`, beside the existing
+   `EditGesture::GestureState* gesture = nullptr;` at `:143`:
+
+```cpp
+            glm::vec4*                        originalColor = nullptr;
+```
+
+   and set it wherever `gesture` is assigned from the owning `InspectorState`
+   (grep `->gesture =` / `.gesture` at the construction site and mirror it exactly).
+   Same lifetime, same owner, same shape — deliberately, so there is one rule to
+   remember rather than two.
+
+The names used in the code above — `stack`, `*gesture`, `typeName`, `descriptor`,
+`ForEachTarget`, `SnapshotComponent` — are the visitor's real members and helpers as
+of `InspectorView.cpp:143-196`, not placeholders. The `onOpened` body is
+`BeginGestureIfActivated`'s own fan-out copied verbatim from `:192-194`.
 
 - [ ] **Step 4: Build and confirm the editor relinked**
 
@@ -1390,12 +1433,18 @@ do not shift the row's layout or overlap the hex fields.
 | Part 2 D16 (gradient bars, cuttable) | 8 |
 | reverts table (`ColorField4` retired, conversions survive) | 5 |
 
-**Placeholder scan:** two deliberate exceptions, both flagged in-place rather than
-hidden. Task 6 Step 3 cannot supply verbatim code for `SnapshotTargets` because the
-existing snapshot fan-out lives inside `BeginGestureIfActivated` and its callable
-shape is unknown without reading that function; the step says so and says what to do.
-Task 8 Step 2 names the grouped-item-rect risk and instructs a STOP rather than a
-workaround. Everything else carries complete code, exact commands and expected output.
+**Placeholder scan:** one deliberate exception. Task 8 Step 2 names the
+grouped-item-rect risk and instructs a STOP rather than a workaround, because the
+workaround would forfeit Decision 7's hue-restore guarantee. Everything else carries
+complete code, exact commands and expected output.
+
+An earlier revision of this plan asked Task 6's implementer to invent a
+`SnapshotTargets` helper and to hang the Old-swatch colour off the Inspector's
+visitor. Both were wrong and are now resolved against the source: the fan-out is
+copied verbatim from `BeginGestureIfActivated` (`InspectorView.cpp:192-194`), and the
+colour slot moved to `InspectorState` because the visitor is rebuilt every frame
+(`:143` holds only a POINTER to the gesture state) — a member on it would have reset
+each frame and made Old track New. That bug would have looked like a picker defect.
 
 **Type consistency:** `ColorPopupId(const char*) -> ImGuiID`,
 `ColorSwatchButton(const char*, const float[4], ImVec2) -> bool`,
@@ -1405,9 +1454,14 @@ workaround. Everything else carries complete code, exact commands and expected o
 `EndOnPopupClose(CommandStack*, GestureState&, std::uint32_t)` are spelled identically
 in every declaration, definition, Interfaces block and call. `MatParamValue::f` is
 `float[4]`; `GraphNode::value` is `float[4]` (both bind to `float[4]` parameters
-directly). `m_colorPopupOriginal` is `glm::vec4` on the Inspector view and `float[4]`
-on `ShaderEditorDocument`, which is why Task 6 passes `&m_colorPopupOriginal.x` and
-Task 7 passes it unqualified.
+directly). The Old-swatch slot differs per site by design and the call syntax follows
+it: Task 6 uses `glm::vec4 InspectorState::colorPopupOriginal` reached through the
+visitor's `glm::vec4* originalColor`, so it passes `&originalColor->x`; Task 7 uses
+`float m_colorPopupOriginal[4]` directly on `ShaderEditorDocument` (which already owns
+its own `m_gesture` at `ShaderEditorDocument.hpp:579`), so it passes it unqualified.
+Undo handles likewise differ: the Inspector visitor exposes `stack` and
+`EditGesture::GestureState* gesture`, while `ShaderEditorDocument` uses
+`m_services.undo` and `m_gesture` — the plan's code uses each file's own names.
 
 **Known ordering hazard:** Task 5 deletes `ColorField4` while Tasks 6-7 still call it,
 so the tree does not build clean between Task 5 Step 3 and Task 6 Step 4. Task 5
