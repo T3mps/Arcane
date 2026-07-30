@@ -3,8 +3,8 @@
 // Arcane::Editor widget vocabulary -- the shared ImGui building blocks the
 // editor's panels and documents draw rows out of: the two-column field grid,
 // the field label cell, the axis-coloured drags and their bar, the header
-// band, the std::string InputText, the Range-honouring drags, and the
-// stable-buffer text commit.
+// band, the std::string InputText, the Range-honouring drags, the
+// stable-buffer text commit, and the colour field.
 //
 // REFLECTION-FREE ON PURPOSE. This layer knows about Astra::Range -- a plain
 // [min, max, step] value -- and nothing else from reflection. Resolving a
@@ -152,4 +152,45 @@ namespace Arcane::Editor
     bool StableTextEdit(const char* imguiLabel, TextCommitState& st, std::uint64_t key,
                         std::string_view current, float width,
                         Arcane::FunctionRef<void(const char*)> commit);
+
+    // ---- colour ---------------------------------------------------------------
+    // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME
+    // transfer nvrhi::Format::SRGBA8_UNORM applies in hardware when a texture is
+    // sampled (Assets.cpp:176), and that is the whole point: before this, a tint
+    // and a texture pixel authored as the same number meant DIFFERENT colours in
+    // the same multiply (#808080 -> linear 0.216 as a pixel, 0.502 as a tint).
+    //
+    // Deliberately NOT pow(2.2): that is the tonemap's display encode
+    // (shaders/tonemap.hlsl:33, byte-matched to the retired client) and answers a
+    // different question. Values outside [0,1] pass through monotonically so the
+    // hdr path below cannot clamp anything.
+    [[nodiscard]] float SrgbToLinear(float srgb) noexcept;
+    [[nodiscard]] float LinearToSrgb(float linear) noexcept;
+
+    // The pure halves of ColorField4, split out so the policy is stated in one
+    // place and is obvious on inspection: RGB converts, ALPHA NEVER DOES (it is
+    // coverage, not colour -- same rule as UE/Unity), and hdr passes all four
+    // channels through untouched, because a value that may exceed 1 has no
+    // meaningful sRGB encoding.
+    void ColorDisplayFromLinear(const float linear[4], bool hdr, float outDisplay[4]) noexcept;
+    void ColorLinearFromDisplay(const float display[4], bool hdr, float outLinear[4]) noexcept;
+
+    // THE colour widget for the editor. Four 0-255 sRGB channel boxes plus a
+    // swatch that opens ImGui's picker: radial hue wheel, alpha bar, and
+    // RGB/HSV/Hex rows -- the hex box accepts a paste. Reads and writes LINEAR;
+    // the encode/decode is entirely inside here.
+    //
+    // `linear` is float[4] rather than glm::vec4& so every call site binds
+    // unchanged (the Inspector's glm::vec4 via &v.x, a material param's value.f,
+    // a graph node's n.value). hdr = true presents raw linear floats instead.
+    //
+    // Returns true only on frames ImGui reported a change. The caller owns undo
+    // bracketing -- call BeginGestureIfActivated / gestureBegin immediately after,
+    // exactly as for any other widget.
+    //
+    // `label` is passed to ColorEdit4 verbatim; keep whatever each site already
+    // uses. The Inspector needs a hidden "##id" because it draws its own label
+    // column, while the material panel passes a visible name (which ImGui also
+    // uses as the picker popup's title, imgui_widgets.cpp:5970-5973).
+    bool ColorField4(const char* label, float linear[4], bool hdr = false);
 }

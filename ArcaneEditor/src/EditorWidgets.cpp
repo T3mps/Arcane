@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -543,5 +544,78 @@ namespace Arcane::Editor
             return true;
         }
         return false;
+    }
+
+    float SrgbToLinear(float srgb) noexcept
+    {
+        // Guard the low end FIRST: std::pow of a negative base with a
+        // fractional exponent is NaN, and a negative channel is reachable
+        // (an HDR-authored value edited down, a script write).
+        if (srgb <= 0.0f)     return srgb;
+        if (srgb <= 0.04045f) return srgb / 12.92f;
+        return std::pow((srgb + 0.055f) / 1.055f, 2.4f);
+    }
+
+    float LinearToSrgb(float linear) noexcept
+    {
+        if (linear <= 0.0f)       return linear;
+        if (linear <= 0.0031308f) return linear * 12.92f;
+        return 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
+    }
+
+    void ColorDisplayFromLinear(const float linear[4], bool hdr, float outDisplay[4]) noexcept
+    {
+        if (hdr)
+        {
+            for (int i = 0; i < 4; ++i)
+                outDisplay[i] = linear[i];
+            return;
+        }
+        outDisplay[0] = LinearToSrgb(linear[0]);
+        outDisplay[1] = LinearToSrgb(linear[1]);
+        outDisplay[2] = LinearToSrgb(linear[2]);
+        outDisplay[3] = linear[3];   // alpha: coverage, never encoded
+    }
+
+    void ColorLinearFromDisplay(const float display[4], bool hdr, float outLinear[4]) noexcept
+    {
+        if (hdr)
+        {
+            for (int i = 0; i < 4; ++i)
+                outLinear[i] = display[i];
+            return;
+        }
+        outLinear[0] = SrgbToLinear(display[0]);
+        outLinear[1] = SrgbToLinear(display[1]);
+        outLinear[2] = SrgbToLinear(display[2]);
+        outLinear[3] = display[3];
+    }
+
+    bool ColorField4(const char* label, float linear[4], bool hdr)
+    {
+        float display[4];
+        ColorDisplayFromLinear(linear, hdr, display);
+
+        // Uint8 is ImGui's default today, but state it: the hdr branch needs
+        // Float explicitly anyway, and a default is not a contract.
+        // No NoPicker -- that flag is what this whole arc removes. The hex box
+        // needs nothing from us: ColorEdit4 forwards PickerMask_ (so the wheel
+        // carries into the popup) and force-sets DisplayMask_ on the picker
+        // (imgui_widgets.cpp:5975-5976), and ColorPicker4 draws a hex ColorEdit4
+        // whenever DisplayHex is in that mask (:6304-6305).
+        const ImGuiColorEditFlags flags =
+            (hdr ? (ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR)
+                 : ImGuiColorEditFlags_Uint8)
+            | ImGuiColorEditFlags_AlphaBar
+            | ImGuiColorEditFlags_PickerHueWheel;
+
+        if (!ImGui::ColorEdit4(label, display, flags))
+            return false;   // NO write on an unchanged frame. A blind round-trip
+                            // every frame would re-quantise the stored float to
+                            // 255ths continuously, so a colour set by script or
+                            // animation would decay just from being looked at.
+
+        ColorLinearFromDisplay(display, hdr, linear);
+        return true;
     }
 }
