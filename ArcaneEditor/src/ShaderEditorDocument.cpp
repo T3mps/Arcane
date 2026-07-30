@@ -2,8 +2,9 @@
 
 #include "AssetBrowser.hpp"
 #include "CanvasPopupScope.hpp"
+#include "ColorPickerPopup.hpp"
 #include "EditorTheme.hpp"
-#include "EditorWidgets.hpp"   // ColorField4: the editor's one colour widget
+#include "EditorWidgets.hpp"   // StableTextEdit: the stable-buffer text-commit helper
 #include "IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "GraphGridPass.hpp"
 #include "MaterialParamWidgets.hpp"
@@ -4868,25 +4869,28 @@ namespace Arcane::Editor
                 if (n.type == Arcane::GraphNodeType::ConstColor)
                 {
                     ImGui::SameLine();
-                    // A LIVE swatch now: clicking it opens the shared picker.
-                    //
-                    // The comment this replaces said popups cannot open inside
-                    // the canvas. They can, and this very file already does it --
-                    // ed::Suspend()/ed::Resume() brackets at :2849, :3917 and
-                    // :3988 exist for exactly this, because a popup has to escape
-                    // the node editor's transformed coordinate space.
-                    //
-                    // hdr = true: a ConstColor feeds raw shader maths and may
-                    // legitimately exceed 1, where sRGB encoding is meaningless,
-                    // so it shows linear floats. The DragFloat4 above stays the
-                    // numeric entry; this is the graphical one.
-                    ed::Suspend();
-                    const bool swatchEdited = ColorField4("##swatch", n.value, /*hdr*/ true);
-                    gestureBegin("Edit Color");
-                    if (swatchEdited)
-                        valueEdited();
-                    gestureEnd();
-                    ed::Resume();
+                    // hdr = true: a ConstColor feeds raw shader maths and may exceed
+                    // 1, where an sRGB encode is meaningless and a hex is a clamped
+                    // lie -- so the popup shows linear floats and no hex rows. The
+                    // SV response is poor for HDR values; inherent, and equally true
+                    // in UE.
+                    const CanvasPopupScope canvasPopup;   // popups must leave the canvas space
+                    const ImGuiID popupId = ColorPopupId("##constcolorpopup");
+                    if (ColorSwatchButton("##swatch", n.value, ImVec2(18, 18)))
+                    {
+                        std::memcpy(m_colorPopupOriginal, n.value, sizeof(m_colorPopupOriginal));
+                        ImGui::OpenPopup(popupId);
+                    }
+                    EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture, popupId,
+                                                  [&] { return std::string("Edit Color"); },
+                                                  [&] { return std::function<void()>(); });
+                    if (ImGui::BeginPopup("##constcolorpopup"))
+                    {
+                        if (ColorPopupBody(n.value, m_colorPopupOriginal, /*hdr*/ true))
+                            valueEdited();
+                        ImGui::EndPopup();
+                    }
+                    EditGesture::EndOnPopupClose(m_services.undo, m_gesture, popupId);
                 }
                 break;
             }
@@ -5837,22 +5841,53 @@ namespace Arcane::Editor
                     edited = ImGui::DragFloat4(d.name.c_str(), value.f, 0.01f);
                     break;
                 case ParamWidget::ColorEdit:
-                    // The same colour widget the Inspector uses: 0-255 sRGB plus
-                    // the radial picker. This row used to be raw 0..1 floats with
-                    // ImGui's square picker, so colour authored here and colour
-                    // authored in the Inspector neither looked nor behaved alike.
+                {
+                    // Same shape as the Inspector row: linear float boxes plus an
+                    // encoded swatch opening the dense popup. hdr = false because
+                    // MatParamType::Color exists precisely so "the editor shows a
+                    // color picker" (MaterialTypes.hpp:26) -- it IS a colour, and
+                    // nothing declares one as HDR (ParamMeta carries only
+                    // sliderMin/sliderMax, MaterialTypes.hpp:133-139). A param
+                    // wanting an unclamped multiplier is a Float4.
+                    const std::string popupKey = d.name + "##colorpopup";
+                    const ImGuiID popupId = ColorPopupId(popupKey.c_str());
+
+                    // DisplayRGB and InputRGB PIN the mode: NoOptions only
+                    // suppresses this row's own right-click menu, and without a
+                    // display or input bit ColorEdit4 takes both from the global
+                    // g.ColorEditOptions (imgui_widgets.cpp:5830-5837), which any
+                    // colour widget lacking NoOptions can flip to HSV -- writing
+                    // HSV components into storage this row promises is linear.
                     //
-                    // hdr = false (the default) on purpose: MatParamType::Color
-                    // exists precisely because "the editor shows a color picker"
-                    // (MaterialTypes.hpp:26), so it IS a colour and authors like
-                    // one. Nothing declares a colour param as HDR -- ParamMeta
-                    // carries only sliderMin/sliderMax (MaterialTypes.hpp:133-139),
-                    // documented for the Float slider and ignored here, and every
-                    // existing template leaves them 0..1. A param that wants an
-                    // unclamped multiplier is a Float4, which keeps its DragFloat4
-                    // above and is not a colour widget at all.
-                    edited = ColorField4(d.name.c_str(), value.f);
+                    // Hidden label: ImGui draws a visible label AFTER the input
+                    // boxes, so a visible d.name here would separate the swatch
+                    // from the boxes it previews ([boxes] Name [swatch]). Drawing
+                    // the name ourselves after the swatch keeps the Inspector's
+                    // [boxes][swatch] adjacency (Spec Decision 8): [boxes][swatch] Name.
+                    const std::string boxesId = "##" + d.name;
+                    edited = ImGui::ColorEdit4(boxesId.c_str(), value.f,
+                                               ImGuiColorEditFlags_Float
+                                               | ImGuiColorEditFlags_NoSmallPreview
+                                               | ImGuiColorEditFlags_NoPicker
+                                               | ImGuiColorEditFlags_NoOptions
+                                               | ImGuiColorEditFlags_DisplayRGB
+                                               | ImGuiColorEditFlags_InputRGB);
+                    ImGui::SameLine();
+                    if (ColorSwatchButton("##sw", value.f))
+                    {
+                        std::memcpy(m_colorPopupOriginal, value.f, sizeof(m_colorPopupOriginal));
+                        ImGui::OpenPopup(popupId);
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(d.name.c_str());
+                    if (ImGui::BeginPopup(popupKey.c_str()))
+                    {
+                        if (ColorPopupBody(value.f, m_colorPopupOriginal, /*hdr*/ false))
+                            edited = true;
+                        ImGui::EndPopup();
+                    }
                     break;
+                }
                 case ParamWidget::TexturePicker:
                     DrawTextureParam(d, value);
                     break;
@@ -5912,6 +5947,21 @@ namespace Arcane::Editor
             }
 
             EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
+
+            // The popup gesture pair: separate from the box row's
+            // BeginOnActivate/EndOnDeactivate above because the popup's
+            // ActiveId is ImGui's own (EditGesture.hpp's ShouldClosePopup
+            // note) -- only sites with a ColorEdit case actually opened a
+            // popup this frame.
+            if (WidgetFor(d.type) == ParamWidget::ColorEdit)
+            {
+                EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture,
+                                              ColorPopupId((d.name + "##colorpopup").c_str()),
+                                              [&] { return std::string("Edit ") + d.name; },
+                                              [&] { return std::function<void()>(); });
+                EditGesture::EndOnPopupClose(m_services.undo, m_gesture,
+                                             ColorPopupId((d.name + "##colorpopup").c_str()));
+            }
 
             // Reset-to-default: clears the override so the //@param default (or
             // a parent's value, Slice 7) shows through. Undoable.

@@ -168,31 +168,4 @@ namespace Arcane::Editor
     //   Tests/src/TonemapTest.cpp   (CPU golden reference, branchless)
     [[nodiscard]] float SrgbToLinear(float srgb) noexcept;
     [[nodiscard]] float LinearToSrgb(float linear) noexcept;
-
-    // The pure halves of ColorField4, split out so the policy is stated in one
-    // place and is obvious on inspection: RGB converts, ALPHA NEVER DOES (it is
-    // coverage, not colour -- same rule as UE/Unity), and hdr passes all four
-    // channels through untouched, because a value that may exceed 1 has no
-    // meaningful sRGB encoding.
-    void ColorDisplayFromLinear(const float linear[4], bool hdr, float outDisplay[4]) noexcept;
-    void ColorLinearFromDisplay(const float display[4], bool hdr, float outLinear[4]) noexcept;
-
-    // THE colour widget for the editor. Four 0-255 sRGB channel boxes plus a
-    // swatch that opens ImGui's picker: radial hue wheel, alpha bar, and
-    // RGB/HSV/Hex rows -- the hex box accepts a paste. Reads and writes LINEAR;
-    // the encode/decode is entirely inside here.
-    //
-    // `linear` is float[4] rather than glm::vec4& so every call site binds
-    // unchanged (the Inspector's glm::vec4 via &v.x, a material param's value.f,
-    // a graph node's n.value). hdr = true presents raw linear floats instead.
-    //
-    // Returns true only on frames ImGui reported a change. The caller owns undo
-    // bracketing -- call BeginGestureIfActivated / gestureBegin immediately after,
-    // exactly as for any other widget.
-    //
-    // `label` is passed to ColorEdit4 verbatim; keep whatever each site already
-    // uses. The Inspector needs a hidden "##id" because it draws its own label
-    // column, while the material panel passes a visible name (which ImGui also
-    // uses as the picker popup's title, imgui_widgets.cpp:5970-5973).
-    bool ColorField4(const char* label, float linear[4], bool hdr = false);
 }

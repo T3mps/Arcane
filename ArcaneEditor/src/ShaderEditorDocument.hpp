@@ -578,6 +578,12 @@ namespace Arcane::Editor
         // cross shared statics.
         EditGesture::GestureState m_gesture;
 
+        // Latched on the frame a colour swatch opens its popup (material param
+        // row and the ConstColor node both use this one buffer -- neither can be
+        // mid-gesture while the other opens, since only one popup is open at a
+        // time): the Old half of ColorPopupBody's Old/New pair.
+        float m_colorPopupOriginal[4] = {};
+
         // ---- Graph mode (Slice 9; per-pass graphs) ----
         ax::NodeEditor::EditorContext* m_graphCtx = nullptr;   // lazy; dtor destroys
         // Shader-rendered canvas backdrop, blitted under the canvas content.

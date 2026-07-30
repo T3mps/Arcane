@@ -609,6 +609,13 @@ project "ArcaneTests"
         -- test exe fails to link (LNK2019). Nothing in it is called headlessly;
         -- it is pure ImGui, like the skin half of EditGesture.cpp.
         "%{wks.location}/ArcaneEditor/src/EditorWidgets.cpp",
+        -- Colour pipeline + dense picker Task 7: ColorPickerPopup is here as a
+        -- LINK dependency, not a unit surface, same reason as EditorWidgets.cpp
+        -- above -- ShaderEditorDocument.cpp (compiled above) now calls
+        -- ColorPopupId/ColorSwatchButton/ColorPopupBody for the material-param
+        -- row and the ConstColor node, and without this the test exe fails to
+        -- link (LNK2019). Nothing in it is called headlessly; it is pure ImGui.
+        "%{wks.location}/ArcaneEditor/src/ColorPickerPopup.cpp",
         -- Widget layer Task 7: SpriteDocument source-compiles into the test exe
         -- so the [editor] units drive its UNDO half directly (ApplySpriteData,
         -- the before/after step builder, and the doc-identity anchor after the
