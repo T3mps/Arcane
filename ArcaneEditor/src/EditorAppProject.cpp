@@ -387,30 +387,42 @@ namespace Arcane::Editor
         // dead weight carrying a live dangling pointer; dropping it removes
         // the hazard at the source instead of papering over it with a named
         // std::string local.
+        // Policy is an explicit parameter (not a hardcoded Fatal default) --
+        // matching BootStage's own field order (id, deps, thread, policy,
+        // weight, run) -- because switch_plugin_load below is Optional, not
+        // Fatal (2026-07-30 review correction; see that stage's own comment).
         auto stage = [](std::string id, std::vector<std::string> deps,
-                        Arcane::BootThread thread, std::uint32_t weight,
-                        std::function<bool()> run)
+                        Arcane::BootThread thread, Arcane::BootPolicy policy,
+                        std::uint32_t weight, std::function<bool()> run)
         {
             Arcane::BootStage s;
             s.id = std::move(id); s.dependsOn = std::move(deps);
-            s.thread = thread; s.policy = Arcane::BootPolicy::Fatal;
+            s.thread = thread; s.policy = policy;
             s.weight = weight; s.run = std::move(run);
             return s;
         };
 
         // NOT CoreStages: the process is already booted. This is the reopen
-        // subset only, and every stage is Fatal -- the caller already
-        // validated the project (the guards above) and is about to tear down
-        // the old one, so there is nothing partial worth preserving. A
-        // failure at ANY of the four stages converges on the SAME defined
-        // project-less fallback below (Runtime::CloseProject + EditorLock +
-        // EnsureScene), including switch_plugin_load: the ORIGINAL SwitchProject
-        // let a failed game-module load stay "soft" (project stays open, error
-        // banner, no plugin) -- a THIRD state alongside "switched" and
-        // "project-less" that Amendment 2's ruling forbids. Unifying it here is
-        // a deliberate behavior change, not an oversight.
+        // subset only. switch_teardown/switch_project_open/switch_render_bridge
+        // are Fatal -- the caller already validated the project (the guards
+        // above) and is about to tear down the old one, so switch_project_open
+        // genuinely has nothing to fall back to; a failure there converges on
+        // the defined project-less fallback below (Runtime::CloseProject +
+        // EditorLock + EnsureScene). switch_plugin_load is Optional (2026-07-30
+        // review correction to the first draft's "unify every failure" call):
+        // a failed game-module load leaves m_plugin disengaged, which is
+        // ALREADY the exact same safe, defined state the "no game module for
+        // this project" branch two lines below it produces on purpose --
+        // every m_plugin-> use elsewhere is optional-guarded. Amendment 2
+        // requires a clean fallback when a stage genuinely has nothing to
+        // fall back to; it does not require turning an already-recoverable
+        // outcome (project open, no plugin, a detailed error banner) into a
+        // forced full revert that costs the whole project and a re-run of
+        // File -> Open Project over what could be a colleague's WIP DLL or a
+        // stale build.
         std::vector<Arcane::BootStage> stages;
-        stages.push_back(stage("switch_teardown", {}, Arcane::BootThread::Main, 2, [&]
+        stages.push_back(stage("switch_teardown", {}, Arcane::BootThread::Main,
+                               Arcane::BootPolicy::Fatal, 2, [&]
         {
             m_documents.CloseAll();
             // Sprites, materials and the post chain all resolved against the
@@ -437,7 +449,8 @@ namespace Arcane::Editor
             m_plugin.reset();
             return true;
         }));
-        stages.push_back(stage("switch_project_open", {"switch_teardown"}, Arcane::BootThread::Worker, 6, [&]
+        stages.push_back(stage("switch_project_open", {"switch_teardown"}, Arcane::BootThread::Worker,
+                               Arcane::BootPolicy::Fatal, 6, [&]
         {
             // Disjoint-ownership proof: this stage touches exactly two things
             // -- `path` (a caller-local, read-only, and this stage's only
@@ -458,7 +471,8 @@ namespace Arcane::Editor
             // comment: "the DAG exists for exactly ONE overlap").
             return m_runtime->OpenProject(path);
         }));
-        stages.push_back(stage("switch_render_bridge", {"switch_project_open"}, Arcane::BootThread::Main, 1, [&]
+        stages.push_back(stage("switch_render_bridge", {"switch_project_open"}, Arcane::BootThread::Main,
+                               Arcane::BootPolicy::Fatal, 1, [&]
         {
             // Hand the lock over: the old project is closed, the new one is
             // ours. (A same-project re-open just rewrites its own lock --
@@ -475,7 +489,8 @@ namespace Arcane::Editor
                 ARC_WARN("Open Project: input actions failed to load");
             return true;
         }));
-        stages.push_back(stage("switch_plugin_load", {"switch_render_bridge"}, Arcane::BootThread::Main, 4, [&]
+        stages.push_back(stage("switch_plugin_load", {"switch_render_bridge"}, Arcane::BootThread::Main,
+                               Arcane::BootPolicy::Optional, 4, [&]
         {
             // Load the new game module (and/or the project's plugin modules)
             // through the same ABI-versioned plugin host. An empty gameModule
@@ -491,8 +506,24 @@ namespace Arcane::Editor
                     m_plugin->AddPlugin(dll);
                 if (!m_plugin->Load())
                 {
+                    // Optional, not Fatal (2026-07-30 review correction -- see
+                    // this stage's push_back comment above for the full
+                    // reasoning): m_plugin.reset() below leaves EXACTLY the
+                    // same safe, disengaged state the "no game module" branch
+                    // two lines below produces on purpose, so this falls
+                    // through to the SAME common tail (paused, boot scene,
+                    // EnsureScene, title) rather than aborting the switch.
+                    // Original SwitchProject's exact detailed banner restored
+                    // here -- it survives to the user because this stage
+                    // returning true (below) keeps BootSequence's overall
+                    // r.ok == true, so the generic "switching to X failed at
+                    // stage Y" message past seq.Run() never overwrites it.
                     ARC_ERROR("Open Project: failed to load the game module / project plugins");
-                    return false;   // Fatal -- see the ruling note above the stage vector
+                    m_projectOpenError = "The project opened, but its game module / plugins "
+                                         "failed to load (see Console).\nCheck the DLL paths in "
+                                         "the manifest and that they are built against ABI " +
+                                         std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".";
+                    m_plugin.reset();
                 }
             }
             else
@@ -544,13 +575,29 @@ namespace Arcane::Editor
             // project-less state the boot path itself uses when there is no
             // project (ProjectBoot.cpp's plugin_load "no game loaded" branch,
             // StageFinalize's EnsureScene()), not a second, ad hoc definition.
-            // switch_teardown above unconditionally already closed the
-            // documents, cleared the resolver caches, cleared the scene
-            // references, reset the session to Untitled, idled the GPU, and
-            // unloaded whatever plugin was hosting the OUTGOING project
-            // (PluginHost's dtor -> Unload -> ClearSystems + ResetRegistry) --
-            // that alone gets most of the way there regardless of which stage
-            // failed. What is still missing:
+            //
+            // Reachability (2026-07-30 review correction): with
+            // switch_plugin_load now Optional (see its own push_back comment
+            // above), the ONLY ways `r.ok` can be false here are
+            // switch_project_open failing (Fatal -- it genuinely has nothing
+            // to fall back to, per the guards above having already validated
+            // the project and switch_teardown having already torn the old one
+            // down) or the presenter itself requesting quit
+            // (`r.quitRequested`, e.g. the window closing mid-switch). Either
+            // way, switch_render_bridge/switch_plugin_load never ran (Fatal
+            // failure skips dependents), so `m_plugin` is still exactly what
+            // switch_teardown left it (nullopt) and the registry is still
+            // exactly what that same PluginHost::Unload -> ResetRegistry left
+            // it (empty) -- this fallback's own m_plugin.reset()/
+            // ResetRegistry() calls below are therefore always no-ops TODAY,
+            // kept as a structural invariant-guard (this block converges on
+            // "project-less" regardless of HOW it was reached, not because a
+            // reader has to prove which stage failed) rather than because
+            // they currently do anything. switch_teardown above unconditionally
+            // already closed the documents, cleared the resolver caches,
+            // cleared the scene references, and reset the session to
+            // Untitled -- that alone gets most of the way there. What is
+            // still missing:
             //   - Runtime::CurrentProject() can still be the OUTGOING project
             //     (Runtime::OpenProject's OWN contract is "leaves ALL state
             //     untouched" on failure -- fine at boot, where "untouched"
@@ -561,26 +608,12 @@ namespace Arcane::Editor
             //     comment). It also drops the Assets content root/resolver
             //     and the Config project/plugin layers, so nothing about the
             //     torn-down project lingers there either.
-            //   - m_plugin can still be ENGAGED (holding a real but
-            //     internally-empty PluginHost) if switch_plugin_load's
-            //     `Load()` call itself is what failed -- PluginHost::Load
-            //     already unwinds its OWN partial state before returning
-            //     false in every failure branch (LoadInitPlugins' self-clear,
-            //     or the explicit Unload() call after a secondaries failure),
-            //     so resetting it here is a safe no-op teardown, not a second
-            //     GPU-resource free -- but it is still required to match
-            //     boot's true "no game module" invariant, where m_plugin is
-            //     nullopt, never an engaged-but-empty host.
-            //   - The registry can still hold entities a game module's Init
-            //     spawned before failing partway through (Load()'s own
-            //     cleanup does not promise an empty registry, only a
-            //     consistent PluginHost). ResetRegistry() guarantees the
-            //     EnsureScene() below is deciding for a genuinely empty
-            //     registry, the same as switch_teardown's plugin-unload path
-            //     already gives every OTHER failure case.
-            //   - The outgoing (or, if the handover already ran, the NEW)
-            //     project's editor lock: `lockedRoot` names whichever one we
-            //     are actually holding right now (see its declaration above).
+            //   - The outgoing project's editor lock: `lockedRoot` still
+            //     equals `outgoingRoot` here (switch_render_bridge, the only
+            //     stage that ever advances it, never ran) -- named via
+            //     `lockedRoot` rather than `outgoingRoot` directly so this
+            //     block stays correct even if a future stage is added after
+            //     the handover point.
             //   - EnsureScene(): the boot path's finalize stage calls this
             //     unconditionally, project or not, so the registry has a
             //     SceneRoot the Outliner/save walk can root at instead of
