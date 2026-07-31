@@ -81,6 +81,17 @@ namespace Arcane
         std::mutex        textMutex;
         std::string       statusText;
 
+        // Gate for BootSplashPresenter::Present's forwarding of status text +
+        // taskbar progress -- see SetShowProgress/ShowProgress's own comments
+        // in the header. Defaults true (this class's behaviour before the flag
+        // existed); RuntimeApp explicitly flips it false before BootSequence::
+        // Run begins, per the spec default for a non-editor host. A plain
+        // atomic<bool>, like open/everOpen/ready above: written from any
+        // thread (the boot/main thread via RuntimeApp, or project_open's
+        // worker-thread stage body once a project's manifest is known), read
+        // from the boot/main thread inside BootSplashPresenter::Present.
+        std::atomic<bool> showProgress{true};
+
         // Splash-thread-owned; touched ONLY on that thread (loaded once before
         // the message loop starts, released once it exits -- see the thread
         // lambda). A missing/unreadable image, or a GDI+ Startup failure,
@@ -556,6 +567,19 @@ namespace Arcane
         PostMessageW(h, kMsgSetProgress, static_cast<WPARAM>(percent), 0);
     }
 
+    void BootSplashWindow::SetShowProgress(bool show) noexcept
+    {
+        if (m_impl) m_impl->showProgress.store(show);
+    }
+
+    bool BootSplashWindow::ShowProgress() const noexcept
+    {
+        // No impl (construction failed) behaves like "showing" -- harmless,
+        // since every consumer of the flag (SetStatusText/SetProgress) is
+        // already a no-op with no window to draw into.
+        return !m_impl || m_impl->showProgress.load();
+    }
+
     BootSplashWindow::~BootSplashWindow() { Close(); }
 #else
     struct BootSplashWindow::Impl {};
@@ -566,5 +590,7 @@ namespace Arcane
     bool BootSplashWindow::WasEverOpen() const noexcept { return false; }
     void BootSplashWindow::SetStatusText(std::string) noexcept {}
     void BootSplashWindow::SetProgress(float) noexcept {}
+    void BootSplashWindow::SetShowProgress(bool) noexcept {}
+    bool BootSplashWindow::ShowProgress() const noexcept { return true; }
 #endif
 }

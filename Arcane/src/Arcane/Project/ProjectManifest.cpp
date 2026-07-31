@@ -57,6 +57,41 @@ namespace Arcane
             }
         }
 
+        // Splash block: leniently, exactly like plugins above -- a missing key,
+        // or one present with the wrong TYPE (not an object), yields the
+        // SplashConfig defaults rather than failing the manifest. Once inside a
+        // well-typed object, a wrong-typed FIELD (e.g. "showProgress": "yes")
+        // still throws via .value() below, same as description/gameModule/
+        // plugins[].enabled above -- caught by this function's own try/catch,
+        // so the whole manifest reports nullopt rather than silently defaulting
+        // just that one field (consistent with every other optional field this
+        // function parses).
+        if (doc.contains("splash") && doc["splash"].is_object())
+        {
+            const auto& sp = doc["splash"];
+            ProjectManifest::SplashConfig cfg;   // defaults
+            cfg.enabled            = sp.value("enabled", cfg.enabled);
+            cfg.image              = sp.value("image", cfg.image);
+            cfg.showProgress       = sp.value("showProgress", cfg.showProgress);
+            cfg.minDurationSeconds = sp.value("minDurationSeconds", cfg.minDurationSeconds);
+            // backgroundColor: an array field with no precedent among the scalar
+            // optionals above. Same lenient spirit as the plugins ARRAY check --
+            // present but malformed (wrong type, too short) leaves the default
+            // rather than failing the manifest -- but each ELEMENT must still be
+            // a number to be accepted, so a partially-numeric array cannot leave
+            // the default and an explicit value mixed across channels.
+            if (sp.contains("backgroundColor") && sp["backgroundColor"].is_array()
+                && sp["backgroundColor"].size() >= 3
+                && sp["backgroundColor"][0].is_number() && sp["backgroundColor"][1].is_number()
+                && sp["backgroundColor"][2].is_number())
+            {
+                cfg.backgroundColor[0] = sp["backgroundColor"][0].get<float>();
+                cfg.backgroundColor[1] = sp["backgroundColor"][1].get<float>();
+                cfg.backgroundColor[2] = sp["backgroundColor"][2].get<float>();
+            }
+            m.splash = cfg;
+        }
+
         return m;
     }
     catch (const nlohmann::json::exception&)

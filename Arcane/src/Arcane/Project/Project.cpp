@@ -135,7 +135,8 @@ namespace Arcane
         }
     }
 
-    std::optional<Project> Project::Open(const std::filesystem::path& pathOrFile)
+    std::optional<Project> Project::Open(const std::filesystem::path& pathOrFile,
+                                         AssetRegistry::ScanProgressFn onProgress)
     {
         std::error_code ec;
 
@@ -197,7 +198,7 @@ namespace Arcane
         // project's own Content/; plugin content folds in below. (engine:// stays reserved
         // until the engine ships built-in content -- spec Q2.)
         proj.m_mounts.Mount("game", root / "Content");
-        proj.m_registry.ScanContent(root / "Content", "game");
+        proj.m_registry.ScanContent(root / "Content", "game", onProgress);
 
         // Slice 4 -- project plugins. Each enabled plugin in the manifest lives at
         // <root>/Plugins/<name>/ with a <name>.arcplugin descriptor (same shape as

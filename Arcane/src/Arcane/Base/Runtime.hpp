@@ -8,6 +8,7 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Project/AssetRegistry.hpp>   // AssetRegistry::ScanProgressFn (OpenProject's progress param) -- light header, not Project.hpp
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
 
@@ -87,7 +88,14 @@ namespace Arcane
         // project's game:// mount (root/Content); returns false and leaves ALL state
         // untouched on a missing/invalid manifest OR an engineAbi that does not match
         // this engine (kGamePluginABIVersion). Both hosts open a project through here.
-        bool OpenProject(const std::filesystem::path& pathOrFile);
+        //
+        // `onProgress`, when non-empty, is forwarded straight through to
+        // Project::Open (and from there to AssetRegistry::ScanContent) -- this
+        // is the seam project_open's boot-stage body (ProjectBoot.cpp) uses to
+        // surface "Scanning content... N / M" while a project's content tree
+        // is being scanned.
+        bool OpenProject(const std::filesystem::path& pathOrFile,
+                         AssetRegistry::ScanProgressFn onProgress = {});
 
         // The open project, or nullptr when none is open (no-project fallback mode).
         const Project* CurrentProject() const noexcept;

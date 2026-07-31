@@ -13,6 +13,18 @@
 
 namespace Arcane
 {
+    void BootStageDetail::Set(std::string text)
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        m_text = std::move(text);
+    }
+
+    std::string BootStageDetail::Get() const
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        return m_text;
+    }
+
     struct BootSequence::Impl
     {
         std::vector<BootStage> stages;
@@ -125,6 +137,16 @@ namespace Arcane
             p.fraction = static_cast<float>(static_cast<double>(doneWeight) /
                                             static_cast<double>(totalWeight));
             p.stageId  = stageId;
+            // `index` (built above, id -> position) doubles as the lookup this
+            // needs: the stage this update is ABOUT, if any (empty stageId only
+            // at the terminal "done" tick, which owns no single stage and so
+            // finds nothing here -- p.detail stays empty, exactly as before this
+            // field had a producer). A stage with no attached BootStageDetail
+            // (the common case) also leaves p.detail empty -- this is purely
+            // additive over the old always-empty behaviour.
+            if (auto it = index.find(stageId); it != index.end())
+                if (const auto& d = im.stages[it->second].detail)
+                    p.detail = d->Get();
             return presenter->Present(p);
         };
 

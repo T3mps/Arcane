@@ -1,7 +1,9 @@
 // BootSequence: the boot-stage DAG. Pure scheduler, no GPU/window/ImGui.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -214,6 +216,83 @@ TEST_CASE("progress reaches 1.0 and never goes backwards", "[boot]")
     CHECK(r.ok);
     CHECK(rec.monotonic);
     CHECK(rec.last == 1.0f);
+}
+
+TEST_CASE("a stage's attached BootStageDetail routes into BootProgress::detail", "[boot]")
+{
+    // Proves the ROUTING (present()'s new index-lookup in BootSequence.cpp),
+    // not merely that BootStageDetail::Set/Get round-trips in isolation -- a
+    // test that only exercised the box directly would stay green even if
+    // present() never consulted BootStage::detail at all (Task 10's own
+    // "detail is never populated by BootSequence itself" note in
+    // BootSequence.hpp is exactly the gap this test closes).
+    struct Recorder final : Arcane::IBootPresenter
+    {
+        std::vector<std::string> details;
+        bool Present(const Arcane::BootProgress& p) override
+        {
+            details.push_back(p.detail);
+            return true;
+        }
+    } rec;
+
+    auto detail = std::make_shared<Arcane::BootStageDetail>();
+
+    Arcane::BootStage worker;
+    worker.id      = "scan";
+    worker.thread  = Arcane::BootThread::Worker;
+    worker.policy  = Arcane::BootPolicy::Fatal;
+    worker.weight  = 1;
+    worker.detail  = detail;
+    worker.run     = [&]
+    {
+        // Long enough (75ms) against the 8ms idle-pump cadence
+        // (BootSequence.cpp) that several present() calls are guaranteed to
+        // land while a fresh value is set, without depending on exact timing.
+        for (int i = 1; i <= 5; ++i)
+        {
+            detail->Set("Scanning content... " + std::to_string(i) + " / 5");
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        }
+        return true;
+    };
+
+    std::vector<Arcane::BootStage> stages;
+    stages.push_back(std::move(worker));
+
+    Arcane::BootSequence seq(std::move(stages));
+    const Arcane::BootResult r = seq.Run(&rec);
+
+    REQUIRE(r.ok);
+    const bool sawDetail = std::any_of(rec.details.begin(), rec.details.end(),
+        [](const std::string& d) { return d.rfind("Scanning content...", 0) == 0; });
+    CHECK(sawDetail);
+}
+
+TEST_CASE("a stage with no attached BootStageDetail leaves BootProgress::detail empty", "[boot]")
+{
+    // The common case (every stage today except project_open): no regression
+    // to the pre-Task-10 "always empty" behaviour when a stage attaches
+    // nothing.
+    struct Recorder final : Arcane::IBootPresenter
+    {
+        bool sawNonEmpty = false;
+        bool Present(const Arcane::BootProgress& p) override
+        {
+            if (!p.detail.empty()) sawNonEmpty = true;
+            return true;
+        }
+    } rec;
+
+    std::vector<Arcane::BootStage> stages;
+    stages.push_back(Stage("a", {},    [] { return true; }));
+    stages.push_back(Stage("b", {"a"}, [] { return true; }));
+
+    Arcane::BootSequence seq(std::move(stages));
+    const Arcane::BootResult r = seq.Run(&rec);
+
+    CHECK(r.ok);
+    CHECK_FALSE(rec.sawNonEmpty);
 }
 
 TEST_CASE("a presenter requesting quit aborts the boot cleanly", "[boot]")

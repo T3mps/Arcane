@@ -617,6 +617,18 @@ int RuntimeApp::Run()
     ctx.pluginPath  = m_config.pluginPath.c_str();
     ctx.moduleName  = "ArcaneRuntime.exe";
 
+    // Spec sec 6 default: the runtime host shows no boot progress until an
+    // opened project's own manifest opts in (project_open's ProjectBoot.cpp
+    // override flips this once that manifest is known -- see its own
+    // comment). Set here, BEFORE BootSequence::Run is even constructed below,
+    // so not even the very FIRST present() call (which fires as soon as
+    // "runtime_create" completes, before project_open's Worker body has had
+    // any chance to run at all -- BootSequence.cpp's dispatch order) can show
+    // progress a player never asked to see. BootSplashWindow::SetShowProgress
+    // tolerates m_splash == nullptr, same never-fail contract as every other
+    // splash call.
+    if (m_splash) m_splash->SetShowProgress(false);
+
     // HostBoot::RuntimeStages(ctx) is the SAME shared function
     // BootStageParityTest exercises and EditorApp calls for its own list
     // (EditorApp::Run) -- this is the literal call that keeps the two hosts

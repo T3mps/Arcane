@@ -48,6 +48,35 @@ TEST_CASE("Runtime::OpenProject adopts a valid project", "[project]")
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
+TEST_CASE("Runtime::OpenProject forwards its progress callback through to the content scan", "[project]")
+{
+    // The exact seam project_open's boot-stage body calls through
+    // (ProjectBoot.cpp: `ctx.runtime->OpenProject(ctx.projectPath, onProgress)`)
+    // -- proves the callback survives Runtime::OpenProject -> Project::Open
+    // -> AssetRegistry::ScanContent end to end, not merely that ScanContent
+    // itself (AssetRegistryTest.cpp) or Project::Open (ProjectTest.cpp)
+    // forward it one hop.
+    const fs::path dir = MakeTempDir("progress");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "ProgGame").has_value());
+    WriteFile(dir / "Game" / "Content" / "a.arcmat", R"({"id":"aaaa1111-1111-4111-8111-111111111111"})");
+    WriteFile(dir / "Game" / "Content" / "b.arcmat", R"({"id":"bbbb2222-2222-4222-8222-222222222222"})");
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    std::size_t calls = 0, lastDone = 0, lastTotal = 0;
+    REQUIRE(rt.OpenProject(dir / "Game", [&](std::size_t done, std::size_t total)
+    {
+        ++calls;
+        lastDone = done;
+        lastTotal = total;
+    }));
+
+    CHECK(calls == 2);
+    CHECK(lastDone == lastTotal);
+    CHECK(lastTotal == 2);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
 TEST_CASE("Runtime::OpenProject refuses a mismatched engine ABI", "[project]")
 {
     const fs::path dir = MakeTempDir("badabi");

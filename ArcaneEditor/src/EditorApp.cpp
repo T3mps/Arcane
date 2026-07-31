@@ -862,6 +862,15 @@ namespace Arcane::Editor
         ctx.pluginPath  = m_config.pluginPath.c_str();
         ctx.moduleName  = "ArcaneEditor.exe";
 
+        // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
+        // opened project's manifest (project_open's shared CoreStages body
+        // never touches showProgress at all -- only RuntimeStages' override
+        // does, see ProjectBoot.cpp). BootSplashWindow::ShowProgress already
+        // defaults true, so this is redundant with that default today; set
+        // explicitly anyway so the editor's intent reads from this file
+        // rather than depending on a default it does not own.
+        if (m_splash) m_splash->SetShowProgress(true);
+
         // HostBoot::EditorStages(ctx) is the SAME shared function
         // BootStageParityTest exercises and RuntimeApp calls for its own list
         // (RuntimeApp::Run) -- this is the literal call that keeps the two

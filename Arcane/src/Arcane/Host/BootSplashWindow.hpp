@@ -88,6 +88,30 @@ namespace Arcane
         // boot.
         void SetProgress(float fraction01) noexcept;
 
+        // Gate what BootSplashPresenter::Present (below) forwards to this
+        // splash: false means Present() leaves the splash on branding alone --
+        // no status text, no taskbar percentage -- matching the spec default
+        // for a player who never asked to watch asset scanning (ProjectManifest
+        // ::SplashConfig::showProgress, spec sec 6). Defaults to TRUE, matching
+        // this class's behaviour before this method existed (every existing
+        // caller -- the editor, and every BootSplashPresenter test -- keeps
+        // seeing status text/progress with zero code change). The runtime host
+        // is the one caller that wants FALSE, and sets it explicitly (see
+        // RuntimeApp::Run, before BootSequence::Run begins) BEFORE flipping it
+        // per-project once project_open's manifest is known (ProjectBoot.cpp's
+        // RuntimeStages override). Safe to call from any thread, before the
+        // window exists, or after Close() -- same always-degrade contract as
+        // every other setter here; on non-Windows this is a harmless no-op
+        // (ShowProgress() below always reports true there, but every consumer
+        // of it -- SetStatusText/SetProgress -- is already a no-op on that
+        // platform, so the value is unobservable).
+        void SetShowProgress(bool show) noexcept;
+
+        // The flag SetShowProgress last set (or its default). Read by
+        // BootSplashPresenter::Present; exposed publicly mainly so it is
+        // directly testable without reaching into the presenter.
+        [[nodiscard]] bool ShowProgress() const noexcept;
+
     public:
         // Defined in BootSplashWindow.cpp, Windows-only. Public (not private)
         // so the free WndProc function there -- which must stay a plain
@@ -186,8 +210,14 @@ namespace Arcane
         bool Present(const BootProgress& progress) override
         {
             if (!m_splash) return true;
-            m_splash->SetStatusText(!progress.detail.empty() ? progress.detail : progress.stageId);
-            m_splash->SetProgress(progress.fraction);
+            // showProgress gates ONLY what gets reported (status text + taskbar
+            // percentage) -- never the quit-detection below, which must keep
+            // working whether or not progress is being shown.
+            if (m_splash->ShowProgress())
+            {
+                m_splash->SetStatusText(!progress.detail.empty() ? progress.detail : progress.stageId);
+                m_splash->SetProgress(progress.fraction);
+            }
 
             // was open, now is not, and nobody Disarm()'d us: a real quit.
             if (!m_disarmed && !m_splash->IsOpen() && m_splash->WasEverOpen())

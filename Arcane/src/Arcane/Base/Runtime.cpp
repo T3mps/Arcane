@@ -382,9 +382,9 @@ namespace Arcane
         m_impl->ResetAudio();
     }
 
-    bool Runtime::OpenProject(const std::filesystem::path& pathOrFile)
+    bool Runtime::OpenProject(const std::filesystem::path& pathOrFile, AssetRegistry::ScanProgressFn onProgress)
     {
-        auto proj = Project::Open(pathOrFile);
+        auto proj = Project::Open(pathOrFile, onProgress);
         if (!proj)
             return false;   // Project::Open already logged the cause
 

@@ -24,7 +24,15 @@ namespace Arcane
         // Open a project folder (finds the single *.arcproj inside) or a direct
         // .arcproj file. Loads the manifest and mounts game:// -> <root>/Content.
         // nullopt on: no/multiple .arcproj, or an invalid manifest.
-        static std::optional<Project> Open(const std::filesystem::path& pathOrFile);
+        //
+        // `onProgress`, when non-empty, is forwarded to the primary game://
+        // content scan (AssetRegistry::ScanContent) -- see that method's own
+        // comment for the cost/contract. Not forwarded to each plugin's
+        // AddContent below: that folding is comparatively small, and the
+        // primary Content/ scan is what a boot splash's "Scanning content..."
+        // line is about.
+        static std::optional<Project> Open(const std::filesystem::path& pathOrFile,
+                                           AssetRegistry::ScanProgressFn onProgress = {});
 
         // Scaffold a new project at `dir` named `name`: creates the folder skeleton
         // (Source/ Content/ Config/ Plugins/), writes <name>.arcproj and .gitignore,

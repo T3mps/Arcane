@@ -23,6 +23,25 @@ namespace Arcane
             bool        enabled = true;
         };
 
+        // The pre-device splash's own configuration (spec S6). Every field has
+        // a sane default so an absent "splash" block behaves exactly like this
+        // struct's defaults -- see FromJson's lenient parse.
+        struct SplashConfig
+        {
+            bool        enabled            = true;
+            std::string image;                        // empty -> engine branding
+            float       backgroundColor[3] = {0.05f, 0.05f, 0.06f};
+            // FALSE by default, deliberately. The editor always shows progress; a
+            // player does not. UE enforces the same split structurally --
+            // FFeedbackContext::ProgressReported is a no-op base and only the
+            // editor overrides it (FeedbackContextEditor.cpp:664-669), with the
+            // splash backend commenting that startup progress is "not interesting
+            // to an end-user" (WindowsPlatformSplash.cpp). A project MAY opt in
+            // for its own runtime boot by setting this true.
+            bool        showProgress       = false;
+            float       minDurationSeconds = 0.0f;    // avoids an ~80ms splash flash
+        };
+
         int                    formatVersion = 0;
         std::string            name;
         std::string            description;
@@ -38,6 +57,11 @@ namespace Arcane
         // entry's path is gone, so a hand-copied folder (which copies the guid)
         // stays a separate project. The Hub's Duplicate regenerates it outright.
         std::string            guid;
+
+        // The pre-device splash's configuration. Defaults apply whenever the
+        // manifest has no "splash" block at all (see SplashConfig's own
+        // per-field comments for what those defaults are and why).
+        SplashConfig           splash;
 
         // Parse + validate a JSON document. nullopt on schema violation.
         static ARCANE_API std::optional<ProjectManifest> FromJson(const nlohmann::json& doc);

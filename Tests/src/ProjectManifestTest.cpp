@@ -84,6 +84,53 @@ TEST_CASE("ProjectManifest returns nullopt (never throws) on type-mismatched opt
         })")).has_value());
 }
 
+TEST_CASE("a manifest with no splash block defaults showProgress to false", "[project]")
+{
+    // Absent block: engine branding, no progress -- a player does not care that
+    // we are scanning asset 412 of 1180. UE reaches the same conclusion.
+    const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "T", "engine": { "abi": 9 }
+    })"));
+    REQUIRE(m.has_value());
+    CHECK(m->splash.enabled);
+    CHECK_FALSE(m->splash.showProgress);
+}
+
+TEST_CASE("a manifest splash block round-trips its fields", "[project]")
+{
+    const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "T", "engine": { "abi": 9 },
+        "splash": { "enabled": false, "image": "game://B/s.png", "showProgress": true,
+                    "minDurationSeconds": 1.5 }
+    })"));
+    REQUIRE(m.has_value());
+    CHECK_FALSE(m->splash.enabled);
+    CHECK(m->splash.image == "game://B/s.png");
+    CHECK(m->splash.showProgress);
+    CHECK(m->splash.minDurationSeconds == 1.5f);
+}
+
+TEST_CASE("a splash block present but not an object yields defaults, not manifest failure", "[project]")
+{
+    const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "T", "engine": { "abi": 9 }, "splash": 42
+    })"));
+    REQUIRE(m.has_value());
+    CHECK(m->splash.enabled);          // untouched default
+    CHECK_FALSE(m->splash.showProgress);
+}
+
+TEST_CASE("a splash block with a wrong-typed field fails the whole manifest, not just that field", "[project]")
+{
+    // Same contract as description/gameModule/plugins[].enabled above:
+    // .value() throws json::type_error on a type mismatch, caught by
+    // FromJson's own try/catch -- nullopt, not a silently-defaulted field.
+    CHECK_FALSE(Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "T", "engine": { "abi": 9 },
+        "splash": { "showProgress": "yes" }
+    })")).has_value());
+}
+
 TEST_CASE("SetBootScene rewrites only that field, preserving key order", "[project]")
 {
     namespace fs = std::filesystem;

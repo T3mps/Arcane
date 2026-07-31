@@ -70,6 +70,33 @@ namespace Arcane::HostBoot
             s.run = run ? std::move(run) : Unpatched(std::move(id));
             return s;
         }
+
+        // project_open's AssetRegistry::ScanContent progress callback, shared by
+        // CoreStages' own body (the editor keeps this unmodified) and
+        // RuntimeStages' override (which replaces the WHOLE closure for the
+        // Fatal-ABI-refusal behaviour but wants the identical sub-progress
+        // reporting) -- see BootStage::detail's own comment for why the box is
+        // a shared_ptr rather than something this function could just close
+        // over and hand back as a FunctionRef (it cannot: FunctionRef is a
+        // non-owning view of a SYNCHRONOUS, non-escaping callable, so the
+        // referent has to be a named local at the actual OpenProject call
+        // site, not a temporary this factory would return).
+        //
+        // Throttled to roughly every 32 files, plus always the first and the
+        // final tick: IBootPresenter's contract (BootSequence.hpp) requires a
+        // presenter to stay cheap and non-blocking, and BootStageDetail::Set
+        // is not free (a mutex lock plus a std::string format+allocation) --
+        // ScanContent's own callback fires once per file, so reporting EVERY
+        // one of a content tree's files would put that cost on the worker
+        // thread for a status line nothing reads faster than present()'s own
+        // ~8ms pump cadence (BootSequence.cpp) actually repaints it.
+        void ReportScanProgress(BootStageDetail& box, std::size_t done, std::size_t total)
+        {
+            constexpr std::size_t kStride = 32;
+            if (done != 1 && done != total && done % kStride != 0)
+                return;
+            box.Set("Scanning content... " + std::to_string(done) + " / " + std::to_string(total));
+        }
     }
 
     std::vector<BootStage> CoreStages(BootContext& ctx)
@@ -139,19 +166,36 @@ namespace Arcane::HostBoot
                                            ctx.moduleName ? ctx.moduleName : "HostBoot");
         }));
         s.push_back(Make("gpu_core",             {},                                  BootThread::Main,   BootPolicy::Fatal,    25));
-        s.push_back(Make("project_open",         {"runtime_create"},                  BootThread::Worker, BootPolicy::Optional, 45, [&ctx]
         {
-            // Optional default: a failed/absent open is never fatal here -- the
-            // runtime host tightens this into a Fatal ABI refusal (see
-            // RuntimeStages below); the editor keeps exactly this behavior.
-            if (!ctx.runtime || !ctx.projectPath || !*ctx.projectPath)
-                return true;   // no --project: nothing to open, not a failure
-            if (ctx.runtime->OpenProject(ctx.projectPath))
+            // scanDetail: attached to the stage below (BootStage::detail) so
+            // BootSequence's present() can read it into BootProgress::detail
+            // while this stage runs -- see ReportScanProgress's own comment for
+            // why the box (not a returned FunctionRef) is what gets shared with
+            // RuntimeStages' override.
+            auto scanDetail = std::make_shared<BootStageDetail>();
+            BootStage projectOpen = Make("project_open", {"runtime_create"}, BootThread::Worker,
+                                         BootPolicy::Optional, 45, [&ctx, scanDetail]
+            {
+                // Optional default: a failed/absent open is never fatal here -- the
+                // runtime host tightens this into a Fatal ABI refusal (see
+                // RuntimeStages below); the editor keeps exactly this behavior.
+                if (!ctx.runtime || !ctx.projectPath || !*ctx.projectPath)
+                    return true;   // no --project: nothing to open, not a failure
+                if (ctx.runtime->OpenProject(ctx.projectPath,
+                        [scanDetail](std::size_t done, std::size_t total)
+                        { ReportScanProgress(*scanDetail, done, total); }))
+                {
+                    scanDetail->Set(std::string());   // clear: this stage is done reporting
+                    return true;
+                }
+                scanDetail->Set(std::string());
+                ARC_WARN("{}: --project '{}' failed to open; using data/ + --plugin fallback",
+                         ctx.moduleName ? ctx.moduleName : "HostBoot", ctx.projectPath);
                 return true;
-            ARC_WARN("{}: --project '{}' failed to open; using data/ + --plugin fallback",
-                     ctx.moduleName ? ctx.moduleName : "HostBoot", ctx.projectPath);
-            return true;
-        }));
+            });
+            projectOpen.detail = scanDetail;
+            s.push_back(std::move(projectOpen));
+        }
         s.push_back(Make("render_bridge",        {"gpu_core", "runtime_create"},      BootThread::Main,   BootPolicy::Fatal,     3));
         s.push_back(Make("input_config",         {"project_open", "gpu_core"},        BootThread::Main,   BootPolicy::Optional,  2, [&ctx]
         {
@@ -208,12 +252,57 @@ namespace Arcane::HostBoot
             if (stage.id != "project_open")
                 continue;
             stage.policy = BootPolicy::Fatal;
-            stage.run = [&ctx]
+            // Reuse the SAME BootStageDetail box CoreStages already attached
+            // (stage.detail), not a fresh one -- this closure fully replaces
+            // `.run` below, so it must capture its own reference to report
+            // into, and it has to be the box BootSequence's present() already
+            // knows to read for this stage's id.
+            auto scanDetail = stage.detail;
+            stage.run = [&ctx, scanDetail]
             {
+                // Runtime-only default (spec sec 6): no boot progress until a
+                // project's own manifest opts in. Set every time this stage
+                // actually RUNS (not once at RuntimeStages-construction time,
+                // which callers like RuntimeStageIdsForTest invoke without ever
+                // running a boot) -- RuntimeApp::Run additionally sets this
+                // BEFORE BootSequence::Run begins, so not even the present()
+                // call after "runtime_create" (which completes and reports
+                // before this Worker stage's body gets a chance to run) can
+                // show progress a player never asked to see.
+                if (ctx.splash) ctx.splash->SetShowProgress(false);
                 if (!ctx.runtime || !ctx.projectPath || !*ctx.projectPath)
                     return true;   // no --project: nothing to open, not a failure
-                if (ctx.runtime->OpenProject(ctx.projectPath))
+                if (ctx.runtime->OpenProject(ctx.projectPath,
+                        [scanDetail](std::size_t done, std::size_t total)
+                        { ReportScanProgress(*scanDetail, done, total); }))
+                {
+                    scanDetail->Set(std::string());
+                    // The just-opened project's OWN manifest decides whether
+                    // ITS runtime boot shows progress from here on -- never the
+                    // editor's (EditorStages does not touch this at all, so the
+                    // splash's showProgress default of true stands for it
+                    // regardless of what any opened project's manifest says).
+                    //
+                    // KNOWN NUANCE, not fixed here: ProjectManifest is parsed
+                    // (Project.cpp) BEFORE the content scan that same call
+                    // performs, but this code cannot learn showProgress until
+                    // OpenProject returns -- CurrentProject() is only populated
+                    // on adoption, at the very end of Runtime::OpenProject, well
+                    // after the scan (and its onProgress calls above) already
+                    // ran. So an opted-in project's splash shows the taskbar/
+                    // fraction from here onward (render_bridge, plugin_load,
+                    // ...) but never the "Scanning content..." text for the
+                    // scan that just happened -- only a live project-manifest
+                    // peek BEFORE calling OpenProject could close that gap, and
+                    // duplicating Project::Open's own manifest-file resolution
+                    // to do it risks exactly the two-implementations-drift
+                    // AddFile's own comment warns against. Left as a follow-up.
+                    if (ctx.splash)
+                        if (const Arcane::Project* proj = ctx.runtime->CurrentProject())
+                            ctx.splash->SetShowProgress(proj->Manifest().splash.showProgress);
                     return true;
+                }
+                scanDetail->Set(std::string());
                 ARC_ERROR("{}: '{}' could not be opened (engine ABI {} -- is the "
                           "project's game DLL built against this engine?). Refusing "
                           "to boot with the data/ fallback.",

@@ -111,10 +111,45 @@ namespace Arcane
         }
     }
 
-    std::size_t AssetRegistry::ScanContent(const std::filesystem::path& contentDir, std::string_view scheme)
+    std::size_t AssetRegistry::ScanContent(const std::filesystem::path& contentDir, std::string_view scheme,
+                                           ScanProgressFn onProgress)
     {
         m_byGuid.clear();
-        return AddContent(contentDir, scheme);
+
+        // No observer: identical to this function's pre-callback shape (and
+        // cost) -- a single walk via AddContent, no counting pass.
+        if (!onProgress)
+            return AddContent(contentDir, scheme);
+
+        std::error_code ec;
+        if (!std::filesystem::is_directory(contentDir, ec))
+            return 0;
+
+        // Denominator: a cheap stat-only pass (is_regular_file only -- no file
+        // reads) over the SAME population AddFile below will be offered, so
+        // `done` reaching `total` on the real pass is guaranteed rather than
+        // hoped for. This is the one added cost this parameter brings, and it
+        // is only paid when a caller actually wants progress (see above).
+        std::size_t total = 0;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(contentDir, ec))
+            if (entry.is_regular_file())
+                ++total;
+
+        const std::size_t before = m_byGuid.size();
+        std::size_t done = 0;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(contentDir, ec))
+        {
+            if (!entry.is_regular_file())
+                continue;
+            // Per-file rules (kind routing, id resolution, mount-path shape) live in
+            // AddFile so this progress-reporting walk and AddContent's plain one can
+            // never drift apart on what counts as a trackable asset.
+            AddFile(entry.path(), contentDir, scheme);
+            ++done;
+            onProgress(done, total);
+        }
+
+        return m_byGuid.size() - before;
     }
 
     std::size_t AssetRegistry::AddContent(const std::filesystem::path& contentDir, std::string_view scheme)

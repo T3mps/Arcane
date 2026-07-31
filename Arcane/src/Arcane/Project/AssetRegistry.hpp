@@ -10,6 +10,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Util/FunctionRef.hpp>
 
 #include <cstddef>
 #include <filesystem>
@@ -29,12 +30,32 @@ namespace Arcane
     class ARCANE_API AssetRegistry
     {
     public:
+        // Sub-progress a caller can observe while ScanContent walks a (possibly
+        // large) content tree: (files scanned so far, total files that will be
+        // scanned). FunctionRef, not std::function -- ScanContent calls it
+        // SYNCHRONOUSLY, once per file, from within the scan loop and never
+        // stores it, so a non-owning view is the right (zero-allocation) tool;
+        // see FunctionRef.hpp's own contract. Default-constructed (empty) means
+        // "no observer" -- ScanContent still does its ordinary single-pass work
+        // in that case (see ScanContent's own comment for the cost this adds
+        // ONLY when a callback is supplied).
+        using ScanProgressFn = Arcane::FunctionRef<void(std::size_t done, std::size_t total)>;
+
         // Clear the registry, then scan `contentDir` for assets -- native JSON (embedded
         // "id") and imported binary originals (id in a sibling "<file>.meta") -- assigning
         // or reading a stable Guid per asset, and register Guid -> "<scheme>://<relative>".
         // A file with no valid id gets one generated and written back. Returns the number
         // of assets registered. This is Clear() + AddContent(); a full rebuild from scratch.
-        std::size_t ScanContent(const std::filesystem::path& contentDir, std::string_view scheme);
+        //
+        // `onProgress`, when non-empty, is called after each regular file is
+        // processed with (files done, total files under contentDir) -- done is
+        // monotonic and the final call always has done == total. Getting that
+        // total needs a cheap stat-only directory_iterator pass BEFORE the real
+        // scan (no file reads, just counting), so it is only paid when a caller
+        // actually wants progress: with no callback this delegates straight to
+        // AddContent, identical cost to before this parameter existed.
+        std::size_t ScanContent(const std::filesystem::path& contentDir, std::string_view scheme,
+                                ScanProgressFn onProgress = {});
 
         // Scan another content root into the SAME registry WITHOUT clearing it first --
         // used to fold a mounted plugin's (or engine's) content in beside game:// content,

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,33 @@ namespace Arcane
     // with the data/ + --plugin fallback. Preserve that, do not tighten it.
     enum class BootPolicy : std::uint8_t { Fatal, Optional };
 
+    // A thread-safe box a stage's `run` body may write into WHILE EXECUTING to
+    // report its own sub-progress (e.g. project_open's "Scanning content...
+    // 412 / 1180") -- see BootStage::detail and BootProgress::detail below for
+    // how BootSequence reads it back. Deliberately NOT a bare std::string: a
+    // Worker stage's `run` executes on the boot worker thread while
+    // BootSequence's own present() calls (the per-completed-stage call AND the
+    // idle-pump call during a Worker overlap, BootSequence.cpp) read the SAME
+    // stage's detail from the main thread -- Set/Get go through one mutex so
+    // writer and reader never race on the string's internal buffer.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4251)  // std::string member on a dll-exported class: benign under /MD (shared CRT heap)
+#endif
+    class ARCANE_API BootStageDetail
+    {
+    public:
+        void        Set(std::string text);
+        std::string Get() const;
+
+    private:
+        mutable std::mutex m_mutex;
+        std::string        m_text;
+    };
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
     struct BootStage
     {
         std::string              id;
@@ -40,6 +68,17 @@ namespace Arcane
         BootPolicy                policy = BootPolicy::Fatal;
         std::uint32_t             weight = 1;      // share of the progress bar
         std::function<bool()>    run;             // false == this stage failed
+
+        // Optional (null for every stage that has none, which is most of
+        // them): a stage may attach a BootStageDetail box so its `run` body
+        // can report sub-progress while it executes -- BootSequence reads it
+        // (see present() in BootSequence.cpp) and forwards the text into
+        // BootProgress::detail below, keyed by this stage's id. A shared_ptr,
+        // not a plain member, so a host that fully REPLACES `run` (see
+        // ProjectBoot.cpp's RuntimeStages override of project_open) can still
+        // reuse the SAME box CoreStages attached, by copying `.detail` before
+        // overwriting `.run`.
+        std::shared_ptr<BootStageDetail> detail;
     };
 
     struct BootProgress
@@ -54,10 +93,11 @@ namespace Arcane
         // per-stage caption, just show the fraction".
         std::string stageId;
 
-        // Reserved for a stage's own sub-progress (e.g. "412 / 1180").
-        // BootSequence never populates this itself today -- no stage in the
-        // current DAG has sub-progress to report -- it exists for a future
-        // stage callable to fill in, not something the scheduler fabricates.
+        // A stage's own sub-progress (e.g. "412 / 1180"), read from that
+        // stage's BootStage::detail box when one is attached (BootSequence.cpp's
+        // present()); empty when the stage has no detail box, or the box's
+        // text is itself empty -- a presenter treats empty the same either way
+        // (fall back to stageId, or show nothing).
         std::string detail;
     };
 

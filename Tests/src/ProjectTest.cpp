@@ -49,6 +49,33 @@ TEST_CASE("Project::Open loads a folder's manifest and mounts game://", "[projec
     CHECK(*p == dir / "Content" / "x.png");
 }
 
+TEST_CASE("Project::Open forwards its progress callback to the game:// content scan", "[project]")
+{
+    // Proves the WIRING (Project::Open -> AssetRegistry::ScanContent), not
+    // just that ScanContent itself reports progress -- this is the exact
+    // seam project_open's boot-stage body (ProjectBoot.cpp) calls through
+    // (via Runtime::OpenProject), so a break here is a break in what a
+    // player/developer actually sees on the splash.
+    const auto dir = TempDir("open_progress");
+    WriteFile(dir / "P.arcproj", R"({ "formatVersion": 1, "name": "P", "engine": { "abi": 4 } })");
+    WriteFile(dir / "Content" / "a.arcmat", R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })");
+    WriteFile(dir / "Content" / "b.arcmat", R"({ "id": "bbbb2222-2222-4222-8222-222222222222" })");
+
+    std::size_t calls = 0;
+    std::size_t lastDone = 0, lastTotal = 0;
+    auto proj = Arcane::Project::Open(dir, [&](std::size_t done, std::size_t total)
+    {
+        ++calls;
+        lastDone = done;
+        lastTotal = total;
+    });
+
+    REQUIRE(proj.has_value());
+    CHECK(calls == 2);
+    CHECK(lastDone == lastTotal);
+    CHECK(lastTotal == 2);
+}
+
 TEST_CASE("Project::Open fails on missing or ambiguous manifest", "[project]")
 {
     const auto none = TempDir("open_none");

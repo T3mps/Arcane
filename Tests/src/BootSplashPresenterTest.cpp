@@ -195,6 +195,46 @@ TEST_CASE("BootSplashPresenter: closing the splash without Disarm() reports a qu
     CHECK_FALSE(presenter.Present(p));   // must report a quit
 }
 
+TEST_CASE("BootSplashWindow::ShowProgress defaults true and round-trips through SetShowProgress", "[boot]")
+{
+    // Default true preserves this class's behaviour from before the flag
+    // existed -- the editor and every OTHER test in this file need zero
+    // changes because of it (spec sec 6: the editor always shows progress).
+    Arcane::BootSplashWindow splash("");
+    CHECK(splash.ShowProgress());
+
+    splash.SetShowProgress(false);
+    CHECK_FALSE(splash.ShowProgress());
+
+    splash.SetShowProgress(true);
+    CHECK(splash.ShowProgress());
+
+    splash.Close();
+}
+
+TEST_CASE("BootSplashPresenter still reports a quit when showProgress is false", "[boot]")
+{
+    // The showProgress gate (BootSplashPresenter::Present) must affect ONLY
+    // what gets reported (status text/taskbar percentage), never the
+    // quit-detection below it in the same method -- proves the two are not
+    // accidentally coupled (e.g. an early `if (show) { ...; return true; }`
+    // shape would silently swallow Alt+F4 for any project that opted out of
+    // progress display).
+    Arcane::BootSplashWindow splash("");
+    REQUIRE(WaitUntilOpen(splash));
+    splash.SetShowProgress(false);
+
+    Arcane::BootSplashPresenter presenter(&splash);
+    Arcane::BootProgress p;
+    p.fraction = 0.5f;
+    CHECK(presenter.Present(p));   // arms (splash observed open)
+
+    splash.Close();   // no Disarm() -- simulates the user closing it mid-boot
+
+    p.fraction = 0.75f;
+    CHECK_FALSE(presenter.Present(p));   // must still report a quit
+}
+
 // ---- integration: a real BootSequence::Run, closed the way a human does ----
 //
 // The three unit tests above prove BootSplashPresenter::Present() in
