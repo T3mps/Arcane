@@ -34,6 +34,22 @@ namespace Arcane
         static std::optional<Project> Open(const std::filesystem::path& pathOrFile,
                                            AssetRegistry::ScanProgressFn onProgress = {});
 
+        // Resolve `pathOrFile` (a project folder OR a direct .arcproj file) to
+        // the single .arcproj it names -- the exact rule Open() itself uses
+        // internally (Open() calls this), exposed so a caller that needs to
+        // know WHICH manifest file a path resolves to WITHOUT paying for a
+        // full Open() (mounts, plugin discovery, a content scan) can reuse the
+        // ambiguity-detection/directory-search logic instead of reimplementing
+        // it -- e.g. ProjectBoot.cpp's RuntimeStages project_open override
+        // peeks ProjectManifest::SplashConfig::showProgress through this before
+        // the real OpenProject call, so the splash's "Scanning content..." text
+        // can be live during the very scan it describes rather than only
+        // knowable after that scan (and the whole Open()) already finished.
+        // nullopt on the same failure modes as Open(): no .arcproj, or more
+        // than one (both logged).
+        static std::optional<std::filesystem::path> ResolveManifestFile(
+            const std::filesystem::path& pathOrFile);
+
         // Scaffold a new project at `dir` named `name`: creates the folder skeleton
         // (Source/ Content/ Config/ Plugins/), writes <name>.arcproj and .gitignore,
         // then opens it. nullopt if `dir` exists non-empty or on IO error.

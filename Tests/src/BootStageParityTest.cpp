@@ -7,13 +7,40 @@
 // runtime VerifySharedTypeContext check. The two cover different halves.
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/BootSequence.hpp>
+#include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Plugin/PluginABI.hpp>
+
+#include "Helpers/TestTypeContext.hpp"
+
+namespace
+{
+    std::filesystem::path TempProjectDir(const char* leaf)
+    {
+        std::filesystem::path d = std::filesystem::temp_directory_path() / "arcane_bootstage_parity_test" / leaf;
+        std::error_code ec;
+        std::filesystem::remove_all(d, ec);
+        std::filesystem::create_directories(d / "Content", ec);
+        return d;
+    }
+
+    const Arcane::BootStage* FindStage(const std::vector<Arcane::BootStage>& stages, const char* id)
+    {
+        const auto it = std::find_if(stages.begin(), stages.end(),
+            [&](const Arcane::BootStage& s) { return s.id == id; });
+        return it != stages.end() ? &*it : nullptr;
+    }
+}
 
 TEST_CASE("CoreStages ids are unique", "[boot]")
 {
@@ -218,4 +245,90 @@ TEST_CASE("splash_ready structurally depends on finalize", "[boot]")
         [](const Arcane::BootStage& s) { return s.id == "splash_ready"; });
     REQUIRE(it != stages.end());
     CHECK(std::find(it->dependsOn.begin(), it->dependsOn.end(), "finalize") != it->dependsOn.end());
+}
+
+// ---- project_open .run() coverage (2026-07-31 review, Important 1) --------
+//
+// Every test above builds RuntimeStages(ctx)/EditorStages(ctx) and inspects
+// ids/deps/policy -- none of them ever CALL `.run()`. That left two real
+// pieces of glue (ProjectBoot.cpp's RuntimeStages override) completely
+// unexercised: whether the scanDetail box the closure writes into is the SAME
+// one CoreStages attached (vs. a fresh, disconnected one), and whether the
+// manifest-driven SetShowProgress toggle actually fires. Both are proved here
+// deterministically -- no background thread, no wall-clock timing -- by
+// exploiting two structural facts: ProjectBoot.cpp's project_open closures no
+// longer clear scanDetail on exit (dead code removed the same day this test
+// was added; see that file's comment), so a box's FINAL content after a
+// synchronous `.run()` already proves who wrote into it; and the showProgress
+// PEEK runs unconditionally before OpenProject is even attempted, so an
+// ABI-mismatched project (OpenProject fails, Fatal) isolates the peek from
+// the success-only post-open re-set that would otherwise mask a dropped peek.
+
+TEST_CASE("RuntimeStages' project_open .run() reuses CoreStages' attached detail box", "[boot][project]")
+{
+    const auto dir = TempProjectDir("reuse");
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion) << "}}";
+    for (int i = 0; i < 5; ++i)
+        std::ofstream(dir / "Content" / ("a" + std::to_string(i) + ".arcmat"), std::ios::binary)
+            << R"({"id":")" << Arcane::Guid::Generate().ToString() << R"("})";
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::BootSplashWindow splash("");
+    Arcane::HostBoot::BootContext ctx{};
+    ctx.runtime = &rt;
+    ctx.splash  = &splash;
+    const std::string projectPath = dir.string();
+    ctx.projectPath = projectPath.c_str();
+    ctx.moduleName  = "Test";
+
+    std::vector<Arcane::BootStage> stages = Arcane::HostBoot::RuntimeStages(ctx);
+    const Arcane::BootStage* stage = FindStage(stages, "project_open");
+    REQUIRE(stage != nullptr);
+    REQUIRE(stage->detail != nullptr);       // CoreStages attached a box
+    CHECK(stage->detail->Get().empty());     // untouched before .run()
+
+    CHECK(stage->run());
+    // A fresh/disconnected box (the break this test exists to catch) would
+    // leave stage->detail at its untouched empty string forever -- the
+    // closure would have written into a DIFFERENT object entirely.
+    CHECK(stage->detail->Get() == "Scanning content... 5 / 5");
+
+    splash.Close();
+}
+
+TEST_CASE("RuntimeStages' project_open .run() peeks splash.showProgress before OpenProject, "
+          "even when OpenProject itself fails", "[boot][project]")
+{
+    // A manifest ABI mismatch makes Runtime::OpenProject fail (Fatal for the
+    // runtime host -- same shape as RuntimeProjectTest.cpp's own "refuses a
+    // mismatched engine ABI" case), so the success-only post-open re-set
+    // (ctx.runtime->CurrentProject()->Manifest().splash.showProgress) never
+    // runs. ProjectManifest::LoadFile parses formatVersion/name/engine.abi
+    // structurally and does not itself compare against kGamePluginABIVersion
+    // (Runtime::OpenProject does), so the PEEK still succeeds regardless.
+    const auto dir = TempProjectDir("peek_abi_mismatch");
+    std::ofstream(dir / "Bad.arcproj") <<
+        R"({"formatVersion":1,"name":"Bad","engine":{"abi":9999},)"
+        R"("splash":{"showProgress":true}})";
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::BootSplashWindow splash("");
+    Arcane::HostBoot::BootContext ctx{};
+    ctx.runtime = &rt;
+    ctx.splash  = &splash;
+    const std::string projectPath = dir.string();
+    ctx.projectPath = projectPath.c_str();
+    ctx.moduleName  = "Test";
+
+    std::vector<Arcane::BootStage> stages = Arcane::HostBoot::RuntimeStages(ctx);
+    const Arcane::BootStage* stage = FindStage(stages, "project_open");
+    REQUIRE(stage != nullptr);
+
+    CHECK_FALSE(stage->run());               // ABI mismatch: Fatal for the runtime host
+    CHECK(rt.CurrentProject() == nullptr);   // confirms the success branch never ran
+    CHECK(splash.ShowProgress());            // ...yet the PEEK still flipped it
+
+    splash.Close();
 }

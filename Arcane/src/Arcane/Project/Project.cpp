@@ -135,23 +135,18 @@ namespace Arcane
         }
     }
 
-    std::optional<Project> Project::Open(const std::filesystem::path& pathOrFile,
-                                         AssetRegistry::ScanProgressFn onProgress)
+    std::optional<std::filesystem::path> Project::ResolveManifestFile(const std::filesystem::path& pathOrFile)
     {
         std::error_code ec;
-
-        std::filesystem::path root;
         std::filesystem::path manifestFile;
 
         if (std::filesystem::is_regular_file(pathOrFile, ec)
             && pathOrFile.extension() == ".arcproj")
         {
             manifestFile = pathOrFile;
-            root         = pathOrFile.parent_path();
         }
         else if (std::filesystem::is_directory(pathOrFile, ec))
         {
-            root = pathOrFile;
             // Find exactly one *.arcproj in the folder.
             for (const auto& entry : std::filesystem::directory_iterator(pathOrFile, ec))
             {
@@ -159,7 +154,8 @@ namespace Arcane
                 {
                     if (!manifestFile.empty())
                     {
-                        ARC_WARN("Project::Open: multiple .arcproj in '{}'", pathOrFile.generic_string());
+                        ARC_WARN("Project::ResolveManifestFile: multiple .arcproj in '{}'",
+                                 pathOrFile.generic_string());
                         return std::nullopt;   // ambiguous
                     }
                     manifestFile = entry.path();
@@ -169,11 +165,38 @@ namespace Arcane
 
         if (manifestFile.empty())
         {
-            ARC_WARN("Project::Open: no .arcproj at '{}'", pathOrFile.generic_string());
+            ARC_WARN("Project::ResolveManifestFile: no .arcproj at '{}'", pathOrFile.generic_string());
             return std::nullopt;
         }
+        return manifestFile;
+    }
 
-        auto manifest = ProjectManifest::LoadFile(manifestFile);
+    std::optional<Project> Project::Open(const std::filesystem::path& pathOrFile,
+                                         AssetRegistry::ScanProgressFn onProgress)
+    {
+        std::error_code ec;
+
+        // The ONE place a project root resolves to its .arcproj -- shared with
+        // the pre-open splash.showProgress peek in ProjectBoot.cpp's
+        // RuntimeStages (HostBoot::RuntimeStages' project_open override), so
+        // that peek can never drift from what Open() itself would actually
+        // open. `root` is deliberately NOT derived from manifestFile->
+        // parent_path() (which is lexically equal in both branches today, but
+        // relying on that equality would make root's correctness hostage to
+        // std::filesystem::path normalization of a trailing separator/"." in
+        // whatever pathOrFile a caller happens to pass) -- it stays computed
+        // the exact same way this function always computed it, just after the
+        // (now shared) resolution step instead of interleaved with it.
+        const auto manifestFile = ResolveManifestFile(pathOrFile);
+        if (!manifestFile)
+            return std::nullopt;   // ResolveManifestFile already logged the cause
+
+        const std::filesystem::path root =
+            (std::filesystem::is_regular_file(pathOrFile, ec) && pathOrFile.extension() == ".arcproj")
+                ? pathOrFile.parent_path()
+                : pathOrFile;   // ResolveManifestFile only succeeds here if pathOrFile is the directory
+
+        auto manifest = ProjectManifest::LoadFile(*manifestFile);
         if (!manifest)
             return std::nullopt;   // LoadFile already logged
 
@@ -186,13 +209,13 @@ namespace Arcane
         if (!Guid::FromString(manifest->guid))
         {
             const std::string fresh = Guid::Generate().ToString();
-            if (RewriteManifestField(manifestFile, "guid", fresh, "Project::Open"))
+            if (RewriteManifestField(*manifestFile, "guid", fresh, "Project::Open"))
                 manifest->guid = fresh;
         }
 
         Project proj;
         proj.m_root         = root;
-        proj.m_manifestFile = manifestFile;
+        proj.m_manifestFile = *manifestFile;
         proj.m_manifest     = std::move(*manifest);
         // Default mounts + the asset identity map (Guid -> mount path). game:// is the
         // project's own Content/; plugin content folds in below. (engine:// stays reserved

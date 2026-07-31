@@ -54,6 +54,14 @@ namespace Arcane
         // scan (no file reads, just counting), so it is only paid when a caller
         // actually wants progress: with no callback this delegates straight to
         // AddContent, identical cost to before this parameter existed.
+        //
+        // TOCTOU caveat: the two passes are not atomic. A tree that mutates
+        // BETWEEN them (a file added/removed while scanning) can make `done`
+        // under- or overshoot `total`, so the "final call always has done ==
+        // total" guarantee above holds for a STATIC tree only. Harmless for
+        // every caller today -- an open-time project scan of a directory
+        // nothing else is touching -- but would need revisiting before ever
+        // pointing this at a live/watched directory.
         std::size_t ScanContent(const std::filesystem::path& contentDir, std::string_view scheme,
                                 ScanProgressFn onProgress = {});
 

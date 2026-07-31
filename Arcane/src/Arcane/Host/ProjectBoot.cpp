@@ -179,16 +179,24 @@ namespace Arcane::HostBoot
                 // Optional default: a failed/absent open is never fatal here -- the
                 // runtime host tightens this into a Fatal ABI refusal (see
                 // RuntimeStages below); the editor keeps exactly this behavior.
+                // No clear-on-exit here (an earlier revision of this closure had
+                // one): once this stage completes, BootSequence.cpp's present()
+                // never again looks up "project_open"'s id -- the per-stage
+                // present(ranStageId)/present(workerStageId) call sites only ever
+                // pass a stage id that is CURRENTLY running or just completed,
+                // and a Worker stage that already finished is neither, for the
+                // rest of this boot. A leftover "Scanning content... N / N" in
+                // the box is therefore inert, and leaving it also makes the box's
+                // final content directly, deterministically testable (see
+                // BootStageParityTest.cpp's project_open .run() coverage) without
+                // racing a background thread against a clear this closure would
+                // otherwise perform the instant OpenProject returns.
                 if (!ctx.runtime || !ctx.projectPath || !*ctx.projectPath)
                     return true;   // no --project: nothing to open, not a failure
                 if (ctx.runtime->OpenProject(ctx.projectPath,
                         [scanDetail](std::size_t done, std::size_t total)
                         { ReportScanProgress(*scanDetail, done, total); }))
-                {
-                    scanDetail->Set(std::string());   // clear: this stage is done reporting
                     return true;
-                }
-                scanDetail->Set(std::string());
                 ARC_WARN("{}: --project '{}' failed to open; using data/ + --plugin fallback",
                          ctx.moduleName ? ctx.moduleName : "HostBoot", ctx.projectPath);
                 return true;
@@ -272,37 +280,47 @@ namespace Arcane::HostBoot
                 if (ctx.splash) ctx.splash->SetShowProgress(false);
                 if (!ctx.runtime || !ctx.projectPath || !*ctx.projectPath)
                     return true;   // no --project: nothing to open, not a failure
+
+                // Pre-open PEEK at splash.showProgress, so an opted-in project's
+                // "Scanning content... N / M" text can actually be LIVE during
+                // the scan it describes, not just the taskbar/fraction from
+                // render_bridge onward. Without this, showProgress could only be
+                // learned from ctx.runtime->CurrentProject() AFTER OpenProject
+                // returns -- but ProjectManifest is parsed (Project.cpp) BEFORE
+                // that same call's content scan runs, so by the time this code
+                // could see it, the scan (and every onProgress call below) has
+                // already finished. Arcane::Project::ResolveManifestFile is the
+                // SAME function Project::Open itself now calls internally (that
+                // file's own comment) -- reusing it here means there is exactly
+                // ONE implementation of "how does a project root resolve to a
+                // manifest file", not a second one reimplemented in this TU.
+                // Silent and best-effort by design: no --project, an ambiguous/
+                // missing .arcproj, or an unparseable manifest all just leave
+                // showProgress at the `false` set two lines up -- OpenProject
+                // right below is the real, authoritative, error-reporting open;
+                // this is only a look-ahead for one boolean, and its failure
+                // modes are already OpenProject's failure modes reported again.
+                if (ctx.splash)
+                    if (const auto peekFile = Arcane::Project::ResolveManifestFile(ctx.projectPath))
+                        if (const auto peek = Arcane::ProjectManifest::LoadFile(*peekFile))
+                            ctx.splash->SetShowProgress(peek->splash.showProgress);
+
                 if (ctx.runtime->OpenProject(ctx.projectPath,
                         [scanDetail](std::size_t done, std::size_t total)
                         { ReportScanProgress(*scanDetail, done, total); }))
                 {
-                    scanDetail->Set(std::string());
-                    // The just-opened project's OWN manifest decides whether
-                    // ITS runtime boot shows progress from here on -- never the
-                    // editor's (EditorStages does not touch this at all, so the
-                    // splash's showProgress default of true stands for it
+                    // Re-set from the ADOPTED manifest (not just the peek above):
+                    // authoritative over the peek in the (practically impossible,
+                    // for a boot-time --project) case they could ever disagree --
+                    // e.g. a self-heal rewrite between the peek's read and this
+                    // one. Never the editor's default (EditorStages does not
+                    // touch showProgress at all, so its true default stands
                     // regardless of what any opened project's manifest says).
-                    //
-                    // KNOWN NUANCE, not fixed here: ProjectManifest is parsed
-                    // (Project.cpp) BEFORE the content scan that same call
-                    // performs, but this code cannot learn showProgress until
-                    // OpenProject returns -- CurrentProject() is only populated
-                    // on adoption, at the very end of Runtime::OpenProject, well
-                    // after the scan (and its onProgress calls above) already
-                    // ran. So an opted-in project's splash shows the taskbar/
-                    // fraction from here onward (render_bridge, plugin_load,
-                    // ...) but never the "Scanning content..." text for the
-                    // scan that just happened -- only a live project-manifest
-                    // peek BEFORE calling OpenProject could close that gap, and
-                    // duplicating Project::Open's own manifest-file resolution
-                    // to do it risks exactly the two-implementations-drift
-                    // AddFile's own comment warns against. Left as a follow-up.
                     if (ctx.splash)
                         if (const Arcane::Project* proj = ctx.runtime->CurrentProject())
                             ctx.splash->SetShowProgress(proj->Manifest().splash.showProgress);
                     return true;
                 }
-                scanDetail->Set(std::string());
                 ARC_ERROR("{}: '{}' could not be opened (engine ABI {} -- is the "
                           "project's game DLL built against this engine?). Refusing "
                           "to boot with the data/ fallback.",
