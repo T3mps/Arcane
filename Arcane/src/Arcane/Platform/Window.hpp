@@ -50,6 +50,14 @@ namespace Arcane
         // Un-hide a window created with WindowDesc::hidden. Hosts create hidden
         // and show at the first presented frame, so a window never exists in an
         // undrawn state. Idempotent.
+        //
+        // Also RAISES the window to the foreground (Task 8d defect B) -- this
+        // is the launch reveal, and a newly launched app belongs on top. Folded
+        // in here rather than offered as a separate Raise() precisely so a host
+        // cannot reveal its window and forget: both callers (EditorApp::
+        // StageSplashReady, RuntimeApp::StageFinalize) reveal one statement
+        // before destroying the foreground-holding splash, and the raise has to
+        // happen in that order. See Window.cpp for the ordering argument.
         void Show();
 
         // Set the OS window icon (title bar + taskbar) from an image file. Opt-in per

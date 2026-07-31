@@ -718,6 +718,10 @@ namespace Arcane::Editor
             return false;
         }
 
+        // Show() also RAISES (Task 8d defect B, Window.cpp) -- and it must run
+        // while the splash still holds the foreground, i.e. strictly before
+        // the Close() below, or Windows' foreground lock refuses the raise and
+        // the editor opens behind the window stack.
         m_gpu->Win().Show();
         // Disarm BEFORE Close(): m_splashPresenter's own quit detection
         // (Run()'s comment / BootSplashPresenter::Present) would otherwise

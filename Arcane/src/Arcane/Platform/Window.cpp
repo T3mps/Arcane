@@ -127,7 +127,38 @@ namespace Arcane
 
     void Window::Show()
     {
-        if (m_window) SDL_ShowWindow(m_window);
+        if (!m_window) return;
+        SDL_ShowWindow(m_window);
+        // Raise, not just show (2026-07-30 desk-check, Task 8d defect B): a
+        // bare SDL_ShowWindow left the editor opening BEHIND the existing
+        // window stack. Both callers reveal this window one statement before
+        // destroying the pre-device splash, and that splash is
+        // WS_EX_APPWINDOW | WS_EX_TOPMOST and holds the foreground
+        // (BootSplashWindow.cpp's ShowWindow(SW_SHOW) activates it) -- so
+        // without this the editor is merely un-hidden UNDER a topmost window,
+        // and when the splash is then destroyed Windows hands the foreground
+        // to whatever is next in the Z-order, which is some other app.
+        //
+        // ORDERING, and why it is this way round rather than raising after
+        // the splash closes: this runs while our own process still owns the
+        // foreground window. Windows' foreground lock permits a process that
+        // owns the current foreground window to set it, so the raise is
+        // allowed here and reliably succeeds. Do it AFTER the splash is gone
+        // instead and the foreground has already been handed to another
+        // process -- the very defect -- at which point SetForegroundWindow is
+        // exactly what the lock exists to refuse, and Windows flashes the
+        // taskbar button instead of surfacing us. Raising first also means
+        // the foreground is never briefly parked on a destroyed window.
+        //
+        // SDL_RaiseWindow, not ::SetForegroundWindow: the portable call is
+        // documented as "raise above other windows and gain the input focus",
+        // it is what SDL's own multi-viewport backend uses
+        // (imgui_impl_sdl3.cpp:1226), and on Windows it lands on
+        // SetForegroundWindow/SetFocus anyway. Project.cpp's
+        // FocusWindowOfProcess keeps the raw Win32 route because it targets
+        // ANOTHER process's HWND, which SDL cannot express -- a different
+        // problem, not a precedent for this one.
+        SDL_RaiseWindow(m_window);
     }
 
     bool Window::SetIcon(const std::filesystem::path& path)

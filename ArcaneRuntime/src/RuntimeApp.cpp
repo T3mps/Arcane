@@ -303,6 +303,9 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
         return false;
     }
 
+    // Show() also RAISES (Task 8d defect B) -- and must run while the splash
+    // still holds the foreground, strictly before the Close() below. Same
+    // constraint and same reason as EditorApp::StageSplashReady.
     m_gpu->Win().Show();
     // Disarm BEFORE Close() -- see EditorApp::StageSplashReady's matching
     // comment for why this specific ordering is required.
