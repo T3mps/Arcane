@@ -92,6 +92,25 @@ namespace Arcane
         // The open project, or nullptr when none is open (no-project fallback mode).
         const Project* CurrentProject() const noexcept;
 
+        // Discard the open project and return to the SAME no-project state a
+        // freshly constructed Runtime starts in: no content root (Assets falls
+        // back to exe-relative), no asset resolver (AssetId loads fail), and
+        // Configuration() rebuilt from engine defaults only -- every plugin/
+        // project config layer dropped, not merely shadowed.
+        //
+        // Exists because OpenProject's own "returns false and leaves ALL state
+        // untouched" contract (above) means two different things depending on
+        // when it fires: at boot, with no project open yet, "untouched" is
+        // already no-project. Mid-session, after a project WAS open, a failed
+        // re-open leaves CurrentProject() pointing at the OUTGOING project --
+        // stale, not merely old -- even after a caller has torn down every-
+        // thing downstream of it (plugin, documents, scene). This is the call
+        // that makes "project-less after a failed switch" the SAME state as
+        // "project-less at boot", rather than a second, ad hoc definition.
+        // A no-op is not offered for "already project-less" -- callers that
+        // reach here always just tore something down.
+        void CloseProject();
+
         // Register an editor-created asset file with the open project's registry
         // (Project::RegisterAsset). Idempotent. nullopt when no project is open or
         // the file lies outside every content root.

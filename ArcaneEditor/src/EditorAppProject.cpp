@@ -364,96 +364,235 @@ namespace Arcane::Editor
                                  "Save or close them before switching projects.";
             return;
         }
-        m_documents.CloseAll();
-        // Sprites, materials and the post chain all resolved against the
-        // OUTGOING project's registry, so all three caches drop together (one
-        // Clear since the sprite-resolution lift; it was three calls, and the
-        // sprite one had to be added as a review fix after being forgotten).
-        if (m_resolver)
-            m_resolver->Clear();
-
-        // Return to Edit + clear editor state that references the outgoing scene.
-        ClearSceneReferences();
-        // The scene the session named belonged to the OUTGOING project, and the new
-        // project's registry is built by its plugin, not loaded from an .arcscene --
-        // so the session goes back to Untitled/clean here rather than at the end,
-        // where the "OpenProject failed after validation" return would skip it and
-        // leave a stale path with a spurious dirty marker.
-        if (m_undo) m_scene.Reset(*m_undo);
-
         // The OUTGOING project's root, captured before teardown replaces it:
-        // its editor lock must be released whichever way the switch ends --
-        // success hands the lock to the new project, and the failure path
-        // below leaves the editor project-less, which is not "open".
+        // its editor lock must be released whichever way the switch ends.
+        // `lockedRoot` tracks whichever root WE currently hold the lock for --
+        // starts as the outgoing root and is advanced to the new project's
+        // root the moment switch_render_bridge hands it over below, so the
+        // failure fallback (any stage, including one AFTER that handover)
+        // always releases the lock we are actually holding, never a stale one.
         const std::filesystem::path outgoingRoot =
             m_runtime->CurrentProject() ? m_runtime->CurrentProject()->Root()
                                         : std::filesystem::path{};
+        std::filesystem::path lockedRoot = outgoingRoot;
 
-        // Idle the GPU before freeing plugin-owned GPU resources, then unload the plugin
-        // (dtor: Unload -> ClearSystems + ResetRegistry, DLL still mapped).
-        m_gpu->Device().Nvrhi()->waitForIdle();
-        m_plugin.reset();
-
-        // Commit the new project (sets Assets content-root) + reload input via its mount.
-        if (!m_runtime->OpenProject(path))
+        // Amendment 1 (2026-07-30 human ruling): the brief's stub assigned
+        // `ctx.projectPath = path.string().c_str()`, which dangles the moment
+        // that statement ends (path.string() is a temporary). No BootContext
+        // is built here at all -- this sequence is NOT CoreStages/EditorStages
+        // (it never calls HostBoot::CoreStages/EditorStages/RuntimeStages, so
+        // no shared stage body ever reads a ctx), and every stage below
+        // captures `path`/`this` directly via `[&]`, exactly like the brief's
+        // own stub stages already did. A ctx with nothing that reads it was
+        // dead weight carrying a live dangling pointer; dropping it removes
+        // the hazard at the source instead of papering over it with a named
+        // std::string local.
+        auto stage = [](std::string id, std::vector<std::string> deps,
+                        Arcane::BootThread thread, std::uint32_t weight,
+                        std::function<bool()> run)
         {
-            ARC_ERROR("Open Project: OpenProject('{}') failed after validation", path.generic_string());
-            m_projectOpenError = "Opening '" + path.generic_string() +
-                                 "' failed after validation.\nThe previous session was torn "
-                                 "down -- open another project to continue (see Console).";
-            if (!outgoingRoot.empty())
-                Arcane::EditorLock::Clear(outgoingRoot);
-            return;   // editor left with no plugin; user can Open another project
-        }
-        // Hand the lock over: the old project is closed, the new one is ours.
-        // (A same-project re-open just rewrites its own lock -- harmless.)
-        if (!outgoingRoot.empty())
-            Arcane::EditorLock::Clear(outgoingRoot);
-        if (const Arcane::Project* proj = m_runtime->CurrentProject())
-            Arcane::EditorLock::Write(proj->Root());
-        if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
-            ARC_WARN("Open Project: input actions failed to load");
+            Arcane::BootStage s;
+            s.id = std::move(id); s.dependsOn = std::move(deps);
+            s.thread = thread; s.policy = Arcane::BootPolicy::Fatal;
+            s.weight = weight; s.run = std::move(run);
+            return s;
+        };
 
-        // Load the new game module (and/or the project's plugin modules) through the same
-        // ABI-versioned plugin host. An empty gameModule with plugins = a plugins-only host.
-        const std::string gameModule =
-            Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
-        const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());
-        if (!gameModule.empty() || !pluginModules.empty())
+        // NOT CoreStages: the process is already booted. This is the reopen
+        // subset only, and every stage is Fatal -- the caller already
+        // validated the project (the guards above) and is about to tear down
+        // the old one, so there is nothing partial worth preserving. A
+        // failure at ANY of the four stages converges on the SAME defined
+        // project-less fallback below (Runtime::CloseProject + EditorLock +
+        // EnsureScene), including switch_plugin_load: the ORIGINAL SwitchProject
+        // let a failed game-module load stay "soft" (project stays open, error
+        // banner, no plugin) -- a THIRD state alongside "switched" and
+        // "project-less" that Amendment 2's ruling forbids. Unifying it here is
+        // a deliberate behavior change, not an oversight.
+        std::vector<Arcane::BootStage> stages;
+        stages.push_back(stage("switch_teardown", {}, Arcane::BootThread::Main, 2, [&]
         {
-            m_plugin.emplace(*m_runtime,
-                gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
-            for (const auto& dll : pluginModules)
-                m_plugin->AddPlugin(dll);
-            if (!m_plugin->Load())
-            {
-                ARC_ERROR("Open Project: failed to load the game module / project plugins");
-                m_projectOpenError = "The project opened, but its game module / plugins "
-                                     "failed to load (see Console).\nCheck the DLL paths in "
-                                     "the manifest and that they are built against ABI " +
-                                     std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".";
-            }
-        }
+            m_documents.CloseAll();
+            // Sprites, materials and the post chain all resolved against the
+            // OUTGOING project's registry, so all three caches drop together
+            // (one Clear since the sprite-resolution lift; it was three calls,
+            // and the sprite one had to be added as a review fix after being
+            // forgotten).
+            if (m_resolver)
+                m_resolver->Clear();
 
-        // Task 7: same boot-scene handoff as Init, after THIS project's plugin
-        // load (not the outgoing project's) so a component type the new game
-        // module registers deserializes rather than being dropped. m_scene was
-        // already reset to Untitled above, before OpenProject -- Adopt() here
-        // retargets it onto the new project's boot scene when it has one.
-        if (m_undo)
+            // Return to Edit + clear editor state that references the outgoing scene.
+            ClearSceneReferences();
+            // The scene the session named belonged to the OUTGOING project, and
+            // the new project's registry is built by its plugin, not loaded
+            // from an .arcscene -- so the session goes back to Untitled/clean
+            // here rather than at the end, where a later failure would skip it
+            // and leave a stale path with a spurious dirty marker.
+            if (m_undo) m_scene.Reset(*m_undo);
+
+            // Idle the GPU before freeing plugin-owned GPU resources, then
+            // unload the plugin (dtor: Unload -> ClearSystems + ResetRegistry,
+            // DLL still mapped).
+            m_gpu->Device().Nvrhi()->waitForIdle();
+            m_plugin.reset();
+            return true;
+        }));
+        stages.push_back(stage("switch_project_open", {"switch_teardown"}, Arcane::BootThread::Worker, 6, [&]
         {
+            // Disjoint-ownership proof: this stage touches exactly two things
+            // -- `path` (a caller-local, read-only, and this stage's only
+            // input) and m_runtime->OpenProject, which itself only mutates
+            // Runtime-owned state (Impl::project/assets/config -- see
+            // Runtime::OpenProject/CloseProject). None of that is read or
+            // written by switch_teardown (already complete by construction --
+            // BootSequence does not start a Worker stage until its
+            // dependencies are done) or by switch_render_bridge/
+            // switch_plugin_load (Main stages that do not become ready until
+            // AFTER this one completes -- BootSequence is sequential-and-join
+            // per the DAG, not concurrent Main+Worker access to the same
+            // state). The one thing this overlaps with in practice is
+            // BootPresenter::Present pumping the window/ImGui on the Main
+            // thread while this runs -- disjoint by construction, since
+            // Present never touches Runtime. Same shape as CoreStages'
+            // project_open/gpu_core overlap (BootSequence.hpp's header
+            // comment: "the DAG exists for exactly ONE overlap").
+            return m_runtime->OpenProject(path);
+        }));
+        stages.push_back(stage("switch_render_bridge", {"switch_project_open"}, Arcane::BootThread::Main, 1, [&]
+        {
+            // Hand the lock over: the old project is closed, the new one is
+            // ours. (A same-project re-open just rewrites its own lock --
+            // harmless.)
+            if (!lockedRoot.empty())
+                Arcane::EditorLock::Clear(lockedRoot);
+            lockedRoot.clear();
             if (const Arcane::Project* proj = m_runtime->CurrentProject())
             {
-                if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+                Arcane::EditorLock::Write(proj->Root());
+                lockedRoot = proj->Root();   // now holding the NEW project's lock
+            }
+            if (!Arcane::HostBoot::LoadInputConfig(m_gpu->Input(), m_runtime->Configuration()))
+                ARC_WARN("Open Project: input actions failed to load");
+            return true;
+        }));
+        stages.push_back(stage("switch_plugin_load", {"switch_render_bridge"}, Arcane::BootThread::Main, 4, [&]
+        {
+            // Load the new game module (and/or the project's plugin modules)
+            // through the same ABI-versioned plugin host. An empty gameModule
+            // with plugins = a plugins-only host.
+            const std::string gameModule =
+                Arcane::HostBoot::GameModule(m_runtime->CurrentProject(), m_config.pluginPath);
+            const auto pluginModules = Arcane::HostBoot::PluginModules(m_runtime->CurrentProject());
+            if (!gameModule.empty() || !pluginModules.empty())
+            {
+                m_plugin.emplace(*m_runtime,
+                    gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
+                for (const auto& dll : pluginModules)
+                    m_plugin->AddPlugin(dll);
+                if (!m_plugin->Load())
                 {
-                    m_scene.Adopt(boot->file, boot->id, *m_undo);
-                    m_frameOnSceneOpen = true;
+                    ARC_ERROR("Open Project: failed to load the game module / project plugins");
+                    return false;   // Fatal -- see the ruling note above the stage vector
                 }
             }
-        }
-        EnsureScene();
+            else
+            {
+                ARC_INFO("Open Project: no game module / plugins for this project -- starting with no game loaded");
+            }
 
-        m_runtime->Loop().SetPaused(true);   // back to Edit
-        UpdateWindowTitle();
+            // Task 8: Arcane Editor boots in Edit mode -- the sim starts paused.
+            m_runtime->Loop().SetPaused(true);
+
+            // Task 7: same boot-scene handoff as Init, after THIS project's
+            // plugin load (not the outgoing project's) so a component type the
+            // new game module registers deserializes rather than being
+            // dropped. m_scene was already reset to Untitled in
+            // switch_teardown -- Adopt() here retargets it onto the new
+            // project's boot scene when it has one.
+            if (m_undo)
+            {
+                if (const Arcane::Project* proj = m_runtime->CurrentProject())
+                {
+                    if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+                    {
+                        m_scene.Adopt(boot->file, boot->id, *m_undo);
+                        m_frameOnSceneOpen = true;
+                    }
+                }
+            }
+            EnsureScene();
+            UpdateWindowTitle();
+            return true;
+        }));
+
+        // Overlay, not Fullscreen: the editor window is already up and this
+        // must not erase its last frame (BootPresenter.cpp: only the
+        // Fullscreen branch clears the backbuffer).
+        Arcane::BootPresenter overlay(*m_gpu, Arcane::BootPresenterMode::Overlay);
+        Arcane::BootSequence  seq(std::move(stages));
+        const Arcane::BootResult r = seq.Run(&overlay);
+        if (!r.ok)
+        {
+            ARC_ERROR("Open Project: switching to '{}' failed at stage '{}'",
+                      path.generic_string(), r.failedStage);
+            m_projectOpenError = "Switching to '" + path.generic_string() +
+                                 "' failed at stage '" + r.failedStage +
+                                 "'.\nThe editor was returned to a clean, project-less "
+                                 "state (see Console) -- open another project to continue.";
+
+            // AMENDMENT 2 (2026-07-30 human ruling): converge on the SAME
+            // project-less state the boot path itself uses when there is no
+            // project (ProjectBoot.cpp's plugin_load "no game loaded" branch,
+            // StageFinalize's EnsureScene()), not a second, ad hoc definition.
+            // switch_teardown above unconditionally already closed the
+            // documents, cleared the resolver caches, cleared the scene
+            // references, reset the session to Untitled, idled the GPU, and
+            // unloaded whatever plugin was hosting the OUTGOING project
+            // (PluginHost's dtor -> Unload -> ClearSystems + ResetRegistry) --
+            // that alone gets most of the way there regardless of which stage
+            // failed. What is still missing:
+            //   - Runtime::CurrentProject() can still be the OUTGOING project
+            //     (Runtime::OpenProject's OWN contract is "leaves ALL state
+            //     untouched" on failure -- fine at boot, where "untouched"
+            //     means "was already nullopt"; here it means STALE).
+            //     CloseProject() is the call that makes "project-less after a
+            //     failed switch" the same state as "project-less at boot"
+            //     rather than a second definition (see its own header
+            //     comment). It also drops the Assets content root/resolver
+            //     and the Config project/plugin layers, so nothing about the
+            //     torn-down project lingers there either.
+            //   - m_plugin can still be ENGAGED (holding a real but
+            //     internally-empty PluginHost) if switch_plugin_load's
+            //     `Load()` call itself is what failed -- PluginHost::Load
+            //     already unwinds its OWN partial state before returning
+            //     false in every failure branch (LoadInitPlugins' self-clear,
+            //     or the explicit Unload() call after a secondaries failure),
+            //     so resetting it here is a safe no-op teardown, not a second
+            //     GPU-resource free -- but it is still required to match
+            //     boot's true "no game module" invariant, where m_plugin is
+            //     nullopt, never an engaged-but-empty host.
+            //   - The registry can still hold entities a game module's Init
+            //     spawned before failing partway through (Load()'s own
+            //     cleanup does not promise an empty registry, only a
+            //     consistent PluginHost). ResetRegistry() guarantees the
+            //     EnsureScene() below is deciding for a genuinely empty
+            //     registry, the same as switch_teardown's plugin-unload path
+            //     already gives every OTHER failure case.
+            //   - The outgoing (or, if the handover already ran, the NEW)
+            //     project's editor lock: `lockedRoot` names whichever one we
+            //     are actually holding right now (see its declaration above).
+            //   - EnsureScene(): the boot path's finalize stage calls this
+            //     unconditionally, project or not, so the registry has a
+            //     SceneRoot the Outliner/save walk can root at instead of
+            //     silently refusing the first thing anyone does.
+            m_runtime->CloseProject();
+            m_plugin.reset();
+            m_runtime->ResetRegistry();
+            if (!lockedRoot.empty())
+                Arcane::EditorLock::Clear(lockedRoot);
+            EnsureScene();
+            m_runtime->Loop().SetPaused(true);   // back to Edit
+            UpdateWindowTitle();
+        }
     }
 }

@@ -424,6 +424,23 @@ namespace Arcane
         return m_impl->project ? &*m_impl->project : nullptr;
     }
 
+    void Runtime::CloseProject()
+    {
+        // Mirrors exactly what Impl's ctor leaves Assets/Config in (see above:
+        // `assets = Assets::Create(nullptr)` installs no content root and no
+        // resolver; `config.LoadEngineDefaults(engineConfigDir)` is the only
+        // config call the ctor makes) -- so a project-less Runtime looks the
+        // same whether it never opened a project or just closed one.
+        m_impl->project.reset();
+        m_impl->assets->SetContentRoot({});
+        m_impl->assets->SetAssetResolver({});
+        // Rebuild-from-defaults (LoadEngineDefaults clears m_categories first),
+        // same call OpenProject makes before layering -- discards the plugin/
+        // project/user layers entirely rather than leaving them shadowed by
+        // nothing once nothing re-layers over them.
+        m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
+    }
+
     std::optional<Guid> Runtime::RegisterCreatedAsset(const std::filesystem::path& file)
     {
         if (!m_impl->project)
