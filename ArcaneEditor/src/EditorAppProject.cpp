@@ -564,12 +564,31 @@ namespace Arcane::Editor
         const Arcane::BootResult r = seq.Run(&overlay);
         if (!r.ok)
         {
-            ARC_ERROR("Open Project: switching to '{}' failed at stage '{}'",
-                      path.generic_string(), r.failedStage);
-            m_projectOpenError = "Switching to '" + path.generic_string() +
-                                 "' failed at stage '" + r.failedStage +
-                                 "'.\nThe editor was returned to a clean, project-less "
-                                 "state (see Console) -- open another project to continue.";
+            // Important 1 (2026-07-31 review): a window close mid-switch is
+            // NOT a failure -- the overlay presenter's Present() returned false
+            // because it saw the OS quit event (BootPresenter.cpp), and
+            // BootSequence::Run turned that into quitRequested + failedStage =
+            // "quit requested". Reporting that through m_projectOpenError would
+            // show a bogus "failed at stage 'quit requested'" banner AND leave
+            // the editor running -- the quit event is already consumed by the
+            // presenter's own pump, so PumpFrameEvents' SDL_EVENT_QUIT check
+            // will never see it on a later frame; without this branch the user
+            // has to click the X a second time. m_requestExit hands the exit
+            // back to the normal frame loop instead (see PumpFrameEvents).
+            // The project-less convergence below still runs unconditionally --
+            // it is correct regardless of why r.ok is false, per this block's
+            // own "either way" comment further down.
+            if (r.quitRequested)
+                m_requestExit = true;
+            else
+            {
+                ARC_ERROR("Open Project: switching to '{}' failed at stage '{}'",
+                          path.generic_string(), r.failedStage);
+                m_projectOpenError = "Switching to '" + path.generic_string() +
+                                     "' failed at stage '" + r.failedStage +
+                                     "'.\nThe editor was returned to a clean, project-less "
+                                     "state (see Console) -- open another project to continue.";
+            }
 
             // AMENDMENT 2 (2026-07-30 human ruling): converge on the SAME
             // project-less state the boot path itself uses when there is no

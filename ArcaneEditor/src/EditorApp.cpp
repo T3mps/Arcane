@@ -319,7 +319,6 @@ namespace Arcane::Editor
         // would never see the saved entry.
         ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
-        InstallConsoleSink();
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
         // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now
@@ -855,6 +854,24 @@ namespace Arcane::Editor
 
     int EditorApp::Run()
     {
+        // Installed here -- before HostBoot::EditorStages(ctx) builds the stage
+        // list and before any BootSequence exists -- rather than from inside
+        // StageEditorShell as it used to be (2026-07-31 review, Critical 1).
+        // project_open (Worker) logs from ScanContent/plugin-descriptor warnings,
+        // and editor_lock (Worker) logs on a failed lock write; both run BEFORE
+        // editor_shell in the DAG. spdlog's vendored callback_sink_mt protects
+        // ITS OWN invocation, but Log::Engine()->sinks() is a plain unlocked
+        // std::vector (logger-inl.h's broadcast loop takes no lock) -- pushing
+        // onto it from the main thread while a worker is mid-iteration over the
+        // same vector is a data race (reallocation frees memory the worker is
+        // still walking). Installing the sink before any worker stage exists
+        // removes the race structurally instead of trying to serialize around
+        // it. Needs only Log::Engine() and m_console, both live at this point,
+        // so it has no stage dependency of its own. Bonus: this also means the
+        // Console now captures runtime_create/gpu_core's banner lines, which it
+        // used to miss because the sink installed after they ran.
+        InstallConsoleSink();
+
         Arcane::HostBoot::BootContext ctx{};
         ctx.runtime     = nullptr;              // stages populate as they go
         ctx.splash      = m_splash;

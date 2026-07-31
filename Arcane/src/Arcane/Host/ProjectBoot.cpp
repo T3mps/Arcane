@@ -529,14 +529,17 @@ namespace Arcane::HostBoot
         //      real window (now holding that just-drawn frame) BEFORE
         //      Close()ing the pre-device splash -- reversing these two still
         //      leaves the gap this whole component exists to avoid.
-        // Depending on "finalize" (Fatal) transitively guarantees editor_fonts/
-        // editor_shell already ran too, without needing to name them again:
-        // finalize's own dependency chain (plugin_load/input_config/
-        // sprite_tables/edit_core) only becomes ready long after
-        // editor_fonts/editor_shell, which are inserted right after gpu_core
-        // specifically so they are the FIRST main stages ready (see that
-        // insertion's own comment above) -- that ordering invariant is
-        // unchanged by this task.
+        // Depending on "finalize" (Fatal) guarantees editor_fonts/editor_shell
+        // already ran too, without needing to name them again -- but NOT
+        // because finalize transitively depends on them (2026-07-31 review,
+        // polish 4: it does not -- finalize's own dependency chain is
+        // plugin_load/input_config/sprite_tables/edit_core, none of which
+        // depend on editor_fonts or editor_shell). The guarantee comes from
+        // REGISTRATION ORDER instead: editor_fonts/editor_shell are inserted
+        // right after gpu_core specifically so they are the FIRST main stages
+        // ready (see that insertion's own comment above), well ahead of
+        // finalize's own dependency chain becoming ready -- that ordering
+        // invariant is unchanged by this task.
         s.push_back(Make("splash_ready", {"finalize"}, BootThread::Main, BootPolicy::Fatal, 2));
 
         return s;

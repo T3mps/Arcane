@@ -652,5 +652,18 @@ namespace Arcane::Editor
         // that draws the menu bar, so the picker appears over a live editor window
         // rather than before one exists.
         bool m_raiseOpenProjectOnStart = false;
+
+        // Set by SwitchProject when its overlay BootPresenter reports the window
+        // closed mid-switch (BootResult::quitRequested), instead of treating that
+        // as a failed switch (Important 1, 2026-07-31 review): the presenter
+        // already consumed the OS quit event during its own event pump, so it
+        // will not reach PumpFrameEvents' own SDL_EVENT_QUIT check on a later
+        // frame. PumpFrameEvents reads this flag first and requests the same
+        // normal exit a live quit would, instead of surfacing m_projectOpenError.
+        // Safe to check unconditionally: SwitchProject's switch_teardown stage
+        // has already reset m_scene to a clean Untitled state by the time this
+        // can be set, so there is nothing for the unsaved-changes confirm modal
+        // to protect -- an immediate exit is correct, not just convenient.
+        bool m_requestExit = false;
     };
 }

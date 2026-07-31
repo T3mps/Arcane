@@ -29,8 +29,6 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Host/BootSequence.hpp>
 
-#include <nvrhi/nvrhi.h>
-
 #include <cstdint>
 #include <string>
 
@@ -48,10 +46,6 @@ namespace Arcane
         Overlay,      // project switch: a modal panel over the last editor frame
     };
 
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable: 4251)  // nvrhi::TextureHandle on a dll-exported class: benign under /MD (shared CRT heap)
-#endif
     class ARCANE_API BootPresenter final : public IBootPresenter
     {
     public:
@@ -61,18 +55,6 @@ namespace Arcane
         // Returns false when the window was closed -- BootSequence turns that
         // into BootResult::quitRequested.
         bool Present(const BootProgress& progress) override;
-
-        // Splash logo, drawn centered above the bar in Fullscreen mode only --
-        // Overlay's small fixed-size modal panel stays bar+label (see
-        // Present()). Refcounted: this is the "splash texture" the design spec
-        // means when it says BootPresenter "owns nothing but the splash
-        // texture" -- its one piece of real state besides mode/flags. Null
-        // (the default) draws no image, just the bar/label; the caller owns
-        // loading the texture and may rebind or clear it between Present
-        // calls (e.g. once gpu_core's stage body has decoded it).
-        void SetSplashTexture(nvrhi::TextureHandle texture) noexcept { m_splashTexture = texture; }
-
-        void SetShowProgress(bool show) noexcept { m_showProgress = show; }
 
         // True once Present() has actually drawn+presented a frame at least
         // once -- as opposed to returning true-but-drew-nothing on the
@@ -91,15 +73,10 @@ namespace Arcane
     private:
         GpuContext&          m_gpu;
         BootPresenterMode    m_mode;
-        bool                 m_showProgress = true;
         // Was "m_shownWindow", reserved and unread, until this task gave it
         // the exact job its own old comment described: "has this presenter
         // ever produced a frame". Set true at the end of the real draw+
         // present path in Present(), never on the early no-backbuffer return.
         bool                 m_hasPresentedFrame = false;
-        nvrhi::TextureHandle m_splashTexture;
     };
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
 }

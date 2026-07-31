@@ -4,9 +4,6 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstdint>
-
 namespace Arcane
 {
     BootPresenter::BootPresenter(GpuContext& gpu, BootPresenterMode mode)
@@ -42,35 +39,23 @@ namespace Arcane
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
 
-        // Logo: Fullscreen only. Overlay's fixed 420x120 panel is sized for
-        // the bar plus one label line -- a full logo would not fit, and
-        // Overlay is a brief "resuming..." panel over live editor content,
-        // not a branding moment (Fullscreen already owns first-boot
-        // branding).
-        if (m_mode == BootPresenterMode::Fullscreen && m_splashTexture)
-        {
-            const nvrhi::TextureDesc& d = m_splashTexture->getDesc();
-            constexpr float kMaxLogo = 160.0f;
-            if (d.width > 0 && d.height > 0)
-            {
-                const float scale = kMaxLogo / (float)std::max(d.width, d.height);
-                const float logoW = (float)d.width  * scale;
-                const float logoH = (float)d.height * scale;
-                ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - logoW) * 0.5f);
-                ImGui::Image((ImTextureID)(uintptr_t)m_splashTexture.Get(),
-                             ImVec2(logoW, logoH));
-                ImGui::Spacing();
-            }
-        }
-
-        if (m_showProgress)
-        {
-            ImGui::ProgressBar(progress.fraction, ImVec2(-1.0f, 0.0f));
-            if (!progress.detail.empty())
-                ImGui::TextDisabled("%s", progress.detail.c_str());
-            else if (!progress.stageId.empty())
-                ImGui::TextDisabled("%s", progress.stageId.c_str());
-        }
+        // Always drawn -- the mid-arc SetShowProgress toggle this used to read
+        // (BootPresenter::SetShowProgress) had zero call sites (2026-07-31
+        // review, Important 3; removed along with the unreachable Fullscreen
+        // logo block that used to sit above this, which depended on a
+        // SetSplashTexture that was equally dead). Both of BootPresenter's own
+        // uses want the bar every time: Fullscreen's single reveal frame IS the
+        // whole boot's one chance to show progress at all, and Overlay's brief
+        // project-switch panel is short enough that hiding the bar would not
+        // save anything. A caller wanting to suppress the bar entirely (e.g.
+        // ArcaneRuntime's silent-splash manifest flag) does so through
+        // BootSplashWindow::SetShowProgress instead -- a different class, for
+        // the pre-device splash, not this one.
+        ImGui::ProgressBar(progress.fraction, ImVec2(-1.0f, 0.0f));
+        if (!progress.detail.empty())
+            ImGui::TextDisabled("%s", progress.detail.c_str());
+        else if (!progress.stageId.empty())
+            ImGui::TextDisabled("%s", progress.stageId.c_str());
 
         ImGui::End();
 

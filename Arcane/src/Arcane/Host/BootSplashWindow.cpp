@@ -107,6 +107,15 @@ namespace Arcane
         // itself, only PostMessageW's the request over.
         Microsoft::WRL::ComPtr<ITaskbarList3> taskbar;
         bool comInitialized = false;   // whether THIS thread's CoInitializeEx succeeded (pairs the CoUninitialize)
+
+        // Dedupe for SetProgress, same reasoning as statusText's dedupe there:
+        // BootSequence's present() cadence posts an unchanged percent up to
+        // ~125/sec while a Worker stage overlaps (2026-07-31 review, polish
+        // 3). Boot/main-thread-only, like SetProgress() itself (see
+        // Impl::taskbar's comment for why only that thread ever calls it) --
+        // no mutex needed, unlike statusText which textMutex guards because
+        // WM_PAINT reads it from the splash thread.
+        int lastPercent = -1;
     };
 
     namespace
@@ -316,7 +325,21 @@ namespace Arcane
                 }
                 return 0;
             }
-            if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
+            if (msg == WM_DESTROY)
+            {
+                // Clear hwnd on ANY destroy path, not just the one Close()
+                // drives (2026-07-31 review, polish 2): Close() already
+                // exchanges impl->hwnd to nullptr itself before this handler
+                // can run, but an OS-initiated destroy (Alt+F4 -> WM_SYSCOMMAND
+                // SC_CLOSE -> DefWindowProc's WM_CLOSE -> DestroyWindow, none
+                // of which SplashProc intercepts) reaches WM_DESTROY without
+                // ever going through Close(). Without this, SetStatusText/
+                // SetProgress/a later Close() would keep addressing an HWND
+                // Windows has already destroyed.
+                if (impl) impl->hwnd.store(nullptr);
+                PostQuitMessage(0);
+                return 0;
+            }
             return DefWindowProcW(h, msg, w, l);
         }
     }
@@ -362,6 +385,11 @@ namespace Arcane
                     wc.lpfnWndProc   = SplashProc;
                     wc.hInstance     = GetModuleHandleW(nullptr);
                     wc.hbrBackground = CreateSolidBrush(RGB(13, 13, 15));
+                    // Without this the cursor over the splash is whatever
+                    // happened to be loaded last -- e.g. a stale wait/resize
+                    // cursor from whatever the user was doing right before
+                    // launch (2026-07-31 review, polish 1).
+                    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
                     wc.lpszClassName = L"ArcaneBootSplash";
                     RegisterClassExW(&wc);
 
@@ -560,6 +588,14 @@ namespace Arcane
         if (!h) return;   // no window yet (or already closed): nothing to show progress on
         const float clamped = fraction01 < 0.0f ? 0.0f : (fraction01 > 1.0f ? 1.0f : fraction01);
         const int percent = static_cast<int>(clamped * 100.0f + 0.5f);
+        // Dedupe (2026-07-31 review, polish 3): same reasoning as
+        // SetStatusText's dedupe above -- BootSequence's present() cadence
+        // posts up to ~125/sec while a Worker stage overlaps, and an
+        // unchanged percent would otherwise PostMessageW, then (once handled)
+        // call ITaskbarList3::SetProgressValue, every single time.
+        if (m_impl->lastPercent == percent)
+            return;
+        m_impl->lastPercent = percent;
         // Post, never call directly: SetProgress() runs on the boot/main
         // thread, and impl->taskbar's COM interface belongs to the splash
         // thread (see Impl::taskbar's comment). PostMessageW is non-blocking,

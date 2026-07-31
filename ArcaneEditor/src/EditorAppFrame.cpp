@@ -144,6 +144,16 @@ namespace Arcane::Editor
     // below reads the window size and the quit/minimize state it settles.
     EditorApp::FramePump EditorApp::PumpFrameEvents()
     {
+        // A project-switch overlay presenter already saw and consumed the OS
+        // quit event on its own pump (SwitchProject, EditorAppProject.cpp) --
+        // it will never reach the SDL_EVENT_QUIT check below. m_requestExit is
+        // how that failure branch hands the exit back to the normal frame loop
+        // instead of reporting it as a switch failure (Important 1, 2026-07-31
+        // review). The scene is already clean at that point (switch_teardown
+        // reset it), so an immediate exit is correct -- no confirm modal.
+        if (m_requestExit)
+            return FramePump::Exit;
+
         auto events = m_gpu->Win().PumpEvents();
         if (events.quitRequested)
         {
