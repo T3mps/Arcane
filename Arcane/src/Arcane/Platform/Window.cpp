@@ -91,11 +91,21 @@ namespace Arcane
             switch (e.type)
             {
             case SDL_EVENT_QUIT:
+                // Name the source. SDL_EVENT_QUIT is GLOBAL and unfiltered --
+                // anything in the process that reaches WM_QUIT on this thread
+                // (a plugin, a native modal, SDL tearing down its last window)
+                // lands here and reads as "the user closed the editor". When a
+                // quit is spurious, distinguishing it from a real window close
+                // is the whole diagnosis, so log which one it was.
+                ARC_INFO("Window: SDL_EVENT_QUIT (process-wide, not this window's close button)");
                 events.quitRequested = true;
                 break;
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                 if (e.window.windowID == myId)
+                {
+                    ARC_INFO("Window: close requested for this window (id {})", myId);
                     events.quitRequested = true;
+                }
                 break;
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 if (e.window.windowID == myId)

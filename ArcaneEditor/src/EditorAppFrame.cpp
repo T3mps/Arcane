@@ -161,7 +161,13 @@ namespace Arcane::Editor
             // dropping the user's work on a window close. Request returns false
             // when it parks, and this frame then runs normally so the modal draws.
             if (m_scene.Request(Arcane::Editor::SceneIntent::Exit, {}, *m_undo))
+            {
+                // Exiting here returns 0 from Run(), which is indistinguishable
+                // from a normal shutdown in the process exit code -- so an
+                // unwanted quit looks like the editor simply vanished. Say it.
+                ARC_INFO("Editor: exiting on a quit request (see the Window line above for its source)");
                 return FramePump::Exit;
+            }
         }
         if (events.resized) m_gpu->OnResize(events.width, events.height);
         if (m_gpu->Win().IsMinimized())
