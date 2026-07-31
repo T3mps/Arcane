@@ -230,6 +230,46 @@ namespace Arcane::HostBoot
     {
         std::vector<BootStage> s = CoreStages(ctx);
 
+        // plugin_load: Optional here, not CoreStages' Fatal default (2026-07-30
+        // review, boot-corestages Task 9b -- a deliberate human ruling: "Optional
+        // for the editor, Fatal for the runtime"). Same mechanism RuntimeStages
+        // uses above for project_open -- CoreStages declares the canonical
+        // default and each host's own stage-list function tightens or loosens
+        // it; the id/dependsOn/thread/weight this stage inherits from
+        // CoreStages stay canonical, only .policy differs here.
+        //
+        // EditorApp::StagePluginLoad's own comment (EditorApp.cpp) already
+        // makes the case this override relies on: "Every m_plugin-> use in
+        // MainLoop is optional-guarded, so a disengaged plugin is safe." A
+        // Fatal policy made a failed Load() abort BootSequence before
+        // "finalize" ever ran, which made EditorApp::Run() return 1
+        // (boot.ok == false) -- the process exiting with NO editor window
+        // ever opened. That is backwards for this host specifically: the
+        // editor is the one place a developer can go to FIX a game module
+        // that fails to load. Refusing to open it is what prevents the fix,
+        // not what protects anything -- there is nothing here for a Fatal
+        // policy to be protecting, since every plugin access downstream is
+        // already null-safe. RuntimeStages does NOT get this override and
+        // keeps CoreStages' Fatal default: a game host with no module to run
+        // has nothing to do, so it should refuse to boot loud rather than
+        // silently sit at a black window (see RuntimeStages' own project_open
+        // comment for the same "nothing useful to fall back to" reasoning).
+        //
+        // StagePluginLoad's failure branch was brought into line with this
+        // (EditorApp.cpp): it now leaves the SAME defined, disengaged state
+        // SwitchProject's switch_plugin_load stage already produces for the
+        // identical failure (EditorAppProject.cpp) -- m_plugin.reset() plus a
+        // detailed Console + modal banner naming the required ABI -- instead
+        // of the bare "stage 'plugin_load' failed" a merely-Optional policy
+        // would have left behind on its own.
+        for (BootStage& stage : s)
+        {
+            if (stage.id != "plugin_load")
+                continue;
+            stage.policy = BootPolicy::Optional;
+            break;
+        }
+
         // editor_fonts/editor_shell are INSERTED right after gpu_core, not
         // merely appended at the end (2026-07-30 second review fix -- the
         // FIRST review fix, binding the presenter at the end of editor_shell

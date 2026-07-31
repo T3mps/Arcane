@@ -32,6 +32,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
+#include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Device.hpp>      // Arcane::GraphicsBackend / ToString (HUD)
@@ -589,8 +590,31 @@ namespace Arcane::Editor
                 m_plugin->AddPlugin(dll);
             if (!m_plugin->Load())
             {
+                // Defined-state failure, not a bare stage-failed abort (2026-07-30
+                // review, boot-corestages Task 9b): plugin_load is Optional for the
+                // editor (ProjectBoot.cpp's EditorStages -- see that override's
+                // comment for the full "Optional for the editor, Fatal for the
+                // runtime" ruling), so a `return false;` here would no longer abort
+                // boot, but it would still leave m_plugin holding a PluginHost whose
+                // Load() failed partway through and only a generic "optional stage
+                // 'plugin_load' failed; continuing" line in the log -- worse than
+                // the Fatal path it replaced, which at least failed loudly even
+                // though it never let the developer in to fix anything. Instead this
+                // mirrors SwitchProject's switch_plugin_load stage exactly
+                // (EditorAppProject.cpp): m_plugin.reset() leaves EXACTLY the same
+                // safe, disengaged state the "no game module" branch below produces
+                // on purpose (every m_plugin-> use in MainLoop is optional-guarded,
+                // per this function's opening comment), and a detailed banner --
+                // naming the required ABI, the same wording switch_plugin_load uses
+                // -- surfaces through m_projectOpenError as the "Open Project
+                // Failed" modal (EditorAppFrame.cpp) once MainLoop starts, rather
+                // than only a Console line.
                 ARC_ERROR("Arcane Editor: failed to load the game module / project plugins");
-                return false;
+                m_projectOpenError = "The project opened, but its game module / plugins "
+                                     "failed to load (see Console).\nCheck the DLL paths in "
+                                     "the manifest and that they are built against ABI " +
+                                     std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".";
+                m_plugin.reset();
             }
         }
         else

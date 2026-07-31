@@ -170,6 +170,39 @@ TEST_CASE("EditorStages reveals the window only after finalize", "[boot]")
     CHECK(indexOf("finalize") < indexOf("splash_ready"));
 }
 
+TEST_CASE("plugin_load policy: Optional for the editor, Fatal for the runtime", "[boot]")
+{
+    // 2026-07-30 human ruling (boot-corestages Task 9b): CoreStages declares
+    // plugin_load Fatal by default (ProjectBoot.cpp), and RuntimeStages does
+    // not touch it -- a game host with nothing to run has nothing useful to
+    // fall back to. EditorStages overrides it to Optional: the editor is the
+    // one place a developer can go to FIX a game module that fails to load,
+    // and EditorApp::StagePluginLoad's own comment (EditorApp.cpp) already
+    // establishes why that is safe -- "every m_plugin-> use in MainLoop is
+    // optional-guarded, so a disengaged plugin is safe". Before this ruling,
+    // a Fatal plugin_load made EditorApp::Run() return 1 (boot.ok == false)
+    // with no window ever opened, which is exactly the "cannot get in to fix
+    // it" failure this override exists to close.
+    //
+    // Unlike the other TEST_CASEs in this file, this one reads BootStage's
+    // own .policy field, so it goes through EditorStages/RuntimeStages
+    // directly rather than the *StageIdsForTest helpers -- those return ids
+    // only (see their declarations in ProjectBoot.hpp), which is exactly
+    // right for the id-parity tests above but cannot see policy at all.
+    Arcane::HostBoot::BootContext ctx{};
+
+    const auto policyOf = [](const std::vector<Arcane::BootStage>& stages) -> Arcane::BootPolicy
+    {
+        const auto it = std::find_if(stages.begin(), stages.end(),
+            [](const Arcane::BootStage& s) { return s.id == "plugin_load"; });
+        REQUIRE(it != stages.end());
+        return it->policy;
+    };
+
+    CHECK(policyOf(Arcane::HostBoot::EditorStages(ctx))  == Arcane::BootPolicy::Optional);
+    CHECK(policyOf(Arcane::HostBoot::RuntimeStages(ctx)) == Arcane::BootPolicy::Fatal);
+}
+
 TEST_CASE("splash_ready structurally depends on finalize", "[boot]")
 {
     // The index-order check above (mirroring this file's usual idiom) proves
