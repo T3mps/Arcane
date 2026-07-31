@@ -488,20 +488,37 @@ Two paths that do not exist today and come free with the loop:
   returns `false` -- `IBootPresenter`'s documented quit signal
   (`BootSequence.hpp:65`) -- the moment it observes the splash go from open
   to closed without having been told to expect that (`Disarm()`, called by
-  the reveal stage immediately before it closes the splash itself). Arming
-  only after a genuine open, rather than unconditionally, is what keeps
-  window-creation being asynchronous (a false read on the very first
-  `Present()` call, before `CreateWindowExW` has even run) and the splash
-  failing to create at all (`IsOpen()` false forever) from being
+  the reveal stage immediately before it closes the splash itself). The
+  "was it ever open" evidence is the splash's own monotonic
+  `BootSplashWindow::WasEverOpen()` latch, NOT an arming flag the presenter
+  accumulates across its own calls (Task 8d corrected this; the original
+  arming design silently required a `Present()` call to land while the
+  window was up, and none does for the first ~1s of boot -- see
+  `.superpowers/sdd/2026-07-30-async-boot-corestages/task-8d-report.md`).
+  Sourcing it from the splash is what keeps window-creation being
+  asynchronous (a false read on the very first `Present()` call, before
+  `CreateWindowExW` has even run) and the splash failing to create at all
+  (`IsOpen()` false forever, `WasEverOpen()` false forever) from being
   misread as "the user quit." The reveal stage's own manual `BootPresenter::
   Present()` call at the very end (which DOES pump the real, still-hidden
   window) is a second, independent quit check, for the narrow case of a
   genuine OS-level quit signal landing in that window's own backlog right at
   the reveal instant -- see `EditorApp::StageSplashReady` /
-  `RuntimeApp::StageFinalize`. Net effect either way: `BootSequence` aborts,
-  joins the worker, and the host exits 0 without entering `MainLoop` --
-  unchanged from the original design's promise, just detected through the
-  splash instead of the (now hidden-until-ready) real window.
+  `RuntimeApp::StageFinalize`.
+
+  The two mechanisms do NOT share an exit code, and an earlier revision of
+  this bullet wrongly claimed they did ("net effect either way ... exits
+  0"):
+    - **Splash closed** -- detected by `BootSequence::Run`'s own `present()`
+      call, which sets `BootResult::quitRequested`. The host aborts, joins
+      the worker, and **exits 0** without entering `MainLoop`.
+    - **Quit in the real window's backlog at the reveal instant** -- the
+      reveal stage returns `false`, which is an ordinary Fatal stage
+      failure. `quitRequested` is set only by `Run`'s own `present()` calls,
+      never by a stage's return value, so the host **exits 1**. This
+      asymmetry is deliberate and documented at the call site
+      (`EditorApp.cpp`, `StageSplashReady`); an OS-shutdown broadcast
+      landing in that narrow window is the only realistic trigger.
 - **Worker exceptions** are caught at the stage boundary and converted to a
   stage failure. Nothing crosses the thread boundary unhandled.
 

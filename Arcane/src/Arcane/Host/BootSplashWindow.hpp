@@ -151,6 +151,13 @@ namespace Arcane
         // created), never from this presenter's own call history. That
         // distinction IS Task 8d's bug, and it is not a subtle race:
         //
+        // NOTE for anyone reusing WasEverOpen(): the `!IsOpen() &&
+        // WasEverOpen()` test below is short-circuiting BY REQUIREMENT, not
+        // by style. The latch is stored just AFTER open, so there is a brief
+        // window at creation in which open is true and everOpen is not yet --
+        // reading WasEverOpen() without an IsOpen() guard in front of it can
+        // sample that gap. See BootSplashWindow.cpp's store site.
+        //
         //   This class used to carry an `m_armed` flag, set the first time
         //   Present() happened to observe IsOpen() == true, and treated a
         //   later false as the close. That silently required a Present() call

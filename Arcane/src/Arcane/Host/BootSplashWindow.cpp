@@ -39,9 +39,11 @@ namespace Arcane
         std::atomic<HWND> hwnd{nullptr};
         std::atomic<bool> open{false};
 
-        // Monotonic latch: set true alongside the open.store(true) below, and
+        // Monotonic latch: set true just after the open.store(true) below, and
         // NEVER cleared -- "an OS window for this splash existed at some
-        // point", as distinct from `open`'s "it exists right now".
+        // point", as distinct from `open`'s "it exists right now". See that
+        // store site for the exact ordering guarantee it does and does not
+        // provide.
         //
         // Task 8d (2026-07-30): this is the fact BootSplashPresenter needs and
         // could not previously get. It used to infer it from its own call
@@ -315,6 +317,23 @@ namespace Arcane
         {
             m_impl = std::make_unique<Impl>();
             m_impl->imagePath = imagePath ? imagePath : "";
+            // Seed the status line BEFORE the thread exists. statusText
+            // otherwise default-constructs empty and PaintSplash skips the row
+            // entirely when it is, so the splash showed a blank status strip
+            // for the whole first stretch of every launch -- about a second,
+            // since BootSequence makes no present() call until its first stage
+            // COMPLETES (the same gap that produced Task 8d's quit bug; it is
+            // merely cosmetic now, but it is the first thing a user sees).
+            // UE seeds its own splash the same way and for the same reason
+            // (WindowsPlatformSplash.cpp:663-664 sets the startup-progress
+            // slot before the splash thread starts).
+            //
+            // No mutex despite textMutex guarding this field everywhere else:
+            // this store is sequenced-before the std::thread construction
+            // below, which is itself a synchronisation point, so the splash
+            // thread's first WM_PAINT is guaranteed to see it. There is no
+            // other thread in existence yet to race with.
+            m_impl->statusText = "Loading...";
             m_impl->thread = std::thread([impl = m_impl.get()]
             {
                 // The ENTIRE thread body is one try/catch: this class's
@@ -373,11 +392,25 @@ namespace Arcane
                     SetWindowLongPtrW(h, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(impl));
                     impl->hwnd.store(h);
                     impl->open.store(true);
-                    // everOpen BEFORE ready/ShowWindow, and never cleared:
-                    // any observer that can see open == true must already be
-                    // able to see everOpen == true, or the quit detection
-                    // that reads the pair could sample "not open, never
-                    // opened" for a window that is in fact up.
+                    // everOpen right after open, before ready/ShowWindow, and
+                    // never cleared. The ordering claim that actually holds is
+                    // the one the quit detection needs: everOpen is stored
+                    // while open is still true, and open is not cleared until
+                    // the message loop exits (or Close() runs) much later --
+                    // so any observer that reads open == false for a window
+                    // that HAS existed is guaranteed to also see
+                    // everOpen == true. That is the direction that matters.
+                    //
+                    // The reverse gap is real and deliberately tolerated:
+                    // between the two stores above a reader can sample
+                    // open == true with everOpen still false. That is
+                    // harmless because the sole consumer short-circuits --
+                    // BootSplashWindow.hpp's BootSplashPresenter::Present
+                    // evaluates `!IsOpen() && WasEverOpen()`, so a true
+                    // IsOpen() answers "no quit" without ever reading
+                    // everOpen. A future consumer that reads everOpen WITHOUT
+                    // that guard would need these two stores swapped; do not
+                    // assume the stronger invariant holds today.
                     impl->everOpen.store(true);
                     impl->ready.store(true);
                     impl->ready.notify_all();

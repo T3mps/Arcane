@@ -204,9 +204,10 @@ namespace Arcane::Editor
 
         // Pre-device splash (Task 8): non-owning, see the ctor's doc comment.
         // Task 8c: this is now BootSequence::Run's presenter for the WHOLE
-        // boot (via a local Arcane::BootSplashPresenter Run() constructs
-        // around this pointer -- see Run()'s body) -- not merely a pre-device
-        // stand-in. The old LazyBootPresenter nested class that used to live
+        // boot (via m_splashPresenter below, a MEMBER constructed from this
+        // pointer -- not, as this comment claimed until Task 8d, a local
+        // Run() builds; see that member's own note for why it cannot be a
+        // local) -- not merely a pre-device stand-in. The old LazyBootPresenter nested class that used to live
         // here is gone: it existed to defer binding a swapchain-backed
         // presenter until StageEditorShell had installed fonts/theme, which
         // mattered only because BootSequence used to drive THAT presenter's
