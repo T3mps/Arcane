@@ -39,6 +39,24 @@ namespace Arcane
         std::atomic<HWND> hwnd{nullptr};
         std::atomic<bool> open{false};
 
+        // Monotonic latch: set true alongside the open.store(true) below, and
+        // NEVER cleared -- "an OS window for this splash existed at some
+        // point", as distinct from `open`'s "it exists right now".
+        //
+        // Task 8d (2026-07-30): this is the fact BootSplashPresenter needs and
+        // could not previously get. It used to infer it from its own call
+        // history (an m_armed flag set the first time Present() happened to
+        // observe IsOpen() == true), which silently required a Present() call
+        // to LAND while the window was up. Measured on the real editor, the
+        // first present() call does not happen until the first boot stage
+        // COMPLETES -- about a second after the splash appears -- so a user
+        // closing the splash in that window left the presenter with no
+        // evidence it had ever been open, and the boot ran to completion. See
+        // BootSplashWindow.hpp's BootSplashPresenter::Present for the full
+        // reasoning. Owned here rather than there because THIS is the thread
+        // that actually knows.
+        std::atomic<bool> everOpen{false};
+
         // Set exactly once, on the splash thread, right after window creation
         // has been ATTEMPTED (whether it succeeded or failed) -- BEFORE the
         // thread ever blocks in the message loop below. Close() waits on this
@@ -355,6 +373,12 @@ namespace Arcane
                     SetWindowLongPtrW(h, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(impl));
                     impl->hwnd.store(h);
                     impl->open.store(true);
+                    // everOpen BEFORE ready/ShowWindow, and never cleared:
+                    // any observer that can see open == true must already be
+                    // able to see everOpen == true, or the quit detection
+                    // that reads the pair could sample "not open, never
+                    // opened" for a window that is in fact up.
+                    impl->everOpen.store(true);
                     impl->ready.store(true);
                     impl->ready.notify_all();
                     ShowWindow(h, SW_SHOW);
@@ -439,6 +463,11 @@ namespace Arcane
         return m_impl && m_impl->open.load();
     }
 
+    bool BootSplashWindow::WasEverOpen() const noexcept
+    {
+        return m_impl && m_impl->everOpen.load();
+    }
+
     void BootSplashWindow::SetStatusText(std::string text) noexcept
     {
         if (!m_impl) return;
@@ -501,6 +530,7 @@ namespace Arcane
     BootSplashWindow::~BootSplashWindow() = default;
     void BootSplashWindow::Close() noexcept {}
     bool BootSplashWindow::IsOpen() const noexcept { return false; }
+    bool BootSplashWindow::WasEverOpen() const noexcept { return false; }
     void BootSplashWindow::SetStatusText(std::string) noexcept {}
     void BootSplashWindow::SetProgress(float) noexcept {}
 #endif

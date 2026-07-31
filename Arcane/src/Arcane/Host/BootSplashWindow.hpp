@@ -56,6 +56,21 @@ namespace Arcane
 
         [[nodiscard]] bool IsOpen() const noexcept;
 
+        // "An OS window for this splash existed at some point" -- monotonic,
+        // set the instant CreateWindowExW succeeds and NEVER cleared, so it
+        // stays true after Close() and after the user destroys the window.
+        // Distinct from IsOpen() ("it exists right now") and load-bearing
+        // precisely because of the difference: the pair
+        // (!IsOpen() && WasEverOpen()) is the ONLY unambiguous "it was up and
+        // now it is gone" signal, and unlike an observer's own call history it
+        // does not require anyone to have been LOOKING while the window was
+        // up. It is false forever when window creation failed outright, which
+        // is what keeps that documented degrade ("no splash") from ever
+        // reading as a close. See BootSplashPresenter::Present below, the one
+        // consumer, and Task 8d's root cause in BootSplashWindow.cpp
+        // (Impl::everOpen).
+        [[nodiscard]] bool WasEverOpen() const noexcept;
+
         // Update the one status line drawn over the splash image (bottom-left,
         // UE's convention for startup progress -- WindowsPlatformSplash.cpp:
         // 99-116). Safe to call before the window exists, after Close(), or
@@ -118,8 +133,9 @@ namespace Arcane
         // Called by the reveal stage (StageSplashReady / StageFinalize)
         // immediately BEFORE it closes the splash itself -- see Present()'s
         // comment for why this specific ordering, not merely "somewhere in
-        // that stage", is required.
-        void Disarm() noexcept { m_armed = false; }
+        // that stage", is required. Sticky: the host closes the splash exactly
+        // once, at the end of boot, and there is no legitimate re-arm.
+        void Disarm() noexcept { m_disarmed = true; }
 
         // Quit-during-boot (2026-07-30 review round 2): if the splash was
         // ever open and is no longer, and nobody called Disarm() first, the
@@ -130,37 +146,54 @@ namespace Arcane
         // BootSequence::Run already converts a false return into
         // BootResult::quitRequested + a clean exit, no new plumbing needed.
         //
-        // "Ever been open" is tracked via m_armed rather than checking
-        // IsOpen() unconditionally, for two reasons that both matter:
+        // "Ever been open" comes from the SPLASH (WasEverOpen(), a monotonic
+        // latch set on the splash's own thread the instant its window is
+        // created), never from this presenter's own call history. That
+        // distinction IS Task 8d's bug, and it is not a subtle race:
+        //
+        //   This class used to carry an `m_armed` flag, set the first time
+        //   Present() happened to observe IsOpen() == true, and treated a
+        //   later false as the close. That silently required a Present() call
+        //   to LAND while the window was up. It routinely does not.
+        //   BootSequence calls the presenter only after a stage COMPLETES
+        //   (BootSequence.cpp:214) or while a Worker stage overlaps an idle
+        //   main thread (:250) -- so nothing at all is presented until the
+        //   FIRST stage finishes. Measured on the real editor (2026-07-30):
+        //   splash window up at t=0, first present() at t=+1.0s. Close it in
+        //   that second -- the one stretch where the splash is the only thing
+        //   on screen, i.e. exactly when a human reaches for Alt+F4 -- and
+        //   every later call saw only "not open, never armed" and returned
+        //   true. The boot ran to completion and the editor appeared, which
+        //   is precisely the desk-check report.
+        //
+        // Both reasons the old flag existed still hold, and WasEverOpen()
+        // satisfies them by construction rather than by observation:
         //   1. Window creation is asynchronous (BootSplashWindow's own
-        //      thread) -- the very first Present() call, right after
-        //      runtime_create completes, can easily land before
-        //      CreateWindowExW has even run. Treating "not open YET" as a
-        //      quit here would abort nearly every boot.
-        //   2. If window creation fails outright (RegisterClassExW/
-        //      CreateWindowExW failing), IsOpen() is false FOREVER --
-        //      unconditionally checking it would turn "no splash" (a
-        //      documented, must-never-fail-boot degrade) into "boot
-        //      aborted", which is exactly the failure this class exists to
-        //      rule out.
-        // So: arm only once IsOpen() is actually observed true, and once
-        // armed, a later false means "it WAS open and now is not" -- the
-        // one unambiguous signal for "the user closed it."
+        //      thread), so an early Present() can land before CreateWindowExW
+        //      has run. WasEverOpen() is false then -- not a quit. Correct.
+        //   2. If window creation fails outright, WasEverOpen() is false
+        //      FOREVER, so "no splash" (a documented, must-never-fail-boot
+        //      degrade) can never read as "boot aborted". Correct.
+        // What it ADDS is case 3: the window was created and is now gone,
+        // which is true whether or not anybody was watching at the time.
         bool Present(const BootProgress& progress) override
         {
             if (!m_splash) return true;
             m_splash->SetStatusText(!progress.detail.empty() ? progress.detail : progress.stageId);
             m_splash->SetProgress(progress.fraction);
 
-            if (m_splash->IsOpen())
-                m_armed = true;
-            else if (m_armed)
-                return false;   // was open, now is not, and nobody Disarm()'d us: a real quit
+            // was open, now is not, and nobody Disarm()'d us: a real quit.
+            if (!m_disarmed && !m_splash->IsOpen() && m_splash->WasEverOpen())
+                return false;
             return true;
         }
 
     private:
         BootSplashWindow* m_splash;
-        bool m_armed = false;
+        // Was `m_armed` (defaulting to false, meaning "no evidence yet"). Now
+        // the inverse and only the INTENTIONAL close: the evidence lives in
+        // the splash. Defaulting to false is what makes the fix work at the
+        // head of boot -- there is nothing left to have missed.
+        bool m_disarmed = false;
     };
 }
