@@ -1,5 +1,6 @@
 #include <Arcane/Host/BootPresenter.hpp>
 
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 
 #include <imgui.h>
@@ -14,7 +15,18 @@ namespace Arcane
     bool BootPresenter::Present(const BootProgress& progress)
     {
         const WindowEvents ev = m_gpu.Win().PumpEvents();
-        if (ev.quitRequested) return false;
+        if (ev.quitRequested)
+        {
+            // Say so. A consumed quit aborts the whole sequence and, in the
+            // project-switch case, exits the editor -- silently, because the
+            // event never reaches PumpFrameEvents. When that turns out to be
+            // WRONG (a quit nobody asked for), this line is the only evidence
+            // that it happened at all, and which stage it landed on.
+            ARC_INFO("BootPresenter: quit consumed during stage '{}' ({}); aborting the sequence",
+                     progress.stageId.empty() ? "<terminal>" : progress.stageId.c_str(),
+                     m_mode == BootPresenterMode::Overlay ? "overlay" : "fullscreen");
+            return false;
+        }
         if (ev.resized) m_gpu.OnResize(ev.width, ev.height);
 
         m_gpu.Imgui().BeginFrame();

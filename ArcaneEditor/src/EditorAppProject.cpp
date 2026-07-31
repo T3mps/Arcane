@@ -579,7 +579,13 @@ namespace Arcane::Editor
             // it is correct regardless of why r.ok is false, per this block's
             // own "either way" comment further down.
             if (r.quitRequested)
+            {
+                ARC_WARN("Open Project: the switch to '{}' was aborted by a quit at stage '{}' -- "
+                         "exiting. If you did not close the window, this is a spurious quit and the "
+                         "BootPresenter line above names the stage it landed on.",
+                         path.generic_string(), r.failedStage);
                 m_requestExit = true;
+            }
             else
             {
                 ARC_ERROR("Open Project: switching to '{}' failed at stage '{}'",
