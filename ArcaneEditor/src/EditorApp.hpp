@@ -268,6 +268,7 @@ namespace Arcane::Editor
         // fire (and Push into a destroyed m_console) during member teardown -- e.g.
         // ~GpuContext's Vulkan device destruction logs validation messages.
         std::shared_ptr<spdlog::sinks::callback_sink_mt> m_consoleSink;
+        Arcane::Editor::ConsoleUiState     m_consoleUi;
 
         // Play-in-editor (Task 8): Edit|Play state machine. Play() snapshots the
         // registry + unpauses the RunLoop; Stop() restores the snapshot + re-pauses.

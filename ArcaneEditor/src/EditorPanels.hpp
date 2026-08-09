@@ -92,8 +92,23 @@ namespace Arcane::Editor
     // DrawAssetBrowserPanel; the placeholder stub retired in Slice 6.)
 
 
-    // Scrolling read-only console of captured log lines (autoscroll).
-    void DrawConsolePanel(const ConsoleBuffer& console);
+    // Console panel UI state. Owned by EditorApp so it survives the frame; the
+    // panel mutates it in place (same shape as the viewport's gizmo toggles).
+    struct ConsoleUiState
+    {
+        bool showInfo    = true;
+        bool showWarning = true;
+        bool showError   = true;
+        bool collapse    = false;
+        bool autoScroll  = true;
+        bool wrap        = true;
+        char search[128] = {};
+        int  lineCap     = 512;
+    };
+
+    // Scrolling console of captured log lines: severity filters, text search,
+    // collapse-identical, wrap toggle, Clear/Copy. Autoscroll pins to bottom.
+    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui);
 
     struct ViewportPanelResult
     {

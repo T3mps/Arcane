@@ -1,6 +1,7 @@
 #include "EditorPanels.hpp"
 #include "ComponentCatalog.hpp"
 #include "ConsoleBuffer.hpp"
+#include "DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
 #include "EditorFonts.hpp"
 #include "EditorWidgets.hpp"
 #include "EntityList.hpp"
@@ -30,7 +31,9 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -429,15 +432,116 @@ namespace Arcane::Editor
         return launchStandaloneRequested;
     }
 
-    void DrawConsolePanel(const ConsoleBuffer& console)
+    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui)
     {
         ImGui::Begin("Console");
-        console.ForEach([](const ConsoleEntry& e)
+
+        // Snapshot once: CollapseConsole holds pointers into its input, and a
+        // worker thread can push (and therefore evict) mid-frame.
+        const std::vector<ConsoleEntry> entries = console.Snapshot();
+
+        std::size_t nInfo = 0, nWarn = 0, nErr = 0;
+        for (const ConsoleEntry& e : entries)
         {
-            ImGui::TextUnformatted(e.message.c_str());
-        });
-        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-            ImGui::SetScrollHereY(1.0f);   // autoscroll while pinned to bottom
+            if (e.level == Arcane::DiagSeverity::Error)        ++nErr;
+            else if (e.level == Arcane::DiagSeverity::Warning) ++nWarn;
+            else                                               ++nInfo;
+        }
+
+        if (ImGui::Button("Clear")) console.Clear();
+        ImGui::SameLine();
+        if (ImGui::Button("Copy"))
+        {
+            std::string all;
+            for (const ConsoleEntry& e : entries) { all += e.message; all += '\n'; }
+            ImGui::SetClipboardText(all.c_str());
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("Collapse", &ui.collapse);
+        ImGui::SameLine();
+        ImGui::Checkbox("Scroll", &ui.autoScroll);
+        ImGui::SameLine();
+        ImGui::Checkbox("Wrap", &ui.wrap);
+
+        ImGui::SameLine();
+        ImGui::Text("|");
+        ImGui::SameLine(); ImGui::Checkbox("##infoT", &ui.showInfo);
+        ImGui::SameLine(); ImGui::Text(ICON_LC_INFO " %zu", nInfo);
+        ImGui::SameLine(); ImGui::Checkbox("##warnT", &ui.showWarning);
+        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.77f, 0.30f, 1.0f),
+                                              ICON_LC_TRIANGLE_ALERT " %zu", nWarn);
+        ImGui::SameLine(); ImGui::Checkbox("##errT", &ui.showError);
+        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.90f, 0.35f, 0.35f, 1.0f),
+                                              ICON_LC_CIRCLE_X " %zu", nErr);
+
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##consolesearch", "Search", ui.search, sizeof(ui.search));
+
+        ImGui::Separator();
+        ImGui::BeginChild("##consolerows");
+
+        const auto visible = [&](const ConsoleEntry& e)
+        {
+            if (e.level == Arcane::DiagSeverity::Error   && !ui.showError)   return false;
+            if (e.level == Arcane::DiagSeverity::Warning && !ui.showWarning) return false;
+            if (e.level == Arcane::DiagSeverity::Info    && !ui.showInfo)    return false;
+            Arcane::Diagnostic probe;               // reuse the one filter definition
+            probe.severity = e.level;
+            probe.message  = e.message;
+            return MatchesDiagnosticFilter(probe, Arcane::DiagSeverity::Info, ui.search);
+        };
+
+        // Wall-clock hh:mm:ss from the stored epoch millis. Local time: this is a
+        // human reading their own session, not a log correlated across machines.
+        const auto clockText = [](std::uint64_t ms)
+        {
+            const std::time_t secs = static_cast<std::time_t>(ms / 1000);
+            std::tm tm{};
+#if defined(_WIN32)
+            localtime_s(&tm, &secs);
+#else
+            localtime_r(&secs, &tm);
+#endif
+            char buf[16] = {};
+            std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+            return std::string(buf);
+        };
+
+        const auto drawRow = [&](const ConsoleEntry& e, std::size_t count)
+        {
+            ImVec4 col(0.80f, 0.80f, 0.80f, 1.0f);
+            if (e.level == Arcane::DiagSeverity::Error)        col = ImVec4(0.90f, 0.35f, 0.35f, 1.0f);
+            else if (e.level == Arcane::DiagSeverity::Warning) col = ImVec4(0.95f, 0.77f, 0.30f, 1.0f);
+
+            // Timestamp and category are dimmed prefixes so the message stays the
+            // thing the eye lands on.
+            ImGui::TextDisabled("%s", clockText(e.timestampMs).c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("%-8s", e.category.c_str());
+            ImGui::SameLine();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, col);
+            if (ui.wrap) ImGui::PushTextWrapPos(0.0f);
+            if (count > 1) ImGui::Text("%s  (x%zu)", e.message.c_str(), count);
+            else           ImGui::TextUnformatted(e.message.c_str());
+            if (ui.wrap) ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+        };
+
+        if (ui.collapse)
+        {
+            for (const CollapsedRow& r : CollapseConsole(entries))
+                if (r.first && visible(*r.first)) drawRow(*r.first, r.count);
+        }
+        else
+        {
+            for (const ConsoleEntry& e : entries)
+                if (visible(e)) drawRow(e, 1);
+        }
+
+        if (ui.autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+            ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
         ImGui::End();
     }
 

@@ -1241,7 +1241,9 @@ namespace Arcane::Editor
             else
                 m_sceneError = "Could not write the project's boot scene (see Console).";
         }
-        Arcane::Editor::DrawConsolePanel(m_console);
+        if (static_cast<std::size_t>(m_consoleUi.lineCap) != m_console.Capacity())
+            m_console.SetCapacity(static_cast<std::size_t>(m_consoleUi.lineCap));
+        Arcane::Editor::DrawConsolePanel(m_console, m_consoleUi);
 
         // The Material panel draws BEFORE the documents, and that order is
         // load-bearing rather than incidental: the panel's param rows and the
