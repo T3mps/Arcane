@@ -1,39 +1,48 @@
 #pragma once
 
+// A bounded FIFO of structured log entries. Push appends; when full the oldest
+// entry is dropped.
+//
+// THREAD-SAFE by its own mutex. The original version relied on "pushes and reads
+// never overlap in Arcane Editor's single-thread frame" and said outright: "If a
+// worker ever logs, wrap Push in the sink's lock." The async-boot arc runs
+// project open (and its asset-registry scan, which logs) on a worker thread, so
+// that day has arrived -- the lock lives here rather than in the sink so every
+// caller inherits it.
+
+#include <ConsoleModel.hpp>
+
 #include <Arcane/Util/FunctionRef.hpp>
 
 #include <cstddef>
 #include <deque>
 #include <mutex>
-#include <string>
+#include <vector>
 
 namespace Arcane::Editor
 {
-    // A bounded FIFO of log lines. Push appends; when full the oldest line is
-    // dropped. Guarded by its own mutex (2026-07-31 review, Important 2): since
-    // project_open/editor_lock's Worker-thread boot stages started logging
-    // through Arcane::Log::Engine() (Critical 1 fix), Push can now be called
-    // from a worker thread while the UI reads ForEach/Size on the main thread
-    // that pumps ImGui. That overlap is latent today -- the sink's own
-    // callback_sink_mt mutex serializes concurrent Push callers against each
-    // other, and nothing currently draws the Console panel while a boot/switch
-    // worker is alive -- but the safety argument had silently moved from a
-    // checkable invariant ("no worker logs") to an uncheckable one ("workers
-    // only log when nobody is drawing the Console"). This mutex makes the
-    // invariant checkable again instead of relying on that timing coincidence.
     class ConsoleBuffer
     {
     public:
         explicit ConsoleBuffer(std::size_t capacity) : m_capacity(capacity ? capacity : 1) {}
 
-        void Push(std::string line);
-        [[nodiscard]] std::size_t Size() const noexcept;
-        [[nodiscard]] std::size_t Capacity() const noexcept { return m_capacity; }
-        void ForEach(Arcane::FunctionRef<void(const std::string&)> fn) const;
+        void Push(ConsoleEntry entry);
+        void Clear();
+        // Trims immediately when the new cap is smaller.
+        void SetCapacity(std::size_t capacity);
+
+        [[nodiscard]] std::size_t Size() const;
+        [[nodiscard]] std::size_t Capacity() const;
+
+        void ForEach(Arcane::FunctionRef<void(const ConsoleEntry&)> fn) const;
+        // A copy, for the draw pass: CollapseConsole holds pointers into its
+        // input, so the panel needs storage that cannot be evicted mid-frame by
+        // a worker push.
+        [[nodiscard]] std::vector<ConsoleEntry> Snapshot() const;
 
     private:
-        std::size_t             m_capacity;
-        std::deque<std::string> m_lines;
         mutable std::mutex      m_mutex;
+        std::size_t             m_capacity;
+        std::deque<ConsoleEntry> m_entries;
     };
 }

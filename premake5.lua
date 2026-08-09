@@ -637,6 +637,11 @@ project "ArcaneTests"
         -- into the test exe so the [diagnostics] units drive it directly -- no
         -- ImGui in it at all, same pattern as SceneSession/EditorCamera above.
         "%{wks.location}/ArcaneEditor/src/DiagnosticStore.cpp",
+        -- Diagnostics arc: ConsoleModel (category derivation from the engine's
+        -- "Subsystem: " log prefixes + identical-row collapsing) source-compiles
+        -- into the test exe so the [editor] units drive the pure functions the
+        -- Console panel draws with -- EditorPanels.cpp is not compiled here.
+        "%{wks.location}/ArcaneEditor/src/ConsoleModel.cpp",
         -- File -> Open Recent: RecentProjects source-compiles into the test exe
         -- so the [editor] units drive its PURE half directly -- parsing the
         -- Hub's shared recents.archub, ABI/current/missing selection, and the

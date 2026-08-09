@@ -432,9 +432,9 @@ namespace Arcane::Editor
     void DrawConsolePanel(const ConsoleBuffer& console)
     {
         ImGui::Begin("Console");
-        console.ForEach([](const std::string& line)
+        console.ForEach([](const ConsoleEntry& e)
         {
-            ImGui::TextUnformatted(line.c_str());
+            ImGui::TextUnformatted(e.message.c_str());
         });
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);   // autoscroll while pinned to bottom

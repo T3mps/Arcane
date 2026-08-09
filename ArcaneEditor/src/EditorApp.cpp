@@ -31,6 +31,7 @@
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputActions.hpp>
+#include <ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (InstallConsoleSink)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
@@ -56,6 +57,7 @@
 #include <spdlog/sinks/callback_sink.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -816,7 +818,24 @@ namespace Arcane::Editor
         auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
             [this](const spdlog::details::log_msg& m)
             {
-                m_console.Push(std::string(m.payload.data(), m.payload.size()));
+                // Everything below was already on the log_msg and was previously
+                // thrown away one line later -- capturing it is what makes
+                // severity colouring, filtering, and the category column possible.
+                ConsoleEntry e;
+                switch (m.level)
+                {
+                    case spdlog::level::err:
+                    case spdlog::level::critical: e.level = Arcane::DiagSeverity::Error;   break;
+                    case spdlog::level::warn:     e.level = Arcane::DiagSeverity::Warning; break;
+                    default:                      e.level = Arcane::DiagSeverity::Info;    break;
+                }
+                e.timestampMs = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        m.time.time_since_epoch()).count());
+                e.message  = std::string(m.payload.data(), m.payload.size());
+                e.category = std::string(CategoryForMessage(e.message));
+                if (m.source.filename) { e.file = m.source.filename; e.line = m.source.line; }
+                m_console.Push(std::move(e));
             });
         m_consoleSink = cb;
         Arcane::Log::Engine()->sinks().push_back(cb);
