@@ -632,6 +632,11 @@ project "ArcaneTests"
         -- invoked by any test -- process creation is desk-verify territory,
         -- same "no spawn test" rule the task brief states outright.
         "%{wks.location}/ArcaneEditor/src/RuntimeLaunch.cpp",
+        -- Diagnostics arc: DiagnosticStore (key -> current diagnostic set, the
+        -- publication-group replace semantics, filter/sort/count) source-compiles
+        -- into the test exe so the [diagnostics] units drive it directly -- no
+        -- ImGui in it at all, same pattern as SceneSession/EditorCamera above.
+        "%{wks.location}/ArcaneEditor/src/DiagnosticStore.cpp",
         -- File -> Open Recent: RecentProjects source-compiles into the test exe
         -- so the [editor] units drive its PURE half directly -- parsing the
         -- Hub's shared recents.archub, ABI/current/missing selection, and the
