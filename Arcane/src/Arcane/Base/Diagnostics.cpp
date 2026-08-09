@@ -589,6 +589,16 @@ void SetSink(Sink sink, void* user) noexcept
     g_sinkUser = user;
 }
 
+bool ClearSinkIfCurrent(Sink sink, void* user) noexcept
+{
+    std::lock_guard<std::mutex> lock(g_sinkMutex);
+    if (g_sink != sink || g_sinkUser != user)
+        return false;
+    g_sink     = nullptr;
+    g_sinkUser = nullptr;
+    return true;
+}
+
 void Publish(std::string_view key, std::span<const Diagnostic> diags)
 {
     std::lock_guard<std::mutex> lock(g_sinkMutex);

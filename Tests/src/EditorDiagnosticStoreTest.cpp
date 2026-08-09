@@ -134,3 +134,36 @@ TEST_CASE("The store receives diagnostics published through the engine seam", "[
 
     store.UninstallEngineSink();
 }
+
+TEST_CASE("Uninstalling a stale sink does not disconnect a newer registration", "[diagnostics]")
+{
+    // The engine seam is one process-wide, last-writer-wins slot. If a store
+    // that installed EARLIER tears down after a store that installed LATER,
+    // the earlier store's teardown must not silently unslot the later one --
+    // that is the exact stale-registration hazard the dangling plugin
+    // descriptor bug was, applied to this seam.
+    Arcane::Editor::DiagnosticStore b;
+    {
+        Arcane::Editor::DiagnosticStore a;
+        a.InstallAsEngineSink();
+        b.InstallAsEngineSink();
+        // ~a() runs here and calls UninstallEngineSink(); the slot must still
+        // point at b afterward.
+    }
+
+    const Arcane::Diagnostic d[] = {
+        Diag(Arcane::DiagSeverity::Warning, Arcane::DiagScope::Scene, "scene.stale", "still routed"),
+    };
+    Arcane::Diagnostics::Publish("scene:z", d);
+
+    const std::vector<Arcane::Diagnostic> viaB = b.Snapshot();
+    REQUIRE(viaB.size() == 1);
+    CHECK(viaB[0].code == "scene.stale");
+
+    // b uninstalling for real (it IS the current sink) must clear the slot:
+    // a further publish is a no-op and leaves b's own state untouched.
+    b.UninstallEngineSink();
+    b.ClearAll();
+    Arcane::Diagnostics::Publish("scene:z", d);
+    CHECK(b.Snapshot().empty());
+}

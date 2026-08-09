@@ -126,7 +126,14 @@ namespace Arcane::Editor
     {
         if (!m_installed)
             return;
-        Arcane::Diagnostics::SetSink(nullptr, nullptr);
+        // ClearSinkIfCurrent, not SetSink(nullptr, nullptr): the seam's sink
+        // slot is process-wide and last-writer-wins, so an unconditional clear
+        // here would silently unslot a DIFFERENT store that installed after
+        // this one (same stale-registration hazard as a dangling plugin
+        // descriptor). If we are not the current sink, someone else already
+        // is -- leave it alone. Reset m_installed either way: this call is
+        // done being "installed" regardless of whose slot it finds.
+        Arcane::Diagnostics::ClearSinkIfCurrent(&DiagnosticStore::SinkTrampoline, this);
         m_installed = false;
     }
 }

@@ -171,6 +171,15 @@ namespace Arcane
         // Install (or clear, with nullptr) the process-wide sink. Last writer wins.
         ARCANE_API void SetSink(Sink sink, void* user) noexcept;
 
+        // Clear the slot ONLY if it still holds exactly (sink, user); returns
+        // whether it cleared. A stale consumer's teardown must not silently
+        // unslot whoever registered AFTER it -- the slot is process-wide and
+        // last-writer-wins, so an unconditional SetSink(nullptr, nullptr) from
+        // an old owner's destructor would disconnect a live, unrelated one
+        // (same stale-registration hazard as a dangling plugin descriptor).
+        // Prefer this over SetSink(nullptr, nullptr) in any owner's teardown path.
+        [[nodiscard]] ARCANE_API bool ClearSinkIfCurrent(Sink sink, void* user) noexcept;
+
         // Replace `key`'s entire diagnostic set. Safe with no sink installed.
         ARCANE_API void Publish(std::string_view key, std::span<const Diagnostic> diags);
 

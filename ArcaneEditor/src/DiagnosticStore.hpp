@@ -48,7 +48,11 @@ namespace Arcane::Editor
         // Route Arcane::Diagnostics::Publish into THIS store. Uninstall is called
         // by the destructor too -- the sink slot outlives nothing, and a torn-down
         // store must never be dispatched into (mirrors EditorApp's m_consoleSink
-        // erase-at-Shutdown rule).
+        // erase-at-Shutdown rule). Uninstall clears the seam's slot via
+        // ClearSinkIfCurrent (identity-checked), not SetSink(nullptr, nullptr):
+        // the slot is process-wide last-writer-wins, so an unconditional clear
+        // from a stale owner's teardown would silently disconnect whichever
+        // OTHER store installed after this one.
         void InstallAsEngineSink();
         void UninstallEngineSink();
 
