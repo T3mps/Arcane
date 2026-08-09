@@ -4,6 +4,8 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Scene/PhysicsComponents.hpp>   // RegisterPhysicsComponents (engine roster restore)
+#include <Arcane/Scene/SceneModule.hpp>         // RegisterSceneComponents   (engine roster restore)
 
 #include <Astra/Serialization/BinaryReader.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
@@ -198,7 +200,46 @@ namespace Arcane
             // Reset while the module is still loaded: registered component destructors
             // may point into plugin code.
             runtime.ResetRegistry();
-            img.plugin.reset();
+
+            // ...and the DESCRIPTORS themselves die with the image too, which the
+            // line above does NOT cover. A ComponentDescriptor stores raw function
+            // pointers into whichever module registered the type, and a plugin's
+            // Init deliberately re-points even ENGINE-owned types at itself via
+            // ReRegisterComponent -- that is the hot-reload contract, not a bug.
+            // The moment this image is unmapped every one of those aims at freed
+            // code, and Astra's first-registration guard means RegisterComponent<T>
+            // can never rebuild them: the next scene load calls one and takes an
+            // access violation. (Diagnosed 2026-07-31 from a hang/crash on project
+            // switch: Aphelyon -> SampleProject -> Aphelyon, faulting in
+            // AddComponentByTypeName -> ComponentDescriptor::DefaultConstruct.)
+            //
+            // Disown them while the image is STILL MAPPED, then restore the
+            // engine's roster below. BOTH halves are required:
+            //   - the purge covers types only this plugin knew; they become a
+            //     clean SkippedUnregistered miss in SceneSerializer instead of a
+            //     call into freed memory;
+            //   - the re-registration rebinds the types Arcane owns back to
+            //     Arcane.dll, so a host with NO plugin loaded still has a working
+            //     roster (without it, unloading a plugin would strip Transform).
+            if (const Module::ImageSpan image = img.plugin->LoadedModule().Image(); image.size != 0)
+            {
+                if (const auto& creg = runtime.Components())
+                {
+                    const std::size_t dropped = creg->UnregisterModuleRange(image.base, image.size);
+                    if (dropped != 0)
+                        ARC_TRACE("PluginHost: disowned {} component descriptor(s) owned by the unloading module", dropped);
+                }
+            }
+
+            img.plugin.reset();   // FreeLibrary / dlclose
+
+            // Rebind the engine's own types to THIS module. Cheap and idempotent:
+            // RegisterComponent<T> early-returns for anything the purge left alone.
+            if (const auto& creg = runtime.Components())
+            {
+                RegisterSceneComponents(*creg);
+                RegisterPhysicsComponents(*creg);
+            }
         }
 
         void TeardownLive()

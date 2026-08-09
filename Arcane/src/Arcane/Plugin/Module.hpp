@@ -6,6 +6,7 @@
 
 #include <Arcane/Base/Api.hpp>
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 
@@ -30,6 +31,22 @@ namespace Arcane
 
         [[nodiscard]] bool IsLoaded() const noexcept { return m_handle != nullptr; }
         [[nodiscard]] const std::filesystem::path& Path() const noexcept { return m_path; }
+
+        // The loaded image's address span. Exists so callers can DISOWN anything
+        // that stored a pointer INTO this module before it is unmapped -- most
+        // importantly Astra's ComponentDescriptors, whose raw function pointers
+        // are left aiming at freed code by Unload() (see PluginHost::TeardownImage
+        // and ComponentRegistry::UnregisterModuleRange).
+        //
+        // size == 0 means "unknown": not loaded, or a platform with no
+        // implementation. Callers must treat that as "cannot disown" rather than
+        // as an empty range.
+        struct ImageSpan
+        {
+            const void* base = nullptr;
+            std::size_t size = 0;
+        };
+        [[nodiscard]] ImageSpan Image() const noexcept;
 
     private:
         using NativeHandle = void*;

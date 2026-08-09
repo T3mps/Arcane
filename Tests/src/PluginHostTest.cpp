@@ -6,6 +6,7 @@
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Render/Device.hpp>   // RenderErrorCount()
+#include <Arcane/Scene/Components.hpp>   // Arcane::Transform (the engine-roster survivor check)
 
 #include "Helpers/TestTypeContext.hpp"
 #include "../plugins/HotReloadShared.hpp"   // the SAME Pulse type the plugin uses
@@ -13,6 +14,7 @@
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <cstddef>
 #include <filesystem>
 
 using Arcane::HotReloadTest::Pulse;
@@ -174,6 +176,57 @@ TEST_CASE("Plugins-only host (no primary module) loads and drives its secondarie
     CHECK(ReadPulse(rt) == 4);
     CHECK(Arcane::RenderErrorCount() == 0);
     host.Unload();
+}
+
+TEST_CASE("Unloading a plugin disowns the component descriptors it owned", "[hotreload]")
+{
+    // REGRESSION (diagnosed 2026-07-31). A ComponentDescriptor stores RAW FUNCTION
+    // POINTERS into whichever module registered the type, and this fixture's Init
+    // calls ReRegisterComponent<Pulse>() -- deliberately re-pointing Pulse's
+    // descriptor INTO the plugin image (that is the hot-reload contract).
+    //
+    // Unloading used to leave that descriptor in place, aiming at freed code, and
+    // Astra's first-registration guard made it PERMANENT: RegisterComponent<T>
+    // early-returns, so nothing could ever rebuild it. The next scene load called
+    // through it and took an access violation -- surfacing as an intermittent
+    // crash/hang when switching projects in the editor (the fault landed in
+    // AddComponentByTypeName -> ComponentDescriptor::DefaultConstruct).
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Pulse>();
+
+    const Astra::ComponentID pulseId = Astra::TypeID<Pulse>::Value();
+    REQUIRE(rt.Components()->GetComponentDescriptor(pulseId) != nullptr);
+
+    {
+        Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+        REQUIRE(host.Load());
+        // Init has now re-pointed Pulse's descriptor at the plugin's own image.
+        REQUIRE(rt.Components()->GetComponentDescriptor(pulseId) != nullptr);
+        host.Unload();
+    }
+
+    // Pulse belongs to the PLUGIN, not the engine roster, so the correct state
+    // after unload is "not registered" -- a clean miss that SceneSerializer
+    // reports as SkippedUnregistered. The defect was that it stayed non-null and
+    // callable, pointing into an unmapped image.
+    CHECK(rt.Components()->GetComponentDescriptor(pulseId) == nullptr);
+
+    // The other half: the ENGINE's own roster must SURVIVE the unload, rebound to
+    // Arcane.dll. Without this, disowning the plugin's range would strip Transform
+    // from every host and the editor could not add one.
+    const Astra::ComponentID transformId = Astra::TypeID<Arcane::Transform>::Value();
+    const Astra::ComponentDescriptor* tf = rt.Components()->GetComponentDescriptor(transformId);
+    REQUIRE(tf != nullptr);
+    REQUIRE(tf->defaultConstruct != nullptr);
+
+    // Actually CALL through it. A descriptor left pointing into a freed image
+    // faults right here -- this is the assertion the original defect fails on,
+    // and a presence check alone would not have caught it.
+    alignas(Arcane::Transform) std::byte buf[sizeof(Arcane::Transform)];
+    tf->DefaultConstruct(buf);
+    tf->Destruct(buf);
+
+    CHECK(Arcane::RenderErrorCount() == 0);
 }
 
 TEST_CASE("Reload failure with no last-good yields an honest dead state", "[hotreload]")

@@ -65,6 +65,32 @@ namespace Arcane
 #endif
     }
 
+    Module::ImageSpan Module::Image() const noexcept
+    {
+        if (!m_handle)
+            return {};
+
+#if defined(_WIN32)
+        // On Windows an HMODULE IS the image base. SizeOfImage is read straight
+        // out of the mapped PE headers rather than via GetModuleInformation so
+        // this costs no psapi link. Both signatures are checked because a bad
+        // read here would hand back a range that disowns the wrong module's
+        // descriptors -- far worse than returning "unknown".
+        const auto* base = reinterpret_cast<const unsigned char*>(m_handle);
+        const auto* dos  = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+            return {};
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE)
+            return {};
+        return ImageSpan{m_handle, static_cast<std::size_t>(nt->OptionalHeader.SizeOfImage)};
+#else
+        // POSIX: dladdr/link_map would give this, but no host ships here yet.
+        // Returning "unknown" makes callers skip disowning rather than guess.
+        return {};
+#endif
+    }
+
     void Module::Unload() noexcept
     {
         if (!m_handle)
