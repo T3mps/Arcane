@@ -874,6 +874,13 @@ namespace Arcane::Editor
 
     void EditorApp::Shutdown()
     {
+        // Deregister the diagnostics sink FIRST, same reason as the console sink
+        // erase right below: nothing may dispatch into a half-torn-down editor.
+        // UninstallEngineSink is identity-guarded (ClearSinkIfCurrent), so this
+        // is a no-op if some other DiagnosticStore has since become the
+        // process-wide sink.
+        m_diagnostics.UninstallEngineSink();
+
         // Deregister the console sink FIRST, before anything below can log through
         // Arcane::Log::Engine(). m_console is declared before m_runtime/m_plugin/m_gpu
         // in EditorApp.hpp, so it destructs BEFORE them; if the sink outlived this
@@ -932,6 +939,12 @@ namespace Arcane::Editor
         // Console now captures runtime_create/gpu_core's banner lines, which it
         // used to miss because the sink installed after they ran.
         InstallConsoleSink();
+        // Same reasoning as InstallConsoleSink above -- Arcane::Diagnostics'
+        // sink slot is mutex-guarded (unlike Log::Engine()->sinks()), but a
+        // worker stage (e.g. project_open's content scan) can still publish
+        // diagnostics before any BootSequence exists, so this installs from
+        // the same early, dependency-free point.
+        m_diagnostics.InstallAsEngineSink();
 
         Arcane::HostBoot::BootContext ctx{};
         ctx.runtime     = nullptr;              // stages populate as they go

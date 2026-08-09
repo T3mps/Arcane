@@ -24,10 +24,12 @@
 #include <Arcane/Host/ProjectBoot.hpp>
 #include "AssetBrowser.hpp"
 #include "ConsoleBuffer.hpp"
+#include "DiagnosticStore.hpp"
 #include "DocumentHost.hpp"
 #include "EditorCamera.hpp"
 #include "EditorPanels.hpp"
 #include "PlayMode.hpp"
+#include "ProblemsPanel.hpp"
 #include "RecentProjects.hpp"
 #include "SceneSession.hpp"
 #include "SelectionContext.hpp"
@@ -269,6 +271,14 @@ namespace Arcane::Editor
         // ~GpuContext's Vulkan device destruction logs validation messages.
         std::shared_ptr<spdlog::sinks::callback_sink_mt> m_consoleSink;
         Arcane::Editor::ConsoleUiState     m_consoleUi;
+
+        // Problems panel (Task 5): current diagnostic STATE, distinct from
+        // m_console's append-only log stream. Fed by Arcane::Diagnostics via
+        // InstallAsEngineSink, installed beside InstallConsoleSink in Run() and
+        // uninstalled at the top of Shutdown() (same "nothing may dispatch into
+        // a half-torn-down editor" reason as the console sink's erase).
+        Arcane::Editor::DiagnosticStore m_diagnostics;
+        Arcane::Editor::ProblemsUiState m_problemsUi;
 
         // Play-in-editor (Task 8): Edit|Play state machine. Play() snapshots the
         // registry + unpauses the RunLoop; Stop() restores the snapshot + re-pauses.
@@ -548,6 +558,29 @@ namespace Arcane::Editor
         // branch) decides whether to also open a document.
         Arcane::Guid MintOrReuseSpriteForTexture(const Arcane::Guid& textureGuid);
         Arcane::Editor::DocServices MakeDocServices();
+
+        // Problems-panel row click -> editor navigation. One switch over
+        // DiagLocator::Kind; performed from the frame loop, never mid-draw.
+        void RouteLocator(const Arcane::DiagLocator& locator);
+
+        // Thin wrappers RouteLocator needs, added here rather than on
+        // DocumentHost: DocumentHost only indexes documents by asset Guid
+        // (its own header comment -- "open/dirty/save lifecycle over one GUID
+        // asset"), so Guid->path resolution and path-based lookup are
+        // EditorApp-level concerns, the same way MintOrReuseSpriteForTexture
+        // above resolves through m_runtime->CurrentProject() rather than
+        // living on DocumentHost.
+        //
+        // Resolve `guid` through the open project's registry and open/focus
+        // its document (DocumentHost::OpenPath's focus-not-reopen). Null with
+        // no project, an invalid guid, or an asset that does not resolve to a
+        // file (mirrors MintOrReuseSpriteForTexture's failure shape).
+        Arcane::Editor::EditorDocument* OpenAssetDocument(const Arcane::Guid& guid);
+        // The open ShaderEditorDocument whose on-disk path equals `path`, or
+        // null. ShaderEditorDocument is the only open-document type that
+        // exposes a stable Path() today (Problems-panel File locator is a
+        // shader-diagnostics producer only, per DiagLocator::File's callers).
+        Arcane::Editor::ShaderEditorDocument* FindByPath(const std::filesystem::path& path);
 
         // The Arcane logo, shown at the left of the transport toolbar (Unity-style). A
         // display-referred (UNORM) texture -- NOT Assets::GetTexture's sRGB -- so it

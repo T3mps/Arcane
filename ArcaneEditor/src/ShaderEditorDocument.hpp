@@ -240,6 +240,23 @@ namespace Arcane::Editor
         // by hash at the rebind, rename-translated).
         void RefreshParentChain();
 
+        // Stable on-disk identity, exposed for EditorApp::FindByPath (Problems
+        // panel, Task 5): DocumentHost only indexes documents by asset Guid, so
+        // File-locator navigation (shader diagnostics) resolves through here.
+        const std::filesystem::path& Path() const noexcept { return m_path; }
+
+        // Problems-panel navigation. Requests are recorded here and consumed on
+        // the next Draw -- the panel must never mutate document state mid-draw
+        // (the same deferral rule the editor's modals follow). Both setters
+        // re-arm EXISTING dormant fields (m_jumpToLine, m_focusNode) rather
+        // than adding new ones: DrawGraphPanel already consumes m_focusNode
+        // (ed::SelectNode + NavigateToSelection) -- its own header comment at
+        // m_focusNode's declaration already named the Problems panel as the
+        // future driver -- so this task supplies the driver only; there is no
+        // separate consumption step left for a later task.
+        void RequestJumpToLine(int line) noexcept { m_jumpToLine = line; }
+        void RequestFocusGraphNode(std::uint32_t nodeId) noexcept { m_focusNode = nodeId; }
+
     private:
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)
@@ -550,8 +567,9 @@ namespace Arcane::Editor
         std::uint64_t m_vsJob = 0, m_psJob = 0;      // in-flight ids (0 = none)
         std::vector<std::uint8_t> m_vsBytes, m_psBytes;
         double m_animTime = 0.0;                     // preview Time uniform
-        // 1-based; 0 = no pending jump. DORMANT for the same reason as
-        // m_focusNode -- the errors-panel rows were the only writer.
+        // 1-based; 0 = no pending jump. Re-armed by RequestJumpToLine (Task 5,
+        // the Problems panel) -- its previous driver, the old errors panel,
+        // was removed.
         int    m_jumpToLine = 0;
         bool   m_focusSnippet = false;               // focus the input so the jump lands
         // Armed jump consumed by the input callback. Per-document (review m2): a
@@ -632,9 +650,10 @@ namespace Arcane::Editor
         int  m_snippetLineOffset = 0;
         bool m_graphPositionsApplied = false;   // canvas seeded from stored node positions
         bool m_showGeneratedText = false;       // toolbar toggle: canvas <-> read-only HLSL
-        // Select + navigate the canvas to one node. DORMANT: the errors panel's
-        // rows were the only writer, and console lines are not clickable -- the
-        // Problems panel is what re-drives it (DrawGraphPanel still consumes it).
+        // Select + navigate the canvas to one node. Re-armed by
+        // RequestFocusGraphNode (Task 5, the Problems panel) -- the errors
+        // panel's rows were its only writer before that panel was removed;
+        // DrawGraphPanel still consumes it (ed::SelectNode + NavigateToSelection).
         std::uint32_t m_focusNode = 0;
         float m_graphPopupX = 0.0f, m_graphPopupY = 0.0f;   // create-menu screen pos
         // Drag-wire searcher (SG's signature interaction): releasing a new wire

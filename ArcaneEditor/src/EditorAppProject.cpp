@@ -67,6 +67,80 @@ namespace Arcane::Editor
         return s;
     }
 
+    // ---- Problems-panel navigation (Task 5) --------------------------------
+    // DocumentHost only indexes documents by asset Guid (its own header
+    // comment: "open/dirty/save lifecycle over one GUID asset"), so the two
+    // wrappers below live here rather than being renamed onto DocumentHost.
+
+    Arcane::Editor::EditorDocument* EditorApp::OpenAssetDocument(const Arcane::Guid& guid)
+    {
+        if (!guid.IsValid())
+            return nullptr;
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project)
+            return nullptr;
+        const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(guid));
+        if (!path)
+            return nullptr;
+        return m_documents.OpenPath(*path);
+    }
+
+    Arcane::Editor::ShaderEditorDocument* EditorApp::FindByPath(const std::filesystem::path& path)
+    {
+        Arcane::Editor::ShaderEditorDocument* found = nullptr;
+        m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+        {
+            if (found)
+                return;
+            if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
+                doc && doc->Path() == path)
+                found = doc;
+        });
+        return found;
+    }
+
+    void EditorApp::RouteLocator(const Arcane::DiagLocator& locator)
+    {
+        switch (locator.kind)
+        {
+            case Arcane::DiagLocator::Kind::Entity:
+            {
+                // Selecting is enough: the Inspector follows the selection, and
+                // the Outliner scrolls to it on the next frame. locator.entity is
+                // the entity's raw packed value (id+version) widened to
+                // uint64_t by the producer; Astra::Entity's StorageType is the
+                // narrower type that value was minted from (32-bit by this
+                // project's ASTRA_ENTITY_BITS default), so this narrows back
+                // rather than using a nonexistent Astra::Entity::IDType.
+                m_selection.Select(Astra::Entity(
+                    static_cast<Astra::Entity::StorageType>(locator.entity)));
+                break;
+            }
+            case Arcane::DiagLocator::Kind::Asset:
+            {
+                OpenAssetDocument(locator.asset);
+                break;
+            }
+            case Arcane::DiagLocator::Kind::File:
+            {
+                // The material document is the only File-locator producer today
+                // (shader diagnostics); it owns the jump.
+                if (auto* doc = FindByPath(locator.file))
+                    doc->RequestJumpToLine(locator.line);
+                break;
+            }
+            case Arcane::DiagLocator::Kind::GraphNode:
+            {
+                if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(
+                        OpenAssetDocument(locator.ownerAsset)))
+                    doc->RequestFocusGraphNode(locator.nodeId);
+                break;
+            }
+            case Arcane::DiagLocator::Kind::None:
+                break;
+        }
+    }
+
     void EditorApp::PollMaterialWatch()
     {
         if (m_editorClock < m_materialWatchNext)

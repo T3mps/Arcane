@@ -3893,9 +3893,10 @@ namespace Arcane::Editor
 
         HandleGraphEdits();
 
-        // Requested focus: select + frame the offending node. Nothing writes
-        // m_focusNode today -- the errors panel's rows did, and console lines
-        // are not clickable; the consumer stays for the Problems panel.
+        // Requested focus: select + frame the offending node. Written by
+        // RequestFocusGraphNode (Task 5, the Problems panel's GraphNode
+        // locator) -- the errors panel's rows were its only writer before
+        // that panel was removed; console lines are not clickable.
         if (m_focusNode != 0)
         {
             ed::SelectNode(ed::NodeId(m_focusNode));

@@ -186,7 +186,8 @@ namespace Arcane::Editor
         ImGui::DockBuilderDockWindow("Inspector", rightId);
         ImGui::DockBuilderDockWindow("Material",  rightId);
         ImGui::DockBuilderDockWindow("Assets",    bottomId);   // Assets tab first...
-        ImGui::DockBuilderDockWindow("Console",   bottomId);   // ...then Console
+        ImGui::DockBuilderDockWindow("Console",   bottomId);   // ...then Console...
+        ImGui::DockBuilderDockWindow("Problems",  bottomId);   // ...then Problems, tabbed together
         ImGui::DockBuilderDockWindow("Viewport",  central);
         ImGui::DockBuilderFinish(dockspaceId);
     }

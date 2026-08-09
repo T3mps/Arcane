@@ -1245,6 +1245,18 @@ namespace Arcane::Editor
             m_console.SetCapacity(static_cast<std::size_t>(m_consoleUi.lineCap));
         Arcane::Editor::DrawConsolePanel(m_console, m_consoleUi);
 
+        // Problems panel: current diagnostic STATE (Console above is the
+        // append-only log stream). A clicked row's locator is routed here,
+        // mid-DrawEditorUi -- the same place browserActions.createSpriteFrom
+        // above already opens documents synchronously; only project/scene
+        // teardown needs the frame-boundary deferral this function's other
+        // effects use.
+        if (const std::optional<Arcane::DiagLocator> hit =
+                Arcane::Editor::DrawProblemsPanel(m_diagnostics, m_problemsUi))
+        {
+            RouteLocator(*hit);
+        }
+
         // The Material panel draws BEFORE the documents, and that order is
         // load-bearing rather than incidental: the panel's param rows and the
         // document's graph widgets open gestures against the SAME
