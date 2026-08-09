@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "DiagnosticStore.hpp"
 #include "ShaderEditorDocument.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
@@ -584,4 +585,83 @@ TEST_CASE("material panel layout round-trips through imgui.ini", "[editor][mater
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(nullptr);
     ShaderEditorDocument::Layout() = Layout{};   // leave the default for other tests
+}
+
+TEST_CASE("A material document publishes its diagnostics under its own key", "[diagnostics]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    const fs::path dir = TempDir("diagpublish");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "DiagTest").has_value());
+    const fs::path content = dir / "Game" / "Content";
+
+    // An instance whose parent was never registered: ResolveParentChain fails,
+    // which fills m_parseErrors -- diagnostic rows without a compile.
+    Arcane::MaterialAssetData orphan;
+    orphan.id     = Arcane::Guid::Generate();
+    orphan.parent = Arcane::Guid::Generate();   // never registered
+    orphan.name   = "Orphan";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "orphan.arcmat", orphan));
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+
+    DocServices services;
+    services.runtime = &rt;   // no compiler/sources/device
+
+    const auto data = Arcane::LoadMaterialAsset(content / "orphan.arcmat");
+    REQUIRE(data.has_value());
+
+    {
+        ShaderEditorDocument doc(services, content / "orphan.arcmat", *data);
+        REQUIRE_FALSE(doc.ParseErrors().empty());
+        doc.PublishDiagnostics();
+
+        const std::vector<Arcane::Diagnostic> rows = store.Snapshot();
+        REQUIRE_FALSE(rows.empty());
+        CHECK(rows[0].scope == Arcane::DiagScope::Material);
+        CHECK(rows[0].severity == Arcane::DiagSeverity::Error);
+    }
+    // Destructor retracts the key: a closed document must not leave rows behind.
+    CHECK(store.Snapshot().empty());
+
+    store.UninstallEngineSink();
+}
+
+TEST_CASE("Republishing an identical diagnostic set is idempotent", "[diagnostics]")
+{
+    // This is what retired the FNV-1a signature gate: publication groups replace,
+    // so calling PublishDiagnostics on every frame cannot accumulate rows.
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    const fs::path dir = TempDir("diagidempotent");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "IdemTest").has_value());
+    const fs::path content = dir / "Game" / "Content";
+
+    Arcane::MaterialAssetData orphan;
+    orphan.id     = Arcane::Guid::Generate();
+    orphan.parent = Arcane::Guid::Generate();
+    orphan.name   = "Orphan";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "orphan.arcmat", orphan));
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+
+    DocServices services;
+    services.runtime = &rt;
+
+    const auto data = Arcane::LoadMaterialAsset(content / "orphan.arcmat");
+    REQUIRE(data.has_value());
+    ShaderEditorDocument doc(services, content / "orphan.arcmat", *data);
+
+    doc.PublishDiagnostics();
+    const std::size_t once = store.Snapshot().size();
+    REQUIRE(once > 0);
+
+    for (int i = 0; i < 10; ++i) doc.PublishDiagnostics();
+    CHECK(store.Snapshot().size() == once);
+
+    store.UninstallEngineSink();
 }

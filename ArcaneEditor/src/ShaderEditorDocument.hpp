@@ -8,8 +8,11 @@
 //   params (auto-widgets from the //@param decls; edits write the CB LIVE, no
 //           recompile, and land on the shared CommandStack as undo steps)
 // Diagnostics have NO panel of their own: canvas node badges still mark the
-// offending nodes, and the row text is published to the editor Console by
-// PublishDiagnostics -- once per CHANGE of the set, not once per compile.
+// offending nodes, and the structured rows are published under this
+// document's key ("material:<guid>") to the engine-wide Diagnostics seam by
+// PublishDiagnostics, every Tick -- publication groups make republishing an
+// unchanged set idempotent, so there is no anti-spam gate to maintain. The
+// editor's Problems panel is the presentation layer.
 // Live loop: a text edit resubmits both stages through the app-shared
 // ShaderCompiler (the service's per-key debounce coalesces keystrokes); the
 // LAST-GOOD pipeline keeps rendering while a compile is in flight or failing.
@@ -257,6 +260,13 @@ namespace Arcane::Editor
         void RequestJumpToLine(int line) noexcept { m_jumpToLine = line; }
         void RequestFocusGraphNode(std::uint32_t nodeId) noexcept { m_focusNode = nodeId; }
 
+        // Publish this document's CURRENT diagnostic set under "material:<guid>".
+        // No anti-spam gate is needed: publication groups replace, so republishing
+        // an identical set is idempotent by construction. Public so the
+        // [diagnostics] units can drive it headlessly (ParseErrors precedent).
+        void PublishDiagnostics();
+        [[nodiscard]] std::string DiagnosticKey() const;
+
     private:
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)
@@ -330,23 +340,27 @@ namespace Arcane::Editor
         // and the confirm modal's "Save Anyway" is the deliberate way past.
         void RequestSave();
         void DrawSnippetEditor();
-        // ---- Diagnostics -> editor Console (no in-document panel) ----
+        // ---- Diagnostics -> Problems panel (no in-document panel) ----
         // THE formatting seam. One traversal turns every diagnostic this
         // document holds -- graph codegen errors (per pass), parse/stitch
         // errors, vertex-body rows, and compile diags (per pass in chain mode,
         // m_diags otherwise) -- into presentable rows, in that order. It is the
-        // ONLY place that ordering and that wording exist.
+        // ONLY place that ordering and that wording exist. Non-const only
+        // because GraphOptAt (the node lookup for graph-error rows) is non-const.
         //
-        // PROBLEMS-PANEL SEAM: a future Problems panel plugs in HERE. It will
-        // want structured source info (origin, chain index, node id, snippet
-        // line) rather than a flattened string, so widen the callback's payload
-        // in this one function instead of re-deriving the traversal beside it --
-        // the flattening is deliberately the last step. Non-const only because
-        // GraphOptAt (the node lookup for graph-error rows) is non-const.
-        void ForEachDiagnosticRow(Arcane::FunctionRef<void(bool isError,
-                                                           const std::string& row)> fn);
-        // Per-frame (from Tick), gated on the CONTENT of the diagnostic set.
-        void PublishDiagnostics();
+        // One presentable diagnostic row, with the structured source info the
+        // Problems panel needs (origin, node id, snippet line) rather than a
+        // flattened string -- PublishDiagnostics (public section above) is the
+        // one place that flattens it, into an Arcane::Diagnostic per row.
+        struct DiagnosticRow
+        {
+            bool          isError = false;
+            std::string   message;      // already prefixed (pass label / "vertex: ")
+            int           line    = 0;  // snippet-space line, 0 when not line-bound
+            std::uint32_t nodeId  = 0;  // graph node, 0 when not node-bound
+        };
+
+        void ForEachDiagnosticRow(Arcane::FunctionRef<void(const DiagnosticRow&)> fn);
         // Graph mode (Slice 9, imgui-node-editor canvas). The canvas edits the
         // ACTIVE pass's graph; these resolve which optional that is.
         std::optional<Arcane::MaterialGraph>& GraphOptAt(std::size_t pass);
@@ -474,10 +488,6 @@ namespace Arcane::Editor
         std::vector<Arcane::ParamMeta>             m_boundMetas; // parallel to bound->Params()
         std::vector<std::string>                   m_parseErrors;
         std::vector<Arcane::ShaderDiag>            m_diags;      // last compile (active backend)
-        // Content signature of the diagnostic set at the LAST console emission.
-        // 0 means "nothing outstanding" -- both the initial state and the state
-        // after a clean build, so opening a clean material says nothing.
-        std::uint64_t                              m_emittedDiagSig = 0;
 
         std::unique_ptr<Arcane::OffscreenCanvas>         m_preview;
         std::unique_ptr<Arcane::FullscreenMaterialPass>  m_pass;

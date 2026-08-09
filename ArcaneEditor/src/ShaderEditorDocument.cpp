@@ -10,6 +10,7 @@
 #include "MaterialParamWidgets.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/Command.hpp>
@@ -1002,6 +1003,10 @@ namespace Arcane::Editor
 
     ShaderEditorDocument::~ShaderEditorDocument()
     {
+        // Retract this document's diagnostic rows -- a closed material must not
+        // leave stale errors in the Problems panel. Exactly Publish(key, {}).
+        Arcane::Diagnostics::Clear(DiagnosticKey());
+
         // Documents are DESTROYED synchronously on close and there is no
         // on-close hook (DocumentHost::Close erases the unique_ptr; CloseAll
         // does it for every document on a project switch). The X-button path is
@@ -2017,10 +2022,11 @@ namespace Arcane::Editor
         if (ImGui::BeginPopupModal("Save With Errors?##matdoc", nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize))
         {
-            // "see the Console" because the rows no longer live in this window
-            // (PublishDiagnostics), matching the shell's other deferrals.
+            // "see Problems" because the rows no longer live in this window --
+            // PublishDiagnostics routes them to the editor-wide Problems panel,
+            // matching the shell's other deferrals.
             ImGui::TextUnformatted("This material has compile errors (see the "
-                                   "Console). Save anyway?");
+                                   "Problems panel). Save anyway?");
             ImGui::Separator();
             if (ImGui::Button("Save Anyway"))
             {
@@ -2995,7 +3001,7 @@ namespace Arcane::Editor
     }
 
     void ShaderEditorDocument::ForEachDiagnosticRow(
-        Arcane::FunctionRef<void(bool, const std::string&)> fn)
+        Arcane::FunctionRef<void(const DiagnosticRow&)> fn)
     {
         // Graph-level codegen errors first, for EVERY pass's graph -- these are
         // the ones the canvas also badges (NodeBadged/RebuildDiagBadges).
@@ -3005,6 +3011,7 @@ namespace Arcane::Editor
             {
                 std::string row = m_data.passes.empty() ? std::string("graph: ")
                                                         : PassLabel(c) + " graph: ";
+                DiagnosticRow out;
                 if (e.nodeId != 0)
                 {
                     std::optional<Arcane::MaterialGraph>& g = GraphOptAt(c);
@@ -3012,13 +3019,21 @@ namespace Arcane::Editor
                     row += (n ? std::string(Arcane::GraphNodeInfo(n->type).display)
                               : std::string("node")) +
                            " #" + std::to_string(e.nodeId) + ": ";
+                    out.nodeId = e.nodeId;
                 }
-                fn(true, row + e.message);
+                out.isError = true;
+                out.message = row + e.message;
+                fn(out);
             }
         }
         // Stitch/parse failures (instance parent-chain resolution included).
         for (const std::string& e : m_parseErrors)
-            fn(true, "parse: " + e);
+        {
+            DiagnosticRow row;
+            row.isError = true;
+            row.message = "parse: " + e;
+            fn(row);
+        }
         // Vertex-stage rows: ONLY diags whose line falls inside the vertex
         // body -- both stages compile the same TU, so pixel-body errors appear
         // in the vs result too and are already carried by the compile rows
@@ -3033,8 +3048,12 @@ namespace Arcane::Editor
                 if (rel < 1 || rel > vsLines)
                     continue;
                 const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
-                fn(isError, "vertex: " + std::string(isError ? "error" : "warning") +
-                                "(" + std::to_string(rel) + "): " + d.message);
+                DiagnosticRow row;
+                row.isError = isError;
+                row.line    = rel;
+                row.message = "vertex: " + std::string(isError ? "error" : "warning") +
+                              "(" + std::to_string(rel) + "): " + d.message;
+                fn(row);
             }
         }
         // Compile diags. Diag lines arrive in STITCHED-source space; the pass's
@@ -3044,8 +3063,12 @@ namespace Arcane::Editor
         {
             const bool isError = d.severity == Arcane::ShaderDiagSeverity::Error;
             const int line = d.line > offset ? d.line - offset : 1;
-            fn(isError, prefix + (isError ? "error" : "warning") +
-                            "(" + std::to_string(line) + "): " + d.message);
+            DiagnosticRow row;
+            row.isError = isError;
+            row.line    = line;
+            row.message = prefix + (isError ? "error" : "warning") +
+                          "(" + std::to_string(line) + "): " + d.message;
+            fn(row);
         };
         if (ChainMode())
         {
@@ -3065,60 +3088,32 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::PublishDiagnostics()
     {
-        // ANTI-SPAM POLICY (the reason this is not a plain "log on compile").
-        // The editor regenerates and recompiles on EVERY edit -- one drag of a
-        // param is dozens of Rebuilds, each landing the SAME diagnostics -- so
-        // emission is gated on the CONTENT of the row set, never on the
-        // compile/regenerate events that produce it. An FNV-1a signature over
-        // (severity, row text) in traversal order is compared against the last
-        // EMITTED one; an identical set is silence. By design:
-        //   - dragging on a broken material emits nothing after the first frame;
-        //   - clean -> broken emits every row, once;
-        //   - broken -> clean emits ONE "diagnostics cleared" line: the console
-        //     is append-only, so the rows above it need retracting;
-        //   - broken -> DIFFERENTLY broken emits the new set once;
-        //   - a set that flaps back to an earlier shape DOES re-emit -- the
-        //     comparison is against the last emission, not a history.
-        // The empty set signs as 0, which is also the initial value, so opening
-        // an already-clean material says nothing.
-        //
-        // Running this from Tick (rather than from the mutation sites) is what
-        // makes the gate total: every path that can change a diagnostic --
-        // ConsumeResult, Rebuild, RegenerateFromGraph, ReloadFromDisk, the
-        // parent-chain resolver -- is covered without enumerating them. Idle
-        // cost is one traversal of a set that is normally empty.
-        std::uint64_t sig = 0xcbf29ce484222325ull;
-        std::size_t rows = 0;
-        ForEachDiagnosticRow([&](bool isError, const std::string& row)
+        // Publication groups make this idempotent: republishing an identical set
+        // replaces it with itself. The old FNV-1a signature gate and its
+        // synthetic "went clean" log line existed only because the console is
+        // append-only, and are gone with it.
+        std::vector<Arcane::Diagnostic> out;
+        ForEachDiagnosticRow([&](const DiagnosticRow& row)
         {
-            ++rows;
-            sig = (sig ^ (isError ? 1ull : 0ull)) * 0x100000001b3ull;
-            for (const char ch : row)
-                sig = (sig ^ static_cast<std::uint8_t>(ch)) * 0x100000001b3ull;
+            Arcane::Diagnostic d;
+            d.severity = row.isError ? Arcane::DiagSeverity::Error
+                                     : Arcane::DiagSeverity::Warning;
+            d.scope    = Arcane::DiagScope::Material;
+            d.code     = row.isError ? "material.compile.error" : "material.compile.warning";
+            d.message  = m_title + ": " + row.message;
+            if (row.nodeId != 0)
+                d.locator = Arcane::DiagLocator::GraphNode(m_data.id, row.nodeId);
+            else if (row.line != 0)
+                d.locator = Arcane::DiagLocator::File(m_path.string(), row.line);
+            out.push_back(std::move(d));
         });
-        if (rows == 0)
-            sig = 0;
-        else if (sig == 0)
-            sig = 1;   // 0 is reserved for "clean"; a real set hashing to 0 is a lottery win
-        if (sig == m_emittedDiagSig)
-            return;
-        m_emittedDiagSig = sig;
-        if (rows == 0)
-        {
-            // Reached only from a non-zero signature (equal signatures returned
-            // above), so this really is a broken -> clean transition.
-            ARC_INFO("'{}': shader diagnostics cleared", m_title);
-            return;
-        }
-        // Severity rides BOTH the log level and the row text: the Console panel
-        // renders the sink's payload only (EditorApp.cpp:494-497, and the panel
-        // at EditorPanels.cpp:288-297 prints it verbatim), so a level
-        // alone would be invisible there. The material name is the source tag.
-        ForEachDiagnosticRow([&](bool isError, const std::string& row)
-        {
-            if (isError) ARC_ERROR("'{}': {}", m_title, row);
-            else         ARC_WARN("'{}': {}", m_title, row);
-        });
+        // An empty `out` retracts this document's rows -- the clean transition.
+        Arcane::Diagnostics::Publish(DiagnosticKey(), out);
+    }
+
+    std::string ShaderEditorDocument::DiagnosticKey() const
+    {
+        return "material:" + m_data.id.ToString();
     }
 
     void ShaderEditorDocument::DrawPreviewPanel(float height)
