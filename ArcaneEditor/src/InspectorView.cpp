@@ -777,6 +777,22 @@ namespace Arcane::Editor
                         const bool refMixed = Multi() && MixedFor(f).Any();
 
                         std::string display = "(none)";
+                        // A non-nil guid whose registry Resolve() fails is a DANGLING
+                        // reference (the asset it named is gone/moved/never
+                        // registered) -- flagged with the editor's established
+                        // error-text color (ProblemsPanel.cpp's severity coloring
+                        // and EditorPanels.cpp's Console panel both use this same
+                        // ImVec4(0.90, 0.35, 0.35, 1.0) literal for
+                        // DiagSeverity::Error; there is no named Theme constant for
+                        // it -- EditorTheme.hpp's domain-color note says exactly
+                        // this kind of color-coding is deliberately NOT
+                        // monochrome/centralized) plus a "(missing)" suffix, so a
+                        // broken reference reads as broken rather than as an
+                        // ordinary grey guid. No diagnostic is published from HERE
+                        // -- AssetRegistry::ScanContent already owns "assets" for
+                        // the registry's own view of what is broken; this is only
+                        // this one field's display.
+                        bool dangling = false;
                         if (refMixed)
                         {
                             display = "--";   // differing values across the selection
@@ -785,8 +801,15 @@ namespace Arcane::Editor
                         {
                             display = v.ToString();
                             if (project)
+                            {
                                 if (const auto mount = project->Registry().Resolve(v))
                                     display = *mount;
+                                else
+                                {
+                                    dangling = true;
+                                    display += " (missing)";
+                                }
+                            }
                         }
 
                         // SIZED to the cell, minus the clear button's seat when
@@ -810,6 +833,11 @@ namespace Arcane::Editor
                         // Left-aligned like every value widget -- a centred
                         // path reads as decoration, not data.
                         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
+                        // Button() draws its label through ImGuiCol_Text, so pushing
+                        // it here recolors exactly the "<guid> (missing)" text set
+                        // above, matching Button's normal text-color mechanism.
+                        if (dangling)
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.90f, 0.35f, 0.35f, 1.0f));
                         // "###", not "##": only "###" resets the id hash
                         // (ImHashStr, imgui.cpp:2557), so with "##" the button's id
                         // was seeded by `display` -- a MUTABLE string that changes
@@ -817,6 +845,8 @@ namespace Arcane::Editor
                         // ImGui mid-interaction, dropping the item's state.
                         const bool pickPressed =
                             ImGui::Button((shown + "###assetref").c_str(), ImVec2(btnW, 0.0f));
+                        if (dangling)
+                            ImGui::PopStyleColor();
                         ImGui::PopStyleVar();
                         if (pickPressed)
                             ImGui::OpenPopup("##assetpick");

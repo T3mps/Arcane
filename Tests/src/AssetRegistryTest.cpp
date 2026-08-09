@@ -6,7 +6,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
+
+#include <DiagnosticStore.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -96,5 +99,85 @@ TEST_CASE("ScanContent on an empty directory reports zero assets and never calls
     CHECK_FALSE(called);
 
     std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// Task 9: two native assets carrying the SAME embedded id -- the scan keeps the
+// first registration and warns (AssetRegistry.cpp's "duplicate id ... keeping
+// first" ARC_WARN); this proves the SAME event is now ALSO visible as a
+// structured "assets" diagnostic, not just a log line. Materials are the
+// cheapest native asset to author here (SaveMaterialAsset).
+TEST_CASE("A duplicate asset id publishes an assets diagnostic", "[diagnostics]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    const auto dir = TempDir("dup_id");
+
+    Arcane::MaterialAssetData a;
+    a.id      = Arcane::Guid::Generate();
+    a.name    = "A";
+    a.snippet = "float4 shade(Varyings v) { return 1; }\n";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "a.arcmat", a));
+
+    Arcane::MaterialAssetData b = a;   // same id on purpose
+    b.name = "B";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "b.arcmat", b));
+
+    Arcane::AssetRegistry reg;
+    reg.ScanContent(dir, "game");
+
+    const std::vector<Arcane::Diagnostic> rows = store.Snapshot();
+    REQUIRE_FALSE(rows.empty());
+    CHECK(rows[0].code == "assets.id.duplicate");
+    CHECK(rows[0].scope == Arcane::DiagScope::Assets);
+    CHECK(rows[0].severity == Arcane::DiagSeverity::Warning);
+    CHECK(rows[0].locator.kind == Arcane::DiagLocator::Kind::Asset);
+    CHECK(rows[0].locator.asset == a.id);
+
+    store.UninstallEngineSink();
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// A clean rescan (no duplicates this time) must RETRACT the prior scan's
+// diagnostic -- Diagnostics::Publish is a publication-group replace, and
+// ScanContent publishes unconditionally after every walk (see AssetRegistry.cpp).
+TEST_CASE("A clean rescan retracts a previous duplicate-id diagnostic", "[diagnostics]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    const auto dir = TempDir("dup_id_retract");
+
+    Arcane::MaterialAssetData a;
+    a.id      = Arcane::Guid::Generate();
+    a.name    = "A";
+    a.snippet = "float4 shade(Varyings v) { return 1; }\n";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "a.arcmat", a));
+
+    Arcane::MaterialAssetData b = a;
+    b.name = "B";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "b.arcmat", b));
+
+    Arcane::AssetRegistry reg;
+    reg.ScanContent(dir, "game");
+    REQUIRE_FALSE(store.Snapshot().empty());
+
+    // Fix the collision on disk (give b its own id), then rescan the SAME
+    // registry instance -- ScanContent clears and rebuilds from scratch.
+    std::error_code ec;
+    std::filesystem::remove(dir / "b.arcmat", ec);
+    Arcane::MaterialAssetData c = a;
+    c.id   = Arcane::Guid::Generate();
+    c.name = "C";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "c.arcmat", c));
+
+    reg.ScanContent(dir, "game");
+    CHECK(store.Snapshot().empty());
+
+    store.UninstallEngineSink();
+
     std::filesystem::remove_all(dir, ec);
 }

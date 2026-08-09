@@ -9,6 +9,7 @@
 // In both cases a missing/invalid id is minted and written back (Unity-style auto-import).
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Util/FunctionRef.hpp>
 
@@ -93,6 +94,16 @@ namespace Arcane
 
     private:
         std::unordered_map<Guid, std::string> m_byGuid;   // guid -> mount path
+
+        // KEY OWNERSHIP: this registry owns the fixed Diagnostics key "assets" --
+        // see AssetRegistry.cpp for the accumulate-then-publish-once shape. A
+        // member (not a local in ScanContent) because AddContent is also called
+        // standalone, after ScanContent, to fold plugin content into the SAME
+        // registry (Project::Open) -- if each such call published its OWN local
+        // vector, a later plugin's clean AddContent would silently retract an
+        // earlier plugin's (or the game scan's) still-true diagnostics. Cleared
+        // only where m_byGuid is cleared (ScanContent's full-rebuild entry).
+        std::vector<Diagnostic> m_scanDiagnostics;
     };
 #if defined(_MSC_VER)
 #pragma warning(pop)

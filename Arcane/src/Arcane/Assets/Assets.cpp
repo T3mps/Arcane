@@ -1,6 +1,7 @@
 #include <Arcane/Assets/Assets.hpp>
 
 #include <Arcane/Assets/AssetCache.hpp>
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 
 #include <Json.hpp>
@@ -101,6 +102,15 @@ namespace Arcane
                 // A new resolver (project open / registry rescan) may know ids that
                 // previously failed -- drop the warn-once memos for a clean retry.
                 m_idFailures.clear();
+                // KEY OWNERSHIP: "assets.unresolved" -- this producer's OWN key,
+                // distinct from AssetRegistry::ScanContent's "assets" key
+                // (AssetRegistry.cpp) -- ResolveId's warn-once memo is not a
+                // whole-tree walk, so it must never touch "assets". A retry may
+                // resolve ids that previously failed, so retract every row rather
+                // than leave stale "unresolved" diagnostics for ids that are about
+                // to be re-checked.
+                m_unresolvedDiagnosticIds.clear();
+                Diagnostics::Clear("assets.unresolved");
             }
 
             nvrhi::TextureHandle GetTexture(const AssetId& id) override
@@ -373,8 +383,43 @@ namespace Arcane
                 }
                 auto p = m_resolver(id);
                 if (!p && m_idFailures.insert(id.Value()).second)
+                {
                     ARC_WARN("Assets: unresolved asset id {}", id.Value().ToString());
+                    // KEY OWNERSHIP: "assets.unresolved" -- this producer's OWN
+                    // key. AssetRegistry::ScanContent owns the whole-tree-walk
+                    // "assets" key (AssetRegistry.cpp); this memo is a per-id
+                    // warn-once gate on the resolve path, not a walk, so it must
+                    // NEVER Publish("assets", ...) -- that would let a single
+                    // unresolved lookup clobber every row the last full scan
+                    // found. m_idFailures.insert(...).second is true only the
+                    // FIRST time this id fails, so this id is genuinely new here.
+                    m_unresolvedDiagnosticIds.push_back(id.Value());
+                    PublishUnresolvedDiagnostics();
+                }
                 return p;
+            }
+
+            // Rebuilds and republishes the FULL "assets.unresolved" set from
+            // m_unresolvedDiagnosticIds. Diagnostics::Publish is a publication-
+            // group REPLACE (see Diagnostics.hpp) -- publishing only the newest
+            // id would retract every id a prior addition surfaced, so every
+            // addition (ResolveId above) and every clear (SetAssetResolver)
+            // republishes the whole accumulated set, not a delta.
+            void PublishUnresolvedDiagnostics()
+            {
+                std::vector<Diagnostic> diags;
+                diags.reserve(m_unresolvedDiagnosticIds.size());
+                for (const Guid& g : m_unresolvedDiagnosticIds)
+                {
+                    Diagnostic d;
+                    d.severity = DiagSeverity::Warning;
+                    d.scope    = DiagScope::Assets;
+                    d.code     = "assets.unresolved";
+                    d.message  = "Unresolved asset id " + g.ToString();
+                    d.locator  = DiagLocator::Asset(g);
+                    diags.push_back(std::move(d));
+                }
+                Diagnostics::Publish("assets.unresolved", diags);
             }
 
             nvrhi::IDevice* m_device;
@@ -382,6 +427,14 @@ namespace Arcane
             std::filesystem::path m_contentRoot;   // empty => exe-relative (legacy)
             AssetResolver m_resolver;              // empty => AssetId loads fail
             std::unordered_set<Guid> m_idFailures; // warn-once memo per unresolved id
+            // Diagnostic mirror of the SLICE of m_idFailures that came from an
+            // actually-installed resolver failing to resolve (ResolveId's third
+            // branch only) -- kept separate because m_idFailures ALSO carries
+            // nil-id and no-resolver-installed failures, which are different
+            // problems this task does not diagnose structurally. Order-preserving
+            // vector (not a set): republished whole on every addition, so
+            // insertion order is the row order the user sees.
+            std::vector<Guid> m_unresolvedDiagnosticIds;
 
             // ONE recency clock across the three caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU

@@ -1,5 +1,6 @@
 #include <Arcane/Project/AssetRegistry.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 
 #include <Json.hpp>
@@ -52,7 +53,12 @@ namespace Arcane
 
         // Native asset: id embedded as a top-level "id". A missing/invalid id is minted and
         // written back into the asset (auto-import), so it is born with a durable identity.
-        Guid ResolveNativeId(const std::filesystem::path& file)
+        //
+        // `writeFailed`, when non-null, is set true ONLY on the id-persist failure below
+        // (never on a read/parse failure) -- the caller (AddFile) turns that one case into
+        // the "assets.id.write-failed" diagnostic; the other failure paths already return
+        // an invalid Guid, which AddFile treats as "already warned, skip".
+        Guid ResolveNativeId(const std::filesystem::path& file, bool* writeFailed = nullptr)
         {
             std::ifstream in(file, std::ios::binary);
             if (!in) { ARC_WARN("AssetRegistry: cannot read '{}'", file.generic_string()); return {}; }
@@ -71,7 +77,11 @@ namespace Arcane
             doc["id"] = id.ToString();
             std::ofstream out(file, std::ios::binary);
             if (out) out << doc.dump(2) << '\n';
-            else     ARC_WARN("AssetRegistry: cannot write id back to '{}'", file.generic_string());
+            else
+            {
+                ARC_WARN("AssetRegistry: cannot write id back to '{}'", file.generic_string());
+                if (writeFailed) *writeFailed = true;
+            }
             return id;
         }
 
@@ -79,7 +89,10 @@ namespace Arcane
         // APPENDED to the full filename (Unity convention: hero.png -> hero.png.meta) rather
         // than replacing the extension, so "a.png" and "a.wav" get distinct sidecars. A
         // missing/invalid sidecar is minted and written beside the original (auto-import).
-        Guid ResolveSidecarId(const std::filesystem::path& file)
+        // Same `writeFailed` contract as ResolveNativeId above: set true only when the
+        // sidecar write itself fails, so the caller can raise the same
+        // "assets.id.write-failed" code for either identity-persistence route.
+        Guid ResolveSidecarId(const std::filesystem::path& file, bool* writeFailed = nullptr)
         {
             std::filesystem::path meta = file;
             meta += ".meta";
@@ -106,7 +119,11 @@ namespace Arcane
             doc["version"] = 1;                 // sidecar format version (import settings land here later)
             std::ofstream out(meta, std::ios::binary);
             if (out) out << doc.dump(2) << '\n';
-            else     ARC_WARN("AssetRegistry: cannot write sidecar '{}'", meta.generic_string());
+            else
+            {
+                ARC_WARN("AssetRegistry: cannot write sidecar '{}'", meta.generic_string());
+                if (writeFailed) *writeFailed = true;
+            }
             return id;
         }
     }
@@ -115,9 +132,14 @@ namespace Arcane
                                            ScanProgressFn onProgress)
     {
         m_byGuid.clear();
+        // A full rebuild-from-scratch restarts the "assets" diagnostic set too --
+        // see AddContent's Publish() below for why this lives on the member
+        // rather than a function-local vector.
+        m_scanDiagnostics.clear();
 
         // No observer: identical to this function's pre-callback shape (and
-        // cost) -- a single walk via AddContent, no counting pass.
+        // cost) -- a single walk via AddContent, no counting pass. AddContent
+        // itself accumulates + publishes "assets" once its walk finishes.
         if (!onProgress)
             return AddContent(contentDir, scheme);
 
@@ -149,6 +171,14 @@ namespace Arcane
             onProgress(done, total);
         }
 
+        // KEY OWNERSHIP: "assets" -- accumulated across the WHOLE walk above into
+        // m_scanDiagnostics (AddFile appends; ScanContent cleared it at entry) and
+        // published ONCE here, per the publication-group contract (Publish
+        // replaces the key's entire set) -- publishing per-file would leave only
+        // the last file's rows visible. Unconditional: an empty vector RETRACTS
+        // the previous scan's rows, which is exactly the clean-rescan case.
+        Diagnostics::Publish("assets", m_scanDiagnostics);
+
         return m_byGuid.size() - before;
     }
 
@@ -169,6 +199,19 @@ namespace Arcane
                 continue;
             AddFile(entry.path(), contentDir, scheme);
         }
+
+        // KEY OWNERSHIP: "assets" -- same contract as ScanContent's callback
+        // branch above (accumulate the whole walk into m_scanDiagnostics, then
+        // publish once, unconditionally). Deliberately NOT cleared at entry:
+        // ScanContent's no-callback path delegates straight into this function
+        // (m_scanDiagnostics was already reset there, so this publishes exactly
+        // that one walk's rows), but Project::Open also calls AddContent
+        // standalone -- once per enabled plugin -- to fold plugin content into
+        // the SAME registry AFTER the initial ScanContent. If this cleared, that
+        // second call's publish would retract the first scan's still-true
+        // diagnostics instead of adding to them; accumulating keeps every
+        // content root's rows visible across the whole open.
+        Diagnostics::Publish("assets", m_scanDiagnostics);
 
         return m_byGuid.size() - before;
     }
@@ -195,15 +238,42 @@ namespace Arcane
         // embeds a top-level "id" (SpriteAsset.cpp:14), so it rides the same
         // ResolveNativeId path rather than a sidecar.
         Guid id;
+        bool idWriteFailed = false;
         if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite")
-            id = ResolveNativeId(file);
+            id = ResolveNativeId(file, &idWriteFailed);
         else if (IsImportedBinary(ext))
-            id = ResolveSidecarId(file);
+            id = ResolveSidecarId(file, &idWriteFailed);
         else
             return std::nullopt;
 
         if (!id.IsValid())
             return std::nullopt;   // read/parse failure -- already warned
+
+        // KEY OWNERSHIP for all three diagnostics below: "assets", owned
+        // end-to-end by ScanContent/AddContent (see their Diagnostics::Publish
+        // calls) -- AddFile itself never publishes. It only appends to
+        // m_scanDiagnostics, the member those callers accumulate across a
+        // whole walk and publish as one set. A standalone AddFile call outside
+        // a scan (Project::RegisterAsset's incremental New Material/Instance
+        // path) still queues into the same member; it surfaces on the next
+        // ScanContent/AddContent rather than immediately, which is fine since
+        // that path mints a fresh Guid and essentially never collides.
+        if (idWriteFailed)
+        {
+            // Producer: failed id write-back -- native ResolveNativeId or sidecar
+            // ResolveSidecarId, same code either way. The mint still SUCCEEDED in
+            // memory (id.IsValid() below is true, so Resolve(id) works THIS
+            // session), it just did not PERSIST -- a restart mints a different id
+            // for the same file, so the reference is not durable yet.
+            Diagnostic d;
+            d.severity = DiagSeverity::Warning;
+            d.scope    = DiagScope::Assets;
+            d.code     = "assets.id.write-failed";
+            d.message  = "Could not write asset id back to '" + file.generic_string() +
+                         "' -- the id will not survive a restart";
+            d.locator  = DiagLocator::Asset(id);
+            m_scanDiagnostics.push_back(std::move(d));
+        }
 
         // Mount path: "<scheme>://<relative-to-contentDir, forward slashes>". The
         // ORIGINAL file is registered (the .meta only stores the id), so a resolved
@@ -215,6 +285,18 @@ namespace Arcane
         {
             ARC_WARN("AssetRegistry: '{}' is not under content root '{}' -- not registered",
                      file.generic_string(), contentDir.generic_string());
+            // Producer: outside content root -- the file is never registered (no
+            // mount path exists), so a File locator is what a click can actually
+            // do something with; an Asset locator would point at nothing (this
+            // Guid, even if minted above, is never inserted into m_byGuid).
+            Diagnostic d;
+            d.severity = DiagSeverity::Warning;
+            d.scope    = DiagScope::Assets;
+            d.code     = "assets.outside-content-root";
+            d.message  = "'" + file.generic_string() + "' is not under content root '" +
+                         contentDir.generic_string() + "' -- not registered";
+            d.locator  = DiagLocator::File(file.string());
+            m_scanDiagnostics.push_back(std::move(d));
             return std::nullopt;
         }
         const std::string mountPath = std::string(scheme) + "://" + rel.generic_string();
@@ -226,6 +308,18 @@ namespace Arcane
             // (Same id + same mapping = idempotent re-registration, silent.)
             ARC_WARN("AssetRegistry: duplicate id {} (also '{}') -- keeping first",
                      id.ToString(), file.generic_string());
+            // Producer: duplicate embedded id, kept-first. Asset locator -- id IS
+            // registered (to the first file), so Resolve(id) navigates somewhere
+            // real; this row is what tells the user a second file is being
+            // silently ignored.
+            Diagnostic d;
+            d.severity = DiagSeverity::Warning;
+            d.scope    = DiagScope::Assets;
+            d.code     = "assets.id.duplicate";
+            d.message  = "Duplicate asset id " + id.ToString() + ": kept '" + it->second +
+                         "', ignoring '" + file.generic_string() + "'";
+            d.locator  = DiagLocator::Asset(id);
+            m_scanDiagnostics.push_back(std::move(d));
         }
         return id;
     }
