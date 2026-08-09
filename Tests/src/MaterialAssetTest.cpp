@@ -8,6 +8,11 @@
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
 
+#include <DiagnosticStore.hpp>
+
+#include <Json.hpp>   // nlohmann::json -- the vendored single header lives at
+                       // ThirdParty/nlohmann/Json.hpp, NOT <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -384,4 +389,44 @@ TEST_CASE("graph-only material self-heals pixel AND vertex snippets", "[material
     CHECK_FALSE(back->snippet.empty());
     CHECK_FALSE(back->vertexSnippet.empty());
     CHECK(back->vertexSnippet.find("displace") != std::string::npos);
+}
+
+// Task 10: LoadMaterialAsset's dropped-entry diagnostics (material.param.dropped
+// here; material.pass.malformed/material.graph.invalid are the sibling codes at
+// the other drop sites in MaterialAsset.cpp). On-disk shape verified against
+// SaveMaterialAsset/LoadMaterialAsset above: top-level "id"/"name"/"snippet",
+// "params" is an object keyed by param name, each entry self-typed as
+// {"type","value"} (MatParamValueToJson/MatParamValueFromJson).
+TEST_CASE("A malformed material param is dropped WITH a diagnostic", "[diagnostics]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    const auto dir = TempDir("bad_param");
+    const auto file = dir / "bad.arcmat";
+
+    // Hand-written .arcmat: valid envelope, one param whose "type" is nonsense.
+    // The loader drops it -- today silently, after this task with a diagnostic.
+    {
+        nlohmann::json j;
+        j["id"]      = Guid::Generate().ToString();
+        j["name"]    = "Bad";
+        j["snippet"] = "float4 shade(Varyings v) { return 1; }\n";
+        j["params"]["Tint"]["type"]  = "not-a-real-type";
+        j["params"]["Tint"]["value"] = 1.0f;
+        std::ofstream out(file);
+        REQUIRE(out.good());
+        out << j.dump(2);
+    }
+
+    const auto loaded = LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());   // the asset still loads; the param is dropped
+
+    const std::vector<Arcane::Diagnostic> rows = store.Snapshot();
+    REQUIRE_FALSE(rows.empty());
+    CHECK(rows[0].code == "material.param.dropped");
+    CHECK(rows[0].scope == Arcane::DiagScope::Material);
+    CHECK(rows[0].locator.kind == Arcane::DiagLocator::Kind::Asset);
+
+    store.UninstallEngineSink();
 }

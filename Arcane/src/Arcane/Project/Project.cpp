@@ -1,5 +1,6 @@
 #include <Arcane/Project/Project.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>   // ARC_WARN, ARC_ERROR
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 
@@ -223,6 +224,29 @@ namespace Arcane
         proj.m_mounts.Mount("game", root / "Content");
         proj.m_registry.ScanContent(root / "Content", "game", onProgress);
 
+        // KEY OWNERSHIP: "project" (fixed key) -- accumulated across the
+        // WHOLE plugin loop below and published ONCE, unconditionally, right
+        // before returning (so a clean re-open with no plugin problems
+        // retracts a previous open's rows -- the empty-vector-is-a-retraction
+        // rule shared by every other producer in this arc).
+        //
+        // ProjectManifest::LoadFile (ProjectManifest.cpp) ALSO publishes
+        // directly under this SAME "project" key at its own open/parse/
+        // schema failure sites -- it is the only code that knows which of
+        // the three actually failed. That is authoritative for the TOP-LEVEL
+        // manifest load a few lines above (this function already returned
+        // std::nullopt in that branch, so execution never reaches here to
+        // stomp it). For the PER-PLUGIN descriptor validated in the loop
+        // below, LoadFile's direct publish is only transient: this
+        // function's own unconditional publish at the end would otherwise
+        // silently retract it (Publish() replaces the whole key, and this
+        // function has no way to read back what LoadFile just published to
+        // fold it in). So the loop below mirrors an equivalent
+        // "project.manifest.invalid" row into THIS vector whenever a
+        // descriptor exists but fails to load, keeping it alive past this
+        // function's final publish.
+        std::vector<Diagnostic> diagnostics;
+
         // Slice 4 -- project plugins. Each enabled plugin in the manifest lives at
         // <root>/Plugins/<name>/ with a <name>.arcplugin descriptor (same shape as
         // .arcproj). Its Content/ (if any) mounts as "plugin/<name>://" and its assets
@@ -241,12 +265,33 @@ namespace Arcane
             {
                 ARC_WARN("Project::Open: plugin '{}' is enabled but has no descriptor at '{}'",
                          ref.name, descriptor.generic_string());
+                Diagnostic d;
+                d.severity = DiagSeverity::Warning;
+                d.scope    = DiagScope::Project;
+                d.code     = "project.plugin.no-descriptor";
+                d.message  = "Plugin '" + ref.name + "' is enabled but has no descriptor at '" +
+                             descriptor.generic_string() + "'.";
+                d.locator  = DiagLocator::File(descriptor.generic_string());
+                diagnostics.push_back(std::move(d));
                 continue;
             }
             // Validate the descriptor (well-formed .arcproj-shaped manifest). LoadFile logs
             // on failure; a malformed descriptor disables the plugin rather than the project.
             if (!ProjectManifest::LoadFile(descriptor))
+            {
+                // Mirrors LoadFile's own (transient, about to be superseded)
+                // "project" publish for this same failure -- see the KEY
+                // OWNERSHIP comment above `diagnostics`'s declaration.
+                Diagnostic d;
+                d.severity = DiagSeverity::Error;
+                d.scope    = DiagScope::Project;
+                d.code     = "project.manifest.invalid";
+                d.message  = "Plugin '" + ref.name + "'s descriptor at '" +
+                             descriptor.generic_string() + "' could not be loaded.";
+                d.locator  = DiagLocator::File(descriptor.generic_string());
+                diagnostics.push_back(std::move(d));
                 continue;
+            }
 
             // Record the activated plugin (valid + enabled), whether or not it has Content --
             // its Config/ still layers and its Source/ DLL still loads. ActivePluginRoots().
@@ -261,6 +306,7 @@ namespace Arcane
             }
         }
 
+        Diagnostics::Publish("project", diagnostics);
         return proj;
     }
 

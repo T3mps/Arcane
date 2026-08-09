@@ -1,5 +1,6 @@
 #include <Arcane/Project/ProjectManifest.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>   // ARC_WARN (defined at Log.hpp:40)
 
 #include <Json.hpp>
@@ -99,12 +100,51 @@ namespace Arcane
         return std::nullopt;
     }
 
+    namespace
+    {
+        // KEY OWNERSHIP: "project" (fixed key). LoadFile is the SINGLE owner
+        // of every manifest-shaped-file diagnostic, for EVERY caller -- both
+        // the project's own .arcproj (Project::Open's top-level call, made
+        // BEFORE a Project instance even exists) and a plugin's .arcplugin
+        // descriptor (Project::Open's per-plugin validation call, made from
+        // INSIDE an already-constructed Project). LoadFile is the only code
+        // that knows which of open/parse/schema actually failed, so it
+        // publishes directly here rather than smuggling a reason code out
+        // through the std::optional<> return.
+        //
+        // This is "replace-semantics safe" for the top-level call: on that
+        // failure Project::Open returns std::nullopt immediately afterward
+        // (Project.cpp) without ever touching "project" again, so this
+        // publish is the final, authoritative word for that open attempt.
+        //
+        // For the per-plugin descriptor call it is only the FIRST word:
+        // Project::Open reaches its own unconditional "project" publish at
+        // the end of a successful open regardless, which would otherwise
+        // silently retract this row. Project::Open's own comment (Project.cpp)
+        // covers how it re-mirrors an equivalent diagnostic into its own
+        // accumulated set for exactly this reason -- see there for why this
+        // function does not need (and must not attempt) to know its caller.
+        void PublishManifestDiagnostic(const std::filesystem::path& file, DiagSeverity severity,
+                                        const char* code, std::string message)
+        {
+            Diagnostic d;
+            d.severity = severity;
+            d.scope    = DiagScope::Project;
+            d.code     = code;
+            d.message  = std::move(message);
+            d.locator  = DiagLocator::File(file.generic_string());
+            Diagnostics::Publish("project", std::vector<Diagnostic>{ std::move(d) });
+        }
+    }
+
     std::optional<ProjectManifest> ProjectManifest::LoadFile(const std::filesystem::path& file)
     {
         std::ifstream in(file, std::ios::binary);
         if (!in)
         {
             ARC_WARN("ProjectManifest: cannot open '{}'", file.generic_string());
+            PublishManifestDiagnostic(file, DiagSeverity::Error, "project.manifest.unreadable",
+                                       "Could not open '" + file.generic_string() + "'.");
             return std::nullopt;
         }
         std::stringstream ss;
@@ -118,11 +158,17 @@ namespace Arcane
         catch (const std::exception& e)
         {
             ARC_WARN("ProjectManifest: parse failed for '{}': {}", file.generic_string(), e.what());
+            PublishManifestDiagnostic(file, DiagSeverity::Error, "project.manifest.unreadable",
+                                       "Could not parse '" + file.generic_string() + "': " + e.what());
             return std::nullopt;
         }
         auto m = FromJson(doc);
         if (!m)
+        {
             ARC_WARN("ProjectManifest: schema invalid in '{}'", file.generic_string());
+            PublishManifestDiagnostic(file, DiagSeverity::Error, "project.manifest.invalid",
+                                       "'" + file.generic_string() + "' is not a valid project manifest.");
+        }
         return m;
     }
 }

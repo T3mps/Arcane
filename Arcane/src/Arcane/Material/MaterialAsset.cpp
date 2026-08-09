@@ -1,5 +1,6 @@
 #include <Arcane/Material/MaterialAsset.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 
 #include <Json.hpp>
@@ -203,6 +204,24 @@ namespace Arcane
         }
 
         MaterialAssetData data;
+
+        // KEY OWNERSHIP: "material-load:<id-or-path>" -- every dropped-entry
+        // diagnostic below (malformed param/pass/graph) accumulates into this
+        // vector and is published ONCE at the very end of this function (see
+        // the unconditional Diagnostics::Publish() right before `return
+        // data;`). Publishing per-entry would leave only the LAST dropped
+        // entry's row visible, since Publish() replaces the key's whole set.
+        //
+        // NEVER publish this loader's rows under "material:<guid>" -- that key
+        // belongs to the OPEN ShaderEditorDocument (ShaderEditorDocument::
+        // DiagnosticKey, Task 6's compile-diagnostics seam). A loader publish
+        // on that key would silently wipe the document's live compile rows
+        // out from under it the next time this asset happens to reload from
+        // disk (e.g. an external file-watcher reload while the document is
+        // still open). "material-load:" is a distinct namespace precisely so
+        // the two producers can never collide.
+        std::vector<Diagnostic> diagnostics;
+
         if (doc.contains("id") && doc["id"].is_string())
             if (auto g = Guid::FromString(doc["id"].get<std::string>()))
                 data.id = *g;
@@ -253,8 +272,18 @@ namespace Arcane
                 }
             }
             else
+            {
                 ARC_WARN("LoadMaterialAsset: '{}' has a malformed graph object -- ignored "
                          "(text snippet still loads)", path.generic_string());
+                Diagnostic d;
+                d.severity = DiagSeverity::Warning;
+                d.scope    = DiagScope::Material;
+                d.code     = "material.graph.invalid";
+                d.message  = "'" + path.generic_string() + "' has a malformed graph object.";
+                d.detail   = "The graph was ignored; the text snippet still loads.";
+                d.locator  = DiagLocator::Asset(data.id);
+                diagnostics.push_back(std::move(d));
+            }
         }
 
         // Pass chain: fullscreen base materials only. Sprite kind and instances
@@ -273,6 +302,14 @@ namespace Arcane
                     {
                         ARC_WARN("LoadMaterialAsset: '{}' has a malformed pass entry -- dropped",
                                  path.generic_string());
+                        Diagnostic d;
+                        d.severity = DiagSeverity::Warning;
+                        d.scope    = DiagScope::Material;
+                        d.code     = "material.pass.malformed";
+                        d.message  = "'" + path.generic_string() + "' has a malformed pass entry.";
+                        d.detail   = "The pass was dropped.";
+                        d.locator  = DiagLocator::Asset(data.id);
+                        diagnostics.push_back(std::move(d));
                         continue;
                     }
                     MaterialPass p;
@@ -320,9 +357,20 @@ namespace Arcane
                             }
                         }
                         else
+                        {
                             ARC_WARN("LoadMaterialAsset: '{}' pass '{}' has a malformed "
                                      "graph -- ignored (text snippet still loads)",
                                      path.generic_string(), p.name);
+                            Diagnostic d;
+                            d.severity = DiagSeverity::Warning;
+                            d.scope    = DiagScope::Material;
+                            d.code     = "material.graph.invalid";
+                            d.message  = "'" + path.generic_string() + "' pass '" + p.name +
+                                         "' has a malformed graph.";
+                            d.detail   = "The graph was ignored; the pass's text snippet still loads.";
+                            d.locator  = DiagLocator::Asset(data.id);
+                            diagnostics.push_back(std::move(d));
+                        }
                     }
                     data.passes.push_back(std::move(p));
                 }
@@ -368,10 +416,32 @@ namespace Arcane
                 if (auto v = MatParamValueFromJson(jvalue))
                     data.params.emplace_back(name, *v);
                 else
+                {
                     ARC_WARN("LoadMaterialAsset: '{}' param '{}' is malformed -- dropped",
                              path.generic_string(), name);
+                    Diagnostic d;
+                    d.severity = DiagSeverity::Warning;
+                    d.scope    = DiagScope::Material;
+                    d.code     = "material.param.dropped";
+                    d.message  = "'" + path.generic_string() + "' param '" + name + "' is malformed.";
+                    d.detail   = "The saved value was dropped.";
+                    d.locator  = DiagLocator::Asset(data.id);
+                    diagnostics.push_back(std::move(d));
+                }
             }
         }
+
+        // KEY OWNERSHIP: see the comment where `diagnostics` was declared
+        // above. Unconditional: an empty vector RETRACTS a previous load's
+        // rows for this asset -- exactly the clean-reload case (a file that
+        // was malformed and got fixed must not leave stale rows on screen).
+        // Keyed by the asset's own guid when one parsed; a guid-less file
+        // (malformed/missing "id") falls back to its path so the row still
+        // has a stable, distinguishable key rather than colliding with every
+        // other guid-less load under one shared key.
+        const std::string diagKey = "material-load:" +
+            (data.id.IsValid() ? data.id.ToString() : path.generic_string());
+        Diagnostics::Publish(diagKey, diagnostics);
         return data;
     }
 
